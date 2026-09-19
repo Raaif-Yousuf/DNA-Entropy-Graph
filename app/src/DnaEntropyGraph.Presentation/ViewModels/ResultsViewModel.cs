@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
 
@@ -9,14 +10,16 @@ public sealed partial class ResultsViewModel : ObservableObject
 {
     private readonly IRunRepository _runRepository;
     private readonly IToastService _toastService;
+    private readonly IStringResourceProvider _strings;
 
     [ObservableProperty]
     private string? _jobId;
 
-    public ResultsViewModel(IRunRepository runRepository, IToastService toastService)
+    public ResultsViewModel(IRunRepository runRepository, IToastService toastService, IStringResourceProvider strings)
     {
         _runRepository = runRepository;
         _toastService = toastService;
+        _strings = strings;
     }
 
     [RelayCommand]
@@ -25,7 +28,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         var runs = await _runRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
         if (runs.Count == 0)
         {
-            _toastService.ShowToast("No runs yet", "Start a run to see results here.");
+            _toastService.ShowToast(_strings.GetString("NoRunsYet.Title"), _strings.GetString("NoRunsYet.Body"));
         }
     }
 }

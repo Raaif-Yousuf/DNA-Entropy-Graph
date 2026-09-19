@@ -18,6 +18,12 @@ internal static class RepoPaths
 
     public static string[] AllXamlFiles => Directory.GetFiles(Path.Combine(AppRoot, "src"), "*.xaml", SearchOption.AllDirectories);
 
+    /// <summary>Every real, source-controlled .cs file under src/ - generated obj/bin output excluded, since a scan of generated code is not a scan of anything anyone wrote.</summary>
+    public static string[] AllCSharpFiles => Directory.GetFiles(Path.Combine(AppRoot, "src"), "*.cs", SearchOption.AllDirectories)
+        .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+            && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+
     private static string FindAppRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

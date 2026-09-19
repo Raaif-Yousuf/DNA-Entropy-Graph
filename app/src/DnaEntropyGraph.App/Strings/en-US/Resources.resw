@@ -18,4 +18,97 @@
   <data name="ShellTitle.Text" xml:space="preserve">
     <value>DNA Entropy Graph</value>
   </data>
+  <data name="ConfirmDeleteResource.Title" xml:space="preserve">
+    <value>Delete this cloud resource?</value>
+  </data>
+  <data name="ConfirmDeleteResource.Body" xml:space="preserve">
+    <value>This stops billing for it. This cannot be undone.</value>
+  </data>
+  <data name="NoRunsYet.Title" xml:space="preserve">
+    <value>No runs yet</value>
+  </data>
+  <data name="NoRunsYet.Body" xml:space="preserve">
+    <value>Start a run to see results here.</value>
+  </data>
+  <data name="ThemeUpdated.Title" xml:space="preserve">
+    <value>Theme updated</value>
+  </data>
+  <data name="NavNewRun.Content" xml:space="preserve">
+    <value>New run</value>
+  </data>
+  <data name="NavRuns.Content" xml:space="preserve">
+    <value>Runs</value>
+  </data>
+  <data name="NavCloud.Content" xml:space="preserve">
+    <value>Cloud</value>
+  </data>
+  <data name="NavSettings.Content" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="StatusPillNotSignedIn.Text" xml:space="preserve">
+    <value>Not signed in</value>
+  </data>
+  <data name="StatusPillSignedIn.Text" xml:space="preserve">
+    <value>Signed in - {0}</value>
+  </data>
+  <data name="RunProgressCancel.Content" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="RunProgressStopVm.Content" xml:space="preserve">
+    <value>Stop VM now</value>
+  </data>
+  <data name="RunProgressDeleteVm.Content" xml:space="preserve">
+    <value>Delete VM now</value>
+  </data>
+  <data name="RunProgressStayOpenBanner.Message" xml:space="preserve">
+    <value>You can close the app. The run continues in the cloud and results download when you come back.</value>
+  </data>
+  <data name="ConfirmStopVm.Title" xml:space="preserve">
+    <value>Stop this rented computer now?</value>
+  </data>
+  <data name="ConfirmStopVm.Body" xml:space="preserve">
+    <value>Its storage still costs a small amount until you delete it. Your run stops making progress.</value>
+  </data>
+  <data name="ConfirmDeleteVm.Title" xml:space="preserve">
+    <value>Delete this rented computer now?</value>
+  </data>
+  <data name="ConfirmDeleteVm.Body" xml:space="preserve">
+    <value>This cannot be undone. Nothing about this run keeps costing money afterward.</value>
+  </data>
+  <data name="PhaseValidating_Title" xml:space="preserve">
+    <value>Checking your files</value>
+  </data>
+  <data name="PhaseUploading_Title" xml:space="preserve">
+    <value>Uploading</value>
+  </data>
+  <data name="PhaseProvisioning_Title" xml:space="preserve">
+    <value>Starting a computer</value>
+  </data>
+  <data name="PhasePreparing_Title" xml:space="preserve">
+    <value>Preparing the computer</value>
+  </data>
+  <data name="PhaseRunning_Title" xml:space="preserve">
+    <value>Analysing</value>
+  </data>
+  <data name="PhaseFinalizing_Title" xml:space="preserve">
+    <value>Saving results</value>
+  </data>
+  <data name="PhaseDownloading_Title" xml:space="preserve">
+    <value>Downloading</value>
+  </data>
+  <data name="PhaseCompleted_Title" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="PhasePartiallyCompleted_Title" xml:space="preserve">
+    <value>Done, with some problems</value>
+  </data>
+  <data name="PhaseFailed_Title" xml:space="preserve">
+    <value>Something went wrong</value>
+  </data>
+  <data name="PhaseCancelling_Title" xml:space="preserve">
+    <value>Cancelling</value>
+  </data>
+  <data name="PhaseCancelled_Title" xml:space="preserve">
+    <value>Cancelled</value>
+  </data>
 </root>

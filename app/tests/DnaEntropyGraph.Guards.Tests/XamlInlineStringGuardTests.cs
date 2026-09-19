@@ -54,6 +54,18 @@ public class XamlInlineStringGuardTests
     }
 
     [Fact]
+    public void An_attribute_whose_name_merely_ends_in_a_watched_word_is_not_flagged()
+    {
+        // MEASURED 2026-09-19 (issue #62): NavigationView.AlwaysShowHeader="True"
+        // was flagged as an inline "Header" string before the scanner's
+        // regex required a word boundary before the attribute name - a
+        // real false positive on legitimate markup, not a violation.
+        WithTempXaml(
+            """<NavigationView AlwaysShowHeader="True" />""",
+            result => result.Violations.ShouldBeEmpty());
+    }
+
+    [Fact]
     public void A_value_with_no_letters_is_not_flagged()
     {
         // A number or a coordinate is not user-facing copy, and flagging it

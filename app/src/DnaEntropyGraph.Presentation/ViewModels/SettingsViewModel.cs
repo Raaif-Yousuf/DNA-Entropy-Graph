@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
 
@@ -11,14 +12,16 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     private readonly ISettingsStore _settingsStore;
     private readonly IToastService _toastService;
+    private readonly IStringResourceProvider _strings;
 
     [ObservableProperty]
     private string _theme;
 
-    public SettingsViewModel(ISettingsStore settingsStore, IToastService toastService)
+    public SettingsViewModel(ISettingsStore settingsStore, IToastService toastService, IStringResourceProvider strings)
     {
         _settingsStore = settingsStore;
         _toastService = toastService;
+        _strings = strings;
         _theme = settingsStore.GetString(ThemeKey) ?? "System";
     }
 
@@ -27,6 +30,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         Theme = theme;
         _settingsStore.SetString(ThemeKey, theme);
-        _toastService.ShowToast("Theme updated", theme);
+        _toastService.ShowToast(_strings.GetString("ThemeUpdated.Title"), theme);
     }
 }
