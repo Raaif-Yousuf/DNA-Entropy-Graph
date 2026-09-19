@@ -11,9 +11,10 @@ and their working sets SWAPPED. A P1 fix landed in an unrelated agent's
 worktree while that agent's work landed in the first. Both reported it as "my
 edits silently vanished", and one nearly committed the other's changes.
 
-The ban has been written into `docs/agent_wave_brief.md`, into the
-`orchestrating-agents` skill, and verbatim into individual agent briefs. It has
-been broken FIVE recorded times anyway, most recently 2026-09-05, by agents who
+The ban has been written into `CLAUDE.md`, into the
+`.claude/skills/orchestrating-agents/SKILL.md` skill, and verbatim into individual
+agent briefs. It has been broken FIVE recorded times anyway (on the project these
+hooks came from, before this repo existed), most recently 2026-09-05, by agents who
 had the ban in their own brief and reported the violation themselves afterwards.
 Every one of those was a revert check, which is a thing orchestrators actively
 ask for, and stash is the reflex answer.
@@ -56,8 +57,8 @@ MUTATING = ("push", "save", "pop", "apply", "drop", "clear", "create", "store", 
 #
 # The env-assignment prefix is not hypothetical tidiness: the first version of
 # this pattern omitted it, and `GIT_PAGER=cat git stash` walked straight
-# through. tests/test_block_git_stash_hook.py caught that before the hook was
-# ever registered, which is the whole reason a guard gets a test with both arms.
+# through. scripts/tests/test_hooks.py catches that, which is the whole reason
+# a guard gets a test with both arms.
 _STASH = re.compile(
     r"(?:^|[;&|\n]|&&|\|\|)\s*"
     r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
@@ -65,7 +66,7 @@ _STASH = re.compile(
     re.IGNORECASE,
 )
 
-# #2535: a `cat <<'EOF' ... EOF` heredoc is how this session's own commit
+# A `cat <<'EOF' ... EOF` heredoc is how this session's own commit
 # instructions build a multi-line `-m` message (`git commit -m "$(cat <<'EOF'
 # ... EOF)"`). A commit message that DESCRIBES the ban -- quoting "never `git
 # stash`", or narrating a fix to this very hook -- puts the words "git" and

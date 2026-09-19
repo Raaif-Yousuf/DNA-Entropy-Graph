@@ -2,7 +2,7 @@
 """
 scripts/issue_precheck.py -- has this issue already been done?
 
-    python scripts/issue_precheck.py 521 522 497
+    python scripts/issue_precheck.py <n> [<n> ...]
     python scripts/issue_precheck.py --all-open          # sweep every open issue
     python scripts/issue_precheck.py --all-open --suspect-only
 
@@ -10,19 +10,15 @@ Run it BEFORE starting work on a GitHub issue, and before closing one.
 
 Why this exists
 ---------------
-This repo keeps paying the same cost, in both directions:
-
-    2026-08-01  a sweep closed nine issues; SIX turned out to be already fixed
-                and never marked.
-    2026-08-02  an agent spent a full run rebuilding #394/#395 before finding
-                it had shipped the previous day.
-    2026-08-11  #520 was fully implemented, tested, and named in its own commit
-                message -- and sat open. Found by accident.
-
-and the opposite failure:
-
-    2026-08-01  #439 and #363 were closed on "code evidence" with no commit
-                actually doing the work; both were disproven the next day.
+On the project this script came from (a private repo, mined for shape only;
+see docs/migration/2026-09-19-clair-conventions-inventory.md), the same cost
+got paid repeatedly, in both directions: a sweep once closed nine issues, six
+of which turned out to be already fixed and never marked; an agent once spent
+a full run rebuilding a feature before finding it had shipped the previous
+day; an issue was once fully implemented, tested, and named in its own commit
+message, and sat open anyway, found only by accident. And the opposite
+failure: issues were closed on "code evidence" with no commit actually doing
+the work, both disproven the next day.
 
 Both are the same missing step: nobody asked the repository what it already
 knows about the issue number. The repository always knew.
@@ -35,12 +31,12 @@ The verdict rests on ONE fact, not on reading English:
 
 That distinguishes the two cases that matter and that a text search cannot:
 
-    "feat(#520): ..."   touching 8 frontend files   -> the work landed
-    "docs: ... see #522"  touching only docs/       -> the issue was discussed
+    "feat(#N): ..."       touching several source files  -> the work landed
+    "docs: ... see #N"    touching only docs/            -> the issue was discussed
 
 An earlier draft of this script tried to tell an implementation comment from a
-forward reference ("peeling those primitives out is #522") with a keyword
-regex. It was wrong on three of the first five real inputs, because both kinds
+forward reference (something like "peeling those primitives out is #N") with
+a keyword regex. It was wrong on three of the first five real inputs, because both kinds
 of comment are written in the same voice. The commit graph is not a heuristic
 and does not need a word list kept up to date.
 
@@ -48,7 +44,7 @@ Tree mentions are still reported -- with the matching line -- because they are
 the single most useful place to START the work. They just do not drive the
 verdict.
 
-What it CANNOT see (#2442, #2492) -- read this before trusting a verdict
+What it CANNOT see -- read this before trusting a verdict
 -------------------------------------------------------------------------
 This script answers one narrow, mechanical question well: did a commit whose
 MESSAGE names #N change a source file. Three recorded blind spots follow
@@ -57,34 +53,37 @@ being cleverer about English -- the fix each time was either "widen what
 counts as the message" or "say plainly what was not checked":
 
     1. It cannot see a milestone, an EPIC's do-not-build list, or an owner
-       hold recorded only in a comment. #1946 was `OK -- OPEN with no trace
-       anywhere. Safe to start.` while its milestone was literally
-       post-v1 and an owner comment said to hold the line. The verdict
-       below now prints the milestone and any post-v1 label next to the
-       state, and says DEFERRED when either says so -- but a hold recorded
-       ONLY as prose in a comment, with no milestone or label set, is still
-       invisible. Read the thread regardless of what this script says.
-    2. Until 2026-09-06 the commit matcher searched only the commit SUBJECT.
-       A fix referenced mid-paragraph in the BODY (`e20c3e70`'s body opens
-       "#1940: one-way ANOVA reported no effect size...", its subject does
-       not mention #1940 at all) was invisible, and a closed issue with only
-       that commit read as `SUSPECT -- no commit naming it ever changed a
-       source file`, the #439/#363 shape in reverse. Fixed by matching
-       subject+body together; see `scan_commits`.
+       hold recorded only in a comment. On the project this script came from,
+       an issue once read `OK -- OPEN with no trace anywhere. Safe to start.`
+       while its milestone was the deferred one and an owner comment said to
+       hold the line. The verdict below now prints the milestone and any
+       post-v1 label next to the state, and says DEFERRED when either says
+       so -- but a hold recorded ONLY as prose in a comment, with no
+       milestone or label set, is still invisible. Read the thread
+       regardless of what this script says.
+    2. The commit matcher must search the commit BODY as well as the
+       SUBJECT: searching the subject alone misses a fix referenced
+       mid-paragraph in the body (a commit whose body opens with the real
+       issue reference while its own subject line names something else
+       entirely), and a closed issue with only that commit reads as
+       `SUSPECT -- no commit naming it ever changed a source file`, the
+       closed-with-no-trace shape in reverse. Fixed by matching subject+body
+       together; see `scan_commits`.
     3. It matches the literal issue number, so it cannot see a fix that
-       landed under a DIFFERENT issue number entirely (#1997 was half-fixed
-       by #1998's commits, which never mention #1997; #2426's fix shipped
-       under #2409). The `related` line below surfaces GitHub's own
-       cross-reference graph (an issue's body/comments mentioning another,
-       in either direction) for exactly the issues where this script itself
-       found no implementing commit -- the cases where "nothing shipped" and
-       "shipped under a different number" are otherwise indistinguishable.
-       It is a candidate list, not a verdict: GitHub only knows about an
-       explicit `#N` mention, so two issues fixed by the same commit with
-       neither number ever written in the other's thread stay invisible.
-       CONFIRMED the same night this fix landed: #1834's exact bug was fixed
-       by `459b913b0` (subject `guard(#1848): ...`), a batch commit auditing
-       five unrelated guards; #1834's body never mentions #1848 and #1848 is
+       landed under a DIFFERENT issue number entirely (one issue half-fixed
+       by another issue's commits, which never mention the first). The
+       `related` line below surfaces GitHub's own cross-reference graph (an
+       issue's body/comments mentioning another, in either direction) for
+       exactly the issues where this script itself found no implementing
+       commit -- the cases where "nothing shipped" and "shipped under a
+       different number" are otherwise indistinguishable. It is a candidate
+       list, not a verdict: GitHub only knows about an explicit `#N`
+       mention, so two issues fixed by the same commit with neither number
+       ever written in the other's thread stay invisible. CONFIRMED the same
+       night this fix landed, on the project this script came from: one
+       issue's exact bug was fixed by a single batch commit auditing several
+       unrelated guards, whose subject named a different issue entirely; the
+       first issue's body never mentioned the second, and the second was
        itself a different, unrelated issue. No `#N` text connects them
        ANYWHERE -- not a matcher gap, not a cross-reference gap, just no
        trace to find. This is the residual case the standing footer exists
@@ -151,16 +150,18 @@ DOC_PREFIXES = ("docs/", "README", "CLAUDE.md", "NEXT_SESSION.md", "AGENTS.md",
                 "FEATURES.md")
 
 
-# #1777: a commit that names one issue while its diff is really about another
-# is a real, recorded failure mode -- a commit on a branch literally named
-# `agent/1646-ml` cited "#1646" while its entire diff was `#1642`'s subject
-# (unrelated wall-clock test fixes), and it took three separate `git show`
-# calls to learn that. True topic relevance is not this script's job (the
-# whole reason it reads the commit graph instead of English is to avoid
-# guessing at meaning), but a commit citing MORE than one issue number is a
-# cheap, mechanical tell that the reader should check both before trusting
-# the diff as evidence for either. Same trailing-lookahead requirement as the
-# per-issue query patterns below: #52 must never be read out of #521.
+# A commit that names one issue while its diff is really about another is a
+# real, recorded failure mode: on the project this script came from, a commit
+# on a branch named for one issue cited that issue in its message while its
+# entire diff was actually a different issue's subject (unrelated wall-clock
+# test fixes), and it took three separate `git show` calls to learn that.
+# True topic relevance is not this script's job (the whole reason it reads
+# the commit graph instead of English is to avoid guessing at meaning), but a
+# commit citing MORE than one issue number is a cheap, mechanical tell that
+# the reader should check both before trusting the diff as evidence for
+# either. Same trailing-lookahead requirement as the per-issue query patterns
+# below: the digits of issue 52 must never be read out of issue 521's own,
+# longer digit string.
 _ISSUE_REF_RE = re.compile(r"#(\d+)(?![0-9])")
 
 
@@ -176,7 +177,7 @@ def _is_doc(path: str) -> bool:
 
 # EXCLUDED_SUFFIXES is a hand-maintained list, and a hand-maintained
 # denominator is a recorded bug shape in its own right: an issue can read as
-# SUSPECT because its own byte sequence ("#89") happens to occur inside a
+# SUSPECT because its own digits happen to occur as a byte sequence inside a
 # vendored binary with a suffix nobody had added to the tuple yet. Rather
 # than keep extending it one extension at a time, sniff actual
 # content the same way `git` and `diff` decide "binary": a NUL byte in the
@@ -206,18 +207,19 @@ class Commit:
     sha: str
     subject: str
     # First paragraph of the commit body, filled in lazily for matched commits
-    # only. This repo writes long, decision-bearing commit messages -- 68974d59's
-    # body says outright "#255 rescoped ... #269/#283 closed as already-shipped",
-    # which is the exact verdict a reader would otherwise go derive from diffs.
+    # only. A repo that writes long, decision-bearing commit messages can have
+    # a body that says outright "issue X was rescoped, issues Y/Z closed as
+    # already-shipped" -- which is the exact verdict a reader would otherwise
+    # go derive from diffs.
     body: str = ""
     source_files: list[str] = field(default_factory=list)
     doc_files: list[str] = field(default_factory=list)
     # Is this commit an ancestor of the current HEAD? `git log --all` reaches
-    # every ref including unmerged branches, and this repo carries several
-    # (chat/epic-379-wave1, fix/alpha-t2-ollama-...). Work sitting on one of
-    # those is BUILT but not SHIPPED -- a completely different state from done,
-    # and reporting it as done would recreate exactly the mistake this script
-    # exists to prevent.
+    # every ref including unmerged branches, and a repo worked by several
+    # agents in parallel will carry a few at any given time. Work sitting on
+    # one of those is BUILT but not SHIPPED -- a completely different state
+    # from done, and reporting it as done would recreate exactly the mistake
+    # this script exists to prevent.
     merged: bool = True
 
     @property
@@ -229,10 +231,11 @@ class Commit:
 class IssueMeta:
     """What `gh` told us about one issue number, beyond open/closed.
 
-    #2442: an orchestrator dispatched five lanes onto issues milestoned
-    post-v1, and the precheck output never showed a milestone at all --
-    "safe to start" (a commit-graph fact) got read as "worth doing now" (a
-    priority decision this script has no opinion on). Kept as its own type
+    On the project this script came from, an orchestrator once dispatched
+    several lanes onto issues milestoned for later, because the precheck
+    output never showed a milestone at all -- "safe to start" (a
+    commit-graph fact) got read as "worth doing now" (a priority decision
+    this script has no opinion on). Kept as its own type
     rather than two more bare fields on `Evidence` because `state`/`title`
     were already threaded through `known` as a 2-tuple in half a dozen call
     sites; giving that tuple a name here is what let the milestone/labels
@@ -251,8 +254,8 @@ class IssueMeta:
 
         Deliberately narrow -- a `post-v1` MILESTONE or LABEL is a
         structured field `gh` can hand back directly. An owner hold written
-        only as comment prose (the actual #1946 case) is not caught here;
-        see the module docstring's blind-spot list.
+        only as comment prose (the module docstring's own recorded case) is
+        not caught here; see its blind-spot list.
         """
         if self.milestone.strip().lower() == "post-v1":
             return True
@@ -275,15 +278,15 @@ class Evidence:
     # left open on purpose -- reporting it identically to a genuinely forgotten
     # one is how a checker trains people to skim past it.
     reviewed_shas: list[str] = field(default_factory=list)
-    # #2492: other issue numbers this issue's own body/comments mention, or
-    # that mention THIS issue elsewhere (GitHub's own cross-reference graph).
+    # Other issue numbers this issue's own body/comments mention, or that
+    # mention THIS issue elsewhere (GitHub's own cross-reference graph).
     # Populated only when this issue has no implementing commit of its own --
     # exactly the case where "nothing shipped" and "shipped under another
     # number" are otherwise indistinguishable. Each entry is
     # (number, state, title, direction).
     related: list[tuple[int, str, str, str]] = field(default_factory=list)
-    # #2493's own shape: a fix commit that names NO issue number at all --
-    # not even mid-paragraph, not under a different issue's number. No text
+    # A fix commit that names NO issue number at all -- not even
+    # mid-paragraph, not under a different issue's number. No text
     # search over commit messages can ever see that, because there is no
     # text to find. When this issue's title/body literally names a test
     # function or symbol, `fill_node_id_matches` looks for a commit whose
@@ -330,8 +333,8 @@ class Evidence:
                 return (
                     "SUSPECT",
                     f"OPEN, but {n} commit(s) naming it changed source files. "
-                    "This is the exact shape #520 had -- fully built, never closed. "
-                    "Read the commit(s) below before writing anything.",
+                    "This is the exact shape a fully-built-but-never-closed issue "
+                    "has. Read the commit(s) below before writing anything.",
                 )
             if self.unmerged_commits:
                 return (
@@ -359,7 +362,7 @@ class Evidence:
                 return (
                     "SUSPECT",
                     "CLOSED with NO trace anywhere -- no commit, no code, no docs. "
-                    "This is how #439 and #363 were wrongly closed. Verify or reopen.",
+                    "This is exactly how an issue gets wrongly closed. Verify or reopen.",
                 )
             if not impl:
                 return (
@@ -440,12 +443,12 @@ def _parse_commit_records(root: Path) -> list[dict]:
     """One `git log` pass over every ref, with the file list AND body per
     commit, as plain JSON-able dicts -- independent of any issue's regex, so
     the result can be cached and re-matched against a DIFFERENT set of issue
-    numbers without re-running `git log` (#2870).
+    numbers without re-running `git log`.
 
-    #2442: matching only `%s` (the subject) missed `e20c3e70`, whose subject
-    is "feat(stats): effect-size CIs on ANOVA/chi-square, ..." and whose BODY
-    opens "#1940: one-way ANOVA reported no effect size...". A closed issue
-    whose only implementing commit references it that way used to read as
+    Matching only `%s` (the subject) misses a commit whose subject describes
+    the change in its own words and whose BODY opens with the real issue
+    reference. A closed issue whose only implementing commit references it
+    that way used to read as
     `SUSPECT -- no commit naming it ever changed a source file`.
 
     The body can't just be appended to the per-commit format line the way the
@@ -491,28 +494,26 @@ def _parse_commit_records(root: Path) -> list[dict]:
 
 def _cached_commit_records(root: Path, use_cache: bool = True) -> list[dict]:
     """`_parse_commit_records`, cached on disk keyed by the repo's current
-    HEAD sha plus `LOG_DEPTH` (#2870). MEASURED 2026-09-13: `--all-open`
-    against 263 open issues took ~19 minutes, and the caller-side workaround
-    of batching issue numbers into groups of 40 made it WORSE, not better --
-    `scan_commits` re-ran this exact invariant `git log --all` pass once per
-    batch regardless of how many numbers were in it. The fix is not smarter
-    batching, it's recognising the pass doesn't depend on the issue numbers
-    at all: cache it once per HEAD, and every subsequent invocation in the
-    same session (a per-lane `issue_precheck.py <n>` before every dispatch,
-    the exact pattern #2380 asks for) reads the cache instead of re-running
-    `git log`.
+    HEAD sha plus `LOG_DEPTH`. MEASURED 2026-09-13, on the project this
+    script came from: `--all-open` against 263 open issues took ~19 minutes,
+    and the caller-side workaround of batching issue numbers into groups of
+    40 made it WORSE, not better -- `scan_commits` re-ran this exact
+    invariant `git log --all` pass once per batch regardless of how many
+    numbers were in it. The fix is not smarter batching, it's recognising the
+    pass doesn't depend on the issue numbers at all: cache it once per HEAD,
+    and every subsequent invocation in the same session (a per-lane
+    `issue_precheck.py <n>` before every dispatch) reads the cache instead of
+    re-running `git log`.
 
     Invalidation is a straight HEAD-sha compare: a stale cache is a "check
-    that cannot fail" risk (the whole reason this repo distrusts a
-    hand-maintained cache), so a mismatch -- including "no cache file yet" or
+    that cannot fail" risk, so a mismatch -- including "no cache file yet" or
     "the file is corrupt" -- always falls through to a real rescan rather
     than ever serving a guess. `--all` still scans every ref, not just HEAD,
     so a cache built on one HEAD could in principle miss a commit that only
-    landed on some OTHER branch since; the issue's own guidance (#2870, "the
-    cheap correct answer") accepts that gap deliberately rather than keying
-    on a hash of every ref, which would need a full `git for-each-ref` walk
-    just to compute the cache key -- most of the cost this cache exists to
-    avoid.
+    landed on some OTHER branch since; that gap is accepted deliberately
+    rather than keying on a hash of every ref, which would need a full
+    `git for-each-ref` walk just to compute the cache key -- most of the cost
+    this cache exists to avoid.
     """
     head = _run(["git", "rev-parse", "HEAD"], root).strip()
     cache_path = _commit_scan_cache_path(root)
@@ -542,7 +543,7 @@ def _cached_commit_records(root: Path, use_cache: bool = True) -> list[dict]:
 def scan_commits(
     root: Path, patterns: dict[int, re.Pattern], use_cache: bool = True,
 ) -> dict[int, list[Commit]]:
-    """Match `patterns` against the (possibly cached, #2870) parsed commit
+    """Match `patterns` against the (possibly cached) parsed commit
     log. Splitting the expensive, issue-independent `git log` pass
     (`_cached_commit_records`) from this cheap per-issue regex match is what
     makes the cache reusable across a DIFFERENT set of issue numbers, not
@@ -633,7 +634,7 @@ def fill_reviewed_shas(root: Path, ev: dict[int, Evidence]) -> None:
 def gh_list(root: Path, state: str) -> dict[int, IssueMeta]:
     """Every issue in `state`, as number -> IssueMeta, in one call.
 
-    Milestone and labels ride along in the SAME bulk call (#2442): `gh issue
+    Milestone and labels ride along in the SAME bulk call: `gh issue
     list --json` accepts them exactly like `number,title,state`, so showing
     the milestone next to every verdict costs nothing extra over a sweep that
     was already making this one call.
@@ -652,25 +653,26 @@ def gh_list(root: Path, state: str) -> dict[int, IssueMeta]:
 
 
 def fill_related_issues(root: Path, ev: dict[int, Evidence]) -> None:
-    """#2492: surface a fix that landed under a DIFFERENT issue number.
+    """Surface a fix that landed under a DIFFERENT issue number.
 
     This script's verdict rests entirely on the literal `#N` appearing in a
-    commit message. #1997 was half-fixed by #1998's commits, which never once
-    write "#1997" -- the two issues are linked only because #1998's own ISSUE
-    BODY says "supersedes #1997" and GitHub tracks that as a cross-reference.
-    #2426's fix shipped under #2409 the other way round: #2426's own body
-    names #2409, #1998's does not name #1997 anywhere reachable except via
-    GitHub's cross-reference graph.
+    commit message. Two shapes are both real and recorded, on the project
+    this script came from: issue A was half-fixed by issue B's commits,
+    which never once wrote "#A" -- the two were linked only because issue
+    B's own ISSUE BODY said "supersedes #A" and GitHub tracks that as a
+    cross-reference. The reverse also happened: a fix shipped under issue C
+    whose own body named issue D, while D's own body never named C anywhere
+    reachable except via GitHub's cross-reference graph.
 
     So two lookups, not one:
       * OUTBOUND -- numbers THIS issue's own body/comments mention. Free of
         any extra API surface: it is exactly the text `fill_reviewed_shas`
         already fetches for a different reason, just read differently. This
-        catches #2426 -> #2409.
+        catches the C -> D shape above.
       * INBOUND -- other issues/PRs whose body or comments mention THIS
         issue, from `gh api .../timeline`'s `cross-referenced` events. This
-        catches #1997 -> #1998, which no outbound scan of #1997's own body
-        could ever see, because #1997 never mentions #1998.
+        catches the A -> B shape above, which no outbound scan of A's own
+        body could ever see, because A never mentions B.
 
     Gated on `not e.implementing_commits`: once an issue already has its OWN
     implementing commit, whether some other issue also mentions it is not
@@ -748,14 +750,14 @@ def fill_related_issues(root: Path, ev: dict[int, Evidence]) -> None:
             e.related.append((m, other_state, other_title, direction))
 
 
-# #2493's blind spot, distinct from #2492's: `related` needs SOME `#N` text
-# connecting the two issues, ANYWHERE. #2493 had none -- its fixing commit
-# (`1d946ab4e`) named `#2445`, `#2459` and `#1094`, never `#2493`, and no
-# other issue's thread ever wrote "#2493" either. The one thing that DID
-# survive is the test's own name, because this repo's issue titles routinely
-# quote it verbatim ("#2493 test_end_to_end_a_quiet_edit_reaches_a_fresh_
-# exhaustive_result fails CONSISTENTLY on main"). A symbol name is not an
-# issue number, so it needs its own, narrower mechanism.
+# A blind spot distinct from `fill_related_issues`'s own: `related` needs
+# SOME `#N` text connecting the two issues, ANYWHERE. On the project this
+# script came from, one issue had none -- its fixing commit named three
+# other issue numbers, never its own, and no other issue's thread ever
+# named it either. The one thing that DID survive is the test's own name,
+# because issue titles there routinely quote a failing test function
+# verbatim in the title. A symbol name is not an issue number, so it needs
+# its own, narrower mechanism.
 #
 # Deliberately conservative, per the owner's own framing: a false "already
 # done" here costs more than a false "safe to start" does, so this NEVER
@@ -770,9 +772,10 @@ _NODE_ID_RE = re.compile(r"\btest_[A-Za-z0-9_]{8,}\b")
 # is bounded by how often that happens, not by sweep size.
 _NODE_ID_CANDIDATE_LIMIT = 5
 
-# #2987: the real per-symbol cost is `find_node_id_matches`'s own `git log
-# --all -S"def {symbol}("` pickaxe, MEASURED 2026-09-18 at ~7-10s PER CALL on
-# this repo's real history (7346 commits) -- not the file-tree AST scan
+# The real per-symbol cost is `find_node_id_matches`'s own `git log
+# --all -S"def {symbol}("` pickaxe, MEASURED 2026-09-18 at ~7-10s PER CALL,
+# on the project this script came from, against a history of several
+# thousand commits -- not the file-tree AST scan
 # `_find_defining_files` used to redo per symbol (that redundant rescan is
 # fixed separately by `_cached_function_index`, but caching cannot help the
 # pickaxe itself: each symbol searches genuinely different content, so there
@@ -790,7 +793,7 @@ _NODE_ID_MAX_SYMBOLS_PER_ISSUE = 8
 def extract_node_id_candidates(title: str, body: str) -> list[str]:
     """Test-function-shaped identifiers named in an issue's own title/body,
     in the order they first appear, deduplicated, capped at
-    `_NODE_ID_MAX_SYMBOLS_PER_ISSUE` (#2987 -- see that constant's own
+    `_NODE_ID_MAX_SYMBOLS_PER_ISSUE` (see that constant's own
     comment for why). `test_` is chosen over a bare `[A-Za-z_]+` symbol
     pattern on purpose: this repo's test names are long and specific (the
     8-char minimum after the prefix), so false positives from ordinary prose
@@ -832,13 +835,14 @@ def _build_function_index(root: Path) -> dict[str, list[str]]:
     """Every top-level or nested function/method NAME defined anywhere under
     `_NODE_ID_SCAN_DIRS`'s CURRENT (working-tree) content, mapped to the
     file(s) that define it -- one `ast.parse` per FILE, not one per candidate
-    SYMBOL (#2987 follow-up to #2870).
+    SYMBOL.
 
-    MEASURED 2026-09-18: profiling a real 10-issue `--all-open`-shaped sample
-    found `fill_node_id_matches` responsible for 284.93s of a 305.73s total
-    (scan_commits 0.76s, the tree scan 1.85s, gh_list+gh_state 1.86s,
-    fill_reviewed_shas 0.47s, fill_related_issues 15.85s) -- NOT the `gh`
-    network calls #2870's own body suspected. The old `_find_defining_files`
+    MEASURED 2026-09-18, on the project this script came from: profiling a
+    real 10-issue `--all-open`-shaped sample found `fill_node_id_matches`
+    responsible for 284.93s of a 305.73s total (scan_commits 0.76s, the tree
+    scan 1.85s, gh_list+gh_state 1.86s, fill_reviewed_shas 0.47s,
+    fill_related_issues 15.85s) -- NOT the `gh` network calls that had been
+    suspected. The old `_find_defining_files`
     re-read and re-`ast.parse`d every `.py` file under both scan dirs from
     scratch for EVERY candidate symbol on EVERY issue that lacked its own
     implementing commit, with no memoisation across either axis. Building
@@ -904,7 +908,7 @@ def _find_defining_files(root: Path, symbol: str, use_cache: bool = True) -> lis
     content defines a function named `symbol`, via `ast.parse` -- never
     grep. Scoped to those two directories because that is where an issue
     title's symbol overwhelmingly lives in this repo. A lookup into
-    `_cached_function_index` (#2987); see that function's docstring for why
+    `_cached_function_index`; see that function's docstring for why
     this used to be the dominant cost of `--all-open`."""
     return list(_cached_function_index(root, use_cache=use_cache).get(symbol, []))
 
@@ -912,16 +916,16 @@ def _find_defining_files(root: Path, symbol: str, use_cache: bool = True) -> lis
 def find_node_id_matches(root: Path, symbol: str, use_cache: bool = True) -> list[tuple[str, str]]:
     """Commits (sha, path) whose POST-image genuinely defines a function
     named `symbol` -- confirmed by `ast.parse`, never by grepping for the
-    string. Two candidate sources, unioned, because #2493's own real fixing
-    commit (`1d946ab4e`) is the case that rules out relying on just one:
+    string. Two candidate sources, unioned, because a real fixing commit on
+    the project this script came from is the case that rules out relying on
+    just one:
 
       1. `git log -S"def {symbol}("` -- git's native pickaxe, catches a
          commit that ADDED or REMOVED the def line itself. Cheap and
-         precise, but MEASURED 2026-09-07 against #2493's real history to
-         find ONLY `6150a1920` (the commit that originally wrote the test) --
-         `1d946ab4e` (the commit that actually fixed the bug the issue
-         reports) never touches the `def` line at all, only the function's
-         BODY, so the pickaxe cannot see it.
+         precise, but MEASURED 2026-09-07 against that real history to find
+         ONLY the commit that originally wrote the test -- the commit that
+         actually fixed the bug the issue reported never touches the `def`
+         line at all, only the function's BODY, so the pickaxe cannot see it.
       2. Recent commits touching whichever file(s) CURRENTLY define
          `symbol` (found by AST-scanning the working tree, not by name
          guessing). This is what actually catches a body-only fix commit:
@@ -974,7 +978,7 @@ def find_node_id_matches(root: Path, symbol: str, use_cache: bool = True) -> lis
 
 
 def fill_node_id_matches(root: Path, ev: dict[int, Evidence], use_cache: bool = True) -> None:
-    """See the module comment above `_NODE_ID_RE`: the #2493 shape, a fixing
+    """See the module comment above `_NODE_ID_RE`: the shape of a fixing
     commit with no `#N` anywhere for `fill_related_issues` to find. Gated
     identically to `fill_related_issues` (only issues with no implementing
     commit of their own, only once state is known) so the ~85% of issues
@@ -999,7 +1003,8 @@ def scan(root: Path, numbers: list[int],
     ev = {n: Evidence(number=n) for n in numbers}
 
     # The trailing lookahead is the whole reason this is not a substring search:
-    # without it, #52 matches #521 and every sweep reports phantom hits.
+    # without it, issue 52's pattern matches inside issue 521's own digits and
+    # every sweep reports phantom hits.
     patterns = {n: re.compile(rf"#{n}(?![0-9])") for n in numbers}
 
     for n, commits in scan_commits(root, patterns, use_cache=use_cache).items():
@@ -1089,7 +1094,7 @@ def report(ev: dict[int, Evidence], suspect_only: bool) -> int:
                 extra = f"  [{len(c.source_files)} source file(s)]" if c.touched_source else ""
                 cited = "  (cited in the issue thread)" if c.sha in e.reviewed_shas else ""
                 print(f"             [{mark}] {c.sha} {c.subject[:78]}{extra}{cited}")
-                # #1777: surface it, don't make the reader re-derive it. A
+                # Surface it, don't make the reader re-derive it. A
                 # commit naming more than one issue is exactly the shape that
                 # cost three `git show` calls to catch once already.
                 other_refs = [r for r in _issue_refs(c.subject) if r != n]
@@ -1135,7 +1140,7 @@ def report(ev: dict[int, Evidence], suspect_only: bool) -> int:
         if e.in_totest:
             print("  totest   : an open row in docs/ToTest.md")
 
-        # #2492: this issue has no implementing commit of its OWN -- the exact
+        # This issue has no implementing commit of its OWN -- the exact
         # case where "nothing shipped" and "shipped under a different number"
         # look identical from the commit graph alone.
         if e.related:
@@ -1148,15 +1153,15 @@ def report(ev: dict[int, Evidence], suspect_only: bool) -> int:
             if len(e.related) > 6:
                 print(f"             ... and {len(e.related) - 6} more")
 
-        # #2493's shape: no `#N` text anywhere links this issue to its own
-        # fix, so `related` above cannot find it either -- only a commit
-        # that genuinely DEFINES the test/symbol this issue's title or body
-        # names, confirmed by parsing it, not by grepping for it.
+        # No `#N` text anywhere links this issue to its own fix, so `related`
+        # above cannot find it either -- only a commit that genuinely
+        # DEFINES the test/symbol this issue's title or body names,
+        # confirmed by parsing it, not by grepping for it.
         if e.node_id_matches:
             print(
                 f"  node-ids : {len(e.node_id_matches)} commit(s) AST-confirmed to "
                 "define a symbol this issue's own title/body names, with no "
-                "#-reference connecting them -- the #2493 shape. NOT part of the "
+                "#-reference connecting them. NOT part of the "
                 "verdict above; go read the commit."
             )
             for symbol, sha, path in e.node_id_matches[:6]:
@@ -1192,7 +1197,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="skip GitHub entirely; report commit and tree evidence only")
     ap.add_argument("--no-scan-cache", action="store_true",
                     help="force a fresh `git log --all` pass instead of reading the "
-                         "HEAD-keyed cache (#2870); use when debugging the cache itself")
+                         "HEAD-keyed cache; use when debugging the cache itself")
     args = ap.parse_args(argv)
 
     if args.all_open and args.no_gh:

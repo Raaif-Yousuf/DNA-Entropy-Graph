@@ -7,6 +7,7 @@ bullet to its own file, docs/changelog.d/<branch>.md, which never conflicts,
 and the merger runs this script once at merge time:
 
     python scripts/compile_sprint_log.py [--dry-run]
+    python scripts/compile_sprint_log.py --check   # shape only, never folds; what CI runs
 
 Each fragment is the exact sprint-log bullet (starts with "- ", may span
 multiple lines / contain several bullets). Fragments are prepended to the
@@ -16,7 +17,9 @@ still logs its own work; only the write path differs (see
 docs/changelog.d/README.md).
 
 Stdlib only. Exits non-zero (touching nothing) on a malformed fragment or a
-sprint log missing the "## Recent changes" heading.
+sprint log missing the "## Recent changes" heading. `--check` (run by
+`ci-docs.yml` on every PR) validates fragment shape only and never touches
+`sprint_log.md`, so it does not need the heading to exist yet either.
 """
 
 import argparse
@@ -29,7 +32,7 @@ IGNORED = {"README.md"}
 
 # The one directory compile_fragments() reads fragments from. Kept as a
 # constant (rather than inlined in compile_fragments()) so
-# find_stray_changelog_dirs() below can be tied to it structurally: #903's
+# find_stray_changelog_dirs() below can be tied to it structurally: its own
 # regression test asserts compile_fragments()'s source actually references
 # this name, so a future refactor that adds a second fragments source has to
 # touch the stray-directory guard deliberately instead of leaving it blind.
@@ -64,11 +67,12 @@ def _validate(path: Path) -> str:
     """Return the fragment's stripped text; raise ValueError if malformed.
 
     The heading-hint below exists because this exact mistake already cost two
-    days: four fragments written as Markdown headings ("## ..." / "### ...")
-    instead of "- " bullets made every one of them fail this check, so
-    `compile_sprint_log.py` correctly exited non-zero and folded nothing — but
-    the only way anyone found out was a human running the script by hand and
-    reading stderr, which nobody did until 2026-08-01 (fixed in ec9fb70f).
+    days, on the project this script came from: four fragments written as
+    Markdown headings ("## ..." / "### ...") instead of "- " bullets made
+    every one of them fail this check, so `compile_sprint_log.py` correctly
+    exited non-zero and folded nothing — but the only way anyone found out
+    was a human running the script by hand and reading stderr, which nobody
+    did for two days.
     `test_live_changelog_fragments_are_well_formed` in
     scripts/tests/test_compile_sprint_log.py now catches this inside the
     normal test suite instead of relying on that; this hint just makes the
@@ -188,14 +192,54 @@ def compile_fragments(root: Path, dry_run: bool = False) -> int:
     return 0
 
 
+def check_fragments(root: Path) -> int:
+    """Validate every fragment's shape (the same rule `_validate` already
+    enforces at fold time) without touching `sprint_log.md` at all -- no
+    fold, no delete, no requirement that the "## Recent changes" heading
+    even exist yet. This is what CI runs on every PR (`ci-docs.yml`'s
+    "Changelog fragment shape" step, `python scripts/compile_sprint_log.py
+    --check`): a branch's own malformed fragment is caught on that PR,
+    before it ever reaches the merger who runs the real fold.
+    `docs/changelog.d/README.md` documents this flag by name; keep them in
+    sync if the flag is ever renamed.
+    """
+    fragments_dir = root / Path(*FRAGMENTS_RELATIVE)
+    files = _fragment_files(fragments_dir)
+    if not files:
+        print("No changelog fragments to check.")
+        return 0
+
+    errors = []
+    for path in files:
+        try:
+            _validate(path)
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    if errors:
+        for err in errors:
+            print(f"ERROR: {err}", file=sys.stderr)
+        print(f"{len(errors)} malformed fragment(s) in {fragments_dir}.", file=sys.stderr)
+        return 1
+    print(f"compile_sprint_log --check: {len(files)} fragment(s), all well-formed.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=_repo_root(),
                         help="repo root (default: this script's parent repo)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="report what would happen without writing")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true",
+                       help="report what folding would do without writing")
+    mode.add_argument("--check", action="store_true",
+                       help="validate every fragment's shape only; never folds, never touches "
+                            "sprint_log.md (what CI runs on every PR)")
     args = parser.parse_args()
-    return compile_fragments(args.root.resolve(), dry_run=args.dry_run)
+    root = args.root.resolve()
+    if args.check:
+        return check_fragments(root)
+    return compile_fragments(root, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

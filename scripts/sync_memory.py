@@ -35,6 +35,15 @@ memory instructions say to delete ones that turn out wrong) and it should not
 happen as a side effect of a machine that has not synced in a while. The cost
 is that deletions have to be propagated by hand; that is the right trade.
 
+**It never publishes personal memory.** MEASURED 2026-09-19 (issue #302): the
+first unattended run of `--push` copied four files out of session memory,
+including two `feedback`-type notes about the owner -- his working
+preferences and the name of this project's private conventions donor -- into
+this public repo's tracked `.claude/memory/`. The secret scanner found
+nothing, because a paragraph about how a named person likes to work is not a
+credential; it is simply not this repo's to publish. See "THE PERSONAL-MEMORY
+FILTER" below.
+
 THE SECRET SCAN (why `--push` is not just a copy)
 ---------------------------------------------------
 DNA-Entropy-Graph is a **public** repository. `.claude/memory/` is committed
@@ -52,23 +61,37 @@ narrower behaviour (copy the clean files, skip only the flagged ones) for the
 rare case where a human has already looked at the flagged file and wants the
 rest of the batch through immediately; see its own help text.
 
-CONFLICTS
----------
-Memories are one fact per file, so two machines rarely touch the same one and
-`--pull` only overwrites a live file when the mirror's copy is genuinely
-different. `MEMORY.md` is the exception: it is a shared index that both
-machines append to, so it is the one file that will actually collide. When it
-does, git surfaces it as a normal merge conflict on the mirror and the two
-halves are almost always both wanted.
+THE PERSONAL-MEMORY FILTER (why `--push` is not just a secret scan either)
+----------------------------------------------------------------------------
+The secret scan and the personal-memory filter catch two different things,
+and neither substitutes for the other. A memory file's own frontmatter
+already types it (`metadata.type`, one of `project`, `reference`, `user`,
+`feedback`): `project` and `reference` are about the WORK and are exactly
+what this mirror is for; `user` and `feedback` are about a PERSON and stay on
+the machine that wrote them. `--push` mirrors only `project`/`reference`
+files, prints every file it skips with its type and the reason, and never
+silently drops one. A file with no frontmatter, or a type this script does
+not recognise, is treated as personal -- fail toward not publishing, the
+same direction the secret scan already fails in. `--include-personal`
+overrides this for a deliberate, one-time exception; it does not disable the
+secret scan, which still runs on whatever ends up eligible to copy.
+
+`.claude/memory/MEMORY.md` is never touched by either `--pull` or `--push`,
+regardless of type or `--include-personal`. It is a hand-written index of
+this repo's own lesson files, committed in the mirror; the LIVE directory
+has its own `MEMORY.md`, Claude Code's own session-memory index, and the two
+are different documents that happen to share a filename. Syncing one over
+the other in either direction would silently destroy whichever one lost.
 
 USAGE
 -----
-    python scripts/sync_memory.py --pull                 # mirror -> live
-    python scripts/sync_memory.py --push                 # live -> mirror, secret-scanned
-    python scripts/sync_memory.py --push --dry-run        # report only; write nothing
-    python scripts/sync_memory.py --status                # report drift both ways, change nothing
-    python scripts/sync_memory.py --self-test              # run the scanner against its own fixtures
-    python scripts/sync_memory.py --list-patterns          # print the secret-pattern set
+    python scripts/sync_memory.py --pull                    # mirror -> live
+    python scripts/sync_memory.py --push                    # live -> mirror: personal-filtered, secret-scanned
+    python scripts/sync_memory.py --push --include-personal # also publish user/feedback memory, deliberately
+    python scripts/sync_memory.py --push --dry-run           # report only; write nothing
+    python scripts/sync_memory.py --status                   # report drift both ways, change nothing
+    python scripts/sync_memory.py --self-test                 # run the secret scanner against its own fixtures
+    python scripts/sync_memory.py --list-patterns              # print the secret-pattern set
 
 Exit code is 0 on success and on "nothing to do", 1 when `--push` finds a
 secret and aborts, 3 when `--self-test` finds the scanner itself broken. A
@@ -251,6 +274,92 @@ def scan_file_for_secrets(path: pathlib.Path) -> list[SecretMatch]:
     return find_secrets(text)
 
 
+# ---------------------------------------------------------------------------
+# The personal-memory filter (issue #302). A memory file's frontmatter looks
+# like:
+#
+#     ---
+#     name: dna-entropy-graph-project
+#     description: ...
+#     metadata:
+#       type: project
+#     ---
+#
+# `PUBLISHABLE_MEMORY_TYPES` is the whole rule: everything else --
+# `user`/`feedback`, an unrecognised type, or no frontmatter at all -- is
+# personal and stays off `--push` unless `--include-personal` says otherwise.
+# Deliberately a minimal hand-rolled reader, not a YAML library: the shape
+# above is the only shape this script needs to understand, and a real parser
+# would accept (and have to reason about) far more of YAML than that.
+# ---------------------------------------------------------------------------
+
+MEMORY_INDEX_FILENAME = "MEMORY.md"
+PUBLISHABLE_MEMORY_TYPES: frozenset[str] = frozenset({"project", "reference"})
+
+_METADATA_KEY_RE = re.compile(r"^metadata\s*:\s*$")
+_TYPE_KEY_RE = re.compile(r"^type\s*:\s*(\S+)\s*$")
+
+
+def read_memory_type(path: pathlib.Path) -> str | None:
+    """The lowercased `metadata.type` frontmatter value, or None if `path`
+    has no frontmatter, no `metadata:` block, or no `type:` inside it.
+
+    Frontmatter is the block between the first line (exactly `---`) and the
+    next line that is exactly `---`. Only that block is read; the file body
+    is never parsed as YAML. Within it, `type:` counts only when it appears
+    indented under a `metadata:` line at a shallower indent -- a stray
+    top-level `type:` (unlikely, but not this script's format) is not
+    treated as the memory's type.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return None
+
+    in_metadata = False
+    metadata_indent = 0
+    for line in lines[1:end]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        if not in_metadata:
+            if _METADATA_KEY_RE.match(stripped):
+                in_metadata = True
+                metadata_indent = indent
+            continue
+        if indent <= metadata_indent:
+            # Dedented back out of the metadata block without finding `type:`.
+            in_metadata = False
+            if _METADATA_KEY_RE.match(stripped):
+                in_metadata = True
+                metadata_indent = indent
+            continue
+        m = _TYPE_KEY_RE.match(stripped)
+        if m:
+            return m.group(1).strip("\"'").lower()
+    return None
+
+
+def classify_memory_file(path: pathlib.Path) -> tuple[bool, str]:
+    """(is_personal, reason). Fails toward personal: no frontmatter and an
+    unrecognised type both come back True, per issue #302's explicit
+    requirement that the filter never guess its way into publishing."""
+    memory_type = read_memory_type(path)
+    if memory_type is None:
+        return True, "no frontmatter / no metadata.type found"
+    if memory_type in PUBLISHABLE_MEMORY_TYPES:
+        return False, f"type: {memory_type}"
+    return True, f"type: {memory_type}"
+
+
 def _slugify_cwd(path: pathlib.Path) -> str:
     """Claude Code's own project-directory slug: every path separator and
     drive colon becomes a dash. `<user-home>/DNA-Entropy-Graph` ->
@@ -340,11 +449,17 @@ def _print_flagged(flagged: dict[str, list[SecretMatch]]) -> None:
             print(f"                    {h.why}")
 
 
+def _print_skipped_personal(skipped: dict[str, str]) -> None:
+    for name, reason in skipped.items():
+        print(f"  SKIPPED  {name}  ({reason}, personal -- use --include-personal to override)")
+
+
 def run(
     direction: str,
     apply_changes: bool,
     dry_run: bool = False,
     allow_flagged_skip: bool = False,
+    include_personal: bool = False,
 ) -> int:
     live = find_live_dir()
     if live is None:
@@ -359,7 +474,33 @@ def run(
         return 0
 
     new, changed, only_dst = compare(src, dst)
+
+    # MEMORY.md is never synced in either direction: the mirror's copy is a
+    # hand-written index of this repo's own lesson files, the live copy is
+    # Claude Code's own session-memory index, and the two are different
+    # documents that happen to share a filename. See the module docstring.
+    memory_index_touched = MEMORY_INDEX_FILENAME in new or MEMORY_INDEX_FILENAME in changed
+    new = [n for n in new if n != MEMORY_INDEX_FILENAME]
+    changed = [n for n in changed if n != MEMORY_INDEX_FILENAME]
+    only_dst = [n for n in only_dst if n != MEMORY_INDEX_FILENAME]
+
     candidates = new + changed
+
+    # The personal-memory filter (issue #302) only matters for the direction
+    # that can publish a note about a PERSON into the public repo: live ->
+    # mirror. Pulling mirror -> live is never gated on it: only
+    # project/reference memory (or something pushed with --include-personal)
+    # can be in the mirror to begin with.
+    personal_skipped: dict[str, str] = {}
+    if direction == "push" and not include_personal and candidates:
+        eligible = []
+        for n in candidates:
+            is_personal, reason = classify_memory_file(src / n)
+            if is_personal:
+                personal_skipped[n] = reason
+            else:
+                eligible.append(n)
+        candidates = eligible
 
     # The secret scan only matters for the direction that can leak into the
     # public repo: live -> mirror. Pulling mirror -> live moves content that
@@ -375,19 +516,33 @@ def run(
         print(f"  live   : {live}")
         print(f"  mirror : {MIRROR_DIR}")
         print(f"  new={len(new)} changed={len(changed)} only-in-destination={len(only_dst)}"
-              f"{f' flagged={len(flagged)}' if direction == 'push' else ''}")
+              f"{f' personal-skipped={len(personal_skipped)} flagged={len(flagged)}' if direction == 'push' else ''}")
         for n in new:
-            marker = "  (WOULD BE REFUSED, see below)" if n in flagged else ""
+            marker = _status_marker(n, personal_skipped, flagged)
             print(f"    new      {n}{marker}")
         for n in changed:
-            marker = "  (WOULD BE REFUSED, see below)" if n in flagged else ""
+            marker = _status_marker(n, personal_skipped, flagged)
             print(f"    changed  {n}{marker}")
         for n in only_dst:
             print(f"    dst-only {n}   (never deleted automatically)")
+        if memory_index_touched:
+            print(f"    {MEMORY_INDEX_FILENAME}: excluded from sync (hand-written index of this "
+                  "repo's own lesson files; not the same document as the session-memory index)")
+        if personal_skipped:
+            print(f"\n  {verb}skip {len(personal_skipped)} personal file(s):")
+            _print_skipped_personal(personal_skipped)
         if flagged:
             print(f"\n  {verb}refuse {len(flagged)} file(s) containing what looks like a secret:")
             _print_flagged(flagged)
         return 1 if (flagged and not allow_flagged_skip) else 0
+
+    if personal_skipped:
+        print(f"sync_memory: skipping {len(personal_skipped)} personal file(s):")
+        _print_skipped_personal(personal_skipped)
+
+    if memory_index_touched:
+        print(f"sync_memory: {MEMORY_INDEX_FILENAME} excluded from sync (hand-written index of "
+              "this repo's own lesson files; not the same document as the session-memory index)")
 
     if flagged and not allow_flagged_skip:
         print(f"sync_memory: REFUSING to push -- {len(flagged)} file(s) look like they contain a secret:",
@@ -414,14 +569,27 @@ def run(
         return 0
 
     copy_over(src, dst, to_copy)
-    summary = f"sync_memory: {label}, {len(new) - len([n for n in new if n in flagged])} new, " \
-              f"{len(changed) - len([n for n in changed if n in flagged])} updated{skipped_note}"
+    copied_new = len([n for n in new if n in to_copy])
+    copied_changed = len([n for n in changed if n in to_copy])
+    summary = f"sync_memory: {label}, {copied_new} new, {copied_changed} updated{skipped_note}"
+    if personal_skipped:
+        summary += f" ({len(personal_skipped)} personal file(s) skipped)"
     if only_dst:
         summary += f" ({len(only_dst)} present only in destination, left alone)"
     # A hook's stdout is only surfaced to the user via systemMessage, so emit
     # the JSON shape Claude Code reads rather than a bare line nobody sees.
     print(json.dumps({"systemMessage": summary}))
     return 0
+
+
+def _status_marker(
+    name: str, personal_skipped: dict[str, str], flagged: dict[str, list[SecretMatch]],
+) -> str:
+    if name in personal_skipped:
+        return f"  (PERSONAL, skipped: {personal_skipped[name]})"
+    if name in flagged:
+        return "  (WOULD BE REFUSED, see below)"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -497,6 +665,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--allow-flagged-skip", action="store_true",
                      help="with --push: copy every clean file and skip only the flagged one(s), "
                           "instead of the default of refusing the whole push")
+    ap.add_argument("--include-personal", action="store_true",
+                     help="with --push: also publish user/feedback memory (personal notes) that "
+                          "would otherwise be skipped -- a deliberate, one-time exception, per issue #302")
     args = ap.parse_args(argv)
 
     if args.list_patterns:
@@ -509,6 +680,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.allow_flagged_skip and not args.push:
         ap.error("--allow-flagged-skip only applies to --push")
+    if args.include_personal and not args.push:
+        ap.error("--include-personal only applies to --push")
 
     if args.status:
         rc_pull = run("pull", apply_changes=False)
@@ -522,6 +695,7 @@ def main(argv: list[str] | None = None) -> int:
         apply_changes=True,
         dry_run=args.dry_run,
         allow_flagged_skip=args.allow_flagged_skip,
+        include_personal=args.include_personal,
     )
 
 

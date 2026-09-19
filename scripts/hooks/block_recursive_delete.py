@@ -7,24 +7,23 @@ TRACKED, and it holds files other commits own -- e2e screenshots among them.
 An agent tidying up its own scratch files cannot tell its files from anyone
 else's, and `rm -rf` does not ask.
 
-MEASURED 2026-09-13, one overnight wave: FOUR agents independently ran
-`rm -rf .scratch` and all four deleted the same three tracked PNGs from
-commit `7a4ae2a40` (`e2e-dev-links-confirm-FAIL-idle-wait.png`,
-`e2e-dev-links-confirm-PASS-after-run-now.png`,
-`e2e-dev-sheets-edit-persists-PASS.png`). All four caught it with
-`git status` and restored with `git checkout -- .scratch/` before committing.
-That is four saves by luck, not a control. THREE of the four happened AFTER
-the ban was written into `docs/agent_wave_brief.md` as ban 4b, and one of
-those three was in a lane whose own brief carried the ban verbatim, with the
-count of prior offenders in it. The agent reported it as "I ran it out of
-habit."
+MEASURED 2026-09-13, one overnight wave (on the project this hook came from,
+before this repo existed): FOUR agents independently ran `rm -rf .scratch`
+and all four deleted the same three tracked screenshot files from a single
+commit. All four caught it with `git status` and restored with
+`git checkout -- .scratch/` before committing. That is four saves by luck,
+not a control. THREE of the four happened AFTER the ban was written into that
+project's own wave-brief document, and one of those three was in a lane whose
+own brief carried the ban verbatim, with the count of prior offenders in it.
+The agent reported it as "I ran it out of habit."
 
-This is the same arc `git stash` took: banned in the wave brief, banned in the
-`orchestrating-agents` skill, banned verbatim in individual briefs, broken five
-times anyway, and only actually stopped by `scripts/hooks/block_git_stash.py`.
-A rule broken four times in one night by agents who read it is not a
-documentation problem. This hook is the enforcement, and the message it prints
-is the replacement, because a ban with no alternative loses to the reflex.
+This is the same arc `git stash` took: banned in `CLAUDE.md`, banned in the
+`.claude/skills/orchestrating-agents/SKILL.md` skill, banned verbatim in
+individual briefs, broken five times anyway, and only actually stopped by
+`scripts/hooks/block_git_stash.py`. A rule broken four times in one night by
+agents who read it is not a documentation problem. This hook is the
+enforcement, and the message it prints is the replacement, because a ban
+with no alternative loses to the reflex.
 
 WHAT IT BLOCKS
 --------------
@@ -91,10 +90,10 @@ _REMOVE_ITEM = re.compile(
 
 MESSAGE = """A recursive force-delete aimed inside this repository is blocked.
 
-`.scratch/` is SHARED and TRACKED. It holds files other commits own, and four
-agents in a single wave have already deleted the same three tracked e2e
-screenshots with `rm -rf .scratch`. Every one of them meant to remove only
-their own files.
+`.scratch/` is SHARED and TRACKED. It holds files other commits own: on the
+project this hook came from, four agents in a single overnight wave each
+independently deleted the same three tracked screenshot files with
+`rm -rf .scratch`, meaning to remove only their own.
 
 Delete the specific files you created, by name, then prove the tree is clean:
 

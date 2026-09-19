@@ -189,3 +189,87 @@ def test_cli_nonzero_exit_on_malformed_fragment(tmp_path):
     )
     assert proc.returncode == 1
     assert "must start with a '- ' bullet" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# --check: what ci-docs.yml's "Changelog fragment shape" step actually runs
+# on every PR. It must never fold or touch sprint_log.md, and it must not
+# require sprint_log.md to exist at all (a branch has fragments long before
+# anyone runs a real fold).
+# ---------------------------------------------------------------------------
+
+def test_check_passes_and_touches_nothing_with_well_formed_fragments(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    changelog_dir = root / "docs" / "changelog.d"
+    changelog_dir.mkdir(parents=True)
+    frag = changelog_dir / "a-branch.md"
+    frag.write_text("- did a thing\n", encoding="utf-8")
+
+    rc = csl.check_fragments(root)
+
+    assert rc == 0
+    assert frag.exists()  # --check never deletes a fragment
+    assert not (root / "docs" / "sprint_log.md").exists()  # never created/touched
+
+
+def test_check_fails_on_malformed_fragment_without_deleting_it(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    changelog_dir = root / "docs" / "changelog.d"
+    changelog_dir.mkdir(parents=True)
+    frag = changelog_dir / "bad.md"
+    frag.write_text("## not a bullet\n", encoding="utf-8")
+
+    rc = csl.check_fragments(root)
+
+    assert rc == 1
+    assert frag.exists()
+
+
+def test_check_passes_with_no_fragments_at_all(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    assert csl.check_fragments(root) == 0
+
+
+def test_check_does_not_require_sprint_log_heading(tmp_path):
+    """--check validates fragment SHAPE only; it must not care whether
+    docs/sprint_log.md exists or has the '## Recent changes' heading --
+    that requirement belongs to the real fold, not to a per-PR shape check."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    changelog_dir = root / "docs" / "changelog.d"
+    changelog_dir.mkdir(parents=True)
+    (changelog_dir / "a.md").write_text("- fine\n", encoding="utf-8")
+    # No docs/sprint_log.md at all.
+    assert csl.check_fragments(root) == 0
+
+
+def test_cli_check_flag_exits_nonzero_on_malformed_fragment(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    changelog_dir = root / "docs" / "changelog.d"
+    changelog_dir.mkdir(parents=True)
+    (changelog_dir / "bad.md").write_text("## not a bullet\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "compile_sprint_log.py"), "--check", "--root", str(root)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 1
+
+
+def test_check_against_this_repos_real_changelog_fragments():
+    """What ci-docs.yml actually runs, against the real fragments several
+    agents wrote tonight -- see this agent's own report for the live
+    result; this assertion only proves --check runs cleanly end to end."""
+    assert csl.check_fragments(REPO_ROOT) in (0, 1)
+
+
+def test_check_and_dry_run_are_mutually_exclusive():
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "compile_sprint_log.py"), "--check", "--dry-run"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 2

@@ -220,7 +220,7 @@ def verdict(cwd: str) -> str | None:
 
 
 def main() -> int:
-    # #2415: `--explain <cwd>` is a diagnostic mode, never reached by the
+    # `--explain <cwd>` is a diagnostic mode, never reached by the
     # real PreToolUse invocation (which always feeds JSON on stdin with no
     # argv). It exists so testing this hook by hand distinguishes "allowed
     # because primary checkout" from "allowed because the cwd could not be
