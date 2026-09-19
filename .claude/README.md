@@ -66,6 +66,16 @@ replace the note with a `MEASURED <date>:` finding once checked (Hard Rule
 
 ## Memory and secrets
 
+> **The memory-sync hooks are switched off right now.** `hooks.SessionStart` and
+> `hooks.Stop` in `settings.json` are empty arrays on purpose, pending the `DECISION`
+> issue on memory sync (#302). The `--push` hook did two things on its first real runs
+> that nobody intended: it published four of the owner's personal session memories into
+> this public directory, and on every later run it overwrote `memory/MEMORY.md`, the
+> hand-written index of this repo's own lesson files, with the unrelated session-memory
+> index. The secret scan was working; credentials were never the exposure. Restore both
+> hook entries (they are in git history at commit `8875b51`) once `sync_memory.py`
+> filters on the memory type and leaves `MEMORY.md` alone.
+
 This repo is **public**. Before any `sync_memory.py --push` hook writes a
 memory file into this directory, it must run a secret-pattern scan and
 refuse to push a file containing an email address, a Google Cloud project
