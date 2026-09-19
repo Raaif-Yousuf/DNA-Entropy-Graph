@@ -59,12 +59,16 @@ run against an in-memory fake).
 ## 2. The decisions, five minutes each
 
 `DECISION` issues are questions you can usually answer async in a GitHub comment, no
-dashboard, no hardware. Fifteen are open. Thirteen already carry a written
-recommendation from planning or from tonight's session; read the one line below, and
-either comment "agreed" on the issue (or just let it stand) or say what you'd do
-differently. Two needed a recommendation written tonight because there wasn't one yet
-(#226), or because the shipped work has already overtaken the question (#17); those are
-marked.
+dashboard, no hardware. Every one carries a written recommendation; read the one line
+below and either comment "agreed" (or just let it stand) or say what you'd do
+differently.
+
+**The six at the bottom of the table are different in kind.** They were decided by an
+agent during the 2026-09-19 wave and are already **implemented**, under the standing
+instruction to decide a non-major fork rather than block on it. Each is marked
+`DECISION (agent-made, reversible)` on the issue itself and carries the reasoning and the
+conditions that would change the call. Overruling one means reopening work, not just
+choosing, so they are worth a slower read than the rest.
 
 | # | Question | Recommendation | Your move |
 |---|---|---|---|
@@ -74,7 +78,7 @@ marked.
 | [#12](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/12) | Default max run duration and hard ceiling? | **4 h default / 24 h ceiling** | Confirm, or overrule |
 | [#13](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/13) | Default cloud results retention? | **90 days**, user-changeable in Settings | Confirm, or overrule |
 | [#14](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/14) | Ship evo2_40b and evo2_1b_base in v1? | **40B visible, flagged experimental; 1B hidden under Advanced**; neither blocks v1.0 | Confirm, or overrule |
-| [#15](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/15) | .NET 10 + WASDK 2.x confirmed? | Whatever the week-1 spike actually builds, publishes self-contained, and passes the Velopack/loopback/toast checks; not yet run, since `app/` does not exist | No action until the spike runs |
+| [#15](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/15) | .NET 10 + WASDK 2.x confirmed? | **Half measured now** (#35): .NET 10.0.401 with Microsoft.WindowsAppSDK 1.8.250916003 restores, compiles its XAML and builds an unpackaged self-contained app from the `dotnet` CLI alone, no Visual Studio workload. The app has still never been **launched**, which is the half that matters for this question | No action until someone runs it |
 | [#16](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/16) | Velopack vs MSIX confirmed? | **Velopack**, unless the same spike finds a real blocker with WinUI 3 unpackaged | No action until the spike runs |
 | [#17](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/17) | Multi-record FASTA: all records? | **Already shipped** (all records is the default, #283, closed) matching the original recommendation exactly | **Propose to close**; nothing left to decide |
 | [#18](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/18) | Single `cloud-platform` OAuth scope, or incremental? | **Single scope**; `docs/threat_model.md` section 3 has the fuller honest tradeoff this session wrote, if you want the long version before confirming | Confirm, or overrule |
@@ -83,6 +87,12 @@ marked.
 | [#226](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/226) | AWS sign-in: Identity Center device flow, or access-key import? | **Written tonight, new**: device flow as the primary path (matches the no-static-credential posture the GCP side already has), access-key import as an explicit fallback for accounts with no Identity Center set up; how common that is among lab AWS accounts is genuinely unmeasured, worth a cheap check before committing to device-flow-only | Read the full comment; confirm, or overrule |
 | [#301](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/301) | pyrodigal (GPLv3) violates the MIT/Apache/BSD-only rule | **A scoped carve-out** (option c): GPLv3 stays confined to the worker's `[genes]` extra and the container images, default-on with a build-argument off-switch, never in `app/`; full obligations checklist is on the issue | Confirm, or overrule |
 | [#302](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/302) | Should memory sync publish personal session notes to this public repo? | **Already implemented** (type-filtered: only `project`/`reference` memory publishes by default, `--include-personal` is an explicit override); needs your sign-off that the filter is the right line to draw, not further engineering | Confirm, or overrule |
+| [#379](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/379) | **Agent-made.** What should the worker do when the results store is unreachable for a long time? | **Escalate and leave a breadcrumb**, rather than fail the run or retry forever in silence: five consecutive failures prints an `ESCALATED` line and writes a local-disk copy of the status, and a failed `result.json` write does the same. The worker cannot tell an outage from a bucket permanently gone, and a run that finishes and cannot say so has spent all the money for nothing | Read the issue; confirm, or overrule |
+| [#364](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/364) | **Agent-made.** Should the model gate refuse a model id it does not recognise? | **Fail closed.** The gate stands between a user and a GPU they pay for by the minute; an unknown id is a typo or an unsupported model, and refusing costs them nothing while failing open costs a boot and a weight download | Confirm, or overrule |
+| [#353](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/353) | **Agent-made.** Should the Geneious track bin large sequences, refuse, or ship unbinned? | **Bin above 200,000 positions** (measured: 87.78 MB for 1 Mb unbinned, 22 MB binned), with a `# NOTE` line in the file saying so and a parameter that forces full resolution | Confirm, or overrule |
+| [#333](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/333) | **Agent-made, not yet implemented.** Should `GeneFeature` carry per-exon segments for spliced genes? | Today a spliced gene reports its outer span and a notice says so, so its mean entropy is diluted by intron bases. Per-exon segments would fix that and change a shared data structure | Read the issue; decide |
+| [#332](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/332) | **Agent-made.** Delete the prototype's double-click launcher? | **Deleted.** It shelled out to a `cloudrun` command that no longer exists, and `app/` supersedes it | Confirm, or overrule |
+| [#343](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/343) / [#345](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/345) | Two manifest fields parsed and never consumed: `predictor.precision` and `analysis.stride` | Both are probably **provenance rather than instruction**, but "probably" is why they are still open. Each needs a yes/no on whether the worker should cross-check the app's value and refuse a disagreement | Decide, or hand to an agent |
 
 ---
 
