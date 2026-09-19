@@ -180,6 +180,24 @@ def test_both_combined_seam_is_at_context_length_when_l_at_least_2k() -> None:
     assert result.seam == K
 
 
+def test_direction_result_records_the_ceiling_it_was_run_with() -> None:
+    # WindowPlan.ceiling was set and never read anywhere (found during the lane-B audit);
+    # DirectionResult now threads the SAME ceiling value analyze_direction was called
+    # with, so a report can show why window < 2*context_length (the ceiling clamped it)
+    # without digging through notice text.
+    K = 50
+    seq = "ACGT" * 40  # L=160
+    result = analyze_direction(
+        MockPredictor(seed=9),
+        seq,
+        context_length=K,
+        ceiling=75,  # deliberately less than 2K=100, so W is ceiling-bound
+        direction=Direction.BOTH_COMBINED,
+    )
+    assert result.ceiling == 75
+    assert result.window < 2 * K  # sanity: the ceiling really did clamp W
+
+
 def test_both_combined_first_k_bases_come_from_reverse_rest_from_forward() -> None:
     """This is THE test that would catch reversed-text-instead-of-reverse-complement."""
     K = 50

@@ -95,5 +95,10 @@ class GenBankWriter:
         ]
         out_path = Path(out_dir) / f"{name}.gb"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        _seqio_write(seq_records, str(out_path), "genbank")
+        # Open the file ourselves (Hard Rule 5: UTF-8, LF newlines) rather than handing
+        # SeqIO.write a bare path -- Biopython then opens it itself in the platform's
+        # default text mode, which on Windows means CRLF (MEASURED 2026-09-19, issue
+        # found during the lane-B science/writers audit).
+        with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+            _seqio_write(seq_records, fh, "genbank")
         return str(out_path)
