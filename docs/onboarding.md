@@ -61,9 +61,42 @@ the **.NET runtimes** 8.0, 9.0 and 10.0 were present
 SDKs were found" until the SDK itself is installed — the runtime alone is
 not enough to build anything.
 
+**MEASURED 2026-09-19, later the same day: the winget install does not
+work unattended on this box.**
+
 ```powershell
 winget install Microsoft.DotNet.SDK.10
 ```
+
+fails with `Installer failed with exit code: 1602` ("You cancelled the
+installation"). 1602 here is not a user cancelling anything: the SDK's
+machine-wide installer asks for elevation, and a non-interactive session
+has nobody to answer the UAC prompt, so the prompt is dismissed and the
+installer reports a cancel. Running the same command from an elevated
+PowerShell works.
+
+**The unattended route that does work needs no administrator at all**, and
+is what is installed on this machine now:
+
+```powershell
+Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile $env:TEMP\dotnet-install.ps1
+& $env:TEMP\dotnet-install.ps1 -Channel 10.0 -InstallDir "$env:USERPROFILE\.dotnet" -NoPath
+```
+
+This drops the SDK in `%USERPROFILE%\.dotnet` instead of
+`C:\Program Files\dotnet`. The shared host already on `PATH` only finds
+SDKs beside itself, so a per-user SDK is invisible until `PATH` prefers it.
+Both of these are set as **user** environment variables on this machine:
+
+| Variable | Value |
+| --- | --- |
+| `Path` | `%USERPROFILE%\.dotnet` prepended to the existing value |
+| `DOTNET_ROOT` | `%USERPROFILE%\.dotnet` |
+
+MEASURED 2026-09-19 after that: `dotnet --version` reports `10.0.401` and
+`dotnet --list-sdks` reports `10.0.401 [%USERPROFILE%\.dotnet\sdk]`.
+A shell opened **before** those variables were set still sees no SDK, which
+looks exactly like a failed install; open a new one before believing it.
 
 In Visual Studio's Installer, add the **Windows App SDK** / WinUI 3
 workload (".NET Desktop Development" plus the Windows App SDK component;
