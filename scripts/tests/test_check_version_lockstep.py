@@ -62,12 +62,26 @@ def test_read_app_version_none_on_malformed_xml(tmp_path):
     assert cvl.read_app_version(p) is None
 
 
-def test_check_against_this_repos_real_tree_notices_missing_app():
-    """app/ genuinely does not exist yet (issue #61) as of this session --
-    unlike the docs-index check, this is a stable fact for tonight (the app
-    skeleton is a different agent's much larger, separate task), so this
-    assertion is safe to fix."""
+def test_check_against_this_repos_real_tree_agrees_on_one_version():
+    """This assertion used to be its own opposite: it asserted that `app/` did
+    NOT exist and that the guard said so, on the reasoning that this was "a
+    stable fact for tonight". It stopped being true about two hours later, when
+    issue #61 landed the solution skeleton, and this test went red on the first
+    CI run afterwards -- which is the guard and the test both working, and a
+    reminder that "stable for tonight" is not a property a committed assertion
+    can have.
+
+    What it asserts now is the rule itself (issue #33): app/Directory.Build.props
+    and worker/pyproject.toml carry the same version string, and nothing is
+    merely being skipped."""
     repo_root = SCRIPTS_DIR.parent
     problems, notices = cvl.check(repo_root)
+
     assert problems == []
-    assert any(f"#{cvl.APP_SKELETON_ISSUE}" in n for n in notices)
+    assert not any(f"#{cvl.APP_SKELETON_ISSUE}" in n for n in notices), (
+        "app/ exists now, so the guard must be enforcing rather than noticing."
+    )
+
+    app_version = cvl.read_app_version(repo_root / "app" / "Directory.Build.props")
+    assert app_version is not None, "app/Directory.Build.props must carry a readable <Version>."
+    assert app_version == cvl.read_worker_version(repo_root / "worker" / "pyproject.toml")
