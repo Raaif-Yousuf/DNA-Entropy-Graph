@@ -30,9 +30,5 @@
   "TEST-ONLY-COMMAND:SettingsViewModel.SetThemeCommand": "#104 builds the Settings page",
   "TEST-ONLY-OBSERVABLE:SettingsViewModel.Theme": "#104 builds the Settings page",
 
-  "DEAD-REGISTRATION:IComputeGateway": "#58's CloudJobRunner is the first consumer; registered ahead of it so the DI graph is complete",
-  "DEAD-REGISTRATION:IStorageGateway": "#58's CloudJobRunner is the first consumer",
-  "DEAD-REGISTRATION:IProjectSetupGateway": "#204's SetupHealthService is the first consumer",
-  "DEAD-REGISTRATION:IQuotaGateway": "#88's quota read is the first consumer",
   "DEAD-REGISTRATION:RunTargetResolver": "#173's run-target picker is the first consumer"
 }

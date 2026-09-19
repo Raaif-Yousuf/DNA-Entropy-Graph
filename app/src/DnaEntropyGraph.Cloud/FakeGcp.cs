@@ -17,6 +17,19 @@ namespace DnaEntropyGraph.Cloud;
 /// it (see <c>FakeGcpScriptedFailureTests</c>'s round-trip tests, which
 /// assert exactly that agreement).
 ///
+/// Issue #257: VMs are keyed by <c>(Name, Zone)</c>, not name alone, because
+/// that is what real Compute Engine actually enforces - a name is unique
+/// only within a zone. That means this fake does NOT stop a second,
+/// different zone's create for the same name from succeeding independently
+/// (that is the real risk issue #389 describes; the fix is the caller-side
+/// reconciliation in <see cref="FindByJobIdAsync"/>, not a fake that hides
+/// the danger by pretending names are globally unique). What the fake DOES
+/// enforce is the narrower, real guarantee: a retried create for the exact
+/// same <c>(spec, zone)</c> - which, since <c>requestId == JobId</c> is
+/// deterministic per spec, is indistinguishable from Compute Engine's own
+/// request-id-based idempotent replay - returns the ORIGINAL successful
+/// result rather than erroring or creating a second entry.
+///
 /// <see cref="FakeGcp"/> keeps a public, parameterless constructor (DI in
 /// <c>ServiceRegistration.cs</c> resolves it that way); every scripted
 /// failure is armed afterward through the fluent setters below, never
@@ -26,7 +39,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 {
     private readonly TimeProvider _timeProvider;
 
-    private readonly ConcurrentDictionary<string, VmDescriptor> _vms = new();
+    private readonly ConcurrentDictionary<(string Name, string Zone), VmDescriptor> _vms = new();
 
     // --- Account ---
     private bool _signedIn = true;
@@ -37,11 +50,12 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     private readonly HashSet<string> _apiDisabledProjects = new(StringComparer.Ordinal);
     private readonly HashSet<string> _permissionDeniedProjects = new(StringComparer.Ordinal);
     private readonly HashSet<string> _orgPolicyBlockedProjects = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProjectLifecycleState> _projectStates = new(StringComparer.Ordinal);
 
     // --- Per-attempt scripted failures (worth continuing past) ---
     private readonly Dictionary<string, int> _stockoutRemainingByZone = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _quotaExceededRemainingByZone = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _alreadyExistingVmNames = new(StringComparer.Ordinal);
+    private readonly HashSet<(string Name, string Zone)> _alreadyExistingVmKeys = new();
     private int _networkFailuresRemaining;
 
     // --- Quota table (IQuotaGateway) ---
@@ -50,7 +64,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     private const int DefaultRegionalQuota = 1;
 
     // --- Preemption (a running VM discovered TERMINATED after a deadline) ---
-    private readonly Dictionary<string, DateTimeOffset> _preemptAt = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Name, string Zone), DateTimeOffset> _preemptAt = new();
 
     public FakeGcp()
         : this(TimeProvider.System)
@@ -100,6 +114,13 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         return this;
     }
 
+    /// <summary>The project's lifecycle state <see cref="GetProjectStateAsync"/> reports (issue #388) - preflight step 1. Unset projects report <see cref="ProjectLifecycleState.Active"/>.</summary>
+    public FakeGcp WithProjectState(string projectId, ProjectLifecycleState state)
+    {
+        _projectStates[projectId] = state;
+        return this;
+    }
+
     /// <summary>
     /// The next <paramref name="times"/> <see cref="CreateVmAsync"/> attempts
     /// in <paramref name="zone"/> fail with <see cref="CloudErrorKind.Stockout"/>
@@ -129,17 +150,22 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     /// <summary>
     /// A VM named <paramref name="vmName"/> already exists in
-    /// <paramref name="zone"/>. <see cref="CreateVmAsync"/> for that exact
-    /// name throws <see cref="CloudErrorKind.AlreadyExists"/> every time
-    /// (unlike stockout/quota, this is not transient - the resource genuinely
-    /// is there), and <see cref="GetVmAsync"/> finds it immediately, so a
-    /// caller can adopt it rather than treat the create as a failure
-    /// (docs/cloud_design.md section 3, step 4).
+    /// <paramref name="zone"/> for a reason OTHER than this fake's own
+    /// idempotent-replay tracking (e.g. adopted from a previous session).
+    /// <see cref="CreateVmAsync"/> for that exact (name, zone) throws
+    /// <see cref="CloudErrorKind.AlreadyExists"/> every time, and
+    /// <see cref="GetVmAsync"/> finds it immediately, so a caller can adopt
+    /// it rather than treat the create as a failure (docs/cloud_design.md
+    /// section 3, step 4). Contrast this with a plain repeated
+    /// <see cref="CreateVmAsync"/> call for a (spec, zone) THIS fake already
+    /// created, which is treated as an idempotent replay (see this class's
+    /// own doc comment) and returns success, not this error.
     /// </summary>
     public FakeGcp WithAlreadyExists(string vmName, string zone, string status = "RUNNING")
     {
-        _vms[vmName] = new VmDescriptor(vmName, zone, status);
-        _alreadyExistingVmNames.Add(vmName);
+        var key = (vmName, zone);
+        _vms[key] = new VmDescriptor(vmName, zone, status);
+        _alreadyExistingVmKeys.Add(key);
         return this;
     }
 
@@ -171,17 +197,17 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     }
 
     /// <summary>
-    /// A running VM is discovered <c>TERMINATED</c> (with
-    /// <see cref="VmDescriptor.StatusReason"/> <c>"preempted"</c>) the first
-    /// time <see cref="GetVmAsync"/> is polled at or after
-    /// <paramref name="after"/> has elapsed on this instance's
+    /// The VM named <paramref name="vmName"/> in <paramref name="zone"/> is
+    /// discovered <c>TERMINATED</c> (with <see cref="VmDescriptor.StatusReason"/>
+    /// <c>"preempted"</c>) the first time <see cref="GetVmAsync"/> is polled
+    /// at or after <paramref name="after"/> has elapsed on this instance's
     /// <see cref="TimeProvider"/>. Requires the <see cref="FakeGcp(TimeProvider)"/>
     /// constructor with a controllable time source to be deterministic in a
     /// test.
     /// </summary>
-    public FakeGcp WithPreemption(string vmName, TimeSpan after)
+    public FakeGcp WithPreemption(string vmName, string zone, TimeSpan after)
     {
-        _preemptAt[vmName] = _timeProvider.GetUtcNow() + after;
+        _preemptAt[(vmName, zone)] = _timeProvider.GetUtcNow() + after;
         return this;
     }
 
@@ -211,15 +237,9 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         // even when nothing is scripted at all.
         spec.EnsurePreconditions();
 
-        if (_networkFailuresRemaining > 0)
-        {
-            _networkFailuresRemaining--;
-            throw Build(CloudErrorKind.Network, null, null, "Could not reach the server; connection timed out");
-        }
+        var key = (spec.VmName, zone);
 
-        ThrowIfProjectWide(spec.ProjectId);
-
-        if (_alreadyExistingVmNames.Contains(spec.VmName))
+        if (_alreadyExistingVmKeys.Contains(key))
         {
             throw Build(
                 CloudErrorKind.AlreadyExists,
@@ -227,6 +247,25 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
                 409,
                 $"The resource 'projects/{spec.ProjectId}/zones/{zone}/instances/{spec.VmName}' already exists");
         }
+
+        if (_vms.TryGetValue(key, out var alreadyCreatedByUs))
+        {
+            // Issue #257: requestId == JobId is deterministic per (spec,
+            // zone), so a repeated call here is indistinguishable from
+            // Compute Engine's own request-id-based idempotent replay -
+            // the original result comes back, not a second VM and not an
+            // error. Real project-wide/quota/stockout checks are NOT
+            // re-run, matching a real replayed operation.
+            return Task.FromResult(alreadyCreatedByUs);
+        }
+
+        if (_networkFailuresRemaining > 0)
+        {
+            _networkFailuresRemaining--;
+            throw Build(CloudErrorKind.Network, null, null, "Could not reach the server; connection timed out");
+        }
+
+        ThrowIfProjectWide(spec.ProjectId);
 
         if (Consume(_quotaExceededRemainingByZone, zone))
         {
@@ -247,21 +286,22 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         }
 
         var vm = new VmDescriptor(spec.VmName, zone, "RUNNING");
-        _vms[vm.Name] = vm;
+        _vms[key] = vm;
         return Task.FromResult(vm);
     }
 
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
-        if (!_vms.TryGetValue(vmName, out var vm))
+        var key = (vmName, zone);
+        if (!_vms.TryGetValue(key, out var vm))
         {
             return Task.FromResult<VmDescriptor?>(null);
         }
 
-        if (vm.Status == "RUNNING" && _preemptAt.TryGetValue(vmName, out var preemptAt) && _timeProvider.GetUtcNow() >= preemptAt)
+        if (vm.Status == "RUNNING" && _preemptAt.TryGetValue(key, out var preemptAt) && _timeProvider.GetUtcNow() >= preemptAt)
         {
             vm = vm with { Status = "TERMINATED", StatusReason = "preempted" };
-            _vms[vmName] = vm;
+            _vms[key] = vm;
         }
 
         return Task.FromResult<VmDescriptor?>(vm);
@@ -269,9 +309,10 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
-        if (_vms.TryGetValue(vmName, out var vm))
+        var key = (vmName, zone);
+        if (_vms.TryGetValue(key, out var vm))
         {
-            _vms[vmName] = vm with { Status = "STOPPED", StatusReason = null };
+            _vms[key] = vm with { Status = "STOPPED", StatusReason = null };
         }
 
         return Task.CompletedTask;
@@ -279,8 +320,27 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
-        _vms.TryRemove(vmName, out _);
+        _vms.TryRemove((vmName, zone), out _);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Issue #257/#389: scans every zone this fake knows about for a VM
+    /// named <c>deg-&lt;jobId&gt;</c>, the same computation
+    /// <see cref="VmSpec.VmName"/> uses. A real gateway would instead query
+    /// by the <c>job-id</c> label via <c>aggregatedList</c> (Hard Rule 9);
+    /// this fake does not store labels per VM, so it simulates the same
+    /// observable behaviour - "every VM for this job, regardless of which
+    /// zone it landed in" - by the one thing the fake DOES track precisely:
+    /// the deterministic name. More than one result is not a fake bug, it
+    /// is this fake correctly exposing #389's real risk when a caller
+    /// creates in two zones without reconciling first.
+    /// </summary>
+    public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var name = $"deg-{jobId}";
+        IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
+        return Task.FromResult(matches);
     }
 
     // ----------------------------------------------------------------
@@ -300,6 +360,9 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     // IProjectSetupGateway
     // ----------------------------------------------------------------
 
+    public Task<ProjectLifecycleState> GetProjectStateAsync(string projectId, CancellationToken cancellationToken)
+        => Task.FromResult(_projectStates.TryGetValue(projectId, out var state) ? state : ProjectLifecycleState.Active);
+
     public Task<bool> IsBillingEnabledAsync(string projectId, CancellationToken cancellationToken)
         => Task.FromResult(!_billingOffProjects.Contains(projectId));
 
@@ -310,8 +373,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     {
         // Real `gcloud services enable` is idempotent; scripting it as an
         // immediate, unconditional clear matches that, minus the real
-        // API's ~30-60s LRO delay (not modeled here - see the final report's
-        // "Unverified" section).
+        // API's ~30-60s LRO delay (tracked as a known gap in issue #390).
         _apiDisabledProjects.Remove(projectId);
         return Task.CompletedTask;
     }
