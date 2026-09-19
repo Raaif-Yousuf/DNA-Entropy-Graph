@@ -56,6 +56,24 @@ def test_invalid_char_reports_total_count() -> None:
     assert "3 non-ACGT" in str(exc.value)
 
 
+def test_replacement_character_gives_an_encoding_diagnosis_not_a_generic_invalid_char() -> None:
+    """#348: a literal U+FFFD (the Unicode decode-failure replacement character) means
+    the file was not valid UTF-8, not that the biologist typed a wrong base. The error
+    must say so and name an action, distinctly from an ordinary typo like 'B' or 'X'."""
+    with pytest.raises(ValidationError) as exc:
+        validate_sequence("ACGTACGT�ACGTACGT")  # position 9
+    msg = str(exc.value)
+    assert "position 9" in msg
+    assert "utf-8" in msg.lower()
+    assert "invalid character" not in msg.lower()  # distinct wording from a real typo
+
+
+def test_replacement_character_reports_the_total_count() -> None:
+    with pytest.raises(ValidationError) as exc:
+        validate_sequence("A�C�G�T")
+    assert "3" in str(exc.value)
+
+
 def test_ambiguity_code_gives_hint() -> None:
     with pytest.raises(ValidationError) as exc:
         validate_sequence("ATGCNATGCA")  # 'N' is IUPAC ambiguity

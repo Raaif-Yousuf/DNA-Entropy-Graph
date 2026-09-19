@@ -234,6 +234,45 @@ Windows dev box, MEASURED 2026-09-19 — silently different from the other two r
 forced UTF-8, and would have decoded differently again on a UTF-8-locale Linux box.
 GenBank input now agrees with FASTA and paste on encoding, everywhere.
 
+**A replacement character gets its own diagnosis (issue #348, MEASURED 2026-09-19):**
+`validate_sequence`'s alphabet check special-cases the literal `�` character (Unicode's
+own "could not decode" signal, and never something a biologist types) — instead of the
+generic "Invalid character" wording it gets for a real typo, the error names the actual
+cause ("could not be decoded as text... the file was not saved as UTF-8") and the fix
+(re-save the file as UTF-8), naming the position and count the same way every other
+alphabet error does.
+
+**Malformed GenBank input never reaches the caller as a raw traceback (issue #349,
+MEASURED 2026-09-19):** `read_genbank` wraps the call into Biopython's own parser in a
+`try/except ValueError` (every failure mode Biopython's `Bio.GenBank.Scanner` raises for
+malformed content, including its own `ParserFailureError`, is a `ValueError` or a
+subclass of one) and re-raises as `GenBankReadError`, agreeing with `read_fasta`'s own
+blanket guarantee that a malformed file is always a clean `*ReadError`, never a bare
+traceback. Line endings are also normalized (`\r`/`\r\n`/`\n` all become `\n`) before
+the text reaches Biopython's scanner, the same way `read_fasta`'s `text.splitlines()`
+already handles them for free — a lone `\r` (classic Mac, and what some sequencing
+instruments still emit) now parses successfully rather than merely failing cleanly.
+
+**Contig names are hardened against real filename hazards (issue #350, MEASURED
+2026-09-19):** `_safe_contig_name` (`readers/input.py`) disambiguates a name that
+sanitizes to a Windows-reserved device name (`CON`, `NUL`, `PRN`, `COM1`..`9`,
+`LPT1`..`9`) and caps length for a realistic output path, truncating only the base
+portion so the `_<n>` disambiguator that keeps records in one file from colliding always
+survives intact. CORRECTED per Hard Rule 18: the original theory that "Windows refuses
+to create `CON.fasta`" does not reproduce on this dev box (Windows 11 Home
+10.0.26200) — Python, .NET and PowerShell all created it successfully when measured
+directly — so this hardening is kept as free insurance (the sanitized name also becomes
+a GenBank LOCUS field and an IGV/WIG `chrom=` label) rather than as a fix for a
+confirmed crash. A separate, real gap this does **not** close — the actual output
+folder/file name on disk comes from `cfg.name` directly in `pipeline.py`, never from
+this sanitized form — is filed as its own issue against that file.
+
+**FASTA duplicate detection keys on the record ID, not the full header (issue #351,
+MEASURED 2026-09-19):** two records sharing an ID (the header up to its first
+whitespace — the part BLAST/samtools/IGV actually treat as the identifier) but carrying
+different free-text descriptions are now flagged as a genuine ID collision; comparing
+the full header line missed exactly this shape.
+
 **Checks, in order, fail fast with the first offending position:**
 1. **RNA**: if `U` is present and `--rna`/`Treat as RNA` is off, raise with the exact
  1-based position of the first `U` and a suggestion to turn the option on. With the

@@ -1,0 +1,7 @@
+LOCUS       badcoord    10 bp    DNA
+FEATURES             Location/Qualifiers
+     gene            999999..1000005
+                     /gene="x"
+ORIGIN
+        1 acgtacgtac
+//

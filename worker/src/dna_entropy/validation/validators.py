@@ -15,6 +15,11 @@ from ..config import DEFAULT_MAX_LEN, AmbiguityPolicy
 from ..redact import describe_len
 
 _ACGT: frozenset[str] = frozenset("ACGT")
+# issue #348: readers/encoding.py's own fallback for a byte that isn't valid UTF-8
+# turns it into exactly this one character (Unicode's own "could not decode" signal) --
+# never something a biologist typed themselves, so its presence is a reliable signal
+# that the real problem is the file's encoding, not its content.
+_REPLACEMENT_CHAR = "�"
 # The 11 single-letter IUPAC nucleotide ambiguity codes (issue #249): distinguished from a
 # genuinely invalid character so `ambiguity_policy` (keep/mask/error) can apply to them
 # specifically, rather than treating "not ACGT" as one undifferentiated error bucket.
@@ -127,6 +132,20 @@ def validate_sequence(
     if bad:
         non_iupac = [i for i in bad if seq[i] not in _AMBIGUITY]
         if non_iupac:
+            # issue #348: a replacement character means the underlying bytes were never
+            # valid UTF-8 in the first place (readers/encoding.py's own errors="replace"
+            # fallback produced it) — that is an encoding problem, not a wrong base, and
+            # deserves a distinct diagnosis naming the real cause and the real fix,
+            # rather than being lumped in with a genuine typo like 'B' or 'X'.
+            n_replacement = sum(1 for i in bad if seq[i] == _REPLACEMENT_CHAR)
+            if n_replacement:
+                i = next(i for i in bad if seq[i] == _REPLACEMENT_CHAR)
+                raise ValidationError(
+                    f"Found {n_replacement} character(s) that could not be decoded as "
+                    f"text (position {i + 1} is the first), which usually means the file "
+                    "was not saved as UTF-8 (e.g. Windows-1252 or another codepage). "
+                    "Re-save the file with UTF-8 encoding and try again."
+                )
             # A character that is neither A/C/G/T NOR a recognized IUPAC ambiguity code
             # is always an error, whatever ambiguity_policy says — that is a genuinely
             # invalid character, not an ambiguity question.

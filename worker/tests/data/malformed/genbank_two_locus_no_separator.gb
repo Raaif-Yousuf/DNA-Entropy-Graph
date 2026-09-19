@@ -1,0 +1,7 @@
+LOCUS       first    5 bp    DNA
+ORIGIN
+        1 acgtn
+LOCUS       second    5 bp    DNA
+ORIGIN
+        1 tgcan
+//
