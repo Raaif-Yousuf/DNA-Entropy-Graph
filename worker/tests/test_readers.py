@@ -19,6 +19,27 @@ def test_paste_reader_reads_file(tmp_path: Path) -> None:
     assert PasteReader(str(f)).read() == "ATGCATGCAT"
 
 
+def test_paste_reader_handles_non_utf8_bytes_without_crashing(tmp_path: Path) -> None:
+    """#294: a non-UTF-8 byte must not crash the paste path with UnicodeDecodeError,
+    matching readers/fasta.py and readers/detect.py, both of which already tolerate this."""
+    f = tmp_path / "latin1.txt"
+    f.write_bytes(b"ATGC\xffATGC")  # 0xFF is never valid as a standalone UTF-8 byte
+    text = PasteReader(str(f)).read()  # must not raise
+    assert "ATGC" in text
+
+
+def test_paste_reader_handles_non_utf8_stdin_without_crashing(monkeypatch) -> None:
+    """#294: the stdin branch must agree with the file branch on encoding robustness."""
+    import io
+
+    class FakeStdin:
+        buffer = io.BytesIO(b"ATGC\xffATGC")
+
+    monkeypatch.setattr("sys.stdin", FakeStdin())
+    text = PasteReader().read()  # must not raise
+    assert "ATGC" in text
+
+
 def test_pipeline_load_and_validate_from_file(tmp_path: Path) -> None:
     f = tmp_path / "locus.fasta"
     f.write_text(">demo\nATGC ATGC\nATGC", encoding="utf-8")

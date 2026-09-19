@@ -210,6 +210,13 @@ their file has a bad character in it.
 (noticed, not an error); remove all whitespace; remove digits (handles pasted line
 numbers); uppercase.
 
+**Encoding (issue #294, MEASURED 2026-09-19):** all three input paths decode with
+`errors="replace"` rather than raising `UnicodeDecodeError` on the first non-UTF-8 byte —
+`readers/paste.py`'s file and stdin branches now match `readers/fasta.py` and
+`readers/detect.py`'s existing behaviour, so a file with a stray non-UTF-8 byte (a
+Windows-1252 export, a copy-paste artefact) reaches the normal validation-stage checks
+above instead of crashing the process outright.
+
 **Checks, in order, fail fast with the first offending position:**
 1. **RNA**: if `U` is present and `--rna`/`Treat as RNA` is off, raise with the exact
  1-based position of the first `U` and a suggestion to turn the option on. With the
@@ -261,13 +268,37 @@ numbers); uppercase.
  for the paste path. An app declaring `allowAmbiguity: false` had zero effect. `job_contract.md`
  §3 covers the wire-format side of this fix (the field rename and the old field's
  now-honest no-op tolerance); this section is the science-meaning side.
-4. **Length vs. context cap**: `--max-len` (default 8,192 nt in the prototype; this is the
- single-pass cap the new context-window feature in section 3 replaces with windowing -
- the cap only rejects when windowing is unavailable, e.g. the Mock predictor path with
- no windowing configured). Over the cap without windowing configured: raise, naming the
- exact length and the cap.
+4. **Length vs. the whole-input cap**: MEASURED 2026-09-19 — every `validate_sequence(...)`
+ call site passes `max_len=cfg.max_total_len` (default 10,000,000 nt; `config.py`'s own
+ "outer sanity bound on total input length"), **not** `cfg.max_len` (default 8,192 nt,
+ the GPU per-window ceiling from section 3). `cfg.max_len` never rejects a sequence on
+ its own — windowing tiles anything longer into multiple `<= cfg.max_len` passes
+ (Hard Rule 4), so treating it as an input-rejection cap would break the exact inputs
+ windowing exists to serve. For a single sequence (the paste path) this one call already
+ is a whole-input check. For a multi-record GenBank/FASTA file (issue #314), `readers/
+ input.py` additionally sums every record's validated length as it reads them and raises
+ the moment the running total exceeds `cfg.max_total_len` — a per-record-only check would
+ let a file many times over the cap through, one small record at a time, since a record's
+ own length was always checked against the same generous whole-input bound, never against
+ the sum. Over the cap (either the single-sequence or the summed-across-records case):
+ raise, naming the length reached and the configured cap, and by how much it is over.
 5. **Minimum length**: below 10 nt, warn (not fail) that entropy near the start will be
  dominated by the model's prior.
+
+**GenBank gene features: compound (spliced) locations** (issue #295, MEASURED
+2026-09-19). `readers/genbank.py` maps each `gene` (or, failing that, `CDS`) feature to a
+single `GeneFeature(begin, end, strand, ...)`. For a `join(...)` /
+`complement(join(...))` (spliced/multi-exon) location, Biopython's own `CompoundLocation`
+reports `.start`/`.end` as the outer bounding min/max across every exon segment — **not**
+the union of the exon spans — so `begin..end` includes the intron sequence between exons.
+`GeneFeature` has room for exactly one span (it is owned by `annotators/base.py`, outside
+this reader's own files), so the reader still reports that bounding box, but it is never
+silent about it any more: every compound-location feature raises a notice naming its
+exact exon segments (sorted by genomic position, not transcript order), e.g. `GenBank
+feature 'geneX' has a compound (spliced) location with 2 segments (100..200, 400..500)`.
+Any consumer of a spliced gene's mean-entropy figure (`writers/genbank.py`'s `/note=` on
+the output `.gb`) should read it as diluted by intron bases until a per-exon
+representation ships — see the tracked `DECISION` issue on `GeneFeature.exons`.
 
 Every one of these five checks has a dedicated, deterministic test in
 `worker/tests/test_validation.py`; `docs/tests.md`'s neighbour-test set names the shapes a
