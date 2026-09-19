@@ -36,8 +36,11 @@ class BedGraphWriter:
         seq: str,
         start: int,
         out_dir: str,
+        variant: str | None = None,
     ) -> str:
-        return self.write_multi(name=name, blocks=[(name, values)], start=start, out_dir=out_dir)
+        return self.write_multi(
+            name=name, blocks=[(name, values)], start=start, out_dir=out_dir, variant=variant,
+        )
 
     def write_multi(
         self,
@@ -46,17 +49,22 @@ class BedGraphWriter:
         blocks: Sequence[tuple[str, np.ndarray]],
         start: int,
         out_dir: str,
+        variant: str | None = None,
     ) -> str:
         """Write one bedGraph with a ``chrom`` block per ``(chrom, values)`` in ``blocks``.
 
         A single ``track`` header covers every block; each row already carries its own
-        ``chrom``, so the records stay aligned to their FASTA contigs in IGV.
+        ``chrom``, so the records stay aligned to their FASTA contigs in IGV. ``variant``
+        (e.g. ``"fwd"``/``"rev"`` for Direction.BOTH_SEPARATE, section 5.6) names the file
+        ``<name>.entropy.<variant>.bedgraph`` instead of the default ``<name>.entropy.bedgraph``.
         """
+        label = f"{name} entropy" if variant is None else f"{name} entropy ({variant})"
         lines = [
-            f'track type=bedGraph name="{name} entropy" '
+            f'track type=bedGraph name="{label}" '
             'description="Shannon entropy (bits)" visibility=full'
         ]
         for chrom, values in blocks:
             lines.extend(_block_lines(chrom, values, start))
         text = "\n".join(lines) + "\n"
-        return write_text_lf(Path(out_dir) / f"{name}.entropy.bedgraph", text)
+        suffix = "entropy.bedgraph" if variant is None else f"entropy.{variant}.bedgraph"
+        return write_text_lf(Path(out_dir) / f"{name}.{suffix}", text)

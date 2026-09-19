@@ -14,11 +14,23 @@ from typing import Optional
 import typer
 
 from . import __version__, pipeline
+from .analysis.windowing import WindowingError
 from .annotators.base import AnnotatorError
-from .config import DEFAULT_MAX_LEN, PredictorKind, RunConfig, TrackFormat
+from .config import (
+    DEFAULT_CONTEXT_LENGTH,
+    DEFAULT_MAX_LEN,
+    DEFAULT_MAX_TOTAL_LEN,
+    Direction,
+    PredictorKind,
+    RunConfig,
+    TrackFormat,
+)
 from .pipeline import load_and_validate
 from .predictors.base import PredictorError
 from .validation.validators import ValidationError
+from .worker.blobstore import BlobstoreError, GcsBlobstore, LocalBlobstore
+from .worker.manifest import ManifestError
+from .worker.runner import run_job
 
 app = typer.Typer(
     add_completion=False,
@@ -50,9 +62,13 @@ def run(
     out: Optional[str] = typer.Option(None, "--out", "-o", help="Base folder for outputs (default: your Downloads folder); files go in <out>/<name>/."),
     fmt: str = typer.Option("bedgraph", "--format", help="Entropy track format: bedgraph|wig."),
     start: int = typer.Option(1, "--start", help="Genomic start coordinate for the track."),
-    max_len: int = typer.Option(DEFAULT_MAX_LEN, "--max-len", help="Single-pass context cap (nt)."),
+    max_len: int = typer.Option(DEFAULT_MAX_LEN, "--max-len", help="GPU ceiling for one model forward pass (window cap, nt); NOT a limit on total input length anymore (windowing tiles longer sequences)."),
+    max_total_len: int = typer.Option(DEFAULT_MAX_TOTAL_LEN, "--max-total-len", help="Outer sanity bound on the whole input (nt), independent of --max-len/windowing."),
+    context_length: int = typer.Option(DEFAULT_CONTEXT_LENGTH, "--context-length", "-k", help="K: sequence the model must have seen before a prediction is trusted (nt)."),
+    direction: str = typer.Option("both-combined", "--direction", help="both-combined|both-averaged|both-separate|forward-only|reverse-only."),
     rna: bool = typer.Option(False, "--rna", help="Convert U->T (treat input as RNA)."),
     genes: bool = typer.Option(False, "--genes/--no-genes", help="Call gene boundaries (prokaryotic; needs [genes] extra)."),
+    tsv: bool = typer.Option(True, "--tsv/--no-tsv", help="Also write <name>.entropy.tsv (position, base, entropy; spreadsheet-friendly)."),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -75,17 +91,21 @@ def run(
             track_format=TrackFormat(fmt),
             start=start,
             max_len=max_len,
+            max_total_len=max_total_len,
+            context_length=context_length,
+            direction=Direction(direction),
             rna=rna,
             genes=genes,
+            include_tsv=tsv,
             seed=seed,
         )
-    except ValueError as exc:  # bad --predictor/--format value
+    except ValueError as exc:  # bad --predictor/--format/--direction value
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
     try:
         result = pipeline.run(cfg)
-    except (ValidationError, PredictorError, AnnotatorError) as exc:
+    except (ValidationError, PredictorError, AnnotatorError, WindowingError) as exc:
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
@@ -100,6 +120,16 @@ def run(
     typer.echo(
         f"  entropy (bits): mean={v.mean():.3f}  min={v.min():.3f}  max={v.max():.3f}"
     )
+    typer.echo(
+        f"  context: K={result.context_length}  window={result.window}  stride={result.stride}"
+        + (f"  seam@{result.seam}" if result.seam is not None else "")
+        + f"  direction={result.direction.value}"
+    )
+    if result.reduced_context_count:
+        typer.secho(
+            f"  reduced-context positions: {result.reduced_context_count}",
+            fg=typer.colors.YELLOW,
+        )
     if result.genes:
         typer.echo(f"  genes: {len(result.genes)}")
     typer.echo(f"  folder: {run_dir}")
@@ -112,10 +142,10 @@ def run(
 def validate(
     input: Optional[str] = typer.Option(None, "--input", "-i", help="Read sequence from file (default: stdin)."),
     rna: bool = typer.Option(False, "--rna", help="Convert U->T (treat input as RNA)."),
-    max_len: int = typer.Option(DEFAULT_MAX_LEN, "--max-len", help="Single-pass context cap (nt)."),
+    max_len: int = typer.Option(DEFAULT_MAX_TOTAL_LEN, "--max-len", help="Outer sanity bound on the whole input (nt) — this command only cleans/validates, it never runs windowing, so there is no separate per-pass ceiling to set here."),
 ) -> None:
     """Validate a sequence without running a model."""
-    cfg = RunConfig(input_path=input, rna=rna, max_len=max_len)
+    cfg = RunConfig(input_path=input, rna=rna, max_total_len=max_len)
     try:
         result = load_and_validate(cfg)
     except ValidationError as exc:
@@ -129,23 +159,45 @@ def validate(
 
 @app.command("worker-run")
 def worker_run(
-    manifest: str = typer.Option(..., "--manifest", "-m", help="Path to the job manifest (manifest.json) uploaded to the per-job VM's bucket prefix."),
+    root: Optional[str] = typer.Option(None, "--root", help="Local job directory containing manifest.json (LocalBlobstore; the local engine and every test in this repo use this path)."),
+    bucket: Optional[str] = typer.Option(None, "--bucket", help="GCS bucket name (GcsBlobstore)."),
+    prefix: Optional[str] = typer.Option(None, "--prefix", help="GCS job prefix, e.g. jobs/<jobId>/ (GcsBlobstore, used with --bucket)."),
 ) -> None:
-    """Run one job from a manifest: read it, run the pipeline, write status/result. STUB.
+    """Run one job from manifest.json: read it, run the pipeline once per input, and
+    write status.json/progress.jsonl/result.json (docs/job_contract.md).
 
-    This is the seed of the manifest-driven worker entrypoint that issue #278 ("worker: add
-    the worker subpackage (manifest, status heartbeat, blobstore, cancel, lifecycle)")
-    implements in full. It intentionally does nothing yet and always exits non-zero rather
-    than pretend to succeed, so nothing downstream (a startup script, a container ENTRYPOINT)
-    can mistake this stub for a working job runner.
+    Local jobs: ``--root <dir>``. Cloud jobs: ``--bucket``/``--prefix`` together
+    (GcsBlobstore is implemented but not exercised against real GCS by this command
+    tonight — no cloud spend, no cloud calls; see worker/lifecycle.py).
     """
-    typer.secho(
-        f"ERROR: 'worker-run' is a stub (manifest={manifest!r} not read). "
-        "The manifest/status/blobstore worker loop is tracked in issue #278 and not "
-        "implemented yet.",
-        fg=typer.colors.RED, err=True,
-    )
-    raise typer.Exit(code=2)
+    if root:
+        store = LocalBlobstore(root)
+    elif bucket and prefix:
+        store = GcsBlobstore(bucket, prefix)
+    else:
+        typer.secho(
+            "ERROR: pass either --root (local) or --bucket AND --prefix (gcs).",
+            fg=typer.colors.RED, err=True,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        result = run_job(store)
+    except (ManifestError, BlobstoreError) as exc:
+        # ManifestError: manifest.json exists but is invalid/wrong schema. BlobstoreError:
+        # manifest.json (or the store root) doesn't exist at all — both are "the job
+        # cannot even start", reported the same clean way, never a raw traceback.
+        typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+
+    typer.secho(f"job {result.job_id}: {result.status}",
+                fg=typer.colors.GREEN if result.status == "done" else typer.colors.RED)
+    for ir in result.inputs:
+        line = f"  {ir.id}: {ir.status}"
+        if ir.error:
+            line += f" ({ir.error.get('message', ir.error)})"
+        typer.echo(line)
+    raise typer.Exit(code=0 if result.status == "done" else 1)
 
 
 def main() -> None:

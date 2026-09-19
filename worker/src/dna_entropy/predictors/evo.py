@@ -15,7 +15,8 @@ import numpy as np
 import torch  # noqa: F401  (GPU-only dep; isolated to this module)
 from evo2 import Evo2
 
-from .base import PredictorError, check_probability_matrix
+from .base import PredictorError, PredictorOOMError, check_probability_matrix
+from .hardware import require_hardware
 from .logits import aligned_acgt_probs
 
 
@@ -31,6 +32,14 @@ class EvoPredictor:
         self.model_name = model
         self.device = device
         self.max_context = max_context
+
+        # MODEL_NEEDS_HOPPER (design section 5.9): gate BEFORE any weight download. Reads
+        # the device's REAL compute capability — never trusts the model name alone.
+        capability = None
+        if device == "cuda" and torch.cuda.is_available():
+            capability = tuple(torch.cuda.get_device_capability())
+        require_hardware(model, device=device, compute_capability=capability)
+
         try:
             self._model = Evo2(model)
         except Exception as exc:  # weights missing, OOM, etc.
@@ -69,16 +78,28 @@ class EvoPredictor:
 
     def predict(self, seq: str) -> np.ndarray:
         if self.max_context and len(seq) > self.max_context:
+            # Defensive: callers (analysis/direction.py's windowed runner) must never
+            # pass a slice longer than one window (<= the GPU ceiling); this guards the
+            # invariant rather than implementing windowing itself, which now lives one
+            # layer up so it works identically for every predictor, not just Evo.
             raise PredictorError(
                 f"Sequence length {len(seq)} exceeds Evo single-pass context "
-                f"{self.max_context}; windowing is future work."
+                f"{self.max_context}; the caller should have windowed this already."
             )
 
         token_ids = self._model.tokenizer.tokenize(seq)
         input_ids = torch.tensor(token_ids, dtype=torch.int).unsqueeze(0).to(self.device)
 
-        with torch.no_grad():
-            raw = self._model(input_ids)
+        try:
+            with torch.no_grad():
+                raw = self._model(input_ids)
+        except torch.cuda.OutOfMemoryError as exc:
+            # Translate into a typed signal analysis/direction.py's windowed runner can
+            # catch specifically (halve the window and retry once — design section 5.6)
+            # without importing torch itself (only this module may).
+            raise PredictorOOMError(
+                f"Out of GPU memory running a window of {len(seq)} nt: {exc}"
+            ) from exc
         logits = self._extract_logits(raw)  # (L, vocab)
 
         nuc_logits = logits[:, self._nuc_ids].float().cpu().numpy()  # (L, 4)

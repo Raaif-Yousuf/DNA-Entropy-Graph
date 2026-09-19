@@ -5,6 +5,7 @@ from .base import (
     NUM_NUCLEOTIDES,
     Predictor,
     PredictorError,
+    PredictorOOMError,
     check_probability_matrix,
 )
 from .logits import aligned_acgt_probs
@@ -18,6 +19,7 @@ __all__ = [
     "NUM_NUCLEOTIDES",
     "Predictor",
     "PredictorError",
+    "PredictorOOMError",
     "check_probability_matrix",
     "aligned_acgt_probs",
     "MockPredictor",

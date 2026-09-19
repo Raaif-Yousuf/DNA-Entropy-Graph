@@ -30,8 +30,11 @@ class WigWriter:
         seq: str,
         start: int,
         out_dir: str,
+        variant: str | None = None,
     ) -> str:
-        return self.write_multi(name=name, blocks=[(name, values)], start=start, out_dir=out_dir)
+        return self.write_multi(
+            name=name, blocks=[(name, values)], start=start, out_dir=out_dir, variant=variant,
+        )
 
     def write_multi(
         self,
@@ -40,13 +43,20 @@ class WigWriter:
         blocks: Sequence[tuple[str, np.ndarray]],
         start: int,
         out_dir: str,
+        variant: str | None = None,
     ) -> str:
-        """Write one WIG file with a fixedStep block per ``(chrom, values)`` in ``blocks``."""
+        """Write one WIG file with a fixedStep block per ``(chrom, values)`` in ``blocks``.
+
+        ``variant`` (e.g. ``"fwd"``/``"rev"`` for Direction.BOTH_SEPARATE, section 5.6)
+        names the file ``<name>.entropy.<variant>.wig`` instead of ``<name>.entropy.wig``.
+        """
+        label = f"{name} entropy" if variant is None else f"{name} entropy ({variant})"
         lines = [
-            f'track type=wiggle_0 name="{name} entropy" '
+            f'track type=wiggle_0 name="{label}" '
             'description="Shannon entropy (bits)" visibility=full'
         ]
         for chrom, values in blocks:
             lines.extend(_fixed_step_block(chrom, values, start))
         text = "\n".join(lines) + "\n"
-        return write_text_lf(Path(out_dir) / f"{name}.entropy.wig", text)
+        suffix = "entropy.wig" if variant is None else f"entropy.{variant}.wig"
+        return write_text_lf(Path(out_dir) / f"{name}.{suffix}", text)

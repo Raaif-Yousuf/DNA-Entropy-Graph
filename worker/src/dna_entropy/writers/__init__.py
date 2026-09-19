@@ -6,6 +6,7 @@ from .fasta import FastaWriter
 from .geneious import GeneiousWriter
 from .gff import GffWriter
 from .summary import SummaryWriter
+from .tsv import TsvWriter
 from .wig import WigWriter
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "GeneiousWriter",
     "GffWriter",
     "SummaryWriter",
+    "TsvWriter",
     "WigWriter",
 ]

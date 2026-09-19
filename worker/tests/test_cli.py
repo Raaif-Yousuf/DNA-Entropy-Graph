@@ -1,14 +1,16 @@
-"""CLI-shape tests for issue #277 (drop cloudrun/keep-gpu) and its replacement stub.
+"""CLI-shape tests for issue #277 (drop cloudrun/keep-gpu) and #278 (worker-run, real).
 
 The approved design (docs/superpowers/specs/2026-09-18-dna-entropy-graph-design.md
 section 3) forbids the worker shelling out to gcloud/SSH; `cloudrun` and `keep-gpu` (plus
-`--prefer-local`) are gone along with `dna_entropy.cloud`. In their place, `worker-run`
-is the seed of the manifest-driven worker entrypoint issue #278 will flesh out — it must
-exist and must fail loudly and specifically (pointing at #278), never silently succeed or
-silently do nothing, so nobody mistakes the stub for a working feature.
+`--prefer-local`) are gone along with `dna_entropy.cloud`. In their place, `worker-run` is
+the real manifest-driven worker entrypoint (issue #278); see test_worker_runner.py for its
+full end-to-end behaviour with `--root` against a `LocalBlobstore`.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -34,14 +36,77 @@ def test_keep_gpu_command_is_gone() -> None:
     assert result.exit_code != 0
 
 
-def test_worker_run_stub_exists_and_fails_loudly() -> None:
-    """The stub must exit non-zero and name the tracking issue, not pretend to succeed."""
-    result = runner.invoke(app, ["worker-run", "--manifest", "does-not-matter.json"])
-    assert result.exit_code != 0
-    assert "#278" in result.output
+def test_worker_run_requires_either_root_or_bucket_and_prefix() -> None:
+    result = runner.invoke(app, ["worker-run"])
+    assert result.exit_code == 2
+    assert "--root" in result.output or "--bucket" in result.output
 
 
-def test_worker_run_requires_a_manifest_argument() -> None:
+def test_worker_run_help_lists_local_and_gcs_options() -> None:
     result = runner.invoke(app, ["worker-run", "--help"])
     assert result.exit_code == 0
-    assert "--manifest" in result.output
+    assert "--root" in result.output
+    assert "--bucket" in result.output
+    assert "--prefix" in result.output
+
+
+def test_worker_run_missing_manifest_is_a_clean_error_not_a_crash(tmp_path: Path) -> None:
+    empty_job_dir = tmp_path / "empty_job"
+    empty_job_dir.mkdir()
+    result = runner.invoke(app, ["worker-run", "--root", str(empty_job_dir)])
+    assert result.exit_code == 2
+    assert "ERROR" in result.output
+    assert "Traceback" not in result.output  # a clean, reported error, not a raw crash
+
+
+def test_worker_run_real_local_job_end_to_end(tmp_path: Path) -> None:
+    """The CLI surface for the same acceptance bar test_worker_runner.py exercises
+    directly: a real manifest, run through the actual `dna-entropy worker-run` command,
+    produces a real result.json on disk."""
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "input").mkdir()
+    (job_dir / "input" / "locus.fasta").write_text(">seq\nACGTACGTACGTACGTACGTACGTACGTACGT\n", encoding="utf-8")
+    manifest = {
+        "schema": 1,
+        "jobId": "clitest-job",
+        "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "store": {"kind": "localdir", "root": str(job_dir)},
+    }
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = runner.invoke(app, ["worker-run", "--root", str(job_dir)])
+    assert result.exit_code == 0, result.output
+    assert "done" in result.output
+    assert (job_dir / "result.json").exists()
+    result_doc = json.loads((job_dir / "result.json").read_text(encoding="utf-8"))
+    assert result_doc["status"] == "done"
+
+
+def test_no_tsv_flag_actually_omits_the_tsv_file(tmp_path) -> None:
+    """Regression guard: --tsv/--no-tsv was declared as a CLI option but never passed into
+    RunConfig, so --no-tsv silently did nothing (caught by inspection, not by a failing
+    test, while wiring #281 — this test is what should have caught it)."""
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "clitsv", "--out", str(out_dir), "--no-tsv"],
+        input="ATGCATGCATGCATGCATGCATGCATGCATGC\n",
+    )
+    assert result.exit_code == 0, result.output
+    written = {p.name for p in (out_dir / "clitsv").iterdir()}
+    assert not any(name.endswith(".entropy.tsv") for name in written)
+
+
+def test_tsv_flag_default_on_writes_the_tsv_file(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "clitsvon", "--out", str(out_dir)],
+        input="ATGCATGCATGCATGCATGCATGCATGCATGC\n",
+    )
+    assert result.exit_code == 0, result.output
+    written = {p.name for p in (out_dir / "clitsvon").iterdir()}
+    assert any(name.endswith(".entropy.tsv") for name in written)

@@ -8,17 +8,19 @@ Each stage is swappable; this module is the only place that knows the order.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 
-from .analysis.entropy import shannon_entropy
+from .analysis.direction import DirectionResult, analyze_direction
+from .analysis.windowing import validate_context
 from .annotators.base import GeneFeature
 from .annotators.prodigal import ProdigalAnnotator
-from .config import PredictorKind, RunConfig, TrackFormat
-from .predictors.base import Predictor, PredictorError, check_probability_matrix
+from .config import Direction, PredictorKind, RunConfig, TrackFormat
+from .predictors.base import Predictor, PredictorError
 from .predictors.mock import MockPredictor
 from .readers import detect
-from .readers.input import LoadedInput, load_input
+from .readers.input import Contig, LoadedInput, load_input
 from .readers.paste import PasteReader
 from .validation.validators import ValidatedSequence, validate_sequence
 from .writers.base import Writer
@@ -28,6 +30,7 @@ from .writers.genbank import GenBankWriter
 from .writers.geneious import GeneiousWriter
 from .writers.gff import GffWriter
 from .writers.summary import SummaryWriter
+from .writers.tsv import TsvWriter
 from .writers.wig import WigWriter
 
 
@@ -38,6 +41,12 @@ class RunResult:
     ``seq``/``values`` refer to the first contig (single-sequence inputs have exactly one).
     ``all_values`` concatenates every contig's entropy for aggregate reporting; ``contigs``
     and ``total_nt`` describe multi-record GenBank runs.
+
+    ``direction``/``context_length``/``window``/``stride`` are the windowing/direction
+    provenance for the whole run (section 5.6) — DERIVED once here and recorded, not
+    recomputed by every writer/future manifest reader. ``seam`` and
+    ``reduced_context_count`` describe the first contig's combination (``seam`` is
+    ``None`` when that contig is shorter than ``2 * context_length``, per section 5.6).
     """
 
     seq: str
@@ -48,6 +57,12 @@ class RunResult:
     contigs: int = 1
     total_nt: int = 0
     all_values: np.ndarray | None = None
+    direction: Direction = Direction.BOTH_COMBINED
+    context_length: int = 0
+    window: int = 0
+    stride: int = 0
+    seam: int | None = None
+    reduced_context_count: int = 0
 
     def __post_init__(self) -> None:
         if self.all_values is None:
@@ -65,7 +80,7 @@ def load_and_validate(cfg: RunConfig, raw: str | None = None) -> ValidatedSequen
     """Read (unless ``raw`` is supplied) and validate into a clean sequence."""
     if raw is None:
         raw = read_raw(cfg)
-    return validate_sequence(raw, max_len=cfg.max_len, rna=cfg.rna)
+    return validate_sequence(raw, max_len=cfg.max_total_len, rna=cfg.rna)
 
 
 def build_predictor(cfg: RunConfig) -> Predictor:
@@ -82,7 +97,10 @@ def build_predictor(cfg: RunConfig) -> Predictor:
                 "Evo predictor is not available yet (arrives in Sprint 3, and needs "
                 "the [evo] extra on a GPU box). Use --predictor mock for now."
             ) from exc
-        return EvoPredictor(model=cfg.model, device=cfg.device)
+        # max_context must match the GPU ceiling windowing computed W against (cfg.max_len)
+        # — otherwise a bigger-ceiling config (e.g. an A100 tier) would still be silently
+        # capped at EvoPredictor's own 8192 default, rejecting perfectly valid windows.
+        return EvoPredictor(model=cfg.model, device=cfg.device, max_context=cfg.max_len)
     raise PredictorError(f"Unknown predictor: {cfg.predictor!r}")
 
 
@@ -98,16 +116,41 @@ def _try_annotate(seq: str) -> list[GeneFeature]:
         return []
 
 
-def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple]) -> list[str]:
+def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> str:
+    """Write ``<name>.entropy.tsv``, shared by both output paths (GenBank and standard).
+
+    Uses the 5-column fwd/rev/combined shape for Direction.BOTH_SEPARATE (each contig's
+    forward/reverse/combined tracks are all populated), the plain 3-column shape
+    otherwise (docs/science_and_formats.md section 5).
+    """
+    if any(dr.forward_values is not None for _, dr in processed):
+        return TsvWriter().write_multi_separate(
+            name=cfg.name,
+            blocks=[
+                (c.name, c.seq, dr.forward_values, dr.reverse_values, dr.values)
+                for c, dr in processed
+            ],
+            start=cfg.start, out_dir=cfg.out_dir,
+        )
+    return TsvWriter().write_multi(
+        name=cfg.name,
+        blocks=[(c.name, c.seq, dr.values) for c, dr in processed],
+        start=cfg.start, out_dir=cfg.out_dir,
+    )
+
+
+def _write_genbank_outputs(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]
+) -> list[str]:
     """GenBank input -> ONE GenBank (all records, genes preserved + entropy notes), a
     FASTA + bedGraph + WIG + Geneious track (a block per record), and ONE stats.txt.
 
     Everything is sourced straight from the GenBank records (sequence and existing genes);
-    Prodigal is never run on this path. ``processed`` is a list of ``(Contig, values)``.
+    Prodigal is never run on this path. ``processed`` is a list of ``(Contig, DirectionResult)``.
     """
     gb = GenBankWriter().write_multi(
         name=cfg.name,
-        records=[(c.name, c.seq, c.features, values, c.source_id) for c, values in processed],
+        records=[(c.name, c.seq, c.features, dr.values, c.source_id) for c, dr in processed],
         out_dir=cfg.out_dir,
     )
     fasta = FastaWriter().write_multi(
@@ -117,30 +160,52 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple]) -> list[str]:
     )
     bedgraph = BedGraphWriter().write_multi(
         name=cfg.name,
-        blocks=[(c.name, values) for c, values in processed],
+        blocks=[(c.name, dr.values) for c, dr in processed],
         start=cfg.start,
         out_dir=cfg.out_dir,
     )
     wig = WigWriter().write_multi(
         name=cfg.name,
-        blocks=[(c.name, values) for c, values in processed],
+        blocks=[(c.name, dr.values) for c, dr in processed],
         start=cfg.start,
         out_dir=cfg.out_dir,
     )
     geneious = GeneiousWriter().write_multi(
         name=cfg.name,
-        blocks=[(c.name, values) for c, values in processed],
+        blocks=[(c.name, dr.values) for c, dr in processed],
         start=cfg.start,
         out_dir=cfg.out_dir,
     )
     stats = SummaryWriter().write_multi(
         name=cfg.name,
-        sections=[(c.name, values) for c, values in processed],
+        sections=[(c.name, dr.values) for c, dr in processed],
         start=cfg.start,
         out_dir=cfg.out_dir,
         filename="stats.txt",
+        provenance=[dr for _, dr in processed],
     )
     outputs = [gb, fasta, bedgraph, wig, geneious, stats]
+
+    if cfg.include_tsv:
+        outputs.append(_write_tsv(cfg, processed))
+
+    # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
+    # record, alongside the combined bedGraph above.
+    if any(dr.forward_values is not None for _, dr in processed):
+        outputs.append(
+            BedGraphWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, dr.forward_values) for c, dr in processed],
+                start=cfg.start, out_dir=cfg.out_dir, variant="fwd",
+            )
+        )
+        outputs.append(
+            BedGraphWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, dr.reverse_values) for c, dr in processed],
+                start=cfg.start, out_dir=cfg.out_dir, variant="rev",
+            )
+        )
 
     # Gene track for IGV, straight from the GenBank's own genes (never Prodigal). Only
     # written when the records actually carry genes.
@@ -157,74 +222,160 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple]) -> list[str]:
 
 
 def _write_standard_outputs(
-    cfg: RunConfig, values: np.ndarray, seq: str
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]],
 ) -> tuple[list[str], list[GeneFeature]]:
-    """FASTA/paste input -> the existing files, plus a bonus GenBank when possible."""
-    writers: list[Writer] = [
-        FastaWriter(),
-        _select_track_writer(cfg),
-        GeneiousWriter(),
-        SummaryWriter(),
-    ]
-    outputs = [
-        w.write(name=cfg.name, values=values, seq=seq, start=cfg.start, out_dir=cfg.out_dir)
-        for w in writers
-    ]
+    """FASTA/paste input -> the existing files, plus a bonus GenBank when possible.
+
+    One block per contig (design D14/#283: a multi-record FASTA is processed exactly like
+    multi-record GenBank — every record, not just the first). A single-contig input (paste,
+    or a single-record FASTA) produces byte-identical output to the pre-#283 code, since
+    ``write_multi`` with one block is how ``write`` was already implemented for every
+    writer here.
+    """
+    track_writer = _select_track_writer(cfg)
+    fasta = FastaWriter().write_multi(
+        name=cfg.name, blocks=[(c.name, c.seq) for c, _ in processed], out_dir=cfg.out_dir,
+    )
+    track = track_writer.write_multi(
+        name=cfg.name, blocks=[(c.name, dr.values) for c, dr in processed],
+        start=cfg.start, out_dir=cfg.out_dir,
+    )
+    geneious = GeneiousWriter().write_multi(
+        name=cfg.name, blocks=[(c.name, dr.values) for c, dr in processed],
+        start=cfg.start, out_dir=cfg.out_dir,
+    )
+    stats = SummaryWriter().write_multi(
+        name=cfg.name, sections=[(c.name, dr.values) for c, dr in processed],
+        start=cfg.start, out_dir=cfg.out_dir,
+        provenance=[dr for _, dr in processed],
+    )
+    outputs = [fasta, track, geneious, stats]
+
+    if cfg.include_tsv:
+        outputs.append(_write_tsv(cfg, processed))
+
+    # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
+    # contig, alongside the combined track already written above.
+    if any(dr.forward_values is not None for _, dr in processed):
+        outputs.append(
+            track_writer.write_multi(
+                name=cfg.name, blocks=[(c.name, dr.forward_values) for c, dr in processed],
+                start=cfg.start, out_dir=cfg.out_dir, variant="fwd",
+            )
+        )
+        outputs.append(
+            track_writer.write_multi(
+                name=cfg.name, blocks=[(c.name, dr.reverse_values) for c, dr in processed],
+                start=cfg.start, out_dir=cfg.out_dir, variant="rev",
+            )
+        )
 
     genes: list[GeneFeature] = []
+    genes_by_contig: list[list[GeneFeature]] = [[] for _ in processed]
     if cfg.genes:
-        genes = ProdigalAnnotator().annotate(seq)  # may raise AnnotatorError (explicit opt-in)
+        for i, (c, _dr) in enumerate(processed):
+            g = ProdigalAnnotator().annotate(c.seq)  # may raise AnnotatorError (explicit opt-in)
+            genes_by_contig[i] = g
+            genes += g
         outputs.append(
-            GffWriter().write(
-                name=cfg.name, features=genes, length=len(seq),
-                start=cfg.start, out_dir=cfg.out_dir,
+            GffWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, g, len(c.seq)) for (c, _), g in zip(processed, genes_by_contig)],
+                start=cfg.start, out_dir=cfg.out_dir, source="pyrodigal",
             )
         )
 
-    # Bonus GenBank "if possible": reuse --genes features, else best-effort Prodigal.
-    gb_features = genes or _try_annotate(seq)
+    # Bonus GenBank "if possible": reuse --genes features per contig, else best-effort
+    # Prodigal per contig. One .gb file holding every record, like the GenBank input path.
     try:
-        outputs.append(
-            GenBankWriter().write(
-                name=cfg.name, values=values, seq=seq, start=cfg.start,
-                features=gb_features, out_dir=cfg.out_dir,
-            )
-        )
+        records = []
+        for (c, dr), g in zip(processed, genes_by_contig):
+            gb_features = g or _try_annotate(c.seq)
+            records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
+        outputs.append(GenBankWriter().write_multi(name=cfg.name, records=records, out_dir=cfg.out_dir))
     except Exception:
         pass  # GenBank is a bonus on this path; never fail the core run over it
     return outputs, genes
 
 
-def run(cfg: RunConfig, raw: str | None = None) -> RunResult:
+def run(
+    cfg: RunConfig, raw: str | None = None,
+    *, on_window: "Callable[[], None] | None" = None,
+    on_contig: "Callable[[Contig], None] | None" = None,
+) -> RunResult:
     """Run the full pipeline and write all output files (output set depends on input kind).
 
-    Every contig gets one Evo forward pass (GenBank inputs may carry several records).
+    Every contig gets windowed forward and/or reverse-complement passes (section 5.6),
+    never a per-base rolling window (GenBank inputs may carry several contigs, each
+    analyzed independently). The worker RE-VALIDATES the context length against each
+    contig even though the app is expected to validate first (``validate_context`` may
+    raise :class:`~dna_entropy.analysis.windowing.WindowingError`).
+
+    ``on_window``/``on_contig`` are cooperative-cancellation hooks (docs/job_contract.md
+    §6: "the worker checks control/cancel between windows and between contigs"), called
+    after every completed window and after every completed contig respectively; the
+    worker's ``CancelWatcher.check_or_raise`` plugs into either without this module
+    needing to know anything about ``control/cancel``. ``None`` (the default) means no
+    hook — every existing caller is unaffected.
     """
     loaded = load_input(cfg, raw)
     predictor = build_predictor(cfg)
 
-    processed: list[tuple] = []  # (Contig, entropy values)
-    for contig in loaded.contigs:
-        probs = predictor.predict(contig.seq)
-        check_probability_matrix(probs, len(contig.seq))  # guard the predictor boundary
-        processed.append((contig, shannon_entropy(probs)))
+    notices: list[str] = list(loaded.notices)
+    processed: list[tuple[Contig, DirectionResult]] = []
+    reduced_total = 0
+    try:
+        for contig in loaded.contigs:
+            notices += validate_context(
+                context_length=cfg.context_length, ceiling=cfg.max_len, seq_len=len(contig.seq),
+            )
+            dr = analyze_direction(
+                predictor, contig.seq,
+                context_length=cfg.context_length, ceiling=cfg.max_len, direction=cfg.direction,
+                on_window=on_window,
+            )
+            notices += dr.notices
+            reduced_total += dr.reduced_context_count
+            processed.append((contig, dr))
+            if on_contig is not None:
+                on_contig(contig)
+    except Exception:
+        # A hook (typically a cooperative cancellation check) stopped the run early.
+        # docs/job_contract.md §6: "partial results are always kept, never discarded" —
+        # write whatever contigs DID complete (best-effort; a failure here must not mask
+        # the original exception, which is what the caller actually needs to see) before
+        # propagating it unchanged.
+        if processed:
+            try:
+                if loaded.source_kind == detect.GENBANK:
+                    _write_genbank_outputs(cfg, processed)
+                else:
+                    _write_standard_outputs(cfg, processed)
+            except Exception:
+                pass
+        raise
 
     if loaded.source_kind == detect.GENBANK:
         outputs = _write_genbank_outputs(cfg, processed)
         genes = [f for c, _ in processed for f in c.features]
     else:
-        contig, values = processed[0]
-        outputs, genes = _write_standard_outputs(cfg, values, contig.seq)
+        outputs, genes = _write_standard_outputs(cfg, processed)
 
-    first_contig, first_values = processed[0]
-    all_values = np.concatenate([v for _, v in processed])
+    first_contig, first_dr = processed[0]
+    all_values = np.concatenate([dr.values for _, dr in processed])
     return RunResult(
         seq=first_contig.seq,
-        values=first_values,
-        notices=loaded.notices,
+        values=first_dr.values,
+        notices=notices,
         outputs=outputs,
         genes=genes,
         contigs=len(processed),
         total_nt=sum(len(c.seq) for c, _ in processed),
         all_values=all_values,
+        direction=cfg.direction,
+        context_length=cfg.context_length,
+        window=first_dr.window,
+        stride=first_dr.stride,
+        seam=first_dr.seam,
+        reduced_context_count=reduced_total,
     )

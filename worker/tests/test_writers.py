@@ -44,6 +44,32 @@ def test_bedgraph_respects_start_offset(tmp_path: Path) -> None:
     assert lines[1] == "locus\t99\t100\t0.0000"
 
 
+def test_bedgraph_variant_suffix_names_the_file_fwd_rev(tmp_path: Path) -> None:
+    # both-separate mode names its extra tracks <name>.entropy.fwd.bedgraph / .rev.bedgraph.
+    fwd_path = BedGraphWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), variant="fwd"
+    )
+    rev_path = BedGraphWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), variant="rev"
+    )
+    assert fwd_path.endswith("locus.entropy.fwd.bedgraph")
+    assert rev_path.endswith("locus.entropy.rev.bedgraph")
+    assert Path(fwd_path).exists() and Path(rev_path).exists()
+    # The default (no variant) path is unaffected and still the plain name.
+    plain_path = BedGraphWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path)
+    )
+    assert plain_path.endswith("locus.entropy.bedgraph")
+    assert not plain_path.endswith("fwd.bedgraph")
+
+
+def test_wig_variant_suffix_names_the_file_fwd_rev(tmp_path: Path) -> None:
+    fwd_path = WigWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), variant="fwd"
+    )
+    assert fwd_path.endswith("locus.entropy.fwd.wig")
+
+
 def test_wig_header_and_values(tmp_path: Path) -> None:
     path = WigWriter().write(
         name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path)
@@ -101,3 +127,39 @@ def test_summary_contains_stats(tmp_path: Path) -> None:
     assert "length:" in text
     assert "3 nt" in text
     assert "entropy mean:" in text
+
+
+def test_summary_records_windowing_and_direction_provenance(tmp_path: Path) -> None:
+    from dna_entropy.analysis.direction import DirectionResult
+    from dna_entropy.config import Direction
+
+    dr = DirectionResult(
+        values=VALUES, direction=Direction.BOTH_COMBINED, context_length=128,
+        window=256, stride=128, seam=128, reduced_context_count=0,
+    )
+    path = SummaryWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), provenance=dr,
+    )
+    text = Path(path).read_text(encoding="utf-8")
+    assert "context length (K):" in text and "128" in text
+    assert "window (W):" in text and "256" in text
+    assert "stride (S):" in text
+    assert "direction:" in text and "both-combined" in text
+    assert "seam:" in text and "128" in text
+
+
+def test_summary_records_reduced_context_note_when_present(tmp_path: Path) -> None:
+    from dna_entropy.analysis.direction import DirectionResult
+    from dna_entropy.config import Direction
+
+    dr = DirectionResult(
+        values=VALUES, direction=Direction.BOTH_COMBINED, context_length=100,
+        window=200, stride=100, seam=None, reduced_context_count=7,
+    )
+    path = SummaryWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), provenance=dr,
+    )
+    text = Path(path).read_text(encoding="utf-8")
+    assert "reduced-context positions: 7" in text
+    seam_line = next(line for line in text.splitlines() if line.strip().startswith("seam:"))
+    assert seam_line.strip() == "seam:               n/a"

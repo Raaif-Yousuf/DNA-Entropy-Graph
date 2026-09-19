@@ -25,6 +25,18 @@ class PredictorError(RuntimeError):
     """Raised when a predictor backend is unavailable or fails to run."""
 
 
+class PredictorOOMError(PredictorError):
+    """Raised when a predictor ran out of GPU memory on this call.
+
+    A distinct subclass so callers (analysis/direction.py's windowed runner) can tell "the
+    device ran out of memory for this window size" apart from any other predictor failure
+    and react specifically — halve the window and retry once (design section 5.6) — rather
+    than surfacing every failure identically. Only :mod:`predictors.evo` raises this today
+    (translating ``torch.cuda.OutOfMemoryError``); :class:`~.mock.MockPredictor` never
+    raises it, since it never touches a GPU.
+    """
+
+
 @runtime_checkable
 class Predictor(Protocol):
     """Maps a validated DNA string to per-position nucleotide probabilities."""

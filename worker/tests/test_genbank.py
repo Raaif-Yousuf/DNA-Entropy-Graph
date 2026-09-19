@@ -68,16 +68,50 @@ def test_read_genbank_extracts_seq_and_genes() -> None:
 # --- FASTA reader -------------------------------------------------------------------
 
 def test_read_fasta_single_record() -> None:
-    seq, notices = read_fasta(SAMPLE_FA)
-    assert seq and set(seq.upper()) <= set("ACGTN")
+    records, notices = read_fasta(SAMPLE_FA)
+    assert len(records) == 1
+    assert records[0].seq and set(records[0].seq.upper()) <= set("ACGTN")
 
 
-def test_read_fasta_multi_record_uses_first(tmp_path: Path) -> None:
+def test_read_fasta_multi_record_returns_all_records(tmp_path: Path) -> None:
+    """D14/#283: FASTA processes ALL records, matching GenBank — not just the first."""
     p = tmp_path / "multi.fasta"
     p.write_text(">one\nACGT\nACGT\n>two\nTTTT\n", encoding="utf-8")
-    seq, notices = read_fasta(str(p))
-    assert seq == "ACGTACGT"
-    assert any("using the first" in n for n in notices)
+    records, notices = read_fasta(str(p))
+    assert len(records) == 2
+    assert records[0].header == "one" and records[0].seq == "ACGTACGT"
+    assert records[1].header == "two" and records[1].seq == "TTTT"
+    assert any("2 record" in n for n in notices)
+
+
+def test_read_fasta_skips_a_record_with_no_sequence_lines(tmp_path: Path) -> None:
+    p = tmp_path / "empty_record.fasta"
+    p.write_text(">has_seq\nACGT\n>empty\n>also_has_seq\nTTTT\n", encoding="utf-8")
+    records, notices = read_fasta(str(p))
+    assert [r.header for r in records] == ["has_seq", "also_has_seq"]
+    assert any("Skipped record 'empty'" in n for n in notices)
+
+
+def test_read_fasta_flags_missing_header() -> None:
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".fasta", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(">\nACGT\n>named\nTTTT\n")
+        path = f.name
+    records, notices = read_fasta(path)
+    assert len(records) == 2
+    assert records[0].header == ""
+    assert any("empty header" in n.lower() for n in notices)
+
+
+def test_read_fasta_flags_duplicate_headers(tmp_path: Path) -> None:
+    p = tmp_path / "dupes.fasta"
+    p.write_text(">same\nACGT\n>same\nTTTT\n", encoding="utf-8")
+    records, notices = read_fasta(str(p))
+    assert len(records) == 2  # both kept — duplicates are flagged, not fatal
+    assert any("repeat across records" in n for n in notices)
 
 
 # --- lenient N validation -----------------------------------------------------------
@@ -129,6 +163,7 @@ def test_pipeline_genbank_input(tmp_path: Path) -> None:
         "tl.entropy.bedgraph",
         "tl.entropy.wig",
         "tl.entropy.geneious.gff3",
+        "tl.entropy.tsv",
         "tl.genes.gff3",
         "stats.txt",
     }
@@ -186,6 +221,7 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
         "mt.entropy.bedgraph",
         "mt.entropy.wig",
         "mt.entropy.geneious.gff3",
+        "mt.entropy.tsv",
         "mt.genes.gff3",
         "stats.txt",
     }
