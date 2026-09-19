@@ -1,0 +1,31 @@
+# .NET
+app/**/bin/
+app/**/obj/
+app/**/*.user
+.vs/
+*.suo
+publish/
+Releases/
+
+# Python
+worker/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+worker/dist/
+worker/build/
+*.egg-info/
+
+# Secrets and local state
+app/secrets/*.local.json
+*.tok
+.env
+
+# Outputs
+out/
+runs/
+
+# OS
+Thumbs.db
+desktop.ini
