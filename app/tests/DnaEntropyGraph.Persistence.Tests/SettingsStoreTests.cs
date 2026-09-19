@@ -51,11 +51,11 @@ public class SettingsStoreTests
         ISettingsStore store = new SettingsStore(paths.SettingsPath);
 
         store.SetString("Theme", "Dark");
-        store.SetString("OutputFolder", @"C:\Users\lab\Downloads");
+        store.SetString("OutputFolder", @"%USERPROFILE%\Downloads");
         store.SetString("Theme", "Light");
 
         store.GetString("Theme").ShouldBe("Light");
-        store.GetString("OutputFolder").ShouldBe(@"C:\Users\lab\Downloads");
+        store.GetString("OutputFolder").ShouldBe(@"%USERPROFILE%\Downloads");
     }
 
     /// <summary>

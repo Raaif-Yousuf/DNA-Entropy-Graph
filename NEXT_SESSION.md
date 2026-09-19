@@ -1,115 +1,124 @@
-# Handoff: after the 2026-09-19 second overnight wave
+# Handoff: after the 2026-09-19 six-lane wave
 
-> Overwritten every session. Re-check `git log -1 main` and `gh issue list` before trusting anything
-> here. Counts are deliberately not written down; run
+> Overwritten every session. Re-check `git log -1 main` and `gh issue list` before trusting
+> anything here. Counts are deliberately not written down; run
 > `gh issue list --repo Raaif-Yousuf/DNA-Entropy-Graph --limit 500 --json number,labels,milestone`
 > for current numbers.
 
 ## What this session was
 
-One orchestrator and three Sonnet agents at a time, in one shared checkout, each owning a disjoint
-set of paths, with the orchestrator holding every `git` command. Same shape as the first wave, with
-two changes.
+One orchestrator and **six** Sonnet lanes (raised from three mid-run), in one shared checkout,
+each owning a disjoint set of paths, with the orchestrator holding every `git` command. No lane
+ran `git` at all. No path collision all night.
 
-**Nothing goes to `main` by a direct push any more.** Every unit of work is a branch, a pull
-request and a merge, one issue per PR wherever the files allow. The convention and its two
-mechanical traps are written down in [`docs/branching_and_prs.md`](docs/branching_and_prs.md); read
-it before the first commit. The short version: `--merge`, never `--squash`, and **CI here fires on
-demand only, so a pull request that looks green has been checked by nothing.**
+**Seventeen pull requests, one per issue wherever the files allowed.** Every test count in every
+commit message was re-run by the orchestrator before the commit, not quoted from an agent's
+report.
 
-**The wave ended abruptly.** All three agents died within seconds of each other on the org monthly
-spend limit, mid-edit, exactly as the first wave did. Because no agent had ever run `git`, every
-partial change was exactly where the path assignment said it would be, and the orchestrator landed
-all of it: two lanes were complete, and the third had written its tests and left them red, which is
-the intended state of a test-first lane. Finishing it took a missing import, an error-code registry
-entry, a schema regeneration and two ruff fixes. **Nothing was lost.**
+**The app suite went from 51 tests to 316.** The worker suite is at 814. `scripts/tests` is at
+340.
 
 ## Start here next session
 
-1. **`OWNER_TODO.md`** still, and it has grown. The `DECISION` pile now includes six new
-   agent-made calls, each marked reversible and each carrying its reasoning: **#379** (what the
-   worker does when the store is unreachable for a long time), **#364** (the model gate fails
-   closed on an unknown id), **#353** (the Geneious track bins above 200,000 positions), **#333**
-   (per-exon segments for spliced genes), **#332** (the prototype launcher was deleted), and
-   **#361** (whether `JobManifest.raw` was meant to be a forward-compatibility hook).
+1. **Launch the app.** It has still never been run, and there is now a great deal more to see
+   than there was: a `NavigationView` shell, a run progress page, Mica, a status pill, theme at
+   startup, window placement persisted through a real SQLite-backed settings store.
+   [`docs/ToTest.md`](docs/ToTest.md) has the row and names the two false passes precisely. The
+   one to watch: a `.resw` that is not packed as a PRI resource gives a window whose every label
+   is **blank**, which reads as an unfinished layout rather than a broken build. Check
+   `ShellTitle`, `NavNewRun`, `NavRuns`, `NavCloud`, `NavSettings` and the `RunProgress*` set
+   specifically, because not one of them has ever been seen rendered.
 
-2. **Launch the app.** It has never been run. `app/` builds, 51 tests pass, and none of that says
-   a window appears. [`docs/ToTest.md`](docs/ToTest.md) has the row and names the two false passes:
-   an unpackaged WinUI 3 app resolves the Windows App SDK bootstrapper **at runtime**, so a failure
-   there is a silent exit with no window and no error; and a `.resw` that is not packed as a PRI
-   resource gives a window whose every label is **blank**, which reads as an unfinished layout
-   rather than a broken build.
+2. **Only five `v0.1 walking skeleton` issues remain open**: #204 (SetupHealthService), #205 (IAM
+   permission preflight), #258 (token refresh and retry policy), #261 (startup-script templating)
+   and #266 (the GPU pricing research note, owner-flagged). The milestone is within reach.
 
-3. **Then `app/` in earnest.** The skeleton and all five guards are done (#61, #68). The next
-   pieces are #64 (the input validator port, which has golden vectors in `tests/contract-fixtures/`
-   produced by running the real worker, so the port has something to be wrong against), #57
-   (`CloudErrorClassifier`, whose fixtures were extracted **with their evaluation order recorded**
-   because order is load-bearing), and #62 (the shell).
+3. **`OWNER_TODO.md` has grown again.** Seven new `DECISION` issues were filed this wave, each
+   marked agent-made and reversible, each carrying its reasoning: **#402** (does Hard Rule 21
+   reach a dev-only MPL-2.0 test dependency), **#413** (does it reach the Windows App SDK's
+   proprietary redistributables), **#404** (how `app.db` corruption is handled on launch),
+   **#408** (`Notes`/`TagsJson` columns added ahead of #141), **#386** and **#387** (two cloud API
+   shapes), **#394** (a RunOptions option set that two spec sections disagree about). **#301,
+   #402 and #413 all point at the same unwritten section of `docs/hard_rules.md`** - rule 21
+   still reads "Carve-out: None currently recorded" while the notices generator now documents
+   the `pyrodigal` GPL-3.0 exception mechanically. That is one edit, not three.
 
 ## What exists now that did not this morning
 
-- **`app/` exists.** Thirteen projects, six test projects, 51 tests, 0 warnings. The dependency
-  arrows are structurally true before there is a real call to enforce them against: `Core` has no
-  `Google.*`, `Presentation` has no WinUI reference, both `.xaml.cs` files are branch-free.
-- **All five guards from #68**, each proven able to fail against the real tree, not a fixture.
-  Each scanner reports what it actually **read**, not only what it objected to, and has a test for
-  its own false pass.
-- **`scripts/check_unused_fields.py`**, the eighth guard: a dataclass field that is parsed,
-  validated, schema-checked and never read. Its first run found nine real ones.
-- **A .NET 10 SDK on the box.** It was missing entirely. `docs/onboarding.md` section 4 has both
-  install routes and why the obvious one returns exit code 1602 with nobody at the keyboard.
+- **A real app.** Shell, run progress page, navigation, theme, window placement, a string
+  resource provider, and a SQLite run history with forward migrations under `PRAGMA
+  user_version`, WAL, and four repositories.
+- **A real cloud layer.** `FakeGcp` with scripted failures (billing off, API off, quota,
+  stockout, 403, org policy, preempt, already-exists, network), `CloudErrorClassifier` driven by
+  recorded fixtures with their evaluation order, `VmSpec` refusing a spec the real API would
+  reject, an operation poller with backoff and deadlines, and `CloudJobRunner` end to end over
+  the fake.
+- **Surprisal is wired.** It had a module and thirteen passing tests and no caller. It now has a
+  config flag, a CLI flag, three track files, a TSV column and stats, computed inside the
+  existing forward/reverse pass with zero extra predictor calls.
+- **`provenance.json`**, written unconditionally, including on partial and cancelled runs.
+- **`THIRD-PARTY-NOTICES.md` exists**, generated, with a staleness check that is no longer a
+  no-op passing because the file it checked did not exist.
+- **Two new guards**: `scripts/check_app_wiring.py` (nine finding codes for the C# half of
+  wired-to-nothing) and `Guards.Tests/DialogStringLiteralScanner`.
+- **Property-based tests** (Hypothesis) for windowing, direction and the readers.
 
 ## What was found that is worth more than the fixes
 
-**`afterTask: "keep"` left a VM running with no worker-side expiry at all.** Hard Rule 11, and
-roughly $20 a day for an L4 or $88 for an A100. It now degrades to `afterKeepAlive` until #93
-builds the real keep-alive queue.
+**`_combine()` silently collapsed combined mode to a single direction.** After an OOM halving
+shrank `K` in one direction, `_combine()` compared both directions against the same stale shared
+threshold, so the halved one could never re-qualify. No error, no notice, a wrong number in the
+user's output file. Found by asking the lane that filed #407 as a `THEORY` to resolve it rather
+than leave its workaround standing; the theory itself turned out to be half wrong, and the real
+bug was one layer below it.
 
-**`ci-app.yml`'s test step had never run a single test.** It carried `--filter`, `--logger trx` and
-`--collect:"XPlat Code Coverage"`, all VSTest options, against xunit.v3 / Microsoft.Testing.Platform
-projects: all six assemblies reported `Zero tests ran`, exit code 5. It went red for the right
-reason, and an exit code of 0 there would have been a permanently green job testing nothing.
+**A raw `AssertionError` was escaping the GenBank reader.** Biopython's scanner has bare `assert`
+statements, and a feature qualifier missing its leading `/` hits one. `except ValueError` did not
+catch it. This **disproved a claim this repo had already landed** with `MEASURED` and a fixture
+behind it (#349's "every malformed-content failure this scanner raises is a ValueError"). It was
+true of every input anyone had thought to try. Found by property-based fuzzing; 38 example-based
+GenBank tests were green and stayed green.
 
-**The malformed-input fuzz corpus was being normalized by git.** `*.fasta text` with `eol=lf` meant
-a CRLF fixture was committed with its CRLFs already stripped, while the suite kept passing because
-pytest reads the working tree. A fresh clone would have tested a different file and nothing would
-have said so.
+**`analysis.stride` was parsed, never read, and the conclusion that this was fine had already
+been written into `docs/job_contract.md` as settled.** `analysis.window` *is* read (as
+`max_len`); `stride` was not, so a manifest declaring a disagreeing stride was silently
+discarded. `check_unused_fields.py` could not see it because it matches attribute reads by name
+and `DirectionResult.stride` is read - a live instance of the false negative that script
+documents about itself.
 
-**`min_gpu_count` was never read**, so a single-GPU machine passed the gate for a model needing two
-cards, and would have found out after paying for the VM, the boot and the weight download.
+**A new copy guard found three real Hard Rule 13 violations on its first run**, and a false
+positive in an existing guard (`AlwaysShowHeader="True"` read as an inline "Header" string, for
+want of a word boundary). Both now have regression tests.
 
-**A guard caught a cross-lane regression no human was watching.** #346 added a `MODEL_UNKNOWN` error
-code in one lane without the registry entry, in a PR merged without a full-suite run, and
-`test_every_code_literal_in_worker_python_source_is_registered` caught it hours later.
+**A high-severity advisory rode in on a new dependency.** `Microsoft.Data.Sqlite` 9.0.9 pulled
+`SQLitePCLRaw.lib.e_sqlite3` 2.1.10 (GHSA-2m69-gcr7-jv3q). It was caught only because
+`TreatWarningsAsErrors` turns NU1903 into a build error, and then only because an unrelated lane
+ran an unrelated cross-project build. Fixed by version bump, never suppressed. #197 now puts
+CodeQL on the C# app so the next one is caught on purpose.
 
-**An agent disproved its own claim.** #350 was filed saying Windows refuses to create `CON.fasta`.
-Measured: it does not, in Python, .NET or PowerShell. The issue carries the disproof, and what
-survived is the part that was real, which was silent overwrite when two records sanitize to the
-same name.
+**Two allowlist ratchets fired on schedule with nobody watching.** See
+`.claude/memory/an-allowlist-that-expires-itself.md`.
 
 ## Still true, still unproven
 
-**Nothing cloud-facing has ever run against real Google Cloud.** `lifecycle.py`, `GcsBlobstore`,
-`startup.sh`, `cloud_gpu_test.ps1 -Apply`, `Dockerfile.cuda`, and now the #341 local fallback are
-implemented, tested against fakes, and unproven. They are rows in `docs/ToTest.md`, each naming its
-own false pass, not claims. The cost estimate for draining that queue is unchanged from the previous
-handoff and is in `git log` for `NEXT_SESSION.md`; the number that matters is still that one
-forgotten VM over a weekend costs more than the entire test campaign.
+**Nothing cloud-facing has ever run against real Google Cloud**, and that is now a much larger
+surface: `CloudJobRunner`, `OperationPoller`, `CloudErrorClassifier`, `VmSpec`'s label
+validation, `FakeGcp`'s whole failure vocabulary, plus everything that was already there.
+`docs/ToTest.md` has a row for each, and the sharpest false pass is stated plainly: **`FakeGcp`
+and the classifier were written by the same agent in the same session against the same document**,
+so a failure shape that document gets wrong is wrong in both and no test between them can see it.
 
-**`analysis/surprisal.py` is wired to nothing.** The module and its 13 tests exist; no writer emits
-it and no CLI flag turns it on. #123 is open and the remaining work is the wiring.
+**`check_third_party_notices.py` runs in no CI job** (#416). `ci-docs.yml`'s guard loop cannot
+run it, because that job has neither `dotnet` nor a `worker/.venv`, and it is excluded with a
+visible `::notice` rather than silently. Until #416, a GPL dependency added tomorrow is caught
+only by a human running it.
 
-## Traps this session paid for, beyond the ones already in `CLAUDE.md`
+**The cost ticker does not exist.** #66 shipped the progress page without it, deliberately and
+stated: `CostEstimator` is not in Core and nothing produces per-window progress yet.
 
-- **`ruff` is a CI gate and a whole wave ran without it.** It is deliberately not in `worker\.venv`;
-  run `uvx ruff check worker` and `uvx ruff format --check worker`. Both are in
-  `docs/dev_commands.md` and neither had been run.
-- **Never give two agents different sections of the same file.** Two lanes both owned parts of
-  `docs/science_and_formats.md` and both edited it, so neither lane's work could be committed
-  without sweeping in the other's half-finished edit. The recipe that avoids touching a working tree
-  three agents are live in is in the `overnight-agent-wave-protocol` memory.
-- **`dotnet test` must run from `app/`**, because `global.json`'s `test.runner` setting resolves from
-  the current working directory, not the project path. From the repo root it fails with "Testing
-  with VSTest target is no longer supported", which reads like a broken test project.
-- **Central Package Management refuses an undeclared package before any guard runs** (`NU1010`),
-  which is a second layer nobody had counted on when writing the Hard Rule 7 guard.
+## One external contribution
+
+**PR #362** (Voyagerroc-Lab) was reviewed and closed by the owner. Their NaN diagnosis was
+correct and they were twenty minutes ahead of `8ce6653`, but `main` had a strict superset and
+merging would have landed an unreachable branch. **#401** is the follow-up (`inf` has the
+identical flaw), labelled `good-first-issue` and offered to them.
