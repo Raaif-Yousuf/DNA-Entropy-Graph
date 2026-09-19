@@ -81,8 +81,10 @@ class InputSpec:
     start: int = 1
     rna: bool = False
     genes: bool = False
-    allow_ambiguity: bool = True
-    fasta_records: str = "all"  # all | first (D14: "all" is the default; "first" is parity-only)
+    allow_ambiguity: bool = field(default=True, metadata={"json_name": "allowAmbiguity"})
+    fasta_records: str = field(
+        default="all", metadata={"json_name": "fastaRecords"}
+    )  # all | first (D14: "all" is the default; "first" is parity-only)
 
     @staticmethod
     def from_dict(d: dict) -> "InputSpec":
@@ -120,11 +122,12 @@ class PredictorSpec:
 
 @dataclass
 class AnalysisSpec:
-    context_length: int = 4096
+    context_length: int = field(default=4096, metadata={"json_name": "contextLength"})
     window: int = 8192  # derived by the app; recorded here, never re-derived (job_contract.md §3)
     stride: int = 4096
     direction: Direction = Direction.BOTH_COMBINED
-    track_format: str = "bedgraph"  # bedgraph | wig
+    # The wire field is literally "format", not "trackFormat" (job_contract.md §3's example).
+    track_format: str = field(default="bedgraph", metadata={"json_name": "format"})  # bedgraph | wig
 
     @staticmethod
     def from_dict(d: dict) -> "AnalysisSpec":
@@ -146,9 +149,9 @@ class AnalysisSpec:
 
 @dataclass
 class Limits:
-    max_run_seconds: int = 14400
-    cancel_poll_seconds: int = 10
-    heartbeat_seconds: int = 30
+    max_run_seconds: int = field(default=14400, metadata={"json_name": "maxRunSeconds"})
+    cancel_poll_seconds: int = field(default=10, metadata={"json_name": "cancelPollSeconds"})
+    heartbeat_seconds: int = field(default=30, metadata={"json_name": "heartbeatSeconds"})
 
     @staticmethod
     def from_dict(d: dict) -> "Limits":
@@ -161,9 +164,9 @@ class Limits:
 
 @dataclass
 class Lifecycle:
-    after_task: str = "stop"  # stop | delete | keep
-    keep_alive_minutes: int = 0
-    after_keep_alive: str = "stop"
+    after_task: str = field(default="stop", metadata={"json_name": "afterTask"})  # stop | delete | keep
+    keep_alive_minutes: int = field(default=0, metadata={"json_name": "keepAliveMinutes"})
+    after_keep_alive: str = field(default="stop", metadata={"json_name": "afterKeepAlive"})
 
     @staticmethod
     def from_dict(d: dict) -> "Lifecycle":
@@ -218,7 +221,7 @@ class JobManifest:
     """A fully parsed, validated ``manifest.json``."""
 
     schema: int
-    job_id: str
+    job_id: str = field(metadata={"json_name": "jobId"})
     inputs: list[InputSpec]
     predictor: PredictorSpec
     analysis: AnalysisSpec
@@ -227,7 +230,9 @@ class JobManifest:
     lifecycle: Lifecycle
     store: StoreSpec
     worker: WorkerRef = field(default_factory=WorkerRef)
-    raw: dict = field(repr=False, default_factory=dict)  # the original parsed dict, for provenance
+    # Not part of the wire contract — internal bookkeeping only — so excluded from the
+    # generated schema entirely rather than appearing as a nonsensical free-form "raw" field.
+    raw: dict = field(repr=False, default_factory=dict, metadata={"json_exclude": True})
 
     @staticmethod
     def parse(text: str) -> "JobManifest":

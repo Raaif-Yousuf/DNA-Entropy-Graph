@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Raaif-Yousuf/DNA-Entropy-Graph/main/docs/contract/status.schema.json",
+  "type": "object",
+  "title": "StatusDocument (status.json)",
+  "properties": {
+    "schema": {
+      "type": "integer"
+    },
+    "jobId": {
+      "type": "string"
+    },
+    "stage": {
+      "type": "string"
+    },
+    "percent": {
+      "type": "number"
+    },
+    "detail": {
+      "type": "object"
+    },
+    "startedAt": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string"
+    },
+    "heartbeatSeq": {
+      "type": "integer"
+    },
+    "vm": {
+      "type": "object",
+      "title": "VmRef",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gpu": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "driver": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "title": "WorkerInfo",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        }
+      }
+    },
+    "error": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "title": "ErrorInfo",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retriable": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "jobId",
+    "stage",
+    "percent",
+    "detail",
+    "startedAt",
+    "updatedAt",
+    "heartbeatSeq",
+    "vm",
+    "worker"
+  ]
+}

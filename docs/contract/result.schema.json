@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Raaif-Yousuf/DNA-Entropy-Graph/main/docs/contract/result.schema.json",
+  "type": "object",
+  "title": "JobResult (result.json)",
+  "properties": {
+    "schema": {
+      "type": "integer"
+    },
+    "jobId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "InputResult",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ]
+      }
+    },
+    "timing": {
+      "type": "object",
+      "title": "ResultTiming",
+      "properties": {
+        "startedAt": {
+          "type": "string"
+        },
+        "finishedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "startedAt",
+        "finishedAt"
+      ]
+    },
+    "gpu": {
+      "type": "object",
+      "title": "ResultGpu",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spot": {
+          "type": "boolean"
+        }
+      }
+    },
+    "error": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "jobId",
+    "status",
+    "inputs",
+    "timing"
+  ]
+}

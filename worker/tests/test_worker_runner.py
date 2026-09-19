@@ -49,7 +49,7 @@ def test_full_fake_job_manifest_to_result_json(tmp_path: Path) -> None:
     result = run_job(store)
 
     assert result.status == "done"
-    assert result.job_id == "20260918-142233-k7q2vx"
+    assert result.jobId == "20260918-142233-k7q2vx"
     assert len(result.inputs) == 1
     assert result.inputs[0].status == "done"
     assert result.inputs[0].outputs  # at least one uploaded output path
@@ -262,3 +262,51 @@ def test_status_records_worker_version_and_declared_image(tmp_path: Path) -> Non
     status_doc = json.loads(store.read_text("status.json"))
     assert status_doc["worker"]["image"] == "ghcr.io/x@sha256:test"
     assert status_doc["worker"]["version"]  # the ACTUAL running worker's own version
+
+
+# --- generated schema validates the REAL output (issue #39's whole point) -------------
+
+
+def test_real_result_json_validates_against_the_generated_schema(tmp_path: Path) -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    from dna_entropy.worker.runner import JobResult
+    from dna_entropy.worker.schema_gen import top_level_schema
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+    run_job(store)
+
+    schema = top_level_schema(JobResult, schema_id="x", title="JobResult")
+    result_doc = json.loads(store.read_text(RESULT_PATH))
+    jsonschema.Draft202012Validator(schema).validate(result_doc)
+
+
+def test_real_status_json_validates_against_the_generated_schema(tmp_path: Path) -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    from dna_entropy.worker.schema_gen import top_level_schema
+    from dna_entropy.worker.status import StatusDocument
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+    run_job(store)
+
+    schema = top_level_schema(StatusDocument, schema_id="x", title="StatusDocument")
+    status_doc = json.loads(store.read_text("status.json"))
+    jsonschema.Draft202012Validator(schema).validate(status_doc)
+
+
+def test_job_result_to_dict_matches_its_own_dataclass_shape() -> None:
+    """Regression guard for the exact bug this refactor fixed: a hand-written to_dict()
+    that nests timing/gpu without those being real dataclass fields, silently drifting
+    from what the schema generator (which only sees real fields) would produce."""
+    import dataclasses
+
+    from dna_entropy.worker.runner import JobResult, ResultGpu, ResultTiming
+
+    result = JobResult(
+        schema=1, jobId="x", status="done", inputs=[],
+        timing=ResultTiming(startedAt="a", finishedAt="b"), gpu=ResultGpu(),
+    )
+    assert set(result.to_dict().keys()) == {f.name for f in dataclasses.fields(JobResult)}

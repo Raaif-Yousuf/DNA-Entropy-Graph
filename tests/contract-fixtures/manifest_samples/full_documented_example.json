@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "jobId": "20260918-142233-k7q2vx",
+  "createdAt": "2026-09-18T14:22:33Z",
+  "createdBy": {
+    "installationId": "01H9X5G6K7M8N9P0Q1R2S3T4U5",
+    "appVersion": "1.0.0",
+    "accountSub": "104852...redacted"
+  },
+  "worker": {
+    "image": "ghcr.io/raaif-yousuf/dna-entropy-worker@sha256:9f2b...redacted",
+    "version": "1.0.0"
+  },
+  "inputs": [
+    {
+      "id": "in1",
+      "path": "input/SetTnpB-Evo.gb",
+      "name": "SetTnpB",
+      "informat": "auto",
+      "start": 1,
+      "rna": false,
+      "genes": true,
+      "allowAmbiguity": true,
+      "fastaRecords": "all"
+    }
+  ],
+  "predictor": {
+    "kind": "evo",
+    "model": "evo2_7b",
+    "precision": "bf16",
+    "device": "cuda",
+    "seed": 0
+  },
+  "analysis": {
+    "contextLength": 4096,
+    "window": 8192,
+    "stride": 4096,
+    "direction": "both-combined",
+    "format": "bedgraph"
+  },
+  "outputs": ["genbank", "fasta", "bedgraph", "wig", "geneious_gff3", "genes_gff3", "stats", "tsv"],
+  "limits": {
+    "maxRunSeconds": 14400,
+    "cancelPollSeconds": 10,
+    "heartbeatSeconds": 30
+  },
+  "lifecycle": {
+    "afterTask": "stop",
+    "keepAliveMinutes": 30,
+    "afterKeepAlive": "stop"
+  },
+  "store": {
+    "kind": "gcs",
+    "bucket": "deg-123-abc",
+    "prefix": "jobs/20260918-142233-k7q2vx/"
+  }
+}

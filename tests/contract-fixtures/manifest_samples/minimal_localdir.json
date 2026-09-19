@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "jobId": "20260919-090000-aaaaaa",
+  "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
+  "predictor": {"kind": "mock", "seed": 0},
+  "analysis": {"contextLength": 4096, "window": 8192, "stride": 4096, "direction": "both-combined"},
+  "outputs": ["fasta", "bedgraph", "tsv"],
+  "limits": {"maxRunSeconds": 14400, "cancelPollSeconds": 10, "heartbeatSeconds": 30},
+  "lifecycle": {"afterTask": "stop"},
+  "store": {"kind": "localdir", "root": "C:\\Users\\example\\AppData\\Local\\DNAEntropyGraph\\runs\\20260919-090000-aaaaaa"}
+}

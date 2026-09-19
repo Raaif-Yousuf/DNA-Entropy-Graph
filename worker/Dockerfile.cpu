@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+#
+# worker/Dockerfile.cpu — the CPU-only worker image (design D6, issue #36): the worker
+# package with the mock predictor only — no torch/evo2/flash-attn — for the CI smoke test
+# and any CPU-only "walking skeleton" job. Design section 5.4: "For the CPU smoke test the
+# same startup script runs on Container-Optimized OS with the -cpu image."
+#
+# Build from the `worker/` directory as the context (this is how ci-worker.yml's
+# `contract` job invokes it):
+#   docker build -f worker/Dockerfile.cpu -t dna-entropy-worker:cpu worker
+#   docker run --rm dna-entropy-worker:cpu dna-entropy-worker selftest
+#
+# Base image pinned by digest (issue #255): python:3.12-slim, resolved 2026-09-19 via the
+# public Docker Hub registry API (a free, unauthenticated manifest-list read — no cloud
+# spend, no GCP/billing call). Re-resolve and update this digest whenever the base image
+# needs a security patch; `docker build` will otherwise keep using this exact, byte-for-
+# byte-reproducible base forever.
+FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
+
+LABEL org.opencontainers.image.source="https://github.com/Raaif-Yousuf/DNA-Entropy-Graph"
+LABEL org.opencontainers.image.description="DNA-Entropy-Graph worker (CPU / mock-predictor build, ~500 MB target per design D6)"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# ca-certificates: the worker (and pip's own installs) makes HTTPS calls (GCS REST,
+# PyPI at build time). Nothing else — this image deliberately carries no compiler, no
+# gcloud, no docker-in-docker, no ssh client (docs/cloud_design.md section 9: no SSH
+# anywhere in this design, including inside the image that runs it).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/worker
+
+# Only what setuptools needs to build+install the package (see pyproject.toml's
+# `[tool.setuptools.packages.find] where = ["src"]`) — copied separately from the rest of
+# the repo so an unrelated source change elsewhere in worker/ doesn't invalidate this
+# layer's pip-install cache.
+COPY pyproject.toml ./
+COPY src ./src
+
+# [genes] (pyrodigal) is a pure/portable C-extension wheel, no GPU toolchain needed, so it
+# ships in the CPU image too — gene-calling should work identically on the CPU build.
+# Deliberately NOT [evo] (torch/evo2/flash-attn): that is the -cuda image's whole job.
+RUN pip install ".[genes]"
+
+# Run as non-root (least privilege; this container never needs to write anywhere but its
+# own tmp/work directories, which docker run's -v /work:/work mount already covers on the
+# real VM — see worker/vm/startup.sh).
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin worker
+USER worker
+WORKDIR /home/worker
+
+# No fixed ENTRYPOINT: `ci-worker.yml`'s smoke test invokes
+# `docker run --rm dna-entropy-worker:cpu dna-entropy-worker selftest`, i.e. it passes the
+# FULL command itself — an ENTRYPOINT of `dna-entropy-worker` would double up into
+# `dna-entropy-worker dna-entropy-worker selftest` and fail (caught by actually running
+# this exact command against the real image, not assumed). CMD alone gives a sensible
+# zero-arg default (`docker run dna-entropy-worker:cpu`) while a full command still
+# completely replaces it, matching the CI invocation's own shape exactly.
+CMD ["dna-entropy-worker", "selftest"]

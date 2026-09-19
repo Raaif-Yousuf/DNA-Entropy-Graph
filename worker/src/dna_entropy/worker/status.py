@@ -43,9 +43,54 @@ class GpuInfo:
 
 
 @dataclass
+class VmRef:
+    """``status.json``'s ``vm`` field."""
+
+    name: str | None = None
+    zone: str | None = None
+    gpu: str | None = None
+    driver: str | None = None
+
+
+@dataclass
+class ErrorInfo:
+    """``status.json``/``result.json``'s ``error`` field, when non-null
+    (docs/job_contract.md §4)."""
+
+    code: str
+    message: str
+    retriable: bool = False
+    detail: str | None = None
+    remediation: str | None = None
+
+
+@dataclass
 class WorkerInfo:
     version: str = "0.0.0"
     image: str = ""
+
+
+@dataclass
+class StatusDocument:
+    """The documented shape of ``status.json`` (docs/job_contract.md §4), kept here purely
+    as the schema-generation source of truth for ``worker/schema_gen.py`` — NOT the type
+    :class:`StatusWriter` mutates internally (it keeps a plain dict for cheap, lock-held
+    in-place updates). ``test_status_document_fields_match_statuswriter_keys`` in
+    ``test_worker_status.py`` is the regression guard tying the two together: if a field is
+    added/renamed on one side without the other, that test fails.
+    """
+
+    schema: int
+    jobId: str
+    stage: str
+    percent: float
+    detail: dict
+    startedAt: str
+    updatedAt: str
+    heartbeatSeq: int
+    vm: VmRef
+    worker: WorkerInfo
+    error: ErrorInfo | None = None
 
 
 class StatusWriter:

@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+#
+# worker/Dockerfile.cuda — the GPU worker image (design D6, issue #36): NGC PyTorch base
+# (ships Transformer Engine and flash-attn prebuilt) plus evo2 and this worker package.
+# One image serves both the bf16 (7B) and FP8 (40B, Hopper-only — see
+# worker/src/dna_entropy/predictors/hardware.py's MODEL_NEEDS_HOPPER gate) code paths;
+# `predictor.precision` in the manifest selects which one runs.
+#
+# *****************************************************************************
+# * UNVERIFIED. This laptop has an Intel Arc GPU and no CUDA stack; the Docker  *
+# * daemon here is also unreachable (binary present, daemon not running). This  *
+# * file has NEVER been built, let alone run, on a GPU. Do not treat it as      *
+# * working until issue #37 ("spike: NGC PyTorch base + pip install evo2       *
+# * imports cleanly and reproduces prototype numbers") has actually run it on   *
+# * a real GPU VM. See this repo's docs/ToTest.md (outside my paths tonight —   *
+# * flagged in my report instead) for the row that should track that.          *
+# *****************************************************************************
+#
+# Build from the `worker/` directory as the context:
+#   docker build -f worker/Dockerfile.cuda -t dna-entropy-worker:cuda worker
+#
+# Base tag: appendix B section 4 ("Unknowns to verify") names `nvcr.io/nvidia/pytorch:
+# 25.xx-py3` as the family without pinning an exact monthly release, explicitly flagging
+# "verify evo2/vortex version pins against the NGC versions" as unresolved. The tag below
+# is this session's best-effort placeholder (NOT pinned by digest — issue #255 — since an
+# unverified digest for an unverified base is worse than an obviously-a-placeholder tag);
+# issue #37 must confirm the real tag AND its digest on real hardware before release.
+ARG NGC_PYTORCH_TAG=25.06-py3
+FROM nvcr.io/nvidia/pytorch:${NGC_PYTORCH_TAG}
+
+LABEL org.opencontainers.image.source="https://github.com/Raaif-Yousuf/DNA-Entropy-Graph"
+LABEL org.opencontainers.image.description="DNA-Entropy-Graph worker (CUDA / Evo 2 build) — UNVERIFIED, see issue #37"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /opt/worker
+
+COPY pyproject.toml ./
+COPY src ./src
+
+# The NGC base already ships torch + flash-attn + Transformer Engine prebuilt (the whole
+# reason design D6 chose this base over the prototype's ~10-minute flash-attn source
+# build, docs/packaging_design.md). [genes] (pyrodigal) and [evo] (torch, evo2) — `[evo]`
+# resolves `torch` against whatever the base image already has via pip's normal dependency
+# resolution; if that ever tries to REPLACE the NGC-shipped torch build (losing its
+# CUDA/flash-attn integration) rather than reusing it, that is exactly the kind of
+# incompatibility issue #37's spike exists to catch — this Dockerfile cannot detect that
+# without actually running on a GPU.
+RUN pip install ".[genes,evo]"
+
+# Weights are NOT baked into the image (design D6): the worker fetches/mirrors them via
+# worker/src/dna_entropy/worker/weights.py's cache/models/<id>/ convention at runtime, so
+# this image stays a fixed, reusable artifact across every model id.
+
+RUN useradd --create-home --uid 10001 worker
+USER worker
+WORKDIR /home/worker
+
+# No fixed ENTRYPOINT — see Dockerfile.cpu's comment (this exact double-command bug was
+# caught by actually running `docker run --rm dna-entropy-worker:cpu dna-entropy-worker
+# selftest` against the CPU image; applying the same fix here for consistency, though this
+# file itself remains unverified — see the UNVERIFIED banner above).
+CMD ["dna-entropy-worker", "selftest"]

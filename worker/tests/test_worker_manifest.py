@@ -92,6 +92,38 @@ def test_gcs_store_requires_bucket_and_prefix() -> None:
 # --- parsing the full example from docs/job_contract.md -----------------------------
 
 
+def test_unknown_top_level_fields_are_tolerated() -> None:
+    """job_contract.md §8: 'unknown fields on an otherwise-matching schema version are
+    tolerated (ignored), so a newer app talking to an older worker degrades gracefully.'"""
+    m = JobManifest.parse(_manifest(
+        aFieldFromTheFuture="some new thing this worker build has never heard of",
+        anotherOne={"nested": "also unknown"},
+    ))
+    assert m.job_id == MINIMAL_MANIFEST["jobId"]  # parsed normally, unknown fields just ignored
+
+
+def test_unknown_nested_fields_are_tolerated() -> None:
+    m = JobManifest.parse(_manifest(
+        predictor={"kind": "mock", "seed": 0, "futureField": "ignored"},
+        analysis={"contextLength": 2048, "yetAnotherFutureField": 123},
+    ))
+    assert m.predictor.kind == "mock"
+    assert m.analysis.context_length == 2048
+
+
+def test_defaults_apply_when_optional_sections_are_omitted() -> None:
+    """Every section except schema/jobId/inputs/store is optional at the top level; a
+    minimal manifest still parses with documented defaults."""
+    m = JobManifest.parse(_manifest())
+    assert m.predictor.kind == "mock"
+    assert m.predictor.model == "evo2_7b"
+    assert m.analysis.context_length == 4096
+    assert m.analysis.direction is Direction.BOTH_COMBINED
+    assert m.limits.heartbeat_seconds == 30
+    assert m.lifecycle.after_task == "stop"
+    assert m.outputs == []
+
+
 def test_parses_the_full_documented_example() -> None:
     full = {
         "schema": 1,

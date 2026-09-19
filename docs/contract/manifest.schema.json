@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Raaif-Yousuf/DNA-Entropy-Graph/main/docs/contract/manifest.schema.json",
+  "type": "object",
+  "title": "JobManifest (manifest.json)",
+  "properties": {
+    "schema": {
+      "type": "integer"
+    },
+    "jobId": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "InputSpec",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "informat": {
+            "type": "string"
+          },
+          "start": {
+            "type": "integer"
+          },
+          "rna": {
+            "type": "boolean"
+          },
+          "genes": {
+            "type": "boolean"
+          },
+          "allowAmbiguity": {
+            "type": "boolean"
+          },
+          "fastaRecords": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "name"
+        ]
+      }
+    },
+    "predictor": {
+      "type": "object",
+      "title": "PredictorSpec",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "precision": {
+          "type": "string"
+        },
+        "device": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer"
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "title": "AnalysisSpec",
+      "properties": {
+        "contextLength": {
+          "type": "integer"
+        },
+        "window": {
+          "type": "integer"
+        },
+        "stride": {
+          "type": "integer"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "both-combined",
+            "both-averaged",
+            "both-separate",
+            "forward-only",
+            "reverse-only"
+          ]
+        },
+        "format": {
+          "type": "string"
+        }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "title": "Limits",
+      "properties": {
+        "maxRunSeconds": {
+          "type": "integer"
+        },
+        "cancelPollSeconds": {
+          "type": "integer"
+        },
+        "heartbeatSeconds": {
+          "type": "integer"
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "title": "Lifecycle",
+      "properties": {
+        "afterTask": {
+          "type": "string"
+        },
+        "keepAliveMinutes": {
+          "type": "integer"
+        },
+        "afterKeepAlive": {
+          "type": "string"
+        }
+      }
+    },
+    "store": {
+      "type": "object",
+      "title": "StoreSpec",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "bucket": {
+          "type": "string"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "worker": {
+      "type": "object",
+      "title": "WorkerRef",
+      "properties": {
+        "image": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "jobId",
+    "inputs",
+    "predictor",
+    "analysis",
+    "outputs",
+    "limits",
+    "lifecycle",
+    "store"
+  ]
+}

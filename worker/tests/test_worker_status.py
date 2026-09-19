@@ -176,3 +176,39 @@ def test_context_manager_starts_and_stops(tmp_path: Path) -> None:
         assert _status(store)["stage"] == "running"
     # After the context exits, one more (final) write happened via stop().
     assert _status(store)["stage"] == "running"
+
+
+# --- StatusDocument: the schema-generation source of truth must match what StatusWriter
+# actually produces (worker/schema_gen.py, issue #39) ----------------------------------
+
+
+def test_status_document_fields_match_statuswriter_keys(tmp_path: Path) -> None:
+    import dataclasses
+
+    from dna_entropy.worker.status import StatusDocument
+
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job1", interval_seconds=999)
+    w.start()
+    try:
+        actual_keys = set(_status(store).keys())
+    finally:
+        w.stop()
+    documented_fields = {f.name for f in dataclasses.fields(StatusDocument)}
+    assert actual_keys == documented_fields
+
+
+def test_status_document_vm_and_worker_subfields_match(tmp_path: Path) -> None:
+    import dataclasses
+
+    from dna_entropy.worker.status import VmRef, WorkerInfo
+
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job1", interval_seconds=999)
+    w.start()
+    try:
+        actual = _status(store)
+    finally:
+        w.stop()
+    assert set(actual["vm"].keys()) == {f.name for f in dataclasses.fields(VmRef)}
+    assert set(actual["worker"].keys()) == {f.name for f in dataclasses.fields(WorkerInfo)}

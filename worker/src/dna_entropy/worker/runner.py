@@ -22,7 +22,6 @@ import shutil
 import tempfile
 import time
 import traceback
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import __version__ as WORKER_VERSION
@@ -33,6 +32,7 @@ from .blobstore import Blobstore, BlobstoreError, write_json
 from .cancel import CancelWatcher, JobCancelledError
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError
+from .result import InputResult, JobResult, ResultGpu, ResultTiming
 from .status import GpuInfo, StatusWriter, WorkerInfo
 
 RESULT_PATH = "result.json"
@@ -49,40 +49,6 @@ def _free_disk_gb(path: Path) -> float:
         return round(usage.free / (1024**3), 1)
     except OSError:
         return -1.0
-
-
-@dataclass
-class InputResult:
-    """One ``result.json`` ``inputs[]`` entry."""
-
-    id: str
-    status: str  # "done" | "failed" | "cancelled"
-    outputs: list[str] = field(default_factory=list)
-    error: dict | None = None
-
-
-@dataclass
-class JobResult:
-    """The parsed shape of ``result.json`` (docs/job_contract.md §7)."""
-
-    schema: int
-    job_id: str
-    status: str  # "done" | "failed" | "cancelled" (job level; see per-input status too)
-    inputs: list[InputResult]
-    started_at: str
-    finished_at: str
-    error: dict | None = None
-
-    def to_dict(self) -> dict:
-        return {
-            "schema": self.schema,
-            "jobId": self.job_id,
-            "status": self.status,
-            "inputs": [dataclasses.asdict(i) for i in self.inputs],
-            "timing": {"startedAt": self.started_at, "finishedAt": self.finished_at},
-            "gpu": {"name": None, "zone": None, "spot": False},  # filled in on a real GPU VM
-            "error": self.error,
-        }
 
 
 def _run_one_input(
@@ -193,8 +159,8 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     )
 
     result = JobResult(
-        schema=1, job_id=manifest.job_id, status=job_status, inputs=input_results,
-        started_at=started_at, finished_at=finished_at, error=job_error,
+        schema=1, jobId=manifest.job_id, status=job_status, inputs=input_results,
+        timing=ResultTiming(startedAt=started_at, finishedAt=finished_at), error=job_error,
     )
     # Written LAST, after every output is confirmed uploaded — job_contract.md §7: its
     # mere presence, not just its contents, is the app's "this job reached a terminal

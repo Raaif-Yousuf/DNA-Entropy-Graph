@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Dev: laptop / CI, no GPU needed.
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "jsonschema>=4"]
 # Evo: GPU box only (see docs/EVO_SETUP.md). Heavy; never a core dep.
 evo = ["torch", "evo2"]
 # Gene boundaries (optional, prokaryotic).
@@ -35,6 +35,11 @@ genes = ["pyrodigal>=3"]
 
 [project.scripts]
 dna-entropy = "dna_entropy.cli:main"
+# The container's own entrypoint (worker/vm/startup.sh, issue #45; the -cpu/-cuda images,
+# issue #36) — a separate console script from `dna-entropy` because `run`'s exit-code
+# contract (0/2/3/10/11, see worker/src/dna_entropy/worker/cli.py) is specific to the
+# startup script's cleanup dispatch, not the human-facing science CLI.
+dna-entropy-worker = "dna_entropy.worker.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -190,7 +190,7 @@ def worker_run(
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
 
-    typer.secho(f"job {result.job_id}: {result.status}",
+    typer.secho(f"job {result.jobId}: {result.status}",
                 fg=typer.colors.GREEN if result.status == "done" else typer.colors.RED)
     for ir in result.inputs:
         line = f"  {ir.id}: {ir.status}"
