@@ -94,6 +94,21 @@ def test_run_windowed_retries_once_after_oom_with_halved_window() -> None:
     check_probability_matrix(result.probs, len(seq))
 
 
+def test_run_windowed_retry_actually_shrinks_a_k_bound_window() -> None:
+    """issue #313/#315: the case above (context_length=8, ceiling=16) is the *tied*
+    boundary W == 2K == ceiling, the one regime where the old, broken `halved()` also
+    happened to work (K-bound and ceiling-bound coincide there). This test uses a K-bound
+    plan WITH headroom (2K=8 well under ceiling=64, matching the default K=4096 on every
+    GPU tier above an L4) -- the case the old code silently did nothing for, since halving
+    the ceiling alone never moves a K-bound window."""
+    seq = "ACGT" * 10
+    predictor = _OOMOnceThenOK()
+    result = run_windowed(predictor, seq, context_length=4, ceiling=64)
+    assert result.window == 4  # halved from 8 (== 2*4, K-bound -- ceiling was never close)
+    assert any("out of gpu memory" in n.lower() for n in result.notices)
+    check_probability_matrix(result.probs, len(seq))
+
+
 class _AlwaysOOM:
     def predict(self, seq: str) -> np.ndarray:
         raise PredictorOOMError("simulated OOM")

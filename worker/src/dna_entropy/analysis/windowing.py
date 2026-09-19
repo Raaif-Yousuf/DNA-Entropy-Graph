@@ -156,10 +156,39 @@ def validate_context(*, context_length: int, ceiling: int, seq_len: int) -> list
 
 
 def halved(context_length: int, ceiling: int) -> tuple[int, int]:
-    """Halve the window after an out-of-memory retry: keep K if the halved ceiling can
-    still hold it, otherwise halve both (section 5.6: "halve W (keep K if possible, else
-    halve both K and W)"). Never returns a ceiling or K below 1.
+    """Halve the WINDOW after an out-of-memory retry (section 5.6: "halve W, keep K if
+    possible, else halve both K and W"). Returns ``(new_context, new_ceiling)`` such that
+    ``compute_window(new_context, new_ceiling)`` derives a window strictly smaller than
+    the one that just OOM'd (or, if the plan was already at its smallest valid shape,
+    the same one — a floor, not a crash).
+
+    "Keep K if possible" means: keep K when the window that just OOM'd was
+    **ceiling-bound** (``W == ceiling < 2K``) — halving the ceiling alone then genuinely
+    shrinks W, since K was never the constraint ``min(2K, ceiling)`` picked. When the
+    window was **K-bound** (``W == 2K <= ceiling``), halving the ceiling alone does
+    nothing — ``min(2K, ceiling)`` still picks ``2K`` — so K itself must shrink too
+    (issue #313: this was the actual bug. The previous implementation always halved the
+    *ceiling* and let the caller re-derive W via a fresh ``min(2K, ceiling)``, which only
+    moves W when W was already ceiling-bound. The default context length is K-bound on
+    every GPU tier above an L4, so every OOM retry silently re-ran an identically shaped
+    pass and OOM'd again). Never returns a ceiling or K below 1.
     """
-    new_ceiling = max(1, ceiling // 2)
-    new_context = context_length if context_length < new_ceiling else max(1, context_length // 2)
+    old_window, old_stride = compute_window(context_length, ceiling)
+    ceiling_was_binding = old_window < 2 * context_length
+
+    if ceiling_was_binding and old_stride >= 2:
+        # K stays exactly as-is; shrink the ceiling as far as it can go while still
+        # leaving K a positive stride. A ceiling-bound region always has
+        # `ceiling // 2 < context_length` (ceiling < 2K by definition here), so this
+        # floors at `context_length + 1` in practice: the tightest valid window that
+        # still honours K, which is the most relief an OOM retry can get without
+        # touching K at all.
+        new_ceiling = max(context_length + 1, ceiling // 2)
+        return context_length, new_ceiling
+
+    # K-bound (halving the ceiling alone would not move W), or a ceiling-bound plan
+    # already at its tightest possible stride (old_stride == 1, no room left to shrink
+    # the ceiling without violating K): halve K, and the ceiling along with it.
+    new_context = max(1, context_length // 2)
+    new_ceiling = max(new_context + 1, ceiling // 2)
     return new_context, new_ceiling

@@ -174,24 +174,96 @@ def test_clean_config_has_no_notices() -> None:
     assert validate_context(context_length=4096, ceiling=8192, seq_len=50000) == []
 
 
-# --- OOM halving -----------------------------------------------------------------------
+# --- OOM halving -------------------------------------------------------------------
+#
+# issue #313: `halved()` used to halve the *ceiling* and let W fall out of a fresh
+# `min(2K, ceiling)`, which only moves W when the plan was ceiling-bound. A K-bound plan
+# (W == 2K <= ceiling — true for the default K=4096 on every GPU tier above an L4) got an
+# UNCHANGED window back: the OOM retry re-ran an identically shaped pass and OOM'd again.
+# issue #315: the tests here used to assert only the returned (K, ceiling) *values*, never
+# the derived window itself — the quantity the docstring and spec 5.6 actually promise —
+# so a case that happened to return the "right" numbers for the wrong reason still passed.
+# Every test below asserts the DERIVED WINDOW (via compute_window on halved()'s own
+# output), not just the (K, ceiling) tuple.
+
+# (context_length, ceiling) pairs that exercise both regimes real usage can hit. Every
+# pair here is one `compute_window` would already have accepted once (halved() is only
+# ever called on a (K, ceiling) that just ran a real, successful predictor pass before
+# OOM'ing on a SECOND call) — an inherent precondition, not new behaviour.
+_HALVING_CASES = [
+    pytest.param(4096, 16384, id="k-bound-default-l4-to-a100-headroom"),  # issue #313's own repro
+    pytest.param(4096, 8192, id="k-bound-tight-l4-default-ceiling"),  # W == 2K == ceiling exactly
+    pytest.param(2048, 8192, id="k-bound-with-headroom"),
+    pytest.param(3000, 5000, id="ceiling-bound-with-headroom"),  # K < ceiling < 2K
+    pytest.param(100, 101, id="ceiling-bound-at-its-tightest-stride-of-1"),
+    pytest.param(1, 2, id="already-at-the-absolute-floor"),
+]
 
 
-def test_halved_keeps_k_when_it_still_fits() -> None:
-    # ceiling 8192 -> 4096; K=2048 still < 4096, so K is kept.
-    k, ceiling = halved(context_length=2048, ceiling=8192)
-    assert ceiling == 4096
-    assert k == 2048
+@pytest.mark.parametrize("context_length, ceiling", _HALVING_CASES)
+def test_halved_strictly_decreases_the_derived_window_or_is_already_at_the_floor(
+    context_length: int, ceiling: int
+) -> None:
+    """The regression test for #313: assert the WINDOW shrinks, not just that `halved()`
+    returns some (K, ceiling) pair. Every case above genuinely shrinks except the last
+    (1, 2), which is already the smallest valid plan (K=1, W=2, S=1) and is a floor, not a
+    regression — asserted separately below by `test_halved_reaches_a_stable_floor`."""
+    old_window, _old_stride = compute_window(context_length, ceiling)
+    new_context, new_ceiling = halved(context_length, ceiling)
+    new_window, new_stride = compute_window(new_context, new_ceiling)
+
+    assert new_context >= 1
+    assert new_ceiling >= 1
+    assert new_stride >= 1  # halved() must always return a still-valid plan
+    assert new_window <= old_window
+    if (context_length, ceiling) != (1, 2):  # the one already-at-the-floor case
+        assert new_window < old_window, (
+            f"halved({context_length}, {ceiling}) returned ({new_context}, {new_ceiling}) "
+            f"-> window {new_window}, no smaller than the {old_window} that just OOM'd"
+        )
 
 
-def test_halved_also_halves_k_when_it_no_longer_fits() -> None:
-    # ceiling 8192 -> 4096; K=4096 is NOT < 4096, so K must also halve.
-    k, ceiling = halved(context_length=4096, ceiling=8192)
-    assert ceiling == 4096
-    assert k == 2048
+def test_halved_keeps_k_when_the_ceiling_was_the_actual_constraint() -> None:
+    """ "Keep K if possible" (spec 5.6) means: when the plan was ceiling-bound (the
+    ceiling, not 2K, is what `min()` picked), K was never the limiting factor, so
+    shrinking the ceiling alone already produces a smaller window — K does not need to
+    move. (3000, 5000): 2K=6000 > ceiling=5000, so W=5000 is ceiling-bound."""
+    old_window, _ = compute_window(3000, 5000)
+    new_context, new_ceiling = halved(3000, 5000)
+    new_window, _ = compute_window(new_context, new_ceiling)
+
+    assert new_context == 3000  # K kept exactly
+    assert new_window < old_window
 
 
-def test_halved_never_goes_below_one() -> None:
-    k, ceiling = halved(context_length=1, ceiling=1)
-    assert k >= 1
+def test_halved_also_halves_k_when_the_window_was_k_bound() -> None:
+    """The other half of "keep K if possible, else halve both": a K-bound plan (W == 2K)
+    cannot shrink by touching the ceiling alone — `min(2K, ceiling)` would still pick
+    `2K` — so K itself must halve too. This is issue #313's exact repro: K=4096,
+    ceiling=16384 (an A100/H100-tier ceiling, far above 2K=8192)."""
+    old_window, _ = compute_window(4096, 16384)
+    assert old_window == 8192  # K-bound: 2*4096, not the 16384 ceiling
+
+    new_context, new_ceiling = halved(4096, 16384)
+    new_window, _ = compute_window(new_context, new_ceiling)
+
+    assert new_context < 4096  # K moved -- this is the bug: it used to stay 4096
+    assert new_window == 8192 // 2  # a genuine halving, not a no-op
+
+
+def test_halved_reaches_a_stable_floor_not_an_infinite_shrink() -> None:
+    """Repeatedly retrying (as if every retry OOM'd again) must converge to a fixed,
+    still-valid plan -- never raise, never shrink K or the window below 1, and never
+    loop without settling."""
+    context_length, ceiling = 4096, 16384
+    windows = []
+    for _ in range(50):
+        window, _ = compute_window(context_length, ceiling)
+        windows.append(window)
+        context_length, ceiling = halved(context_length, ceiling)
+
+    assert context_length >= 1
     assert ceiling >= 1
+    # Monotonically non-increasing throughout, and settles (does not oscillate/grow).
+    assert windows == sorted(windows, reverse=True)
+    assert windows[-1] == windows[-2] == windows[-3]  # reached and held a floor

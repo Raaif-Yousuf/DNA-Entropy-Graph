@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,8 @@ RAW = ">demo header\nATGC ATGC ATGC\nACGTACGTACGT"
 CLEAN_LEN = 24
 DATA = Path(__file__).parent / "data"
 SAMPLE_FA = str(DATA / "sample.fasta")
+FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "contract-fixtures"
+PROTOTYPE_FORWARD_ONLY_FIXTURE = FIXTURES / "prototype_parity" / "forward_only_sample_fasta.json"
 
 
 def test_run_writes_all_outputs(tmp_path: Path) -> None:
@@ -105,20 +108,28 @@ def test_build_predictor_passes_max_len_as_evo_max_context(
 
 def test_forward_only_reproduces_legacy_single_pass_output_bit_for_bit(tmp_path: Path) -> None:
     """Issue #279's own observable: on tests/data/sample.fasta, Forward-only must match
-    what the pre-windowing pipeline computed: predictor.predict(seq) -> shannon_entropy,
-    in one pass, no windowing seam, no reverse-complement — a straight bit-for-bit replay.
+    what the DNA-Entropy-Genbank prototype's pre-windowing pipeline actually computed.
+
+    issue #316: an earlier version of this test computed its own "legacy reference" live,
+    from the CURRENT (ported) ``MockPredictor``/``shannon_entropy``, and compared it to
+    the CURRENT pipeline's output — both sides the same code, so this only ever proved
+    the new windowing plumbing is a transparent no-op in the single-window case (still
+    true and still worth checking — see the notice-count/window assertions below), never
+    that it actually matches the prototype. Nobody had checked that claim.
+
+    This version compares against ``tests/contract-fixtures/prototype_parity/
+    forward_only_sample_fasta.json`` — the real, frozen output of running the actual
+    DNA-Entropy-Genbank prototype (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b, the
+    exact commit worker/ was ported from) on its own copy of this same sample.fasta, with
+    predictor=mock seed=0. See that file's ``description``/``source`` for exactly how it
+    was generated and cross-checked.
     """
-    from dna_entropy.readers.fasta import read_fasta
-    from dna_entropy.validation.validators import validate_sequence
-
-    records, _ = read_fasta(SAMPLE_FA)
-    validated = validate_sequence(records[0].seq, allow_ambiguity=True)
-    seq = validated.seq
-    assert len(seq) < 8192  # must land in the single-window path, matching the old code
-
-    # The "legacy" reference: exactly what pipeline.run() did before windowing existed.
-    legacy_probs = MockPredictor(seed=0).predict(seq)
-    legacy_values = shannon_entropy(legacy_probs)
+    assert PROTOTYPE_FORWARD_ONLY_FIXTURE.exists(), (
+        f"missing fixture: {PROTOTYPE_FORWARD_ONLY_FIXTURE} "
+        "(see tests/contract-fixtures/prototype_parity/ for how to regenerate it)"
+    )
+    fixture = json.loads(PROTOTYPE_FORWARD_ONLY_FIXTURE.read_text(encoding="utf-8"))
+    prototype_values = np.array(fixture["values"], dtype=np.float32)
 
     cfg = RunConfig(
         name="legacycheck",
@@ -129,12 +140,44 @@ def test_forward_only_reproduces_legacy_single_pass_output_bit_for_bit(tmp_path:
     )
     result = pipeline.run(cfg)
 
-    assert np.array_equal(result.values, legacy_values)
+    assert len(result.seq) == fixture["seq_len"]
+    assert len(result.seq) < 8192  # must land in the single-window path, matching the old code
+    assert np.array_equal(result.values, prototype_values)
     # The classic "first base has zero context -> not applicable to mock, but the shape
     # and window/stride bookkeeping must still be present and correct.
     assert result.direction is Direction.FORWARD_ONLY
     assert result.window == 8192
     assert result.context_length == 4096
+
+
+def test_windowing_is_transparent_in_the_single_window_case(tmp_path: Path) -> None:
+    """The property the OLD version of the test above actually proved (and which is still
+    worth its own name, separately from prototype parity): when a sequence fits in one
+    window, the new windowing/direction plumbing reduces to exactly
+    ``predictor.predict(seq) -> shannon_entropy``, with no seam and no windowing artifact
+    — the same live comparison the old test made, just no longer wearing a "matches the
+    prototype" label it never earned."""
+    from dna_entropy.readers.fasta import read_fasta
+    from dna_entropy.validation.validators import validate_sequence
+
+    records, _ = read_fasta(SAMPLE_FA)
+    validated = validate_sequence(records[0].seq, allow_ambiguity=True)
+    seq = validated.seq
+    assert len(seq) < 8192  # single-window path
+
+    direct_probs = MockPredictor(seed=0).predict(seq)
+    direct_values = shannon_entropy(direct_probs)
+
+    cfg = RunConfig(
+        name="transparencycheck",
+        out_dir=str(tmp_path),
+        input_path=SAMPLE_FA,
+        direction=Direction.FORWARD_ONLY,
+        seed=0,
+    )
+    result = pipeline.run(cfg)
+
+    assert np.array_equal(result.values, direct_values)
 
 
 def test_run_records_window_stride_and_seam_in_result(tmp_path: Path) -> None:

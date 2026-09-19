@@ -61,6 +61,14 @@ EXEMPT_PREFIXES = (
     "scripts/tests/test_check_user_home_paths.py",
 )
 
+# Every absolute path in a Dockerfile is a path inside the image, not on anyone's
+# machine. MEASURED 2026-09-19: `WORKDIR /home/worker` in both worker Dockerfiles was
+# flagged as a leaked home directory, which it is not; "worker" is the container's
+# service account. Exempting the file type is the honest rule, because there is no way to
+# tell a real account name from a container user by looking at the name, and a guard that
+# cries wolf on correct code is a guard someone deletes.
+EXEMPT_BASENAME_PREFIXES = ("Dockerfile",)
+
 
 def scan_text(text: str) -> list[tuple[int, str]]:
     """Return (line number, line) for every line holding a real home path."""
@@ -84,7 +92,9 @@ def check() -> int:
     files = tracked_files()
     hits: list[str] = []
     for path in files:
-        if path.startswith(EXEMPT_PREFIXES):
+        if path.startswith(EXEMPT_PREFIXES) or path.rsplit("/", 1)[-1].startswith(
+            EXEMPT_BASENAME_PREFIXES
+        ):
             continue
         try:
             with open(path, encoding="utf-8") as handle:
