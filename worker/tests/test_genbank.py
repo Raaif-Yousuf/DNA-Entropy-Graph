@@ -10,7 +10,7 @@ from dna_entropy import pipeline
 from dna_entropy.config import RunConfig
 from dna_entropy.readers import detect
 from dna_entropy.readers.fasta import read_fasta
-from dna_entropy.readers.genbank import read_genbank
+from dna_entropy.readers.genbank import GenBankReadError, read_genbank
 from dna_entropy.readers.input import load_input
 from dna_entropy.validation.validators import ValidationError, validate_sequence
 from dna_entropy.writers.genbank import GenBankWriter
@@ -79,6 +79,56 @@ def test_read_genbank_extracts_seq_and_genes() -> None:
     assert (a.begin, a.end, a.strand, a.gene_id) == (1, 42, "+", "geneA")
     assert (b.begin, b.end, b.strand, b.gene_id) == (85, 126, "-", "geneB")
     assert any("not re-annotated" in n for n in notices)
+
+
+def test_read_genbank_zero_feature_summary_notice_is_grammatical(tmp_path: Path) -> None:
+    """#352: a record with no gene/CDS features at all is a real, unremarkable shape
+    (source-only annotations, or a tool that never calls genes) -- the summary notice
+    must read as ordinary English, not '0 no gene feature(s)'."""
+    from Bio import SeqIO
+    from Bio.Seq import Seq
+    from Bio.SeqRecord import SeqRecord
+
+    rec = SeqRecord(Seq("ACGTACGTACGT"), id="nofeat", name="nofeat", description="no features")
+    rec.annotations["molecule_type"] = "DNA"
+    p = tmp_path / "nofeat.gb"
+    with open(p, "w", encoding="utf-8", newline="\n") as fh:
+        SeqIO.write(rec, fh, "genbank")
+
+    records, notices = read_genbank(str(p))
+    assert records[0].features == []
+    assert any("0 gene feature(s)" in n for n in notices)
+    assert not any("no gene feature" in n for n in notices)
+
+
+def test_read_genbank_wraps_a_missing_origin_block_as_a_clean_error(tmp_path: Path) -> None:
+    """#349: a FEATURES table with no ORIGIN block at all (ends straight at '//') must
+    raise a clean GenBankReadError naming an action, not Biopython's own raw
+    'ValueError: Premature end of features table' traceback."""
+    p = tmp_path / "no_origin.gb"
+    p.write_text(
+        "LOCUS       nosource    0 bp    DNA\n"
+        "DEFINITION  no origin block at all.\n"
+        "FEATURES             Location/Qualifiers\n"
+        '     gene            1..5\n                     /gene="x"\n'
+        "//\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(GenBankReadError):
+        read_genbank(str(p))
+
+
+def test_read_genbank_handles_lone_cr_line_endings(tmp_path: Path) -> None:
+    """#349: classic Mac / some sequencing instruments still emit lone '\\r' line
+    endings. readers/fasta.py's text.splitlines() already tolerates this; GenBank must
+    agree, not raise Biopython's raw 'ValueError: Premature end of line'."""
+    raw = Path(SAMPLE_GB).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r")
+    p = tmp_path / "lone_cr.gb"
+    p.write_bytes(raw)
+    records, notices = read_genbank(str(p))
+    assert len(records) == 1
+    assert len(records[0].seq) == 126
+    assert len(records[0].features) == 2
 
 
 def test_read_genbank_strips_a_utf8_bom(tmp_path: Path) -> None:
@@ -223,6 +273,18 @@ def test_read_fasta_flags_duplicate_headers(tmp_path: Path) -> None:
     p.write_text(">same\nACGT\n>same\nTTTT\n", encoding="utf-8")
     records, notices = read_fasta(str(p))
     assert len(records) == 2  # both kept — duplicates are flagged, not fatal
+    assert any("repeat across records" in n for n in notices)
+
+
+def test_read_fasta_flags_duplicate_ids_even_with_different_descriptions(tmp_path: Path) -> None:
+    """#351: the ID is the first whitespace-delimited token (BLAST/samtools/IGV
+    convention) — two records sharing an ID but with different free-text descriptions
+    are a genuine ID collision and must be flagged, not silently missed because the
+    FULL header lines happen to differ."""
+    p = tmp_path / "dup_ids.fasta"
+    p.write_text(">seq1 first description\nACGT\n>seq1 second description\nTTTT\n", encoding="utf-8")
+    records, notices = read_fasta(str(p))
+    assert len(records) == 2
     assert any("repeat across records" in n for n in notices)
 
 
