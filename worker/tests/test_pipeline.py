@@ -501,3 +501,92 @@ def test_fasta_records_first_does_not_affect_genbank_multi_record_input(tmp_path
     )
     result = pipeline.run(cfg)
     assert result.contigs > 1
+
+
+# --- issue #366: cfg.name reaches every writer's output path with zero sanitization ----
+#
+# MEASURED 2026-09-19: every writer builds its path as `Path(cfg.out_dir) / f"{cfg.name}
+# <suffix>"`. `cfg.name` can come from a CLI `--name` OR straight from a manifest's
+# `inputs[].name` (`worker/manifest.py::build_run_config`, never sanitized at all before
+# this fix) -- so `pipeline.run()` itself, not just the CLI, is the one choke point both
+# paths funnel through. Hard Rule 14 (the user's files are read-only to us; outputs go
+# only to the chosen folder) is what actually matters here: a `--name` of `../../evil`
+# is that rule broken by a string, so `sanitize_run_name` REFUSES or NEUTRALISES a
+# traversal rather than merely tidying a name for cosmetics.
+
+
+def test_sanitize_run_name_neutralizes_a_traversal_with_forward_slashes() -> None:
+    safe = pipeline.sanitize_run_name("../../evil")
+    assert "/" not in safe
+    assert ".." not in safe
+
+
+def test_sanitize_run_name_neutralizes_a_traversal_with_backslashes() -> None:
+    safe = pipeline.sanitize_run_name("..\\..\\evil")
+    assert "\\" not in safe
+    assert ".." not in safe
+
+
+def test_sanitize_run_name_neutralizes_traversal_in_the_middle_too() -> None:
+    safe = pipeline.sanitize_run_name("foo/../../bar")
+    assert "/" not in safe and ".." not in safe
+
+
+def test_sanitize_run_name_rejects_a_name_that_is_only_traversal() -> None:
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.sanitize_run_name("../..")
+
+
+def test_sanitize_run_name_rejects_empty_or_whitespace_only() -> None:
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.sanitize_run_name("")
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.sanitize_run_name("   ")
+
+
+def test_sanitize_run_name_neutralizes_a_reserved_device_name() -> None:
+    for hostile in ("CON", "con", "NUL", "COM1", "LPT9"):
+        safe = pipeline.sanitize_run_name(hostile)
+        assert safe.upper() not in pipeline._RESERVED_DEVICE_NAMES, hostile
+
+
+def test_sanitize_run_name_caps_length() -> None:
+    safe = pipeline.sanitize_run_name("x" * 500)
+    assert len(safe) <= pipeline.MAX_RUN_NAME_LENGTH
+
+
+def test_sanitize_run_name_leaves_an_ordinary_name_unchanged() -> None:
+    assert pipeline.sanitize_run_name("my_locus-1.2") == "my_locus-1.2"
+
+
+def test_run_with_a_hostile_name_never_writes_outside_out_dir(tmp_path: Path) -> None:
+    # The actual end-to-end observable the issue asks for: run it for real with a hostile
+    # name and prove nothing landed outside the configured out_dir.
+    out_dir = tmp_path / "configured_out"
+    out_dir.mkdir()
+    cfg = RunConfig(name="../../evil", out_dir=str(out_dir))
+    result = pipeline.run(cfg, raw=RAW)
+
+    for p in result.outputs:
+        resolved = Path(p).resolve()
+        assert resolved.is_relative_to(out_dir.resolve()), p
+        assert resolved.exists()
+    # Nothing escaped upward: no file with the sanitized base name exists as a DIRECT
+    # child of tmp_path (only inside out_dir, one level down, is acceptable).
+    assert not any(tmp_path.glob("evil*"))
+    # And cfg.name itself was sanitized (every writer used the sanitized value).
+    assert cfg.name == pipeline.sanitize_run_name("../../evil")
+
+
+def test_run_with_a_reserved_device_name_writes_a_usable_file_not_a_crash(tmp_path: Path) -> None:
+    cfg = RunConfig(name="CON", out_dir=str(tmp_path))
+    result = pipeline.run(cfg, raw=RAW)
+    assert result.outputs
+    for p in result.outputs:
+        assert Path(p).exists()
+
+
+def test_run_rejects_a_name_that_sanitizes_to_nothing(tmp_path: Path) -> None:
+    cfg = RunConfig(name="../..", out_dir=str(tmp_path))
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.run(cfg, raw=RAW)

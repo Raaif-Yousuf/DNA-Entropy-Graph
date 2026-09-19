@@ -163,7 +163,9 @@ def test_geneious_default_threshold_bounds_file_size_for_a_long_sequence(tmp_pat
     length = DEFAULT_MAX_PER_BASE_FEATURES + 50_000
     rng = np.random.default_rng(0)
     values = rng.uniform(0.0, 2.0, size=length).astype(np.float32)
-    path = GeneiousWriter().write(name="locus", values=values, seq="A" * length, start=1, out_dir=str(tmp_path))
+    path = GeneiousWriter().write(
+        name="locus", values=values, seq="A" * length, start=1, out_dir=str(tmp_path)
+    )
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     feature_lines = [line for line in lines if not line.startswith("#") and line != "##gff-version 3"]
     assert len(feature_lines) <= DEFAULT_MAX_PER_BASE_FEATURES
