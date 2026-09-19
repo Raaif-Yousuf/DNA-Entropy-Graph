@@ -26,8 +26,14 @@ import pytest
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "contract-fixtures"
 
 ERROR_BUCKETS = {
-    "billing", "api_disabled", "quota", "stockout",
-    "already_exists", "permission", "network", "other",
+    "billing",
+    "api_disabled",
+    "quota",
+    "stockout",
+    "already_exists",
+    "permission",
+    "network",
+    "other",
 }
 
 
@@ -59,7 +65,13 @@ def test_error_classification_fixture_covers_every_prototype_test_case() -> None
     # The prototype's test_cloud.py::test_classify_create_error had exactly 9 parametrized cases.
     assert len(prototype_cases) == 9
     assert {c["expected_bucket"] for c in prototype_cases} == {
-        "quota", "stockout", "permission", "other", "billing", "api_disabled", "network",
+        "quota",
+        "stockout",
+        "permission",
+        "other",
+        "billing",
+        "api_disabled",
+        "network",
     }
 
 

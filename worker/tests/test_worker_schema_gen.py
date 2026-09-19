@@ -9,7 +9,6 @@ import pytest
 
 from dna_entropy.worker.schema_gen import dataclass_to_schema, top_level_schema, type_to_schema
 
-
 # --- scalar types ------------------------------------------------------------------
 
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..redact import describe_len, fingerprint
+
 
 class FastaReadError(ValueError):
     """Raised when a FASTA file has no usable sequence records."""
@@ -58,12 +60,14 @@ def read_fasta(path: str) -> tuple[list[FastaRecordRaw], list[str]]:
 
     records: list[FastaRecordRaw] = []
     skipped = 0
-    for rec_header, seq_lines in parsed:
+    for idx, (rec_header, seq_lines) in enumerate(parsed, start=1):
         seq = "".join(seq_lines)
         if not seq:
             skipped += 1
-            label = rec_header or "(no header text)"
-            notices.append(f"Skipped record {label!r}: no sequence lines after its header.")
+            # Never the header text itself (issue #253: a log artifact must not leak
+            # anything a user typed) — just which record, and how long its header was.
+            header_desc = describe_len(rec_header) if rec_header else "no header text"
+            notices.append(f"Skipped FASTA record {idx} ({header_desc}): no sequence lines after its header.")
             continue
         records.append(FastaRecordRaw(header=rec_header, seq=seq))
 
@@ -72,9 +76,7 @@ def read_fasta(path: str) -> tuple[list[FastaRecordRaw], list[str]]:
 
     n_missing_header = sum(1 for r in records if not r.header)
     if n_missing_header:
-        notices.append(
-            f"{n_missing_header} record(s) have an empty header line (a bare '>' with no name)."
-        )
+        notices.append(f"{n_missing_header} record(s) have an empty header line (a bare '>' with no name).")
 
     seen: dict[str, int] = {}
     for r in records:
@@ -82,11 +84,13 @@ def read_fasta(path: str) -> tuple[list[FastaRecordRaw], list[str]]:
             seen[r.header] = seen.get(r.header, 0) + 1
     dupes = sorted(h for h, n in seen.items() if n > 1)
     if dupes:
-        shown = ", ".join(d[:40] for d in dupes[:5])
+        # fingerprint(), not the header text itself (issue #253) — enough to correlate
+        # "these two records share a header" without ever writing the header out.
+        shown = ", ".join(fingerprint(d) for d in dupes[:5])
         more = "..." if len(dupes) > 5 else ""
         notices.append(
-            f"{len(dupes)} header(s) repeat across records ({shown}{more}); records are "
-            "still kept and numbered separately."
+            f"{len(dupes)} header(s) repeat across records (fingerprints: {shown}{more}); "
+            "records are still kept and numbered separately."
         )
 
     if len(records) > 1:

@@ -55,9 +55,12 @@ def test_tsv_write_multi_separates_contigs_with_a_comment_and_still_three_column
 ) -> None:
     path = TsvWriter().write_multi(
         name="multi",
-        blocks=[("chrom_1", "AT", np.array([0.0, 1.0], dtype=np.float32)),
-                ("chrom_2", "GC", np.array([2.0, 0.5], dtype=np.float32))],
-        start=1, out_dir=str(tmp_path),
+        blocks=[
+            ("chrom_1", "AT", np.array([0.0, 1.0], dtype=np.float32)),
+            ("chrom_2", "GC", np.array([2.0, 0.5], dtype=np.float32)),
+        ],
+        start=1,
+        out_dir=str(tmp_path),
     )
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     assert lines[0] == "position\tbase\tentropy_bits"
@@ -77,7 +80,10 @@ def test_tsv_write_multi_separates_contigs_with_a_comment_and_still_three_column
 def test_tsv_write_multi_single_block_has_no_comment_line(tmp_path: Path) -> None:
     # A single-record write via write_multi must be indistinguishable from write().
     path = TsvWriter().write_multi(
-        name="one", blocks=[("one", SEQ, VALUES)], start=1, out_dir=str(tmp_path),
+        name="one",
+        blocks=[("one", SEQ, VALUES)],
+        start=1,
+        out_dir=str(tmp_path),
     )
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     assert not any(ln.startswith("#") for ln in lines)
@@ -93,8 +99,13 @@ def test_tsv_separate_has_five_columns_with_a_header_row(tmp_path: Path) -> None
     rev = np.array([1.0, 0.25], dtype=np.float32)
     combined = np.array([0.75, 0.9], dtype=np.float32)
     path = TsvWriter().write_separate(
-        name="sep", forward_values=fwd, reverse_values=rev, combined_values=combined,
-        seq="AT", start=1, out_dir=str(tmp_path),
+        name="sep",
+        forward_values=fwd,
+        reverse_values=rev,
+        combined_values=combined,
+        seq="AT",
+        start=1,
+        out_dir=str(tmp_path),
     )
     assert path.endswith("sep.entropy.tsv")
     lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -113,7 +124,8 @@ def test_tsv_write_multi_separate_separates_contigs_with_a_comment(tmp_path: Pat
             ("chrom_1", "A", a, b, c),
             ("chrom_2", "T", b, c, a),
         ],
-        start=1, out_dir=str(tmp_path),
+        start=1,
+        out_dir=str(tmp_path),
     )
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     assert lines[0] == "position\tbase\tentropy_fwd\tentropy_rev\tentropy_combined"

@@ -6,8 +6,6 @@ import json
 import time
 from pathlib import Path
 
-import pytest
-
 from dna_entropy.worker.blobstore import LocalBlobstore
 from dna_entropy.worker.status import GpuInfo, StatusWriter, WorkerInfo
 
@@ -113,7 +111,9 @@ def test_set_vm_records_gpu_and_name(tmp_path: Path) -> None:
 
 def test_worker_info_is_recorded(tmp_path: Path) -> None:
     store = LocalBlobstore(tmp_path)
-    w = StatusWriter(store, "job1", interval_seconds=999, worker=WorkerInfo(version="1.2.3", image="sha256:abc"))
+    w = StatusWriter(
+        store, "job1", interval_seconds=999, worker=WorkerInfo(version="1.2.3", image="sha256:abc")
+    )
     w.start()
     try:
         status = _status(store)
@@ -147,7 +147,7 @@ def test_notice_sequence_numbers_increase(tmp_path: Path) -> None:
         w.notice("first")
         w.notice("second")
         lines = _progress_lines(store)
-        assert [l["seq"] for l in lines] == [1, 2]
+        assert [line["seq"] for line in lines] == [1, 2]
     finally:
         w.stop()
 

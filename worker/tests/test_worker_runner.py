@@ -24,7 +24,10 @@ def _write_manifest(store: LocalBlobstore, **overrides) -> dict:
         "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
         "predictor": {"kind": "mock", "seed": 0},
         "analysis": {
-            "contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only",
+            "contextLength": 128,
+            "window": 256,
+            "stride": 128,
+            "direction": "forward-only",
         },
         "outputs": ["fasta", "bedgraph", "tsv"],
         "store": {"kind": "localdir", "root": "unused-by-the-test"},
@@ -66,7 +69,9 @@ def test_full_fake_job_manifest_to_result_json(tmp_path: Path) -> None:
     assert status_doc["heartbeatSeq"] >= 1
 
     # progress.jsonl has at least the "worker starting" notice.
-    progress_lines = [json.loads(l) for l in store.read_text("progress.jsonl").splitlines() if l.strip()]
+    progress_lines = [
+        json.loads(line) for line in store.read_text("progress.jsonl").splitlines() if line.strip()
+    ]
     assert any("free disk" in p["message"] for p in progress_lines)
 
 
@@ -303,10 +308,109 @@ def test_job_result_to_dict_matches_its_own_dataclass_shape() -> None:
     from what the schema generator (which only sees real fields) would produce."""
     import dataclasses
 
-    from dna_entropy.worker.runner import JobResult, ResultGpu, ResultTiming
+    from dna_entropy.worker.result import ResultGpu
+    from dna_entropy.worker.runner import JobResult, ResultTiming
 
     result = JobResult(
-        schema=1, jobId="x", status="done", inputs=[],
-        timing=ResultTiming(startedAt="a", finishedAt="b"), gpu=ResultGpu(),
+        schema=1,
+        jobId="x",
+        status="done",
+        inputs=[],
+        timing=ResultTiming(startedAt="a", finishedAt="b"),
+        gpu=ResultGpu(),
     )
     assert set(result.to_dict().keys()) == {f.name for f in dataclasses.fields(JobResult)}
+
+
+# --- error-code fidelity (issue #254): a specific exception's own .code must survive ---
+# all the way into the InputResult, never be flattened to the generic INPUT_INVALID.
+
+
+def test_model_needs_hopper_reports_its_own_code_not_input_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dna_entropy.predictors.hardware import ModelNeedsHopperError
+    from dna_entropy.worker import runner as runner_module
+
+    def _raise_hopper(*args, **kwargs):
+        raise ModelNeedsHopperError("evo2_40b needs an H100-class GPU; use evo2_7b instead.")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise_hopper)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    result = run_job(store)
+
+    assert result.status == "done"  # job level: one bad input, still "done" per §7
+    assert result.inputs[0].status == "failed"
+    assert result.inputs[0].error["code"] == "MODEL_NEEDS_HOPPER"
+    assert result.inputs[0].error["retriable"] is False
+
+
+def test_second_oom_reports_model_oom_not_input_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dna_entropy.predictors.base import PredictorOOMError
+    from dna_entropy.worker import runner as runner_module
+
+    def _raise_oom(*args, **kwargs):
+        raise PredictorOOMError("out of memory (simulated second OOM)")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise_oom)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    result = run_job(store)
+
+    assert result.inputs[0].error["code"] == "MODEL_OOM"
+    assert result.inputs[0].error["retriable"] is True  # per the errors.py registry
+
+
+def test_plain_validation_error_still_reports_input_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback path (no .code on the exception) must still work correctly."""
+    from dna_entropy.validation.validators import ValidationError
+    from dna_entropy.worker import runner as runner_module
+
+    def _raise_validation(*args, **kwargs):
+        raise ValidationError("bad sequence")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise_validation)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    result = run_job(store)
+
+    assert result.inputs[0].error["code"] == "INPUT_INVALID"
+    assert result.inputs[0].error["retriable"] is False
+
+
+def test_unrecognized_exception_falls_back_to_worker_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dna_entropy.worker import runner as runner_module
+
+    def _raise_odd(*args, **kwargs):
+        raise RuntimeError("something nobody registered a code for")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise_odd)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    result = run_job(store)
+
+    assert result.inputs[0].error["code"] == "WORKER_CRASH"
+    assert "detail" in result.inputs[0].error  # traceback attached for WORKER_CRASH only

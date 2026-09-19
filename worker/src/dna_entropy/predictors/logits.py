@@ -34,9 +34,7 @@ def aligned_acgt_probs(nuc_logits: np.ndarray) -> np.ndarray:
         the uniform distribution (maximum entropy, 2.0 bits).
     """
     if nuc_logits.ndim != 2 or nuc_logits.shape[1] != NUM_NUCLEOTIDES:
-        raise ValueError(
-            f"nuc_logits must be (L, {NUM_NUCLEOTIDES}), got {nuc_logits.shape}"
-        )
+        raise ValueError(f"nuc_logits must be (L, {NUM_NUCLEOTIDES}), got {nuc_logits.shape}")
     length = nuc_logits.shape[0]
     # next_probs[i] = distribution for base i+1.
     next_probs = _softmax_rows(nuc_logits.astype(np.float32))

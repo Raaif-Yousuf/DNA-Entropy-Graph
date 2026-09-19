@@ -76,7 +76,9 @@ def test_worker_run_real_local_job_end_to_end(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     (job_dir / "input").mkdir()
-    (job_dir / "input" / "locus.fasta").write_text(">seq\nACGTACGTACGTACGTACGTACGTACGTACGT\n", encoding="utf-8")
+    (job_dir / "input" / "locus.fasta").write_text(
+        ">seq\nACGTACGTACGTACGTACGTACGTACGTACGT\n", encoding="utf-8"
+    )
     manifest = {
         "schema": 1,
         "jobId": "clitest-job",

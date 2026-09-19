@@ -175,7 +175,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *exc) -> bool:
@@ -240,10 +240,12 @@ def test_gcs_exists_true_when_object_found() -> None:
 def test_gcs_exists_false_on_404() -> None:
     import urllib.error
 
-    opener = _RecordingOpener([
-        _token_response(),
-        urllib.error.HTTPError("url", 404, "Not Found", {}, None),
-    ])
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.HTTPError("url", 404, "Not Found", {}, None),
+        ]
+    )
     store = GcsBlobstore("bucket", "jobs/x/", opener=opener)
     assert store.exists("control/cancel") is False
 
@@ -251,10 +253,12 @@ def test_gcs_exists_false_on_404() -> None:
 def test_gcs_other_http_error_raises_blobstore_error() -> None:
     import urllib.error
 
-    opener = _RecordingOpener([
-        _token_response(),
-        urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
-    ])
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
+        ]
+    )
     store = GcsBlobstore("bucket", "jobs/x/", opener=opener)
     with pytest.raises(BlobstoreError):
         store.exists("control/cancel")

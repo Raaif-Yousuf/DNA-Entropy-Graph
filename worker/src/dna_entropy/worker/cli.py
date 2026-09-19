@@ -55,7 +55,7 @@ def _parse_gs_uri(uri: str) -> tuple[str, str]:
     """Split ``gs://<bucket>/<prefix>/`` into ``(bucket, prefix)``."""
     if not uri.startswith("gs://"):
         raise ValueError(f"not a gs:// URI: {uri!r}")
-    rest = uri[len("gs://"):]
+    rest = uri[len("gs://") :]
     bucket, _, prefix = rest.partition("/")
     if not bucket:
         raise ValueError(f"gs:// URI has no bucket: {uri!r}")
@@ -122,7 +122,10 @@ def _cmd_selftest(_args: argparse.Namespace) -> int:
 
         with tempfile.TemporaryDirectory(prefix="deg-selftest-") as tmp:
             cfg = RunConfig(
-                name="selftest", out_dir=tmp, context_length=128, max_len=256,
+                name="selftest",
+                out_dir=tmp,
+                context_length=128,
+                max_len=256,
                 direction=Direction.BOTH_COMBINED,
             )
             result = pipeline.run(cfg, raw="ACGT" * 40)  # 160 nt, well-formed, deterministic
@@ -144,14 +147,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_p = sub.add_parser("run", help="Run one job from manifest.json (docs/job_contract.md).")
     run_p.add_argument(
-        "--manifest", required=False,
+        "--manifest",
+        required=False,
         help="Local path the startup script already staged manifest.json at (informational — "
-             "the manifest is always (re-)read from the store root, same relative layout either way).",
+        "the manifest is always (re-)read from the store root, same relative layout either way).",
     )
     run_p.add_argument("--store", choices=["gcs", "localdir"], required=True)
     run_p.add_argument("--bucket", help="GCS bucket (--store gcs). Falls back to $DEG_JOB_URI if omitted.")
     run_p.add_argument("--prefix", help="GCS job prefix, e.g. jobs/<jobId>/ (--store gcs).")
-    run_p.add_argument("--root", help="Local job directory (--store localdir). Falls back to $DEG_LOCAL_ROOT.")
+    run_p.add_argument(
+        "--root", help="Local job directory (--store localdir). Falls back to $DEG_LOCAL_ROOT."
+    )
     run_p.set_defaults(func=_cmd_run)
 
     selftest_p = sub.add_parser("selftest", help="GPU-free smoke test; prints OK and exits 0 on success.")

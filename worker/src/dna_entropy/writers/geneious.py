@@ -56,9 +56,7 @@ class GeneiousWriter:
         start: int,
         out_dir: str,
     ) -> str:
-        return self.write_multi(
-            name=name, blocks=[(name, values)], start=start, out_dir=out_dir
-        )
+        return self.write_multi(name=name, blocks=[(name, values)], start=start, out_dir=out_dir)
 
     def write_multi(
         self,

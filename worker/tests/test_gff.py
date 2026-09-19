@@ -14,9 +14,7 @@ FEATURES = [
 
 
 def test_gff_header_and_features(tmp_path: Path) -> None:
-    path = GffWriter().write(
-        name="locus", features=FEATURES, length=200, start=1, out_dir=str(tmp_path)
-    )
+    path = GffWriter().write(name="locus", features=FEATURES, length=200, start=1, out_dir=str(tmp_path))
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     assert lines[0] == "##gff-version 3"
     assert lines[1] == "##sequence-region locus 1 200"
@@ -26,9 +24,7 @@ def test_gff_header_and_features(tmp_path: Path) -> None:
 
 
 def test_gff_respects_start_offset(tmp_path: Path) -> None:
-    path = GffWriter().write(
-        name="locus", features=FEATURES, length=200, start=101, out_dir=str(tmp_path)
-    )
+    path = GffWriter().write(name="locus", features=FEATURES, length=200, start=101, out_dir=str(tmp_path))
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     assert lines[1] == "##sequence-region locus 101 300"
     # gene_1 begin 10 -> 110, end 60 -> 160
@@ -36,8 +32,6 @@ def test_gff_respects_start_offset(tmp_path: Path) -> None:
 
 
 def test_gff_empty_features(tmp_path: Path) -> None:
-    path = GffWriter().write(
-        name="locus", features=[], length=50, start=1, out_dir=str(tmp_path)
-    )
+    path = GffWriter().write(name="locus", features=[], length=50, start=1, out_dir=str(tmp_path))
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     assert lines == ["##gff-version 3", "##sequence-region locus 1 50"]

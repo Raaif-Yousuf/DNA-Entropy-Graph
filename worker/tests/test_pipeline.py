@@ -7,13 +7,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from dna_entropy import pipeline
 from dna_entropy.analysis import MAX_ENTROPY_BITS
 from dna_entropy.analysis.entropy import shannon_entropy
 from dna_entropy.analysis.windowing import WindowingError
 from dna_entropy.config import Direction, PredictorKind, RunConfig, TrackFormat
 from dna_entropy.predictors.base import PredictorError
 from dna_entropy.predictors.mock import MockPredictor
-from dna_entropy import pipeline
 
 RAW = ">demo header\nATGC ATGC ATGC\nACGTACGTACGT"
 CLEAN_LEN = 24
@@ -65,15 +65,14 @@ def test_run_is_deterministic(tmp_path: Path) -> None:
 
 
 def test_evo_predictor_unavailable_is_clean_error(tmp_path: Path) -> None:
-    cfg = RunConfig(
-        name="demo", out_dir=str(tmp_path), predictor=PredictorKind.EVO
-    )
+    cfg = RunConfig(name="demo", out_dir=str(tmp_path), predictor=PredictorKind.EVO)
     with pytest.raises(PredictorError):
         pipeline.run(cfg, raw="ATGCATGCATGC")
 
 
 def test_build_predictor_passes_max_len_as_evo_max_context(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Regression guard: the GPU ceiling windowing computes W against (cfg.max_len) MUST
     reach EvoPredictor's own max_context, or a bigger-ceiling config (e.g. A100) would be
@@ -122,8 +121,11 @@ def test_forward_only_reproduces_legacy_single_pass_output_bit_for_bit(tmp_path:
     legacy_values = shannon_entropy(legacy_probs)
 
     cfg = RunConfig(
-        name="legacycheck", out_dir=str(tmp_path), input_path=SAMPLE_FA,
-        direction=Direction.FORWARD_ONLY, seed=0,
+        name="legacycheck",
+        out_dir=str(tmp_path),
+        input_path=SAMPLE_FA,
+        direction=Direction.FORWARD_ONLY,
+        seed=0,
     )
     result = pipeline.run(cfg)
 
@@ -137,8 +139,11 @@ def test_forward_only_reproduces_legacy_single_pass_output_bit_for_bit(tmp_path:
 
 def test_run_records_window_stride_and_seam_in_result(tmp_path: Path) -> None:
     cfg = RunConfig(
-        name="prov", out_dir=str(tmp_path), context_length=128,
-        direction=Direction.BOTH_COMBINED, seed=1,
+        name="prov",
+        out_dir=str(tmp_path),
+        context_length=128,
+        direction=Direction.BOTH_COMBINED,
+        seed=1,
     )
     result = pipeline.run(cfg, raw="ACGT" * 70)  # L=280 >= 2*128
     assert result.window == 256  # min(2*128, 8192)
@@ -150,8 +155,11 @@ def test_run_records_window_stride_and_seam_in_result(tmp_path: Path) -> None:
 
 def test_run_records_reduced_context_when_sequence_shorter_than_2k(tmp_path: Path) -> None:
     cfg = RunConfig(
-        name="reduced", out_dir=str(tmp_path), context_length=200,
-        direction=Direction.BOTH_COMBINED, seed=1,
+        name="reduced",
+        out_dir=str(tmp_path),
+        context_length=200,
+        direction=Direction.BOTH_COMBINED,
+        seed=1,
     )
     result = pipeline.run(cfg, raw="ACGT" * 30)  # L=120 < 2*200
     assert result.reduced_context_count > 0
@@ -173,8 +181,11 @@ def test_run_warns_when_input_shorter_than_context_length(tmp_path: Path) -> Non
 
 def test_both_separate_writes_fwd_and_rev_track_files(tmp_path: Path) -> None:
     cfg = RunConfig(
-        name="sep", out_dir=str(tmp_path), context_length=128,
-        direction=Direction.BOTH_SEPARATE, seed=2,
+        name="sep",
+        out_dir=str(tmp_path),
+        context_length=128,
+        direction=Direction.BOTH_SEPARATE,
+        seed=2,
     )
     result = pipeline.run(cfg, raw="ACGT" * 70)  # L=280 >= 2*128
     names = {Path(p).name for p in result.outputs}
@@ -220,10 +231,13 @@ def test_on_window_is_called_once_per_completed_window(tmp_path: Path) -> None:
     # K=128, ceiling=256 -> W=256, S=128; a 600 nt sequence needs multiple windows.
     calls = []
     cfg = RunConfig(
-        name="hook", out_dir=str(tmp_path), context_length=128, max_len=256,
+        name="hook",
+        out_dir=str(tmp_path),
+        context_length=128,
+        max_len=256,
         direction=Direction.FORWARD_ONLY,
     )
-    result = pipeline.run(cfg, raw="ACGT" * 150, on_window=lambda: calls.append(1))  # 600 nt
+    pipeline.run(cfg, raw="ACGT" * 150, on_window=lambda: calls.append(1))  # 600 nt
     from dna_entropy.analysis.windowing import plan_windows
 
     plan = plan_windows(600, 128, 256)

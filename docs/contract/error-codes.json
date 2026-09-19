@@ -1,0 +1,54 @@
+{
+  "$id": "https://raw.githubusercontent.com/Raaif-Yousuf/DNA-Entropy-Graph/main/docs/contract/error-codes.json",
+  "generatedFrom": "dna_entropy.worker.errors.WORKER_ERROR_CODES",
+  "codes": [
+    {
+      "code": "MANIFEST_INVALID",
+      "raisedBy": "dna_entropy.worker.manifest.ManifestError",
+      "retriable": false,
+      "note": "Not yet in docs/copy_catalog.md's 34 codes \u2014 the manifest is app-written and app-trusted, so a malformed one is an app-side bug a user should never see; flagged as a real gap on issue #254 rather than inventing user copy for a case the design doesn't expect to reach a user."
+    },
+    {
+      "code": "WORKER_VERSION_MISMATCH",
+      "raisedBy": "dna_entropy.worker.manifest.ManifestSchemaError",
+      "retriable": false,
+      "note": "Issue #250's own code ('the manifest declares a schema this worker build does not understand'), with a clear two-versions message already \u2014 but not yet a row in docs/copy_catalog.md. Flagged as a real gap on issue #254."
+    },
+    {
+      "code": "MODEL_NEEDS_HOPPER",
+      "raisedBy": "dna_entropy.predictors.hardware.ModelNeedsHopperError",
+      "retriable": false,
+      "note": "Matches docs/copy_catalog.md's ModelNeedsHopper row exactly."
+    },
+    {
+      "code": "MODEL_OOM",
+      "raisedBy": "dna_entropy.predictors.base.PredictorOOMError",
+      "retriable": true,
+      "note": "Matches docs/copy_catalog.md's ModelOom row. Retriable: a SECOND OOM (the first is already handled internally by analysis/direction.py's halve-and-retry-once) propagates as this code; the app's [Lower context length] / [Use a bigger computer] actions are themselves the 'retry'."
+    },
+    {
+      "code": "INPUT_INVALID",
+      "raisedBy": "dna_entropy.validation.validators.ValidationError (also the generic fallback for dna_entropy.worker.blobstore.BlobstoreError/ManifestError reached per-input)",
+      "retriable": false,
+      "note": "Matches docs/copy_catalog.md's InputInvalid row."
+    },
+    {
+      "code": "WORKER_CRASH",
+      "raisedBy": "dna_entropy.worker.runner (any exception with no more specific .code)",
+      "retriable": false,
+      "note": "Matches docs/copy_catalog.md's WorkerCrash row. Also written directly by worker/vm/startup.sh's ERR trap for a failure before the container ever starts."
+    },
+    {
+      "code": "GPU_NOT_VISIBLE",
+      "raisedBy": "worker/vm/startup.sh (nvidia-smi wait loop)",
+      "retriable": false,
+      "note": "Matches docs/copy_catalog.md's GpuNotVisible row. Written by the startup script, not any Python module \u2014 the worker container never even starts in this case."
+    },
+    {
+      "code": "IMAGE_PULL_FAILED",
+      "raisedBy": "worker/vm/startup.sh (docker pull)",
+      "retriable": true,
+      "note": "Matches docs/copy_catalog.md's ImagePullFailed row. Written by the startup script, not any Python module."
+    }
+  ]
+}

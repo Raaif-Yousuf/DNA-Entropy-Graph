@@ -93,8 +93,12 @@ def plan_windows(length: int, context_length: int, ceiling: int) -> WindowPlan:
         starts = tuple(min(i * stride, length - window) for i in range(num_passes))
 
     return WindowPlan(
-        length=length, context=context_length, ceiling=ceiling,
-        window=window, stride=stride, starts=starts,
+        length=length,
+        context=context_length,
+        ceiling=ceiling,
+        window=window,
+        stride=stride,
+        starts=starts,
     )
 
 

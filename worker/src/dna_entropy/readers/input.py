@@ -25,10 +25,10 @@ from .paste import PasteReader
 class Contig:
     """One sequence to analyze: an output-safe name, the bases, and any known genes."""
 
-    name: str                                   # safe for a filename / IGV chrom / GenBank LOCUS
+    name: str  # safe for a filename / IGV chrom / GenBank LOCUS
     seq: str
     features: list[GeneFeature] = field(default_factory=list)
-    source_id: str = ""                         # original record id (kept for provenance)
+    source_id: str = ""  # original record id (kept for provenance)
 
 
 @dataclass

@@ -15,8 +15,8 @@ from dna_entropy.analysis.windowing import (
     validate_context,
 )
 
-
 # --- compute_window: W = min(2K, ceiling), S = W - K ----------------------------------
+
 
 def test_window_is_double_context_when_under_ceiling() -> None:
     w, s = compute_window(context_length=4096, ceiling=8192)
@@ -44,6 +44,7 @@ def test_negative_or_zero_inputs_are_errors() -> None:
 
 # --- plan_windows: L <= W -> exactly one window at 0 ----------------------------------
 
+
 def test_short_sequence_is_a_single_window_at_zero() -> None:
     plan = plan_windows(length=200, context_length=4096, ceiling=8192)
     assert plan.window == 8192
@@ -58,6 +59,7 @@ def test_sequence_exactly_at_window_is_a_single_window() -> None:
 
 
 # --- plan_windows: L > W -> tiled, last window right-aligned --------------------------
+
 
 def test_tiled_windows_start_at_multiples_of_stride() -> None:
     # L=20000, K=4096, ceiling=8192 -> W=8192, S=4096
@@ -114,6 +116,7 @@ def test_plan_windows_rejects_nonpositive_length() -> None:
 
 # --- pushback rules (section 5.6) ------------------------------------------------------
 
+
 def test_k_below_minimum_refuses() -> None:
     with pytest.raises(WindowingError):
         validate_context(context_length=MIN_CONTEXT_LENGTH - 1, ceiling=8192, seq_len=1000)
@@ -126,16 +129,12 @@ def test_k_at_minimum_is_allowed() -> None:
 
 
 def test_k_below_recommended_warns_but_does_not_raise() -> None:
-    notices = validate_context(
-        context_length=MIN_RECOMMENDED_CONTEXT_LENGTH - 1, ceiling=8192, seq_len=10000
-    )
+    notices = validate_context(context_length=MIN_RECOMMENDED_CONTEXT_LENGTH - 1, ceiling=8192, seq_len=10000)
     assert any("recommended" in n.lower() or "noisy" in n.lower() for n in notices)
 
 
 def test_k_at_or_above_recommended_has_no_context_warning() -> None:
-    notices = validate_context(
-        context_length=MIN_RECOMMENDED_CONTEXT_LENGTH, ceiling=8192, seq_len=10000
-    )
+    notices = validate_context(context_length=MIN_RECOMMENDED_CONTEXT_LENGTH, ceiling=8192, seq_len=10000)
     assert not any("noisy" in n.lower() for n in notices)
 
 
@@ -176,6 +175,7 @@ def test_clean_config_has_no_notices() -> None:
 
 
 # --- OOM halving -----------------------------------------------------------------------
+
 
 def test_halved_keeps_k_when_it_still_fits() -> None:
     # ceiling 8192 -> 4096; K=2048 still < 4096, so K is kept.

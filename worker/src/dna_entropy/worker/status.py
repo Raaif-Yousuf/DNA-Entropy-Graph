@@ -11,7 +11,6 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable
 
 from .blobstore import Blobstore, write_json
 
@@ -147,7 +146,9 @@ class StatusWriter:
         with self._lock:
             self._state["vm"] = {
                 "name": name if name is not None else self._state["vm"].get("name"),
-                "zone": gpu.zone, "gpu": gpu.name, "driver": gpu.driver,
+                "zone": gpu.zone,
+                "gpu": gpu.name,
+                "driver": gpu.driver,
             }
         self._write_status()
 
@@ -172,7 +173,7 @@ class StatusWriter:
         self._write_status()
         self._write_progress()
 
-    def __enter__(self) -> "StatusWriter":
+    def __enter__(self) -> StatusWriter:
         self.start()
         return self
 

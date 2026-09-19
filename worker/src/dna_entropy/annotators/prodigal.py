@@ -7,7 +7,7 @@ any length without a separate training pass.
 
 from __future__ import annotations
 
-from .base import Annotator, AnnotatorError, GeneFeature
+from .base import AnnotatorError, GeneFeature
 
 
 class ProdigalAnnotator:
@@ -18,7 +18,7 @@ class ProdigalAnnotator:
             import pyrodigal
         except ImportError as exc:
             raise AnnotatorError(
-                "Gene calling needs Pyrodigal. Install it with: pip install -e \".[genes]\""
+                'Gene calling needs Pyrodigal. Install it with: pip install -e ".[genes]"'
             ) from exc
         # meta=True uses Prodigal's pre-trained models, so no training pass is needed
         # and short loci work.

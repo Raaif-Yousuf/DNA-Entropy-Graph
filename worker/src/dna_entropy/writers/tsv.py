@@ -47,7 +47,11 @@ def _block_lines(seq: str, values: np.ndarray, start: int) -> list[str]:
 
 
 def _block_lines_separate(
-    seq: str, fwd: np.ndarray, rev: np.ndarray, combined: np.ndarray, start: int,
+    seq: str,
+    fwd: np.ndarray,
+    rev: np.ndarray,
+    combined: np.ndarray,
+    start: int,
 ) -> list[str]:
     lines = []
     for i in range(len(combined)):
@@ -77,7 +81,10 @@ class TsvWriter:
         out_dir: str,
     ) -> str:
         return self.write_multi(
-            name=name, blocks=[(name, seq, values)], start=start, out_dir=out_dir,
+            name=name,
+            blocks=[(name, seq, values)],
+            start=start,
+            out_dir=out_dir,
         )
 
     def write_multi(
@@ -117,7 +124,8 @@ class TsvWriter:
         return self.write_multi_separate(
             name=name,
             blocks=[(name, seq, forward_values, reverse_values, combined_values)],
-            start=start, out_dir=out_dir,
+            start=start,
+            out_dir=out_dir,
         )
 
     def write_multi_separate(

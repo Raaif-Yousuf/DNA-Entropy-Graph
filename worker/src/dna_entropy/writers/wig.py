@@ -33,7 +33,11 @@ class WigWriter:
         variant: str | None = None,
     ) -> str:
         return self.write_multi(
-            name=name, blocks=[(name, values)], start=start, out_dir=out_dir, variant=variant,
+            name=name,
+            blocks=[(name, values)],
+            start=start,
+            out_dir=out_dir,
+            variant=variant,
         )
 
     def write_multi(
@@ -51,10 +55,7 @@ class WigWriter:
         names the file ``<name>.entropy.<variant>.wig`` instead of ``<name>.entropy.wig``.
         """
         label = f"{name} entropy" if variant is None else f"{name} entropy ({variant})"
-        lines = [
-            f'track type=wiggle_0 name="{label}" '
-            'description="Shannon entropy (bits)" visibility=full'
-        ]
+        lines = [f'track type=wiggle_0 name="{label}" description="Shannon entropy (bits)" visibility=full']
         for chrom, values in blocks:
             lines.extend(_fixed_step_block(chrom, values, start))
         text = "\n".join(lines) + "\n"

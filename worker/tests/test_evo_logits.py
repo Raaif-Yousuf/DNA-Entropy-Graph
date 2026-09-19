@@ -40,9 +40,11 @@ def test_first_row_is_uniform() -> None:
 def test_position_alignment_is_next_token_shifted() -> None:
     # Distinct rows so the shift is unambiguous.
     logits = np.array(
-        [[5.0, 0.0, 0.0, 0.0],   # predicts base 1
-         [0.0, 5.0, 0.0, 0.0],   # predicts base 2
-         [0.0, 0.0, 5.0, 0.0]],  # predicts base 3 (beyond -> dropped)
+        [
+            [5.0, 0.0, 0.0, 0.0],  # predicts base 1
+            [0.0, 5.0, 0.0, 0.0],  # predicts base 2
+            [0.0, 0.0, 5.0, 0.0],
+        ],  # predicts base 3 (beyond -> dropped)
         dtype=np.float32,
     )
     out = aligned_acgt_probs(logits)

@@ -111,7 +111,11 @@ def test_forward_only_matches_run_windowed_forward_pass() -> None:
     seq = "ACGTACGTACGTACGTACGT"
     predictor = MockPredictor(seed=5)
     result = analyze_direction(
-        predictor, seq, context_length=4096, ceiling=8192, direction=Direction.FORWARD_ONLY,
+        predictor,
+        seq,
+        context_length=4096,
+        ceiling=8192,
+        direction=Direction.FORWARD_ONLY,
     )
     expected = run_windowed(MockPredictor(seed=5), seq, context_length=4096, ceiling=8192)
     from dna_entropy.analysis.entropy import shannon_entropy
@@ -125,10 +129,18 @@ def test_reverse_only_uses_reverse_complement() -> None:
     seq = "ACGTACGTACGTACGTACGT"
     predictor = MockPredictor(seed=5)
     fwd_result = analyze_direction(
-        MockPredictor(seed=5), seq, context_length=4096, ceiling=8192, direction=Direction.FORWARD_ONLY,
+        MockPredictor(seed=5),
+        seq,
+        context_length=4096,
+        ceiling=8192,
+        direction=Direction.FORWARD_ONLY,
     )
     rev_result = analyze_direction(
-        predictor, seq, context_length=4096, ceiling=8192, direction=Direction.REVERSE_ONLY,
+        predictor,
+        seq,
+        context_length=4096,
+        ceiling=8192,
+        direction=Direction.REVERSE_ONLY,
     )
     # Different direction of the same deterministic mock predictor sees a different
     # (reverse-complemented) string, so it must NOT equal the forward-only track.
@@ -144,7 +156,11 @@ def test_both_combined_seam_is_at_context_length_when_l_at_least_2k() -> None:
     seq = "ACGT" * 40  # L=160 >= 2*50
     predictor = MockPredictor(seed=9)
     result = analyze_direction(
-        predictor, seq, context_length=K, ceiling=200, direction=Direction.BOTH_COMBINED,
+        predictor,
+        seq,
+        context_length=K,
+        ceiling=200,
+        direction=Direction.BOTH_COMBINED,
     )
     assert result.seam == K
 
@@ -154,13 +170,25 @@ def test_both_combined_first_k_bases_come_from_reverse_rest_from_forward() -> No
     K = 50
     seq = "ACGT" * 40  # L=160
     fwd = analyze_direction(
-        MockPredictor(seed=9), seq, context_length=K, ceiling=200, direction=Direction.FORWARD_ONLY,
+        MockPredictor(seed=9),
+        seq,
+        context_length=K,
+        ceiling=200,
+        direction=Direction.FORWARD_ONLY,
     )
     rev = analyze_direction(
-        MockPredictor(seed=9), seq, context_length=K, ceiling=200, direction=Direction.REVERSE_ONLY,
+        MockPredictor(seed=9),
+        seq,
+        context_length=K,
+        ceiling=200,
+        direction=Direction.REVERSE_ONLY,
     )
     combined = analyze_direction(
-        MockPredictor(seed=9), seq, context_length=K, ceiling=200, direction=Direction.BOTH_COMBINED,
+        MockPredictor(seed=9),
+        seq,
+        context_length=K,
+        ceiling=200,
+        direction=Direction.BOTH_COMBINED,
     )
     # First K bases: reverse read wins (matches the reverse-only track exactly).
     assert np.array_equal(combined.values[:K], rev.values[:K])
@@ -175,7 +203,11 @@ def test_both_combined_reduces_to_forward_only_when_l_le_w_and_reverse_never_qua
     K = 20
     seq = "ACGT" * 30  # L = 120, still >= 2K = 40
     result = analyze_direction(
-        MockPredictor(seed=2), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED,
+        MockPredictor(seed=2),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.BOTH_COMBINED,
     )
     assert result.seam == K
     assert result.reduced_context_count == 0
@@ -188,13 +220,25 @@ def test_both_averaged_takes_mean_where_both_qualify() -> None:
     K = 50
     seq = "ACGT" * 40  # L=160
     fwd = analyze_direction(
-        MockPredictor(seed=4), seq, context_length=K, ceiling=8192, direction=Direction.FORWARD_ONLY,
+        MockPredictor(seed=4),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.FORWARD_ONLY,
     )
     rev = analyze_direction(
-        MockPredictor(seed=4), seq, context_length=K, ceiling=8192, direction=Direction.REVERSE_ONLY,
+        MockPredictor(seed=4),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.REVERSE_ONLY,
     )
     avg = analyze_direction(
-        MockPredictor(seed=4), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_AVERAGED,
+        MockPredictor(seed=4),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.BOTH_AVERAGED,
     )
     # With L=160, K=50: the middle region [K, L-K) = [50, 110) has BOTH directions
     # qualifying (>=K context each way) -> averaged there.
@@ -213,7 +257,11 @@ def test_reduced_context_recorded_when_l_less_than_2k() -> None:
     K = 100
     seq = "ACGT" * 30  # L=120 < 2K=200
     result = analyze_direction(
-        MockPredictor(seed=6), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED,
+        MockPredictor(seed=6),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.BOTH_COMBINED,
     )
     assert result.reduced_context_count > 0
     assert result.seam is None  # no clean seam when L < 2K
@@ -224,7 +272,11 @@ def test_no_reduced_context_when_l_at_least_2k() -> None:
     K = 20
     seq = "ACGT" * 30  # L=120 >= 2K=40
     result = analyze_direction(
-        MockPredictor(seed=6), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED,
+        MockPredictor(seed=6),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.BOTH_COMBINED,
     )
     assert result.reduced_context_count == 0
 
@@ -236,7 +288,11 @@ def test_both_separate_populates_forward_and_reverse_values() -> None:
     K = 20
     seq = "ACGT" * 30
     result = analyze_direction(
-        MockPredictor(seed=7), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_SEPARATE,
+        MockPredictor(seed=7),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.BOTH_SEPARATE,
     )
     assert result.forward_values is not None
     assert result.reverse_values is not None
@@ -244,14 +300,21 @@ def test_both_separate_populates_forward_and_reverse_values() -> None:
     assert result.reverse_values.shape == (len(seq),)
     # The "combined" values field is still populated using the both-combined rule.
     combined = analyze_direction(
-        MockPredictor(seed=7), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED,
+        MockPredictor(seed=7),
+        seq,
+        context_length=K,
+        ceiling=8192,
+        direction=Direction.BOTH_COMBINED,
     )
     assert np.array_equal(result.values, combined.values)
 
 
 def test_direction_result_is_the_expected_dataclass() -> None:
     result = analyze_direction(
-        MockPredictor(seed=0), "ACGT" * 10, context_length=8, ceiling=64,
+        MockPredictor(seed=0),
+        "ACGT" * 10,
+        context_length=8,
+        ceiling=64,
         direction=Direction.FORWARD_ONLY,
     )
     assert isinstance(result, DirectionResult)

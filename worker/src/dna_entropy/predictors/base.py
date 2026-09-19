@@ -34,7 +34,14 @@ class PredictorOOMError(PredictorError):
     than surfacing every failure identically. Only :mod:`predictors.evo` raises this today
     (translating ``torch.cuda.OutOfMemoryError``); :class:`~.mock.MockPredictor` never
     raises it, since it never touches a GPU.
+
+    ``code = "MODEL_OOM"`` (docs/copy_catalog.md, worker error taxonomy issue #254): a
+    SECOND OOM (the first is handled internally by ``analysis/direction.py``'s halve-and-
+    retry-once) propagates all the way to ``worker/runner.py`` still carrying this code,
+    so the per-input result reports ``MODEL_OOM`` rather than a generic failure.
     """
+
+    code = "MODEL_OOM"
 
 
 @runtime_checkable
@@ -65,10 +72,7 @@ def check_probability_matrix(probs: np.ndarray, seq_len: int) -> np.ndarray:
         ValueError: if shape, dtype, value range, or row-sum invariants are violated.
     """
     if probs.ndim != 2 or probs.shape != (seq_len, NUM_NUCLEOTIDES):
-        raise ValueError(
-            f"probabilities must have shape ({seq_len}, {NUM_NUCLEOTIDES}), "
-            f"got {probs.shape}"
-        )
+        raise ValueError(f"probabilities must have shape ({seq_len}, {NUM_NUCLEOTIDES}), got {probs.shape}")
     if probs.dtype != np.float32:
         raise ValueError(f"probabilities must be float32, got {probs.dtype}")
     if np.any(probs < 0.0) or np.any(probs > 1.0):

@@ -18,8 +18,12 @@ from .runner import run_job
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m dna_entropy.worker")
-    parser.add_argument("--manifest-store", choices=["local", "gcs"], default="local",
-                         help="Where manifest.json (and the rest of the job) lives.")
+    parser.add_argument(
+        "--manifest-store",
+        choices=["local", "gcs"],
+        default="local",
+        help="Where manifest.json (and the rest of the job) lives.",
+    )
     parser.add_argument("--root", help="Local root directory (--manifest-store local).")
     parser.add_argument("--bucket", help="GCS bucket (--manifest-store gcs).")
     parser.add_argument("--prefix", help="GCS job prefix, e.g. jobs/<jobId>/ (--manifest-store gcs).")

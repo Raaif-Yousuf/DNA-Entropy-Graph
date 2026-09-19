@@ -30,7 +30,7 @@ def _build_record(
     from Bio.SeqFeature import FeatureLocation, SeqFeature
     from Bio.SeqRecord import SeqRecord
 
-    locus = (contig_name[:16] or "locus")  # GenBank LOCUS ids are short; avoid a warning
+    locus = contig_name[:16] or "locus"  # GenBank LOCUS ids are short; avoid a warning
     desc = f"DNA-Entropy per-position Shannon entropy for {contig_name}"
     if source_id and source_id != contig_name:
         desc += f" (source: {source_id})"
@@ -39,7 +39,7 @@ def _build_record(
     record.annotations["source"] = "DNA-Entropy"
 
     for f in features:
-        begin0 = max(f.begin - 1, 0)               # 1-based inclusive -> 0-based half-open
+        begin0 = max(f.begin - 1, 0)  # 1-based inclusive -> 0-based half-open
         end = min(f.end, len(seq))
         if end <= begin0:
             continue
@@ -74,9 +74,7 @@ class GenBankWriter:
         out_dir: str,
     ) -> str:
         """Write a single-record GenBank."""
-        return self.write_multi(
-            name=name, records=[(name, seq, features, values, "")], out_dir=out_dir
-        )
+        return self.write_multi(name=name, records=[(name, seq, features, values, "")], out_dir=out_dir)
 
     def write_multi(
         self,

@@ -182,7 +182,8 @@ def cleanup_fake_evo_module():
 
 
 def test_evo_predictor_init_refuses_hopper_only_model_before_loading_weights(
-    monkeypatch: pytest.MonkeyPatch, cleanup_fake_evo_module,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_fake_evo_module,
 ) -> None:
     _install_fake_torch_and_evo2(monkeypatch, capability=L4)
     evo_module = _import_fresh_evo_module()
@@ -194,7 +195,8 @@ def test_evo_predictor_init_refuses_hopper_only_model_before_loading_weights(
 
 
 def test_evo_predictor_init_allows_7b_on_l4(
-    monkeypatch: pytest.MonkeyPatch, cleanup_fake_evo_module,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_fake_evo_module,
 ) -> None:
     _install_fake_torch_and_evo2(monkeypatch, capability=L4)
     evo_module = _import_fresh_evo_module()

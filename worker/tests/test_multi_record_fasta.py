@@ -11,10 +11,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from dna_entropy import pipeline
 from dna_entropy.config import RunConfig
 from dna_entropy.readers import detect
 from dna_entropy.readers.input import load_input
-from dna_entropy import pipeline
 
 THREE_RECORD_FASTA = (
     ">record_one first locus\n"
@@ -67,7 +67,8 @@ def test_fasta_contig_names_are_collision_proof_regardless_of_header_text(
 
 
 def test_pipeline_multi_record_fasta_produces_n_contigs(
-    three_record_fasta: Path, tmp_path: Path,
+    three_record_fasta: Path,
+    tmp_path: Path,
 ) -> None:
     cfg = RunConfig(name="three", input_path=str(three_record_fasta), out_dir=str(tmp_path))
     result = pipeline.run(cfg)
@@ -76,7 +77,8 @@ def test_pipeline_multi_record_fasta_produces_n_contigs(
 
 
 def test_pipeline_multi_record_fasta_writes_one_fasta_record_per_contig(
-    three_record_fasta: Path, tmp_path: Path,
+    three_record_fasta: Path,
+    tmp_path: Path,
 ) -> None:
     cfg = RunConfig(name="three", input_path=str(three_record_fasta), out_dir=str(tmp_path))
     result = pipeline.run(cfg)
@@ -87,7 +89,8 @@ def test_pipeline_multi_record_fasta_writes_one_fasta_record_per_contig(
 
 
 def test_pipeline_multi_record_fasta_bedgraph_has_a_block_per_contig(
-    three_record_fasta: Path, tmp_path: Path,
+    three_record_fasta: Path,
+    tmp_path: Path,
 ) -> None:
     cfg = RunConfig(name="three", input_path=str(three_record_fasta), out_dir=str(tmp_path))
     result = pipeline.run(cfg)
@@ -98,7 +101,8 @@ def test_pipeline_multi_record_fasta_bedgraph_has_a_block_per_contig(
 
 
 def test_pipeline_multi_record_fasta_summary_has_a_section_per_record(
-    three_record_fasta: Path, tmp_path: Path,
+    three_record_fasta: Path,
+    tmp_path: Path,
 ) -> None:
     cfg = RunConfig(name="three", input_path=str(three_record_fasta), out_dir=str(tmp_path))
     result = pipeline.run(cfg)
@@ -109,7 +113,8 @@ def test_pipeline_multi_record_fasta_summary_has_a_section_per_record(
 
 
 def test_pipeline_multi_record_fasta_genbank_bonus_holds_all_records(
-    three_record_fasta: Path, tmp_path: Path,
+    three_record_fasta: Path,
+    tmp_path: Path,
 ) -> None:
     cfg = RunConfig(name="three", input_path=str(three_record_fasta), out_dir=str(tmp_path))
     result = pipeline.run(cfg)
@@ -141,7 +146,8 @@ def test_pipeline_single_record_fasta_still_produces_exactly_the_old_output_set(
 
 
 def test_pipeline_multi_record_fasta_all_values_concatenates_every_contig(
-    three_record_fasta: Path, tmp_path: Path,
+    three_record_fasta: Path,
+    tmp_path: Path,
 ) -> None:
     cfg = RunConfig(name="three", input_path=str(three_record_fasta), out_dir=str(tmp_path))
     result = pipeline.run(cfg)

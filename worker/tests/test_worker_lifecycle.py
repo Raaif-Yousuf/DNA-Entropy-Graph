@@ -20,7 +20,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *exc) -> bool:
@@ -52,11 +52,13 @@ def _token() -> _FakeResponse:
 
 
 def test_self_instance_identity_reads_project_zone_name() -> None:
-    opener = _RecordingOpener([
-        _text("my-project-123"),
-        _text("projects/999/zones/us-central1-a"),
-        _text("deg-20260918-142233-k7q2vx"),
-    ])
+    opener = _RecordingOpener(
+        [
+            _text("my-project-123"),
+            _text("projects/999/zones/us-central1-a"),
+            _text("deg-20260918-142233-k7q2vx"),
+        ]
+    )
     project, zone, name = self_instance_identity(opener=opener)
     assert project == "my-project-123"
     assert zone == "us-central1-a"  # last path segment only, not the full zone path
@@ -84,11 +86,15 @@ def test_apply_lifecycle_keep_is_a_no_op_and_makes_no_request() -> None:
 
 
 def test_apply_lifecycle_stop_posts_to_the_compute_api() -> None:
-    opener = _RecordingOpener([
-        _text("proj"), _text("projects/1/zones/us-central1-a"), _text("deg-job1"),
-        _token(),
-        _FakeResponse(b"{}"),
-    ])
+    opener = _RecordingOpener(
+        [
+            _text("proj"),
+            _text("projects/1/zones/us-central1-a"),
+            _text("deg-job1"),
+            _token(),
+            _FakeResponse(b"{}"),
+        ]
+    )
     apply_lifecycle("stop", opener=opener)
     last = opener.requests[-1]
     assert last.get_method() == "POST"
@@ -98,11 +104,15 @@ def test_apply_lifecycle_stop_posts_to_the_compute_api() -> None:
 
 
 def test_apply_lifecycle_delete_posts_the_delete_verb() -> None:
-    opener = _RecordingOpener([
-        _text("proj"), _text("projects/1/zones/us-central1-a"), _text("deg-job1"),
-        _token(),
-        _FakeResponse(b"{}"),
-    ])
+    opener = _RecordingOpener(
+        [
+            _text("proj"),
+            _text("projects/1/zones/us-central1-a"),
+            _text("deg-job1"),
+            _token(),
+            _FakeResponse(b"{}"),
+        ]
+    )
     apply_lifecycle("delete", opener=opener)
     last = opener.requests[-1]
     assert last.full_url.endswith("/instances/deg-job1/delete")
@@ -118,11 +128,15 @@ def test_apply_lifecycle_unknown_action_is_rejected_without_any_request() -> Non
 def test_apply_lifecycle_http_error_from_compute_api_raises_lifecycle_error() -> None:
     import urllib.error
 
-    opener = _RecordingOpener([
-        _text("proj"), _text("projects/1/zones/us-central1-a"), _text("deg-job1"),
-        _token(),
-        urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
-    ])
+    opener = _RecordingOpener(
+        [
+            _text("proj"),
+            _text("projects/1/zones/us-central1-a"),
+            _text("deg-job1"),
+            _token(),
+            urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
+        ]
+    )
     with pytest.raises(LifecycleError):
         apply_lifecycle("stop", opener=opener)
 

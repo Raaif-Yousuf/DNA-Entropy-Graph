@@ -51,3 +51,74 @@ testpaths = ["tests"]
 markers = [
     "gpu: requires a CUDA GPU and the Evo stack (skipped without one)",
 ]
+
+[tool.ruff]
+# `ci-worker.yml` turns `ruff check`/`ruff format --check` on the moment this table
+# exists (issue #38) — this is a decision to lint the WHOLE package in one commit, a
+# prototype that had never been linted before. Findings were fixed, not hidden; see the
+# per-rule notes below for anything genuinely disabled, each with its own reason.
+line-length = 110  # generous enough that worker/src/dna_entropy/cli.py's typer.Option
+# declarations (one flag = one call, deliberately not split across many tiny lines so the
+# whole flag definition — name, default, help text — stays scannable in one place) fit
+# after a light rewrap, without forcing this package into black's 88-column convention,
+# which several genuinely wide numpy broadcasting/windowing expressions would fight.
+target-version = "py310"  # matches `requires-python = ">=3.10"` above
+
+# worker/legacy/ and worker/docs-legacy/ are untouched, byte-for-byte copies of retired
+# prototype code, kept ONLY as historical reference (see
+# docs/migration/2026-09-19-worker-migration-inventory.md) — linting or reformatting them
+# would defeat the point of keeping them unchanged. worker/packaging/ is REFERENCE-only
+# PyInstaller tooling that ships nothing and nobody runs day to day.
+extend-exclude = ["legacy", "docs-legacy", "packaging"]
+
+[tool.ruff.lint]
+# A rule set picked for a scientific Python package with real GPU/cloud contracts, not a
+# generic library:
+#   E, F   - pycodestyle errors / pyflakes: real bugs (undefined names, unused imports,
+#            syntax-adjacent mistakes), the non-negotiable baseline.
+#   I      - isort: one consistent import order, autofixable, zero judgment calls.
+#   UP     - pyupgrade: modernize syntax for the `requires-python = ">=3.10"` floor this
+#            package already declares (e.g. drop now-redundant quoted annotations under
+#            `from __future__ import annotations`).
+#   B      - flake8-bugbear: catches exactly the "written fast, never reviewed" mistake
+#            shapes this codebase was flagged as being at risk of (mutable default
+#            arguments, loop variables captured by a closure, etc.).
+#   SIM    - flake8-simplify: nudges toward the more readable of two equivalent forms
+#            without being prescriptive about anything scientific code actually needs.
+# Deliberately NOT selected:
+#   ANN (type-annotation-required) - this package documents its contracts in prose and
+#     enforces them at runtime (predictors/base.py's check_probability_matrix(), the
+#     windowing/direction dataclasses), not with mypy; requiring an annotation on every
+#     argument everywhere is churn without a type checker in CI to make it pay off.
+#   D (pydocstyle format rules) - this codebase's docstrings are thorough prose explaining
+#     WHY, not machine-checkable Google/NumPy-style API docs; reformatting hundreds of
+#     them to satisfy a formatter's opinion on docstring punctuation is not worth the diff.
+#   PL (pylint) - extremely opinionated, high false-positive rate on numpy-broadcasting-
+#     heavy code (too-many-arguments on a dataclass field list, etc.).
+#   C90 (mccabe complexity) - the windowing/direction combination logic
+#     (analysis/direction.py's _combine) is legitimately branchy science with a real
+#     truth table behind it, not a code smell to flatten.
+#   S (flake8-bandit) - security-linting a local science/CLI tool with no user-supplied
+#     code execution surface produces mostly false positives (subprocess/tempfile
+#     patterns that are fine here); the one place this would matter (the worker's own
+#     HTTP calls to GCS/Compute) is already hand-reviewed in blobstore.py/lifecycle.py's
+#     docstrings, not something a linter's generic bandit rules would catch anyway.
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    # B008: typer's whole API is "call typer.Option(...) as an argument default" — that
+    # IS the framework's documented pattern (Options are evaluated once at import time by
+    # design, not per-call like a mutable-default bug), not the footgun this rule exists
+    # to catch elsewhere.
+    "B008",
+]
+
+[tool.ruff.lint.isort]
+# dna_entropy's own submodules (predictors, readers, writers, analysis, worker, ...) count
+# as first-party, not third-party, so `from .foo import Bar` sorts with the local-import
+# group even when a file is deep enough that `.` alone doesn't make that obvious.
+known-first-party = ["dna_entropy"]
+
+[tool.ruff.format]
+# No overrides beyond `line-length`/`target-version` above — ruff format's defaults
+# (double quotes, trailing commas, LF) already match this codebase's existing style
+# (CLAUDE.md hard rule: ASCII console + UTF-8/LF).

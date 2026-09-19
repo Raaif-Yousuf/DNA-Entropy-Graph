@@ -9,10 +9,10 @@ import pytest
 from dna_entropy.config import Direction, PredictorKind, TrackFormat
 from dna_entropy.worker.manifest import (
     CURRENT_SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
     JobManifest,
     ManifestError,
     ManifestSchemaError,
-    SUPPORTED_SCHEMA_VERSIONS,
 )
 
 MINIMAL_MANIFEST = {
@@ -56,7 +56,9 @@ def test_schema_mismatch_is_checked_before_any_other_field() -> None:
 
 def test_missing_schema_field_is_a_manifest_error_not_a_crash() -> None:
     with pytest.raises(ManifestError):
-        JobManifest.parse(json.dumps({"jobId": "x", "inputs": [], "store": {"kind": "localdir", "root": "x"}}))
+        JobManifest.parse(
+            json.dumps({"jobId": "x", "inputs": [], "store": {"kind": "localdir", "root": "x"}})
+        )
 
 
 def test_not_json_at_all_is_a_manifest_error() -> None:
@@ -95,18 +97,22 @@ def test_gcs_store_requires_bucket_and_prefix() -> None:
 def test_unknown_top_level_fields_are_tolerated() -> None:
     """job_contract.md §8: 'unknown fields on an otherwise-matching schema version are
     tolerated (ignored), so a newer app talking to an older worker degrades gracefully.'"""
-    m = JobManifest.parse(_manifest(
-        aFieldFromTheFuture="some new thing this worker build has never heard of",
-        anotherOne={"nested": "also unknown"},
-    ))
+    m = JobManifest.parse(
+        _manifest(
+            aFieldFromTheFuture="some new thing this worker build has never heard of",
+            anotherOne={"nested": "also unknown"},
+        )
+    )
     assert m.job_id == MINIMAL_MANIFEST["jobId"]  # parsed normally, unknown fields just ignored
 
 
 def test_unknown_nested_fields_are_tolerated() -> None:
-    m = JobManifest.parse(_manifest(
-        predictor={"kind": "mock", "seed": 0, "futureField": "ignored"},
-        analysis={"contextLength": 2048, "yetAnotherFutureField": 123},
-    ))
+    m = JobManifest.parse(
+        _manifest(
+            predictor={"kind": "mock", "seed": 0, "futureField": "ignored"},
+            analysis={"contextLength": 2048, "yetAnotherFutureField": 123},
+        )
+    )
     assert m.predictor.kind == "mock"
     assert m.analysis.context_length == 2048
 
@@ -133,15 +139,24 @@ def test_parses_the_full_documented_example() -> None:
         "worker": {"image": "ghcr.io/x@sha256:abc", "version": "1.0.0"},
         "inputs": [
             {
-                "id": "in1", "path": "input/SetTnpB-Evo.gb", "name": "SetTnpB",
-                "informat": "auto", "start": 1, "rna": False, "genes": True,
-                "allowAmbiguity": True, "fastaRecords": "all",
+                "id": "in1",
+                "path": "input/SetTnpB-Evo.gb",
+                "name": "SetTnpB",
+                "informat": "auto",
+                "start": 1,
+                "rna": False,
+                "genes": True,
+                "allowAmbiguity": True,
+                "fastaRecords": "all",
             }
         ],
         "predictor": {"kind": "evo", "model": "evo2_7b", "precision": "bf16", "device": "cuda", "seed": 0},
         "analysis": {
-            "contextLength": 4096, "window": 8192, "stride": 4096,
-            "direction": "both-combined", "format": "bedgraph",
+            "contextLength": 4096,
+            "window": 8192,
+            "stride": 4096,
+            "direction": "both-combined",
+            "format": "bedgraph",
         },
         "outputs": ["genbank", "fasta", "bedgraph", "wig", "geneious_gff3", "genes_gff3", "stats", "tsv"],
         "limits": {"maxRunSeconds": 14400, "cancelPollSeconds": 10, "heartbeatSeconds": 30},
@@ -178,8 +193,6 @@ def test_parses_a_localdir_store_manifest() -> None:
 @pytest.mark.parametrize(
     "spelling, expected",
     [
-        ("forward", Direction.FORWARD_ONLY),
-        ("reverse", Direction.REVERSE_ONLY),
         ("forward-only", Direction.FORWARD_ONLY),
         ("reverse-only", Direction.REVERSE_ONLY),
         ("both-combined", Direction.BOTH_COMBINED),
@@ -187,7 +200,7 @@ def test_parses_a_localdir_store_manifest() -> None:
         ("both-separate", Direction.BOTH_SEPARATE),
     ],
 )
-def test_direction_spelling_aliases(spelling: str, expected: Direction) -> None:
+def test_direction_canonical_spellings(spelling: str, expected: Direction) -> None:
     m = JobManifest.parse(_manifest(analysis={"direction": spelling}))
     assert m.analysis.direction is expected
 
@@ -197,14 +210,26 @@ def test_unknown_direction_spelling_is_rejected() -> None:
         JobManifest.parse(_manifest(analysis={"direction": "sideways"}))
 
 
+def test_the_old_forward_reverse_aliases_are_no_longer_accepted() -> None:
+    """Naming resolved (issue #254 follow-up): docs/job_contract.md's old "forward"/
+    "reverse" spelling is not the canonical one — see manifest.py's module docstring.
+    A manifest using the old spelling must now fail loudly, not be silently tolerated."""
+    with pytest.raises(ManifestError):
+        JobManifest.parse(_manifest(analysis={"direction": "forward"}))
+    with pytest.raises(ManifestError):
+        JobManifest.parse(_manifest(analysis={"direction": "reverse"}))
+
+
 # --- build_run_config: the manifest -> RunConfig bridge -------------------------------
 
 
 def test_build_run_config_maps_core_fields() -> None:
-    m = JobManifest.parse(_manifest(
-        predictor={"kind": "mock", "seed": 7},
-        analysis={"contextLength": 2048, "window": 4096, "stride": 2048, "direction": "both-averaged"},
-    ))
+    m = JobManifest.parse(
+        _manifest(
+            predictor={"kind": "mock", "seed": 7},
+            analysis={"contextLength": 2048, "window": 4096, "stride": 2048, "direction": "both-averaged"},
+        )
+    )
     cfg = m.build_run_config(m.inputs[0], local_input_path="/tmp/staged/in1.gb", local_out_dir="/tmp/out/in1")
     assert cfg.name == "SetTnpB"
     assert cfg.input_path == "/tmp/staged/in1.gb"
@@ -222,9 +247,11 @@ def test_build_run_config_window_reproduces_itself_when_recomputed() -> None:
     why this is mathematically identical either way: W is always <= 2K by construction)."""
     from dna_entropy.analysis.windowing import plan_windows
 
-    m = JobManifest.parse(_manifest(
-        analysis={"contextLength": 3000, "window": 6000, "stride": 3000, "direction": "both-combined"},
-    ))
+    m = JobManifest.parse(
+        _manifest(
+            analysis={"contextLength": 3000, "window": 6000, "stride": 3000, "direction": "both-combined"},
+        )
+    )
     cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
     plan = plan_windows(length=100_000, context_length=cfg.context_length, ceiling=cfg.max_len)
     assert plan.window == 6000  # matches analysis.window exactly
@@ -252,9 +279,11 @@ def test_build_run_config_tsv_toggle_from_outputs() -> None:
 
 
 def test_build_run_config_genes_from_input_spec_or_outputs() -> None:
-    m = JobManifest.parse(_manifest(
-        inputs=[{"id": "in1", "path": "x", "name": "n", "genes": False}],
-        outputs=["genes_gff3"],
-    ))
+    m = JobManifest.parse(
+        _manifest(
+            inputs=[{"id": "in1", "path": "x", "name": "n", "genes": False}],
+            outputs=["genes_gff3"],
+        )
+    )
     cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
     assert cfg.genes is True  # outputs asked for it even though the input spec did not

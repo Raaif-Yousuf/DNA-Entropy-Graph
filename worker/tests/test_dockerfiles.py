@@ -21,8 +21,7 @@ def _code_only(path: Path) -> str:
     actually DOES aren't fooled by explanatory prose that necessarily names the very
     things (torch, gcloud, ...) it explains the image does NOT include."""
     return "\n".join(
-        ln for ln in path.read_text(encoding="utf-8").splitlines()
-        if not ln.strip().startswith("#")
+        ln for ln in path.read_text(encoding="utf-8").splitlines() if not ln.strip().startswith("#")
     )
 
 

@@ -47,9 +47,7 @@ def test_max_entropy_constant_is_two_bits() -> None:
 
 def test_summarize_reports_extrema_positions() -> None:
     # position 1 uniform (2.0 bits), position 0 one-hot (0.0 bits)
-    probs = np.array(
-        [[1.0, 0.0, 0.0, 0.0], [0.25, 0.25, 0.25, 0.25]], dtype=np.float32
-    )
+    probs = np.array([[1.0, 0.0, 0.0, 0.0], [0.25, 0.25, 0.25, 0.25]], dtype=np.float32)
     h = shannon_entropy(probs)
     s = summarize(h)
     assert s.length == 2

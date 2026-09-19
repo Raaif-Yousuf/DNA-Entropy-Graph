@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -53,28 +52,77 @@ def version() -> None:
 
 @app.command()
 def run(
-    input: Optional[str] = typer.Option(None, "--input", "-i", help="Read sequence from file (FASTA/GenBank/plain; default: stdin)."),
-    name: str = typer.Option(..., "--name", prompt="Name for this run (used for the folder and file names)", help="Output base name; prompts if omitted. (Pass it explicitly when piping the sequence via stdin.)"),
-    informat: Optional[str] = typer.Option(None, "--informat", help="Force input format: genbank|fasta|paste (default: auto-detect by extension/content)."),
+    input: str | None = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Read sequence from file (FASTA/GenBank/plain; default: stdin).",
+    ),
+    name: str = typer.Option(
+        ...,
+        "--name",
+        prompt="Name for this run (used for the folder and file names)",
+        help="Output base name; prompts if omitted. (Pass it explicitly when piping the sequence via stdin.)",
+    ),
+    informat: str | None = typer.Option(
+        None,
+        "--informat",
+        help="Force input format: genbank|fasta|paste (default: auto-detect by extension/content).",
+    ),
     predictor: str = typer.Option("mock", "--predictor", help="Predictor backend: mock|evo."),
     model: str = typer.Option("evo2_7b", "--model", help="Evo model id (evo predictor only)."),
     device: str = typer.Option("cuda", "--device", help="cuda|cpu (evo predictor only)."),
-    out: Optional[str] = typer.Option(None, "--out", "-o", help="Base folder for outputs (default: your Downloads folder); files go in <out>/<name>/."),
+    out: str | None = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="Base folder for outputs (default: your Downloads folder); files go in <out>/<name>/.",
+    ),
     fmt: str = typer.Option("bedgraph", "--format", help="Entropy track format: bedgraph|wig."),
     start: int = typer.Option(1, "--start", help="Genomic start coordinate for the track."),
-    max_len: int = typer.Option(DEFAULT_MAX_LEN, "--max-len", help="GPU ceiling for one model forward pass (window cap, nt); NOT a limit on total input length anymore (windowing tiles longer sequences)."),
-    max_total_len: int = typer.Option(DEFAULT_MAX_TOTAL_LEN, "--max-total-len", help="Outer sanity bound on the whole input (nt), independent of --max-len/windowing."),
-    context_length: int = typer.Option(DEFAULT_CONTEXT_LENGTH, "--context-length", "-k", help="K: sequence the model must have seen before a prediction is trusted (nt)."),
-    direction: str = typer.Option("both-combined", "--direction", help="both-combined|both-averaged|both-separate|forward-only|reverse-only."),
+    max_len: int = typer.Option(
+        DEFAULT_MAX_LEN,
+        "--max-len",
+        help="GPU ceiling for one model forward pass (window cap, nt); NOT a limit on total "
+        "input length anymore (windowing tiles longer sequences).",
+    ),
+    max_total_len: int = typer.Option(
+        DEFAULT_MAX_TOTAL_LEN,
+        "--max-total-len",
+        help="Outer sanity bound on the whole input (nt), independent of --max-len/windowing.",
+    ),
+    context_length: int = typer.Option(
+        DEFAULT_CONTEXT_LENGTH,
+        "--context-length",
+        "-k",
+        help="K: sequence the model must have seen before a prediction is trusted (nt).",
+    ),
+    direction: str = typer.Option(
+        "both-combined",
+        "--direction",
+        help="both-combined|both-averaged|both-separate|forward-only|reverse-only.",
+    ),
     rna: bool = typer.Option(False, "--rna", help="Convert U->T (treat input as RNA)."),
-    genes: bool = typer.Option(False, "--genes/--no-genes", help="Call gene boundaries (prokaryotic; needs [genes] extra)."),
-    tsv: bool = typer.Option(True, "--tsv/--no-tsv", help="Also write <name>.entropy.tsv (position, base, entropy; spreadsheet-friendly)."),
+    genes: bool = typer.Option(
+        False,
+        "--genes/--no-genes",
+        help="Call gene boundaries (prokaryotic; needs [genes] extra).",
+    ),
+    tsv: bool = typer.Option(
+        True,
+        "--tsv/--no-tsv",
+        help="Also write <name>.entropy.tsv (position, base, entropy; spreadsheet-friendly).",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
     safe_name = _sanitize_name(name)
     if not safe_name:
-        typer.secho("ERROR: that name has no usable characters (use letters/digits).", fg=typer.colors.RED, err=True)
+        typer.secho(
+            "ERROR: that name has no usable characters (use letters/digits).",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(code=1)
     base_dir = Path(out) if out else Path.home() / "Downloads"
     run_dir = base_dir / safe_name
@@ -101,25 +149,25 @@ def run(
         )
     except ValueError as exc:  # bad --predictor/--format/--direction value
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
     try:
         result = pipeline.run(cfg)
     except (ValidationError, PredictorError, AnnotatorError, WindowingError) as exc:
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
     for notice in result.notices:
         typer.secho(f"  - {notice}", fg=typer.colors.YELLOW)
     v = result.all_values
     if result.contigs > 1:
-        headline = f"OK: {result.total_nt} nt across {result.contigs} sequences analyzed (predictor={predictor})."
+        headline = (
+            f"OK: {result.total_nt} nt across {result.contigs} sequences analyzed (predictor={predictor})."
+        )
     else:
         headline = f"OK: {len(result.seq)} nt analyzed (predictor={predictor})."
     typer.secho(headline, fg=typer.colors.GREEN)
-    typer.echo(
-        f"  entropy (bits): mean={v.mean():.3f}  min={v.min():.3f}  max={v.max():.3f}"
-    )
+    typer.echo(f"  entropy (bits): mean={v.mean():.3f}  min={v.min():.3f}  max={v.max():.3f}")
     typer.echo(
         f"  context: K={result.context_length}  window={result.window}  stride={result.stride}"
         + (f"  seam@{result.seam}" if result.seam is not None else "")
@@ -140,9 +188,14 @@ def run(
 
 @app.command()
 def validate(
-    input: Optional[str] = typer.Option(None, "--input", "-i", help="Read sequence from file (default: stdin)."),
+    input: str | None = typer.Option(None, "--input", "-i", help="Read sequence from file (default: stdin)."),
     rna: bool = typer.Option(False, "--rna", help="Convert U->T (treat input as RNA)."),
-    max_len: int = typer.Option(DEFAULT_MAX_TOTAL_LEN, "--max-len", help="Outer sanity bound on the whole input (nt) — this command only cleans/validates, it never runs windowing, so there is no separate per-pass ceiling to set here."),
+    max_len: int = typer.Option(
+        DEFAULT_MAX_TOTAL_LEN,
+        "--max-len",
+        help="Outer sanity bound on the whole input (nt) — this command only cleans/validates, "
+        "it never runs windowing, so there is no separate per-pass ceiling to set here.",
+    ),
 ) -> None:
     """Validate a sequence without running a model."""
     cfg = RunConfig(input_path=input, rna=rna, max_total_len=max_len)
@@ -150,7 +203,7 @@ def validate(
         result = load_and_validate(cfg)
     except ValidationError as exc:
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
     for notice in result.notices:
         typer.secho(f"  - {notice}", fg=typer.colors.YELLOW)
@@ -159,9 +212,18 @@ def validate(
 
 @app.command("worker-run")
 def worker_run(
-    root: Optional[str] = typer.Option(None, "--root", help="Local job directory containing manifest.json (LocalBlobstore; the local engine and every test in this repo use this path)."),
-    bucket: Optional[str] = typer.Option(None, "--bucket", help="GCS bucket name (GcsBlobstore)."),
-    prefix: Optional[str] = typer.Option(None, "--prefix", help="GCS job prefix, e.g. jobs/<jobId>/ (GcsBlobstore, used with --bucket)."),
+    root: str | None = typer.Option(
+        None,
+        "--root",
+        help="Local job directory containing manifest.json (LocalBlobstore; the local "
+        "engine and every test in this repo use this path).",
+    ),
+    bucket: str | None = typer.Option(None, "--bucket", help="GCS bucket name (GcsBlobstore)."),
+    prefix: str | None = typer.Option(
+        None,
+        "--prefix",
+        help="GCS job prefix, e.g. jobs/<jobId>/ (GcsBlobstore, used with --bucket).",
+    ),
 ) -> None:
     """Run one job from manifest.json: read it, run the pipeline once per input, and
     write status.json/progress.jsonl/result.json (docs/job_contract.md).
@@ -177,7 +239,8 @@ def worker_run(
     else:
         typer.secho(
             "ERROR: pass either --root (local) or --bucket AND --prefix (gcs).",
-            fg=typer.colors.RED, err=True,
+            fg=typer.colors.RED,
+            err=True,
         )
         raise typer.Exit(code=2)
 
@@ -188,10 +251,12 @@ def worker_run(
         # manifest.json (or the store root) doesn't exist at all — both are "the job
         # cannot even start", reported the same clean way, never a raw traceback.
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from exc
 
-    typer.secho(f"job {result.jobId}: {result.status}",
-                fg=typer.colors.GREEN if result.status == "done" else typer.colors.RED)
+    typer.secho(
+        f"job {result.jobId}: {result.status}",
+        fg=typer.colors.GREEN if result.status == "done" else typer.colors.RED,
+    )
     for ir in result.inputs:
         line = f"  {ir.id}: {ir.status}"
         if ir.error:

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..annotators.base import GeneFeature
+from ..redact import describe_len
 
 
 class GenBankReadError(ValueError):
@@ -72,10 +73,15 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     notices: list[str] = []
     records: list[GenBankRecord] = []
     total_features = 0
-    for rec in parsed:
+    for idx, rec in enumerate(parsed, start=1):
         seq = str(rec.seq)
         if not seq or set(seq.upper()) <= {"N"}:
-            notices.append(f"Skipped record {rec.id!r}: no nucleotide sequence.")
+            # Never the record id itself (issue #253) — a GenBank LOCUS/ACCESSION id is
+            # free text a user or their sequencing core chose, same privacy class as a
+            # FASTA header or a file name.
+            notices.append(
+                f"Skipped GenBank record {idx} (id {describe_len(str(rec.id))}): no nucleotide sequence."
+            )
             continue
         feats = _features_of(rec)
         total_features += len(feats)

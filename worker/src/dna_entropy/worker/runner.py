@@ -17,6 +17,7 @@ docs/job_contract.md is the contract this satisfies. The high-level shape:
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import shutil
 import tempfile
@@ -30,9 +31,10 @@ from ..predictors.base import PredictorError
 from ..validation.validators import ValidationError
 from .blobstore import Blobstore, BlobstoreError, write_json
 from .cancel import CancelWatcher, JobCancelledError
+from .errors import is_retriable
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError
-from .result import InputResult, JobResult, ResultGpu, ResultTiming
+from .result import InputResult, JobResult, ResultTiming
 from .status import GpuInfo, StatusWriter, WorkerInfo
 
 RESULT_PATH = "result.json"
@@ -52,8 +54,12 @@ def _free_disk_gb(path: Path) -> float:
 
 
 def _run_one_input(
-    store: Blobstore, manifest: JobManifest, input_spec: InputSpec, tmp: Path,
-    status: StatusWriter, cancel: CancelWatcher,
+    store: Blobstore,
+    manifest: JobManifest,
+    input_spec: InputSpec,
+    tmp: Path,
+    status: StatusWriter,
+    cancel: CancelWatcher,
 ) -> InputResult:
     """Stage, run, and upload results for one manifest input. Raises
     :class:`~.cancel.JobCancelledError` if cancellation is seen (job-level, not per-input);
@@ -79,25 +85,33 @@ def _run_one_input(
 
         local_out = tmp / "output" / input_spec.name
         cfg = manifest.build_run_config(
-            input_spec, local_input_path=str(local_input), local_out_dir=str(local_out),
+            input_spec,
+            local_input_path=str(local_input),
+            local_out_dir=str(local_out),
         )
         result = pipeline.run(cfg, on_window=_on_window, on_contig=_on_contig)
     except JobCancelledError:
         raise  # job-level: stop the whole job, not just this input
-    except (ValidationError, PredictorError, ManifestError, BlobstoreError) as exc:
-        return InputResult(
-            id=input_spec.id, status="failed",
-            error={"code": "INPUT_INVALID", "message": str(exc), "retriable": False},
-        )
-    except Exception as exc:  # anything else is an unexpected worker-side crash
-        status.notice(f"{input_spec.id}: worker crashed: {exc}", level="error")
-        return InputResult(
-            id=input_spec.id, status="failed",
-            error={
-                "code": "WORKER_CRASH", "message": str(exc), "retriable": False,
-                "detail": traceback.format_exc(),
-            },
-        )
+    except Exception as exc:
+        # A specific exception's OWN `.code` (ModelNeedsHopperError -> MODEL_NEEDS_HOPPER,
+        # PredictorOOMError -> MODEL_OOM, ...) always wins over the generic fallback below
+        # — a bug this fixed: (ValidationError, PredictorError, ManifestError,
+        # BlobstoreError) used to be caught as ONE tuple and always labeled
+        # "INPUT_INVALID", which silently mislabeled every PredictorError subclass with
+        # its own more specific code (see errors.py's module docstring / #254's closing
+        # comment for the two cases this caught: a Hopper-only model request and a
+        # second-OOM both used to report INPUT_INVALID instead of their real code).
+        code = getattr(exc, "code", None)
+        if code is None:
+            if isinstance(exc, (ValidationError, PredictorError, ManifestError, BlobstoreError)):
+                code = "INPUT_INVALID"
+            else:
+                code = "WORKER_CRASH"
+                status.notice(f"{input_spec.id}: worker crashed: {exc}", level="error")
+        error: dict = {"code": code, "message": str(exc), "retriable": is_retriable(code)}
+        if code == "WORKER_CRASH":
+            error["detail"] = traceback.format_exc()
+        return InputResult(id=input_spec.id, status="failed", error=error)
 
     uploaded: list[str] = []
     for local_path in result.outputs:
@@ -124,7 +138,8 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     manifest = JobManifest.parse(manifest_text)  # ManifestSchemaError/ManifestError propagate
 
     status = StatusWriter(
-        store, manifest.job_id,
+        store,
+        manifest.job_id,
         worker=WorkerInfo(version=worker_version, image=manifest.worker.image),
     )
     status.start()
@@ -154,13 +169,19 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
 
     finished_at = _utc_now_iso()
     status.update(
-        stage=job_status, percent=100.0,
-        error=job_error, detail={"inputs": [dataclasses.asdict(r) for r in input_results]},
+        stage=job_status,
+        percent=100.0,
+        error=job_error,
+        detail={"inputs": [dataclasses.asdict(r) for r in input_results]},
     )
 
     result = JobResult(
-        schema=1, jobId=manifest.job_id, status=job_status, inputs=input_results,
-        timing=ResultTiming(startedAt=started_at, finishedAt=finished_at), error=job_error,
+        schema=1,
+        jobId=manifest.job_id,
+        status=job_status,
+        inputs=input_results,
+        timing=ResultTiming(startedAt=started_at, finishedAt=finished_at),
+        error=job_error,
     )
     # Written LAST, after every output is confirmed uploaded — job_contract.md §7: its
     # mere presence, not just its contents, is the app's "this job reached a terminal
@@ -175,9 +196,8 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     # the `apply_lifecycle` call at all, so no test in this repo exercises it against a
     # real network no matter how this function is invoked.
     if manifest.store.kind == "gcs" and manifest.lifecycle.after_task != "keep":
-        try:
+        # best-effort; instanceTerminationAction=DELETE is the backstop
+        with contextlib.suppress(LifecycleError):
             apply_lifecycle(manifest.lifecycle.after_task)
-        except LifecycleError:
-            pass  # best-effort; instanceTerminationAction=DELETE is the backstop
 
     return result

@@ -44,23 +44,31 @@ class ModelRequirement:
 # Design section 5.4's model/hardware matrix, verbatim.
 MODEL_REQUIREMENTS: dict[str, ModelRequirement] = {
     "evo2_7b": ModelRequirement(
-        precision="bf16", needs_hopper=False,
+        precision="bf16",
+        needs_hopper=False,
         note="bf16, ~14 GB, runs on an L4 or A100 (24 GB+)",
     ),
     "evo2_7b_262k": ModelRequirement(
-        precision="bf16", needs_hopper=False,
+        precision="bf16",
+        needs_hopper=False,
         note="bf16, ~14 GB, runs on an L4 or A100 (24 GB+)",
     ),
     "evo2_1b_base": ModelRequirement(
-        precision="fp8", needs_hopper=True, min_gpu_count=1,
+        precision="fp8",
+        needs_hopper=True,
+        min_gpu_count=1,
         note="FP8 on Hopper (H100) only",
     ),
     "evo2_20b": ModelRequirement(
-        precision="fp8", needs_hopper=True, min_gpu_count=1,
+        precision="fp8",
+        needs_hopper=True,
+        min_gpu_count=1,
         note="FP8 on Hopper (H100) only",
     ),
     "evo2_40b": ModelRequirement(
-        precision="fp8", needs_hopper=True, min_gpu_count=2,
+        precision="fp8",
+        needs_hopper=True,
+        min_gpu_count=2,
         note="FP8 on 2x H100 80 GB",
     ),
 }
@@ -87,7 +95,10 @@ def model_requirement(model_id: str) -> ModelRequirement:
 
 
 def require_hardware(
-    model_id: str, *, device: str, compute_capability: tuple[int, int] | None,
+    model_id: str,
+    *,
+    device: str,
+    compute_capability: tuple[int, int] | None,
 ) -> None:
     """Raise :class:`ModelNeedsHopperError` if ``model_id`` needs Hopper and the offered
     device does not qualify. No-op for every other model.

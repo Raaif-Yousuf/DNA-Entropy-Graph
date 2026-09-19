@@ -43,9 +43,7 @@ class EvoPredictor:
         try:
             self._model = Evo2(model)
         except Exception as exc:  # weights missing, OOM, etc.
-            raise PredictorError(
-                f"Failed to load Evo model {model!r}: {exc}"
-            ) from exc
+            raise PredictorError(f"Failed to load Evo model {model!r}: {exc}") from exc
         # Ask the tokenizer for the exact ids of A, C, G, T rather than hard-coding
         # ASCII — robust to whatever scheme the model uses.
         nuc_ids = list(self._model.tokenizer.tokenize("ACGT"))
@@ -59,7 +57,7 @@ class EvoPredictor:
         self._nuc_ids = [int(x) for x in nuc_ids]
 
     @staticmethod
-    def _extract_logits(raw: object) -> "torch.Tensor":
+    def _extract_logits(raw: object) -> torch.Tensor:
         """Normalize the model's return into a 2D ``(L, vocab)`` logits tensor.
 
         Tolerates evo2 versions that return a tuple, an object with ``.logits``, or a
@@ -97,9 +95,7 @@ class EvoPredictor:
             # Translate into a typed signal analysis/direction.py's windowed runner can
             # catch specifically (halve the window and retry once — design section 5.6)
             # without importing torch itself (only this module may).
-            raise PredictorOOMError(
-                f"Out of GPU memory running a window of {len(seq)} nt: {exc}"
-            ) from exc
+            raise PredictorOOMError(f"Out of GPU memory running a window of {len(seq)} nt: {exc}") from exc
         logits = self._extract_logits(raw)  # (L, vocab)
 
         nuc_logits = logits[:, self._nuc_ids].float().cpu().numpy()  # (L, 4)

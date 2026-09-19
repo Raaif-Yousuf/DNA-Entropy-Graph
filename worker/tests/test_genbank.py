@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from dna_entropy import pipeline
 from dna_entropy.config import RunConfig
 from dna_entropy.readers import detect
 from dna_entropy.readers.fasta import read_fasta
@@ -13,7 +14,6 @@ from dna_entropy.readers.genbank import read_genbank
 from dna_entropy.readers.input import load_input
 from dna_entropy.validation.validators import ValidationError, validate_sequence
 from dna_entropy.writers.genbank import GenBankWriter
-from dna_entropy import pipeline
 
 DATA = Path(__file__).parent / "data"
 SAMPLE_GB = str(DATA / "sample.gb")
@@ -22,6 +22,7 @@ SAMPLE_FA = str(DATA / "sample.fasta")
 
 
 # --- detection ----------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "path, expected",
@@ -53,6 +54,7 @@ def test_detect_by_content_sniff(tmp_path: Path) -> None:
 
 # --- GenBank reader (genes preserved, gene preferred over CDS) -----------------------
 
+
 def test_read_genbank_extracts_seq_and_genes() -> None:
     records, notices = read_genbank(SAMPLE_GB)
     assert len(records) == 1
@@ -66,6 +68,7 @@ def test_read_genbank_extracts_seq_and_genes() -> None:
 
 
 # --- FASTA reader -------------------------------------------------------------------
+
 
 def test_read_fasta_single_record() -> None:
     records, notices = read_fasta(SAMPLE_FA)
@@ -89,15 +92,17 @@ def test_read_fasta_skips_a_record_with_no_sequence_lines(tmp_path: Path) -> Non
     p.write_text(">has_seq\nACGT\n>empty\n>also_has_seq\nTTTT\n", encoding="utf-8")
     records, notices = read_fasta(str(p))
     assert [r.header for r in records] == ["has_seq", "also_has_seq"]
-    assert any("Skipped record 'empty'" in n for n in notices)
+    # issue #253: the notice must name WHICH record was skipped without ever echoing the
+    # header text itself back (a header is user-typed free text, same privacy class as a
+    # sequence or a file name).
+    assert any("Skipped FASTA record 2" in n for n in notices)
+    assert not any("empty" in n for n in notices)  # the header text must not leak
 
 
 def test_read_fasta_flags_missing_header() -> None:
     import tempfile
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".fasta", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".fasta", delete=False, encoding="utf-8") as f:
         f.write(">\nACGT\n>named\nTTTT\n")
         path = f.name
     records, notices = read_fasta(path)
@@ -115,6 +120,7 @@ def test_read_fasta_flags_duplicate_headers(tmp_path: Path) -> None:
 
 
 # --- lenient N validation -----------------------------------------------------------
+
 
 def test_validate_tolerates_n_when_allowed() -> None:
     v = validate_sequence("ACGTNNNACGT", allow_ambiguity=True)
@@ -134,8 +140,10 @@ def test_validate_still_rejects_true_garbage_even_when_lenient() -> None:
 
 # --- GenBank writer round-trip ------------------------------------------------------
 
+
 def test_genbank_writer_embeds_mean_entropy(tmp_path: Path) -> None:
     import numpy as np
+
     from dna_entropy.readers.genbank import read_genbank
 
     records, _ = read_genbank(SAMPLE_GB)
@@ -152,6 +160,7 @@ def test_genbank_writer_embeds_mean_entropy(tmp_path: Path) -> None:
 
 
 # --- pipeline: GenBank input -> genbank + wig + stats, genes preserved ---------------
+
 
 def test_pipeline_genbank_input(tmp_path: Path) -> None:
     cfg = RunConfig(name="tl", input_path=SAMPLE_GB, out_dir=str(tmp_path))
@@ -194,6 +203,7 @@ def test_load_input_paste_stays_strict(tmp_path: Path) -> None:
 
 # --- multi-record GenBank: ALL records processed ------------------------------------
 
+
 def test_read_genbank_returns_all_records() -> None:
     records, notices = read_genbank(MULTI_GB)
     assert len(records) == 2
@@ -207,8 +217,10 @@ def test_load_input_multi_record_contigs() -> None:
     assert len(loaded.contigs) == 2
     # Geneious-style ids must be sanitized to safe, indexed contig names.
     assert [c.name for c in loaded.contigs] == ["mt_1", "mt_2"]
-    assert all(set(c.name) <= set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-               for c in loaded.contigs)
+    assert all(
+        set(c.name) <= set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        for c in loaded.contigs
+    )
 
 
 def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
@@ -230,6 +242,7 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
 
     # One GenBank file holds BOTH records.
     from Bio import SeqIO
+
     gb_path = next(p for p in result.outputs if p.endswith(".gb"))
     recs = list(SeqIO.parse(gb_path, "genbank"))
     assert len(recs) == 2

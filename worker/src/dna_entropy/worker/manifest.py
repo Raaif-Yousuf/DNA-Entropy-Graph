@@ -7,21 +7,26 @@ validates it — staging inputs locally and actually running the pipeline is
 this module deliberately does not depend on (manifest parsing must work identically
 whether the bytes came from GCS or a local file).
 
-**Naming note (worth flagging to whoever next edits ``docs/job_contract.md``):** that doc's
-manifest example uses ``"forward"``/``"reverse"`` for ``analysis.direction``, but
-:class:`dna_entropy.config.Direction` (shipped and tested under issue #279, per the
-coordinator's own explicit instruction at the time) uses ``"forward-only"``/``"reverse-only"``.
-This module accepts BOTH spellings on input (a manifest author's typo here should not be
-a hard failure of an otherwise-valid job) but always reports the canonical
-``Direction`` value in error messages and everywhere else. The doc, not the code, should
-be corrected to match — see this module's docstring instead of re-deriving the question.
+**Naming resolved (2026-09-19, issue #254 follow-up):** an earlier draft of this module
+flagged that ``docs/job_contract.md``'s manifest example used ``"forward"``/``"reverse"``
+for ``analysis.direction`` while :class:`dna_entropy.config.Direction` (shipped and
+tested under issue #279, per the coordinator's own explicit instruction at the time) uses
+``"forward-only"``/``"reverse-only"``, and tolerated both spellings on input pending a
+decision. The decision: the shipped ``Direction`` enum is canonical — it was deliberately
+named this way (matching the "Forward only"/"Reverse only" *display* names throughout
+``docs/science_and_formats.md``, and distinguishing them from a plain "forward"/"reverse"
+which reads ambiguously next to ``"both-combined"``/``"both-averaged"``) and was already
+shipped and tested before ``docs/job_contract.md``'s example was written. Only the
+canonical spellings are accepted now; ``docs/job_contract.md``'s manifest example (section
+3) should be corrected from ``"forward"``/``"reverse"`` to ``"forward-only"``/
+``"reverse-only"`` to match — flagged in this session's report rather than edited
+directly, since that file is outside this package's own paths.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from ..config import Direction, PredictorKind, RunConfig, TrackFormat
 
@@ -31,13 +36,10 @@ from ..config import Direction, PredictorKind, RunConfig, TrackFormat
 CURRENT_SCHEMA_VERSION = 1
 SUPPORTED_SCHEMA_VERSIONS: tuple[int, ...] = (1,)
 
-# Manifest spellings that map onto the shipped Direction enum — accepts job_contract.md's
-# "forward"/"reverse" as aliases for "forward-only"/"reverse-only" (see module docstring).
-_DIRECTION_ALIASES: dict[str, Direction] = {
-    "forward": Direction.FORWARD_ONLY,
-    "reverse": Direction.REVERSE_ONLY,
-    **{d.value: d for d in Direction},
-}
+# Only the canonical Direction spellings are accepted (see the module docstring's
+# "Naming resolved" note) — no "forward"/"reverse" aliases; a manifest using the old
+# spelling now fails validation with the valid-values list in the error message.
+_DIRECTION_ALIASES: dict[str, Direction] = {d.value: d for d in Direction}
 
 
 class ManifestError(ValueError):
@@ -87,7 +89,7 @@ class InputSpec:
     )  # all | first (D14: "all" is the default; "first" is parity-only)
 
     @staticmethod
-    def from_dict(d: dict) -> "InputSpec":
+    def from_dict(d: dict) -> InputSpec:
         return InputSpec(
             id=str(_require(d, "id", where="inputs[]")),
             path=str(_require(d, "path", where="inputs[]")),
@@ -110,7 +112,7 @@ class PredictorSpec:
     seed: int = 0
 
     @staticmethod
-    def from_dict(d: dict) -> "PredictorSpec":
+    def from_dict(d: dict) -> PredictorSpec:
         return PredictorSpec(
             kind=str(d.get("kind", "mock")),
             model=str(d.get("model", "evo2_7b")),
@@ -130,14 +132,12 @@ class AnalysisSpec:
     track_format: str = field(default="bedgraph", metadata={"json_name": "format"})  # bedgraph | wig
 
     @staticmethod
-    def from_dict(d: dict) -> "AnalysisSpec":
+    def from_dict(d: dict) -> AnalysisSpec:
         raw_direction = str(d.get("direction", Direction.BOTH_COMBINED.value))
         direction = _DIRECTION_ALIASES.get(raw_direction)
         if direction is None:
             valid = sorted({*_DIRECTION_ALIASES.keys()})
-            raise ManifestError(
-                f"manifest.json analysis.direction {raw_direction!r} is not one of {valid}"
-            )
+            raise ManifestError(f"manifest.json analysis.direction {raw_direction!r} is not one of {valid}")
         return AnalysisSpec(
             context_length=int(d.get("contextLength", 4096)),
             window=int(d.get("window", 8192)),
@@ -154,7 +154,7 @@ class Limits:
     heartbeat_seconds: int = field(default=30, metadata={"json_name": "heartbeatSeconds"})
 
     @staticmethod
-    def from_dict(d: dict) -> "Limits":
+    def from_dict(d: dict) -> Limits:
         return Limits(
             max_run_seconds=int(d.get("maxRunSeconds", 14400)),
             cancel_poll_seconds=int(d.get("cancelPollSeconds", 10)),
@@ -169,7 +169,7 @@ class Lifecycle:
     after_keep_alive: str = field(default="stop", metadata={"json_name": "afterKeepAlive"})
 
     @staticmethod
-    def from_dict(d: dict) -> "Lifecycle":
+    def from_dict(d: dict) -> Lifecycle:
         return Lifecycle(
             after_task=str(d.get("afterTask", "stop")),
             keep_alive_minutes=int(d.get("keepAliveMinutes", 0)),
@@ -185,7 +185,7 @@ class StoreSpec:
     root: str = ""
 
     @staticmethod
-    def from_dict(d: dict) -> "StoreSpec":
+    def from_dict(d: dict) -> StoreSpec:
         kind = str(_require(d, "kind", where="store"))
         if kind == "gcs":
             return StoreSpec(
@@ -212,7 +212,7 @@ class WorkerRef:
     version: str = ""
 
     @staticmethod
-    def from_dict(d: dict) -> "WorkerRef":
+    def from_dict(d: dict) -> WorkerRef:
         return WorkerRef(image=str(d.get("image", "")), version=str(d.get("version", "")))
 
 
@@ -235,7 +235,7 @@ class JobManifest:
     raw: dict = field(repr=False, default_factory=dict, metadata={"json_exclude": True})
 
     @staticmethod
-    def parse(text: str) -> "JobManifest":
+    def parse(text: str) -> JobManifest:
         """Parse and validate manifest JSON text. Raises :class:`ManifestSchemaError` for
         an unsupported schema (checked FIRST, before any other field is even read, so a
         version mismatch is reported as exactly that and not as some other confusing
@@ -265,13 +265,25 @@ class JobManifest:
         worker = WorkerRef.from_dict(d.get("worker", {}))
 
         return JobManifest(
-            schema=schema, job_id=job_id, inputs=inputs, predictor=predictor,
-            analysis=analysis, outputs=outputs, limits=limits, lifecycle=lifecycle,
-            store=store, worker=worker, raw=d,
+            schema=schema,
+            job_id=job_id,
+            inputs=inputs,
+            predictor=predictor,
+            analysis=analysis,
+            outputs=outputs,
+            limits=limits,
+            lifecycle=lifecycle,
+            store=store,
+            worker=worker,
+            raw=d,
         )
 
     def build_run_config(
-        self, input_spec: InputSpec, *, local_input_path: str, local_out_dir: str,
+        self,
+        input_spec: InputSpec,
+        *,
+        local_input_path: str,
+        local_out_dir: str,
     ) -> RunConfig:
         """Build the :class:`~dna_entropy.config.RunConfig` for one input, given where the
         runner has already staged it locally (via the blobstore) and where local outputs
@@ -287,7 +299,8 @@ class JobManifest:
         """
         informat = None if input_spec.informat == "auto" else input_spec.informat
         track_format = (
-            TrackFormat.WIG if "wig" in self.outputs and "bedgraph" not in self.outputs
+            TrackFormat.WIG
+            if "wig" in self.outputs and "bedgraph" not in self.outputs
             else TrackFormat.BEDGRAPH
         )
         return RunConfig(

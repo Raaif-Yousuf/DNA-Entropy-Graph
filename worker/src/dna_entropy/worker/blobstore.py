@@ -23,9 +23,10 @@ import os
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 class BlobstoreError(RuntimeError):
@@ -164,8 +165,7 @@ class LocalBlobstore:
 # --- GcsBlobstore ------------------------------------------------------------------------
 
 _METADATA_TOKEN_URL = (
-    "http://metadata.google.internal/computeMetadata/v1/"
-    "instance/service-accounts/default/token"
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
 )
 _METADATA_HEADERS = {"Metadata-Flavor": "Google"}
 _STORAGE_API = "https://storage.googleapis.com/storage/v1"
@@ -196,7 +196,9 @@ class MetadataTokenProvider:
     this class injects ``opener`` and asserts on the constructed request.
     """
 
-    def __init__(self, *, opener: HttpOpener = default_http_opener, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self, *, opener: HttpOpener = default_http_opener, clock: Callable[[], float] = time.time
+    ) -> None:
         self._opener = opener
         self._clock = clock
         self._cached: _CachedToken | None = None
@@ -275,7 +277,7 @@ class GcsBlobstore:
         payload = json.loads(resp.read().decode("utf-8"))
         names = [item["name"] for item in payload.get("items", [])]
         # Strip this job's own prefix so callers see paths relative to it, like LocalBlobstore.
-        return sorted(n[len(self.prefix):] if n.startswith(self.prefix) else n for n in names)
+        return sorted(n[len(self.prefix) :] if n.startswith(self.prefix) else n for n in names)
 
     def download_file(self, path: str, local_dest: Path) -> None:
         data = self._download_bytes(path)

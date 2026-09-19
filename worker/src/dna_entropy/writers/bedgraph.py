@@ -19,10 +19,7 @@ def _block_lines(chrom: str, values: np.ndarray, start: int) -> list[str]:
     # genomic 1-based coord of base i (0-based) is (start + i);
     # bedGraph is 0-based half-open => [start-1+i, start+i).
     base0 = start - 1
-    return [
-        f"{chrom}\t{base0 + i}\t{base0 + i + 1}\t{float(v):.4f}"
-        for i, v in enumerate(values)
-    ]
+    return [f"{chrom}\t{base0 + i}\t{base0 + i + 1}\t{float(v):.4f}" for i, v in enumerate(values)]
 
 
 class BedGraphWriter:
@@ -39,7 +36,11 @@ class BedGraphWriter:
         variant: str | None = None,
     ) -> str:
         return self.write_multi(
-            name=name, blocks=[(name, values)], start=start, out_dir=out_dir, variant=variant,
+            name=name,
+            blocks=[(name, values)],
+            start=start,
+            out_dir=out_dir,
+            variant=variant,
         )
 
     def write_multi(
@@ -59,10 +60,7 @@ class BedGraphWriter:
         ``<name>.entropy.<variant>.bedgraph`` instead of the default ``<name>.entropy.bedgraph``.
         """
         label = f"{name} entropy" if variant is None else f"{name} entropy ({variant})"
-        lines = [
-            f'track type=bedGraph name="{label}" '
-            'description="Shannon entropy (bits)" visibility=full'
-        ]
+        lines = [f'track type=bedGraph name="{label}" description="Shannon entropy (bits)" visibility=full']
         for chrom, values in blocks:
             lines.extend(_block_lines(chrom, values, start))
         text = "\n".join(lines) + "\n"

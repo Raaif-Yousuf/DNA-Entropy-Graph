@@ -13,8 +13,8 @@ mistake available in this codebase to get wrong — see ``test_reverse_uses_comp
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 
@@ -61,7 +61,7 @@ def _stitch_forward(window_probs: list[np.ndarray], plan: WindowPlan) -> tuple[n
     length = plan.length
     probs = np.empty((length, 4), dtype=np.float32)
     context = np.full(length, -1, dtype=np.int64)
-    for start, w in zip(plan.starts, window_probs):
+    for start, w in zip(plan.starts, window_probs, strict=True):
         width = w.shape[0]
         local = np.arange(width)
         global_idx = start + local
@@ -72,8 +72,11 @@ def _stitch_forward(window_probs: list[np.ndarray], plan: WindowPlan) -> tuple[n
 
 
 def _run_plan(
-    predictor: Predictor, seq: str, plan: WindowPlan,
-    *, on_window: "Callable[[], None] | None" = None,
+    predictor: Predictor,
+    seq: str,
+    plan: WindowPlan,
+    *,
+    on_window: Callable[[], None] | None = None,
 ) -> list[np.ndarray]:
     out = []
     for start in plan.starts:
@@ -91,8 +94,12 @@ def _run_plan(
 
 
 def run_windowed(
-    predictor: Predictor, seq: str, *, context_length: int, ceiling: int,
-    on_window: "Callable[[], None] | None" = None,
+    predictor: Predictor,
+    seq: str,
+    *,
+    context_length: int,
+    ceiling: int,
+    on_window: Callable[[], None] | None = None,
 ) -> SinglePassResult:
     """Run ``predictor.predict`` once per window over ``seq`` and stitch forward-style.
 
@@ -117,7 +124,11 @@ def run_windowed(
         window_probs = _run_plan(predictor, seq, plan, on_window=on_window)  # a 2nd OOM propagates
     probs, context = _stitch_forward(window_probs, plan)
     return SinglePassResult(
-        probs=probs, context=context, window=plan.window, stride=plan.stride, notices=notices,
+        probs=probs,
+        context=context,
+        window=plan.window,
+        stride=plan.stride,
+        notices=notices,
     )
 
 
@@ -138,19 +149,27 @@ class DirectionResult:
 
 
 _NEEDS_FORWARD = {
-    Direction.BOTH_COMBINED, Direction.BOTH_AVERAGED, Direction.BOTH_SEPARATE,
+    Direction.BOTH_COMBINED,
+    Direction.BOTH_AVERAGED,
+    Direction.BOTH_SEPARATE,
     Direction.FORWARD_ONLY,
 }
 _NEEDS_REVERSE = {
-    Direction.BOTH_COMBINED, Direction.BOTH_AVERAGED, Direction.BOTH_SEPARATE,
+    Direction.BOTH_COMBINED,
+    Direction.BOTH_AVERAGED,
+    Direction.BOTH_SEPARATE,
     Direction.REVERSE_ONLY,
 }
 
 
 def _combine(
-    fwd_entropy: np.ndarray, fwd_context: np.ndarray,
-    rev_entropy: np.ndarray, rev_context: np.ndarray,
-    context_length: int, *, averaged: bool,
+    fwd_entropy: np.ndarray,
+    fwd_context: np.ndarray,
+    rev_entropy: np.ndarray,
+    rev_context: np.ndarray,
+    context_length: int,
+    *,
+    averaged: bool,
 ) -> tuple[np.ndarray, int]:
     """Section 5.6's combination rule.
 
@@ -171,8 +190,9 @@ def _combine(
     neither = ~fwd_ok & ~rev_ok
 
     if averaged:
-        values[both_ok] = ((fwd_entropy[both_ok].astype(np.float64)
-                             + rev_entropy[both_ok].astype(np.float64)) / 2.0)
+        values[both_ok] = (
+            fwd_entropy[both_ok].astype(np.float64) + rev_entropy[both_ok].astype(np.float64)
+        ) / 2.0
     else:
         values[both_ok] = fwd_entropy[both_ok]  # forward always wins when both qualify
     values[only_fwd] = fwd_entropy[only_fwd]
@@ -189,8 +209,13 @@ def _combine(
 
 
 def analyze_direction(
-    predictor: Predictor, seq: str, *, context_length: int, ceiling: int, direction: Direction,
-    on_window: "Callable[[], None] | None" = None,
+    predictor: Predictor,
+    seq: str,
+    *,
+    context_length: int,
+    ceiling: int,
+    direction: Direction,
+    on_window: Callable[[], None] | None = None,
 ) -> DirectionResult:
     """Run the windowed forward and/or reverse-complement passes and combine them.
 
@@ -206,7 +231,11 @@ def analyze_direction(
 
     if direction in _NEEDS_FORWARD:
         fwd = run_windowed(
-            predictor, seq, context_length=context_length, ceiling=ceiling, on_window=on_window,
+            predictor,
+            seq,
+            context_length=context_length,
+            ceiling=ceiling,
+            on_window=on_window,
         )
         fwd_entropy = shannon_entropy(fwd.probs)
         fwd_context = fwd.context
@@ -216,7 +245,11 @@ def analyze_direction(
     if direction in _NEEDS_REVERSE:
         rc = reverse_complement(seq)
         rev = run_windowed(
-            predictor, rc, context_length=context_length, ceiling=ceiling, on_window=on_window,
+            predictor,
+            rc,
+            context_length=context_length,
+            ceiling=ceiling,
+            on_window=on_window,
         )
         # rev.probs/.context are in the REVERSE-COMPLEMENT's own read order (index j came
         # from rc[j], i.e. original position L-1-j); flip back to original coordinates.
@@ -236,7 +269,11 @@ def analyze_direction(
         values = rev_entropy
     else:
         values, reduced = _combine(
-            fwd_entropy, fwd_context, rev_entropy, rev_context, context_length,
+            fwd_entropy,
+            fwd_context,
+            rev_entropy,
+            rev_context,
+            context_length,
             averaged=(direction is Direction.BOTH_AVERAGED),
         )
         if length >= 2 * context_length:

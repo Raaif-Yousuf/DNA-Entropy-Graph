@@ -82,7 +82,9 @@ def apply_lifecycle(
     project, zone, name = self_instance_identity(opener=opener)
     url = f"{_COMPUTE_API}/projects/{project}/zones/{zone}/instances/{name}/{after}"
     req = urllib.request.Request(
-        url, method="POST", headers={"Authorization": f"Bearer {tokens.get()}"},
+        url,
+        method="POST",
+        headers={"Authorization": f"Bearer {tokens.get()}"},
     )
     try:
         opener(req)

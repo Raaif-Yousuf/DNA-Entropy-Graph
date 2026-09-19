@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..config import DEFAULT_MAX_LEN
+from ..redact import describe_len
 
 _ACGT: frozenset[str] = frozenset("ACGT")
 # IUPAC nucleotide ambiguity codes — recognized so we can give a helpful message,
@@ -45,7 +46,9 @@ def _strip_leading_header(raw: str) -> tuple[str, list[str]]:
         if line.strip() == "":
             continue  # skip blank lines before the first content line
         if line.lstrip().startswith(">"):
-            notices.append(f"Ignored FASTA header line: {line.strip()[:60]!r}")
+            # Never the header text itself (issue #253) — just that one was dropped, and
+            # how long it was.
+            notices.append(f"Ignored a leading FASTA header line ({describe_len(line.strip())}).")
             del lines[idx]
         break
     return "\n".join(lines), notices
@@ -107,9 +110,7 @@ def validate_sequence(
             )
 
     if not seq:
-        raise ValidationError(
-            "No nucleotides found after cleaning the input (empty sequence)."
-        )
+        raise ValidationError("No nucleotides found after cleaning the input (empty sequence).")
 
     bad = [i for i, c in enumerate(seq) if c not in _ACGT]
     if bad:

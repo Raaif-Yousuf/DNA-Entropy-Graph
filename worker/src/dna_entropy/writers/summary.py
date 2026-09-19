@@ -15,7 +15,7 @@ if TYPE_CHECKING:  # avoid a hard import cycle risk; only needed for type hints
     from ..analysis.direction import DirectionResult
 
 
-def _provenance_lines(dr: "DirectionResult", *, indent: str = "") -> list[str]:
+def _provenance_lines(dr: DirectionResult, *, indent: str = "") -> list[str]:
     """Section 5.6 windowing/direction provenance, recorded (not recomputed) per contig."""
     seam = str(dr.seam) if dr.seam is not None else "n/a"
     lines = [
@@ -42,7 +42,7 @@ class SummaryWriter:
         start: int,
         out_dir: str,
         filename: str | None = None,
-        provenance: "DirectionResult | None" = None,
+        provenance: DirectionResult | None = None,
     ) -> str:
         """Write the summary. ``filename`` overrides the default ``<name>.summary.txt``
         (GenBank runs use ``stats.txt`` per the professor's spec). ``provenance``, when
@@ -72,7 +72,7 @@ class SummaryWriter:
         start: int,
         out_dir: str,
         filename: str | None = None,
-        provenance: "Sequence[DirectionResult] | None" = None,
+        provenance: Sequence[DirectionResult] | None = None,
     ) -> str:
         """Write a summary covering several contigs: an overall block, then one per contig.
 

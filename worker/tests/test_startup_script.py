@@ -39,7 +39,9 @@ def test_startup_script_has_valid_bash_syntax() -> None:
     # .gitattributes pins `eol=lf` repo-wide) — both are subprocess/Windows quirks, not
     # anything wrong with the script.
     result = subprocess.run(
-        ["bash", "-n", "-"], input=STARTUP_SH.read_bytes(), capture_output=True,
+        ["bash", "-n", "-"],
+        input=STARTUP_SH.read_bytes(),
+        capture_output=True,
     )
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
 
@@ -52,9 +54,7 @@ def _code_only() -> str:
     """``_text()`` with full-line comments stripped, so assertions about what the script
     actually DOES aren't fooled by its own explanatory prose (which necessarily mentions
     "shutdown -h"/"ssh"/"gcloud" while explaining why they are avoided)."""
-    return "\n".join(
-        ln for ln in _text().splitlines() if not ln.strip().startswith("#")
-    )
+    return "\n".join(ln for ln in _text().splitlines() if not ln.strip().startswith("#"))
 
 
 # --- the hard rules this script exists to satisfy (see its own module docstring) ------
@@ -93,7 +93,7 @@ def test_waits_for_nvidia_smi_rather_than_assuming_the_driver_is_up() -> None:
 
 def test_pulls_the_image_by_digest_variable_not_a_mutable_tag() -> None:
     text = _text()
-    assert 'IMAGE=$(meta instance/attributes/deg-worker-image)' in text
+    assert "IMAGE=$(meta instance/attributes/deg-worker-image)" in text
     assert 'docker pull "$IMAGE"' in text
 
 
@@ -108,7 +108,7 @@ def test_writes_a_booting_status_before_any_step_that_can_fail() -> None:
 
 def test_short_circuits_when_already_finished_on_a_previous_boot() -> None:
     text = _text()
-    assert 'done|failed|cancelled' in text
+    assert "done|failed|cancelled" in text
     # The short-circuit must appear BEFORE the install/run work, not after.
     short_circuit_idx = text.index("done|failed|cancelled")
     docker_pull_idx = text.index('docker pull "$IMAGE"')

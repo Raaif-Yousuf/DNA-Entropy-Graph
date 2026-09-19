@@ -7,8 +7,8 @@ Each stage is swappable; this module is the only place that knows the order.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 
@@ -20,7 +20,7 @@ from .config import Direction, PredictorKind, RunConfig, TrackFormat
 from .predictors.base import Predictor, PredictorError
 from .predictors.mock import MockPredictor
 from .readers import detect
-from .readers.input import Contig, LoadedInput, load_input
+from .readers.input import Contig, load_input
 from .readers.paste import PasteReader
 from .validation.validators import ValidatedSequence, validate_sequence
 from .writers.base import Writer
@@ -126,22 +126,19 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
     if any(dr.forward_values is not None for _, dr in processed):
         return TsvWriter().write_multi_separate(
             name=cfg.name,
-            blocks=[
-                (c.name, c.seq, dr.forward_values, dr.reverse_values, dr.values)
-                for c, dr in processed
-            ],
-            start=cfg.start, out_dir=cfg.out_dir,
+            blocks=[(c.name, c.seq, dr.forward_values, dr.reverse_values, dr.values) for c, dr in processed],
+            start=cfg.start,
+            out_dir=cfg.out_dir,
         )
     return TsvWriter().write_multi(
         name=cfg.name,
         blocks=[(c.name, c.seq, dr.values) for c, dr in processed],
-        start=cfg.start, out_dir=cfg.out_dir,
+        start=cfg.start,
+        out_dir=cfg.out_dir,
     )
 
 
-def _write_genbank_outputs(
-    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]
-) -> list[str]:
+def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
     """GenBank input -> ONE GenBank (all records, genes preserved + entropy notes), a
     FASTA + bedGraph + WIG + Geneious track (a block per record), and ONE stats.txt.
 
@@ -196,14 +193,18 @@ def _write_genbank_outputs(
             BedGraphWriter().write_multi(
                 name=cfg.name,
                 blocks=[(c.name, dr.forward_values) for c, dr in processed],
-                start=cfg.start, out_dir=cfg.out_dir, variant="fwd",
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+                variant="fwd",
             )
         )
         outputs.append(
             BedGraphWriter().write_multi(
                 name=cfg.name,
                 blocks=[(c.name, dr.reverse_values) for c, dr in processed],
-                start=cfg.start, out_dir=cfg.out_dir, variant="rev",
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+                variant="rev",
             )
         )
 
@@ -222,7 +223,8 @@ def _write_genbank_outputs(
 
 
 def _write_standard_outputs(
-    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]],
+    cfg: RunConfig,
+    processed: list[tuple[Contig, DirectionResult]],
 ) -> tuple[list[str], list[GeneFeature]]:
     """FASTA/paste input -> the existing files, plus a bonus GenBank when possible.
 
@@ -234,19 +236,27 @@ def _write_standard_outputs(
     """
     track_writer = _select_track_writer(cfg)
     fasta = FastaWriter().write_multi(
-        name=cfg.name, blocks=[(c.name, c.seq) for c, _ in processed], out_dir=cfg.out_dir,
+        name=cfg.name,
+        blocks=[(c.name, c.seq) for c, _ in processed],
+        out_dir=cfg.out_dir,
     )
     track = track_writer.write_multi(
-        name=cfg.name, blocks=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start, out_dir=cfg.out_dir,
+        name=cfg.name,
+        blocks=[(c.name, dr.values) for c, dr in processed],
+        start=cfg.start,
+        out_dir=cfg.out_dir,
     )
     geneious = GeneiousWriter().write_multi(
-        name=cfg.name, blocks=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start, out_dir=cfg.out_dir,
+        name=cfg.name,
+        blocks=[(c.name, dr.values) for c, dr in processed],
+        start=cfg.start,
+        out_dir=cfg.out_dir,
     )
     stats = SummaryWriter().write_multi(
-        name=cfg.name, sections=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start, out_dir=cfg.out_dir,
+        name=cfg.name,
+        sections=[(c.name, dr.values) for c, dr in processed],
+        start=cfg.start,
+        out_dir=cfg.out_dir,
         provenance=[dr for _, dr in processed],
     )
     outputs = [fasta, track, geneious, stats]
@@ -259,14 +269,20 @@ def _write_standard_outputs(
     if any(dr.forward_values is not None for _, dr in processed):
         outputs.append(
             track_writer.write_multi(
-                name=cfg.name, blocks=[(c.name, dr.forward_values) for c, dr in processed],
-                start=cfg.start, out_dir=cfg.out_dir, variant="fwd",
+                name=cfg.name,
+                blocks=[(c.name, dr.forward_values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+                variant="fwd",
             )
         )
         outputs.append(
             track_writer.write_multi(
-                name=cfg.name, blocks=[(c.name, dr.reverse_values) for c, dr in processed],
-                start=cfg.start, out_dir=cfg.out_dir, variant="rev",
+                name=cfg.name,
+                blocks=[(c.name, dr.reverse_values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+                variant="rev",
             )
         )
 
@@ -280,8 +296,12 @@ def _write_standard_outputs(
         outputs.append(
             GffWriter().write_multi(
                 name=cfg.name,
-                blocks=[(c.name, g, len(c.seq)) for (c, _), g in zip(processed, genes_by_contig)],
-                start=cfg.start, out_dir=cfg.out_dir, source="pyrodigal",
+                blocks=[
+                    (c.name, g, len(c.seq)) for (c, _), g in zip(processed, genes_by_contig, strict=True)
+                ],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+                source="pyrodigal",
             )
         )
 
@@ -289,7 +309,7 @@ def _write_standard_outputs(
     # Prodigal per contig. One .gb file holding every record, like the GenBank input path.
     try:
         records = []
-        for (c, dr), g in zip(processed, genes_by_contig):
+        for (c, dr), g in zip(processed, genes_by_contig, strict=True):
             gb_features = g or _try_annotate(c.seq)
             records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
         outputs.append(GenBankWriter().write_multi(name=cfg.name, records=records, out_dir=cfg.out_dir))
@@ -299,9 +319,11 @@ def _write_standard_outputs(
 
 
 def run(
-    cfg: RunConfig, raw: str | None = None,
-    *, on_window: "Callable[[], None] | None" = None,
-    on_contig: "Callable[[Contig], None] | None" = None,
+    cfg: RunConfig,
+    raw: str | None = None,
+    *,
+    on_window: Callable[[], None] | None = None,
+    on_contig: Callable[[Contig], None] | None = None,
 ) -> RunResult:
     """Run the full pipeline and write all output files (output set depends on input kind).
 
@@ -327,11 +349,16 @@ def run(
     try:
         for contig in loaded.contigs:
             notices += validate_context(
-                context_length=cfg.context_length, ceiling=cfg.max_len, seq_len=len(contig.seq),
+                context_length=cfg.context_length,
+                ceiling=cfg.max_len,
+                seq_len=len(contig.seq),
             )
             dr = analyze_direction(
-                predictor, contig.seq,
-                context_length=cfg.context_length, ceiling=cfg.max_len, direction=cfg.direction,
+                predictor,
+                contig.seq,
+                context_length=cfg.context_length,
+                ceiling=cfg.max_len,
+                direction=cfg.direction,
                 on_window=on_window,
             )
             notices += dr.notices

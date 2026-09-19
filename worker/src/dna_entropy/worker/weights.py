@@ -37,7 +37,7 @@ def restore_from_cache(store: Blobstore, model_id: str, local_dir: Path) -> int:
     prefix = cache_prefix(model_id)
     paths = store.list_prefix(prefix)
     for p in paths:
-        rel = p[len(prefix):]
+        rel = p[len(prefix) :]
         store.download_file(p, local_dir / rel)
     return len(paths)
 

@@ -19,7 +19,6 @@ from dna_entropy.worker.cli import (
     build_parser,
     main,
 )
-from dna_entropy.worker.manifest import JobManifest
 
 
 def _write_manifest(job_dir: Path) -> None:
@@ -85,7 +84,9 @@ def test_run_gcs_accepts_deg_job_uri_env_var(tmp_path: Path, monkeypatch: pytest
     assert code == EXIT_FAILED  # fails trying to reach the (nonexistent) network, not on arg parsing
 
 
-def test_run_missing_store_args_exits_failed_not_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_missing_store_args_exits_failed_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("DEG_LOCAL_ROOT", raising=False)
     code = main(["run", "--store", "localdir"])
     assert code == EXIT_FAILED
@@ -117,10 +118,17 @@ def test_manifest_flag_is_accepted_but_does_not_change_where_the_store_reads_fro
     root (same relative layout the script already staged it at)."""
     _write_manifest(tmp_path)
     _seed_input(tmp_path)
-    code = main([
-        "run", "--manifest", str(tmp_path / "manifest.json"),
-        "--store", "localdir", "--root", str(tmp_path),
-    ])
+    code = main(
+        [
+            "run",
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--store",
+            "localdir",
+            "--root",
+            str(tmp_path),
+        ]
+    )
     assert code == EXIT_DONE
 
 
