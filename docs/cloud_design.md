@@ -1,12 +1,13 @@
 # Cloud design: preflight, zone selection, error classes, labels, cost, termination
 
-**Status: specification, not yet implemented.** `DnaEntropyGraph.Cloud` does not exist yet
-(`app/` is issue #61 and its siblings). This doc is the reference the C# gateways, the
-zone ladder (`GpuPlanner`, issue #86), the setup health checks (issue #204), and the error
-classifier (issue #57) are built against. Authoritative detail lives in
-[Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this doc is the
-"what a developer needs while implementing" summary with the tables filled in, not a
-shorter copy of the whole appendix.
+**Status: `DnaEntropyGraph.Cloud` exists.** Issues #49 (FakeGcp's scripted failures), #55
+(`VmSpec`'s label/name guard) and #57 (`CloudErrorClassifier`) landed against this doc as
+their reference. Still not built: the zone ladder (`GpuPlanner`, issue #86), the setup
+health checks (issue #204), and a real (non-fake) gateway implementation against
+`Google.Cloud.Compute.V1` - `DnaEntropyGraph.Cloud` today holds only `FakeGcp`. Authoritative
+detail lives in [Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this
+doc is the "what a developer needs while implementing" summary with the tables filled in,
+not a shorter copy of the whole appendix.
 
 ---
 
@@ -50,6 +51,25 @@ b-cloud-design.md` section 2.2) - the same four checks run at first-run setup, b
 every run (fast, cached 10 minutes), and inside the zone ladder's own abort logic
 (section 3).
 
+**Gap, filed as issue #388:** step 1 ("project ACTIVE") has no interface method anywhere
+in `Core/Cloud` today - `IProjectSetupGateway` only has `IsBillingEnabledAsync`,
+`IsComputeApiEnabledAsync` and `EnableComputeApiAsync`. A caller implementing this chain
+literally cannot express its own first step until that gap is closed.
+
+**Implemented** (`app/src/DnaEntropyGraph.Cloud/FakeGcp.cs`, issue #49): every project-wide
+step this section names except step 1 (the gap above) can be scripted on `FakeGcp` with a
+fluent one-liner - `WithBillingOff(projectId)`, `WithComputeApiOff(projectId)`
+(`EnableComputeApiAsync` clears it, mirroring the real API's idempotent enable),
+`WithPermissionDenied(projectId)`, `WithOrgPolicyBlocked(projectId)` - plus the per-zone/
+per-region steps 4-5's failure shapes: `WithZoneStockout(zone, times)`,
+`WithQuotaExceededOnCreate(zone, times)`, `WithGpuQuota(region, accelerator, available)`
+and `WithAllRegionsGpuCap(cap)` (the `GPUS_ALL_REGIONS` override from section 6 below),
+plus `WithAlreadyExists`, `WithNetworkFailures` and `WithPreemption` for the failure shapes
+outside the preflight chain proper. Every one of these throws the same
+`CloudOperationException`/`CloudError` shape section 5's classifier consumes -
+`FakeGcpScriptedFailureTests.cs` round-trips several of them back through
+`CloudErrorClassifier.Classify` to prove the two agree.
+
 ## 3. Zone and GPU-tier selection (the ladder)
 
 Reference implementation to port: `worker/legacy/cloud/orchestrator.py`'s `_create_box`
@@ -76,6 +96,15 @@ per-region quota memory, persisted per project instead of the prototype's
  zones - names are zonal, so this is safe - and any extra winner from a race is deleted
  immediately via an `aggregatedList` filtered to that exact name, except a VM that
  already existed before this job started (adopted, not created by this attempt).
+
+ THEORY (unverified), filed as issue #389: this same "name is only unique per zone"
+ property that makes a same-zone retry safe (an ALREADY_EXISTS response is adopted, per
+ section 5's table) may make a **crash between zone attempts** unsafe: if the app dies
+ after a create in zone A succeeds but before it durably records which zone it used, a
+ resumed ladder that tries zone B next has no ALREADY_EXISTS signal to catch the
+ duplicate, because zone B's Insert genuinely has never seen that name before. The
+ ladder's implementation (#86) needs to record the attempted zone before the Insert call
+ returns, not after, for issue #257's "never a duplicate VM" to hold across a crash.
 5. **A project-wide error (billing, API disabled, permission, org policy) aborts the
  entire ladder at the first sighting**, with the exact structured error and one
  remediation action - retrying a different zone cannot fix a project-wide problem, so
@@ -98,15 +127,43 @@ label; `job-id` and `installation-id` are what make a resource individually addr
 and correctly attributable to the PC/account that created it; `deg-` is the name prefix
 the worker service account's IAM condition keys on (section 7 below).
 
+**Implemented** (`app/src/DnaEntropyGraph.Core/Cloud/VmSpec.cs`, issue #55):
+`VmSpec.EnsurePreconditions()` rejects a spec missing any of the six labels or
+`maxRunDuration`/`instanceTerminationAction` **before** `VmName`/`ToLabels()` is ever
+called, and additionally rejects a value the real Compute API would itself reject: a
+label value outside `^[a-z0-9_-]{1,63}$` (five of the six labels - `app-version` is
+sanitized instead, see issue #387's DECISION, since a semantic version like `0.1.0`
+naturally contains a dot), and a computed `VmName` (`deg-<jobId>`) outside Compute
+Engine's resource-name charset (a job id containing an underscore, for example, is a
+valid label value but not a valid resource-name fragment - `VmSpecTests` has a case for
+exactly this). `VmSpec` also gained a required `ProjectId` field (issue #386's DECISION)
+and `IComputeGateway.CreateVmAsync` now takes the target `zone` as its own parameter,
+matching `GetVmAsync`/`StopVmAsync`/`DeleteVmAsync`. `JobId.NewId()`
+(`app/src/DnaEntropyGraph.Core/Cloud/JobId.cs`) generates the `yyyymmdd-hhmmss-<6
+lowercase base32 chars>` convention; `VmSpec` does not require an externally-supplied job
+id to match that exact convention, only that it is safe as a label value and inside the
+computed resource name - the two are deliberately separate contracts.
+
 ## 5. Error classification
 
 Structured-error successor to the prototype's stderr-substring `classify_create_error`
 (`worker/legacy/cloud/gcloud.py`; the exact bucket conditions and the 20+ test cases that
 specify them are preserved as JSON fixtures at
-`tests/contract-fixtures/cloud_error_classification.json`, consumed by C# issue #213). The
-C# classifier (issue #57) reads `Operation.Error` codes and HTTP status from
-`Google.Cloud.Compute.V1`/`GoogleApiException` directly, rather than parsing text, wherever
-a structured code exists.
+`tests/contract-fixtures/cloud_error_classification.json`, consumed by C# issue #213).
+**Implemented**: `DnaEntropyGraph.Core.Cloud.CloudErrorClassifier.Classify(CloudError)`
+(`app/src/DnaEntropyGraph.Core/Cloud/CloudErrorClassifier.cs`), checking structured
+`Code`/`HttpStatus` first per the table below and falling back to the fixture's own
+substring evaluation order only where neither is populated - see that file's own doc
+comment for the exact two-stage algorithm and
+`app/tests/DnaEntropyGraph.Cloud.Tests/CloudErrorClassifierTests.cs` for the fixture-driven
+theory plus the structured-signal cases the fixture cannot express (it is stderr-only).
+`CloudError` is Core's own Google-free DTO (Hard Rule 7): a real gateway in
+`DnaEntropyGraph.Cloud` is responsible for mapping a real `Operation.Error`/
+`RpcException`/`GoogleApiException` into it before this classifier ever runs - no such
+mapping exists yet (there is no real, non-fake gateway implementation), only
+`FakeGcp`, which constructs `CloudError` directly when scripting a failure.
+**Not yet consumed by any caller**: the runner (#58) and the Health page (#208) are the
+two callers this classifier exists for, and neither is built yet.
 
 | Signal | Class | Ladder behaviour |
 |---|---|---|

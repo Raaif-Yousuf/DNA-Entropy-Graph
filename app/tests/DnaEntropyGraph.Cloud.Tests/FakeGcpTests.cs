@@ -7,7 +7,10 @@ namespace DnaEntropyGraph.Cloud.Tests;
 
 public class FakeGcpTests
 {
+    private const string Zone = "us-central1-a";
+
     private static VmSpec ValidSpec(string jobId) => new(
+        ProjectId: "fake-project",
         InstallationId: "install-1",
         JobId: jobId,
         Model: "evo2_7b",
@@ -22,7 +25,7 @@ public class FakeGcpTests
     {
         var gcp = new FakeGcp();
 
-        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), CancellationToken.None);
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
         var found = await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None);
 
         found.ShouldNotBeNull();
@@ -33,7 +36,7 @@ public class FakeGcpTests
     public async Task Stopped_vm_is_reported_as_stopped_not_deleted()
     {
         var gcp = new FakeGcp();
-        var created = await gcp.CreateVmAsync(ValidSpec("job-2"), CancellationToken.None);
+        var created = await gcp.CreateVmAsync(ValidSpec("job-2"), Zone, CancellationToken.None);
 
         await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
         var found = await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None);
@@ -46,7 +49,7 @@ public class FakeGcpTests
     public async Task Deleted_vm_is_no_longer_found()
     {
         var gcp = new FakeGcp();
-        var created = await gcp.CreateVmAsync(ValidSpec("job-3"), CancellationToken.None);
+        var created = await gcp.CreateVmAsync(ValidSpec("job-3"), Zone, CancellationToken.None);
 
         await gcp.DeleteVmAsync(created.Name, created.Zone, CancellationToken.None);
         var found = await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None);
@@ -60,7 +63,9 @@ public class FakeGcpTests
         var gcp = new FakeGcp();
         var spec = ValidSpec("job-4") with { InstallationId = "" };
 
-        await Should.ThrowAsync<InvalidOperationException>(() => gcp.CreateVmAsync(spec, CancellationToken.None));
+        await Should.ThrowAsync<InvalidOperationException>(() => gcp.CreateVmAsync(spec, Zone, CancellationToken.None));
+
+        (await gcp.GetVmAsync(spec.VmName, Zone, CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
@@ -70,5 +75,22 @@ public class FakeGcpTests
 
         (await gcp.IsBillingEnabledAsync("fake-project", CancellationToken.None)).ShouldBeTrue();
         (await gcp.IsComputeApiEnabledAsync("fake-project", CancellationToken.None)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Default_gpu_quota_is_one_so_the_unscripted_baseline_still_succeeds()
+    {
+        var gcp = new FakeGcp();
+
+        (await gcp.GetGpuQuotaAsync("fake-project", "us-central1", "nvidia-l4", CancellationToken.None)).ShouldBe(1);
+    }
+
+    [Fact]
+    public void Signed_out_account_reports_no_selected_project()
+    {
+        var gcp = new FakeGcp().WithSignedOut();
+
+        gcp.IsSignedIn.ShouldBeFalse();
+        gcp.SelectedProjectId.ShouldBeNull();
     }
 }
