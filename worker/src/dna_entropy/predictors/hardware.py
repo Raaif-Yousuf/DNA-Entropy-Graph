@@ -31,6 +31,27 @@ class ModelNeedsHopperError(PredictorError):
     code = "MODEL_NEEDS_HOPPER"
 
 
+class UnknownModelError(PredictorError):
+    """``MODEL_UNKNOWN`` (issue #346, DECISION -- agent-made, reversible): the requested
+    model id is not one this build recognizes at all.
+
+    Fails CLOSED rather than the historical "unrecognized id is treated as safe bf16
+    hardware" default: this gate stands between a user and a GPU VM billed by the minute.
+    An unrecognized id is either a typo or a model this build does not yet support, and
+    in both cases refusing here costs the user nothing, while failing open would cost a
+    boot, a weight download, and a confusing failure several minutes later, deep inside
+    Evo2(model) or worse. Always raised BEFORE any weight download begins, and before the
+    Hopper/gpu-count checks below (an unknown id has no requirement to check against).
+
+    Reversible: if a real case turns up where refusing an unrecognized id breaks a
+    legitimate workflow (e.g. a local/custom model id never meant to be in
+    :data:`MODEL_REQUIREMENTS`), that is a new, separate DECISION with its own evidence,
+    not a reason to revert this one silently.
+    """
+
+    code = "MODEL_UNKNOWN"
+
+
 @dataclass(frozen=True)
 class ModelRequirement:
     """Hardware a model id needs, from design section 5.4's model/hardware matrix."""
@@ -120,7 +141,20 @@ def require_hardware(
             named one. ``None`` skips this check entirely (a caller that does not know
             its GPU count yet gets the same behavior this function had before this
             parameter existed, never a false refusal).
+
+    Raises:
+        UnknownModelError: if ``model_id`` is not in :data:`MODEL_REQUIREMENTS` at all
+            (issue #346 DECISION: fail closed on an unrecognized id, checked before
+            anything else below).
+        ModelNeedsHopperError: if a recognized model needs Hopper/more GPUs than offered.
     """
+    if model_id not in MODEL_REQUIREMENTS:
+        supported = ", ".join(sorted(MODEL_REQUIREMENTS))
+        raise UnknownModelError(
+            f"{model_id!r} is not a model this build recognizes. Supported model ids: "
+            f"{supported}. If this is a real, newly released Evo model, it needs to be "
+            "added to predictors/hardware.py's MODEL_REQUIREMENTS table first."
+        )
     req = model_requirement(model_id)
     if not req.needs_hopper:
         return

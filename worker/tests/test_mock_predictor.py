@@ -87,3 +87,39 @@ def test_check_rejects_rows_not_summing_to_one() -> None:
 def test_check_accepts_valid_matrix() -> None:
     good = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
     assert check_probability_matrix(good, seq_len=5) is good
+
+
+# --- NaN diagnosis (issue #347) ---------------------------------------------------------
+#
+# A NaN probability was already CAUGHT before this fix -- it poisons the row sum, and
+# np.allclose(row_sums, 1.0) treats a NaN sum as never close -- but only incidentally,
+# via a message reading "worst deviation nan" that never says NaN was the cause. A GPU
+# bug is the single most likely real source of a NaN row, so the message should say so
+# directly and name which rows, not send the reader looking for a normalization bug.
+
+
+def test_check_rejects_nan_with_a_message_naming_nan() -> None:
+    bad = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[2, 0] = np.nan
+    with pytest.raises(ValueError, match="NaN"):
+        check_probability_matrix(bad, seq_len=5)
+
+
+def test_check_nan_message_names_the_offending_row_indices() -> None:
+    bad = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[2, 0] = np.nan
+    bad[4, 3] = np.nan
+    with pytest.raises(ValueError) as exc:
+        check_probability_matrix(bad, seq_len=5)
+    msg = str(exc.value)
+    assert "2" in msg and "4" in msg
+
+
+def test_check_nan_message_does_not_talk_about_row_sum_deviation() -> None:
+    # Before the fix this fell through to the row-sum branch and reported a confusing
+    # "worst deviation nan" instead of naming NaN as the actual cause.
+    bad = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[0, 0] = np.nan
+    with pytest.raises(ValueError) as exc:
+        check_probability_matrix(bad, seq_len=5)
+    assert "deviation" not in str(exc.value)
