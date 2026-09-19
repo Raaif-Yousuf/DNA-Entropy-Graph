@@ -123,9 +123,9 @@ run-progress or history-row state.
 | `Provisioning` | "Starting a GPU computer" (zone ladder narrated live: "Trying us-central1-a... no L4 capacity, trying us-central1-b") | running, VM not yet billing | Cancel, Stop VM now, Delete VM now | Running |
 | `Preparing` | "Preparing the computer" (first run in a project explains the cache fill: "First run in this project takes longer, about 8 minutes, while the model is cached") | running | Cancel, Stop VM now, Delete VM now | Running |
 | `Running` | "Analysing" (per input, per contig, per window and direction, e.g. "SetTnpB - record 2 of 5 - window 3 of 7, forward") | running | Cancel, Stop VM now, Delete VM now | Running |
-| `Finalizing` | "Saving results" then "Cleaning up" ("Stopping the GPU computer" / "Deleting" / "Keeping running for 30 min") | final estimate shown, ticking stops once the VM's terminal state is verified | disabled (nothing left to stop) | Running |
+| `Finalizing` | "Saving results" | final estimate shown, ticker still running (the VM is not yet confirmed stopped) | disabled (nothing left to stop) | Running |
 | `Downloading` | "Downloading" | final estimate | disabled | Running |
-| `Completed` | (page navigates to Results) | final actual estimate | n/a | Success chip, cost, duration |
+| `Completed` | "Cleaning up" ("Stopping the GPU computer" / "Deleting" / "Keeping running for 30 min") shown briefly, then the page navigates to Results | final actual estimate, ticking stops once the VM's terminal state is verified | n/a | Success chip, cost, duration |
 | `PartiallyCompleted` | (Results, with a banner naming which inputs failed) | final actual estimate | n/a | Warning chip |
 | `Failed(code)` | error card at the stage where it failed, from `ErrorCatalog` | final estimate up to the failure | Delete VM if one still exists | Failure chip, with the error code |
 | `Cancelling` / `Cancelled` | "Cancelled. Partial results kept." | final estimate | disabled | Cancelled chip |

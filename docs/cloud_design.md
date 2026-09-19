@@ -204,7 +204,19 @@ exercise.
 
 - A shipped `pricing.json` per release, refreshed best-effort from the Billing Catalog
  API at most once a day, with the shipped table as the fallback when that refresh fails
- or is stale.
+ or is stale. Seeded from [`docs/research/2026-09-19-gpu-pricing-and-instances.md`](research/2026-09-19-gpu-pricing-and-instances.md)
+ (every figure there is THEORY (unverified), not vendor-confirmed, pending issue #303 and
+ a real browser read of the vendor pricing pages) until issue #214's live lookup ships.
+- **Boot disk**: `pd-balanced`, 150 GB for the default (7B) model tier, 300 GB for the 40B
+ tier (spec section 5.4), autoDelete with the instance. At ~$0.10/GB/month (THEORY
+ (unverified), same research note), this is ~$15/month (150 GB) or ~$30/month (300 GB)
+ while the disk exists, whether the VM is running or stopped, which is why the app's
+ 7-day stopped-VM sweep (spec D10) exists as the backstop against a forgotten Stop, not
+ just the after-task setting itself: see `docs/user_guide/06-costs-and-cleanup.md` for
+ the user-facing version of this same number.
+- A **live ticker** per running job: `(now - lastStartTimestamp) * hourlyRate / 3600 +
+ disk`, labelled "estimate" everywhere it appears, because there is no billing-export
+ access - every number in this app is a modeled estimate, never a real invoice figure.
 - A **live ticker** per running job: `(now - lastStartTimestamp) * hourlyRate / 3600 +
  disk`, labelled "estimate" everywhere it appears, because there is no billing-export
  access - every number in this app is a modeled estimate, never a real invoice figure.

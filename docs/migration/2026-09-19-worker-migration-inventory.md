@@ -87,7 +87,7 @@ Verdict legend: **KEEP** = ships as-is in the worker package · **ADAPT** = kept
 | `worker/src/dna_entropy/readers/paste.py` | `PasteReader`: reads a file path or stdin, no cleaning. | KEEP | Still useful for the worker's manifest-supplied plain-text input path. | Stays. |
 | `worker/src/dna_entropy/validation/__init__.py` | Re-exports validation symbols. | KEEP | Trivial package init. | Stays. |
 | `worker/src/dna_entropy/validation/validators.py` | `validate_sequence()`: normalization, RNA handling, IUPAC ambiguity, length caps, notices. | KEEP | Validation rules are unchanged; §5.6 pushback rules (`K` warn/refuse thresholds) are *additional* checks layered on top, not a replacement. | Stays; new context-length pushback checks are added alongside, not instead. |
-| `worker/src/dna_entropy/writers/__init__.py` | Re-exports writer classes. | ADAPT | Must also export the new `TsvWriter` once it exists (§5.5: "New `TsvWriter`"). | Stays; add the new writer's export. |
+| `worker/src/dna_entropy/writers/__init__.py` | Re-exports writer classes. | ADAPT | Must also export the new `TsvWriter` once it exists (§5.5: "New `TsvWriter`"). | Stays; add the new writer's export. **DONE (#281):** `TsvWriter` added to `writers/tsv.py` and exported here. |
 | `worker/src/dna_entropy/writers/base.py` | `Writer` Protocol, `write_text_lf()` (UTF-8 + LF). | KEEP | Shared writer contract untouched. | Stays. |
 | `worker/src/dna_entropy/writers/bedgraph.py` | `BedGraphWriter`: 0-based half-open bedGraph track, `write`/`write_multi`. | KEEP | Output format unchanged. | Stays. |
 | `worker/src/dna_entropy/writers/fasta.py` | `FastaWriter`: 60-column wrapped FASTA, `write`/`write_multi`. | KEEP | Output format unchanged. | Stays. |
@@ -116,7 +116,7 @@ Verdict legend: **KEEP** = ships as-is in the worker package · **ADAPT** = kept
 | `worker/tests/test_pipeline.py` | 5 tests: end-to-end pipeline on the mock predictor, expected files produced. | ADAPT | Needs new assertions once windowing/direction and the worker run-loop wrap `pipeline.run()`, but the existing single-pass, single-contig assertions remain valid as a baseline (Forward-only mode must still match). | Stays; extended alongside `pipeline.py`'s ADAPT. |
 | `worker/tests/test_readers.py` | 4 tests: stdin/file reading, read+validate wiring. | KEEP | Reader contract unchanged. | Stays. |
 | `worker/tests/test_validation.py` | 16 tests: normalization, alphabet, RNA, ambiguity, length, empty-input. | KEEP | Validation rules unchanged (the new §5.6 pushback checks are additive, tested separately). | Stays. |
-| `worker/tests/test_writers.py` | 8 tests: bedGraph/WIG/FASTA spec correctness. | ADAPT | Needs a companion `test_tsv.py` (or extension here) once `TsvWriter` exists (§5.5). | Stays; extended when `TsvWriter` lands. |
+| `worker/tests/test_writers.py` | 8 tests: bedGraph/WIG/FASTA spec correctness. | ADAPT | Needs a companion `test_tsv.py` (or extension here) once `TsvWriter` exists (§5.5). | Stays; extended when `TsvWriter` lands. **DONE (#281):** `worker/tests/test_tsv.py` added (9 tests: 3-column and 5-column shapes, coordinates, formatting); `test_writers.py` also extended with the `variant` param tests for bedgraph/wig (fwd/rev tracks). |
 
 ### `worker/scripts/`
 

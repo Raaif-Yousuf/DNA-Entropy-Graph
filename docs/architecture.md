@@ -98,9 +98,17 @@ Local target: Validating -> PreparingEngine -> Running -> Downloading(copy) -> C
  `booting` status write. **`Preparing`** spans the worker's `installing`
  (image pull), `restoring-cache`, and `model-loading` stages. **`Running`** spans the
  worker's own per-input `validating`/`running`/`writing`. **`Finalizing`** spans the
- worker's `uploading` stage through its terminal status write, then the app's
- verification of the after-task lifecycle action. See `job_contract.md` section 4 for
- the worker-side stage names these app-side phases wrap.
+ worker's `uploading` stage through its terminal status write, i.e. it ends once
+ `result.json` exists and every output object is confirmed uploaded to the bucket ("Saving
+ results" in the plain-language stage list below). The app's verification of the
+ after-task lifecycle action (stopping or deleting the VM, "Cleaning up") happens **after**
+ `Downloading`, not before it, matching the order the user actually sees results appear
+ first and the rented computer's fate confirmed last: `docs/superpowers/specs/2026-09-18-
+ dna-entropy-graph-design.md` section 4.4's own plain-language stage list is "Checking your
+ files, Uploading, Starting a GPU computer, Preparing the computer, Analysing, Saving
+ results, Downloading, Cleaning up", in that order, and `docs/user_guide/03-run.md` follows
+ it exactly. See `job_contract.md` section 4 for the worker-side stage names these
+ app-side phases wrap.
 - A separate `VmLifecycle` state machine (one per `CloudResources` row) tracks the VM
  itself independently of any one job: `Creating -> Running -> Stopping -> Stopped ->
  Deleting -> Deleted`, plus `KeepAlive(untilUtc)` - this is what lets the Cloud page show

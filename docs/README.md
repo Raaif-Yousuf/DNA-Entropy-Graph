@@ -61,8 +61,8 @@ Full description of what each carries: [`.claude/README.md`](../.claude/README.m
 | What shipped, newest first | [`sprint_log.md`](sprint_log.md) |
 | The branch-to-sprint-log write path | [`changelog.d/README.md`](changelog.d/README.md) |
 | Dated design specs | [`superpowers/specs/`](superpowers/specs/) |
-| Dated research notes | `docs/research/YYYY-MM-DD-<slug>.md` — starts empty; no directory exists until the first note is written, per the template skeleton below |
-| For the lab user (separate voice, no jargon) | [`user_guide/README.md`](user_guide/README.md) |
+| Dated research notes | [`research/`](research/) — one file per note, `YYYY-MM-DD-<slug>.md`, per the template skeleton below |
+| For the lab user (separate voice, no jargon) | [`user_guide/`](user_guide/) — start at `README.md` inside it |
 
 ## House style: who owns which fact
 
