@@ -93,6 +93,70 @@ way too, even though the predicted identity is not - see section 3.
 
 ---
 
+## 2b. Surprisal: what the model thought of the base that is actually there
+
+**Status: implemented (issue #123, closed).** `analysis/surprisal.py` computes it;
+`analysis/direction.py` combines it by the identical forward/reverse selection rule as
+entropy (section 3); every writer in section 5 emits it when `include_surprisal` is on
+(the default). `--surprisal`/`--no-surprisal` on the CLI, `include_surprisal` on
+`RunConfig`.
+
+```python
+def surprisal(probs: np.ndarray, seq: str) -> np.ndarray:
+    """probs: (L, 4), seq: length-L actual sequence -> surprisal (L,) in bits.
+    S[i] = -log2(P(actual base at i)), clamped to [0.0, MAX_SURPRISAL_BITS=20.0]."""
+```
+
+Entropy says how uncertain the model was **before** seeing the real base; surprisal says
+how surprised it was **after**. They usually move together, but a position where they
+diverge - **low entropy (the model was confident) and high surprisal (it was confident and
+WRONG)** - is exactly the mutation-spotting signal this issue asks for: the model expected
+a conserved base here and the real sequence has something else. A biologist scanning for
+that pattern wants both tracks loaded side by side, not entropy alone.
+
+Two decisions worth naming:
+
+- **Unbounded above, unlike entropy's `[0.0, 2.0]`.** As `P -> 0`, `-log2(P) -> infinity`;
+  `MAX_SURPRISAL_BITS = 20.0` (`P <= 2**-20`, far below any real Evo prediction) clamps
+  this to a finite, documented ceiling rather than leaving a viewer axis to whatever a
+  run's data happens to contain. A value pinned at the ceiling means "the model was
+  confident and wrong beyond what this track bothers to distinguish further," not a
+  literal probability.
+- **An IUPAC ambiguity code (`N`, `R`, `Y`, ...) has no single "actual base" to index into
+  the `(L, 4)` contract.** DECISION (agent-made, reversible): falls back to the row's
+  Shannon entropy there, which is not an arbitrary choice - entropy IS the model's own
+  EXPECTED surprisal (`entropy = E_p[-log2 p]` by definition), so it is the mathematically
+  principled value to report when the true base is unknown, and it stays bounded in
+  `[0.0, 2.0]` like the rest of the ambiguous-position handling in section 4, rather than
+  requiring a new ambiguity-set decode table this issue never asked for.
+
+Row 0 in Forward-only mode is uniform (`2.0` bits, section 3) by design, so surprisal
+there is exactly `2.0` for ANY actual base - not a bug to special-case away.
+
+`SurprisalSummary` (`length, mean, total_log_likelihood_bits, defined_count`) mirrors
+`EntropySummary`'s per-contig role: `mean` is over the WHOLE track (ambiguity-fallback
+positions included, matching `EntropySummary`'s own convention), while
+`total_log_likelihood_bits = sum(log2 P(actual base))` and `defined_count` count only
+positions with a real A/C/G/T (an ambiguity-fallback position is not a real observation of
+a specific symbol, so it contributes no log-likelihood term). `stats.txt`/`<name>.summary.txt`
+report both when `include_surprisal` is on (section 5).
+
+Zero extra GPU cost: surprisal is computed from the SAME `(L, 4)` probability matrix and
+the SAME predictor calls entropy already used - no second forward pass, no extra
+windowing (Hard Rule 4 is unaffected either way).
+
+**Known scope limit (not a bug, tracked separately):** the TSV's `Both, separate tracks`
+5-column shape (section 5) does not yet grow forward/reverse surprisal columns - only the
+plain (3/4-column) shape does. `DirectionResult` deliberately has no
+`forward_surprisal`/`reverse_surprisal` pair (unlike `forward_values`/`reverse_values`):
+an early draft of this wiring added one, `scripts/check_unused_fields.py` immediately
+flagged both fields as genuinely unread (no writer consumed them), and they were removed
+rather than left "for a future writer" - the exact bug class this repo hunts, caught by
+its own guard within the same session. A future writer that wants per-direction surprisal
+computes it locally from the already-available `fwd.probs`/`rev.probs`.
+
+---
+
 ## 3. Long sequences: context length, windowing, and bidirectional prediction
 
 **Status: implemented (worker issue #279, closed).** `analysis/windowing.py` and
@@ -398,9 +462,10 @@ transform.
 | `<name>.entropy.bedgraph` | bedGraph | **0-based, half-open**: row `chrom start end value` where base `i` (0-based) covers `[start_coord - 1 + i, start_coord + i)` | Full-resolution per-position entropy, one row per base per direction requested. `chrom` matches the FASTA contig name so IGV lines the track up automatically. IGV's default track for this data. | MEASURED, `writers/bedgraph.py` |
 | `<name>.entropy.wig` | WIG (`fixedStep`) | **1-based**: `fixedStep chrom=<name> start=<start> step=1 span=1`, then one value per line | The same full-resolution entropy track as bedGraph, in the alternate WIG format some tools prefer. | MEASURED, `writers/wig.py` |
 | `<name>.entropy.geneious.gff3` | GFF3 | **1-based, inclusive**: one 1 bp feature per position, `pos = start - 1 + i + 1`, **or**, above `DEFAULT_MAX_PER_BASE_FEATURES` (200,000) combined positions, one feature per fixed-size bin (mean entropy), `[start - 1 + bin_start + 1, start - 1 + bin_end]` | Full-resolution entropy as a GFF3 feature track, because **Geneious Prime imports GFF3 but not WIG or bedGraph as a graph track** (in Geneious those are export-only, from the Graphs tab). Each feature carries the entropy value in both the GFF3 score column and an `entropy`/`entropy_mean` qualifier; shade the track with Geneious's *Color by / Heatmap* on either. **Large-sequence binning (issue #296):** MEASURED 2026-09-19, an unbinned 1,000,000-position track is 87.78 MB / 1.587s to write; above the threshold the writer switches to mean-entropy bins instead (both a 1,000,000- and a 10,000,000-position run land at ~22-23 MB), and records a `# NOTE` line in the file saying so. `GeneiousWriter.write(..., max_per_base_features=None)` forces unbinned, full-resolution output regardless of length. | MEASURED (prototype team; recorded in `worker/docs-legacy/DESIGN.md` and the docstring of `writers/geneious.py`) |
+| `<name>.surprisal.bedgraph` / `.wig` / `.geneious.gff3` | same three formats as the entropy tracks above, byte-identical layout | Same, but the value at each position is surprisal (section 2b), not entropy - the `entropy`/`Shannon entropy` label and `H=` qualifier become `surprisal`/`Surprisal: -log2 P(actual base)` and `S=`. Written whenever `include_surprisal` is on (the default; `--no-surprisal` on the CLI omits all three plus the TSV column below). | MEASURED 2026-09-19, `writers/bedgraph.py`/`wig.py`/`geneious.py` (`metric="surprisal"`), issue #123 |
 | `<name>.genes.gff3` | GFF3 | **1-based, inclusive**: `f.begin + offset` .. `f.end + offset` where `offset = start - 1` | Gene features on the same contig and coordinate frame as the entropy track: the input's own genes for GenBank input (`source=genbank`, written only when the input actually carries genes), or Prodigal's predictions for FASTA/paste input with `--genes` on (`source=pyrodigal`). Column-9 attribute values (gene ids/names) are percent-encoded per the GFF3 spec's reserved set - `;`, `=`, `&`, `,`, tab, newline, and `%` itself (escaped first, so it is never re-escaped and a literal `%` can never be misread as the start of another escape). | MEASURED, `writers/gff.py` |
-| `stats.txt` (GenBank input) / `<name>.summary.txt` (FASTA/paste input) | plain text | n/a | Per-contig `EntropySummary`: length, mean, min, max, and the 0-based array index of each extreme (see section 2 - add `start` to get a genomic position). When windowing/direction provenance is supplied, also records context length (K), window (W), stride (S), the GPU per-window ceiling the run used, direction, seam position, and any reduced-context count - the same derived numbers, not recomputed. | MEASURED, `writers/summary.py` |
-| `<name>.entropy.tsv` | TSV | **1-based, inclusive**, matching WIG and both GFF3 flavours - see note below | Per-position entropy in a plain, spreadsheet-friendly table, one row per base. | MEASURED 2026-09-19, `writers/tsv.py` |
+| `stats.txt` (GenBank input) / `<name>.summary.txt` (FASTA/paste input) | plain text | n/a | Per-contig `EntropySummary`: length, mean, min, max, and the 0-based array index of each extreme (see section 2 - add `start` to get a genomic position). When `include_surprisal` is on, also reports `SurprisalSummary`'s mean and total log-likelihood (section 2b). When windowing/direction provenance is supplied, also records context length (K), window (W), stride (S), the GPU per-window ceiling the run used, direction, seam position, and any reduced-context count - the same derived numbers, not recomputed. | MEASURED, `writers/summary.py` |
+| `<name>.entropy.tsv` | TSV | **1-based, inclusive**, matching WIG and both GFF3 flavours - see note below | Per-position entropy (and surprisal, when `include_surprisal` is on) in a plain, spreadsheet-friendly table, one row per base. | MEASURED 2026-09-19, `writers/tsv.py` |
 
 **A note on the Entropy TSV's shape (issue #281/#46, closed):** this doc proposed the
 convention before `TsvWriter` existed, so the first implementation had a shape to land in
@@ -417,6 +482,11 @@ style positions by a biologist, not fed to a half-open-aware parser. A multi-rec
 stays exactly 3 (or 5) columns rather than growing a `contig` column: each contig's block
 is introduced by a `# contig: <name>` comment line, and position numbering restarts at
 `start` for each contig, the same per-contig coordinate frame bedGraph/WIG already use.
+
+**Issue #123's surprisal column:** the plain (non-`Both, separate tracks`) shape grows a
+4th column, `position\tbase\tentropy_bits\tsurprisal_bits`, when `include_surprisal` is on
+(the default). The `Both, separate tracks` 5-column shape does not yet grow surprisal
+columns - see section 2b's "known scope limit."
 
 **Multi-record input**: per spec decision D14, all FASTA records are processed (the
 prototype processed only the first); GenBank multi-record input was already handled via

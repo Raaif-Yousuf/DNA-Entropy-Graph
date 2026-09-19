@@ -96,6 +96,43 @@ def test_geneious_gff3_respects_start_offset(tmp_path: Path) -> None:
     assert lines[2].split("\t")[3] == "100"
 
 
+# --- issue #123: metric="surprisal" reuses these writers for the surprisal track -------
+
+
+def test_bedgraph_surprisal_metric_names_a_different_file_with_a_different_label(tmp_path: Path) -> None:
+    path = BedGraphWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), metric="surprisal"
+    )
+    assert path.endswith("locus.surprisal.bedgraph")
+    text = Path(path).read_text(encoding="utf-8")
+    assert "surprisal" in text.splitlines()[0].lower()
+    assert "entropy" not in text.splitlines()[0].lower()
+    # The default (no metric) path is unaffected.
+    default_path = BedGraphWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path)
+    )
+    assert default_path.endswith("locus.entropy.bedgraph")
+
+
+def test_wig_surprisal_metric_names_a_different_file(tmp_path: Path) -> None:
+    path = WigWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), metric="surprisal"
+    )
+    assert path.endswith("locus.surprisal.wig")
+
+
+def test_geneious_surprisal_metric_names_a_different_file_and_feature_type(tmp_path: Path) -> None:
+    path = GeneiousWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), metric="surprisal"
+    )
+    assert path.endswith("locus.surprisal.geneious.gff3")
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    first = lines[2].split("\t")
+    assert first[2] == "surprisal"
+    assert "surprisal=0.0000" in first[8]
+    assert "S=0.0000" in first[8]  # short qualifier prefix, distinct from entropy's "H="
+
+
 # --- large-sequence binning (issue #296) -----------------------------------------------
 #
 # MEASURED 2026-09-19: an unbinned 1,000,000-position track (via the ORIGINAL, one-line-
@@ -262,6 +299,55 @@ def test_summary_records_the_ceiling_used(tmp_path: Path) -> None:
     )
     text = Path(path).read_text(encoding="utf-8")
     assert "ceiling" in text and "8192" in text
+
+
+def test_summary_records_surprisal_mean_and_log_likelihood_when_given(tmp_path: Path) -> None:
+    from dna_entropy.analysis.surprisal import summarize_surprisal
+    from dna_entropy.analysis.surprisal import surprisal as compute_surprisal
+
+    probs = np.array([[1.0, 0.0, 0.0, 0.0], [0.25, 0.25, 0.25, 0.25]], dtype=np.float32)
+    s_values = compute_surprisal(probs, "AA")
+    s_summary = summarize_surprisal(s_values, seq="AA")
+    path = SummaryWriter().write(
+        name="locus",
+        values=VALUES,
+        seq=SEQ,
+        start=1,
+        out_dir=str(tmp_path),
+        surprisal=s_summary,
+    )
+    text = Path(path).read_text(encoding="utf-8")
+    assert "surprisal mean:" in text and "1.0000" in text
+    assert "log-likelihood:" in text and "-2.0000" in text
+    assert "2 defined position" in text
+
+
+def test_summary_omits_surprisal_section_by_default(tmp_path: Path) -> None:
+    path = SummaryWriter().write(name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path))
+    text = Path(path).read_text(encoding="utf-8")
+    assert "surprisal" not in text.lower()
+
+
+def test_summary_write_multi_records_surprisal_per_contig(tmp_path: Path) -> None:
+    from dna_entropy.analysis.surprisal import summarize_surprisal
+    from dna_entropy.analysis.surprisal import surprisal as compute_surprisal
+
+    probs_a = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    probs_b = np.array([[0.25, 0.25, 0.25, 0.25]], dtype=np.float32)
+    sum_a = summarize_surprisal(compute_surprisal(probs_a, "A"), seq="A")
+    sum_b = summarize_surprisal(compute_surprisal(probs_b, "A"), seq="A")
+    path = SummaryWriter().write_multi(
+        name="multi",
+        sections=[
+            ("chrom_1", np.array([0.0], dtype=np.float32)),
+            ("chrom_2", np.array([2.0], dtype=np.float32)),
+        ],
+        start=1,
+        out_dir=str(tmp_path),
+        surprisal=[sum_a, sum_b],
+    )
+    text = Path(path).read_text(encoding="utf-8")
+    assert text.count("surprisal mean:") == 2  # one per contig, no overall-block section
 
 
 def test_summary_records_reduced_context_note_when_present(tmp_path: Path) -> None:

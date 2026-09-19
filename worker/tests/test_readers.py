@@ -7,6 +7,9 @@ from pathlib import Path
 from dna_entropy.config import RunConfig
 from dna_entropy.pipeline import load_and_validate
 from dna_entropy.readers import PasteReader, Reader
+from dna_entropy.readers.fasta import FastaReadError
+from dna_entropy.readers.genbank import GenBankReadError
+from dna_entropy.validation.validators import ValidationError
 
 
 def test_paste_reader_satisfies_protocol() -> None:
@@ -76,3 +79,44 @@ def test_pipeline_load_and_validate_with_raw_override() -> None:
     # raw provided => no file/stdin read needed
     result = load_and_validate(RunConfig(), raw="atgcatgcat")
     assert result.seq == "ATGCATGCAT"
+
+
+# --- #391: a malformed FASTA/GenBank must classify as INPUT_INVALID, not WORKER_CRASH --
+#
+# worker/worker/runner.py's exception classifier (not owned by this lane this round) does
+# `isinstance(exc, (ValidationError, PredictorError, ManifestError, BlobstoreError))` ->
+# INPUT_INVALID, else WORKER_CRASH. FastaReadError/GenBankReadError used to subclass
+# ValueError directly, missing that tuple entirely, so a headerless FASTA or a corrupt
+# GenBank reported the generic, unhelpful WORKER_CRASH -- "the worker crashed" -- instead
+# of INPUT_INVALID -- "your file is invalid" -- even though the real cause is exactly a
+# bad file, the situation ValidationError already reports correctly. Fixed by making both
+# read-error classes ValidationError subclasses (the issue's own "shared base class"
+# option), which requires editing nothing in runner.py: isinstance is structural, so
+# runner.py's EXISTING tuple already matches the moment the base class changes.
+
+
+def test_fasta_read_error_is_a_validation_error() -> None:
+    """Proves the fix the way it actually takes effect: `isinstance` against the REAL
+    `ValidationError` runner.py already checks for (imported here directly, not
+    reimplemented), so this fails if the class hierarchy reverts even though nothing in
+    runner.py itself is touched or re-tested here."""
+    assert issubclass(FastaReadError, ValidationError)
+    assert isinstance(FastaReadError("boom"), ValidationError)
+
+
+def test_genbank_read_error_is_a_validation_error() -> None:
+    assert issubclass(GenBankReadError, ValidationError)
+    assert isinstance(GenBankReadError("boom"), ValidationError)
+
+
+def test_worker_runners_actual_classifier_tuple_now_matches_both_read_errors() -> None:
+    """The strongest proof available from inside this lane's owned files: import
+    runner.py's OWN `ValidationError` name (the exact object its isinstance tuple checks
+    against, not a reimplementation) and confirm both read-error classes satisfy it. A
+    full run_job()/result.json integration test (the issue's own literal Done-when
+    wording) belongs in worker/tests/test_worker_runner.py, which this lane does not own
+    this round -- flagged in the report rather than edited here."""
+    from dna_entropy.worker import runner as runner_mod
+
+    assert isinstance(FastaReadError("boom"), runner_mod.ValidationError)
+    assert isinstance(GenBankReadError("boom"), runner_mod.ValidationError)

@@ -9,15 +9,61 @@ each record's sequence and maps its ``gene`` (or, failing that, ``CDS``) feature
 
 from __future__ import annotations
 
+import traceback
 from dataclasses import dataclass, field
 
 from ..annotators.base import GeneFeature
 from ..redact import describe_len
+from ..validation.validators import ValidationError
 from .encoding import read_text
 
 
-class GenBankReadError(ValueError):
-    """Raised when a GenBank file has no usable sequence record."""
+class GenBankReadError(ValidationError):
+    """Raised when a GenBank file has no usable sequence record.
+
+    Issue #391: subclasses :class:`~dna_entropy.validation.validators.ValidationError`
+    (itself a `ValueError`), not `ValueError` directly, so that
+    `worker/runner.py`'s existing `isinstance(exc, (ValidationError, ...))` classifier
+    -- unedited by this change, since `isinstance` is structural -- reports
+    `INPUT_INVALID` ("your file is invalid") rather than falling through to the generic
+    `WORKER_CRASH` ("the worker crashed"). The real cause of a malformed GenBank is
+    exactly the situation `ValidationError` already exists to report correctly.
+    """
+
+
+def _describe_bare_assertion(exc: AssertionError) -> str:
+    """Recover a true, non-empty reason from a bare (message-less) `AssertionError`.
+
+    Issue #403: several of `Bio.GenBank.Scanner`'s internal `assert` statements carry no
+    message (e.g. `assert len(qualifiers) > 0`, `assert key == qualifiers[-1][0]` in its
+    feature-table parser), so `str(exc)` is `""` and a naive `f"...: {exc}."` wrap left a
+    fact-free gap: `'Could not parse the GenBank file: . Check...'`. Hard Rule 13's
+    principle -- every error names one action the user can take -- means silence here is
+    not acceptable even though the *next* sentence already names an action; the reason
+    slot itself must say something true.
+
+    Biopython's own internal state (which INPUT line it had reached) is not exposed to a
+    caller of the high-level `Bio.SeqIO.parse()`, so this cannot recover the user's exact
+    line number. What IS recoverable for free, via the exception's own traceback, is the
+    Biopython SOURCE line the assertion fired on. For the one shape #368's own Hypothesis
+    fuzzing actually found reachable through malformed GenBank content (a feature
+    qualifier continuation line missing its leading `/`), that source line lets us name
+    the real, checkable cause directly. For any other bare assertion, naming the internal
+    check itself is still strictly better than silence -- concrete enough to search or to
+    paste into a bug report, even though it is Biopython's code, not the user's file.
+    """
+    frames = traceback.extract_tb(exc.__traceback__)
+    biopython_frames = [f for f in frames if "Bio" in f.filename and f.line]
+    source_line = biopython_frames[-1].line if biopython_frames else None
+
+    if source_line and "qualifiers" in source_line:
+        return (
+            "a feature qualifier line appears to be missing its leading '/' "
+            "(Biopython expected a continuation of the previous qualifier)"
+        )
+    if source_line:
+        return f"an internal GenBank format check failed ({source_line!r})"
+    return "an internal GenBank format check failed with no further detail available"
 
 
 @dataclass
@@ -170,8 +216,16 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         # third-party parser to escape from) -- this is GenBank agreeing with FASTA's
         # blanket guarantee that a malformed file never reaches the caller as a raw
         # traceback, only ever as a *ReadError naming one action.
+        # #403: str(exc) is empty for a bare AssertionError, which used to leave this
+        # message reading "Could not parse the GenBank file: . Check..." -- a fact-free
+        # gap. _describe_bare_assertion recovers a true, non-empty reason in that case;
+        # a ValueError already carries real text from Biopython, so it passes through.
+        if isinstance(exc, AssertionError) and not str(exc):
+            reason = _describe_bare_assertion(exc)
+        else:
+            reason = str(exc)
         raise GenBankReadError(
-            f"Could not parse the GenBank file: {exc}. Check the file was not truncated "
+            f"Could not parse the GenBank file: {reason}. Check the file was not truncated "
             "or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
         ) from exc
     if not parsed:

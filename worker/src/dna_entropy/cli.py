@@ -145,6 +145,13 @@ def run(
         "--tsv/--no-tsv",
         help="Also write <name>.entropy.tsv (position, base, entropy; spreadsheet-friendly).",
     ),
+    surprisal: bool = typer.Option(
+        True,
+        "--surprisal/--no-surprisal",
+        help="Also compute per-position surprisal (-log2 P(actual base)) alongside entropy: "
+        "written to the bedgraph/wig/geneious tracks, an extra TSV column, and stats.txt "
+        "(docs/science_and_formats.md; issue #123). Zero extra GPU cost.",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -179,6 +186,7 @@ def run(
             ambiguity_policy=AmbiguityPolicy(ambiguity),
             genes=genes,
             include_tsv=tsv,
+            include_surprisal=surprisal,
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value

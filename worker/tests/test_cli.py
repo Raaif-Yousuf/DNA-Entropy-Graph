@@ -133,6 +133,37 @@ def test_tsv_flag_default_on_writes_the_tsv_file(tmp_path) -> None:
     assert any(name.endswith(".entropy.tsv") for name in written)
 
 
+def test_no_surprisal_flag_actually_omits_the_surprisal_outputs(tmp_path) -> None:
+    """The same shape of regression guard as test_no_tsv_flag_actually_omits_the_tsv_file:
+    --surprisal/--no-surprisal must actually reach RunConfig.include_surprisal, not just
+    parse (issue #123)."""
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "clisurp", "--out", str(out_dir), "--no-surprisal"],
+        input="ATGCATGCATGCATGCATGCATGCATGCATGC\n",
+    )
+    assert result.exit_code == 0, result.output
+    written = {p.name for p in (out_dir / "clisurp").iterdir()}
+    assert not any("surprisal" in name for name in written)
+    tsv_path = out_dir / "clisurp" / "clisurp.entropy.tsv"
+    assert "surprisal" not in tsv_path.read_text(encoding="utf-8")
+
+
+def test_surprisal_flag_default_on_writes_the_surprisal_outputs(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "clisurpon", "--out", str(out_dir)],
+        input="ATGCATGCATGCATGCATGCATGCATGCATGC\n",
+    )
+    assert result.exit_code == 0, result.output
+    written = {p.name for p in (out_dir / "clisurpon").iterdir()}
+    assert any(name.endswith(".surprisal.bedgraph") for name in written)
+    tsv_path = out_dir / "clisurpon" / "clisurpon.entropy.tsv"
+    assert "surprisal_bits" in tsv_path.read_text(encoding="utf-8")
+
+
 def test_ambiguity_flag_error_actually_refuses_an_ambiguous_sequence(tmp_path) -> None:
     """Regression guard: --ambiguity is a real, wired-through option, not a flag that
     parses but is never passed into RunConfig (issue #249)."""
@@ -204,7 +235,8 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
     # --predictor, --model, --device, --out/-o, --format, --start, --max-len, --rna,
     # --genes/--no-genes, --seed) plus everything added since: --max-total-len and
     # --context-length/-k (windowing, issue #279), --direction (issue #279),
-    # --ambiguity (issue #249), --tsv/--no-tsv (issue #281).
+    # --ambiguity (issue #249), --tsv/--no-tsv (issue #281),
+    # --surprisal/--no-surprisal (issue #123).
     expected = {
         "--input",
         "-i",
@@ -228,6 +260,8 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--no-genes",
         "--tsv",
         "--no-tsv",
+        "--surprisal",
+        "--no-surprisal",
         "--seed",
     }
     assert _declared_option_names("run") == expected

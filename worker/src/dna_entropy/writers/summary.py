@@ -13,6 +13,19 @@ from .base import write_text_lf
 
 if TYPE_CHECKING:  # avoid a hard import cycle risk; only needed for type hints
     from ..analysis.direction import DirectionResult
+    from ..analysis.surprisal import SurprisalSummary
+
+
+def _surprisal_lines(s: SurprisalSummary, *, indent: str = "") -> list[str]:
+    """issue #123: mean surprisal and total log-likelihood, alongside the entropy stats
+    already written above this in both callers. ``defined_count`` is named explicitly
+    (SurprisalSummary's own docstring) because it can be less than the sequence length
+    when ambiguity-fallback positions are excluded from the log-likelihood term."""
+    return [
+        f"{indent}surprisal mean:     {s.mean:.4f} bits",
+        f"{indent}log-likelihood:     {s.total_log_likelihood_bits:.4f} bits "
+        f"({s.defined_count} defined position(s))",
+    ]
 
 
 def _provenance_lines(dr: DirectionResult, *, indent: str = "") -> list[str]:
@@ -44,12 +57,14 @@ class SummaryWriter:
         out_dir: str,
         filename: str | None = None,
         provenance: DirectionResult | None = None,
+        surprisal: SurprisalSummary | None = None,
     ) -> str:
         """Write the summary. ``filename`` overrides the default ``<name>.summary.txt``
         (GenBank runs use ``stats.txt`` per the professor's spec). ``provenance``, when
         given, records the windowing/direction derivation (section 5.6) that produced
         ``values`` — the same derived numbers a future manifest reader should read here
-        rather than recompute."""
+        rather than recompute. ``surprisal`` (issue #123), when given, adds mean surprisal
+        and total log-likelihood alongside the entropy stats above."""
         s = summarize(values)
         lines = [
             "DNA-Entropy summary",
@@ -60,6 +75,8 @@ class SummaryWriter:
             f"entropy min:        {s.minimum:.4f} bits (position {start + s.argmin})",
             f"entropy max:        {s.maximum:.4f} bits (position {start + s.argmax})",
         ]
+        if surprisal is not None:
+            lines += _surprisal_lines(surprisal)
         if provenance is not None:
             lines += _provenance_lines(provenance)
         text = "\n".join(lines) + "\n"
@@ -74,11 +91,14 @@ class SummaryWriter:
         out_dir: str,
         filename: str | None = None,
         provenance: Sequence[DirectionResult] | None = None,
+        surprisal: Sequence[SurprisalSummary] | None = None,
     ) -> str:
         """Write a summary covering several contigs: an overall block, then one per contig.
 
         ``provenance``, when given, must align 1:1 with ``sections`` (one
         :class:`~dna_entropy.analysis.direction.DirectionResult` per contig, section 5.6).
+        ``surprisal`` (issue #123), when given, must also align 1:1 with ``sections`` (one
+        :class:`~dna_entropy.analysis.surprisal.SurprisalSummary` per contig).
         """
         all_values = np.concatenate([v for _, v in sections]) if sections else np.array([0.0])
         overall = summarize(all_values)
@@ -102,6 +122,8 @@ class SummaryWriter:
                 f"  entropy min:      {s.minimum:.4f} bits (position {start + s.argmin})",
                 f"  entropy max:      {s.maximum:.4f} bits (position {start + s.argmax})",
             ]
+            if surprisal is not None:
+                lines += _surprisal_lines(surprisal[i], indent="  ")
             if provenance is not None:
                 lines += _provenance_lines(provenance[i], indent="  ")
             lines.append("")

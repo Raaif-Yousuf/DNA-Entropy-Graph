@@ -12,6 +12,7 @@ from dna_entropy.analysis.direction import (
     run_windowed,
 )
 from dna_entropy.analysis.entropy import shannon_entropy
+from dna_entropy.analysis.surprisal import surprisal as compute_surprisal
 from dna_entropy.config import Direction
 from dna_entropy.predictors.base import PredictorOOMError, check_probability_matrix
 from dna_entropy.predictors.mock import MockPredictor
@@ -118,6 +119,47 @@ class _AlwaysOOM:
 def test_run_windowed_propagates_a_second_oom() -> None:
     with pytest.raises(PredictorOOMError):
         run_windowed(_AlwaysOOM(), "ACGT" * 10, context_length=8, ceiling=16)
+
+
+# --- issue #407: analyze_direction() after a one-sided OOM-halving retry ---------------
+#
+# MEASURED 2026-09-19: filed as THEORY (unverified), then reproduced by hand before this
+# fix. `analyze_direction()` calls `run_windowed` once for forward, once for reverse, on
+# the SAME shared predictor instance; each `run_windowed` call only reacts to ITS OWN OOM
+# (issue #313's halving). When the OOM lands during the FIRST predictor call (the forward
+# pass, since analyze_direction always runs forward before reverse), forward halves its K
+# but reverse -- recovering already, no longer erroring -- runs at the FULL, un-halved K.
+# The pre-fix `_combine` used ONE shared, nominal `context_length` threshold for both
+# `fwd_ok`/`rev_ok`; forward's own achieved context is capped at its new, smaller
+# `window - 1`, which can fall permanently below that stale, larger threshold, so forward
+# NEVER qualifies again for the rest of the sequence even once it re-establishes its own
+# (smaller) K -- combined mode silently collapses to reverse-only past the halving point,
+# with no error. Confirmed by hand: at a position where forward's own post-halving K
+# (`window - stride`) was satisfied but the stale nominal K was not, the pre-fix combined
+# value equalled the REVERSE track, not forward -- fixed by giving `_combine` each
+# direction's own actually-achieved `window - stride` instead of one shared value.
+
+
+def test_both_combined_after_a_forward_only_oom_halving_lets_forward_requalify_at_its_own_k() -> None:
+    seq = _adversarial_seq(20000)
+    K, ceiling = 4096, 16384  # K-bound: old window = 2K = 8192
+
+    shared = _OOMOnceThenOK()  # OOMs on the very first predict() call: the forward pass
+    fwd_only = analyze_direction(
+        _OOMOnceThenOK(), seq, context_length=K, ceiling=ceiling, direction=Direction.FORWARD_ONLY
+    )
+    assert fwd_only.window < 2 * K  # confirms the forward pass really did halve
+
+    k_used_fwd = fwd_only.window - fwd_only.stride
+    probe = k_used_fwd + 10  # qualifies under forward's OWN new K, not under the stale K
+
+    combined = analyze_direction(
+        shared, seq, context_length=K, ceiling=ceiling, direction=Direction.BOTH_COMBINED
+    )
+    # Before the fix this equalled the REVERSE track at `probe` (forward locked out by the
+    # stale, pre-halving K); after the fix, forward qualifies at its own achieved K and
+    # (both directions qualifying here) forward wins, matching the forward-only track.
+    assert np.isclose(combined.values[probe], fwd_only.values[probe], atol=1e-5)
 
 
 # --- analyze_direction: forward-only / reverse-only ------------------------------------
@@ -436,3 +478,119 @@ def test_seam_position_matches_where_the_combiner_actually_switched(k: int) -> N
         assert np.allclose(combined.values[:seam], separate.reverse_values[:seam], atol=1e-5), (length, k)
         # At and after the seam: combined must equal the forward-only track.
         assert np.allclose(combined.values[seam:], separate.forward_values[seam:], atol=1e-5), (length, k)
+
+
+# --- issue #123: surprisal is combined alongside entropy, by the SAME rule -------------
+
+
+def test_forward_only_surprisal_matches_direct_computation() -> None:
+    seq = "ACGTACGTACGTACGTACGT"
+    predictor = MockPredictor(seed=5)
+    result = analyze_direction(
+        predictor,
+        seq,
+        context_length=4096,
+        ceiling=8192,
+        direction=Direction.FORWARD_ONLY,
+    )
+    expected_probs = run_windowed(MockPredictor(seed=5), seq, context_length=4096, ceiling=8192).probs
+    assert result.surprisal_values is not None
+    assert np.array_equal(result.surprisal_values, compute_surprisal(expected_probs, seq))
+
+
+def test_reverse_only_surprisal_uses_the_reverse_complement_sequence() -> None:
+    seq = "ACGTACGTACGTACGTACGT"
+    predictor = MockPredictor(seed=5)
+    result = analyze_direction(
+        predictor,
+        seq,
+        context_length=4096,
+        ceiling=8192,
+        direction=Direction.REVERSE_ONLY,
+    )
+    rc = reverse_complement(seq)
+    expected_probs = run_windowed(MockPredictor(seed=5), rc, context_length=4096, ceiling=8192).probs
+    expected = compute_surprisal(expected_probs, rc)[::-1]
+    assert np.array_equal(result.surprisal_values, expected)
+
+
+def test_both_combined_surprisal_follows_the_same_seam_as_entropy() -> None:
+    """This is THE test that would catch surprisal being combined by a DIFFERENT rule
+    than entropy (e.g. always forward, or a fresh/independent context decision)."""
+    K = 50
+    seq = "ACGT" * 40  # L=160
+    fwd = analyze_direction(
+        MockPredictor(seed=9), seq, context_length=K, ceiling=200, direction=Direction.FORWARD_ONLY
+    )
+    rev = analyze_direction(
+        MockPredictor(seed=9), seq, context_length=K, ceiling=200, direction=Direction.REVERSE_ONLY
+    )
+    combined = analyze_direction(
+        MockPredictor(seed=9), seq, context_length=K, ceiling=200, direction=Direction.BOTH_COMBINED
+    )
+    assert combined.surprisal_values is not None
+    # First K bases: reverse read wins (matches the reverse-only surprisal exactly).
+    assert np.array_equal(combined.surprisal_values[:K], rev.surprisal_values[:K])
+    # Remaining bases: forward read wins (matches the forward-only surprisal exactly).
+    assert np.array_equal(combined.surprisal_values[K:], fwd.surprisal_values[K:])
+
+
+def test_both_averaged_surprisal_takes_mean_where_both_qualify() -> None:
+    K = 50
+    seq = "ACGT" * 40  # L=160
+    fwd = analyze_direction(
+        MockPredictor(seed=4), seq, context_length=K, ceiling=8192, direction=Direction.FORWARD_ONLY
+    )
+    rev = analyze_direction(
+        MockPredictor(seed=4), seq, context_length=K, ceiling=8192, direction=Direction.REVERSE_ONLY
+    )
+    avg = analyze_direction(
+        MockPredictor(seed=4), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_AVERAGED
+    )
+    mid = slice(K, len(seq) - K)
+    expected_mid = (
+        fwd.surprisal_values[mid].astype(np.float64) + rev.surprisal_values[mid].astype(np.float64)
+    ) / 2.0
+    assert np.allclose(avg.surprisal_values[mid], expected_mid, atol=1e-5)
+
+
+def test_both_separate_still_populates_the_combined_surprisal_values() -> None:
+    # DirectionResult deliberately has NO forward_surprisal/reverse_surprisal pair (unlike
+    # forward_values/reverse_values): check_unused_fields.py flagged both as genuinely
+    # unread when this session first added them (no writer consumes per-direction
+    # surprisal yet), so they were removed rather than left "for later" -- same reasoning
+    # as WindowPlan.context's removal. surprisal_values (the combined track) is still
+    # always populated, including under BOTH_SEPARATE.
+    K = 20
+    seq = "ACGT" * 30
+    result = analyze_direction(
+        MockPredictor(seed=7), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_SEPARATE
+    )
+    assert not hasattr(result, "forward_surprisal")
+    assert not hasattr(result, "reverse_surprisal")
+    assert result.surprisal_values is not None
+    assert result.surprisal_values.shape == (len(seq),)
+    combined = analyze_direction(
+        MockPredictor(seed=7), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED
+    )
+    assert np.array_equal(result.surprisal_values, combined.surprisal_values)
+
+
+def test_surprisal_values_none_only_on_a_hand_built_direction_result() -> None:
+    # A real analyze_direction() call ALWAYS populates surprisal_values -- cfg.include_surprisal
+    # (config.py) gates only the WRITER, never the computation (issue #123).
+    result = analyze_direction(
+        MockPredictor(seed=0), "ACGT" * 10, context_length=8, ceiling=64, direction=Direction.FORWARD_ONLY
+    )
+    assert result.surprisal_values is not None
+    # A hand-built DirectionResult (as writer tests use) defaults to None.
+    hand_built = DirectionResult(
+        values=np.zeros(4, dtype=np.float32),
+        direction=Direction.FORWARD_ONLY,
+        context_length=8,
+        window=16,
+        stride=8,
+        seam=None,
+        reduced_context_count=0,
+    )
+    assert hand_built.surprisal_values is None

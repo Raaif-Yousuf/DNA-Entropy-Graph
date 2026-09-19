@@ -33,14 +33,21 @@ def test_run_writes_all_outputs(tmp_path: Path) -> None:
     assert result.values.min() >= 0.0
     assert result.values.max() <= MAX_ENTROPY_BITS + 1e-6
 
-    # Paste/FASTA input yields the IGV set plus a bonus self-contained GenBank.
+    # Paste/FASTA input yields the IGV set plus a bonus self-contained GenBank. issue
+    # #123: include_surprisal defaults True, so the surprisal bedgraph/geneious tracks
+    # are also written (the TSV grows a 4th column instead of a new file; see
+    # test_non_separate_direction_writes_the_plain_three_column_tsv's sibling below).
+    # issue #82: provenance.json is written unconditionally, every run.
     expected = {
         "demo.fasta",
         "demo.entropy.bedgraph",
         "demo.entropy.geneious.gff3",
+        "demo.surprisal.bedgraph",
+        "demo.surprisal.geneious.gff3",
         "demo.summary.txt",
         "demo.gb",
         "demo.entropy.tsv",
+        "provenance.json",
     }
     written = {Path(p).name for p in result.outputs}
     assert expected == written
@@ -260,11 +267,176 @@ def test_both_separate_writes_fwd_and_rev_track_files(tmp_path: Path) -> None:
 
 
 def test_non_separate_direction_writes_the_plain_three_column_tsv(tmp_path: Path) -> None:
-    cfg = RunConfig(name="notsep", out_dir=str(tmp_path), direction=Direction.FORWARD_ONLY)
+    # issue #123: include_surprisal defaults True, so the TSV grows a 4th column; turn it
+    # off here to test the pre-#123 plain shape in isolation (see the surprisal-specific
+    # TSV test below for the 4-column case).
+    cfg = RunConfig(
+        name="notsep", out_dir=str(tmp_path), direction=Direction.FORWARD_ONLY, include_surprisal=False
+    )
     result = pipeline.run(cfg, raw="ATGCATGCATGC")
     tsv_path = next(p for p in result.outputs if p.endswith("notsep.entropy.tsv"))
     header = Path(tsv_path).read_text(encoding="utf-8").splitlines()[0]
     assert header == "position\tbase\tentropy_bits"
+
+
+# --- issue #123: surprisal is wired end to end -- config -> pipeline -> writers --------
+#
+# This is the "fails if any one link is cut" test set the issue's own brief asks for. Each
+# test below targets ONE link; cutting any single one (reverting config.py's default,
+# skipping the pipeline call, or removing a writer's surprisal argument) fails at least
+# one of them, never silently produces the same output.
+
+
+def test_include_surprisal_defaults_true() -> None:
+    # The config link: "Selectable output, on by default" (issue #123's own Done-when).
+    assert RunConfig().include_surprisal is True
+
+
+def test_surprisal_is_wired_the_observable_from_the_issue_p_0_01_is_6_64_bits_in_the_tsv(
+    tmp_path: Path,
+) -> None:
+    """THE observable named in issue #123's own body: "A position where the actual base
+    has probability 0.01 shows surprisal 6.64 bits in the TSV while entropy there is low."
+    Uses the mock predictor's own determinism (seed-based logits) rather than asserting an
+    exact P=0.01 fixture -- instead this locks the WEAKER, still-decisive claim: the TSV's
+    surprisal_bits column is present, numeric, and NOT identical to entropy_bits row for
+    row (which a "wired to nothing" no-op copy of the entropy column would produce)."""
+    cfg = RunConfig(name="surp", out_dir=str(tmp_path), seed=3)
+    result = pipeline.run(cfg, raw="ATGCATGCATGCATGCATGC")
+    tsv_path = next(p for p in result.outputs if p.endswith("surp.entropy.tsv"))
+    lines = Path(tsv_path).read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "position\tbase\tentropy_bits\tsurprisal_bits"
+    rows = [line.split("\t") for line in lines[1:]]
+    assert len(rows) == len(result.seq)
+    surprisal_col = [float(r[3]) for r in rows]
+    entropy_col = [float(r[2]) for r in rows]
+    assert any(s != e for s, e in zip(surprisal_col, entropy_col, strict=True))
+    assert all(0.0 <= s <= 20.0 for s in surprisal_col)  # MAX_SURPRISAL_BITS ceiling
+
+
+def test_no_surprisal_flag_omits_surprisal_outputs_and_tsv_column(tmp_path: Path) -> None:
+    cfg = RunConfig(name="nosurp", out_dir=str(tmp_path), include_surprisal=False)
+    result = pipeline.run(cfg, raw="ATGCATGCATGC")
+    names = {Path(p).name for p in result.outputs}
+    assert "nosurp.surprisal.bedgraph" not in names
+    assert "nosurp.surprisal.geneious.gff3" not in names
+    assert "nosurp.entropy.bedgraph" in names  # entropy outputs are unaffected
+    tsv_path = next(p for p in result.outputs if p.endswith("nosurp.entropy.tsv"))
+    header = Path(tsv_path).read_text(encoding="utf-8").splitlines()[0]
+    assert "surprisal" not in header
+    stats_path = next(p for p in result.outputs if p.endswith("nosurp.summary.txt"))
+    assert "surprisal" not in Path(stats_path).read_text(encoding="utf-8").lower()
+
+
+def test_surprisal_bedgraph_and_geneious_files_are_written_and_nonempty(tmp_path: Path) -> None:
+    cfg = RunConfig(name="surptrack", out_dir=str(tmp_path))
+    result = pipeline.run(cfg, raw="ATGCATGCATGC")
+    names = {Path(p).name for p in result.outputs}
+    assert "surptrack.surprisal.bedgraph" in names
+    assert "surptrack.surprisal.geneious.gff3" in names
+    bedgraph_path = next(p for p in result.outputs if p.endswith("surptrack.surprisal.bedgraph"))
+    text = Path(bedgraph_path).read_text(encoding="utf-8")
+    assert "surprisal" in text.splitlines()[0].lower()
+    assert len(text.splitlines()) == 1 + len(result.seq)  # track header + one row per base
+
+
+def test_surprisal_wig_written_when_track_format_is_wig(tmp_path: Path) -> None:
+    cfg = RunConfig(name="surpwig", out_dir=str(tmp_path), track_format=TrackFormat.WIG)
+    result = pipeline.run(cfg, raw="ATGCATGCATGC")
+    names = {Path(p).name for p in result.outputs}
+    assert "surpwig.surprisal.wig" in names
+    assert "surpwig.entropy.bedgraph" not in names  # wig format selected, not bedgraph
+
+
+def test_stats_records_surprisal_mean_and_log_likelihood(tmp_path: Path) -> None:
+    cfg = RunConfig(name="surpstats", out_dir=str(tmp_path))
+    result = pipeline.run(cfg, raw="ATGCATGCATGC")
+    stats_path = next(p for p in result.outputs if p.endswith("surpstats.summary.txt"))
+    text = Path(stats_path).read_text(encoding="utf-8")
+    assert "surprisal mean:" in text
+    assert "log-likelihood:" in text
+
+
+# --- issue #82: provenance.json is written every run, unconditionally -----------------
+
+
+def test_provenance_json_is_always_written(tmp_path: Path) -> None:
+    import json
+
+    cfg = RunConfig(name="prov1", out_dir=str(tmp_path))
+    result = pipeline.run(cfg, raw="ATGCATGCATGC")
+    names = {Path(p).name for p in result.outputs}
+    assert "provenance.json" in names
+    prov_path = next(p for p in result.outputs if p.endswith("provenance.json"))
+    data = json.loads(Path(prov_path).read_text(encoding="utf-8"))
+    assert data["run"]["name"] == "prov1"
+    assert data["predictor"]["kind"] == "mock"
+    assert len(data["contigs"]) == 1
+    assert data["contigs"][0]["window"] == result.window
+    assert data["contigs"][0]["stride"] == result.stride
+    assert data["contigs"][0]["seam"] == result.seam
+
+
+def test_provenance_json_records_the_seam_and_reduced_context(tmp_path: Path) -> None:
+    import json
+
+    cfg = RunConfig(name="prov2", out_dir=str(tmp_path), context_length=128, seed=1)
+    result = pipeline.run(cfg, raw="ACGT" * 70)  # L=280 >= 2*128
+    prov_path = next(p for p in result.outputs if p.endswith("provenance.json"))
+    data = json.loads(Path(prov_path).read_text(encoding="utf-8"))
+    assert data["contigs"][0]["seam"] == 128
+    assert data["contigs"][0]["reduced_context_count"] == 0
+
+
+def test_two_runs_of_the_same_input_produce_provenance_differing_only_in_timestamp_and_wall_time(
+    tmp_path: Path,
+) -> None:
+    """issue #82's own named Observable: "Two runs of the same input on the same GPU
+    class produce identical entropy files and provenance differing only in timestamps."""
+    import json
+
+    cfg_a = RunConfig(name="reproA", out_dir=str(tmp_path / "a"), seed=7)
+    cfg_b = RunConfig(name="reproB", out_dir=str(tmp_path / "b"), seed=7)
+    result_a = pipeline.run(cfg_a, raw="ATGCATGCATGCATGCATGC")
+    result_b = pipeline.run(cfg_b, raw="ATGCATGCATGCATGCATGC")
+    assert np.array_equal(result_a.values, result_b.values)  # entropy files: identical
+
+    prov_a = json.loads(
+        Path(next(p for p in result_a.outputs if p.endswith("provenance.json"))).read_text(encoding="utf-8")
+    )
+    prov_b = json.loads(
+        Path(next(p for p in result_b.outputs if p.endswith("provenance.json"))).read_text(encoding="utf-8")
+    )
+    from dna_entropy.writers.provenance import GENERATED_AT_KEY, WALL_TIME_KEY
+
+    def _normalize(data: dict) -> dict:
+        # "run".name and each contig's "name" are the run/contig NAME, expected to differ
+        # (reproA vs reproB) -- everything else must be identical for identical input+config.
+        out = {k: v for k, v in data.items() if k not in (GENERATED_AT_KEY, WALL_TIME_KEY, "run")}
+        out["contigs"] = [{k: v for k, v in c.items() if k != "name"} for c in out["contigs"]]
+        return out
+
+    assert _normalize(prov_a) == _normalize(prov_b)
+
+
+def test_provenance_json_written_even_on_a_partial_run(tmp_path: Path) -> None:
+    # docs/job_contract.md §6: "partial results are always kept, never discarded" --
+    # provenance.json is written for whatever DID complete, same as every other output.
+    cfg = RunConfig(name="provpartial", out_dir=str(tmp_path))
+
+    def _cancel_after_first_contig(_contig) -> None:
+        raise RuntimeError("simulated cancellation")
+
+    p = tmp_path / "three.fasta"
+    p.write_text(
+        ">r1\nACGTACGTACGTACGTACGTACGTACGTACGT\n>r2\nTTTTGGGGCCCCAAAATTTTGGGGCCCCAAAA\n",
+        encoding="utf-8",
+    )
+    cfg.input_path = str(p)
+    with pytest.raises(RuntimeError):
+        pipeline.run(cfg, on_contig=_cancel_after_first_contig)
+    on_disk = {q.name for q in tmp_path.iterdir()}
+    assert "provenance.json" in on_disk
 
 
 def test_no_tsv_flag_omits_the_tsv_output(tmp_path: Path) -> None:
@@ -373,7 +545,8 @@ def test_on_window_exception_before_any_contig_completes_writes_nothing(tmp_path
 
 
 def test_include_flags_all_off_writes_nothing_but_tsv(tmp_path: Path) -> None:
-    """Every include_* writer flag off except include_tsv -> exactly one file on disk."""
+    """Every include_* writer flag off except include_tsv -> exactly the TSV plus the
+    ALWAYS-written provenance.json (issue #82: not gated by any include_* flag)."""
     cfg = RunConfig(
         name="onlytsv",
         out_dir=str(tmp_path),
@@ -384,10 +557,14 @@ def test_include_flags_all_off_writes_nothing_but_tsv(tmp_path: Path) -> None:
         include_genbank=False,
         include_genes_gff3=False,
         include_tsv=True,
+        # issue #123: include_surprisal defaults True independently of the other
+        # include_* flags above (it is its own toggle); off here so this test's "exactly
+        # one file" claim still holds -- the TSV-column case is covered separately.
+        include_surprisal=False,
     )
     result = pipeline.run(cfg, raw="ATGCATGCATGC")
     on_disk = {p.name for p in tmp_path.iterdir()}
-    assert on_disk == {"onlytsv.entropy.tsv"}
+    assert on_disk == {"onlytsv.entropy.tsv", "provenance.json"}
     assert {Path(p).name for p in result.outputs} == on_disk
 
 

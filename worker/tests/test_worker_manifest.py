@@ -110,7 +110,11 @@ def test_unknown_nested_fields_are_tolerated() -> None:
     m = JobManifest.parse(
         _manifest(
             predictor={"kind": "mock", "seed": 0, "futureField": "ignored"},
-            analysis={"contextLength": 2048, "yetAnotherFutureField": 123},
+            # window/stride declared consistent with contextLength (issue #345: stride is
+            # cross-checked against window - contextLength since this session) -- this
+            # test is about `yetAnotherFutureField` tolerance, not stride, so the fixture
+            # must not incidentally trip the unrelated cross-check.
+            analysis={"contextLength": 2048, "window": 4096, "stride": 2048, "yetAnotherFutureField": 123},
         )
     )
     assert m.predictor.kind == "mock"
@@ -458,6 +462,38 @@ def test_build_run_config_outputs_still_wins_over_analysis_format_when_specified
     m = JobManifest.parse(_manifest(analysis={"format": "wig"}, outputs=["bedgraph"]))
     cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
     assert cfg.track_format is TrackFormat.BEDGRAPH
+
+
+# --- analysis.stride is cross-checked against window - contextLength (issue #345) -----
+#
+# RE-DECIDED 2026-09-19: an earlier pass on this issue concluded stride needed neither a
+# consumer nor a cross-check, reasoning that S = W - K can never independently drift from
+# what the worker recomputes. That is true of the WORKER's own math, but missed that the
+# manifest's declared `stride` is itself a third, independently-writable value nothing
+# here ever read -- `build_run_config` only ever consulted `analysis.window` (as
+# `RunConfig.max_len`), never `analysis.stride` -- so a manifest declaring a `stride` that
+# disagreed with `window - contextLength` was silently ignored, not refused. Cross-checked
+# here the same way `predictor.precision` (issue #343) already is.
+
+
+def test_analysis_stride_matching_window_minus_context_length_parses_clean() -> None:
+    m = JobManifest.parse(_manifest(analysis={"contextLength": 3000, "window": 6000, "stride": 3000}))
+    assert m.analysis.stride == 3000
+
+
+def test_analysis_stride_disagreeing_with_window_minus_context_length_is_rejected() -> None:
+    with pytest.raises(ManifestError) as exc:
+        JobManifest.parse(_manifest(analysis={"contextLength": 3000, "window": 6000, "stride": 999}))
+    msg = str(exc.value)
+    assert "999" in msg
+    assert "6000" in msg and "3000" in msg  # names both the window and the contextLength
+
+
+def test_analysis_stride_default_matches_default_window_and_context_length() -> None:
+    # Defaults (contextLength=4096, window=8192, stride=4096) must already be internally
+    # consistent, or every manifest omitting `analysis` entirely would fail to parse.
+    m = JobManifest.parse(_manifest())
+    assert m.analysis.stride == m.analysis.window - m.analysis.context_length
 
 
 # --- JobManifest.raw (issue #361) -------------------------------------------------------

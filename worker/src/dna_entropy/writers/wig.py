@@ -12,6 +12,13 @@ import numpy as np
 
 from .base import write_text_lf
 
+# issue #123: see bedgraph.py's identical note -- WIG is generic over "the per-position
+# numeric track" too, so surprisal reuses this writer via `metric=`.
+_DESCRIPTIONS: dict[str, str] = {
+    "entropy": "Shannon entropy (bits)",
+    "surprisal": "Surprisal: -log2 P(actual base) (bits)",
+}
+
 
 def _fixed_step_block(chrom: str, values: np.ndarray, start: int) -> list[str]:
     lines = [f"fixedStep chrom={chrom} start={start} step=1 span=1"]
@@ -31,6 +38,7 @@ class WigWriter:
         start: int,
         out_dir: str,
         variant: str | None = None,
+        metric: str = "entropy",
     ) -> str:
         return self.write_multi(
             name=name,
@@ -38,6 +46,7 @@ class WigWriter:
             start=start,
             out_dir=out_dir,
             variant=variant,
+            metric=metric,
         )
 
     def write_multi(
@@ -48,16 +57,21 @@ class WigWriter:
         start: int,
         out_dir: str,
         variant: str | None = None,
+        metric: str = "entropy",
     ) -> str:
         """Write one WIG file with a fixedStep block per ``(chrom, values)`` in ``blocks``.
 
         ``variant`` (e.g. ``"fwd"``/``"rev"`` for Direction.BOTH_SEPARATE, section 5.6)
         names the file ``<name>.entropy.<variant>.wig`` instead of ``<name>.entropy.wig``.
+        ``metric`` (issue #123: ``"entropy"`` or ``"surprisal"``) names the file
+        ``<name>.<metric>.wig`` and labels the track accordingly; the default keeps every
+        existing caller's output byte-identical to before this option existed.
         """
-        label = f"{name} entropy" if variant is None else f"{name} entropy ({variant})"
-        lines = [f'track type=wiggle_0 name="{label}" description="Shannon entropy (bits)" visibility=full']
+        description = _DESCRIPTIONS.get(metric, metric)
+        label = f"{name} {metric}" if variant is None else f"{name} {metric} ({variant})"
+        lines = [f'track type=wiggle_0 name="{label}" description="{description}" visibility=full']
         for chrom, values in blocks:
             lines.extend(_fixed_step_block(chrom, values, start))
         text = "\n".join(lines) + "\n"
-        suffix = "entropy.wig" if variant is None else f"entropy.{variant}.wig"
+        suffix = f"{metric}.wig" if variant is None else f"{metric}.{variant}.wig"
         return write_text_lf(Path(out_dir) / f"{name}.{suffix}", text)

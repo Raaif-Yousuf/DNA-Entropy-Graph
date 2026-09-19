@@ -21,6 +21,7 @@ import numpy as np
 from ..config import Direction
 from ..predictors.base import Predictor, PredictorOOMError, check_probability_matrix
 from .entropy import shannon_entropy
+from .surprisal import surprisal as compute_surprisal
 from .windowing import WindowPlan, halved, plan_windows
 
 _COMPLEMENT = str.maketrans("ACGT", "TGCA")
@@ -138,6 +139,16 @@ class DirectionResult:
 
     values: np.ndarray  # (L,) bits — the SELECTED/combined track (always populated)
     direction: Direction
+    # The run's NOMINAL, configured K -- the value analyze_direction() was called with,
+    # unchanged by an OOM-halving retry (issue #313) on either direction's own pass.
+    # Disproven theory (issue #407): this field itself is NOT a bug to "fix" by making it
+    # track a post-halving value -- reporting the configured K is a legitimate, useful
+    # thing on its own. The REAL bug #407 found was that `_combine`'s qualification
+    # threshold used to be this same shared, nominal value for BOTH directions, which
+    # silently broke after a halving on ONLY one side; `_combine` now takes each
+    # direction's own actually-achieved `window - stride` instead (see its docstring).
+    # `window`/`stride` below already ARE the final, post-halving values when a halving
+    # happened (threaded straight from whichever WindowPlan actually ran).
     context_length: int
     window: int
     stride: int
@@ -146,6 +157,22 @@ class DirectionResult:
     forward_values: np.ndarray | None = None  # populated for BOTH_SEPARATE
     reverse_values: np.ndarray | None = None  # populated for BOTH_SEPARATE
     notices: list[str] = field(default_factory=list)
+    # issue #123: per-position surprisal (-log2 P(actual base)), combined by the SAME rule
+    # as `values` (forward/reverse preference by context sufficiency, or averaged under
+    # BOTH_AVERAGED) -- computed from the SAME fwd/rev `probs` this dataclass's `values`
+    # already came from, at zero extra GPU cost (no second predictor call). `None` only for
+    # a hand-built DirectionResult in a test that never called analyze_direction(); a real
+    # run always populates it, unconditionally -- cfg.include_surprisal (config.py) gates
+    # only whether a WRITER emits it, never whether it is computed.
+    surprisal_values: np.ndarray | None = None
+    # NOT a forward_surprisal/reverse_surprisal pair here (unlike forward_values/
+    # reverse_values above): the TSV's BOTH_SEPARATE 5-column shape does not yet grow
+    # surprisal columns (docs/science_and_formats.md section 2b's "known scope limit"),
+    # so a per-direction surprisal field would have no reader -- found by
+    # `check_unused_fields.py` during this same session (both flagged UNREAD) and removed
+    # rather than left "for later," same reasoning as `WindowPlan.context`'s removal
+    # (test_windowing.py). Compute them locally in analyze_direction() instead, the day a
+    # writer actually wants them.
     # The GPU per-window ceiling this pass was run with (windowing.WindowPlan.ceiling,
     # threaded through rather than recomputed — see run_windowed/analyze_direction).
     # Default 0 for a hand-built DirectionResult (e.g. in a test) that never ran a real
@@ -174,7 +201,8 @@ def _combine(
     fwd_context: np.ndarray,
     rev_entropy: np.ndarray,
     rev_context: np.ndarray,
-    context_length: int,
+    fwd_context_length: int,
+    rev_context_length: int,
     *,
     averaged: bool,
 ) -> tuple[np.ndarray, int]:
@@ -185,12 +213,25 @@ def _combine(
     has more context — recorded as "reduced context". ``averaged`` additionally means:
     where BOTH directions independently reach ``>= K`` context, take their mean instead of
     preferring forward outright.
+
+    ``fwd_context_length``/``rev_context_length`` are deliberately TWO separate values, not
+    one shared ``context_length`` (issue #407, MEASURED 2026-09-19: a single shared
+    threshold was a real bug, not just a theory). An OOM-halving retry (issue #313) can
+    shrink the K a SINGLE direction's pass actually ran with — ``run_windowed`` halves
+    independently per direction, since each direction's ``run_windowed`` call starts fresh
+    from the caller's nominal ``context_length`` and only reacts to its OWN OOM. A shared,
+    nominal ``context_length`` threshold then becomes impossible for the halved side to
+    ever satisfy (its own ``*_context`` array is capped at its new, smaller ``window - 1``,
+    which can be below the UNhalved side's nominal K), silently locking that direction out
+    of "qualifies" for the rest of the sequence and collapsing combined/averaged mode to
+    the other direction alone — with no error, no notice, just a quietly worse track.
+    Each side must be judged against the K it ACTUALLY ran with.
     """
     length = fwd_entropy.shape[0]
     values = np.empty(length, dtype=np.float32)
 
-    fwd_ok = fwd_context >= context_length
-    rev_ok = rev_context >= context_length
+    fwd_ok = fwd_context >= fwd_context_length
+    rev_ok = rev_context >= rev_context_length
     both_ok = fwd_ok & rev_ok
     only_fwd = fwd_ok & ~rev_ok
     only_rev = rev_ok & ~fwd_ok
@@ -235,6 +276,7 @@ def analyze_direction(
     window = stride = None
     fwd_entropy = fwd_context = None
     rev_entropy = rev_context = None
+    fwd_surprisal = rev_surprisal = None
 
     if direction in _NEEDS_FORWARD:
         fwd = run_windowed(
@@ -245,6 +287,9 @@ def analyze_direction(
             on_window=on_window,
         )
         fwd_entropy = shannon_entropy(fwd.probs)
+        # issue #123: surprisal from the SAME fwd.probs entropy was just computed from --
+        # zero extra predictor calls, per analysis/surprisal.py's own module docstring.
+        fwd_surprisal = compute_surprisal(fwd.probs, seq)
         fwd_context = fwd.context
         window, stride = fwd.window, fwd.stride
         notices += fwd.notices
@@ -262,6 +307,10 @@ def analyze_direction(
         # from rc[j], i.e. original position L-1-j); flip back to original coordinates.
         rev_entropy = shannon_entropy(rev.probs)[::-1].copy()
         rev_context = rev.context[::-1].copy()
+        # Surprisal against the REVERSE-COMPLEMENT sequence (rc), read in rc's own order,
+        # THEN flipped back -- same coordinate-flip discipline as rev_entropy above (Hard
+        # Rule "reverse means reverse complement": rc[j] is base L-1-j of seq).
+        rev_surprisal = compute_surprisal(rev.probs, rc)[::-1].copy()
         if window is None:
             window, stride = rev.window, rev.stride
         notices += rev.notices
@@ -272,15 +321,40 @@ def analyze_direction(
 
     if direction is Direction.FORWARD_ONLY:
         values = fwd_entropy
+        surprisal_values = fwd_surprisal
     elif direction is Direction.REVERSE_ONLY:
         values = rev_entropy
+        surprisal_values = rev_surprisal
     else:
+        # issue #407, MEASURED 2026-09-19: each direction's OWN actually-used K, not the
+        # shared nominal `context_length` -- an OOM-halving retry (issue #313) can shrink
+        # ONE direction's K independently (each `run_windowed` call only reacts to ITS OWN
+        # OOM), and `window - stride` always recovers the K that pass really ran with,
+        # regardless of whether a halving happened (see _combine's own docstring for why
+        # a single shared threshold silently broke combined/averaged mode after exactly
+        # this scenario).
+        fwd_k_used = fwd.window - fwd.stride
+        rev_k_used = rev.window - rev.stride
         values, reduced = _combine(
             fwd_entropy,
             fwd_context,
             rev_entropy,
             rev_context,
-            context_length,
+            fwd_k_used,
+            rev_k_used,
+            averaged=(direction is Direction.BOTH_AVERAGED),
+        )
+        # Combined by the IDENTICAL rule (same fwd_context/rev_context masks -> the same
+        # `reduced` count as above, deliberately discarded here rather than reassigned):
+        # surprisal is a second metric riding the SAME per-position forward/reverse
+        # selection entropy already used, not a second, independent combination decision.
+        surprisal_values, _ = _combine(
+            fwd_surprisal,
+            fwd_context,
+            rev_surprisal,
+            rev_context,
+            fwd_k_used,
+            rev_k_used,
             averaged=(direction is Direction.BOTH_AVERAGED),
         )
         if length >= 2 * context_length:
@@ -305,4 +379,5 @@ def analyze_direction(
         forward_values=fwd_entropy if direction is Direction.BOTH_SEPARATE else None,
         reverse_values=rev_entropy if direction is Direction.BOTH_SEPARATE else None,
         notices=notices,
+        surprisal_values=surprisal_values,
     )

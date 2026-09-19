@@ -8,12 +8,15 @@ Each stage is swappable; this module is the only place that knows the order.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
 from .analysis.direction import DirectionResult, analyze_direction
+from .analysis.surprisal import summarize_surprisal
 from .analysis.windowing import validate_context
 from .annotators.base import GeneFeature
 from .annotators.prodigal import ProdigalAnnotator
@@ -30,6 +33,7 @@ from .writers.fasta import FastaWriter
 from .writers.genbank import GenBankWriter
 from .writers.geneious import GeneiousWriter
 from .writers.gff import GffWriter
+from .writers.provenance import ProvenanceWriter, build_run_provenance, contig_provenance
 from .writers.summary import SummaryWriter
 from .writers.tsv import TsvWriter
 from .writers.wig import WigWriter
@@ -202,7 +206,10 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
 
     Uses the 5-column fwd/rev/combined shape for Direction.BOTH_SEPARATE (each contig's
     forward/reverse/combined tracks are all populated), the plain 3-column shape
-    otherwise (docs/science_and_formats.md section 5).
+    otherwise (docs/science_and_formats.md section 5). issue #123: the plain shape grows
+    a 4th ``surprisal_bits`` column when ``cfg.include_surprisal`` -- the BOTH_SEPARATE
+    5-column shape does not yet grow surprisal columns (out of scope for this pass, would
+    need a documented 8-column layout; tracked as a follow-up rather than half-built here).
     """
     if any(dr.forward_values is not None for _, dr in processed):
         return TsvWriter().write_multi_separate(
@@ -216,7 +223,50 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
         blocks=[(c.name, c.seq, dr.values) for c, dr in processed],
         start=cfg.start,
         out_dir=cfg.out_dir,
+        surprisal_blocks=(
+            [dr.surprisal_values for _, dr in processed]
+            if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed)
+            else None
+        ),
     )
+
+
+def _write_provenance(
+    cfg: RunConfig,
+    processed: list[tuple[Contig, DirectionResult]],
+    t0: float,
+    extra: dict[str, Any] | None,
+) -> str:
+    """Build and write ``provenance.json`` (issue #82). Always called, never gated by an
+    ``include_*`` flag -- see :func:`run`'s own docstring."""
+    contigs = [
+        contig_provenance(
+            name=c.name,
+            length=len(c.seq),
+            context_length=dr.context_length,
+            window=dr.window,
+            stride=dr.stride,
+            ceiling=dr.ceiling,
+            direction=dr.direction.value,
+            seam=dr.seam,
+            reduced_context_count=dr.reduced_context_count,
+        )
+        for c, dr in processed
+    ]
+    data = build_run_provenance(
+        name=cfg.name,
+        predictor_kind=cfg.predictor.value,
+        model=cfg.model,
+        device=cfg.device,
+        seed=cfg.seed,
+        direction=cfg.direction.value,
+        ambiguity_policy=cfg.ambiguity_policy.value,
+        rna=cfg.rna,
+        contigs=contigs,
+        wall_time_seconds=time.perf_counter() - t0,
+        extra=extra,
+    )
+    return ProvenanceWriter().write(out_dir=cfg.out_dir, data=data)
 
 
 def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
@@ -265,6 +315,28 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
                 out_dir=cfg.out_dir,
             )
         )
+        # issue #123: GenBank input writes both bedgraph AND wig unconditionally for
+        # entropy (the pre-existing asymmetry job_contract.md §3 already notes); surprisal
+        # matches that same shape rather than inventing a new one.
+        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+            outputs.append(
+                BedGraphWriter().write_multi(
+                    name=cfg.name,
+                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    start=cfg.start,
+                    out_dir=cfg.out_dir,
+                    metric="surprisal",
+                )
+            )
+            outputs.append(
+                WigWriter().write_multi(
+                    name=cfg.name,
+                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    start=cfg.start,
+                    out_dir=cfg.out_dir,
+                    metric="surprisal",
+                )
+            )
     if cfg.include_geneious:
         outputs.append(
             GeneiousWriter().write_multi(
@@ -274,6 +346,16 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
                 out_dir=cfg.out_dir,
             )
         )
+        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+            outputs.append(
+                GeneiousWriter().write_multi(
+                    name=cfg.name,
+                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    start=cfg.start,
+                    out_dir=cfg.out_dir,
+                    metric="surprisal",
+                )
+            )
     if cfg.include_stats:
         outputs.append(
             SummaryWriter().write_multi(
@@ -283,6 +365,11 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
                 out_dir=cfg.out_dir,
                 filename="stats.txt",
                 provenance=[dr for _, dr in processed],
+                surprisal=(
+                    [summarize_surprisal(dr.surprisal_values, seq=c.seq) for c, dr in processed]
+                    if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed)
+                    else None
+                ),
             )
         )
 
@@ -361,6 +448,18 @@ def _write_standard_outputs(
                 out_dir=cfg.out_dir,
             )
         )
+        # issue #123: the single track format track_writer already selected (matching
+        # this input kind's existing choice) also gets a surprisal counterpart.
+        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+            outputs.append(
+                track_writer.write_multi(
+                    name=cfg.name,
+                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    start=cfg.start,
+                    out_dir=cfg.out_dir,
+                    metric="surprisal",
+                )
+            )
     if cfg.include_geneious:
         outputs.append(
             GeneiousWriter().write_multi(
@@ -370,6 +469,16 @@ def _write_standard_outputs(
                 out_dir=cfg.out_dir,
             )
         )
+        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+            outputs.append(
+                GeneiousWriter().write_multi(
+                    name=cfg.name,
+                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    start=cfg.start,
+                    out_dir=cfg.out_dir,
+                    metric="surprisal",
+                )
+            )
     if cfg.include_stats:
         outputs.append(
             SummaryWriter().write_multi(
@@ -378,6 +487,11 @@ def _write_standard_outputs(
                 start=cfg.start,
                 out_dir=cfg.out_dir,
                 provenance=[dr for _, dr in processed],
+                surprisal=(
+                    [summarize_surprisal(dr.surprisal_values, seq=c.seq) for c, dr in processed]
+                    if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed)
+                    else None
+                ),
             )
         )
 
@@ -446,6 +560,7 @@ def run(
     *,
     on_window: Callable[[], None] | None = None,
     on_contig: Callable[[Contig], None] | None = None,
+    provenance_extra: dict[str, Any] | None = None,
 ) -> RunResult:
     """Run the full pipeline and write all output files (output set depends on input kind).
 
@@ -467,7 +582,16 @@ def run(
     ``--name``, or a manifest's ``inputs[].name`` via ``worker/manifest.py``) funnels
     through, so a hostile name is neutralized here regardless of which path called in.
     May raise :class:`PipelineError` if nothing usable survives sanitization.
+
+    Issue #82: every run writes ``provenance.json`` into ``cfg.out_dir``, unconditionally
+    (not gated by an ``include_*`` flag — reproducibility metadata is not an optional
+    output the way an extra track is). ``provenance_extra``, when given, overlays the
+    worker-layer-only fields this module cannot know on its own (GPU name/driver, torch/
+    evo2/flash-attn versions, container image digest, input sha256) — see
+    ``writers/provenance.py``'s module docstring for exactly why those live outside this
+    function's own knowledge and how a caller (``worker/runner.py``) supplies them.
     """
+    t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
     loaded = load_input(cfg, raw)
     # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
@@ -519,6 +643,7 @@ def run(
                     _write_genbank_outputs(cfg, processed)
                 else:
                     _write_standard_outputs(cfg, processed)
+                _write_provenance(cfg, processed, t0, provenance_extra)
             except Exception:
                 pass
         raise
@@ -528,6 +653,7 @@ def run(
         genes = [f for c, _ in processed for f in c.features]
     else:
         outputs, genes = _write_standard_outputs(cfg, processed)
+    outputs.append(_write_provenance(cfg, processed, t0, provenance_extra))
 
     first_contig, first_dr = processed[0]
     all_values = np.concatenate([dr.values for _, dr in processed])

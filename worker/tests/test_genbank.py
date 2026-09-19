@@ -21,6 +21,7 @@ MULTI_GB = str(DATA / "multi.gb")
 SAMPLE_FA = str(DATA / "sample.fasta")
 SPLICED_GB = str(DATA / "spliced.gb")
 OUT_OF_RANGE_GB = str(DATA / "out_of_range.gb")
+MALFORMED_DIR = DATA / "malformed"
 
 
 # --- detection ----------------------------------------------------------------------
@@ -116,6 +117,44 @@ def test_read_genbank_wraps_a_missing_origin_block_as_a_clean_error(tmp_path: Pa
     )
     with pytest.raises(GenBankReadError):
         read_genbank(str(p))
+
+
+def test_read_genbank_names_a_reason_when_biopython_raises_a_bare_assertion() -> None:
+    """#403: Biopython's GenBank scanner has several bare `assert` statements with no
+    message; `str(AssertionError())` is empty, so a naive wrap left
+    'Could not parse the GenBank file: . Check...' -- a fact-free gap where the reason
+    should be. The fixture below (issue #368's own Hypothesis-found regression) drives
+    exactly one of those bare asserts (a feature qualifier continuation line missing its
+    leading '/'): the wrapped message must name that specific, checkable cause instead of
+    leaving the gap empty."""
+    path = MALFORMED_DIR / "genbank_qualifier_missing_slash.gb"
+    with pytest.raises(GenBankReadError) as excinfo:
+        read_genbank(str(path))
+    message = str(excinfo.value)
+    assert "Could not parse the GenBank file: . " not in message, (
+        f"the reason slot is still empty: {message!r}"
+    )
+    assert "leading '/'" in message or "leading slash" in message, message
+
+
+def test_describe_bare_assertion_falls_back_to_naming_the_internal_check_when_unrecognized() -> None:
+    """#403's fallback branch: Biopython has several bare `assert` sites, not just the
+    qualifier-continuation one; a source line this reader does not specifically recognize
+    must still produce a concrete, non-empty description (the raw internal check that
+    failed), never silently falling through to an empty string. Exercised directly against
+    `_describe_bare_assertion`, using a real (non-Biopython) bare assertion so the test
+    does not depend on finding another obscure, possibly-unreachable Biopython assert site
+    to trigger through the full `read_genbank` call."""
+    from dna_entropy.readers.genbank import _describe_bare_assertion
+
+    some_unrelated_value = 1
+    try:
+        assert some_unrelated_value == 2  # noqa: PT015 - deliberately triggering a bare assert
+    except AssertionError as exc:
+        reason = _describe_bare_assertion(exc)
+
+    assert reason, "the fallback produced an empty description"
+    assert "qualifiers" not in reason, "should not misapply the qualifier-specific guess here"
 
 
 def test_read_genbank_handles_lone_cr_line_endings(tmp_path: Path) -> None:
@@ -365,6 +404,10 @@ def test_pipeline_genbank_input(tmp_path: Path) -> None:
         "tl.entropy.geneious.gff3",
         "tl.entropy.tsv",
         "tl.genes.gff3",
+        "tl.surprisal.bedgraph",
+        "tl.surprisal.wig",
+        "tl.surprisal.geneious.gff3",
+        "provenance.json",
         "stats.txt",
     }
     assert len(result.genes) == 2  # preserved from the input, not re-called
@@ -438,6 +481,10 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
         "mt.entropy.geneious.gff3",
         "mt.entropy.tsv",
         "mt.genes.gff3",
+        "mt.surprisal.bedgraph",
+        "mt.surprisal.wig",
+        "mt.surprisal.geneious.gff3",
+        "provenance.json",
         "stats.txt",
     }
     assert result.contigs == 2
