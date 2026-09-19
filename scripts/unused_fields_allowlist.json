@@ -1,7 +1,6 @@
 {
   "_README": "Fields that scripts/check_unused_fields.py flags and that are NOT bugs. Every entry needs a reason a human wrote, because the whole point of the guard is that an unread field looks finished. 'Class.*' covers every field of one class. The guard fails on a stale entry - one whose field is read now, or whose class or field no longer exists - so this file cannot quietly become a list of things that used to be true.",
   "_HOW_TO_ADD": "Do not add an entry to make the guard pass. Add one only when you have checked where the field is consumed and it is genuinely outside this package. If it is dead rather than external, file an issue and name it in the reason, as JobManifest.raw does.",
-
   "allowed": {
     "JobResult.*": "result.json's own shape. JobResult.to_dict() is dataclasses.asdict(self), so every field here travels to the C# app as JSON and is read there, never by this package. The guard sees no attribute load because asdict() names nothing. Deliberately a class-wide entry: this dataclass IS the wire document, so a new field on it is a new JSON key, not a new behaviour someone forgot to wire.",
     "ResultTiming.*": "Nested inside result.json, same reason as JobResult.*.",
@@ -9,10 +8,8 @@
     "StatusDocument.*": "status.json's own shape, written by StatusWriter and read by the app's poller. Same asdict() reason as JobResult.*. This is the document CLAUDE.md calls the only health signal there is, so its fields being app-facing rather than worker-facing is the design, not a gap.",
     "VmRef.*": "Nested inside status.json, same reason as StatusDocument.*.",
     "ErrorInfo.*": "Nested inside status.json. message, detail and remediation exist so the app can show the user one action; the worker writes them and never reads them back.",
-
     "Limits.max_run_seconds": "An app-side Compute Engine parameter, not worker behaviour: it becomes scheduling.maxRunDuration on the VM at creation time, which is the app's job (Hard Rule 10). It rides in the manifest as provenance so a diagnostics bundle records what the VM was created with. Nothing in the worker should act on it. Cross-checked by hand 2026-09-19.",
     "Lifecycle.keep_alive_minutes": "Genuinely not honoured yet, and deliberately so. Issue #93 owns the keep-alive queue and the VM-side idle timer; until it lands, run_job degrades afterTask='keep' to afterKeepAlive rather than pretending to wait for a duration (see the #338/#340 fix). Honouring this field before #93 would mean a VM waiting on a timer with no queue behind it, which is the Hard Rule 11 failure this repo is trying to avoid, not a fix for it.",
-    "JobManifest.schema": "Validated before the object exists. JobManifest.parse() checks the incoming schema string against the worker's supported version and raises ManifestSchemaError on a mismatch, using a local variable; the field survives on the built object so scripts/gen_manifest_schema.py's dataclass introspection documents the wire shape. A decision is made from this value, just not from the attribute.",
-    "SurprisalSummary.*": "Groundwork for issue #123, knowingly landed unwired. analysis/surprisal.py computes the track and this summary, and nothing calls either: no writer emits a surprisal track and no CLI flag turns one on. total_log_likelihood_bits and defined_count are what a caller would read once there is a caller. DELETE THIS ENTRY WHEN #123 LANDS -- the guard fails on a stale entry, so the wiring cannot quietly leave the summary unread."
+    "JobManifest.schema": "Validated before the object exists. JobManifest.parse() checks the incoming schema string against the worker's supported version and raises ManifestSchemaError on a mismatch, using a local variable; the field survives on the built object so scripts/gen_manifest_schema.py's dataclass introspection documents the wire shape. A decision is made from this value, just not from the attribute."
   }
 }
