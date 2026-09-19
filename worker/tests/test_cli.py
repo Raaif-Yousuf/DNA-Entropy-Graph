@@ -43,7 +43,11 @@ def test_worker_run_requires_either_root_or_bucket_and_prefix() -> None:
 
 
 def test_worker_run_help_lists_local_and_gcs_options() -> None:
-    result = runner.invoke(app, ["worker-run", "--help"])
+    # COLUMNS is pinned because Typer renders help through Rich, which wraps and
+    # truncates to the terminal width. MEASURED 2026-09-19: this test passed on a wide
+    # developer terminal and failed on CI's 80 columns, where `--root` fell off the
+    # rendered line. The option is present either way; only the drawing changed.
+    result = runner.invoke(app, ["worker-run", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     assert "--root" in result.output
     assert "--bucket" in result.output
