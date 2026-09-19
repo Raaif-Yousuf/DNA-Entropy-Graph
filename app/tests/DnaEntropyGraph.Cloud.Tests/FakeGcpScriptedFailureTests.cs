@@ -201,7 +201,7 @@ public class FakeGcpScriptedFailureTests
     public async Task A_running_vm_is_discovered_terminated_and_marked_preempted_once_the_scripted_deadline_passes()
     {
         var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-09-19T08:00:00Z"));
-        var gcp = new FakeGcp(time).WithPreemption("deg-20260919-084512-ab23cd", TimeSpan.FromMinutes(10));
+        var gcp = new FakeGcp(time).WithPreemption("deg-20260919-084512-ab23cd", Zone, TimeSpan.FromMinutes(10));
         var spec = ValidSpec();
 
         var created = await gcp.CreateVmAsync(spec, Zone, CancellationToken.None);

@@ -31,4 +31,18 @@ public interface IComputeGateway
     Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Every VM labelled with this job id, across every zone - Hard Rule
+    /// 9's "discovery is by label, never by a fixed name," and issue #257's
+    /// retry-safety mechanism: a caller resuming after a crash calls this
+    /// FIRST and adopts what it finds, rather than risking a second
+    /// <see cref="CreateVmAsync"/> in a different zone succeeding
+    /// independently (a VM name is unique only within a zone, not
+    /// globally - see issue #389). A real gateway implements this via
+    /// <c>instances.aggregatedList</c> filtered to <c>labels.job-id=&lt;jobId&gt;</c>
+    /// and <c>labels.app=dna-entropy-graph</c>. More than one result means
+    /// the exact leak #389 describes already happened.
+    /// </summary>
+    Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken);
 }

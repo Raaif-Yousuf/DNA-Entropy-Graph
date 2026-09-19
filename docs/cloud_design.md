@@ -1,13 +1,17 @@
 # Cloud design: preflight, zone selection, error classes, labels, cost, termination
 
 **Status: `DnaEntropyGraph.Cloud` exists.** Issues #49 (FakeGcp's scripted failures), #55
-(`VmSpec`'s label/name guard) and #57 (`CloudErrorClassifier`) landed against this doc as
-their reference. Still not built: the zone ladder (`GpuPlanner`, issue #86), the setup
-health checks (issue #204), and a real (non-fake) gateway implementation against
-`Google.Cloud.Compute.V1` - `DnaEntropyGraph.Cloud` today holds only `FakeGcp`. Authoritative
-detail lives in [Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this
-doc is the "what a developer needs while implementing" summary with the tables filled in,
-not a shorter copy of the whole appendix.
+(`VmSpec`'s label/name guard), #57 (`CloudErrorClassifier`), #256 (`OperationPoller`), #257
+(retry-safe mutations) and #58 (`CloudJobRunner`) landed against this doc as their
+reference - `CloudJobRunner` is this table's first production caller: it runs the abort-vs-
+continue rule in section 5 for real, over `FakeGcp`. Still not built: the escalating-
+parallelism zone ladder (`GpuPlanner`, issue #86 - `CloudJobRunner`'s own zone list is a
+plain sequential walk, not that ladder), the setup health checks (issue #204), and a real
+(non-fake) gateway implementation against `Google.Cloud.Compute.V1` -
+`DnaEntropyGraph.Cloud` today holds only `FakeGcp`. Authoritative detail lives in
+[Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this doc is the
+"what a developer needs while implementing" summary with the tables filled in, not a
+shorter copy of the whole appendix.
 
 ---
 
@@ -51,17 +55,19 @@ b-cloud-design.md` section 2.2) - the same four checks run at first-run setup, b
 every run (fast, cached 10 minutes), and inside the zone ladder's own abort logic
 (section 3).
 
-**Gap, filed as issue #388:** step 1 ("project ACTIVE") has no interface method anywhere
-in `Core/Cloud` today - `IProjectSetupGateway` only has `IsBillingEnabledAsync`,
-`IsComputeApiEnabledAsync` and `EnableComputeApiAsync`. A caller implementing this chain
-literally cannot express its own first step until that gap is closed.
+**Closed, issue #388:** `IProjectSetupGateway.GetProjectStateAsync` (returning a
+`ProjectLifecycleState` of `Active` / `NotFound` / `Other`) is step 1's interface method,
+`FakeGcp.WithProjectState(projectId, state)` scripts it, and `CloudJobRunner.PreflightAsync`
+runs it first, before billing, before the Compute API check, before quota - the full
+documented order now has a caller and a test (`CloudJobRunnerTests
+.Preflight_fails_the_run_before_any_upload_when_the_project_is_not_active`).
 
 **Implemented** (`app/src/DnaEntropyGraph.Cloud/FakeGcp.cs`, issue #49): every project-wide
-step this section names except step 1 (the gap above) can be scripted on `FakeGcp` with a
-fluent one-liner - `WithBillingOff(projectId)`, `WithComputeApiOff(projectId)`
-(`EnableComputeApiAsync` clears it, mirroring the real API's idempotent enable),
-`WithPermissionDenied(projectId)`, `WithOrgPolicyBlocked(projectId)` - plus the per-zone/
-per-region steps 4-5's failure shapes: `WithZoneStockout(zone, times)`,
+step this section names can be scripted on `FakeGcp` with a fluent one-liner -
+`WithProjectState(projectId, state)`, `WithBillingOff(projectId)`,
+`WithComputeApiOff(projectId)` (`EnableComputeApiAsync` clears it, mirroring the real API's
+idempotent enable), `WithPermissionDenied(projectId)`, `WithOrgPolicyBlocked(projectId)` -
+plus the per-zone/per-region steps 4-5's failure shapes: `WithZoneStockout(zone, times)`,
 `WithQuotaExceededOnCreate(zone, times)`, `WithGpuQuota(region, accelerator, available)`
 and `WithAllRegionsGpuCap(cap)` (the `GPUS_ALL_REGIONS` override from section 6 below),
 plus `WithAlreadyExists`, `WithNetworkFailures` and `WithPreemption` for the failure shapes
@@ -69,6 +75,14 @@ outside the preflight chain proper. Every one of these throws the same
 `CloudOperationException`/`CloudError` shape section 5's classifier consumes -
 `FakeGcpScriptedFailureTests.cs` round-trips several of them back through
 `CloudErrorClassifier.Classify` to prove the two agree.
+
+**Implemented** (`app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs`, issue #58):
+`CloudJobRunner.RunAsync` runs this exact preflight chain (steps 1-4; step 5, bucket-exists,
+is folded into the Uploading phase's own `EnsureBucketAsync` call) before a run ever reaches
+Uploading, and aborts to `Failed` on the first failure with the failing
+`CloudErrorKind` recorded - see `CloudJobRunnerTests`'s `Preflight_*` tests. This is a
+walking-skeleton preflight (one candidate region checked for quota, not the zone ladder's
+full per-tier walk), not issue #86's eventual implementation.
 
 ## 3. Zone and GPU-tier selection (the ladder)
 
@@ -97,14 +111,24 @@ per-region quota memory, persisted per project instead of the prototype's
  immediately via an `aggregatedList` filtered to that exact name, except a VM that
  already existed before this job started (adopted, not created by this attempt).
 
- THEORY (unverified), filed as issue #389: this same "name is only unique per zone"
- property that makes a same-zone retry safe (an ALREADY_EXISTS response is adopted, per
- section 5's table) may make a **crash between zone attempts** unsafe: if the app dies
- after a create in zone A succeeds but before it durably records which zone it used, a
- resumed ladder that tries zone B next has no ALREADY_EXISTS signal to catch the
- duplicate, because zone B's Insert genuinely has never seen that name before. The
- ladder's implementation (#86) needs to record the attempted zone before the Insert call
- returns, not after, for issue #257's "never a duplicate VM" to hold across a crash.
+ MEASURED (against `FakeGcp`, 2026-09-19, issue #257): issue #389's THEORY was correct -
+ `FakeGcpRetrySafetyTests.MEASURED_a_second_zones_create_for_the_same_job_succeeds_
+ independently_reproducing_issue_389` reproduces it deliberately: two `CreateVmAsync`
+ calls for the same spec, in two different zones, both succeed, and
+ `IComputeGateway.FindByJobIdAsync` (new, issue #257) then reports two VMs for one job id.
+ Nothing at the gateway level stops this, on purpose - it is what a real, per-zone-unique
+ name genuinely allows. The fix is caller-side, not gateway-side: `CloudJobRunner
+ .ProvisionAsync` (issue #58) calls `FindByJobIdAsync` and adopts whatever it finds BEFORE
+ attempting any zone, every single time it runs - including the very first time - so a
+ resumed ladder after a crash never reaches a second zone's create at all.
+ `CloudJobRunnerTests.A_crash_after_provisioning_resumes_without_creating_a_second_vm`
+ proves this end to end: a VM created in the ladder's second zone (as if the first had
+ stocked out), a discarded runner instance, and a fresh one that finds and adopts the
+ existing VM rather than creating a new one in the ladder's first zone. The escalating-
+ parallelism ladder itself (issue #86) still needs to call `FindByJobIdAsync` the same way
+ before its own first attempt, not just on an explicit resume path - `CloudJobRunner`
+ does this by treating every call to its one entry point as resume-safe, with no separate
+ "resume" method to forget to call.
 5. **A project-wide error (billing, API disabled, permission, org policy) aborts the
  entire ladder at the first sighting**, with the exact structured error and one
  remediation action - retrying a different zone cannot fix a project-wide problem, so
@@ -162,8 +186,11 @@ theory plus the structured-signal cases the fixture cannot express (it is stderr
 `RpcException`/`GoogleApiException` into it before this classifier ever runs - no such
 mapping exists yet (there is no real, non-fake gateway implementation), only
 `FakeGcp`, which constructs `CloudError` directly when scripting a failure.
-**Not yet consumed by any caller**: the runner (#58) and the Health page (#208) are the
-two callers this classifier exists for, and neither is built yet.
+**Consumed, issue #58**: `CloudJobRunner.ProvisionAsync` (`app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs`)
+is the first production caller - it classifies every `CloudOperationException` a create
+attempt throws and applies exactly the abort-vs-continue column below (project-wide kinds
+return the failure immediately; quota/stockout/network/other try the next zone). The
+Health page (#208) is still unbuilt and still has no caller of its own.
 
 | Signal | Class | Ladder behaviour |
 |---|---|---|
@@ -289,6 +316,46 @@ exercise.
  every signed-in account/project on this PC - the single most important money guard in
  the app, and the direct successor to the prototype keeper's `main()` exit-time reminder
  ("the GPU VM is still RUNNING and billing... delete it when done").
+
+## 11. The job runner and operation polling (issues #58, #256)
+
+**Implemented**: `app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs` turns one
+`CloudJobRequest` into a finished run over `IComputeGateway`/`IStorageGateway`/
+`IProjectSetupGateway`/`IQuotaGateway` (today, `FakeGcp` implementing all four - there is
+no real gateway yet), driven by `JobStateMachine`'s legal-transition table over the
+existing `JobPhase` enum (`app/src/DnaEntropyGraph.Core/JobPhase.cs`, from the #61
+skeleton). Sequence: preflight (section 2's four checks) -> Validating -> Uploading ->
+Provisioning (section 3's reconciler-first zone walk) -> Preparing -> Running (a second VM-
+status poll, to catch a preemption discovered mid-run - CLAUDE.md's "RUNNING is not
+working"; the worker's own `status.json` heartbeat is a separate, worker-owned signal this
+runner does not have) -> Finalizing (Hard Rule 11: stop or delete per the request, then
+independently re-`GetVmAsync` to verify the terminal state actually landed, never just
+trusting the call succeeded) -> Downloading -> Completed/PartiallyCompleted/Failed.
+
+Every phase change is written to `IRunRepository` before any `onPhaseChanged` callback
+fires (issue #58's own Done-when). There is deliberately no separate "resume" method:
+`RunAsync` is safe to call again for the same job id from a brand-new `CloudJobRunner`
+instance - already-passed happy-path phases are silently skipped
+(`JobStateMachine.HasAlreadyPassed`), and `ProvisionAsync` always reconciles via
+`FindByJobIdAsync` first (section 3, issue #257) - so a second call after a crash *is* the
+resume path, not a distinct one someone has to remember to call.
+
+**`OperationPoller`** (`app/src/DnaEntropyGraph.Core/Cloud/OperationPoller.cs`, issue #256):
+the one place that polls-with-backoff (1s doubling to a 10s cap) against a deadline,
+distinguishing a real operation error from its own `OPERATION_POLL_TIMEOUT` (classified as
+`network`, never confused with a genuine `stockout`/`quota` the operation itself reported -
+see `OperationPollerTests`). `CloudJobRunner.ProvisionAsync` wraps every `CreateVmAsync`
+call in it today as a single-shot poll (since `FakeGcp` resolves synchronously, with no
+"not done yet" phase) - a real gateway polling an actual Google LRO would report several
+"not done yet" snapshots first, and needs no runner-side change to do so, only a real
+`poll` delegate.
+
+**Walking-skeleton scope, not issue #86**: `CloudJobRequest.Zones` is a plain, caller-
+supplied, sequential list - not the escalating-parallelism (3 -> 3 -> 5 -> batches of 7),
+last-good-zone-first, tier-escalating ladder section 3 describes. `PreflightAsync`'s GPU
+quota check also uses a placeholder accelerator-type string (`"gpu"`), because `VmSpec` has
+no accelerator-type field yet (only `MachineType`) - see this round's changelog fragment
+and issue tracker for the follow-up.
 
 ## Related
 
