@@ -22,6 +22,7 @@ def _provenance_lines(dr: DirectionResult, *, indent: str = "") -> list[str]:
         f"{indent}context length (K): {dr.context_length}",
         f"{indent}window (W):         {dr.window}",
         f"{indent}stride (S):         {dr.stride}",
+        f"{indent}ceiling:            {dr.ceiling}",
         f"{indent}direction:          {dr.direction.value}",
         f"{indent}seam:               {seam}",
     ]

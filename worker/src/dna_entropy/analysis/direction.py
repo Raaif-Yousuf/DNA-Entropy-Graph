@@ -146,6 +146,13 @@ class DirectionResult:
     forward_values: np.ndarray | None = None  # populated for BOTH_SEPARATE
     reverse_values: np.ndarray | None = None  # populated for BOTH_SEPARATE
     notices: list[str] = field(default_factory=list)
+    # The GPU per-window ceiling this pass was run with (windowing.WindowPlan.ceiling,
+    # threaded through rather than recomputed — see run_windowed/analyze_direction).
+    # Default 0 for a hand-built DirectionResult (e.g. in a test) that never ran a real
+    # windowed pass; a real run always sets this via analyze_direction's own `ceiling`
+    # parameter. Recorded here so a report can show WHY window < 2*context_length (the
+    # ceiling clamped it) without digging through run notices text.
+    ceiling: int = 0
 
 
 _NEEDS_FORWARD = {
@@ -294,6 +301,7 @@ def analyze_direction(
         stride=stride,
         seam=seam,
         reduced_context_count=reduced,
+        ceiling=ceiling,
         forward_values=fwd_entropy if direction is Direction.BOTH_SEPARATE else None,
         reverse_values=rev_entropy if direction is Direction.BOTH_SEPARATE else None,
         notices=notices,
