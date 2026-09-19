@@ -15,6 +15,7 @@ from dna_entropy import pipeline
 from dna_entropy.config import RunConfig
 from dna_entropy.readers import detect
 from dna_entropy.readers.input import load_input
+from dna_entropy.validation.validators import ValidationError
 
 THREE_RECORD_FASTA = (
     ">record_one first locus\n"
@@ -143,6 +144,41 @@ def test_pipeline_single_record_fasta_still_produces_exactly_the_old_output_set(
         "single.entropy.tsv",
     }
     assert result.contigs == 1
+
+
+# --- issue #314: max_total_len bounds the WHOLE input, not each record in isolation ---
+
+
+def test_load_input_enforces_max_total_len_across_all_fasta_records_not_per_record(
+    tmp_path: Path,
+) -> None:
+    """5 records of 10 nt each = 50 nt total; every record alone is far under a cap of
+    25, so a per-record-only check would (wrongly) let this whole file through."""
+    text = "".join(f">rec{i}\nACGTACGTAC\n" for i in range(5))
+    p = tmp_path / "many.fasta"
+    p.write_text(text, encoding="utf-8")
+    cfg = RunConfig(name="many", input_path=str(p), max_total_len=25)
+    with pytest.raises(ValidationError) as exc:
+        load_input(cfg)
+    msg = str(exc.value)
+    assert "25" in msg  # names the configured whole-input cap
+    assert "30" in msg  # names the running total at the point it tipped over (fail-fast:
+    # raised on the 3rd record, without needing to read the remaining 2)
+    assert "exceed" in msg.lower()
+
+
+def test_load_input_max_total_len_boundary_is_inclusive_for_fasta(tmp_path: Path) -> None:
+    """Sum == cap must pass; sum == cap + 1 must fail (off-by-one guard)."""
+    p = tmp_path / "boundary.fasta"
+    p.write_text(">a\nACGTACGTAC\n>b\nACGTACGTAC\n", encoding="utf-8")  # 10 + 10 = 20 nt
+
+    cfg_ok = RunConfig(name="ok", input_path=str(p), max_total_len=20)
+    loaded = load_input(cfg_ok)
+    assert len(loaded.contigs) == 2
+
+    cfg_over = RunConfig(name="over", input_path=str(p), max_total_len=19)
+    with pytest.raises(ValidationError):
+        load_input(cfg_over)
 
 
 def test_pipeline_multi_record_fasta_all_values_concatenates_every_contig(

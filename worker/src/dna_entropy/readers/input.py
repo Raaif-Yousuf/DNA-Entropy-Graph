@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from ..annotators.base import GeneFeature
 from ..config import RunConfig
-from ..validation.validators import validate_sequence
+from ..validation.validators import ValidationError, validate_sequence
 from . import detect
 from .fasta import read_fasta
 from .genbank import read_genbank
@@ -50,6 +50,25 @@ class LoadedInput:
         return self.contigs[0].features
 
 
+def _check_whole_input_cap(running_total: int, max_total_len: int) -> None:
+    """#314: ``cfg.max_total_len`` bounds the WHOLE input (every record's length summed),
+    not any one record checked in isolation. Without this, a multi-record file where
+    every record is individually under the cap can still be many times over it in total
+    -- ``config.py``'s own comment calls it "the outer sanity bound on total input
+    length", and a per-record-only check never enforces that. ``cfg.max_len`` (the GPU
+    per-window ceiling) is a different knob entirely and must stay out of this check:
+    windowing already tiles a single record longer than ``max_len`` into multiple
+    passes (Hard Rule 4), so rejecting a long record here would break that on purpose.
+    """
+    if running_total > max_total_len:
+        over = running_total - max_total_len
+        raise ValidationError(
+            f"Combined input length {running_total} nt exceeds the whole-input cap of "
+            f"{max_total_len} nt by {over} nt. Split the input into smaller files, or "
+            "raise --max-total-len if you intend to analyze this much sequence at once."
+        )
+
+
 def _safe_contig_name(base: str, index: int, total: int) -> str:
     """Make an output-safe contig name (filenames / IGV chrom / GenBank LOCUS).
 
@@ -72,11 +91,14 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     if kind == detect.GENBANK:
         records, notices = read_genbank(cfg.input_path)
         contigs: list[Contig] = []
+        running_total = 0
         for i, rec in enumerate(records):
             v = validate_sequence(
                 rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
             )
             notices += v.notices
+            running_total += len(v.seq)
+            _check_whole_input_cap(running_total, cfg.max_total_len)
             contigs.append(
                 Contig(
                     name=_safe_contig_name(cfg.name, i, len(records)),
@@ -90,11 +112,14 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     if kind == detect.FASTA:
         records, notices = read_fasta(cfg.input_path)
         contigs: list[Contig] = []
+        running_total = 0
         for i, rec in enumerate(records):
             v = validate_sequence(
                 rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
             )
             notices += v.notices
+            running_total += len(v.seq)
+            _check_whole_input_cap(running_total, cfg.max_total_len)
             contigs.append(
                 Contig(
                     name=_safe_contig_name(cfg.name, i, len(records)),
