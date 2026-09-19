@@ -225,9 +225,20 @@ $CloudMoney
 # ---------------------------------------------------------------------------
 
 function Invoke-SelfTest {
-    $failures = 0
+    # $Script:SelfTestFailures (not a bare local $failures): a nested
+    # function's `$script:` scope modifier resolves to the FILE's script
+    # scope, not its enclosing function's local scope, so a plain
+    # `$failures = 0` local here plus `$script:failures++` inside Check
+    # silently incremented a DIFFERENT variable than the one this function
+    # checked below -- every failure printed "FAIL" but the verdict still
+    # read 0 and reported PASS regardless. Found and fixed alongside the
+    # identical shape in scripts/cloud_gpu_test.ps1's own self-test, issue
+    # #309/#310's own round: a self-test whose verdict cannot actually go
+    # red is exactly the "check that cannot fail" class this repo already
+    # has a skill about.
+    $Script:SelfTestFailures = 0
     function Check($label, $condition) {
-        if ($condition) { Write-Host "ok    $label" } else { Write-Host "FAIL  $label"; $script:failures++ }
+        if ($condition) { Write-Host "ok    $label" } else { Write-Host "FAIL  $label"; $Script:SelfTestFailures++ }
     }
 
     Check "an 'area: phrase' title is recognised" (Test-TitleShape 'worker: run loop uploads progress')
@@ -256,11 +267,11 @@ function Invoke-SelfTest {
         ($empty -match '## Tests') -and ($empty -match '## Out of scope') -and ($empty -match '## Cloud money')
     )
 
-    if ($failures -eq 0) {
+    if ($Script:SelfTestFailures -eq 0) {
         Write-Host "`nPASS: new_issue self-test"
         return $true
     }
-    Write-Host "`nFAIL: $failures self-test failure(s)"
+    Write-Host "`nFAIL: $($Script:SelfTestFailures) self-test failure(s)"
     return $false
 }
 

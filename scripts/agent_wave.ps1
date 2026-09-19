@@ -735,9 +735,20 @@ function Remove-AgentWorktree {
 # ---------------------------------------------------------------------------
 
 function Invoke-SelfTest {
-    $failures = 0
+    # $Script:SelfTestFailures (not a bare local $failures): a nested
+    # function's `$script:` scope modifier resolves to the FILE's script
+    # scope, not its enclosing function's local scope, so a plain
+    # `$failures = 0` local here plus `$script:failures++` inside Check
+    # silently incremented a DIFFERENT variable than the one this function
+    # checked below -- every failure printed "FAIL" but the verdict still
+    # read 0 and reported PASS regardless. Found and fixed alongside the
+    # identical shape in scripts/new_issue.ps1 and scripts/cloud_gpu_test.ps1
+    # (issue #309/#310's own round): a self-test whose verdict cannot
+    # actually go red is exactly the "check that cannot fail" class this
+    # repo already has a skill about.
+    $Script:SelfTestFailures = 0
     function Check($label, $condition) {
-        if ($condition) { Write-Host "ok    $label" } else { Write-Host "FAIL  $label"; $script:failures++ }
+        if ($condition) { Write-Host "ok    $label" } else { Write-Host "FAIL  $label"; $Script:SelfTestFailures++ }
     }
 
     # --- Get-PathRoot / Test-PathOverlap ---
@@ -893,11 +904,11 @@ function Invoke-SelfTest {
         Remove-Item -LiteralPath $wtTmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    if ($failures -eq 0) {
+    if ($Script:SelfTestFailures -eq 0) {
         Write-Host "`nPASS: agent_wave self-test"
         return $true
     }
-    Write-Host "`nFAIL: $failures self-test failure(s)"
+    Write-Host "`nFAIL: $($Script:SelfTestFailures) self-test failure(s)"
     return $false
 }
 

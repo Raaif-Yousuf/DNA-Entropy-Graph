@@ -289,3 +289,28 @@ def test_block_unlabelled_vm_create_end_to_end_denies():
     )
     assert code == 0
     assert _denied(decision)
+
+
+# ---------------------------------------------------------------------------
+# --self-test (issue #310): every hook here already has its failing/passing
+# arm proven above via crafted stdin; this section proves the standalone
+# `--self-test` flag itself works, runnable with no pytest on PATH, matching
+# scripts/check_*.py and scripts/hooks/run_hook.py's own shape.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "hook_name",
+    [
+        "block_git_stash.py",
+        "block_recursive_delete.py",
+        "block_unlabelled_vm_create.py",
+        "block_agent_dispatch_in_worktree.py",
+    ],
+)
+def test_hook_self_test_flag_passes(hook_name):
+    proc = subprocess.run(
+        [sys.executable, str(HOOKS_DIR / hook_name), "--self-test"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PASS" in proc.stdout

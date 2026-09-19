@@ -56,6 +56,11 @@ everything except a recursive force-delete inside the repo. It never blocks on
 its own failure: a malformed payload or an unexpected exception exits 0
 quietly, because a hook that breaks the session when IT has a bug is worse than
 the bug it guards.
+
+    python scripts/hooks/block_recursive_delete.py --self-test
+
+proves both arms plus the fails-open contract above with no pytest on PATH
+(issue #310); exits 0 on pass, 1 on a self-test failure.
 """
 
 from __future__ import annotations
@@ -251,7 +256,71 @@ def verdict(command: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Self-test: same deny/allow cases scripts/tests/test_hooks.py already
+# proves via pytest, plus the fails-open contract every hook's own
+# docstring promises, runnable with no pytest on PATH (issue #310).
+# ---------------------------------------------------------------------------
+
+_DENY_CASES = (
+    "rm -rf .scratch",
+    "rm -fr .scratch/",
+    "rm -r -f .scratch",
+    "rm --recursive --force .scratch",
+    "Remove-Item -Recurse -Force .scratch",
+    "ri -Recurse -Force .scratch",
+    "Remove-Item -Recurse -For .scratch",  # PowerShell prefix matching
+)
+
+_ALLOW_CASES = (
+    "rm .scratch/one_file.log",
+    "rm -rf /tmp/some-scratch-dir",
+    "git clean -fd",
+    "git checkout -- .scratch/",
+    "rm -rf",  # no target
+)
+
+
+def self_test() -> int:
+    """Both arms of verdict() plus the fails-open contract. A guard that
+    has only ever been run on a clean tree is not a guard; it is a line
+    that has never said no."""
+    import subprocess
+
+    failures = 0
+    for command in _DENY_CASES:
+        if verdict(command) is None:
+            failures += 1
+            print(f"self-test FAILED: expected deny for {command!r}", file=sys.stderr)
+    for command in _ALLOW_CASES:
+        if verdict(command) is not None:
+            failures += 1
+            print(f"self-test FAILED: expected allow for {command!r}", file=sys.stderr)
+
+    proc = subprocess.run(
+        [sys.executable, __file__],
+        input="not json at all",
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if proc.returncode != 0 or proc.stdout.strip() != "":
+        failures += 1
+        print("self-test FAILED: malformed stdin must fail open (exit 0, silent stdout)",
+              file=sys.stderr)
+
+    total = len(_DENY_CASES) + len(_ALLOW_CASES) + 1
+    if failures:
+        print(f"\nFAIL: block_recursive_delete self-test ({failures}/{total} failure(s))", file=sys.stderr)
+        return 1
+    print(f"PASS: block_recursive_delete self-test ({total} cases)")
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) >= 2 and sys.argv[1] == "--self-test":
+        return self_test()
+
     try:
         payload = json.load(sys.stdin)
     except Exception:
