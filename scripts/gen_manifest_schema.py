@@ -81,22 +81,28 @@ def render_error_codes() -> str:
     return json.dumps(payload, indent=2) + "\n"
 
 
-def _validate_sample_manifests(manifest_schema: dict) -> list[str]:
+def _validate_sample_manifests(manifest_schema: dict) -> tuple[bool, list[str]]:
     """Validate every ``tests/contract-fixtures/manifest_samples/*.json`` fixture against
-    the freshly generated manifest schema. Returns a list of failure descriptions (empty
-    means every sample validated). Skipped entirely (returns ``[]``) if ``jsonschema``
-    isn't installed or no fixtures exist yet — this is a bonus safety net, not the
-    primary drift check, so its absence must never be confused with success OR failure of
-    the schema-drift check itself.
+    the freshly generated manifest schema. Returns ``(ran, failures)``: an empty
+    ``failures`` means every sample validated, and ``ran`` is False when the check could
+    not run at all, because ``jsonschema`` is absent or no fixtures exist yet. This is a
+    bonus safety net, not the primary drift check, so its absence must never be confused
+    with success OR failure of the schema-drift check itself.
+
+    MEASURED 2026-09-19 (issue #323): this used to return a bare ``[]`` when
+    ``jsonschema`` was missing, and the caller then printed "OK: 2 sample manifest(s)
+    validate" one line below its own "jsonschema not installed; skipping" note. A check
+    that reports success for work it did not do. It now returns ``(ran, failures)``, and
+    ``ran`` being False is a different thing from running and finding nothing wrong.
     """
     try:
         import jsonschema
     except ImportError:
         print("note: jsonschema not installed; skipping sample-manifest validation.")
-        return []
+        return False, []
 
     if not FIXTURES_DIR.is_dir():
-        return []
+        return False, []
 
     failures: list[str] = []
     validator = jsonschema.Draft202012Validator(manifest_schema)
@@ -106,7 +112,7 @@ def _validate_sample_manifests(manifest_schema: dict) -> list[str]:
             validator.validate(sample)
         except Exception as exc:  # jsonschema.ValidationError or a JSON parse error
             failures.append(f"{sample_path.relative_to(REPO_ROOT)}: {exc}")
-    return failures
+    return True, failures
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -130,7 +136,9 @@ def main(argv: list[str] | None = None) -> int:
             if current != text:
                 drifted.append(filename)
 
-        sample_failures = _validate_sample_manifests(json.loads(rendered["manifest.schema.json"]))
+        samples_ran, sample_failures = _validate_sample_manifests(
+            json.loads(rendered["manifest.schema.json"])
+        )
 
         if drifted or sample_failures:
             if drifted:
@@ -144,9 +152,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Sample manifest failed validation: {failure}", file=sys.stderr)
             return 1
         print("OK: docs/contract/*.json match the worker's dataclasses/error-code registry.")
-        if FIXTURES_DIR.is_dir():
+        if samples_ran:
             n = len(list(FIXTURES_DIR.glob("*.json")))
             print(f"OK: {n} sample manifest(s) under {FIXTURES_DIR.relative_to(REPO_ROOT)} validate.")
+        else:
+            print(
+                "NOT CHECKED: the sample manifests were not validated, for the reason "
+                "noted above. The schema-drift check itself did run and did pass."
+            )
         return 0
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
