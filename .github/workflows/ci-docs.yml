@@ -113,6 +113,24 @@ jobs:
             echo "::notice title=changelog check skipped::scripts/compile_sprint_log.py does not exist yet (issue #272)."
           fi
 
+  # scripts/tests/ covers the repo-safety hooks, the memory sync's secret scan, the label
+  # sync and every check_*.py guard. Until issue #311 it ran nowhere in CI: the guards
+  # that protect this repo were themselves only ever checked by a human typing pytest.
+  scripts-tests:
+    name: scripts tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Full history: some of these tests exercise git-aware code paths.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: pytest scripts/tests
+        run: uv run --with pytest --with pyyaml python -m pytest scripts/tests -q
+
   links:
     name: markdown links
     runs-on: ubuntu-latest
