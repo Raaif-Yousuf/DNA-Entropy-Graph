@@ -352,4 +352,51 @@ def test_starts_are_sorted_and_unique_across_the_adversarial_grid(k: int) -> Non
         for length in _adversarial_lengths(k):
             plan = plan_windows(length=length, context_length=k, ceiling=ceiling)
             assert list(plan.starts) == sorted(set(plan.starts))
-            assert len(plan.starts) == len(set(plan.starts))
+
+
+# --- issue #345: the WINDOWING layer's own S = W - K invariant (a narrower claim) -----
+#
+# CORRECTED 2026-09-19: an earlier pass on this issue concluded stride needed no
+# cross-check at all, reasoning that S = W - K is a pure function of context_length and
+# ceiling with "no third input a manifest's declared stride could disagree with". That
+# reasoning is correct about THIS module (`compute_window`/`plan_windows` never accept an
+# externally supplied stride -- the two tests below still document that, honestly) but
+# wrong about the MANIFEST layer: `worker/manifest.py::AnalysisSpec` parses its OWN
+# `stride` field independently of `window`/`contextLength`, and nothing downstream used to
+# read it -- a real, silent "wired to nothing" gap (the coordinator's own catch, not found
+# by this session). `AnalysisSpec.from_dict` now cross-checks the manifest's declared
+# `stride` against `window - contextLength` at parse time and refuses a mismatch (see
+# `worker/tests/test_worker_manifest.py`'s `test_analysis_stride_*` tests and
+# `docs/job_contract.md`'s corrected `analysis.contextLength`/`window`/`stride` row) --
+# that is #345's actual resolution. The two tests below are narrower and still true: they
+# lock the WINDOWING module's own internal invariant, not the manifest contract.
+
+
+def test_stride_has_no_parameter_to_accept_an_independently_declared_value() -> None:
+    """`compute_window`/`plan_windows` take only `context_length` and `ceiling`; there is
+    no `stride=` (or `S=`) keyword either function could be called with. A manifest's
+    declared `analysis.stride` therefore has no code path into this module at all -- the
+    ONLY way stride ever enters a `WindowPlan` is as `window - context_length`, computed
+    here, never accepted as an input."""
+    import inspect
+
+    compute_window_params = set(inspect.signature(compute_window).parameters)
+    plan_windows_params = set(inspect.signature(plan_windows).parameters)
+    assert compute_window_params == {"context_length", "ceiling"}
+    assert plan_windows_params == {"length", "context_length", "ceiling"}
+
+
+@pytest.mark.parametrize(
+    "context_length, ceiling",
+    [(4096, 8192), (6000, 8192), (128, 129), (1, 2), (2048, 100_000)],
+)
+def test_stride_is_always_exactly_window_minus_context_length(context_length: int, ceiling: int) -> None:
+    """Locks the invariant a cross-check would otherwise exist to protect: for every
+    (context_length, ceiling) pair `compute_window` will accept, the derived stride is
+    EXACTLY `window - context_length`, with no other value ever possible. If this ever
+    stopped being true, #345's "no cross-check needed" reasoning would stop being true
+    with it, and this test would be the one to go red."""
+    window, stride = compute_window(context_length, ceiling)
+    assert stride == window - context_length
+    plan = plan_windows(length=window * 3, context_length=context_length, ceiling=ceiling)
+    assert plan.stride == window - context_length

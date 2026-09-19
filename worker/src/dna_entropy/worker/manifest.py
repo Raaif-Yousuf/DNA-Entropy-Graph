@@ -208,10 +208,33 @@ class AnalysisSpec:
         if track_format is None:
             valid = sorted(_TRACK_FORMAT_VALUES.keys())
             raise ManifestError(f"manifest.json analysis.format {raw_track_format!r} is not one of {valid}")
+        context_length = int(d.get("contextLength", 4096))
+        window = int(d.get("window", 8192))
+        stride = int(d.get("stride", 4096))
+        # issue #345, RE-DECIDED 2026-09-19: an earlier pass on this issue concluded no
+        # cross-check was needed, reasoning that S = W - K is a pure function of the same
+        # two inputs (context_length, ceiling) that already determine window, so nothing
+        # could ever independently disagree. That reasoning addressed whether the WORKER's
+        # own windowing math could drift -- it cannot -- but missed the actual bug: a
+        # manifest's declared `stride` is a THIRD, independently-writable value nothing
+        # here ever reads (build_run_config only reads `window`, never `stride`), so a
+        # manifest declaring a `stride` that disagrees with `window - contextLength` was
+        # silently ignored, not refused. Cross-checked here the same way
+        # `predictor.precision` (issue #343) already is: a disagreement is the app's own
+        # arithmetic mistake in a value nothing downstream needs, but a silently-ignored
+        # wrong value is still a wrong contract, not a harmless one.
+        expected_stride = window - context_length
+        if stride != expected_stride:
+            raise ManifestError(
+                f"manifest.json analysis.stride {stride!r} does not match "
+                f"window ({window}) - contextLength ({context_length}) = {expected_stride} "
+                "(stride is derived, never independently chosen -- see docs/science_and_formats.md "
+                "section 3; recompute it as window - contextLength before writing the manifest)."
+            )
         return AnalysisSpec(
-            context_length=int(d.get("contextLength", 4096)),
-            window=int(d.get("window", 8192)),
-            stride=int(d.get("stride", 4096)),
+            context_length=context_length,
+            window=window,
+            stride=stride,
             direction=direction,
             track_format=track_format,
         )

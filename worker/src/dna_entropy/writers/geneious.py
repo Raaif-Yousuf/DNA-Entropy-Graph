@@ -41,9 +41,16 @@ from .base import write_text_lf
 # unaffected.
 DEFAULT_MAX_PER_BASE_FEATURES = 200_000
 
+# issue #123: this writer is generic over "the per-position numeric track" too (same
+# reasoning as bedgraph.py/wig.py), so surprisal reuses it via `metric=`. `_LETTER` is the
+# short qualifier prefix Geneious shows (H for Shannon entropy; S for surprisal, its
+# conventional symbol) -- purely cosmetic, never parsed back.
+_LETTER: dict[str, str] = {"entropy": "H", "surprisal": "S"}
 
-def _feature_lines(chrom: str, values: np.ndarray, start: int) -> list[str]:
+
+def _feature_lines(chrom: str, values: np.ndarray, start: int, metric: str) -> list[str]:
     offset = start - 1  # 1-based genomic coord of position i (0-based) is (start + i)
+    letter = _LETTER.get(metric, metric[:1].upper())
     lines = []
     for i, v in enumerate(values):
         pos = offset + i + 1  # GFF3 is 1-based, inclusive
@@ -53,42 +60,45 @@ def _feature_lines(chrom: str, values: np.ndarray, start: int) -> list[str]:
                 [
                     chrom,
                     "dna-entropy",
-                    "entropy",
+                    metric,
                     str(pos),
                     str(pos),
                     val,  # score column: Geneious can Color by / Heatmap on this
                     ".",
                     ".",
-                    f"Name=H={val};entropy={val}",
+                    f"Name={letter}={val};{metric}={val}",
                 ]
             )
         )
     return lines
 
 
-def _binned_feature_lines(chrom: str, values: np.ndarray, start: int, bin_size: int) -> list[str]:
+def _binned_feature_lines(
+    chrom: str, values: np.ndarray, start: int, bin_size: int, metric: str
+) -> list[str]:
     offset = start - 1
     length = len(values)
+    letter = _LETTER.get(metric, metric[:1].upper())
     lines = []
     for bin_start in range(0, length, bin_size):
         bin_end = min(bin_start + bin_size, length)  # last bin may be shorter
-        mean_h = float(values[bin_start:bin_end].mean())
+        mean_v = float(values[bin_start:bin_end].mean())
         pos_start = offset + bin_start + 1  # GFF3 is 1-based, inclusive
         pos_end = offset + bin_end
-        val = f"{mean_h:.4f}"
+        val = f"{mean_v:.4f}"
         width = bin_end - bin_start
         lines.append(
             "\t".join(
                 [
                     chrom,
                     "dna-entropy",
-                    "entropy_bin",
+                    f"{metric}_bin",
                     str(pos_start),
                     str(pos_end),
-                    val,  # score column: mean entropy over the bin
+                    val,  # score column: mean value over the bin
                     ".",
                     ".",
-                    f"Name=H={val};entropy_mean={val};bin_positions={width}",
+                    f"Name={letter}={val};{metric}_mean={val};bin_positions={width}",
                 ]
             )
         )
@@ -111,6 +121,7 @@ class GeneiousWriter:
         start: int,
         out_dir: str,
         max_per_base_features: int | None = DEFAULT_MAX_PER_BASE_FEATURES,
+        metric: str = "entropy",
     ) -> str:
         return self.write_multi(
             name=name,
@@ -118,6 +129,7 @@ class GeneiousWriter:
             start=start,
             out_dir=out_dir,
             max_per_base_features=max_per_base_features,
+            metric=metric,
         )
 
     def write_multi(
@@ -128,6 +140,7 @@ class GeneiousWriter:
         start: int,
         out_dir: str,
         max_per_base_features: int | None = DEFAULT_MAX_PER_BASE_FEATURES,
+        metric: str = "entropy",
     ) -> str:
         """Write one GFF3 with a per-position (or, above the threshold, per-bin) block per
         ``(chrom, values)`` in ``blocks``.
@@ -135,7 +148,9 @@ class GeneiousWriter:
         ``max_per_base_features`` caps the TOTAL feature count across every block
         combined (one file, one import into Geneious). ``None`` disables binning
         unconditionally, for a caller that wants full per-base resolution regardless of
-        length.
+        length. ``metric`` (issue #123: ``"entropy"`` or ``"surprisal"``) names the file
+        ``<name>.<metric>.geneious.gff3``; the default keeps every existing caller's
+        output byte-identical to before this option existed.
         """
         total_length = sum(len(values) for _, values in blocks)
         binned = max_per_base_features is not None and total_length > max_per_base_features
@@ -147,7 +162,7 @@ class GeneiousWriter:
             lines.append(f"##sequence-region {chrom} {start} {end}")
         if binned:
             lines.append(
-                f"# NOTE: entropy binned into {bin_size}-nt windows (mean per bin) because "
+                f"# NOTE: {metric} binned into {bin_size}-nt windows (mean per bin) because "
                 f"the combined track length ({total_length} positions) exceeds "
                 f"max_per_base_features ({max_per_base_features}). See "
                 "docs/science_and_formats.md for the still-per-base WIG/bedGraph tracks, "
@@ -155,8 +170,8 @@ class GeneiousWriter:
             )
         for chrom, values in blocks:
             if binned:
-                lines.extend(_binned_feature_lines(chrom, values, start, bin_size))
+                lines.extend(_binned_feature_lines(chrom, values, start, bin_size, metric))
             else:
-                lines.extend(_feature_lines(chrom, values, start))
+                lines.extend(_feature_lines(chrom, values, start, metric))
         text = "\n".join(lines) + "\n"
-        return write_text_lf(Path(out_dir) / f"{name}.entropy.geneious.gff3", text)
+        return write_text_lf(Path(out_dir) / f"{name}.{metric}.geneious.gff3", text)

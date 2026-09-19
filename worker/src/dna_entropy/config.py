@@ -139,3 +139,10 @@ class RunConfig:
     # actually run before there is anything to write); for GenBank input this alone gates
     # writing the input's own genes as a GFF3 track.
     include_genes_gff3: bool = True
+    # issue #123: per-position surprisal (-log2 P(actual base)), alongside entropy. Falls
+    # out of the SAME (L, 4) matrix at zero extra GPU cost (analysis/surprisal.py), so this
+    # is purely a writer-side toggle -- analyze_direction() always computes it; this flag
+    # only controls whether the surprisal track/column/stats actually get written. On by
+    # default, like every other writer toggle here (issue #123's own "Done when": "Selectable
+    # output, on by default").
+    include_surprisal: bool = True

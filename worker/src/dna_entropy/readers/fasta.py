@@ -12,11 +12,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..redact import describe_len, fingerprint
+from ..validation.validators import ValidationError
 from .encoding import read_text
 
 
-class FastaReadError(ValueError):
-    """Raised when a FASTA file has no usable sequence records."""
+class FastaReadError(ValidationError):
+    """Raised when a FASTA file has no usable sequence records.
+
+    Issue #391: subclasses :class:`~dna_entropy.validation.validators.ValidationError`
+    (itself a `ValueError`), not `ValueError` directly, so that
+    `worker/runner.py`'s existing `isinstance(exc, (ValidationError, ...))` classifier
+    -- unedited by this change, since `isinstance` is structural -- reports
+    `INPUT_INVALID` ("your file is invalid") rather than falling through to the generic
+    `WORKER_CRASH` ("the worker crashed"). The real cause of a malformed FASTA is exactly
+    the situation `ValidationError` already exists to report correctly.
+    """
 
 
 @dataclass

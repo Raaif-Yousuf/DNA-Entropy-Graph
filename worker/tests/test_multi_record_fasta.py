@@ -204,10 +204,16 @@ def test_pipeline_multi_record_fasta_genbank_bonus_holds_all_records(
     assert len(recs) == 3
 
 
-def test_pipeline_single_record_fasta_still_produces_exactly_the_old_output_set(
+def test_pipeline_single_record_fasta_produces_exactly_this_output_set(
     tmp_path: Path,
 ) -> None:
-    """Guards against a multi-record refactor silently changing the single-record shape."""
+    """Guards against a multi-record refactor (or any other pipeline change) silently
+    changing the single-record output shape. Renamed from
+    `..._still_produces_exactly_the_old_output_set` (#123 added the three
+    `single.surprisal.*` outputs and #82 added `provenance.json` to every run, so "the old
+    output set" no longer describes what this asserts) -- still an EXACT set assertion,
+    deliberately never loosened to a subset/superset check, because the whole point is to
+    go red the next time a writer silently starts or stops emitting something."""
     p = tmp_path / "single.fasta"
     p.write_text(">only\nACGTACGTACGTACGTACGTACGTACGTACGT\n", encoding="utf-8")
     cfg = RunConfig(name="single", input_path=str(p), out_dir=str(tmp_path))
@@ -220,6 +226,9 @@ def test_pipeline_single_record_fasta_still_produces_exactly_the_old_output_set(
         "single.summary.txt",
         "single.gb",
         "single.entropy.tsv",
+        "single.surprisal.bedgraph",
+        "single.surprisal.geneious.gff3",
+        "provenance.json",
     }
     assert result.contigs == 1
 

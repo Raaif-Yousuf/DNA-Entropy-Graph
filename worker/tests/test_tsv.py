@@ -77,6 +77,56 @@ def test_tsv_write_multi_separates_contigs_with_a_comment_and_still_three_column
     assert data_lines[3] == "2\tC\t0.5000"
 
 
+# --- issue #123: an optional 4th column, surprisal_bits, alongside entropy -------------
+
+
+def test_tsv_write_adds_surprisal_column_when_given(tmp_path: Path) -> None:
+    surprisal = np.array([6.643856, 0.0, 2.0], dtype=np.float32)
+    path = TsvWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), surprisal=surprisal
+    )
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "position\tbase\tentropy_bits\tsurprisal_bits"
+    # "A position where the actual base has probability 0.01 shows surprisal 6.64 bits in
+    # the TSV while entropy there is low" -- issue #123's own named observable.
+    assert lines[1] == "1\tA\t0.0000\t6.6439"
+    for line in lines[1:]:
+        assert len(line.split("\t")) == 4
+
+
+def test_tsv_write_omits_surprisal_column_by_default(tmp_path: Path) -> None:
+    # Backward compatible: no `surprisal=` -> the plain 3-column shape, byte-identical to
+    # before this option existed.
+    path = TsvWriter().write(name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path))
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "position\tbase\tentropy_bits"
+    for line in lines[1:]:
+        assert len(line.split("\t")) == 3
+
+
+def test_tsv_write_multi_surprisal_blocks_align_with_contigs(tmp_path: Path) -> None:
+    path = TsvWriter().write_multi(
+        name="multi",
+        blocks=[
+            ("chrom_1", "AT", np.array([0.0, 1.0], dtype=np.float32)),
+            ("chrom_2", "GC", np.array([2.0, 0.5], dtype=np.float32)),
+        ],
+        start=1,
+        out_dir=str(tmp_path),
+        surprisal_blocks=[
+            np.array([0.1, 1.1], dtype=np.float32),
+            np.array([2.1, 0.6], dtype=np.float32),
+        ],
+    )
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "position\tbase\tentropy_bits\tsurprisal_bits"
+    data_lines = [ln for ln in lines[1:] if not ln.startswith("#")]
+    assert data_lines[0] == "1\tA\t0.0000\t0.1000"
+    assert data_lines[1] == "2\tT\t1.0000\t1.1000"
+    assert data_lines[2] == "1\tG\t2.0000\t2.1000"
+    assert data_lines[3] == "2\tC\t0.5000\t0.6000"
+
+
 def test_tsv_write_multi_single_block_has_no_comment_line(tmp_path: Path) -> None:
     # A single-record write via write_multi must be indistinguishable from write().
     path = TsvWriter().write_multi(
