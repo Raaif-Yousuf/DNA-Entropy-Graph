@@ -27,7 +27,6 @@ import pytest
 
 from dna_entropy.predictors.base import NUM_NUCLEOTIDES, check_probability_matrix
 
-
 # --- torch-free: the model-output normalization boundary (issue #293) -----------------
 
 

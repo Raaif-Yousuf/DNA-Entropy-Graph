@@ -261,6 +261,37 @@ def test_format_flag_selects_bedgraph_vs_wig_output_file(tmp_path) -> None:
     assert not any(n.endswith(".bedgraph") for n in written)
 
 
+def test_hostile_name_with_traversal_never_writes_outside_the_out_folder(tmp_path) -> None:
+    # Issue #366 (MEASURED 2026-09-19): before the fix, --name '../../evil' escaped the
+    # configured --out folder entirely. This is the real, end-to-end CLI reproduction.
+    out_dir = tmp_path / "configured_out"
+    result = runner.invoke(app, ["run", "--name", "../../evil", "--out", str(out_dir)], input="ACGT" * 30)
+    assert result.exit_code == 0, result.output
+    # Every written file must be somewhere inside out_dir.
+    written = list(out_dir.rglob("*"))
+    assert written, "expected at least one output file"
+    for p in written:
+        if p.is_file():
+            assert p.resolve().is_relative_to(out_dir.resolve()), p
+    # And nothing with the hostile literal name landed as a sibling of out_dir.
+    assert not any(tmp_path.glob("evil*"))
+
+
+def test_hostile_name_that_is_only_traversal_is_a_clean_error(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(app, ["run", "--name", "../..", "--out", str(out_dir)], input="ACGT" * 30)
+    assert result.exit_code != 0
+    assert "ERROR" in result.output
+    assert not out_dir.exists() or not any(out_dir.rglob("*"))
+
+
+def test_reserved_device_name_writes_a_usable_run_not_a_crash(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(app, ["run", "--name", "CON", "--out", str(out_dir)], input="ACGT" * 30)
+    assert result.exit_code == 0, result.output
+    assert any(out_dir.rglob("*.fasta"))
+
+
 def test_seed_flag_makes_the_mock_predictor_reproducible(tmp_path) -> None:
     seq = "ACGT" * 30
     out_a = tmp_path / "a"

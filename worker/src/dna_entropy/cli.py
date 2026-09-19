@@ -7,7 +7,6 @@ filled in during Sprints 1-2.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import typer
@@ -25,7 +24,7 @@ from .config import (
     RunConfig,
     TrackFormat,
 )
-from .pipeline import load_and_validate
+from .pipeline import PipelineError, load_and_validate, sanitize_run_name
 from .predictors.base import PredictorError
 from .validation.validators import ValidationError
 from .worker.blobstore import BlobstoreError, GcsBlobstore, LocalBlobstore
@@ -36,13 +35,6 @@ app = typer.Typer(
     add_completion=False,
     help="Per-position DNA entropy via a genomic language model, exported for IGV.",
 )
-
-
-def _sanitize_name(raw: str) -> str:
-    """Make a user-supplied name safe for a folder, file names, and an IGV contig id."""
-    s = re.sub(r"\s+", "_", raw.strip())
-    s = re.sub(r"[^A-Za-z0-9._-]", "_", s)
-    return s.strip("._-")
 
 
 @app.command()
@@ -156,14 +148,15 @@ def run(
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
-    safe_name = _sanitize_name(name)
-    if not safe_name:
-        typer.secho(
-            "ERROR: that name has no usable characters (use letters/digits).",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    # issue #366: the SAME sanitizer pipeline.run() itself applies (its own top, before
+    # anything is read or written) is used here too, so the folder name (built here,
+    # before pipeline.run() is even called) and every file name inside it (built by
+    # pipeline.run() from cfg.name) always agree -- one rule, not two ad hoc copies.
+    try:
+        safe_name = sanitize_run_name(name)
+    except PipelineError as exc:
+        typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
     base_dir = Path(out) if out else Path.home() / "Downloads"
     run_dir = base_dir / safe_name
 
@@ -194,7 +187,7 @@ def run(
 
     try:
         result = pipeline.run(cfg)
-    except (ValidationError, PredictorError, AnnotatorError, WindowingError) as exc:
+    except (ValidationError, PredictorError, AnnotatorError, WindowingError, PipelineError) as exc:
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 

@@ -7,6 +7,7 @@ Each stage is swappable; this module is the only place that knows the order.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -32,6 +33,86 @@ from .writers.gff import GffWriter
 from .writers.summary import SummaryWriter
 from .writers.tsv import TsvWriter
 from .writers.wig import WigWriter
+
+
+class PipelineError(RuntimeError):
+    """Raised for a pipeline-level configuration problem (e.g. an unusable run name)."""
+
+
+# Windows reserved device names (case-insensitive). Independently reproduced here rather
+# than importing readers/input.py's private `_avoid_reserved_device_name` (issue #350):
+# that module is owned by a different lane and a contig name has different validity
+# rules from a run name (it also has to be a valid IGV chrom / GenBank LOCUS), so this is
+# its own, simpler function for its own, simpler purpose.
+_RESERVED_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"} | {f"COM{n}" for n in range(1, 10)} | {f"LPT{n}" for n in range(1, 10)}
+)
+
+# Generous but finite: the longest writer suffix today is ".entropy.geneious.gff3" (23
+# chars); this stays comfortably under Windows' legacy 260-character MAX_PATH even inside
+# a deeply nested output folder, while remaining generous enough for any real run name.
+MAX_RUN_NAME_LENGTH = 100
+
+
+def sanitize_run_name(name: str) -> str:
+    """Make a run name safe to use as an output FILE NAME PREFIX (and, via ``cli.py``, a
+    folder name).
+
+    Issue #366, MEASURED 2026-09-19: every writer builds its output path as
+    ``Path(cfg.out_dir) / f"{cfg.name}<suffix>"`` — ``cfg.name`` reached the filesystem
+    with ZERO sanitization before this, whether it came from a CLI ``--name`` (previously
+    given an ad hoc, CLI-only pass through a now-removed local helper) or straight from a
+    manifest's ``inputs[].name`` (``worker/manifest.py::build_run_config``, never
+    sanitized at all). :func:`run` calls this unconditionally at its own top, so both
+    entry points — and any future one — are protected regardless of whether the caller
+    remembers to sanitize first.
+
+    Deliberately NOT a reuse of ``readers/input.py``'s private contig-name sanitizer:
+    that function also has to produce a valid IGV ``chrom`` and GenBank ``LOCUS`` name,
+    and numbers multiple records off one base name — different rules for a different
+    job. A run name only has to be a safe path component.
+
+    Hard Rule 14 (the user's files are read-only to us; outputs go only to the chosen
+    output folder) is what actually matters here: a name of ``../../evil`` is that rule
+    broken by a string, so this REFUSES or NEUTRALISES a traversal rather than merely
+    tidying the name for cosmetics —
+
+    - every character outside ``[A-Za-z0-9._-]`` (this includes ``/`` and ``\\``, so a
+      value can never re-assemble into more than one path segment) becomes ``_``;
+    - independently of that, any surviving run of two or more literal dots is also
+      collapsed to ``_`` (defense in depth: a traversal segment can never appear even as
+      inert-looking text);
+    - a leading/trailing ``.``/``_``/``-`` is stripped (a Windows trailing dot/space
+      quirk, same reasoning as issue #350's contig-name hardening);
+    - the result is capped at :data:`MAX_RUN_NAME_LENGTH`;
+    - a bare or case-insensitive Windows reserved device name (``CON``, ``NUL``,
+      ``COM1``..``9``, ``LPT1``..``9``, with or without an extension) gets a harmless
+      ``_run`` suffix appended rather than being refused outright, since it is
+      recoverable without losing the user's intent.
+
+    Raises:
+        PipelineError: if nothing usable survives (empty, whitespace-only, or entirely
+            path separators/dots) — refuses rather than silently writing to an unusable
+            or surprising name.
+    """
+    if not isinstance(name, str):
+        raise PipelineError(f"run name must be a string, got {type(name).__name__}")
+    collapsed = re.sub(r"\s+", "_", name.strip())
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", collapsed)
+    safe = re.sub(r"\.\.+", "_", safe)  # defense in depth: no literal ".." survives either
+    safe = safe.strip("._-")
+    if not safe:
+        raise PipelineError(
+            f"run name {name!r} has no usable characters after removing unsafe ones "
+            "(path separators, control characters, or only dots/dashes/underscores). "
+            "Use letters, digits, '.', '_', or '-'."
+        )
+    if len(safe) > MAX_RUN_NAME_LENGTH:
+        safe = safe[:MAX_RUN_NAME_LENGTH].rstrip("._-") or "run"
+    base = safe.split(".", 1)[0].upper()
+    if safe.upper() in _RESERVED_DEVICE_NAMES or base in _RESERVED_DEVICE_NAMES:
+        safe = f"{safe}_run"
+    return safe
 
 
 @dataclass
@@ -380,18 +461,21 @@ def run(
     worker's ``CancelWatcher.check_or_raise`` plugs into either without this module
     needing to know anything about ``control/cancel``. ``None`` (the default) means no
     hook — every existing caller is unaffected.
+
+    Issue #366: ``cfg.name`` is sanitized (:func:`sanitize_run_name`) FIRST, unconditionally,
+    before anything is read or written — this is the one choke point every caller (a CLI
+    ``--name``, or a manifest's ``inputs[].name`` via ``worker/manifest.py``) funnels
+    through, so a hostile name is neutralized here regardless of which path called in.
+    May raise :class:`PipelineError` if nothing usable survives sanitization.
     """
+    cfg.name = sanitize_run_name(cfg.name)
     loaded = load_input(cfg, raw)
     # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
     # "all records" default — readers/input.py has no opinion on it (and must not: Lane A
     # owns that module), so the truncation happens here, right after loading, before any
     # window is planned or any file is written. GenBank multi-record input is untouched:
     # the field is documented (job_contract.md §3) as FASTA-specific.
-    if (
-        cfg.fasta_records == "first"
-        and loaded.source_kind == detect.FASTA
-        and len(loaded.contigs) > 1
-    ):
+    if cfg.fasta_records == "first" and loaded.source_kind == detect.FASTA and len(loaded.contigs) > 1:
         dropped = len(loaded.contigs) - 1
         loaded.contigs = loaded.contigs[:1]
         loaded.notices = loaded.notices + [

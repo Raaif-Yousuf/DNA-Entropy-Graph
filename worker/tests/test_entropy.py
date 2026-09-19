@@ -83,7 +83,9 @@ def test_entropy_bounded_for_every_degenerate_row(row: list[float]) -> None:
 @pytest.mark.parametrize("length", [1, 2, 5])
 @pytest.mark.parametrize("temperature", [0.01, 1.0, 100.0])  # near-deterministic .. near-uniform
 @pytest.mark.parametrize("seed", [0, 1, 2, 12345])
-def test_entropy_bounded_across_an_adversarial_softmax_grid(length: int, temperature: float, seed: int) -> None:
+def test_entropy_bounded_across_an_adversarial_softmax_grid(
+    length: int, temperature: float, seed: int
+) -> None:
     rng = np.random.default_rng(seed)
     logits = rng.standard_normal((length, 4)) * temperature
     exp = np.exp(logits - logits.max(axis=1, keepdims=True))
