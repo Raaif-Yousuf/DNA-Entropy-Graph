@@ -2,6 +2,8 @@
 
 **Status:** Design draft produced 2026-09-18 by the app-architecture planning pass and reconciled into the [main spec](2026-09-18-dna-entropy-graph-design.md). Where this appendix and the spec body disagree (naming, worker delivery via container, bidirectional prediction replacing the `Strand` option, VM self-stop via the Compute API rather than guest `shutdown`), **the spec body wins**. This appendix is kept because it holds the screen-by-screen detail, the SQLite DDL, the option tables and the viewer bridge design that the implementation issues will draw from.
 
+**Reconciliation note (2026-09-19, this repo's own docs pass):** at the time the paragraph above was written, this appendix was the only detailed material in the repo. It no longer is. `docs/architecture.md` now owns the `JobPhase` state machine and the app/worker split, `docs/job_contract.md` owns the manifest/status/progress/result contract and its timeouts, `docs/copy_catalog.md` owns the error-catalog and phase-title copy, and `docs/ui_conventions.md` owns the accessibility/DPI/keyboard/toast conventions, each written later and checked against more of the real system than this draft was. Section-level pointers are added below only where a reader could genuinely be misled by reading this draft instead of the current doc; the screen-by-screen UX (section 2), the SQLite DDL (section 3), and the viewer integration (section 5) remain this repo's *only* source for that level of detail and are not superseded by anything yet, which is itself worth knowing before implementing #61/#67/#103 and friends from this appendix alone. `#61`, `#67` and the viewer-integration issue filed this session (see section 5's note) are where that gap gets a `docs/` home; until then, read this appendix for those three sections, not as a draft to distrust.
+
 ---
 
 ## 0. Decisions in one screen
@@ -98,6 +100,8 @@ Shell: `NavigationView` (left, compact on narrow widths) with **New run**, **Run
 
 ### 2.1 First-run wizard (`Wizard/*`, `WizardViewModel` with `WizardStep` state)
 
+> The *user-facing* version of these eight steps, in plain voice, is `docs/user_guide/02-connect-google-cloud.md`; the fallback for a step the wizard cannot finish is `docs/gcp_setup_manual.md`. Neither of those documents the ViewModel/gateway names or the "Behind the scenes" column below, so this table is still the only source for the implementation mapping. Still the only source, not stale.
+
 | Step | What the user sees | Behind the scenes | Failure UX |
 |---|---|---|---|
 | 1 Welcome | What the app does; "Runs on a GPU you rent by the minute in your own Google Cloud. Typical run: 5 to 20 min, about $0.10 to $0.50." | | |
@@ -182,6 +186,8 @@ Account (signed in as, Sign out, Switch project, Cloud setup check) - Appearance
 ---
 
 ## 3. Local state model
+
+> `docs/architecture.md` section 6 summarizes this directory layout and the crash-safe resumption rules, and deliberately does not repeat the `CREATE TABLE` statements below, naming this section as their authoritative source. Still the only source for the DDL; that is intentional, not a gap.
 
 Root `%LOCALAPPDATA%\DNAEntropyGraph\` (per Windows user by construction):
 
@@ -276,6 +282,8 @@ Crash-safe resumption rules:
 
 ## 4. Job state machine and the contract
 
+> Superseded by `docs/architecture.md` section 4 (the `JobPhase` state machine and the one-run sequence of events), `docs/job_contract.md` (the full manifest/status/progress/result contract and its versioning rule), and `docs/copy_catalog.md` section 1 (phase titles and copy). Kept for the reasoning; read the docs above for the current shape.
+
 ### 4.1 Phases (`JobPhase`)
 
 ```
@@ -289,11 +297,17 @@ Local target: Validating -> PreparingEngine -> Running -> Downloading(copy) -> C
 - `Provisioning`: VM create/start request through first `booting` status. `Preparing`: `installing` (image pull), `restoring-cache`, `model-loading`. `Running`: per input `validating`, `running`, `writing`. `Finalizing`: worker `uploading` -> terminal status, then lifecycle action.
 - Separate `VmLifecycle` (per `CloudResources` row): `Creating -> Running -> Stopping -> Stopped -> Deleting -> Deleted`, plus `KeepAlive(untilUtc)`.
 
+> **Now wrong:** "`Finalizing`: worker `uploading` -> terminal status, then lifecycle action" puts the VM stop/delete lifecycle action *before* `Downloading` in the diagram above. The main spec body's own plain-language stage list (section 4.4: "Checking your files, Uploading, Starting a GPU computer, Preparing the computer, Analysing, **Saving results, Downloading, Cleaning up**") puts it last, after the user already has their results. This appendix's ordering is the bug `docs/architecture.md` section 4 was found to have inherited from here and fixed this session: `Finalizing` is now defined there as ending once results are saved (matching "Saving results" only), and the lifecycle action's verification is described as happening after `Downloading`, immediately before `Completed`. This is a genuine disagreement between this appendix and the spec body, not a difference in detail level; the spec body wins per this appendix's own header.
+
 ### 4.2 Contract (authoritative schemas in `docs/contract/`)
+
+> Superseded: `docs/job_contract.md` is now the full field-by-field contract with worked examples of every file. See that doc, not this line, for the current shape; `docs/contract/*.schema.json` now exists as real files (issue #39).
 
 See Appendix B section 3 for the manifest, status and progress schemas and the bucket layout; the spec body's names win. The app polls with `IfGenerationNotMatch` so unchanged objects cost one 304. GCS objects are immutable, so "append" is implemented by re-uploading the whole small `progress.jsonl` (cap 1 MB; older lines roll into `progress.1.jsonl`).
 
 ### 4.3 Timeouts (defaults; `JobTimeoutMinutes=Auto`)
+
+> Superseded: `docs/job_contract.md` section 5 (heartbeat and death detection) carries these same numbers, cross-checked against `docs/cloud_design.md`. No disagreement found; read either, they now say the same thing.
 
 | Wait | Limit | On expiry |
 |---|---|---|
@@ -310,11 +324,15 @@ Cancellation: app writes `control/cancel`; after 30 s without `stage:cancelled`,
 
 ### 4.4 Error taxonomy
 
+> Superseded: `docs/copy_catalog.md` section 3 is now the authoritative code -> title/body/actions table (34 codes, cross-checked against `docs/user_guide/07-when-something-goes-wrong.md`), built from spec 5.9 and Appendix B section 7 exactly as this line anticipated. Read that, not this line, for the current copy.
+
 The authoritative list is spec 5.9 and Appendix B section 7. The app's `ErrorCatalog` maps every code to a `.resw` title, plain body and 1 to 3 actions. Every error card has "Copy details for support" (raw API error + job id + timestamps) and the prototype's "paste this into an LLM" hint in Details.
 
 ---
 
 ## 5. Viewer integration
+
+> Still the only source. No `docs/` file covers the igv.js/WebView2 bridge design below (the virtual-host mapping, the `bridge.js` message shape, the dark-mode CSS override, the WebView2 security settings). This is implementation detail an engineer building the viewer will need and currently cannot find outside this appendix. Filed as issue #312 to give it a home in `docs/` before or alongside whoever implements it, so this section does not stay the only copy indefinitely.
 
 **Primary: igv.js (MIT) embedded in WebView2, vendored offline.** Reasons over JBrowse 2: ~1 MB single file vs a React bundle, no build pipeline, first-class bedGraph/WIG/GFF3/FASTA, `indexed:false` FASTA for small sequences, and igv.js already matches the files the tool emits and the users' desktop IGV mental model. **Native chart** (`ScottPlot.WinUI` `Signal` plot) is worthwhile as a *fast overview*: History sparklines, Results header strip, PNG export, seam marker, drag-select to jump the viewer. WebView2 costs ~0.5 to 1 s to initialise and cannot be instanced per list row.
 
@@ -332,6 +350,8 @@ Data feed (no server):
 
 ## 6. Accessibility, DPI, keyboard, localization, toasts, file associations
 
+> `docs/ui_conventions.md` sections 5 and 6 summarize this section and explicitly name it as the fuller detail source; still the only source for the exact keyboard-shortcut list, the toast argument shape, and the file-association ProgID names, all implementation detail not yet duplicated anywhere else.
+
 - **DPI**: WinUI 3 is per-monitor v2 by default; only vector icons (`FontIcon`/`PathIcon`), no bitmaps except the app logo (`.svg` via `SvgImageSource`). WebView2 and ScottPlot inherit `RasterizationScale`.
 - **Accessibility**: `AutomationProperties.Name` on every icon-only button and the drop zone; `LiveSetting=Polite` on the stage list so Narrator announces phase changes; all colours from theme resources so High Contrast works; min 40x40 targets; drag-drop always has an "Add files" button twin; focus visuals default; no fixed heights (text scaling).
 - **Keyboard**: Ctrl+N new run, Ctrl+O add files, Ctrl+Shift+V paste sequence, Ctrl+Enter run, Esc cancel dialog, F5 refresh (Cloud/History), Ctrl+, Settings, Ctrl+L focus locus box in viewer, Alt+Left back. `AccessKey`s on nav items.
@@ -342,6 +362,8 @@ Data feed (no server):
 ---
 
 ## 7. Testing, CI, distribution
+
+> The CI job list and the Velopack-vs-MSIX distribution decision are superseded by `docs/packaging_design.md`, written with more since (the container image split, the version-lockstep rule). The detailed test scenario list below (the exact `Core.Tests`/`Cloud.Tests`/`Guards.Tests` cases) is still the only source; nothing in `docs/tests.md` duplicates it at this level of detail as of this session.
 
 **Unit (xUnit v3)**: `Core.Tests`: validator port against `tests/contract-fixtures/validation.json` (the same vectors pytest uses), `RunNamer`, `GpuPlanner`/`ModelGpuLinker` matrix, `CostEstimator`, `JobStateMachine` transitions (table-driven), `ErrorCatalog` classification (port of `test_cloud.py` cases), JSON round-trips vs schemas (`JsonSchema.Net`), Verify snapshots of manifests and the rendered startup script. `Presentation.Tests`: ViewModels with NSubstitute'd services and a synchronous `IDispatcher`, `FakeTimeProvider`.
 

@@ -4,7 +4,7 @@
 **Status:** Approved by the owner on 2026-09-19. Not yet implemented.
 **Repo:** `Raaif-Yousuf/DNA-Entropy-Graph`, public monorepo
 **Sources:** `FEATURES.md` (prototype inventory), the `dna-entropy` and `DNA-Entropy-GenBank` prototypes, and the CLAIR repository as the conventions donor.
-**Appendices:** [A. Windows app design](2026-09-18-appendix-a-app-design.md) · [B. Cloud and worker design](2026-09-18-appendix-b-cloud-design.md) · [C. Repository conventions](2026-09-18-appendix-c-repo-conventions.md). Where the body and an appendix disagree, the body wins; the appendices are the detailed drafts the body was reconciled from.
+**Appendices:** [A. Windows app design](2026-09-18-appendix-a-app-design.md) · [B. Cloud and worker design](2026-09-18-appendix-b-cloud-design.md) · [C. Repository conventions](2026-09-18-appendix-c-repo-conventions.md). Where the body and an appendix disagree, the body wins; the appendices are the detailed drafts the body was reconciled from. **As of 2026-09-19, most of that detail has itself been reconciled a second time, into `docs/`**: architecture, the job contract, the science, cloud design, UI copy, packaging, release, and threat model each now have a `docs/` file written later than these appendices and checked against more of the real system, including the worker subpackage these appendices only speculated about. Each appendix's own header names which of its sections are superseded, which remain the only source (a real gap worth knowing about, not a stale one), and which a later decision or this session's own work found to be outright wrong. Read an appendix's header before its tables.
 
 ---
 

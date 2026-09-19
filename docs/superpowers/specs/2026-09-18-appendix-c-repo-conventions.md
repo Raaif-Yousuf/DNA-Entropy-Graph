@@ -2,6 +2,8 @@
 
 **Status:** Design draft produced 2026-09-18 by the repo-conventions planning pass, adapted from the CLAIR repository's conventions, and reconciled into the [main spec](2026-09-18-dna-entropy-graph-design.md). Where this appendix and the spec body disagree (for example .NET version, VM naming, worker delivery), **the spec body wins**. This appendix is the paste-ready source for the `docs:` issues in milestone v0.1: the CLAUDE.md draft, the docs set and templates, the `.claude/` set, the GitHub workflow design, and the issue body template.
 
+**Reconciliation note (2026-09-19, this repo's own docs pass):** this appendix was "paste-ready source" for things that, as of this session, have all been pasted and built: `CLAUDE.md`, `docs/README.md` and the full `docs/` set, `.claude/settings.json`, `.claude/skills/*`, `.claude/agents/cold-diff-reviewer.md`, `.claude/memory/*`, `.github/labels.yml`, the issue and PR templates, and every CI workflow named below except `release.yml` (not written yet, `app/` does not exist) and `cloud-canary.yml` (not written yet). Section 2 (the CLAUDE.md draft) and section 4 (the `.claude/` set) are superseded by the real files; read those, not this draft, for the current exact text, since the real files were adapted rather than pasted verbatim in a few places (the real `.claude/settings.json`, for one, has more allowed commands than the draft below, and the memory-sync hooks are currently disabled pending `DECISION` issue #302, which this draft could not have anticipated). Sections 6 through 8 (issue title conventions, epic structure, the body template, what was deliberately not carried forward, the sequencing plan) remain the accurate, actively-used convention; no pointer added there, they are not stale.
+
 ---
 
 ## 1. Repo layout
@@ -56,6 +58,8 @@ DNA-Entropy-Graph/
 ---
 
 ## 2. CLAUDE.md draft (full text; adjust versions to the spec body)
+
+> Superseded: the real `CLAUDE.md` at the repo root is the current text (rewritten via issue #267). Read that file, not this draft; the Hard Rule count and numbering match, but the real file has been adjusted since this was pasted.
 
 ```markdown
 # DNA-Entropy-Graph : Quick-Reference Card
@@ -306,6 +310,8 @@ agent driving `cloud_gpu_test.ps1` launches detached and polls the log.
 
 ## 3. docs/ set for day one
 
+> Superseded: `docs/README.md` is now the real index and the house-style section below was pasted into it near-verbatim, as planned. Read the real file for the current topic map; every doc named below now exists.
+
 | File | Type | Purpose (one line) |
 |---|---|---|
 | `docs/README.md` | index | Topic map, house style (which surface owns which fact), skills table, reading order, editing rules |
@@ -425,6 +431,8 @@ Two more rules of this house:
 
 ## 4. `.claude/` set
 
+> Superseded: the real `.claude/settings.json`, `.claude/skills/*`, `.claude/agents/cold-diff-reviewer.md`, and `.claude/memory/*` all exist. The real settings.json's allow-list has grown past what is pasted below, and the `SessionStart`/`Stop` memory-sync hooks are currently empty arrays pending `DECISION` issue #302 (a privacy finding this draft predates), documented in `.claude/README.md`. Read the real files for the current exact behaviour.
+
 ### `.claude/settings.json`
 
 ```json
@@ -505,6 +513,8 @@ Frontmatter `name`, `description` ("Independent, framing-free review of a C#/Win
 ---
 
 ## 5. GitHub workflow design
+
+> Superseded for what has shipped: `.github/labels.yml`, the issue/PR templates, `ci-app.yml`, `ci-docs.yml`, and `ci-worker.yml` (now with a `scripts-tests` job this draft did not anticipate) all exist as real files. `release.yml` and `cloud-canary.yml` do not exist yet; this section remains the only source for those two until they are built. The `needs-criteria` label exists and is applied per this section's own rule (this session's own backlog audit checked it against every open issue).
 
 ### Labels (`.github/labels.yml`, applied by `scripts/sync_labels.ps1`)
 

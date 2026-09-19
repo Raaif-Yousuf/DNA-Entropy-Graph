@@ -2,6 +2,8 @@
 
 **Status:** Design draft produced 2026-09-18 by the cloud-orchestration planning pass and reconciled into the [main spec](2026-09-18-dna-entropy-graph-design.md). Where this appendix and the spec body disagree, **the spec body wins**; in particular the long-sequence section here was superseded by spec 5.6 (context length K, bidirectional combined prediction), and the naming is spec D13. This appendix is kept for the API-level detail: OAuth and consent, the wizard's API mapping, the bucket layout and schemas, the instance spec, the startup script, the worker package layout, the cost model, the full error table, IAM, testing and the verification list.
 
+**Reconciliation note (2026-09-19, this repo's own docs pass):** this is the appendix that changed most since 2026-09-18. The worker subpackage section 5 speculates about, is now real, shipped code (`worker/src/dna_entropy/worker/` and `analysis/windowing.py`/`direction.py`), and `docs/job_contract.md` now owns the bucket layout and every schema in section 3 with worked examples. `docs/cloud_design.md` owns the preflight order, the zone ladder, IAM, and termination semantics; `docs/copy_catalog.md` owns the error taxonomy's user-facing copy; `docs/threat_model.md` owns the security and privacy reasoning, in more depth than section 8 below. Section-level pointers are added where a reader could be misled into implementing from this draft instead of the current doc. One correction of substance: section 4.1's on-demand GCP prices are still accurate as far as this session's research could verify, but its **Spot** prices for A100-40 and A100-80 disagree with independent sources by 2 to 4x (issue #303, filed this session, not yet resolved); do not treat either number as settled.
+
 Scope: everything between "user clicks Run" and "results are on disk", for a WinUI 3 app that drives the user's own GCP project through Google APIs (no gcloud, no SSH), plus the Python worker (`dna_entropy`) that runs on the VM or locally. Label on every resource: `app=dna-entropy-graph`.
 
 Lessons carried over from the prototypes (`DNA-Entropy-Genbank/src/dna_entropy/cloud/*.py`) and CLAIR (`docs/gce_wave_brief.md`):
@@ -17,6 +19,8 @@ Lessons carried over from the prototypes (`DNA-Entropy-Genbank/src/dna_entropy/c
 ---
 
 ## 1. OAuth and consent
+
+> `docs/threat_model.md` section 3 supersedes the *reasoning* for section 1.2's scope choice (why `cloud-platform` over incremental scopes), with more honesty about the tradeoff than this draft had room for, and is cross-referenced from `docs/user_guide/02-connect-google-cloud.md` for the plain-language version a lab user reads. The client-type/flow mechanics (1.1), the client-based-vs-resource-based API split (1.4), and Windows token storage (1.5) are still the only source; nothing in `docs/` duplicates the `GoogleAuthorizationCodeFlow`/`LocalServerCodeReceiver`/`DpapiFileDataStore` implementation detail yet.
 
 ### 1.1 Client type and flow
 - **OAuth client**: type "Desktop app", owned by the author's GCP project (call it `dna-entropy-graph-oauth`). Desktop clients use the loopback redirect `http://127.0.0.1:{ephemeral}/authorize/`; no redirect URI registration needed. The client id and "secret" ship in the binary; Google explicitly treats desktop client secrets as non-confidential.
@@ -55,6 +59,8 @@ With user tokens minted by the author's OAuth client, **client-based APIs** (Res
 
 ## 2. First-run setup wizard
 
+> `docs/gcp_setup_manual.md` is the plain-voice fallback for a user, and `docs/cloud_design.md` section 2 owns the *preflight order* these steps check (project, billing, API, quota). Neither repeats the exact API call per step below; still the only source for the wizard's implementation-level API mapping.
+
 Principles: every step is idempotent and re-runnable; the wizard persists setup state per (account, project) so a second PC on the same account *discovers* rather than *recreates*; every step shows "what we're doing / why / what it costs".
 
 | # | Step | API call | Automated? | Fallback |
@@ -80,6 +86,8 @@ Principles: every step is idempotent and re-runnable; the wizard persists setup 
 ---
 
 ## 3. Job orchestration
+
+> Superseded: `docs/job_contract.md` is now the authoritative version of this entire section, identifiers, bucket layout, `manifest.json`, `status.json`, heartbeat/death-detection, and cancellation, each with a worked example and cross-checked against the real `worker/src/dna_entropy/worker/` code that now implements it. Read that doc; this section is kept as the reasoning trail, not a second copy to keep in sync by hand.
 
 ### 3.1 Identifiers (spec D13)
 - `installationId`: GUID generated at first launch, stored locally; label value lowercase `[a-z0-9_-]` <= 63 chars -> 26-char Crockford base32.
@@ -152,6 +160,8 @@ Poll `status.json` every 5 s for the first 10 min, then 10 s (GET with `ifGenera
 
 ### 4.1 Model to GPU matrix
 
+> **Now wrong, partially:** `docs/research/2026-09-19-gpu-pricing-and-instances.md` (this session's research pass) confirms the on-demand prices below within rounding, but found the **Spot** prices for the two A100 rows disagree with independent sources by roughly 2 to 4x (~$0.43/h and ~$0.58/h found vs. ~1.1-2.1 and ~1.5-2.0 shown below). Neither figure is vendor-verified yet; issue #303 tracks getting a real reading. Do not treat either number as settled, and do not average them.
+
 | Model | Precision / stack | Fits on | Machine type | Quota metric | ~$/h on-demand (us-central1) | Spot ~$/h | Notes |
 |---|---|---|---|---|---|---|---|
 | `evo2_7b` (default), `evo2_7b_262k` | bf16, flash-attn, no Transformer Engine | any 24 GB+ | **g2-standard-8** (1x L4 24 GB) | `NVIDIA_L4_GPUS` | ~0.85 | ~0.18 to 0.30 | default tier; context ceiling 8,192 |
@@ -217,6 +227,9 @@ Error classification from `Operation.Error.Errors[].Code` and HTTP status (port 
 | HttpRequestException / timeouts | network (retry with backoff) |
 
 ### 4.5 Startup script (metadata `startup-script`, bash, idempotent, runs on every boot including restarts)
+
+> `worker/vm/startup.sh` now exists as real, shipped code (landed this session, alongside the worker subpackage). This pseudocode is the design it was built from; check the real file for the current exact behaviour rather than trusting this block byte for byte, the same caution `docs/cloud_design.md` section 8 already gives for the termination semantics this script implements.
+
 ```
 set -uo pipefail; exec > >(tee -a /var/log/deg-startup.log) 2>&1
 MD=http://metadata.google.internal/computeMetadata/v1; H='Metadata-Flavor: Google'
@@ -260,11 +273,16 @@ case $rc in 10) cleanup stop;; 11) cleanup delete;; *) cleanup "$LIFECYCLE";; es
 Notes: the HF cache on the host disk survives STOP/START so a restarted VM does not re-download weights. The worker, not the script, uploads outputs and writes terminal status; the script only writes `booting`/`installing` and infra-level failures. `put_object` uses curl unconditionally so the same script runs on Container-Optimized OS for the smoke test.
 
 ### 4.6 Least-privilege IAM for the worker SA
+
+> Superseded: `docs/cloud_design.md` section 7 carries this forward unchanged; no disagreement.
+
 Custom role `projects/<p>/roles/dnaEntropyWorker`: `compute.instances.get`, `compute.instances.stop`, `compute.instances.delete`, `compute.zoneOperations.get`. Project-level binding with IAM condition `resource.type == "compute.googleapis.com/Instance" && resource.name.extract("/instances/{name}").startsWith("deg-")` (verify the CEL once in the smoke test). Bucket: `roles/storage.objectAdmin` on the results bucket only. No `logging.logWriter` needed. The signed-in user needs `iam.serviceAccounts.actAs` on the SA (Owner/Editor have it; a bare Compute Admin does not -> `PERMISSION_ACTAS`).
 
 ---
 
 ## 5. Worker (Python) changes in `dna_entropy`
+
+> **Superseded, and this is the section that changed most tonight.** Everything speculated below now exists as real, tested code: `worker/src/dna_entropy/worker/` (`manifest.py`, `status.py`, `blobstore.py`, `cancel.py`, `lifecycle.py`, `weights.py`, `runner.py`, `__main__.py`) and `worker/src/dna_entropy/analysis/{windowing,direction}.py`, each with its own test file, `pytest -m "not gpu"` at 309 passed as of this session (up from 92 before). `docs/job_contract.md` documents the contract-visible parts field by field; `docs/science_and_formats.md` documents the windowing/direction behaviour. The real function and class names may not match the speculative ones below exactly (this appendix was the design the code was built from, not a spec the code was checked against line by line); read the code or `docs/job_contract.md` for the current names, this section for why they exist.
 
 Hard rules preserved: only `predictors/evo.py` imports torch/evo2; `pipeline.run` unchanged in signature; `pytest -m "not gpu"` green on a laptop.
 
@@ -287,6 +305,8 @@ Where the worker code comes from: **baked into the container at the release tag*
 
 ## 6. Cost model and guards
 
+> Superseded: `docs/cloud_design.md` section 10 carries this forward, now naming `docs/research/2026-09-19-gpu-pricing-and-instances.md` as `pricing.json`'s seed source and flagging every figure in it `THEORY (unverified)` until #303 resolves; `docs/user_guide/06-costs-and-cleanup.md` is the reader-facing version, with worked examples this section did not have.
+
 - `pricing.json` shipped per release: `{machineType: {onDemand, spot, byRegionGroup}}`, GPU, pd-balanced $/GB-month (~0.10), GCS standard (~0.02 to 0.026/GB-month). Optional live refresh from the Cloud Billing Catalog API (`services/6F81-5844-456A/skus`) at most once a day; fall back to the shipped table.
 - **Live ticker** per running job: `(now - instance.lastStartTimestamp) x hourlyRate / 3600 + disk`, updated every 10 s; history rows store machine type, provisioning model, zone, start/stop, estimated cost, disk GB, lifecycle.
 - Pre-run estimate: `(expected minutes) x rate`, expected minutes from history for the same model tier (default 12 min fresh / 5 min warm for 7B), shown with "up to $X (your max-hours cap)".
@@ -297,6 +317,8 @@ Where the worker code comes from: **baked into the container at the release tag*
 ---
 
 ## 7. Error taxonomy (plain language, one action each)
+
+> Superseded: `docs/copy_catalog.md` section 3 is now the authoritative, reconciled version of this table (same 34 codes, wording checked against `docs/user_guide/07-when-something-goes-wrong.md`, resw key names added). Read that table; this one is the source it was built from.
 
 | Code | User sees | Action |
 |---|---|---|
@@ -339,6 +361,8 @@ Every error card has "Copy technical details" (raw API error + job id + timestam
 
 ## 8. Security and privacy
 
+> Superseded: `docs/threat_model.md` is the deep-dive this section's bullets summarize, assets, trust boundaries, and an honest "what an attacker at each access level can do" table this section did not have room for. Read that doc; this section is accurate but thin next to it.
+
 - Sequences: app -> user's bucket (TLS) -> VM in user's project -> outputs in user's bucket -> app. Nothing transits author infrastructure. Bucket: uniform bucket-level access, public access prevention enforced, only the user (Owner) and the worker SA (objectAdmin, this bucket only) can read.
 - VM: dedicated SA with a custom role limited to stop/delete of `deg-*` instances and one bucket; no SSH keys (`block-project-ssh-keys=true`), no ports opened by us. Optional hardening (DECISION): a dedicated network `deg-net` with no ingress rules.
 - Logs: worker logs contain names, lengths, timings, never sequence content.
@@ -350,6 +374,8 @@ Every error card has "Copy technical details" (raw API error + job id + timestam
 ---
 
 ## 9. Testing
+
+> Still the only source for the detailed `FakeGcp`/`Cloud.Tests` scenario list and the Python test file names below; `docs/tests.md` (out of this session's scope to check in detail) may summarize the matrix of what runs where without repeating each scenario.
 
 **C# (unit/integration without GCP)**: gateway interfaces (`IAuthGateway`, `IProjectsGateway`, `IBillingGateway`, `IServiceUsageGateway`, `IIamGateway`, `IQuotasGateway`, `IComputeGateway`, `IStorageGateway`, `IBlobstore`). One `FakeGcp` in-memory world implementing all: projects, billing accounts (flags free-trial / no-permission), API enablement with simulated LRO delay, per-zone GPU capacity and per-region quota tables, instance state machine (PROVISIONING -> STAGING -> RUNNING -> TERMINATED, spot preemption), bucket objects with generations, a scripted fake worker. Scenario tests: wizard from zero, second-PC discovery, each error row in section 7, zone ladder (stockout x3 -> parallel win + duplicate deletion; quota in region -> skipped; billing error -> abort first zone), heartbeat stale -> unresponsive, exit-scan modal, cost ticker arithmetic, DPAPI store round-trip, account switching, lease-based adoption.
 
@@ -368,3 +394,5 @@ Every error card has "Copy technical details" (raw API error + job id + timestam
 **Unknowns to verify (cheap experiments, filed as spike issues)**: DLVM image ships Docker + NVIDIA Container Toolkit + gcloud; `HttpListener` loopback unelevated on a locked-down PC; Google.Cloud.* builders accept `UserCredential`; IAM condition CEL on instance-name prefix from the metadata-token path; Cloud Quotas eligibility and `ineligibilityReason` on a fresh project; NGC PyTorch base + `pip install evo2` imports cleanly and reproduces prototype numbers; the "<= 7-day maxRunDuration consumes preemptible quota" rule on a fresh project; quota-project semantics via the author's OAuth client; actual prices per region group at release time.
 
 **Owner-only decisions** (issues labelled DECISION): single scope vs incremental; 40B in v1; Stop vs Delete default; Spot default; dedicated VPC; privacy policy hosting domain and who owns the OAuth project; consent publish timing; max run duration and retention defaults.
+
+> Status update: every decision in the list above now has a written recommendation on its issue (`#18`, `#14`, `#9`, `#10`, `#19`, `#22`, `#11`, `#12`/`#13`; see `OWNER_TODO.md`'s decision table for the one-line summary of each). They remain open pending the owner's actual confirmation, not because nobody has reasoned about them yet.
