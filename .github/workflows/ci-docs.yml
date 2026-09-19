@@ -78,7 +78,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Full history on purpose. check_totest_format.py validates that the closing sha in
+      # every ToTest row is a commit this repo actually has, and the default shallow
+      # clone (depth 1) does not have it, so every row failed with "not a commit this
+      # repo has". The check is right; the clone was wrong.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
