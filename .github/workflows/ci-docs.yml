@@ -103,11 +103,29 @@ jobs:
 
       # Each check enables itself when its script lands, so this job tightens
       # automatically rather than needing a workflow edit per issue.
-      - name: Run every scripts/check_*.py that exists
+      #
+      # scripts/check_third_party_notices.py is EXCLUDED from this loop (2026-09-19,
+      # issue #34): unlike every other check_*.py here, it needs a real `dotnet` CLI
+      # (to enumerate app/'s NuGet tree) and worker/.venv (to read installed Python
+      # package licences) - neither exists on this bare ubuntu-latest + setup-python job,
+      # and worker/.venv is gitignored so no checkout ever has it ready-made. Running it
+      # here would not silently pass (this is not the false-pass shape it used to be
+      # before #34); it would CRASH on "dotnet: command not found", which is a worse
+      # failure than simply not running yet - a confusing, unhelpful red build that
+      # teaches people to route around this loop rather than fix a real licence problem.
+      # It has no CI job of its own yet (needs dotnet restore for app/ AND a `uv venv`'d
+      # worker/.venv in the same job - see the follow-up filed for this) and must be run
+      # locally (`worker\.venv\Scripts\python.exe scripts\check_third_party_notices.py`)
+      # until that job exists.
+      - name: Run every scripts/check_*.py that exists (except third-party-notices, see above)
         run: |
           shopt -s nullglob
           found=0
           for script in scripts/check_*.py; do
+            if [ "$script" = "scripts/check_third_party_notices.py" ]; then
+              echo "::notice title=skipped check_third_party_notices.py::needs dotnet + worker/.venv, not set up on this job (issue filed; see this step's own comment in ci-docs.yml)."
+              continue
+            fi
             found=1
             echo "::group::$script"
             python "$script"

@@ -1,9 +1,15 @@
 # Packaging design: installer, signing, update channel, version lockstep, container images
 
-**Status: specification, not yet implemented.** `app/`, `worker/vm/`, and
-`worker/Dockerfile.*` do not exist yet. This doc records the decisions already made (spec
-D2, D3, D5, D6) and what each one is for, so a later change has to argue against a
-reasoned choice instead of rediscovering the tradeoffs from nothing.
+**Status update (2026-09-19):** the line below used to read "specification, not yet
+implemented" and name `app/`, `worker/vm/`, and `worker/Dockerfile.*` as not existing yet.
+All three now exist (`app/DnaEntropyGraph.sln`, issue #61; `worker/vm/startup.sh`, issue
+#45; `worker/Dockerfile.cpu`/`.cuda`, issue #36) - corrected here rather than left as a
+stale assertion about a state that has since changed (see the "assertion that encodes a
+temporary fact" lesson: assert the rule/decision, not a snapshot of today's tree). This doc
+records the decisions already made (spec D2, D3, D5, D6) and what each one is for, so a
+later change has to argue against a reasoned choice instead of rediscovering the tradeoffs
+from nothing; section 8 (supply-chain notices and scanning) is the one part of this file
+actually built and verified as of this session.
 
 ---
 
@@ -135,6 +141,56 @@ re-bake maintenance burden.
 The exact command sequence and verification steps for cutting one are in
 [`release_runbook.md`](release_runbook.md); this doc is the "why it is built this way",
 that one is the "how to do it right now".
+
+## 8. Supply-chain notices and scanning (issue #34, #197)
+
+**`THIRD-PARTY-NOTICES.md`** is generated, never hand-edited, by
+`scripts/gen_third_party_notices.py`, and `scripts/check_third_party_notices.py` fails CI
+if the committed file disagrees with a fresh regeneration (Hard Rule 16: regenerate and
+commit in the same commit as any dependency change). The generator enumerates:
+
+- Every .NET package (direct + transitive) reachable from the six shipped projects
+  (`App`, `Core`, `Cloud`, `Persistence`, `Presentation`, `LocalEngine` - never the test
+  projects or the `CloudCli` dev tool), via `dotnet list package --include-transitive`
+  and the already-restored package's own `.nuspec` in the local NuGet cache. No network
+  call.
+- Every Python dependency `worker/pyproject.toml` declares: its core `dependencies`
+  (always installed) plus the `genes`/`evo` extras (installed into the `-cuda`/`-cpu`
+  container images and the local engine's pinned venv, per issue #301's own scoping) count
+  as shipped; the `dev` extra (pytest, jsonschema, hypothesis) does not (issue #402's
+  recorded decision: Hard Rule 21 scopes to shipped code). Licence data comes from
+  `worker/.venv`'s own installed package metadata (PEP 639 `license_expression`), never a
+  network call.
+
+A shipped dependency's licence is classified **allowed** (MIT/Apache-2.0/BSD-family),
+**denied** (GPL/LGPL/AGPL with no recorded exception - fails the check), **denied with a
+recorded carve-out** (currently only `pyrodigal`, GPL-3.0, per issue #301's owner
+recommendation - not yet formally written into `docs/hard_rules.md` rule 21's own
+carve-out line, which the generator's own output says plainly), or **unrecognized** (a
+non-SPDX licence string with no curated override - also fails the check, never silently
+passed). A **platform** scope (the Windows App SDK / WebView2 / Windows SDK build tools,
+under Microsoft's own proprietary licence terms rather than a dependency this project
+chose) is excluded from the gate entirely pending a scoping decision (issue #413,
+DECISION). As of this session the one still-open, unresolved item the generator itself
+reports is `evo2`'s licence, cited from `docs/tech_stack.md`'s own MEASURED entry rather
+than independently re-verified (no network access, GPU-only, never installed on the
+laptop) - the honest state, not silently passed.
+
+**CI scanning** (`.github/workflows/codeql.yml`, `.github/dependabot.yml`): CodeQL runs
+for Python, GitHub Actions, and (added this session, now that `app/` exists per #61) C#,
+with an explicit `dotnet restore`/`build` step for the C# language rather than relying on
+`autobuild`'s heuristics against an unpackaged, central-package-managed WinUI 3 solution.
+Dependabot watches `github-actions`, `pip` (`worker/`), and `nuget` (`app/`) weekly; the
+`docker` ecosystem is deliberately absent until issue #36's Dockerfiles need their own
+update cadence (they already exist as of this session but the ecosystem entry itself is a
+separate, not-yet-filed follow-up). `dependency-review-action` on pull requests
+(deny-licenses matching Hard Rule 21's own list) cannot actually run yet for two
+independent, already-documented reasons: every workflow in this repo is
+`workflow_dispatch`-only (the owner's on-demand-CI decision, so there is no `pull_request`
+trigger for the job's `if:` condition to ever satisfy), and even a restored PR trigger
+would fail immediately because the repository's Dependency graph setting is off (issue
+#325, an owner-only action). Restoring the PR trigger before #325 is done would recreate a
+permanently red check.
 
 ## Related
 
