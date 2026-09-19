@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from dna_entropy.analysis.windowing import (
@@ -9,6 +11,7 @@ from dna_entropy.analysis.windowing import (
     MIN_RECOMMENDED_CONTEXT_LENGTH,
     MIN_SEQUENCE_LENGTH,
     WindowingError,
+    WindowPlan,
     compute_window,
     halved,
     plan_windows,
@@ -80,6 +83,25 @@ def test_every_window_except_a_short_final_one_is_full_width() -> None:
     plan = plan_windows(length=20000, context_length=4096, ceiling=8192)
     for i in range(plan.num_windows):
         assert plan.width_at(i) == plan.window  # every window here is a full W wide
+
+
+# --- WindowPlan.context: deliberately removed (found during the lane-B audit) ---------
+#
+# Was set (as `context=context_length` in plan_windows) and never read anywhere as
+# `plan.context` -- unlike `.ceiling` (same shape, fixed by threading it into
+# DirectionResult/SummaryWriter's provenance, since nothing else recorded it), K is
+# ALREADY recorded independently on DirectionResult.context_length, sourced from the same
+# `context_length` parameter every caller already has in scope. There was no unmet need
+# for a second, redundant home for the same value, so this one was deleted rather than
+# wired up. (`check_unused_fields.py`'s own name-based matching missed this one because
+# `.context` also names an unrelated, genuinely-read field on `SinglePassResult`.)
+
+
+def test_windowplan_no_longer_carries_a_redundant_context_field() -> None:
+    field_names = {f.name for f in dataclasses.fields(WindowPlan)}
+    assert "context" not in field_names
+    plan = plan_windows(length=200, context_length=4096, ceiling=8192)
+    assert not hasattr(plan, "context")
 
 
 def test_last_window_covers_the_sequence_end_exactly() -> None:
@@ -267,3 +289,67 @@ def test_halved_reaches_a_stable_floor_not_an_infinite_shrink() -> None:
     # Monotonically non-increasing throughout, and settles (does not oscillate/grow).
     assert windows == sorted(windows, reverse=True)
     assert windows[-1] == windows[-2] == windows[-3]  # reached and held a floor
+
+
+# --- property, table-driven adversarial grid (issue #160, windowing scope only) --------
+#
+# `hypothesis` is not installed in worker\.venv on this laptop (verified: `import
+# hypothesis` -> ModuleNotFoundError); per the brief, nothing was installed to get it.
+# This is the table-driven equivalent over a deliberately adversarial (L, K, ceiling)
+# grid rather than a generated one -- the real Hypothesis version is filed as its own
+# issue instead of half-implemented here. Property under test: every position of the
+# input is covered by exactly one WINNING window after stitching (the "combined output
+# position" -- see `analysis/direction.py::_stitch_forward`'s "local > context[..]"
+# tie-break, simulated here at the windowing level since that is this module's own
+# surface), for every L relative to K including L < K, L == K, L == 2K, L == 2K + 1, and
+# L == 1 -- each swept across both a K-bound window (ceiling far above 2K) and a
+# ceiling-bound window (ceiling barely above K, the tightest valid stride).
+
+
+def _covered_exactly_by_the_winning_window(plan: WindowPlan) -> bool:
+    """Reimplements _stitch_forward's coverage guarantee (max-local-context wins) at the
+    plan level, with no predictor involved: every position 0..length-1 must end up
+    assigned from exactly one window (never left uncovered)."""
+    context = [-1] * plan.length
+    for start in plan.starts:
+        width = plan.window if start + plan.window <= plan.length else plan.length - start
+        for local in range(width):
+            global_idx = start + local
+            if local > context[global_idx]:
+                context[global_idx] = local
+    return all(c >= 0 for c in context) and len(context) == plan.length
+
+
+_ADVERSARIAL_K = [1, 2, 5, 128]
+
+
+def _adversarial_lengths(k: int) -> list[int]:
+    return sorted({1, k, k + 1, 2 * k, 2 * k + 1, 2 * k + 5, 10 * k + 3})
+
+
+@pytest.mark.parametrize("k", _ADVERSARIAL_K)
+def test_every_position_covered_exactly_once_k_bound_window(k: int) -> None:
+    # ceiling far above 2K: window is K-bound (W = 2K exactly).
+    ceiling = 2 * k + 1000
+    for length in _adversarial_lengths(k):
+        plan = plan_windows(length=length, context_length=k, ceiling=ceiling)
+        assert _covered_exactly_by_the_winning_window(plan), (length, k, ceiling)
+
+
+@pytest.mark.parametrize("k", _ADVERSARIAL_K)
+def test_every_position_covered_exactly_once_ceiling_bound_window(k: int) -> None:
+    # ceiling barely above K: window is ceiling-bound (the tightest valid stride, S=1).
+    ceiling = k + 1
+    for length in _adversarial_lengths(k):
+        plan = plan_windows(length=length, context_length=k, ceiling=ceiling)
+        assert _covered_exactly_by_the_winning_window(plan), (length, k, ceiling)
+
+
+@pytest.mark.parametrize("k", _ADVERSARIAL_K)
+def test_starts_are_sorted_and_unique_across_the_adversarial_grid(k: int) -> None:
+    # A duplicate or out-of-order start would silently re-run or skip a window.
+    for ceiling in (2 * k + 1000, k + 1):
+        for length in _adversarial_lengths(k):
+            plan = plan_windows(length=length, context_length=k, ceiling=ceiling)
+            assert list(plan.starts) == sorted(set(plan.starts))
+            assert len(plan.starts) == len(set(plan.starts))

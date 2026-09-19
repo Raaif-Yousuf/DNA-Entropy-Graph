@@ -11,6 +11,7 @@ from dna_entropy.analysis.direction import (
     reverse_complement,
     run_windowed,
 )
+from dna_entropy.analysis.entropy import shannon_entropy
 from dna_entropy.config import Direction
 from dna_entropy.predictors.base import PredictorOOMError, check_probability_matrix
 from dna_entropy.predictors.mock import MockPredictor
@@ -354,3 +355,84 @@ def test_direction_result_is_the_expected_dataclass() -> None:
     assert result.context_length == 8
     assert result.window == 16  # min(2*8, 64)
     assert result.stride == 8
+
+
+# --- property, table-driven adversarial grid (issue #160, direction scope only) --------
+#
+# `hypothesis` is not installed in worker\.venv on this laptop (verified: `import
+# hypothesis` -> ModuleNotFoundError); per the brief, nothing was installed to get it.
+# This is the table-driven equivalent over a deliberately adversarial grid rather than a
+# generated one -- the real Hypothesis version is filed as its own issue instead of
+# half-implemented here. A tolerance is used throughout, never exact float equality
+# (MEASURED 2026-09-19: a log2-based parity fixture elsewhere in this repo passed on
+# Windows and failed on Linux CI over an exact-equality assertion on the last bit).
+
+
+def _adversarial_seq(length: int) -> str:
+    """A deterministic ACGT sequence of exactly `length` bases with no long homopolymer
+    run, so a reversed-text bug and a real reverse-complement bug would not
+    coincidentally produce the same result."""
+    pattern = "ACGTGGCATCGA"
+    return (pattern * (length // len(pattern) + 2))[:length]
+
+
+def test_entropy_is_invariant_under_the_complement_column_permutation() -> None:
+    """The whole justification for combining a forward and a reverse-complement pass
+    (module docstring): complementing (A<->T, C<->G) is just a relabelling of the same
+    four symbols, so it must never change how spread-out a distribution is. Swapping the
+    A/T and C/G probability COLUMNS must leave shannon_entropy unchanged for every
+    distribution -- tested as a property over a grid, not one fixture.
+    """
+    # NUCLEOTIDES = ("A", "C", "G", "T"): complement column permutation is A<->T (0<->3),
+    # C<->G (1<->2).
+    complement_perm = [3, 2, 1, 0]
+    for seed in (0, 1, 2, 7, 99):
+        for length in (1, 2, 5, 50):
+            rng = np.random.default_rng(seed)
+            logits = rng.standard_normal((length, 4))
+            exp = np.exp(logits - logits.max(axis=1, keepdims=True))
+            probs = (exp / exp.sum(axis=1, keepdims=True)).astype(np.float32)
+            h_original = shannon_entropy(probs)
+            h_complemented = shannon_entropy(probs[:, complement_perm])
+            assert np.allclose(h_original, h_complemented, atol=1e-5), (seed, length)
+
+
+_ADVERSARIAL_K = [1, 2, 5, 20]
+
+
+def _adversarial_lengths_at_least_2k(k: int) -> list[int]:
+    # Seam is only defined for L >= 2K; sweep exactly-2K, one-past, and further out.
+    return sorted({2 * k, 2 * k + 1, 2 * k + 5, 10 * k + 3})
+
+
+@pytest.mark.parametrize("k", _ADVERSARIAL_K)
+def test_seam_position_matches_where_the_combiner_actually_switched(k: int) -> None:
+    """The seam recorded in provenance must be the EXACT index the combined track
+    switches from reverse-sourced to forward-sourced values -- checked against an
+    independently computed BOTH_SEPARATE run with the identically-seeded predictor
+    (the same determinism `test_both_separate_populates_forward_and_reverse_values`
+    relies on), not merely "seam == K" taken on faith.
+    """
+    for length in _adversarial_lengths_at_least_2k(k):
+        seq = _adversarial_seq(length)
+        separate = analyze_direction(
+            MockPredictor(seed=42),
+            seq,
+            context_length=k,
+            ceiling=max(2 * k + 1000, 8192),
+            direction=Direction.BOTH_SEPARATE,
+        )
+        combined = analyze_direction(
+            MockPredictor(seed=42),
+            seq,
+            context_length=k,
+            ceiling=max(2 * k + 1000, 8192),
+            direction=Direction.BOTH_COMBINED,
+        )
+        seam = combined.seam
+        assert seam == k, (length, k)
+        # Before the seam: combined must equal the reverse-only track (reduced tolerance,
+        # never exact float equality per Hard Rule/MEASURED note above).
+        assert np.allclose(combined.values[:seam], separate.reverse_values[:seam], atol=1e-5), (length, k)
+        # At and after the seam: combined must equal the forward-only track.
+        assert np.allclose(combined.values[seam:], separate.forward_values[seam:], atol=1e-5), (length, k)
