@@ -145,7 +145,7 @@ scripts/check_*.py`) — it tightens automatically as each one lands, with no
 workflow edit per issue, which is why grepping the workflow file for a
 script's literal name finds nothing even once that script is fully wired in;
 read the loop, not the filename, when checking whether a guard is enforced.
-Seven exist as of this revision, each with a `--self-test` flag that runs
+Eight exist as of this revision, each with a `--self-test` flag that runs
 against synthetic fixtures:
 
 ```powershell
@@ -156,7 +156,8 @@ python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness
 python scripts\check_version_lockstep.py      # every version-bearing file agrees
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
-python scripts\<any check_*.py> --self-test   # every one of the seven supports this
+python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
+python scripts\<any check_*.py> --self-test   # every one of the eight supports this
 ```
 
 **Running `scripts/tests/` itself** — the hooks, the label/memory sync, `compile_sprint_log.py`, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1`, and every `check_*.py` guard above all have their own test file here, run as one suite (issue #311's own scripts-tests CI job runs exactly this, on Ubuntu, with full git history since some tests exercise git-aware code paths):
