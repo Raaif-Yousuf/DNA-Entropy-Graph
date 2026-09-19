@@ -139,7 +139,31 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     # UTF-8, and would decode differently again on a UTF-8-locale Linux box. Decoding
     # ourselves first makes GenBank agree with every other reader and strips a BOM
     # before Biopython's scanner ever sees a 'LOCUS' line.
-    parsed = list(SeqIO.parse(io.StringIO(read_text(path)), "genbank"))
+    text = read_text(path)
+    # #349: normalize line endings the same way readers/fasta.py's text.splitlines()
+    # already does for free -- a lone '\r' (classic Mac, and what some sequencing
+    # instruments still emit) must parse successfully, not merely fail cleanly.
+    # Biopython's line-by-line Scanner reads with a real handle's readline(), which does
+    # not get Python's universal-newlines treatment the way str.splitlines() does, so it
+    # has to be done here, before the text reaches Bio.GenBank.Scanner.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        # #349: every malformed-content failure this scanner raises for GenBank/EMBL is
+        # documented and observed to be a ValueError (including its own
+        # Bio.GenBank.ParserFailureError, itself a ValueError subclass) -- MEASURED
+        # 2026-09-19 against a missing-ORIGIN-block fixture and this repo's own test
+        # suite. list() is what actually drives the parser, since SeqIO.parse() returns
+        # a lazy generator that raises only once iterated.
+        parsed = list(SeqIO.parse(io.StringIO(text), "genbank"))
+    except ValueError as exc:
+        # readers/fasta.py never has this failure class at all (it is hand-rolled, no
+        # third-party parser to escape from) -- this is GenBank agreeing with FASTA's
+        # blanket guarantee that a malformed file never reaches the caller as a raw
+        # traceback, only ever as a *ReadError naming one action.
+        raise GenBankReadError(
+            f"Could not parse the GenBank file: {exc}. Check the file was not truncated "
+            "or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
+        ) from exc
     if not parsed:
         raise GenBankReadError("No GenBank records found in the file.")
 
@@ -164,9 +188,11 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     if not records:
         raise GenBankReadError("The GenBank file has no records with a nucleotide sequence.")
 
-    kind = "gene" if any(r.features for r in records) else "no gene"
+    # issue #352: `total_features` being 0 already says "no gene features were found" on
+    # its own -- a separate "no gene" word produced "0 no gene feature(s)", which reads
+    # as broken English rather than the ordinary "0 gene feature(s)" it means.
     notices.append(
-        f"Read {len(records)} record(s) with {total_features} {kind} feature(s) from the "
+        f"Read {len(records)} record(s) with {total_features} gene feature(s) from the "
         "GenBank (not re-annotated)."
     )
     return records, notices
