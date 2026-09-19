@@ -1,13 +1,25 @@
 name: codeql
 
+# CI runs ON DEMAND ONLY (owner's decision, 2026-09-19). Start a run with:
+#
+#     gh workflow run codeql.yml
+#     gh run watch
+#
+# or the "Run workflow" button on the Actions tab. Nothing here fires on a push, a pull
+# request or a schedule.
+#
+# To restore automatic CI, delete `workflow_dispatch:` below and uncomment this block:
+#
+#   on:
+#     pull_request:
+#       branches: [main]
+#     push:
+#       branches: [main]
+#     schedule:
+#       # Weekly, so a new advisory is found without waiting for the next PR.
+#       - cron: "17 3 * * 1"
+#     workflow_dispatch:
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-  schedule:
-    # Weekly, so a new advisory is found without waiting for the next PR.
-    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -48,6 +60,17 @@ jobs:
   dependency-review:
     name: dependency review
     runs-on: ubuntu-latest
+    # Two reasons this does not run today, both deliberate and both recorded.
+    #
+    # 1. The action needs a pull-request context, and this workflow is dispatch-only, so
+    #    the condition below is never true. It skips rather than failing.
+    # 2. Even on a real PR it errors before it starts, because Dependency graph is not
+    #    enabled on this repository. That is an owner action, filed as #325, and it is
+    #    not a version problem: v4 and v5 fail identically. Observed on PR #305, where
+    #    this was the only red check while every substantive job passed.
+    #
+    # Restoring the pull-request trigger without doing #325 first re-creates a check that
+    # is always red, which is how people learn to merge past red checks.
     if: github.event_name == 'pull_request'
     timeout-minutes: 10
     permissions:

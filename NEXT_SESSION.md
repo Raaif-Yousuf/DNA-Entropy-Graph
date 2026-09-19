@@ -8,7 +8,13 @@
 
 One orchestrator and three Sonnet subagents at a time, each on a disjoint set of file paths, with the
 orchestrator holding every `git` command. Everything is committed and pushed to `main`, and `ci-worker`,
-`ci-docs`, `ci-app` and `codeql` are green.
+`ci-docs`, `ci-app` and `codeql` were green on the last automatic run.
+
+> **CI is now on demand only** (owner's decision, 2026-09-19). No workflow fires on a push, a pull request
+> or a schedule. Start one with `gh workflow run ci-worker.yml` (or `ci-docs`, `ci-app`, `codeql`) and
+> follow it with `gh run watch`. Each file keeps its original triggers in a comment above the `on:` block,
+> so restoring automatic CI is uncommenting a block. The practical consequence: **nothing checks a commit
+> unless you ask it to**, so run the local guards before pushing. `docs/dev_commands.md` lists them.
 
 **Every `P0` is closed.** The migration is done and `app/` is now the entire remaining product.
 

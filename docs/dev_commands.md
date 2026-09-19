@@ -194,6 +194,33 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.p
 That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing
 what I asked for", which is the question you actually have when a command is denied.
 
+## CI is on demand, not automatic
+
+**Owner's decision, 2026-09-19.** None of the four workflows fires on a push, a pull
+request or a schedule. Each is `workflow_dispatch` only, so a run happens when someone
+asks for one:
+
+```powershell
+gh workflow run ci-worker.yml       # pytest, ruff, build, schema, shellcheck, CPU container
+gh workflow run ci-docs.yml         # repo guards, check_*.py, scripts tests, link check
+gh workflow run ci-app.yml          # skips until app/ exists (issue #61)
+gh workflow run codeql.yml          # python and actions analysis
+gh run watch                        # follow the run you just started
+gh run list --limit 5               # what ran recently and how it went
+```
+
+Every workflow file carries its original triggers in a comment directly above the `on:`
+block, so restoring automatic CI is uncommenting a block rather than reconstructing one.
+
+**What this means in practice:** nothing checks a commit unless you ask it to. The local
+guards are the same code CI runs, so run them before pushing rather than after:
+
+```powershell
+worker\.venv\Scripts\python.exe -m pytest worker\tests -m "not gpu" -q
+worker\.venv\Scripts\python.exe -m pytest scripts\tests -q
+Get-ChildItem scripts\check_*.py | ForEach-Object { worker\.venv\Scripts\python.exe $_.FullName }
+```
+
 ## GitHub (`gh`)
 
 ```powershell
