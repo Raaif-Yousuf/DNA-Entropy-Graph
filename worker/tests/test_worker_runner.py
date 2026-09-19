@@ -189,6 +189,12 @@ def test_cancellation_mid_job_keeps_partial_results_for_completed_inputs(tmp_pat
         ],
         "predictor": {"kind": "mock", "seed": 0},
         "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        # issue #338: CancelWatcher now throttles its real store round-trip to
+        # limits.cancelPollSeconds (default 10s) of wall-clock time. This test writes
+        # control/cancel and expects the VERY NEXT check to see it, well under a real 10s
+        # -- cancelPollSeconds=0 means "always due", the pre-#338 behavior this test
+        # actually needs (it is testing cancellation propagation, not the throttle).
+        "limits": {"cancelPollSeconds": 0},
         "store": {"kind": "localdir", "root": "unused"},
     }
     store.write_text(MANIFEST_PATH, json.dumps(manifest))
@@ -380,7 +386,9 @@ def test_cancellation_partway_through_one_inputs_records_uploads_completed_conti
     from dna_entropy.predictors.mock import MockPredictor
 
     store = LocalBlobstore(tmp_path)
-    _write_manifest(store)
+    # issue #338: cancelPollSeconds=0 -- see the sibling cancellation test above for why
+    # this test needs "always due" rather than the manifest's real 10s default throttle.
+    _write_manifest(store, limits={"cancelPollSeconds": 0})
     _seed_three_record_fasta_input(store)
 
     calls = {"n": 0}
@@ -536,6 +544,10 @@ def test_genbank_input_end_to_end(tmp_path: Path) -> None:
     _write_manifest(
         store,
         inputs=[{"id": "in1", "path": "input/sample.gb", "name": "sample", "genes": True}],
+        # issue #304: outputs is now honored literally, and _write_manifest's own default
+        # ("fasta", "bedgraph", "tsv") does not include "genbank" -- this test wants the
+        # .gb file, so it must ask for it explicitly, same as any other suppressible output.
+        outputs=["genbank", "fasta", "bedgraph", "tsv"],
     )
 
     result = run_job(store)
@@ -707,3 +719,133 @@ def test_unrecognized_exception_falls_back_to_worker_crash(
 
     assert result.inputs[0].error["code"] == "WORKER_CRASH"
     assert "detail" in result.inputs[0].error  # traceback attached for WORKER_CRASH only
+
+
+# --- lifecycle.afterTask == "keep" must never be an unbounded no-op (Hard Rule 11) -----
+
+
+def test_after_task_keep_applies_after_keep_alive_instead_of_running_forever(
+    tmp_path: Path,
+) -> None:
+    """Found auditing #304/#306: manifest.lifecycle.keepAliveMinutes/afterKeepAlive were
+    parsed but never consumed anywhere, and run_job's own lifecycle block skipped
+    apply_lifecycle ENTIRELY whenever afterTask == "keep" -- meaning a manifest asking
+    for "keep" left the VM running with literally zero worker-side enforcement of any
+    kind, violating Hard Rule 11 ("keep alive always has an expiry, never indefinitely").
+    The real keep-alive queue/idle-timer feature is issue #93 and is not built here;
+    until it is, "keep" must safely degrade to afterKeepAlive (default "stop") rather
+    than a true no-op, with a loud notice explaining why."""
+    real_store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "keep-job",
+        "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "lifecycle": {"afterTask": "keep", "keepAliveMinutes": 30, "afterKeepAlive": "delete"},
+        "store": {"kind": "gcs", "bucket": "fake-bucket", "prefix": "jobs/x/"},
+    }
+    real_store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    real_store.write_text("input/locus.fasta", ">seq\n" + "ACGT" * 40 + "\n")
+
+    result = run_job(real_store)  # no real metadata server in this sandbox
+
+    assert result.status == "done"
+    progress_lines = [
+        json.loads(line) for line in real_store.read_text("progress.jsonl").splitlines() if line.strip()
+    ]
+    messages = [p["message"] for p in progress_lines]
+    # The substitution actually happened (not skipped): a notice names it...
+    assert any("afterTask='keep'" in m and "afterKeepAlive='delete'" in m for m in messages)
+    # ...and apply_lifecycle was actually ATTEMPTED with the substituted action (there is
+    # no real metadata server in this sandbox, so it fails -- proving it was called at
+    # all, which the old "skip lifecycle entirely for keep" behavior never did).
+    assert any("lifecycle apply failed" in m for m in messages)
+
+
+def test_after_task_keep_with_after_keep_alive_also_keep_falls_back_to_stop(
+    tmp_path: Path,
+) -> None:
+    """A malformed manifest asking for "keep" both ways must not loop or truly no-op --
+    the worker forces a safe, terminating default ("stop") rather than propagate a second
+    "keep"."""
+    real_store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "double-keep-job",
+        "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "lifecycle": {"afterTask": "keep", "afterKeepAlive": "keep"},
+        "store": {"kind": "gcs", "bucket": "fake-bucket", "prefix": "jobs/x/"},
+    }
+    real_store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    real_store.write_text("input/locus.fasta", ">seq\n" + "ACGT" * 40 + "\n")
+
+    result = run_job(real_store)
+
+    assert result.status == "done"
+    progress_lines = [
+        json.loads(line) for line in real_store.read_text("progress.jsonl").splitlines() if line.strip()
+    ]
+    messages = [p["message"] for p in progress_lines]
+    assert any("lifecycle apply failed" in m for m in messages)  # stop was attempted, not skipped
+
+
+# --- limits.heartbeatSeconds must actually reach StatusWriter's tick interval ----------
+
+
+def test_heartbeat_seconds_from_manifest_reaches_status_writer_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found auditing #304/#306: manifest.limits.heartbeatSeconds was parsed but
+    run_job() built StatusWriter with no interval_seconds at all, so it always used
+    status.py's own hardcoded DEFAULT_INTERVAL_SECONDS regardless of what the manifest
+    declared -- CLAUDE.md calls the status.json heartbeat the ONLY health signal an app
+    has, so the app and the worker silently disagreeing about the intended cadence is a
+    real, not cosmetic, gap."""
+    from dna_entropy.worker import runner as runner_module
+    from dna_entropy.worker.status import DEFAULT_INTERVAL_SECONDS, StatusWriter
+
+    captured: dict = {}
+    real_init = StatusWriter.__init__
+
+    def _spy_init(self, *args, **kwargs):
+        captured["interval_seconds"] = kwargs.get("interval_seconds")
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(StatusWriter, "__init__", _spy_init)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"heartbeatSeconds": 2})
+    _seed_fasta_input(store)
+
+    runner_module.run_job(store)
+
+    # Never SLOWER than the manifest's own declared cadence -- and never faster than
+    # necessary either, so this is a real wiring check, not a "some number or other" one.
+    assert captured["interval_seconds"] == min(2.0, DEFAULT_INTERVAL_SECONDS)
+
+
+def test_heartbeat_seconds_default_still_matches_pre_existing_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dna_entropy.worker import runner as runner_module
+    from dna_entropy.worker.status import DEFAULT_INTERVAL_SECONDS, StatusWriter
+
+    captured: dict = {}
+    real_init = StatusWriter.__init__
+
+    def _spy_init(self, *args, **kwargs):
+        captured["interval_seconds"] = kwargs.get("interval_seconds")
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(StatusWriter, "__init__", _spy_init)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)  # no "limits" override -- heartbeatSeconds defaults to 30
+    _seed_fasta_input(store)
+
+    runner_module.run_job(store)
+
+    assert captured["interval_seconds"] == min(30.0, DEFAULT_INTERVAL_SECONDS)

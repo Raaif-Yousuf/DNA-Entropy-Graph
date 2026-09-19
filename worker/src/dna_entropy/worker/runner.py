@@ -36,7 +36,7 @@ from .errors import is_retriable
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError
 from .result import InputResult, JobResult, ResultTiming
-from .status import GpuInfo, StatusWriter, WorkerInfo
+from .status import DEFAULT_INTERVAL_SECONDS, GpuInfo, StatusWriter, WorkerInfo
 
 RESULT_PATH = "result.json"
 MANIFEST_PATH = "manifest.json"
@@ -208,13 +208,27 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     manifest_text = store.read_text(MANIFEST_PATH)
     manifest = JobManifest.parse(manifest_text)  # ManifestSchemaError/ManifestError propagate
 
+    # Found auditing #304/#306: manifest.limits.heartbeatSeconds was parsed but never
+    # reached here, so the worker always ticked at status.py's own hardcoded
+    # DEFAULT_INTERVAL_SECONDS regardless of what the manifest declared. CLAUDE.md calls
+    # the status.json heartbeat the ONLY health signal the app has, so never ticking
+    # SLOWER than the manifest's own declared cadence matters; `min()` with the existing
+    # default keeps this at least as fast as before for the common (30s) case, and never
+    # slower than a manifest asking for tighter liveness detection either. progress.jsonl's
+    # own 5-10s re-upload cadence (job_contract.md §4) is an independent design constant,
+    # not something heartbeatSeconds is meant to relax — so this never goes ABOVE
+    # DEFAULT_INTERVAL_SECONDS regardless of how large a manifest's heartbeatSeconds is.
+    heartbeat_interval = min(float(manifest.limits.heartbeat_seconds), DEFAULT_INTERVAL_SECONDS)
     status = StatusWriter(
         store,
         manifest.job_id,
+        interval_seconds=heartbeat_interval,
         worker=WorkerInfo(version=worker_version, image=manifest.worker.image),
     )
     status.start()
-    cancel = CancelWatcher(store)
+    # issue #338: manifest.limits.cancelPollSeconds now actually reaches the throttle
+    # CancelWatcher applies to its own store round-trips (see cancel.py's docstring).
+    cancel = CancelWatcher(store, poll_interval_seconds=float(manifest.limits.cancel_poll_seconds))
     started_at = _utc_now_iso()
 
     input_results: list[InputResult] = []
@@ -298,21 +312,47 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
 
     status.stop()
 
-    # Lifecycle only applies to a real cloud VM; a local run has no VM to stop/delete, and
-    # `keep` is a genuine no-op even in the cloud case. This is the module the overnight
-    # brief says to implement but never call for real — a local/localdir job never reaches
-    # the `apply_lifecycle` call at all, so no test in this repo exercises it against a
-    # real network no matter how this function is invoked.
-    if manifest.store.kind == "gcs" and manifest.lifecycle.after_task != "keep":
+    # Lifecycle only applies to a real cloud VM; a local run has no VM to stop/delete. This
+    # is the module the overnight brief says to implement but never call for real — a
+    # local/localdir job never reaches the `apply_lifecycle` call at all, so no test in
+    # this repo exercises it against a real network no matter how this function is invoked.
+    if manifest.store.kind == "gcs":
+        # Found auditing #304/#306: `lifecycle.afterTask == "keep"` used to skip this
+        # entire block, and `keepAliveMinutes`/`afterKeepAlive` were parsed but never
+        # consumed anywhere — a manifest requesting "keep" left the VM RUNNING with
+        # literally zero worker-side enforcement, forever. That violates Hard Rule 11
+        # ("keep alive always has an expiry, never indefinitely"): the real keep-alive
+        # queue/idle-timer feature (waiting for a follow-up job, per job_contract.md §1's
+        # `vms/<vm>/queue/`) is issue #93 and is NOT implemented here. Until it is, "keep"
+        # safely degrades to `afterKeepAlive` (default "stop") instead of a true no-op —
+        # with no SSH anywhere in this design (cloud_design.md §9), an unattended "keep"
+        # VM's only other backstop is the VM's own maxRunDuration/
+        # instanceTerminationAction=DELETE hard ceiling (Hard Rule 10), which is untested
+        # against a real project tonight (docs/ToTest.md) and should not be the ONLY thing
+        # standing between a "keep" job and an open-ended bill.
+        effective_action = manifest.lifecycle.after_task
+        if effective_action == "keep":
+            effective_action = manifest.lifecycle.after_keep_alive
+            if effective_action == "keep":
+                # A malformed manifest asking "keep" both ways — force a safe, terminating
+                # default rather than propagate a second "keep" (there is nothing left to
+                # degrade to).
+                effective_action = "stop"
+            status.notice(
+                f"lifecycle: afterTask='keep' requested but the keep-alive queue/idle "
+                f"timer is not implemented yet (issue #93) — applying "
+                f"afterKeepAlive={effective_action!r} now instead of leaving the VM "
+                "running with no expiry (Hard Rule 11)."
+            )
         try:
             # issue #321: a 2xx HTTP status only means the Compute API ACCEPTED the
             # operation, not that stop/delete actually completed — apply_lifecycle()
             # now returns the operation's own response body (or raises if that body
             # itself already reports an error) instead of discarding it.
-            operation = apply_lifecycle(manifest.lifecycle.after_task)
+            operation = apply_lifecycle(effective_action)
             op_id = (operation.get("name") or operation.get("id")) if operation else None
             if op_id:
-                status.notice(f"lifecycle {manifest.lifecycle.after_task}: operation {op_id} accepted")
+                status.notice(f"lifecycle {effective_action}: operation {op_id} accepted")
         except LifecycleError as exc:
             # best-effort; instanceTerminationAction=DELETE and startup.sh's own
             # exit-code-driven cleanup dispatch are both independent backstops for
