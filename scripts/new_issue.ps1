@@ -93,17 +93,32 @@
     with no `gh` call. Exit 0 on pass, 1 on failure.
 
 .EXAMPLE
-    pwsh scripts/new_issue.ps1 -Title "worker: run loop uploads progress while running" `
+    & ./scripts/new_issue.ps1 -Title "worker: run loop uploads progress while running" `
         -Why "..." -DoneWhen "a run left overnight shows progress.jsonl growing" -Observable "..."
     Prints the rendered body. Files nothing.
 
 .EXAMPLE
-    pwsh scripts/new_issue.ps1 -Title "..." -Why "..." -DoneWhen "..." -Observable "..." `
-        -Labels "P2,area:worker" -Apply
+    & ./scripts/new_issue.ps1 -Title "..." -Why "..." -DoneWhen @("first", "second") `
+        -Observable "..." -Labels "P2,area:worker" -Apply
     Files the issue for real via `gh issue create`.
 
 .EXAMPLE
-    pwsh scripts/new_issue.ps1 -SelfTest
+    & ./scripts/new_issue.ps1 -SelfTest
+
+.NOTES
+    Call this with `&` (or dot-source it) from an existing PowerShell session.
+    Do NOT call it as `pwsh scripts/new_issue.ps1 -DoneWhen @(...)`.
+
+    MEASURED 2026-09-19: a nested `pwsh` call spawns a CHILD process, and the
+    array is flattened across that child's argv. The binder then assigns the
+    second and later elements to whatever parameter comes next, so a two-line
+    -DoneWhen silently filed its second line under "Docs touched", and another
+    call corrupted -Milestone. Exit code 0 both times, output looked normal,
+    and three issues were filed wrong before anyone noticed.
+
+    Every -ArrayParam here (-DoneWhen, -DocsTouched, -Tests) has this exposure.
+    The cheap check is to run once WITHOUT -Apply and read the rendered body,
+    which is what this script prints by default for exactly that reason.
 #>
 
 param(
