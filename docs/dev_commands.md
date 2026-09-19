@@ -163,7 +163,7 @@ scripts/check_*.py`) — it tightens automatically as each one lands, with no
 workflow edit per issue, which is why grepping the workflow file for a
 script's literal name finds nothing even once that script is fully wired in;
 read the loop, not the filename, when checking whether a guard is enforced.
-Eight exist as of this revision, each with a `--self-test` flag that runs
+Nine exist as of this revision, each with a `--self-test` flag that runs
 against synthetic fixtures:
 
 ```powershell
@@ -175,8 +175,17 @@ python scripts\check_version_lockstep.py      # every version-bearing file agree
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
 python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
-python scripts\<any check_*.py> --self-test   # every one of the eight supports this
+python scripts\check_app_wiring.py            # the C# half of that same bug class: an unbound command, an unbound [ObservableProperty], a dangling {Binding}, an x:Uid with no .resw entry, a service registered and never resolved
+python scripts\<any check_*.py> --self-test   # every one of the nine supports this
 ```
+
+`check_app_wiring.py` takes `--verbose` (also print what it read and which
+pages it skipped), `--json`, and `--root` (default `app`). Its allowlist is
+`scripts/app_wiring_allowlist.json`, keyed `"CODE:Symbol"` with a reason
+string, and is checked in both directions: an entry whose finding stopped
+firing fails the run, so the file cannot rot into a list of things that used
+to be true. Read the script's docstring before adding an entry — it is
+name-matched, not type-resolved, and it says so in detail.
 
 **Running `scripts/tests/` itself** — the hooks, the label/memory sync, `compile_sprint_log.py`, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1`, and every `check_*.py` guard above all have their own test file here, run as one suite (issue #311's own scripts-tests CI job runs exactly this, on Ubuntu, with full git history since some tests exercise git-aware code paths):
 
