@@ -10,9 +10,9 @@ record, like every other input.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from ..redact import describe_len, fingerprint
+from .encoding import read_text
 
 
 class FastaReadError(ValueError):
@@ -40,7 +40,7 @@ def read_fasta(path: str) -> tuple[list[FastaRecordRaw], list[str]]:
     """
     notices: list[str] = []
     parsed: list[tuple[str, list[str]]] = []  # (header, sequence-lines)
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    text = read_text(path)  # #330: shared BOM/encoding handling, see readers/encoding.py
 
     header: str | None = None
     lines: list[str] = []

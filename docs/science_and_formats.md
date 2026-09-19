@@ -210,12 +210,29 @@ their file has a bad character in it.
 (noticed, not an error); remove all whitespace; remove digits (handles pasted line
 numbers); uppercase.
 
-**Encoding (issue #294, MEASURED 2026-09-19):** all three input paths decode with
-`errors="replace"` rather than raising `UnicodeDecodeError` on the first non-UTF-8 byte —
-`readers/paste.py`'s file and stdin branches now match `readers/fasta.py` and
-`readers/detect.py`'s existing behaviour, so a file with a stray non-UTF-8 byte (a
-Windows-1252 export, a copy-paste artefact) reaches the normal validation-stage checks
-above instead of crashing the process outright.
+**Encoding (issues #294, #330, MEASURED 2026-09-19):** every reader (`paste.py`,
+`fasta.py`, `genbank.py`, `detect.py`'s content sniff) decodes through the single shared
+`readers/encoding.py` rather than each calling `Path.read_text()` (or, for GenBank,
+letting Biopython open the file itself) independently:
+- A UTF-8 byte-order mark is stripped before anything else sees the text — Windows
+  Notepad's default "UTF-8" save option adds one, and it used to decode into a literal
+  `﻿` character that defeated every `>`/`LOCUS` check and validation's own alphabet
+  check alike, rejecting an otherwise perfectly valid file.
+- A UTF-16 byte-order mark (either byte order) is decoded in full as UTF-16, not
+  refused — this is exactly what Notepad's "Unicode" save option produces, an ordinary
+  way to save a plain-text file on Windows, and decoding it costs nothing over a clean
+  refusal.
+- Anything else decodes as UTF-8 with `errors="replace"`: a non-UTF-8 byte (a
+  Windows-1252 export, a copy-paste artefact) becomes a single `�` replacement
+  character and reaches the normal validation-stage checks above as an ordinary invalid
+  character, rather than crashing the process with `UnicodeDecodeError`.
+
+Routing GenBank through the same shared decoder (rather than handing Biopython a raw
+path) also fixed a second, unrelated inconsistency: Biopython's own file-opening used
+Python's default text-mode encoding, which is the OS locale encoding — cp1252 on this
+Windows dev box, MEASURED 2026-09-19 — silently different from the other two readers'
+forced UTF-8, and would have decoded differently again on a UTF-8-locale Linux box.
+GenBank input now agrees with FASTA and paste on encoding, everywhere.
 
 **Checks, in order, fail fast with the first offending position:**
 1. **RNA**: if `U` is present and `--rna`/`Treat as RNA` is off, raise with the exact
@@ -299,6 +316,23 @@ feature 'geneX' has a compound (spliced) location with 2 segments (100..200, 400
 Any consumer of a spliced gene's mean-entropy figure (`writers/genbank.py`'s `/note=` on
 the output `.gb`) should read it as diluted by intron bases until a per-exon
 representation ships — see the tracked `DECISION` issue on `GeneFeature.exons`.
+
+**GenBank gene features: coordinates outside the record's own sequence** (issue #331,
+MEASURED 2026-09-19). A feature's own coordinates must fit inside its record's actual
+ORIGIN length, or the file's feature table disagrees with its own sequence data (a
+truncated download, a hand-edited LOCUS/ORIGIN block, corruption). `readers/genbank.py`
+now checks every feature's (or, for a compound location, every segment's) coordinates
+against the record's length and **drops** the feature — never silently keeps it with a
+wrong span — with a notice naming the gene id, its coordinates, and the record's real
+length, when they disagree. One legitimate exception: a feature carrying GenBank's own
+`>` partial-end marker is allowed to report an end past the record's length, since that
+marker is GenBank's own way of saying "known to continue beyond what was given" (a
+normal shape for a fragment at a contig edge) — this is a `THEORY (unverified)`,
+confirmed only against this reader's own synthetic fixtures, not a corpus of real
+partial GenBank records. A compound (spliced or origin-wrapping) feature's segments
+must each individually fit inside the record regardless of a partial marker; a
+legitimate origin-wrapping feature on a circular plasmid record (the intended shape for
+issue #128) already satisfies this per-segment, so this check does not affect it.
 
 Every one of these five checks has a dedicated, deterministic test in
 `worker/tests/test_validation.py`; `docs/tests.md`'s neighbour-test set names the shapes a

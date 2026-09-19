@@ -40,6 +40,30 @@ def test_paste_reader_handles_non_utf8_stdin_without_crashing(monkeypatch) -> No
     assert "ATGC" in text
 
 
+def test_paste_reader_strips_a_utf8_bom(tmp_path: Path) -> None:
+    """#330: a UTF-8 BOM must not survive into the returned text as a literal U+FEFF
+    character (which would otherwise fail validate_sequence's alphabet check with a
+    confusing "Invalid character '\\ufeff'")."""
+    f = tmp_path / "bom.txt"
+    f.write_bytes(b"\xef\xbb\xbfATGCATGCAT")
+    assert PasteReader(str(f)).read() == "ATGCATGCAT"
+
+
+def test_paste_reader_decodes_utf16_le_bom(tmp_path: Path) -> None:
+    """#330: Windows Notepad's "Unicode" save option produces UTF-16 (little-endian,
+    with a BOM) -- a real, unremarkable way a Windows user saves a plain-text file. It
+    must decode in full, not turn into a wall of U+FFFD replacement characters."""
+    f = tmp_path / "utf16le.txt"
+    f.write_bytes("ATGCATGCAT".encode("utf-16"))  # Python's utf-16 codec writes a BOM
+    assert PasteReader(str(f)).read() == "ATGCATGCAT"
+
+
+def test_paste_reader_decodes_utf16_be_bom(tmp_path: Path) -> None:
+    f = tmp_path / "utf16be.txt"
+    f.write_bytes(b"\xfe\xff" + "ATGCATGCAT".encode("utf-16-be"))
+    assert PasteReader(str(f)).read() == "ATGCATGCAT"
+
+
 def test_pipeline_load_and_validate_from_file(tmp_path: Path) -> None:
     f = tmp_path / "locus.fasta"
     f.write_text(">demo\nATGC ATGC\nATGC", encoding="utf-8")
