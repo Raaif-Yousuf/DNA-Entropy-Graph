@@ -5,9 +5,9 @@ does, compiled from three directories on this machine:
 
 | Directory | Status | Contents |
 |---|---|---|
-| `C:\Users\raaif\DNA-Entropy-Genbank` | **Current / authoritative** — superset of everything | Full tool, Sprints 0–5, 127 tests, 2 built `.exe`s |
-| `C:\Users\raaif\DNA-Entropy` | **Earlier snapshot** (Sprints 0–4) | Same core; no GenBank I/O, no keeper, 72 tests |
-| `C:\Users\raaif\DNA-Entropy-Graph` | **Empty** | No files present |
+| `%USERPROFILE%\DNA-Entropy-Genbank` | **Current / authoritative** — superset of everything | Full tool, Sprints 0–5, 127 tests, 2 built `.exe`s |
+| `%USERPROFILE%\DNA-Entropy` | **Earlier snapshot** (Sprints 0–4) | Same core; no GenBank I/O, no keeper, 72 tests |
+| `%USERPROFILE%\DNA-Entropy-Graph` | **Empty** | No files present |
 
 Unless flagged with ⚠️ *(older repo only)*, every feature below is present in
 `DNA-Entropy-Genbank`. A short section at the end lists what differs between the two

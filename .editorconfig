@@ -1,0 +1,84 @@
+# EditorConfig: https://editorconfig.org
+# Line-ending default agrees with .gitattributes (`* text=auto eol=lf`):
+# everything is LF except the two CRLF carve-outs below, which .gitattributes
+# also marks CRLF (*.ps1, *.sln). Keep the two files in agreement if either
+# changes.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# --- C# (app/) --------------------------------------------------------
+[*.{cs,csx}]
+indent_size = 4
+# dotnet_* / csharp_* analyzer style below is deliberately minimal; the
+# project relies on `dotnet format --verify-no-changes` (Hard Rule, ci-app.yml)
+# as the enforced source of truth, not a large hand-maintained style block here.
+csharp_new_line_before_open_brace = all
+csharp_indent_case_contents = true
+csharp_space_after_keywords_in_control_flow_statements = true
+dotnet_sort_system_directives_first = true
+
+# .csproj / .sln / .props / .targets — MSBuild XML, historically CRLF on
+# Windows tooling; .gitattributes forces *.sln to CRLF specifically.
+[*.sln]
+end_of_line = crlf
+indent_style = tab
+
+[*.{csproj,props,targets}]
+indent_size = 2
+
+# --- XAML (WinUI 3 views) ----------------------------------------------
+[*.xaml]
+indent_size = 4
+
+# --- Python (worker/) ---------------------------------------------------
+[*.py]
+indent_size = 4
+max_line_length = 100
+# ruff (worker/pyproject.toml) is the enforced formatter/linter; this entry
+# is for editors that read EditorConfig directly (most do not read ruff.toml).
+
+[*.pyi]
+indent_size = 4
+
+# --- Data / config formats ----------------------------------------------
+[*.{json,jsonc}]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.toml]
+indent_size = 4
+
+[*.{xml,resx,resw}]
+indent_size = 2
+
+# --- Markdown / docs ------------------------------------------------------
+[*.md]
+indent_size = 2
+trim_trailing_whitespace = false
+# Markdown uses two trailing spaces for a hard line break; do not strip them.
+max_line_length = off
+
+# --- Shell (worker/vm/*.sh, runs on Ubuntu) ------------------------------
+[*.sh]
+indent_size = 2
+end_of_line = lf
+# Never CRLF: a CRLF shebang line fails to exec on the VM's Ubuntu image.
+
+# --- PowerShell (the dev box's own shell; Hard Rule: PowerShell not Unix) -
+[*.{ps1,psm1,psd1}]
+end_of_line = crlf
+indent_size = 4
+
+# --- Makefile-shaped / tab-sensitive files --------------------------------
+[Makefile]
+indent_style = tab

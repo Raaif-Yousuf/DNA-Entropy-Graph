@@ -81,7 +81,7 @@ science: `input -> validate -> predict -> analyze -> export`. The worker runs on
 inside a container, or on a local NVIDIA GPU through the LocalEngine. The app never
 imports torch.
 
-**Repo:** `C:\Users\raaif\DNA-Entropy-Graph` | **Tracker:** GitHub Issues on
+**Repo:** `%USERPROFILE%\DNA-Entropy-Graph` | **Tracker:** GitHub Issues on
 `Raaif-Yousuf/DNA-Entropy-Graph` | **Milestones:** v0.1 walking skeleton, v0.2 real Evo
 on GPU, v0.3 daily-use polish, v1.0 lab release, post-v1.
 

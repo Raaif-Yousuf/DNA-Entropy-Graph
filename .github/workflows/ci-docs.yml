@@ -33,17 +33,17 @@ jobs:
           echo "legacy/clair is not tracked. Good."
 
       # A user-home path in a tracked file leaks a real person's account name and
-      # breaks the file for everyone else.
+      # breaks the file for everyone else. The guard lives in scripts/ so it can be
+      # run locally with the same code CI runs, and it self-tests both arms.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The user-home guard still says no to a real path
+        run: python scripts/check_user_home_paths.py --self-test
+
       - name: No absolute user-home paths in tracked files
-        run: |
-          pattern='(C:\\+Users\\+[A-Za-z0-9._-]+|/home/[a-z][a-z0-9._-]*|/Users/[A-Za-z0-9._-]+)'
-          # docs/migration/ records the redaction that already happened and names the placeholder.
-          if git grep -nIE "$pattern" -- . ':!docs/migration/**' ':!.github/workflows/ci-docs.yml' > /tmp/hits.txt; then
-            echo "::error title=user-home path committed::Replace it with a placeholder such as %USERPROFILE% or <your-home>."
-            cat /tmp/hits.txt
-            exit 1
-          fi
-          echo "No user-home paths in tracked files. Good."
+        run: python scripts/check_user_home_paths.py
 
       - name: AGENTS.md stays a stub
         run: |

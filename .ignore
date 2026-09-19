@@ -1,0 +1,36 @@
+# Files ripgrep skips by default — and therefore what Claude Code's Grep tool
+# skips, since it is built on ripgrep. This is NOT .gitignore: everything
+# listed here (except the second block, which duplicates real .gitignore
+# entries defensively) is committed, tracked, and one `Read` away. It is only
+# kept out of *content searches*.
+#
+# NOTE on this file's provenance: the migration inventory that named this
+# file (docs/migration/2026-09-19-clair-conventions-inventory.md) describes
+# the donor's `.ignore` as excluding build directories under names like
+# `clair_data`/`backend/`/`frontend/`/`node_modules`. The donor's actual
+# `.ignore`, read directly, does something different: it excludes frozen,
+# superseded-but-still-tracked documentation from search, not build output
+# (build output there is already gitignored, and ripgrep already skips
+# gitignored paths by default — duplicating them here is unnecessary in the
+# common case). This file follows the donor's REAL pattern, applied to this
+# repo's own frozen-but-tracked material, and adds the build-artifact
+# entries only as defense-in-depth for a context where .gitignore is not
+# being honoured (a `--no-ignore-vcs` run, or a plain zip of the tree).
+
+# --- Frozen, superseded prototype material (tracked, not gitignored) ------
+# Byte-for-byte copies of the earlier CLI prototype, kept for reference only.
+# The live package is worker/src/dna_entropy/; these are never the answer to
+# "how does the worker work today," but they use the same vocabulary, so an
+# ordinary search pays for both and returns the stale one alongside the
+# current one. Recovering something from here for comparison is a `Read`,
+# not a search: `rg --no-ignore "<pattern>" worker/legacy/ worker/docs-legacy/`
+# if you deliberately want to search the old material anyway.
+worker/legacy/
+worker/docs-legacy/
+
+# --- Build/dependency output (defense-in-depth; already gitignored) -------
+worker/.venv/
+app/**/bin/
+app/**/obj/
+.vs/
+Releases/

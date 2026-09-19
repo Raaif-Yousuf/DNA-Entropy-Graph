@@ -15,7 +15,7 @@ project number, a token-shaped string, or a billing account id — see
 | `settings.json` | Project-scoped Claude Code settings: the permissions allow/deny list and the `PreToolUse`/`SessionStart`/`Stop` hooks. Applies automatically to every session in this repo. |
 | `skills/` | This repo's process-discipline skills, invoked with the `Skill` tool. See the table below. |
 | `agents/` | Subagent definitions under `.claude/agents/*.md` (frontmatter `name`/`description`/`tools`/`model` plus a body). Currently: `cold-diff-reviewer.md`, a framing-free second-opinion reviewer for a diff. |
-| `memory/` | Per-session accumulated project memory (what broke, what was disproven, standing lessons), read from a **user-level, project-scoped** path — see "Installing memory" below. Empty until a session writes to it; `sync_memory.py` (once ported, see the tracker) mirrors it here. |
+| `memory/` | 27 standing lessons (what broke, what was measured, what is still a carried-forward theory), one file per lesson, indexed by `memory/MEMORY.md`. Committed here so a fresh machine or a fresh agent starts with the same knowledge instead of re-deriving it — see "Installing memory" below for how a live session actually reads it. |
 
 ## Skills
 
@@ -26,13 +26,12 @@ project number, a token-shaped string, or a billing account id — see
 | `working-an-issue` | Starting or closing any GitHub issue |
 | `fixing-a-bug` (+ `bug-shapes.md`) | Writing any fix code for a bug, regression, or defect |
 | `orchestrating-agents` | Dispatching subagents, writing a brief, or merging an agent's branch |
-| `working-on-gcp` | Creating, inspecting, or debugging any Google Cloud resource (pending — see the open `docs:` issue for this skill; not yet ported) |
-| `winui-dev` | Building, running, or debugging the WinUI 3 app (pending — no issue yet tracks authoring it; see the open gap issue) |
+| `working-on-gcp` | Creating, inspecting, or debugging any Google Cloud resource, or before `scripts/cloud_gpu_test.ps1` runs |
+| `winui-dev` | Building, running, testing or debugging the WinUI 3 app in `app/` |
 
-Only the first five exist today. The last two are named in
+All 7 exist. They are named in
 [`docs/superpowers/specs/2026-09-18-appendix-c-repo-conventions.md`](../docs/superpowers/specs/2026-09-18-appendix-c-repo-conventions.md)
-§4 as part of the intended full set; check `gh issue list --search "skill"`
-for their current status before assuming either is missing by accident.
+§4, which is the paste-ready source each was adapted from.
 
 ## Installing the memory on another device
 
@@ -57,8 +56,13 @@ cloned somewhere other than its usual location, the slug changes. Check what
 your session actually uses (`claude config` or the path a session prints on
 start) before copying, or the memory will sit there unread.
 
-`MEMORY.md`, once it exists, is the index loaded every session; other files
-are pulled in on relevance. Start there.
+`MEMORY.md` is the index loaded every session; other files are pulled in on
+relevance. Start there. Two of the 27 lessons are marked `(THEORY)` in the
+index — a claim this session could not verify against a real current tool
+version (Geneious's track-import support, igv.js building a genome directly
+from GenBank) — check the file itself before trusting either as fact, and
+replace the note with a `MEASURED <date>:` finding once checked (Hard Rule
+18).
 
 ## Memory and secrets
 
