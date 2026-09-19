@@ -106,9 +106,11 @@ def test_build_predictor_passes_max_len_as_evo_max_context(
 # --- windowing + direction: forward-only reproduces the legacy single-pass output ------
 
 
-def test_forward_only_reproduces_legacy_single_pass_output_bit_for_bit(tmp_path: Path) -> None:
+def test_forward_only_matches_the_recorded_prototype_run(tmp_path: Path) -> None:
     """Issue #279's own observable: on tests/data/sample.fasta, Forward-only must match
-    what the DNA-Entropy-Genbank prototype's pre-windowing pipeline actually computed.
+    what the DNA-Entropy-Genbank prototype's pre-windowing pipeline actually computed, to
+    within last-bit floating-point noise (see the tolerance below; "bit-for-bit" is not a
+    promise a float pipeline can keep across platforms).
 
     issue #316: an earlier version of this test computed its own "legacy reference" live,
     from the CURRENT (ported) ``MockPredictor``/``shannon_entropy``, and compared it to
@@ -142,7 +144,23 @@ def test_forward_only_reproduces_legacy_single_pass_output_bit_for_bit(tmp_path:
 
     assert len(result.seq) == fixture["seq_len"]
     assert len(result.seq) < 8192  # must land in the single-window path, matching the old code
-    assert np.array_equal(result.values, prototype_values)
+
+    # Not bit-for-bit, and deliberately so. MEASURED 2026-09-19: exact equality held on
+    # the machine that generated the fixture and failed on CI's Linux runner, which has a
+    # different numpy and a different libm. `log2` is allowed to differ in the last bit
+    # between platforms, so a float pipeline cannot promise bit-identity across them and a
+    # test that demands it is testing the toolchain.
+    #
+    # The tolerance below is three orders of magnitude tighter than the project's own
+    # scientific acceptance bar for prototype parity (1e-3, issue #84) on a scale that
+    # runs 0 to 2 bits, so anything this catches is a real change in the science and
+    # anything it permits is last-bit arithmetic noise.
+    largest_difference = float(np.max(np.abs(result.values - prototype_values)))
+    assert largest_difference <= 1e-6, (
+        f"Forward-only output drifted from the recorded prototype run by "
+        f"{largest_difference:.3e}, which is larger than last-bit noise. Regenerate the "
+        f"fixture only if the science genuinely changed, and say why in its description."
+    )
     # The classic "first base has zero context -> not applicable to mock, but the shape
     # and window/stride bookkeeping must still be present and correct.
     assert result.direction is Direction.FORWARD_ONLY
