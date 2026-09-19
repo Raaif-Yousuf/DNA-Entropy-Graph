@@ -35,3 +35,21 @@ def test_gff_empty_features(tmp_path: Path) -> None:
     path = GffWriter().write(name="locus", features=[], length=50, start=1, out_dir=str(tmp_path))
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     assert lines == ["##gff-version 3", "##sequence-region locus 1 50"]
+
+
+# --- GFF3 column-9 escaping must include "%" itself ------------------------------------
+#
+# The GFF3 spec's own reserved-character set for column 9 is tab, newline, CR, "%", and
+# the delimiter characters (";", "=", "&", ","). A literal "%" in a gene id (a real
+# GenBank-sourced gene name can contain one) must itself be percent-encoded to "%25" --
+# otherwise a downstream percent-decoder cannot tell an escaped delimiter ("%3B") from a
+# literal "%" followed by two characters that happen to look like hex digits.
+
+
+def test_gff_escapes_a_literal_percent_sign(tmp_path: Path) -> None:
+    features = [GeneFeature(begin=1, end=5, strand="+", gene_id="gene%1;odd")]
+    path = GffWriter().write(name="locus", features=features, length=50, start=1, out_dir=str(tmp_path))
+    line = Path(path).read_text(encoding="utf-8").splitlines()[2]
+    attrs = line.split("\t")[8]
+    assert "gene%251%3Bodd" in attrs  # "%" -> %25 BEFORE ";" -> %3B, so nothing re-collides
+    assert "%3B1%3B" not in attrs  # the literal "%1;" must never be misread as "%1" + ";"
