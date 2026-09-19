@@ -37,13 +37,27 @@ def _feature_id(feature) -> str:
     return feature.type
 
 
-def _features_of(record) -> list[GeneFeature]:
-    """Map a record's ``gene`` (preferred) or ``CDS`` features to :class:`GeneFeature`."""
+def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
+    """Map a record's ``gene`` (preferred) or ``CDS`` features to :class:`GeneFeature`.
+
+    Returns ``(features, notices)``. Issue #295: Biopython's ``CompoundLocation`` (a
+    spliced/multi-exon ``join(...)`` or ``complement(join(...))`` location) reports
+    ``.start``/``.end`` as the outer bounding min/max across every part — it does NOT mean
+    "this gene spans every base in between". ``GeneFeature`` has no way to carry more than
+    one ``(begin, end)`` pair without changing its shape (owned by
+    ``annotators/base.py``, a different lane's file), so we keep reporting the bounding
+    box here — but never silently: every compound-location feature gets an explicit
+    notice naming its real segments, so a biologist (and anyone computing a per-gene
+    mean entropy over ``begin..end`` downstream) knows that span includes intron bases.
+    """
+    from Bio.SeqFeature import CompoundLocation
+
     gene_feats = [f for f in record.features if f.type == "gene"]
     cds_feats = [f for f in record.features if f.type == "CDS"]
     source = gene_feats or cds_feats
 
     features: list[GeneFeature] = []
+    notices: list[str] = []
     for f in source:
         loc = f.location
         if loc is None:
@@ -52,10 +66,24 @@ def _features_of(record) -> list[GeneFeature]:
         end = int(loc.end)
         strand = "-" if loc.strand == -1 else "+"
         partial = "<" in str(loc.start) or ">" in str(loc.end)
-        features.append(
-            GeneFeature(begin=begin, end=end, strand=strand, partial=partial, gene_id=_feature_id(f))
-        )
-    return features
+        gene_id = _feature_id(f)
+        if isinstance(loc, CompoundLocation):
+            # Sorted ascending by genomic start, not transcript/part order (Biopython
+            # writes a minus-strand join()'s parts in transcription order, i.e. highest
+            # coordinate first) — a biologist reading the notice wants segments in
+            # genomic order regardless of strand.
+            parts = sorted((int(p.start) + 1, int(p.end)) for p in loc.parts)
+            parts_desc = ", ".join(f"{a}..{b}" for a, b in parts)
+            notices.append(
+                f"GenBank feature {gene_id!r} has a compound (spliced) location with "
+                f"{len(parts)} segments ({parts_desc}). Its reported boundary "
+                f"{begin}..{end} is the OUTER SPAN and includes the intron sequence "
+                "between segments; a per-gene mean entropy computed over that span is "
+                "not exon-only. Use the segment coordinates above if exon-only entropy "
+                "is needed (docs/science_and_formats.md)."
+            )
+        features.append(GeneFeature(begin=begin, end=end, strand=strand, partial=partial, gene_id=gene_id))
+    return features, notices
 
 
 def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
@@ -83,7 +111,8 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
                 f"Skipped GenBank record {idx} (id {describe_len(str(rec.id))}): no nucleotide sequence."
             )
             continue
-        feats = _features_of(rec)
+        feats, feat_notices = _features_of(rec)
+        notices += feat_notices
         total_features += len(feats)
         records.append(GenBankRecord(record_id=rec.id, seq=seq, features=feats))
 

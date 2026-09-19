@@ -1,0 +1,24 @@
+LOCUS       spliced_locus            200 bp    DNA              UNK 01-JAN-1980
+DEFINITION  Spliced-gene GenBank test fixture (issue #295).
+ACCESSION   spliced_locus
+VERSION     spliced_locus
+KEYWORDS    .
+SOURCE      .
+  ORGANISM  .
+            .
+FEATURES             Location/Qualifiers
+     gene            join(1..30,101..130)
+                     /gene="splicedA"
+                     /locus_tag="SPL_0001"
+     gene            complement(join(181..200,151..170))
+                     /gene="splicedB"
+                     /locus_tag="SPL_0002"
+     gene            40..60
+                     /gene="plainC"
+                     /locus_tag="SPL_0003"
+ORIGIN
+        1 acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt
+       61 acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt
+      121 acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt
+      181 acgtacgtac gtacgtacgt
+//
