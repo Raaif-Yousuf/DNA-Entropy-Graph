@@ -78,18 +78,25 @@ def read_fasta(path: str) -> tuple[list[FastaRecordRaw], list[str]]:
     if n_missing_header:
         notices.append(f"{n_missing_header} record(s) have an empty header line (a bare '>' with no name).")
 
+    # issue #351: key on the record ID -- the header up to its first whitespace, the
+    # part every other FASTA-consuming tool (BLAST, samtools, IGV) actually treats as
+    # the sequence's identifier -- not the full header line. Two records sharing an ID
+    # but carrying different free-text descriptions (">seq1 first"/">seq1 second") are
+    # a genuine ID collision from every downstream tool's perspective; comparing full
+    # header lines missed exactly this shape.
     seen: dict[str, int] = {}
     for r in records:
         if r.header:
-            seen[r.header] = seen.get(r.header, 0) + 1
+            rec_id = r.header.split(None, 1)[0]
+            seen[rec_id] = seen.get(rec_id, 0) + 1
     dupes = sorted(h for h, n in seen.items() if n > 1)
     if dupes:
-        # fingerprint(), not the header text itself (issue #253) — enough to correlate
-        # "these two records share a header" without ever writing the header out.
+        # fingerprint(), not the id text itself (issue #253) — enough to correlate
+        # "these two records share an id" without ever writing the id out.
         shown = ", ".join(fingerprint(d) for d in dupes[:5])
         more = "..." if len(dupes) > 5 else ""
         notices.append(
-            f"{len(dupes)} header(s) repeat across records (fingerprints: {shown}{more}); "
+            f"{len(dupes)} id(s) repeat across records (fingerprints: {shown}{more}); "
             "records are still kept and numbered separately."
         )
 

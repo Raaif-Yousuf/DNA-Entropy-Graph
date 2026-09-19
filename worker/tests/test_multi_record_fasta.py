@@ -14,7 +14,7 @@ import pytest
 from dna_entropy import pipeline
 from dna_entropy.config import RunConfig
 from dna_entropy.readers import detect
-from dna_entropy.readers.input import load_input
+from dna_entropy.readers.input import Contig, _assert_unique_contig_names, _safe_contig_name, load_input
 from dna_entropy.validation.validators import ValidationError
 
 THREE_RECORD_FASTA = (
@@ -62,6 +62,80 @@ def test_fasta_contig_names_are_collision_proof_regardless_of_header_text(
     assert len(loaded.contigs) == 2
     assert [c.name for c in loaded.contigs] == ["dup_1", "dup_2"]
     assert loaded.contigs[0].name != loaded.contigs[1].name
+
+
+# --- issue #350: _safe_contig_name must never produce a name Windows refuses -----------
+
+_RESERVED_DEVICE_NAMES = ["CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9"]
+
+
+@pytest.mark.parametrize("reserved", _RESERVED_DEVICE_NAMES + [n.lower() for n in _RESERVED_DEVICE_NAMES])
+def test_safe_contig_name_disambiguates_a_reserved_windows_device_name(reserved: str) -> None:
+    """A single-record input (no numeric suffix) whose id sanitizes to exactly a
+    Windows-reserved device name must not come back unmodified -- 'CON.fasta' is exactly
+    as forbidden as 'CON' on a real Windows filesystem."""
+    name = _safe_contig_name(reserved, 0, 1, out_dir="out")
+    assert name.split(".", 1)[0].upper() not in {n.upper() for n in _RESERVED_DEVICE_NAMES}
+
+
+def test_safe_contig_name_dots_or_spaces_only_falls_back_to_seq() -> None:
+    assert _safe_contig_name("...", 0, 1) == "seq"
+    assert _safe_contig_name("   ", 0, 1) == "seq"
+
+
+def test_safe_contig_name_strips_a_trailing_dot_or_space() -> None:
+    assert _safe_contig_name("geneA.", 0, 1) == "geneA"
+    assert _safe_contig_name("geneA ", 0, 1) == "geneA"
+
+
+def test_safe_contig_name_caps_length_for_a_realistic_output_directory() -> None:
+    long_id = "A" * 300
+    name = _safe_contig_name(long_id, 0, 1, out_dir=r"C:\Users\someone\Downloads")
+    # <out_dir>/<name><longest writer suffix (.entropy.geneious.gff3, 22 chars)> must
+    # stay comfortably under Windows' legacy MAX_PATH (260).
+    assert len(r"C:\Users\someone\Downloads" + "\\" + name + ".entropy.geneious.gff3") < 260
+    assert len(name) < 300
+
+
+def test_safe_contig_name_truncation_preserves_the_index_suffix(tmp_path: Path) -> None:
+    """Truncating a too-long base must never eat into the '_<n>' suffix that keeps two
+    records in the same multi-record file from colliding -- otherwise the length cap
+    fix would silently reintroduce the exact collision it exists to prevent."""
+    long_id = "B" * 300
+    tiny_out_dir = "o"  # forces a very small truncation budget
+    name1 = _safe_contig_name(long_id, 0, 2, out_dir=tiny_out_dir)
+    name2 = _safe_contig_name(long_id, 1, 2, out_dir=tiny_out_dir)
+    assert name1 != name2
+    assert name1.endswith("_1")
+    assert name2.endswith("_2")
+
+
+def test_assert_unique_contig_names_raises_on_a_collision() -> None:
+    contigs = [Contig(name="dup", seq="ACGT"), Contig(name="dup", seq="TTTT")]
+    with pytest.raises(ValidationError, match="collide"):
+        _assert_unique_contig_names(contigs)
+
+
+def test_assert_unique_contig_names_passes_when_all_distinct() -> None:
+    contigs = [Contig(name="a", seq="ACGT"), Contig(name="b", seq="TTTT")]
+    _assert_unique_contig_names(contigs)  # must not raise
+
+
+def test_load_input_refuses_a_contig_name_collision_rather_than_overwriting(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """#350 (defense in depth): if _safe_contig_name ever produced the same name for two
+    different records in one file -- unreachable today by construction, since the index
+    suffix is preserved through truncation, but proven wired here directly -- load_input
+    must refuse rather than silently letting one record's output overwrite another's."""
+    import dna_entropy.readers.input as input_mod
+
+    p = tmp_path / "two.fasta"
+    p.write_text(">a\nACGTACGTACGT\n>b\nTTTTGGGGCCCC\n", encoding="utf-8")
+    monkeypatch.setattr(input_mod, "_safe_contig_name", lambda base, index, total, out_dir="out": "always_the_same")
+    cfg = RunConfig(name="two", input_path=str(p))
+    with pytest.raises(ValidationError, match="collide"):
+        load_input(cfg)
 
 
 # --- pipeline.run: N records -> N contigs -> N-block outputs --------------------------
