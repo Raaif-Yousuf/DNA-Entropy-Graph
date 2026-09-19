@@ -1,17 +1,49 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    docs/architecture.md section 6: SqliteDatabase, migrations under
-    PRAGMA user_version, RunRepository, SettingsStore, DpapiTokenStore.
-    The skeleton's implementations below are in-memory placeholders so the
-    DI graph and Guards.Tests/DiResolutionTests are real today; wiring
-    Microsoft.Data.Sqlite + Dapper and the numbered migrations is a
-    follow-up issue under this epic, not #61's scope.
+    docs/architecture.md section 6 / issue #67: SqliteDatabase + numbered
+    migrations under PRAGMA user_version, RunRepository, CloudResourceRepository,
+    ProjectRepository, CostLedgerRepository (Appendix A section 3's DDL,
+    verbatim in Migrations/0001_initial.sql) and a settings.json-backed
+    SettingsStore with atomic (temp+rename) writes.
+
+    Microsoft.Data.Sqlite and Dapper are both pre-approved in CLAUDE.md's
+    stack table (MIT). Versions are pinned here with VersionOverride rather
+    than in the shared app/Directory.Packages.props, because five other
+    lanes are editing this repo concurrently tonight and that file is not in
+    this lane's owned paths (see WAVE_BRIEF.md section 2).
+
+    MEASURED 2026-09-19: Microsoft.Data.Sqlite 9.0.9 pulls SQLitePCLRaw.lib.e_sqlite3
+    2.1.10, which trips NU1903 (GHSA-2m69-gcr7-jv3q, high severity) and fails
+    the build under Directory.Build.props's TreatWarningsAsErrors. Microsoft.Data.Sqlite
+    10.0.12 (aligned with this repo's own Microsoft.Extensions.DependencyInjection
+    10.0.12) pulls a patched SQLitePCLRaw transitively - `dotnet build` of this
+    project and of every downstream project (App, Guards.Tests, the full
+    dependency chain) is clean, 0 warnings/0 errors, with no NU1903 anywhere.
+    Do not downgrade Microsoft.Data.Sqlite below 10.0.x without re-checking
+    "dotnet list package (vulnerable, include-transitive)" first.
   -->
   <PropertyGroup>
     <AssemblyName>DnaEntropyGraph.Persistence</AssemblyName>
     <RootNamespace>DnaEntropyGraph.Persistence</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" VersionOverride="10.0.12" />
+    <PackageReference Include="Dapper" VersionOverride="2.1.86" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Migrations\*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Lets Persistence.Tests exercise SqliteMigrations.Apply directly
+         against a synthetic second migration, proving "forward against an
+         already-migrated, populated database" without waiting for a real
+         0002 file to exist (issue #67's tests-first requirement). -->
+    <InternalsVisibleTo Include="DnaEntropyGraph.Persistence.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
