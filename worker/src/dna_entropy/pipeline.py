@@ -144,51 +144,73 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
 
     Everything is sourced straight from the GenBank records (sequence and existing genes);
     Prodigal is never run on this path. ``processed`` is a list of ``(Contig, DirectionResult)``.
+
+    Every writer below is gated by its own ``cfg.include_*`` flag (issue #304) so a
+    manifest naming fewer desired ``outputs`` produces fewer files, not the full set
+    regardless.
     """
-    gb = GenBankWriter().write_multi(
-        name=cfg.name,
-        records=[(c.name, c.seq, c.features, dr.values, c.source_id) for c, dr in processed],
-        out_dir=cfg.out_dir,
-    )
-    fasta = FastaWriter().write_multi(
-        name=cfg.name,
-        blocks=[(c.name, c.seq) for c, _ in processed],
-        out_dir=cfg.out_dir,
-    )
-    bedgraph = BedGraphWriter().write_multi(
-        name=cfg.name,
-        blocks=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start,
-        out_dir=cfg.out_dir,
-    )
-    wig = WigWriter().write_multi(
-        name=cfg.name,
-        blocks=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start,
-        out_dir=cfg.out_dir,
-    )
-    geneious = GeneiousWriter().write_multi(
-        name=cfg.name,
-        blocks=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start,
-        out_dir=cfg.out_dir,
-    )
-    stats = SummaryWriter().write_multi(
-        name=cfg.name,
-        sections=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start,
-        out_dir=cfg.out_dir,
-        filename="stats.txt",
-        provenance=[dr for _, dr in processed],
-    )
-    outputs = [gb, fasta, bedgraph, wig, geneious, stats]
+    outputs: list[str] = []
+
+    if cfg.include_genbank:
+        outputs.append(
+            GenBankWriter().write_multi(
+                name=cfg.name,
+                records=[(c.name, c.seq, c.features, dr.values, c.source_id) for c, dr in processed],
+                out_dir=cfg.out_dir,
+            )
+        )
+    if cfg.include_fasta:
+        outputs.append(
+            FastaWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, c.seq) for c, _ in processed],
+                out_dir=cfg.out_dir,
+            )
+        )
+    if cfg.include_track:
+        outputs.append(
+            BedGraphWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, dr.values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+            )
+        )
+        outputs.append(
+            WigWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, dr.values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+            )
+        )
+    if cfg.include_geneious:
+        outputs.append(
+            GeneiousWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, dr.values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+            )
+        )
+    if cfg.include_stats:
+        outputs.append(
+            SummaryWriter().write_multi(
+                name=cfg.name,
+                sections=[(c.name, dr.values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+                filename="stats.txt",
+                provenance=[dr for _, dr in processed],
+            )
+        )
 
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # record, alongside the combined bedGraph above.
-    if any(dr.forward_values is not None for _, dr in processed):
+    if cfg.include_track and any(dr.forward_values is not None for _, dr in processed):
         outputs.append(
             BedGraphWriter().write_multi(
                 name=cfg.name,
@@ -209,8 +231,8 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
         )
 
     # Gene track for IGV, straight from the GenBank's own genes (never Prodigal). Only
-    # written when the records actually carry genes.
-    if any(c.features for c, _ in processed):
+    # written when the records actually carry genes AND the caller still wants it.
+    if cfg.include_genes_gff3 and any(c.features for c, _ in processed):
         genes_gff = GffWriter().write_multi(
             name=cfg.name,
             blocks=[(c.name, c.features, len(c.seq)) for c, _ in processed],
@@ -233,40 +255,57 @@ def _write_standard_outputs(
     or a single-record FASTA) produces byte-identical output to the pre-#283 code, since
     ``write_multi`` with one block is how ``write`` was already implemented for every
     writer here.
+
+    Every writer below is gated by its own ``cfg.include_*`` flag (issue #304) so a
+    manifest naming fewer desired ``outputs`` produces fewer files, not the full set
+    regardless.
     """
     track_writer = _select_track_writer(cfg)
-    fasta = FastaWriter().write_multi(
-        name=cfg.name,
-        blocks=[(c.name, c.seq) for c, _ in processed],
-        out_dir=cfg.out_dir,
-    )
-    track = track_writer.write_multi(
-        name=cfg.name,
-        blocks=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start,
-        out_dir=cfg.out_dir,
-    )
-    geneious = GeneiousWriter().write_multi(
-        name=cfg.name,
-        blocks=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start,
-        out_dir=cfg.out_dir,
-    )
-    stats = SummaryWriter().write_multi(
-        name=cfg.name,
-        sections=[(c.name, dr.values) for c, dr in processed],
-        start=cfg.start,
-        out_dir=cfg.out_dir,
-        provenance=[dr for _, dr in processed],
-    )
-    outputs = [fasta, track, geneious, stats]
+    outputs: list[str] = []
+
+    if cfg.include_fasta:
+        outputs.append(
+            FastaWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, c.seq) for c, _ in processed],
+                out_dir=cfg.out_dir,
+            )
+        )
+    if cfg.include_track:
+        outputs.append(
+            track_writer.write_multi(
+                name=cfg.name,
+                blocks=[(c.name, dr.values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+            )
+        )
+    if cfg.include_geneious:
+        outputs.append(
+            GeneiousWriter().write_multi(
+                name=cfg.name,
+                blocks=[(c.name, dr.values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+            )
+        )
+    if cfg.include_stats:
+        outputs.append(
+            SummaryWriter().write_multi(
+                name=cfg.name,
+                sections=[(c.name, dr.values) for c, dr in processed],
+                start=cfg.start,
+                out_dir=cfg.out_dir,
+                provenance=[dr for _, dr in processed],
+            )
+        )
 
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # contig, alongside the combined track already written above.
-    if any(dr.forward_values is not None for _, dr in processed):
+    if cfg.include_track and any(dr.forward_values is not None for _, dr in processed):
         outputs.append(
             track_writer.write_multi(
                 name=cfg.name,
@@ -293,28 +332,30 @@ def _write_standard_outputs(
             g = ProdigalAnnotator().annotate(c.seq)  # may raise AnnotatorError (explicit opt-in)
             genes_by_contig[i] = g
             genes += g
-        outputs.append(
-            GffWriter().write_multi(
-                name=cfg.name,
-                blocks=[
-                    (c.name, g, len(c.seq)) for (c, _), g in zip(processed, genes_by_contig, strict=True)
-                ],
-                start=cfg.start,
-                out_dir=cfg.out_dir,
-                source="pyrodigal",
+        if cfg.include_genes_gff3:
+            outputs.append(
+                GffWriter().write_multi(
+                    name=cfg.name,
+                    blocks=[
+                        (c.name, g, len(c.seq)) for (c, _), g in zip(processed, genes_by_contig, strict=True)
+                    ],
+                    start=cfg.start,
+                    out_dir=cfg.out_dir,
+                    source="pyrodigal",
+                )
             )
-        )
 
     # Bonus GenBank "if possible": reuse --genes features per contig, else best-effort
     # Prodigal per contig. One .gb file holding every record, like the GenBank input path.
-    try:
-        records = []
-        for (c, dr), g in zip(processed, genes_by_contig, strict=True):
-            gb_features = g or _try_annotate(c.seq)
-            records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
-        outputs.append(GenBankWriter().write_multi(name=cfg.name, records=records, out_dir=cfg.out_dir))
-    except Exception:
-        pass  # GenBank is a bonus on this path; never fail the core run over it
+    if cfg.include_genbank:
+        try:
+            records = []
+            for (c, dr), g in zip(processed, genes_by_contig, strict=True):
+                gb_features = g or _try_annotate(c.seq)
+                records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
+            outputs.append(GenBankWriter().write_multi(name=cfg.name, records=records, out_dir=cfg.out_dir))
+        except Exception:
+            pass  # GenBank is a bonus on this path; never fail the core run over it
     return outputs, genes
 
 
@@ -341,6 +382,22 @@ def run(
     hook — every existing caller is unaffected.
     """
     loaded = load_input(cfg, raw)
+    # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
+    # "all records" default — readers/input.py has no opinion on it (and must not: Lane A
+    # owns that module), so the truncation happens here, right after loading, before any
+    # window is planned or any file is written. GenBank multi-record input is untouched:
+    # the field is documented (job_contract.md §3) as FASTA-specific.
+    if (
+        cfg.fasta_records == "first"
+        and loaded.source_kind == detect.FASTA
+        and len(loaded.contigs) > 1
+    ):
+        dropped = len(loaded.contigs) - 1
+        loaded.contigs = loaded.contigs[:1]
+        loaded.notices = loaded.notices + [
+            f"fastaRecords='first': analyzing only the first record; {dropped} other "
+            "record(s) in this FASTA were not processed"
+        ]
     predictor = build_predictor(cfg)
 
     notices: list[str] = list(loaded.notices)

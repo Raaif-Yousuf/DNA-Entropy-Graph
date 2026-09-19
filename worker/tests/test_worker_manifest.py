@@ -338,3 +338,123 @@ def test_build_run_config_genes_from_input_spec_or_outputs() -> None:
     )
     cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
     assert cfg.genes is True  # outputs asked for it even though the input spec did not
+
+
+# --- outputs -> per-writer suppression flags (issue #304) -----------------------------
+
+
+def test_build_run_config_outputs_unspecified_defaults_every_include_flag_true() -> None:
+    m = JobManifest.parse(_manifest())  # no "outputs" key at all
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.include_fasta is True
+    assert cfg.include_track is True
+    assert cfg.include_geneious is True
+    assert cfg.include_stats is True
+    assert cfg.include_genbank is True
+    assert cfg.include_genes_gff3 is True
+
+
+def test_build_run_config_outputs_bedgraph_only_suppresses_every_other_flag() -> None:
+    m = JobManifest.parse(_manifest(outputs=["bedgraph"]))
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.include_track is True
+    assert cfg.include_fasta is False
+    assert cfg.include_geneious is False
+    assert cfg.include_stats is False
+    assert cfg.include_genbank is False
+    assert cfg.include_genes_gff3 is False
+    assert cfg.include_tsv is False
+
+
+def test_build_run_config_outputs_neither_bedgraph_nor_wig_turns_track_off() -> None:
+    m = JobManifest.parse(_manifest(outputs=["fasta"]))
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.include_track is False
+    assert cfg.include_fasta is True
+
+
+def test_build_run_config_outputs_geneious_and_stats_flags() -> None:
+    m = JobManifest.parse(_manifest(outputs=["geneious_gff3", "stats"]))
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.include_geneious is True
+    assert cfg.include_stats is True
+    assert cfg.include_fasta is False
+    assert cfg.include_track is False
+
+
+def test_build_run_config_outputs_genbank_flag() -> None:
+    with_gb = JobManifest.parse(_manifest(outputs=["genbank"]))
+    without_gb = JobManifest.parse(_manifest(outputs=["fasta"]))
+    cfg_with = with_gb.build_run_config(with_gb.inputs[0], local_input_path="x", local_out_dir="y")
+    cfg_without = without_gb.build_run_config(without_gb.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg_with.include_genbank is True
+    assert cfg_without.include_genbank is False
+
+
+def test_build_run_config_genes_computation_trigger_is_unaffected_by_outputs_being_unspecified() -> None:
+    """The empty-outputs 'everything on' fallback must NOT also turn genes (a real Prodigal
+    compute cost, opt-in only) on by itself -- only an explicit input.genes or an explicit
+    'genes_gff3' entry in a non-empty outputs list may do that (regression guard: an
+    earlier draft of this fix conflated the two and silently ran Prodigal on every input)."""
+    m = JobManifest.parse(_manifest(inputs=[{"id": "in1", "path": "x", "name": "n", "genes": False}]))
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.genes is False
+    assert cfg.include_genes_gff3 is True  # the FILE toggle still defaults on; only the trigger is guarded
+
+
+# --- fastaRecords -> RunConfig.fasta_records (issue #306) ------------------------------
+
+
+def test_build_run_config_passes_fasta_records_through() -> None:
+    m = JobManifest.parse(
+        _manifest(inputs=[{"id": "in1", "path": "x", "name": "n", "fastaRecords": "first"}])
+    )
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.fasta_records == "first"
+
+
+def test_build_run_config_fasta_records_defaults_to_all() -> None:
+    m = JobManifest.parse(_manifest())
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.fasta_records == "all"
+
+
+def test_unknown_fasta_records_spelling_is_rejected() -> None:
+    with pytest.raises(ManifestError):
+        JobManifest.parse(
+            _manifest(inputs=[{"id": "in1", "path": "input/x", "name": "x", "fastaRecords": "middle"}])
+        )
+
+
+# --- analysis.format -> RunConfig.track_format (found during the #304 audit) -----------
+#
+# AnalysisSpec.track_format (wire field analysis.format) was parsed and stored but never
+# consulted by build_run_config, which derived the format purely from `outputs` membership
+# and otherwise always fell back to bedgraph -- a manifest declaring analysis.format="wig"
+# with no `outputs` key at all silently got bedgraph anyway. Fixed alongside #304 since it
+# is the same build_run_config method and the same class of bug (a manifest field with no
+# consumer).
+
+
+def test_analysis_format_is_validated_at_parse_time() -> None:
+    m = JobManifest.parse(_manifest(analysis={"format": "wig"}))
+    assert m.analysis.track_format is TrackFormat.WIG
+
+
+def test_unknown_analysis_format_is_rejected() -> None:
+    with pytest.raises(ManifestError):
+        JobManifest.parse(_manifest(analysis={"format": "svg"}))
+
+
+def test_build_run_config_honors_analysis_format_when_outputs_is_unspecified() -> None:
+    m = JobManifest.parse(_manifest(analysis={"format": "wig"}))  # no "outputs" key at all
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.track_format is TrackFormat.WIG
+
+
+def test_build_run_config_outputs_still_wins_over_analysis_format_when_specified() -> None:
+    # A non-empty `outputs` array is the literal, per-file suppression list (issue #304);
+    # analysis.format is only the fallback when outputs never says anything at all.
+    m = JobManifest.parse(_manifest(analysis={"format": "wig"}, outputs=["bedgraph"]))
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.track_format is TrackFormat.BEDGRAPH

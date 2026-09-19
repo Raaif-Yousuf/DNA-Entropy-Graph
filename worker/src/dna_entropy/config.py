@@ -109,7 +109,33 @@ class RunConfig:
     genes: bool = False
     rna: bool = False
     seed: int = 0
+    # issue #306: manifest.json's per-input fastaRecords ("all" | "first") was parsed by
+    # worker.manifest.InputSpec but never reached the pipeline. "all" (default, matching
+    # #283/D14: a multi-record FASTA is processed exactly like multi-record GenBank —
+    # every record) processes every record; "first" is the prototype-parity opt-out —
+    # only the first record is analyzed/written, same as the pre-#283 behavior. Consulted
+    # by pipeline.run() right after loading, for FASTA input only (GenBank multi-record
+    # handling is untouched by this field).
+    fasta_records: str = "all"
     # Entropy TSV (position, base, entropy) — a selectable extra output alongside the
     # IGV track/GenBank/summary files (design §4.3 "Entropy TSV (new)"). On by default,
     # like every other writer here; turn off with --no-tsv if a run doesn't need it.
     include_tsv: bool = True
+    # Per-writer suppression toggles (issue #304). Each defaults to True so every existing
+    # caller — the CLI, and every test that builds a bare RunConfig() — keeps writing the
+    # pipeline's full normal output set exactly as before. worker.manifest.JobManifest.
+    # build_run_config is the one caller that turns any of these off, one per
+    # manifest.outputs entry NOT present, so a manifest that names fewer desired outputs
+    # actually produces fewer files instead of the full set regardless (the "wired to
+    # nothing" gap #304 closes).
+    include_fasta: bool = True  # <name>.fasta
+    # The primary entropy track file(s) (bedgraph and/or wig, per track_format/the input
+    # kind's existing writer choice) plus their .fwd/.rev variants under Direction.BOTH_SEPARATE.
+    include_track: bool = True
+    include_geneious: bool = True  # <name>.entropy.geneious.gff3
+    include_stats: bool = True  # stats.txt (GenBank input) / <name>.summary.txt (FASTA/paste)
+    include_genbank: bool = True  # <name>.gb — primary output for GenBank input, bonus for FASTA/paste
+    # <name>.genes.gff3 — still requires cfg.genes for FASTA/paste input (Prodigal must
+    # actually run before there is anything to write); for GenBank input this alone gates
+    # writing the input's own genes as a GFF3 track.
+    include_genes_gff3: bool = True
