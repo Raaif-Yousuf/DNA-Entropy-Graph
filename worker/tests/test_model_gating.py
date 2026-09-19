@@ -15,6 +15,7 @@ from dna_entropy.predictors.hardware import (
     HOPPER_COMPUTE_CAPABILITY,
     MODEL_REQUIREMENTS,
     ModelNeedsHopperError,
+    UnknownModelError,
     model_requirement,
     require_hardware,
 )
@@ -52,8 +53,70 @@ def test_1b_and_20b_need_one_gpu() -> None:
 
 
 def test_unknown_model_id_defaults_to_not_needing_hopper() -> None:
+    # model_requirement() itself stays a pure, permissive LOOKUP (its own docstring: "not
+    # itself the gate"); require_hardware() below is where failing closed actually lives.
     req = model_requirement("some_future_model_id")
     assert req.needs_hopper is False
+
+
+# --- require_hardware fails CLOSED for a model id it does not recognize (issue #346) ---
+#
+# DECISION (agent-made, reversible -- see the DECISION issue): an unrecognized model id
+# refuses at the gate rather than sailing through as bf16/no-Hopper. The gate stands
+# between a user and a GPU VM billed by the minute; an unknown id is either a typo or a
+# model this build does not support, and in both cases refusing costs the user nothing,
+# while failing open costs a boot, a weight download, and a confusing failure several
+# minutes later. This does NOT change model_requirement()'s own permissive default (used
+# elsewhere as a pure lookup) or any of MODEL_REQUIREMENTS's four existing entries.
+
+
+def test_unrecognized_model_id_is_refused_before_any_capability_check() -> None:
+    # Refused even on hardware that would satisfy every real model's requirements —
+    # this is an identity/config check, not a capability check.
+    with pytest.raises(UnknownModelError):
+        require_hardware("totally_fake_model_id", device="cuda", compute_capability=H100, gpu_count=8)
+
+
+def test_unrecognized_model_id_is_refused_with_no_cuda_device_too() -> None:
+    # Fails closed universally, not only when a GPU happens to be present.
+    with pytest.raises(UnknownModelError):
+        require_hardware("totally_fake_model_id", device="cpu", compute_capability=None)
+
+
+def test_unrecognized_model_id_error_names_the_bad_id() -> None:
+    with pytest.raises(UnknownModelError, match="totally_fake_model_id"):
+        require_hardware("totally_fake_model_id", device="cuda", compute_capability=L4)
+
+
+def test_unrecognized_model_id_error_lists_the_supported_ids() -> None:
+    with pytest.raises(UnknownModelError) as exc:
+        require_hardware("totally_fake_model_id", device="cuda", compute_capability=L4)
+    msg = str(exc.value)
+    for known_id in MODEL_REQUIREMENTS:
+        assert known_id in msg
+
+
+def test_unrecognized_model_id_error_has_its_own_code() -> None:
+    with pytest.raises(UnknownModelError) as exc:
+        require_hardware("totally_fake_model_id", device="cuda", compute_capability=L4)
+    assert exc.value.code == "MODEL_UNKNOWN"
+
+
+def test_unknown_model_error_is_a_predictor_error() -> None:
+    # So a caller that only knows to catch PredictorError still catches this.
+    assert issubclass(UnknownModelError, PredictorError)
+
+
+@pytest.mark.parametrize("model_id", ["evo2_7b", "evo2_7b_262k", "evo2_1b_base", "evo2_20b", "evo2_40b"])
+def test_every_known_model_id_is_unaffected_by_the_unknown_id_check(model_id: str) -> None:
+    # Every real model id must NOT trip UnknownModelError; hardware-capability gating
+    # continues to apply exactly as before for all five.
+    try:
+        require_hardware(model_id, device="cuda", compute_capability=H100, gpu_count=2)
+    except ModelNeedsHopperError:
+        pytest.fail(f"{model_id} incorrectly raised ModelNeedsHopperError on H100 x2")
+    except UnknownModelError:
+        pytest.fail(f"{model_id} was incorrectly treated as unrecognized")
 
 
 # --- require_hardware: gates on ACTUAL compute capability, not model name alone -------
@@ -270,3 +333,16 @@ def test_evo_predictor_init_passes_real_gpu_count_to_the_gate(
 
     with pytest.raises(ModelNeedsHopperError, match="2"):
         evo_module.EvoPredictor(model="evo2_40b", device="cuda")
+
+
+def test_evo_predictor_init_refuses_an_unrecognized_model_before_loading_weights(
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_fake_evo_module,
+) -> None:
+    # Even on hardware that would satisfy every real model (a real H100), an id this
+    # build does not recognize is refused before Evo2() is ever constructed.
+    _install_fake_torch_and_evo2(monkeypatch, capability=H100)
+    evo_module = _import_fresh_evo_module()
+
+    with pytest.raises(UnknownModelError, match="totally_fake_model_id"):
+        evo_module.EvoPredictor(model="totally_fake_model_id", device="cuda")

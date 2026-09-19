@@ -75,6 +75,17 @@ def check_probability_matrix(probs: np.ndarray, seq_len: int) -> np.ndarray:
         raise ValueError(f"probabilities must have shape ({seq_len}, {NUM_NUCLEOTIDES}), got {probs.shape}")
     if probs.dtype != np.float32:
         raise ValueError(f"probabilities must be float32, got {probs.dtype}")
+    # Named explicitly (issue #347): a NaN was already CAUGHT before this check existed --
+    # it poisons the row sum, and the row-sum branch below never treats a NaN sum as close
+    # to 1.0 -- but only incidentally, via a message reading "worst deviation nan" that
+    # never says NaN was the cause. A NaN is the single most likely real cause of this
+    # function raising on a GPU (a predictor bug, not a normalization bug), so name it and
+    # the affected rows directly instead of sending the reader looking in the wrong place.
+    nan_rows = np.unique(np.nonzero(np.isnan(probs))[0])
+    if nan_rows.size:
+        preview = ", ".join(str(int(i)) for i in nan_rows[:10])
+        more = "" if nan_rows.size <= 10 else f", +{nan_rows.size - 10} more"
+        raise ValueError(f"probabilities contain NaN in {nan_rows.size} row(s): [{preview}{more}]")
     if np.any(probs < 0.0) or np.any(probs > 1.0):
         raise ValueError("probabilities must lie in [0, 1]")
     row_sums = probs.sum(axis=1)
