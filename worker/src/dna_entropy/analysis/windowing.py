@@ -32,10 +32,19 @@ class WindowingError(ValueError):
 
 @dataclass(frozen=True)
 class WindowPlan:
-    """The derived window/stride/offsets for tiling a length-``L`` sequence, one direction."""
+    """The derived window/stride/offsets for tiling a length-``L`` sequence, one direction.
+
+    Deliberately does NOT carry ``K`` (context length): every caller that builds or
+    consumes a ``WindowPlan`` already has ``context_length`` in scope as its own
+    parameter (this is what :class:`~dna_entropy.analysis.direction.DirectionResult`
+    records it from), so a second, redundant copy here would have no reader -- found
+    unread during the lane-B audit (``scripts/check_unused_fields.py``) and removed
+    rather than wired up, unlike ``ceiling`` below (which DID have a genuine gap: nothing
+    else recorded it, so it was threaded into ``DirectionResult``/``SummaryWriter``
+    instead of deleted).
+    """
 
     length: int  # L
-    context: int  # K
     ceiling: int  # GPU ceiling used to compute W
     window: int  # W = min(2K, ceiling)
     stride: int  # S = W - K
@@ -94,7 +103,6 @@ def plan_windows(length: int, context_length: int, ceiling: int) -> WindowPlan:
 
     return WindowPlan(
         length=length,
-        context=context_length,
         ceiling=ceiling,
         window=window,
         stride=stride,
