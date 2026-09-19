@@ -1,7 +1,7 @@
 # CLAIR conventions inventory
 
 **Date:** 2026-09-19
-**Source repo:** CLAIR (private; `IgnatiusNocturne/CLAIR` mirror), local checkout `C:\Users\raaif\CLAIR`
+**Source repo:** CLAIR (private; `<private-org>/CLAIR` mirror), local checkout `<repo-root>\CLAIR`
 **Source commit:** `e31f5b7dcdb1404a3bfd43bb0c4f1331de15991c`
 **Copied into:** `legacy/clair/` in this repo, mirroring each file's original relative path under CLAIR's root
 **Rule:** Nothing under `legacy/` is live. No file in `legacy/clair/` is referenced by `.claude/settings.json`, any hook, any CI workflow, or any script outside `legacy/`. It exists only to be read and mined by the P0 cleanup issues below, each of which ports a named piece into its live location with CLAIR's paths, repo name and guard scripts replaced. Once every P0 issue lands, `legacy/` is deleted (see `legacy/README.md`).
@@ -24,15 +24,15 @@ This inventory was drafted from `docs/superpowers/specs/2026-09-18-appendix-c-re
 | `.ignore` | ripgrep excludes | ADOPT | Replace `clair_data`, `backend/`, `frontend/`, `node_modules`, `.scratch` entries with `worker/.venv`, `app/**/bin`, `app/**/obj`, `.vs`, `Releases/` | `.ignore` |
 | `.editorconfig` | not found in source | — | Author fresh (C#/Python mixed conventions) | `.editorconfig` |
 | `.gitattributes` | not found in source | — | Author fresh per Appendix C §1 (`* text=auto eol=lf`, `*.ps1 eol=crlf`, `*.sln eol=crlf`) | `.gitattributes` |
-| `.claude/README.md` | Explains the `.claude/` directory: what's tracked vs. reinstallable, memory sync steps | ADOPT | Replace the 3 CLAIR-specific skill names with this repo's 7 skills; replace `C--Users-raaif-CLAIR` memory-path slug and repo path throughout | `.claude/README.md` |
+| `.claude/README.md` | Explains the `.claude/` directory: what's tracked vs. reinstallable, memory sync steps | ADOPT | Replace the 3 CLAIR-specific skill names with this repo's 7 skills; replace `C--Users-<repo-root>-CLAIR` memory-path slug and repo path throughout | `.claude/README.md` |
 | `.claude/settings.json` | Permissions allowlist/denylist + PreToolUse/SessionStart/Stop hooks | ADOPT | `backend/.venv` -> `worker/.venv/Scripts/python.exe`; `dotnet`/`gh issue`/`gh pr` commands per Appendix C §4; deny `gcloud`/`gh release`/`git push --force`/`git stash`; wire the third hook (`block_unlabelled_vm_create.py`, new, doesn't exist in CLAIR) | `.claude/settings.json` |
 | `.claude/agents/cold-diff-reviewer.md` | Framing-free second-opinion review agent | ADOPT | Retarget from "Python/FastAPI/DuckDB/Polars/React" to "C#/WinUI/Python diff"; swap CLAIR's bug-class checklist (route wiring, em dash, DI) for this repo's (binding/command/DI/startup-step/label/setting shapes, reverse-complement check) | `.claude/agents/cold-diff-reviewer.md` |
 | `.claude/skills/tests-first/SKILL.md` | Write failing test first, prove red, then code, then green | ADOPT | `backend/tests/test_<module>.py` / `frontend/tests/unit` -> `worker/tests/test_<module>.py` / `app/tests/DnaEntropyGraph.<Proj>.Tests/`; venv activation path; neighbour-test list becomes empty contig / N-bearing GenBank / multi-record / L<2K / L>W / cloud-error-per-class | `.claude/skills/tests-first/SKILL.md` |
 | `.claude/skills/wired-to-nothing/SKILL.md` | The house bug: code that compiles, runs, passes tests, does nothing | ADOPT | Replace the FastAPI-route/`execution/`-module/eslint-guard shape table with Appendix C §4's table (XAML binding, `[RelayCommand]`, DI service, startup-script step, bucket rule, label, setting, `CloudError` class, worker output file, `JobPhase` transition, direction/windowing change) | `.claude/skills/wired-to-nothing/SKILL.md` |
-| `.claude/skills/working-an-issue/SKILL.md` | Precheck before starting/closing a GitHub issue | ADOPT | `gh issue close ... --repo IgnatiusNocturne/CLAIR` -> `Raaif-Yousuf/DNA-Entropy-Graph`; branch naming and commit-type conventions already match Appendix C §6, keep as-is | `.claude/skills/working-an-issue/SKILL.md` |
+| `.claude/skills/working-an-issue/SKILL.md` | Precheck before starting/closing a GitHub issue | ADOPT | `gh issue close ... --repo <private-org>/CLAIR` -> `Raaif-Yousuf/DNA-Entropy-Graph`; branch naming and commit-type conventions already match Appendix C §6, keep as-is | `.claude/skills/working-an-issue/SKILL.md` |
 | `.claude/skills/fixing-a-bug/SKILL.md` | Eight-step bug-fix discipline; diagnostics zip as field report | ADOPT | `frontend/`/`backend/routers/`/`backend/execution/schema_migrations*.py` file-touch triggers -> `app/src/**`/`worker/src/**` equivalents; `post_merge_check.py` reference -> the Guards project + `check_*.py` scripts | `.claude/skills/fixing-a-bug/SKILL.md` |
 | `.claude/skills/fixing-a-bug/bug-shapes.md` | Hand-maintained bug-shape denominator table | ADOPT | Replace CLAIR examples (hardware-tier registry, tier-lock badge) with this repo's recorded classes: nested-tuple unwrap, uint8-as-bool-mask, no-BOS row 0, billing-vs-stockout misclassification | `.claude/skills/fixing-a-bug/bug-shapes.md` |
-| `.claude/skills/orchestrating-agents/SKILL.md` | Dispatching subagents, writing briefs, merge discipline | ADOPT | `C:\Users\raaif\CLAIR-wt\WAVE_BRIEF.md` path; `post_merge_check.py`/`run_tests.py` references -> this repo's guard commands; ban list keeps `git stash`/recursive-delete/closing issues/publishing releases, add "no cloud creates outside `cloud_gpu_test.ps1`" | `.claude/skills/orchestrating-agents/SKILL.md` |
+| `.claude/skills/orchestrating-agents/SKILL.md` | Dispatching subagents, writing briefs, merge discipline | ADOPT | `<repo-root>\CLAIR-wt\WAVE_BRIEF.md` path; `post_merge_check.py`/`run_tests.py` references -> this repo's guard commands; ban list keeps `git stash`/recursive-delete/closing issues/publishing releases, add "no cloud creates outside `cloud_gpu_test.ps1`" | `.claude/skills/orchestrating-agents/SKILL.md` |
 | `.claude/skills/working-on-macos/SKILL.md` | Pre-flight discipline before touching the macOS box: which binary is running, port conflicts, worktree venv symlinks | TEMPLATE | Becomes `working-on-gcp`: keep the shape (pre-flight checklist, "which X is actually running", cost/budget arithmetic, end-state verification) but replace every fact (macOS bundle identity -> GCP project/labels; port 8000 -> VM heartbeat; `backend-macos.spec` -> `startup.sh`) | `.claude/skills/working-on-gcp/SKILL.md` |
 | `.claude/skills/field-walkthrough/SKILL.md` | Manual field-test walkthrough discipline (screenshots, evidence archive) | REFERENCE | Not in Appendix C's skill list; the MEASURED-discipline and evidence-archiving lessons are reusable if a future manual lab-user test pass is added, but this is not a day-1 skill for DNA-Entropy-Graph | none |
 | `.claude/tools/RTK.md` | Docs for the `rtk` token-optimizing CLI proxy | REFERENCE | Generic tool doc, no CLAIR-specific content, but `rtk` is already documented at the user's global `~/.claude/RTK.md`; redundant to keep repo-local | none |
@@ -41,13 +41,13 @@ This inventory was drafted from `docs/superpowers/specs/2026-09-18-appendix-c-re
 | `.claude/tools/usage.md` | Docs for the usage-tracking tool | REFERENCE | Generic; same as above | none |
 | `.claude/tools/usage.py` | Usage-tracking tool implementation | REFERENCE | Generic; same as above | none |
 | `.claude/memory/MEMORY.md` | Index of 228 memory-seed files, one link per lesson | TEMPLATE | Format only (index that links `memory/<slug>.md` files with a one-line summary); the 27 memory seeds actually seeded are listed fresh in Appendix C §4 | `.claude/memory/MEMORY.md` |
-| `scripts/hooks/README.md` | How the PreToolUse hooks work, example stdin payloads | ADOPT | Example payloads use `C:\Users\raaif\CLAIR-wt\...`; swap for this repo's worktree convention | `scripts/hooks/README.md` |
+| `scripts/hooks/README.md` | How the PreToolUse hooks work, example stdin payloads | ADOPT | Example payloads use `<repo-root>\CLAIR-wt\...`; swap for this repo's worktree convention | `scripts/hooks/README.md` |
 | `scripts/hooks/block_agent_dispatch_in_worktree.py` | Refuses `Agent` tool dispatch from inside a worktree not under the recognized roots | ADOPT | Hard-codes `CLAIR-wt/` as the recognized worktree root; replace with this repo's worktree directory name | `scripts/hooks/block_agent_dispatch_in_worktree.py` |
 | `scripts/hooks/block_git_stash.py` | PreToolUse hook: refuses `git stash` | ADOPT | Check for any hard-coded repo path (grep came back clean for this file specifically; verify on port) | `scripts/hooks/block_git_stash.py` |
 | `scripts/hooks/block_recursive_delete.py` | PreToolUse hook: refuses a recursive delete inside the repo | ADOPT | Check for any hard-coded repo path (grep came back clean for this file specifically; verify on port) | `scripts/hooks/block_recursive_delete.py` |
 | `scripts/compile_sprint_log.py` | Folds `changelog.d/<branch>.md` fragments into `sprint_log.md`, newest-first | ADOPT | `backend/docs/changelog.d/` path assumption -> `docs/changelog.d/`; `.gitignore`'d-tree list (`venv, node_modules, clair_data`) -> `worker/.venv`, `app/**/bin`, `app/**/obj` | `scripts/compile_sprint_log.py` |
-| `scripts/issue_precheck.py` | "Has this issue already been done?" precheck against the GitHub repo | ADOPT | `REPO = "IgnatiusNocturne/CLAIR"` -> `Raaif-Yousuf/DNA-Entropy-Graph`; path-prefix allowlist `("backend/", "frontend/", "src-tauri/", "scripts/")` -> `("app/", "worker/", "scripts/")` | `scripts/issue_precheck.py` |
-| `scripts/sync_memory.py` | Pulls/pushes `.claude/memory/` to/from a per-machine path outside the repo | ADOPT | `CLAIR_MEMORY_DIR` env var and the `-Users-raaif-CLAIR` path-slug derivation are repo-name-coupled; **this repo is public, so add the secret-pattern scan Appendix C §4 requires** (refuse to push a file containing an email, project number, token-shaped string, or billing account id) before wiring the SessionStart/Stop hooks | `scripts/sync_memory.py` |
+| `scripts/issue_precheck.py` | "Has this issue already been done?" precheck against the GitHub repo | ADOPT | `REPO = "<private-org>/CLAIR"` -> `Raaif-Yousuf/DNA-Entropy-Graph`; path-prefix allowlist `("backend/", "frontend/", "src-tauri/", "scripts/")` -> `("app/", "worker/", "scripts/")` | `scripts/issue_precheck.py` |
+| `scripts/sync_memory.py` | Pulls/pushes `.claude/memory/` to/from a per-machine path outside the repo | ADOPT | `CLAIR_MEMORY_DIR` env var and the `-Users-<repo-root>-CLAIR` path-slug derivation are repo-name-coupled; **this repo is public, so add the secret-pattern scan Appendix C §4 requires** (refuse to push a file containing an email, project number, token-shaped string, or billing account id) before wiring the SessionStart/Stop hooks | `scripts/sync_memory.py` |
 | `scripts/triage_diagnostics.py` | Reads a diagnostics zip: app version, last states, error classes, last N log lines | ADOPT | CLAIR-specific fields (`backend/state.py:187`, `clair_data` live-dir default) -> this repo's manifest/status schema (app version, worker version, image digest, last `JobPhase`s, `CloudError` classes, last 50 progress lines) | `scripts/triage_diagnostics.py` |
 | `scripts/post_merge_check.py` | The 85-guard whole-tree merge gate (routers, frontend baselines, sibling re-exports, etc.) | DROP | Entirely keyed to CLAIR's `backend/`+`frontend/`+`src-tauri/` layout and FastAPI/React-specific census checks; this repo's merge gate is `dotnet test app/tests/DnaEntropyGraph.Guards.Tests` + individually named `scripts/check_*.py`, not one monolith. The "guards accumulate over months, trust `--print-guards`/the count, never a written number" lesson is worth keeping in `hard_rules.md` prose, but the code does not port | none |
 | `scripts/branch_gate_check.py` | Pre-commit subset of the merge gate (eslint, component-size baseline, API-mock completeness, etc.) | DROP | Same reasoning as `post_merge_check.py`: every one of its ~13 checks is a census over `backend/routers`, `frontend/src`, or `src-tauri/src` file shapes that don't exist here | none |
@@ -88,7 +88,7 @@ This inventory was drafted from `docs/superpowers/specs/2026-09-18-appendix-c-re
 
 ## Hard-coded CLAIR specifics found
 
-A grep of every copied file for `CLAIR|IgnatiusNocturne|backend/|frontend/|clair_data|C:\Users\raaif\CLAIR|\.venv|run_tests\.py|post_merge_check` returned **1,690 matches across 55 of the 62 copied files**. Per-file counts (highest first): `docs/project_structure.md` 250, `docs/dev_commands.md` 187, `docs/ToTest.md` 171, `docs/packaging_design.md` 132, `docs/tests.md` 122, `scripts/branch_gate_check.py` 92, `docs/ui_conventions.md` 85, `docs/threat_model.md` 85, `docs/macos_next_build_runbook.md` 66, `scripts/post_merge_check.py` 44, `docs/hard_rules.md` 40, `docs/onboarding.md` 35, `.github/workflows/ci.yml` 32, `docs/encryption_at_rest.md` 31, `docs/agent_wave_brief.md` 25, `docs/README.md` 23, `docs/entry_points.md` 22, `scripts/run_tests.py` 17, `CLAUDE.md` 17, `docs/superpowers/specs/2026-08-08-file-model-and-ia-design.md` 16, `docs/sprint_log.head.md` 16, `scripts/wiring_audit.py` 15, `scripts/route_reachability.py` 14, `.claude/skills/working-on-macos/SKILL.md` 14, `.github/workflows/build-msi.yml` 12, `.claude/skills/orchestrating-agents/SKILL.md` 12, `scripts/agent_wave.ps1` 11, `.claude/skills/wired-to-nothing/SKILL.md` 9, `.claude/settings.json` 7, `.claude/memory/MEMORY.md` 7, `.claude/README.md` 7, and 27 more files with 6 or fewer matches each (these TEMPLATE/large-doc files are the bulk of the count; the file:line detail below focuses on the files with an ADOPT or DROP verdict, where the exact line matters for the port).
+A grep of every copied file for `CLAIR|<private-org>|backend/|frontend/|clair_data|<repo-root>\CLAIR|\.venv|run_tests\.py|post_merge_check` returned **1,690 matches across 55 of the 62 copied files**. Per-file counts (highest first): `docs/project_structure.md` 250, `docs/dev_commands.md` 187, `docs/ToTest.md` 171, `docs/packaging_design.md` 132, `docs/tests.md` 122, `scripts/branch_gate_check.py` 92, `docs/ui_conventions.md` 85, `docs/threat_model.md` 85, `docs/macos_next_build_runbook.md` 66, `scripts/post_merge_check.py` 44, `docs/hard_rules.md` 40, `docs/onboarding.md` 35, `.github/workflows/ci.yml` 32, `docs/encryption_at_rest.md` 31, `docs/agent_wave_brief.md` 25, `docs/README.md` 23, `docs/entry_points.md` 22, `scripts/run_tests.py` 17, `CLAUDE.md` 17, `docs/superpowers/specs/2026-08-08-file-model-and-ia-design.md` 16, `docs/sprint_log.head.md` 16, `scripts/wiring_audit.py` 15, `scripts/route_reachability.py` 14, `.claude/skills/working-on-macos/SKILL.md` 14, `.github/workflows/build-msi.yml` 12, `.claude/skills/orchestrating-agents/SKILL.md` 12, `scripts/agent_wave.ps1` 11, `.claude/skills/wired-to-nothing/SKILL.md` 9, `.claude/settings.json` 7, `.claude/memory/MEMORY.md` 7, `.claude/README.md` 7, and 27 more files with 6 or fewer matches each (these TEMPLATE/large-doc files are the bulk of the count; the file:line detail below focuses on the files with an ADOPT or DROP verdict, where the exact line matters for the port).
 
 The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `ToTest.md`, `packaging_design.md`, `tests.md`, `ui_conventions.md`, `threat_model.md`) are TEMPLATE-verdict and will be rewritten wholesale rather than edited line-by-line, so their matches are not itemized below; grep them directly with the pattern above if a specific fact is needed during that rewrite.
 
@@ -102,8 +102,8 @@ The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `To
 
 **`.claude/README.md`**
 - L12: "The three CLAIR-specific skills: `wired-to-nothing`, `working-an-issue`, `field-walkthrough`" -> list this repo's 7 skills
-- L25-26, L31: `~/.claude/projects/C--Users-raaif-CLAIR/memory` path slug -> derived from this repo's own path
-- L37: `C:\Users\raaif\CLAIR` -> `C:\Users\raaif\DNA-Entropy-Graph`
+- L25-26, L31: `~/.claude/projects/C--Users-<repo-root>-CLAIR/memory` path slug -> derived from this repo's own path
+- L37: `<repo-root>\CLAIR` -> `<repo-root>\DNA-Entropy-Graph`
 - L54-55: "CLAIR-specific and re-installable" framing -> restate for this repo's skill set
 
 **`.claude/agents/cold-diff-reviewer.md`**
@@ -126,7 +126,7 @@ The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `To
 
 **`.claude/skills/working-an-issue/SKILL.md`**
 - L3: description names CLAIR generically, framing carries over as-is
-- L119: `gh issue close 123 --repo IgnatiusNocturne/CLAIR ...` -> `--repo Raaif-Yousuf/DNA-Entropy-Graph`
+- L119: `gh issue close 123 --repo <private-org>/CLAIR ...` -> `--repo Raaif-Yousuf/DNA-Entropy-Graph`
 
 **`.claude/skills/fixing-a-bug/SKILL.md`**
 - L3: description names CLAIR generically, framing carries over
@@ -137,7 +137,7 @@ The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `To
 - L33, L43, L61: CLAIR-specific examples (hardware-registry test, tier-lock badge bug) -> replace with this repo's recorded bug shapes (nested-tuple unwrap, uint8-as-bool, no-BOS row-0, billing-vs-stockout) per the denominator table Appendix C §4 implies
 
 **`.claude/skills/orchestrating-agents/SKILL.md`**
-- L70: `C:\Users\raaif\CLAIR-wt\WAVE_BRIEF.md` -> this repo's worktree convention and brief path
+- L70: `<repo-root>\CLAIR-wt\WAVE_BRIEF.md` -> this repo's worktree convention and brief path
 - L139: "from `backend/`" -> `worker/` or `app/` depending on which suite
 - L223, L233, L248, L272-273, L277, L287, L291, L299: repeated `post_merge_check.py` / `scripts/run_tests.py` / `backend/docs/changelog.d/` references -> this repo's guard commands (`dotnet test .../Guards.Tests`, `check_*.py`) and `docs/changelog.d/` path
 
@@ -149,7 +149,7 @@ The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `To
 
 **`scripts/hooks/README.md`**
 - L5: references `backend/tests/test_block_*_hook.py` -> this repo's test location
-- L21, L38: example stdin payloads use `C:\Users\raaif\CLAIR-wt\2352-rename` -> this repo's worktree path convention
+- L21, L38: example stdin payloads use `<repo-root>\CLAIR-wt\2352-rename` -> this repo's worktree path convention
 
 **`scripts/compile_sprint_log.py`**
 - L72: references `backend/tests/test_compile_sprint_log.py` -> this repo's test path
@@ -158,13 +158,13 @@ The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `To
 
 **`scripts/issue_precheck.py`**
 - L118: references `run_tests.py` truncation incident -> historical note, can stay or be dropped
-- L127: `REPO = "IgnatiusNocturne/CLAIR"` -> `REPO = "Raaif-Yousuf/DNA-Entropy-Graph"` (**the one line that must change for this script to point at the right tracker**)
+- L127: `REPO = "<private-org>/CLAIR"` -> `REPO = "Raaif-Yousuf/DNA-Entropy-Graph"` (**the one line that must change for this script to point at the right tracker**)
 - L200: path-prefix allowlist `("backend/", "frontend/", "src-tauri/", "scripts/")` -> `("app/", "worker/", "scripts/")`
 - L825: `_NODE_ID_SCAN_DIRS = ("backend/tests", "backend/execution")` -> `("worker/tests", "worker/src/dna_entropy")` or drop this scan if unused
 - L929: references `backend/tests/test_schedulers_precompute.py` -> historical note, drop or update
 
 **`scripts/sync_memory.py`**
-- L10, L15, L78, L88, L97: `CLAIR_MEMORY_DIR` env var name and the `/Users/raaif/CLAIR -> -Users-raaif-CLAIR` slug-derivation logic are repo-name-coupled by construction (the slug is *derived* from the repo path, so it will self-correct once run from `DNA-Entropy-Graph`, but the env var name and any CLAIR-specific comments should be renamed for clarity)
+- L10, L15, L78, L88, L97: `CLAIR_MEMORY_DIR` env var name and the `<repo-root>/CLAIR -> -Users-<repo-root>-CLAIR` slug-derivation logic are repo-name-coupled by construction (the slug is *derived* from the repo path, so it will self-correct once run from `DNA-Entropy-Graph`, but the env var name and any CLAIR-specific comments should be renamed for clarity)
 - **Not a line match but the required change:** this repo is public. Before wiring the SessionStart/Stop hooks, add the secret-pattern scan Appendix C §4 requires (refuse to push a file containing an email, project number, token-shaped string, or billing account id) and document it in `.claude/README.md`.
 
 **`scripts/triage_diagnostics.py`**
@@ -173,12 +173,12 @@ The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `To
 - L460, L467: `clair_data` directory name and `com.clair.app` bundle id -> this repo's app data directory
 
 **`CLAUDE.md`** (TEMPLATE, but the load-bearing facts to re-derive are at these lines)
-- L1, L9, L13: title, name expansion, repo path (`C:\Users\raaif\CLAIR`) -> this repo's name and path
+- L1, L9, L13: title, name expansion, repo path (`<repo-root>\CLAIR`) -> this repo's name and path
 - L21: names `post_merge_check.py` as the merge gate with a 85-guard count MEASURED history -> this repo's actual guard mechanism (`dotnet test .../Guards.Tests` + `check_*.py`), with its own count once it exists
 - L29, L31: never-commit list (`clair_data/`) and venv-activation rule (`backend\.venv\Scripts\Activate.ps1`) -> `worker\.venv\Scripts\Activate.ps1`
 - L38, L42: FastAPI-router rule and `apiFetch()`/`X-CLAIR-Token` convention -> not applicable; replace with this repo's Cloud-interface and `.resw` string rules
 - L43: `python ..\scripts\run_tests.py` -> this repo's test commands
-- L48: `gh issue create` on `IgnatiusNocturne/CLAIR` -> `Raaif-Yousuf/DNA-Entropy-Graph`
+- L48: `gh issue create` on `<private-org>/CLAIR` -> `Raaif-Yousuf/DNA-Entropy-Graph`
 - L50: em-dash ban scope note -> port as-is, this rule already generalizes (Appendix C Rule 13 keeps it)
 - L58-59, L65: DuckDB/LanceDB stack table rows -> this repo's stack table (Appendix C §"Stack")
 - L97, L117-119: `frontend/CLAUDE.md` cross-reference and the pre-commit branch-gate row -> not applicable in the C#/Python split; replace with this repo's Rule 21 (`branch_gate_check.py` equivalent, if any is built)
@@ -200,11 +200,11 @@ The docs with the highest counts (`project_structure.md`, `dev_commands.md`, `To
 The same list is saved as JSON at `p0_clair.json` in this session's scratchpad (see task notes) for use by whatever files the actual GitHub issues.
 
 1. **`docs: rewrite CLAUDE.md from the CLAIR template`**
-   - Why: `legacy/clair/CLAUDE.md` is CLAIR's card verbatim (FastAPI/React rules, DuckDB stack, `IgnatiusNocturne/CLAIR` tracker). The live `CLAUDE.md` needs the 21 rules, stack table and pitfalls from Appendix C §2 instead, or every session loads instructions that don't apply to this repo.
+   - Why: `legacy/clair/CLAUDE.md` is CLAIR's card verbatim (FastAPI/React rules, DuckDB stack, `<private-org>/CLAIR` tracker). The live `CLAUDE.md` needs the 21 rules, stack table and pitfalls from Appendix C §2 instead, or every session loads instructions that don't apply to this repo.
    - Done when:
      - [ ] `CLAUDE.md` exists at repo root with the 21 numbered rules from Appendix C §2 (science/split/cloud/user/process)
      - [ ] The stack table and Critical Pitfalls section match Appendix C §2, not CLAIR's
-     - [ ] No occurrence of `CLAIR`, `backend/`, `frontend/`, or `IgnatiusNocturne` remains in the file
+     - [ ] No occurrence of `CLAIR`, `backend/`, `frontend/`, or `<private-org>` remains in the file
    - Observable: `grep -c CLAIR CLAUDE.md` returns 0.
    - area: docs
 
@@ -217,7 +217,7 @@ The same list is saved as JSON at `p0_clair.json` in this session's scratchpad (
    - area: docs
 
 3. **`docs: port the five ADOPT skills into .claude/skills/`**
-   - Why: `tests-first`, `wired-to-nothing`, `working-an-issue`, `fixing-a-bug` (+ `bug-shapes.md`), and `orchestrating-agents` carry real, reusable process discipline from CLAIR, but every one references CLAIR's file layout (`backend/`, `frontend/`, `backend/routers/`), its guard scripts (`post_merge_check.py`, `run_tests.py`), and `IgnatiusNocturne/CLAIR`.
+   - Why: `tests-first`, `wired-to-nothing`, `working-an-issue`, `fixing-a-bug` (+ `bug-shapes.md`), and `orchestrating-agents` carry real, reusable process discipline from CLAIR, but every one references CLAIR's file layout (`backend/`, `frontend/`, `backend/routers/`), its guard scripts (`post_merge_check.py`, `run_tests.py`), and `<private-org>/CLAIR`.
    - Done when:
      - [ ] Each of the 5 skills exists under `.claude/skills/<name>/SKILL.md` with every CLAIR-specific path, repo name, and guard-script reference replaced per the file:line list above
      - [ ] `bug-shapes.md`'s example rows are replaced with this repo's recorded bug classes (nested-tuple unwrap, uint8-as-bool-mask, no-BOS row 0, billing-vs-stockout)
@@ -243,7 +243,7 @@ The same list is saved as JSON at `p0_clair.json` in this session's scratchpad (
    - area: scripts
 
 6. **`scripts: port compile_sprint_log.py and issue_precheck.py with the repo name fixed`**
-   - Why: Both scripts are otherwise repo-agnostic tooling, but `issue_precheck.py` line 127 hard-codes `REPO = "IgnatiusNocturne/CLAIR"` and both assume `backend/`/`frontend/` path prefixes that map to `app/`/`worker/` here.
+   - Why: Both scripts are otherwise repo-agnostic tooling, but `issue_precheck.py` line 127 hard-codes `REPO = "<private-org>/CLAIR"` and both assume `backend/`/`frontend/` path prefixes that map to `app/`/`worker/` here.
    - Done when:
      - [ ] `scripts/issue_precheck.py`'s `REPO` constant reads `"Raaif-Yousuf/DNA-Entropy-Graph"`
      - [ ] Both scripts' path-prefix assumptions (`backend/`, `frontend/`, `src-tauri/`) are updated to `app/`, `worker/`

@@ -250,7 +250,7 @@ C:\Users\raaif\DNA-Entropy-Graph\worker\.venv\Scripts\python.exe -m pytest C:\Us
 ## Proposed P0 cleanup issues
 
 The same list is saved as JSON at
-`C:\Users\raaif\AppData\Local\Temp\claude\C--Users-raaif-DNA-Entropy-Graph\dc1bc05e-4761-4567-8c38-d22e1fe0c611\scratchpad\p0_worker.json`.
+`C:\Users\raaif\AppData\Local\Temp\claude\<project-slug>-DNA-Entropy-Graph\dc1bc05e-4761-4567-8c38-d22e1fe0c611\scratchpad\p0_worker.json`.
 
 1. **`worker: drop cloudrun and keep-gpu from the CLI`**
    Why: `cli.py` still exposes `cloudrun` and `keep-gpu`, which shell out to gcloud/SSH and manage an always-on singleton VM that the approved design explicitly removes (§3). Leaving them in place invites wiring the WinUI app to the wrong lifecycle.
