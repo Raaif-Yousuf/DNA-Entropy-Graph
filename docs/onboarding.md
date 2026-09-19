@@ -75,8 +75,15 @@ has nobody to answer the UAC prompt, so the prompt is dismissed and the
 installer reports a cancel. Running the same command from an elevated
 PowerShell works.
 
-**The unattended route that does work needs no administrator at all**, and
-is what is installed on this machine now:
+**What is installed on this machine now**, since the owner ran the winget
+command himself from an elevated prompt later the same day:
+`10.0.401` at `C:\Program Files\dotnet\sdk`, the ordinary machine-wide
+location, which the `dotnet` already on `PATH` finds with no further setup.
+`dotnet --list-sdks` prints `10.0.401 [C:\Program Files\dotnet\sdk]`.
+
+**The rest of this section is for the unattended case**: CI, a remote
+session, a locked-down box, or an agent setting a machine up with nobody at
+the keyboard. It needs no administrator at all:
 
 ```powershell
 Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile $env:TEMP\dotnet-install.ps1
@@ -84,19 +91,31 @@ Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile $env:TEMP\dotne
 ```
 
 This drops the SDK in `%USERPROFILE%\.dotnet` instead of
-`C:\Program Files\dotnet`. The shared host already on `PATH` only finds
-SDKs beside itself, so a per-user SDK is invisible until `PATH` prefers it.
-Both of these are set as **user** environment variables on this machine:
+`C:\Program Files\dotnet`, and that is the part that wastes an hour if you
+do not know it: **the shared host already on `PATH` only finds SDKs sitting
+beside itself**, in its own `sdk\` folder. A per-user SDK is therefore
+invisible to it, `dotnet --list-sdks` stays empty, and the successful
+install looks exactly like another failed one. Nothing is broken; you are
+asking the wrong binary. Point two **user** environment variables at it:
 
 | Variable | Value |
 | --- | --- |
 | `Path` | `%USERPROFILE%\.dotnet` prepended to the existing value |
 | `DOTNET_ROOT` | `%USERPROFILE%\.dotnet` |
 
-MEASURED 2026-09-19 after that: `dotnet --version` reports `10.0.401` and
-`dotnet --list-sdks` reports `10.0.401 [%USERPROFILE%\.dotnet\sdk]`.
-A shell opened **before** those variables were set still sees no SDK, which
-looks exactly like a failed install; open a new one before believing it.
+then **open a new shell**, because a process already running never sees
+variables set this way, which is the same failure wearing a second hat.
+
+MEASURED 2026-09-19: after that, `dotnet --version` reports `10.0.401` and
+`dotnet --list-sdks` reports `10.0.401 [%USERPROFILE%\.dotnet\sdk]`. The
+path in that second line is the whole diagnosis: `Program Files` means the
+machine-wide install is in play, your own profile means the per-user one is.
+
+**These two variables are deliberately not set on the owner's machine any
+more.** They were, for about an hour, and were removed once the machine-wide
+install landed, so that this box has exactly one SDK and no ambiguity about
+which one a build used. `%USERPROFILE%\.dotnet` itself is still on disk and
+is about a gigabyte; it is safe to delete.
 
 In Visual Studio's Installer, add the **Windows App SDK** / WinUI 3
 workload (".NET Desktop Development" plus the Windows App SDK component;
