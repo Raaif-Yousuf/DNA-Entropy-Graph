@@ -37,9 +37,8 @@ updates:
       dotnet:
         patterns: ["*"]
 
-  - package-ecosystem: docker
-    directory: "/worker"
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: build
+  # The docker ecosystem is deliberately absent until issue #36 adds
+  # worker/Dockerfile.cuda and worker/Dockerfile.cpu. Dependabot fails the run outright
+  # when an ecosystem's manifest does not exist, and a weekly red run that means
+  # "not built yet" trains people to ignore red runs. Add it back with the Dockerfiles,
+  # and pin the NGC base by digest there (#255).
