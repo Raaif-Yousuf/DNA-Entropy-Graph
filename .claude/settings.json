@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build *)",
+      "Bash(dotnet test *)",
+      "Bash(dotnet restore *)",
+      "Bash(dotnet list *)",
+      "Bash(dotnet publish *)",
+      "Bash(dotnet format --verify-no-changes *)",
+      "Bash(worker/.venv/Scripts/python.exe -m pytest *)",
+      "Bash(worker/.venv/Scripts/python.exe -m ruff check *)",
+      "Bash(worker/.venv/Scripts/python.exe -m ruff format --check *)",
+      "Bash(worker/.venv/Scripts/python.exe scripts/*)",
+      "Bash(worker/.venv/Scripts/python.exe -m dna_entropy *)",
+      "Bash(uv venv *)",
+      "Bash(uv pip install *)",
+      "Bash(uv pip list *)",
+      "Bash(uv lock *)",
+      "Bash(uv build *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)",
+      "Bash(gh issue create *)",
+      "Bash(gh issue comment *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh issue close *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr comment *)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)",
+      "Bash(gh label list *)",
+      "Bash(gh milestone list *)",
+      "Bash(gh api repos/Raaif-Yousuf/DNA-Entropy-Graph/*)",
+      "Bash(gh repo view *)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git fetch *)",
+      "Bash(git worktree list *)",
+      "Bash(rtk *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Item *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Select-String *)",
+      "PowerShell(Select-Object *)",
+      "PowerShell(Measure-Object *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Write-Output *)",
+      "PowerShell(dotnet build *)",
+      "PowerShell(dotnet test *)",
+      "PowerShell(dotnet restore *)",
+      "PowerShell(dotnet publish *)",
+      "PowerShell(dotnet format --verify-no-changes *)",
+      "PowerShell(& worker\\.venv\\Scripts\\python.exe *)",
+      "PowerShell(& worker\\.venv\\Scripts\\pytest.exe *)",
+      "PowerShell(gh issue *)",
+      "PowerShell(gh pr *)",
+      "PowerShell(gh run *)",
+      "PowerShell(git status *)",
+      "PowerShell(git log *)",
+      "PowerShell(git diff *)",
+      "PowerShell(git show *)",
+      "PowerShell(rtk *)"
+    ],
+    "deny": [
+      "Bash(gcloud *)",
+      "PowerShell(gcloud *)",
+      "Bash(aws *)",
+      "PowerShell(aws *)",
+      "Bash(gh release *)",
+      "PowerShell(gh release *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "PowerShell(git push --force *)",
+      "PowerShell(git push -f *)",
+      "Bash(git stash *)",
+      "PowerShell(git stash *)",
+      "Bash(git reset --hard *)",
+      "PowerShell(git reset --hard *)",
+      "Bash(rm -rf *)",
+      "PowerShell(Remove-Item -Recurse -Force *)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_git_stash.py ] && \"$PY\" scripts/hooks/block_git_stash.py || true",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking for git stash..."
+          },
+          {
+            "type": "command",
+            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_recursive_delete.py ] && \"$PY\" scripts/hooks/block_recursive_delete.py || true",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking for a recursive delete inside the repo..."
+          },
+          {
+            "type": "command",
+            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_unlabelled_vm_create.py ] && \"$PY\" scripts/hooks/block_unlabelled_vm_create.py || true",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking a cloud create carries labels + max-run-duration..."
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_agent_dispatch_in_worktree.py ] && \"$PY\" scripts/hooks/block_agent_dispatch_in_worktree.py || true",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking whether this is a worktree..."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/sync_memory.py ] && \"$PY\" scripts/sync_memory.py --pull || true",
+            "shell": "bash",
+            "timeout": 20,
+            "statusMessage": "Pulling memory from .claude/memory..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/sync_memory.py ] && \"$PY\" scripts/sync_memory.py --push || true",
+            "shell": "bash",
+            "timeout": 20,
+            "statusMessage": "Mirroring memory into the repo..."
+          }
+        ]
+      }
+    ]
+  }
+}
