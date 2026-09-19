@@ -88,9 +88,10 @@ project needs `global.json`'s `test.runner` setting, and that setting is
 resolved from the **current working directory**, not from the project path.
 `app/global.json` has it; the repo root has no `global.json` at all.
 
-The consequence worth remembering is for CI: `ci-app.yml` (issue #31) needs
-`working-directory: app` on its test step, or it will fail on a solution that
-builds and tests perfectly well by hand.
+`ci-app.yml` already sets `working-directory: app` on every step, so CI was
+never going to hit this. The trap is for a human or an agent running the
+command by hand from the repo root, which is exactly where the error reads as
+a broken test project rather than a wrong directory.
 
 ```powershell
 scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches against FakeGcp

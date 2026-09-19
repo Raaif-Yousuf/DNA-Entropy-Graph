@@ -132,7 +132,11 @@ def test_load_input_refuses_a_contig_name_collision_rather_than_overwriting(
 
     p = tmp_path / "two.fasta"
     p.write_text(">a\nACGTACGTACGT\n>b\nTTTTGGGGCCCC\n", encoding="utf-8")
-    monkeypatch.setattr(input_mod, "_safe_contig_name", lambda base, index, total, out_dir="out": "always_the_same")
+    monkeypatch.setattr(
+        input_mod,
+        "_safe_contig_name",
+        lambda base, index, total, out_dir="out": "always_the_same",
+    )
     cfg = RunConfig(name="two", input_path=str(p))
     with pytest.raises(ValidationError, match="collide"):
         load_input(cfg)
