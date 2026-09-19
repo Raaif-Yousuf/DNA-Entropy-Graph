@@ -1,16 +1,22 @@
 # The job contract: `manifest.json`, `status.json`, `progress.jsonl`, `result.json`, `control/cancel`
 
-**Status: specification, not yet implemented.** Nothing under `worker/src/dna_entropy/`
-reads or writes any of the files below today (MEASURED 2026-09-19: no `worker/` module
-imports `json` against a `manifest`-shaped path, and `dna_entropy/worker/` does not exist
-as a directory). This document is what worker issue #278 (the `dna_entropy.worker`
-subpackage: `manifest.py`, `status.py`, `blobstore.py`, `cancel.py`, `lifecycle.py`) and
-the C# `DnaEntropyGraph.Core` contract DTOs (`JobManifest`, `WorkerStatus`, `ProgressEvent`,
-`WorkerResult`) must both satisfy. Treat every JSON example below as the acceptance test
-for those issues, not as a description of running code. The authoritative source this doc
-transcribes is `docs/superpowers/specs/2026-09-18-appendix-b-cloud-design.md` section 3;
-where this doc and that appendix ever disagree, the appendix loses (the main spec's body
-wins over appendices per its own header) and this doc should be corrected.
+**Status: implemented on the Python worker side (issue #278, closed).**
+`worker/src/dna_entropy/worker/` (`manifest.py`, `status.py`, `blobstore.py`, `cancel.py`,
+`lifecycle.py`, `result.py`, `runner.py`, `batch_limits.py`) reads and writes every file
+below MEASURED 2026-09-19 against the committed source. Every field named in this document
+is what the worker actually parses/writes today, cross-checked against
+`docs/contract/*.schema.json` — generated directly from the worker's own dataclasses by
+`scripts/gen_manifest_schema.py --check`, and the shape authority where this prose and
+that generated schema would ever disagree (this document is the authority for *meaning*,
+not shape). The C# `DnaEntropyGraph.Core` contract DTOs (`JobManifest`, `WorkerStatus`,
+`ProgressEvent`, `WorkerResult`) do not exist yet (`app/` is not built, issue #61) and
+still have this document and the generated schemas to satisfy when they do. None of this
+has been exercised against a real GCP project or a real GPU VM yet — see
+[`docs/ToTest.md`](ToTest.md) for exactly which cloud-facing paths remain unproven on real
+infrastructure despite being implemented and unit-tested. The authoritative source this
+doc transcribes is `docs/superpowers/specs/2026-09-18-appendix-b-cloud-design.md` section
+3; where this doc and that appendix ever disagree, the appendix loses (the main spec's
+body wins over appendices per its own header) and this doc should be corrected.
 
 A reader should be able to write a valid `manifest.json` from this file alone and have a
 correctly-implemented worker accept it.
@@ -92,7 +98,7 @@ starts reading it** - a re-run is a *new* `jobId`, never an edit of an existing 
       "start": 1,
       "rna": false,
       "genes": true,
-      "allowAmbiguity": true,
+      "ambiguityPolicy": "keep",
       "fastaRecords": "all"
     }
   ],
@@ -114,7 +120,9 @@ starts reading it** - a re-run is a *new* `jobId`, never an edit of an existing 
   "limits": {
     "maxRunSeconds": 14400,
     "cancelPollSeconds": 10,
-    "heartbeatSeconds": 30
+    "heartbeatSeconds": 30,
+    "maxInputs": 50,
+    "maxTotalNt": 20000000
   },
   "lifecycle": {
     "afterTask": "stop",
@@ -138,11 +146,13 @@ and `predictor.device` may be `cuda:0`.
 |---|---|---|
 | `schema` | Contract version, integer | See section 7 (versioning). A worker that reads `schema != 1` (once other versions exist) must refuse the job with a named error rather than guess at compatibility. |
 | `inputs[].informat` | `auto \| genbank \| fasta \| paste` | `auto` reproduces the prototype's `readers/detect.py` extension-then-content sniff. |
-| `inputs[].allowAmbiguity` | Whether IUPAC ambiguity codes are accepted (N-tolerant mode) | `true` for GenBank/FASTA, `false`-equivalent for a strict pasted sequence - see `science_and_formats.md` section 4. |
+| `inputs[].ambiguityPolicy` | `keep \| mask \| error`, default `keep` | Replaces the old `allowAmbiguity` boolean (issue #249), which was parsed but never actually consulted by any reader - a real "wired to nothing" gap, not just a rename. All three input paths (GenBank, FASTA, paste) now share the same explicit default; see `science_and_formats.md` section 4 for what each policy does to the entropy numbers, and note the behaviour change it documents: paste used to be implicitly stricter than GenBank/FASTA, and no longer is. An old manifest still sending `allowAmbiguity` is unaffected either way - unknown fields are tolerated (section 8 below), it just has no effect, same as before, now honestly so. |
 | `inputs[].fastaRecords` | `all \| first` | Spec D14: all records is now the default; `first` exists only for parity with the prototype's old behaviour if ever needed. |
 | `analysis.contextLength` / `window` / `stride` | `K`, `W`, `S` from `science_and_formats.md` section 3 | `window` and `stride` are **derived, not chosen** by the user, but recorded here so the worker does not have to re-derive them and so `provenance.json` and the manifest agree by construction. |
-| `analysis.direction` | `forward \| reverse \| both-combined \| both-averaged \| both-separate` | See the Direction option in `science_and_formats.md` section 3. |
+| `analysis.direction` | `forward-only \| reverse-only \| both-combined \| both-averaged \| both-separate` | See the Direction option in `science_and_formats.md` section 3. **Corrected 2026-09-19**: an earlier revision of this table showed `forward`/`reverse`; the shipped `dna_entropy.config.Direction` enum (issue #279, already tested before this document's example was written) only ever accepted the canonical `-only` spellings above, and the worker now refuses any manifest using the old, never-actually-supported spelling with a named error rather than silently guessing. |
 | `limits.heartbeatSeconds` | How often the worker must touch `status.json` | 30 s (section 5 below). |
+| `limits.maxInputs` | Batch-level cost guardrail: max input files per job, default `50` | Issue #248. A policy cap tied to money, not a technical ceiling - windowing already tiles a sequence of any length. The worker re-validates this itself (`worker/batch_limits.py`) even if the app is expected to check first, the same "a misconfigured or bypassed client must never silently produce an unbounded bill" reasoning as every other worker-side re-check in this contract. Exceeding it refuses the **whole batch** before any predictor runs - `result.json` reports `status: "failed"`, `error.code: "BATCH_LIMIT_EXCEEDED"`, `inputs: []` (nothing was attempted). See section 7 below. |
+| `limits.maxTotalNt` | Batch-level cost guardrail: max total nt across every input in the job, default `20,000,000` | Same mechanism and disposition as `maxInputs` immediately above; the worker measures the batch's real, actual nt count (via the same input parser the real run uses) before checking either limit, so the refusal message names the batch's own real numbers rather than a generic "too large." |
 | `lifecycle.afterTask` | `stop \| delete \| keep` | What the worker does to its own VM once every output is uploaded and `result.json` is written. |
 | `store.prefix` | Always `jobs/<jobId>/`, matching the bucket layout in section 1 | Redundant with `jobId` by construction; carried explicitly so the worker never has to assemble the path itself from parts that could drift. |
 
@@ -186,7 +196,20 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
 ```
 
 `error`, when non-null, is `{code, message, detail, retriable, remediation}`, with `code`
-drawn from the error taxonomy in `cloud_design.md` section 5.
+drawn from the error taxonomy in `cloud_design.md` section 5. **The worker's own subset of
+that taxonomy - the codes Python code under `dna_entropy` (or `worker/vm/startup.sh`) can
+actually raise - is generated into `docs/contract/error-codes.json`** from
+`dna_entropy.worker.errors.WORKER_ERROR_CODES`, the same generate-and-`--check` pattern as
+the manifest/status/result schemas (issue #39/#254), so the worker and a future C#
+`ErrorCatalog` cannot silently drift. As of this revision it names nine codes:
+`MANIFEST_INVALID`, `WORKER_VERSION_MISMATCH`, `MODEL_NEEDS_HOPPER`, `MODEL_OOM`,
+`INPUT_INVALID`, `WORKER_CRASH`, `BATCH_LIMIT_EXCEEDED`, `GPU_NOT_VISIBLE`,
+`IMAGE_PULL_FAILED` - cross-checked against `docs/copy_catalog.md` section 3's error
+catalog, which every worker code except `MANIFEST_INVALID` and `WORKER_VERSION_MISMATCH`
+appears in. Those two are a deliberate, tracked gap, not an oversight: the manifest is
+app-written and app-trusted, so a malformed one or a schema mismatch is an app-side bug a
+user should never actually see, and no user-facing copy has been invented for a case the
+design doesn't expect to reach a user.
 
 **`progress.jsonl`**: one JSON object per line, appended (in memory, then re-uploaded
 whole):
@@ -222,6 +245,18 @@ queued -> provisioning -> booting -> installing -> restoring-cache -> model-load
 | `idle` | Worker | Keep-alive only: polling `vms/<vm>/queue/` for a follow-up job. |
 | `finalizing` | Worker | Applying the after-task or after-keep-alive lifecycle action (stop/delete via the Compute API). |
 
+**A known gap, MEASURED 2026-09-19 against `worker/runner.py`**: the implementation is
+coarser than this table. Per-input output uploads happen with `stage` still reading
+`"running"` (there is no separate write moving through `uploading`), and applying the
+after-task lifecycle happens with no corresponding `finalizing` write to `status.json` at
+all - the worker calls `apply_lifecycle()` after `status.stop()` has already sent its last
+heartbeat. Neither omission loses information the app strictly needs (`result.json`'s
+existence, not any particular `stage` string, is what signals a terminal state - see
+section 7), but an app polling `status.json` for a live "what is it doing right now" label
+will never actually observe `uploading` or `finalizing` today. This table describes the
+intended granularity; narrowing it to match the implementation, or having the worker
+actually emit these two stages, is an open question for whoever picks it up next.
+
 ---
 
 ## 5. Heartbeat and death detection
@@ -253,6 +288,16 @@ queued -> provisioning -> booting -> installing -> restoring-cache -> model-load
 - On seeing `control/cancel`, the worker writes `stage: "cancelled"`, uploads whatever
  outputs were already produced (partial results are always kept, never discarded), and
  applies the normal after-task lifecycle.
+- **MEASURED 2026-09-19 (issue #252, closed):** the input that was actively running when
+ the cancel was seen gets its own `result.json` entry with `status: "cancelled"` and
+ whatever of its contigs/records finished are listed in its `outputs`, rather than that
+ input silently vanishing from the result entirely (its files were already being uploaded
+ to the bucket by this point; leaving it out of `result.json` would have orphaned them,
+ nothing pointing at them). A crash mid-input gets the equivalent treatment for
+ `status: "failed"` - completed contigs/records are uploaded and listed before the input
+ is marked failed, the same "one bad record doesn't cost the whole input" partial-results
+ discipline this section already describes at the job level, now also applied one level
+ down, inside a single input.
 - If no heartbeat arrives within **60 s** of the app writing `control/cancel`, the app
  calls `instances.stop`/`instances.delete` on the VM directly rather than continuing to
  wait for a worker that may already be gone.
@@ -285,10 +330,57 @@ confirmed uploaded, is the same discipline the prototype's cloud modules already
 continuously but writing the terminal marker last) and the reason a torn or half-uploaded
 result is not a state this contract allows.
 
+**MEASURED 2026-09-19 (issue #320, closed):** the worker's own tail - write `result.json`,
+stop the heartbeat, apply the after-task lifecycle - is three independent steps, each
+wrapped so a failure in one does not silently skip the next. Earlier, a transient store
+failure writing `result.json` itself (the one write this whole section is about) would
+skip both the heartbeat's final write and the lifecycle call outright; now each step's own
+failure is caught and recorded as a `progress.jsonl` notice rather than propagating. A
+lifecycle failure specifically - the one that costs real money, since it means the VM did
+not stop or delete itself - is backstopped by `instanceTerminationAction=DELETE` at
+`manifest.limits.maxRunSeconds` and, per `worker/cli.py`'s own exit-code contract, an
+independent cleanup dispatch in the VM startup script keyed off the worker process's exit
+code; see `docs/ToTest.md` for why none of this - including the lifecycle Compute API
+calls themselves - has ever run against a real GCP project.
+
 `status` is one of `done | failed | cancelled`; a batch where some inputs succeeded and
 others failed still writes `status: "done"` at the job level with per-input `status`
 values distinguishing them (the app's `JobPhase` maps this combination to
-`PartiallyCompleted` - see `architecture.md`).
+`PartiallyCompleted` - see `architecture.md`). Per-input `status` is one of
+`done | failed | cancelled` too (MEASURED 2026-09-19, issue #252 - `cancelled` used to be
+a documented value nothing ever actually produced; see section 6 above for when each one
+appears), each carrying whatever `outputs` were uploaded before that input's outcome was
+decided, and `failed`/`cancelled` inputs also carry an `error` object shaped like
+`status.json`'s (`{code, message, retriable, detail?, remediation?}`).
+
+**A whole-batch refusal, before any input is attempted (issue #248):** if the batch
+exceeds `manifest.limits.maxInputs` or `maxTotalNt`, the worker refuses the entire job
+before running a single predictor call, and `result.json` looks like this instead:
+
+```json
+{
+  "schema": 1,
+  "jobId": "20260918-142233-k7q2vx",
+  "status": "failed",
+  "inputs": [],
+  "timing": {"startedAt": "2026-09-18T14:23:10Z", "finishedAt": "2026-09-18T14:23:11Z"},
+  "gpu": {"name": null, "zone": null, "spot": false},
+  "error": {
+    "code": "BATCH_LIMIT_EXCEEDED",
+    "message": "This batch is 63 file(s), 4,200,000 nt total - over the configured limit (63 files (limit 50)). ...",
+    "retriable": false
+  }
+}
+```
+
+`inputs` is empty because nothing was attempted, not because every input individually
+failed - `timing` still spans real wall-clock time, since the worker measures the batch's
+actual total nt (downloading and parsing every input, cheaply, with no predictor call)
+before it can know whether to refuse. The message names the batch's own real, measured
+numbers, not a generic "too large" - see `science_and_formats.md`'s cross-reference and
+`worker/batch_limits.py`'s own docstring for why it deliberately does not also quote a
+dollar estimate for the refused batch (no verified nt/second throughput figure exists
+anywhere in this repository to make that honest).
 
 ---
 

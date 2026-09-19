@@ -14,8 +14,11 @@ onward is new.
 
 **Source of truth for the numbers below:** `worker/src/dna_entropy/` as checked out in
 this repo, read on 2026-09-19 (`predictors/base.py`, `analysis/entropy.py`,
-`validation/validators.py`, `writers/*.py`). Where this doc describes something not yet
-built (windowing, direction, the TSV writer), it says so.
+`analysis/windowing.py`, `analysis/direction.py`, `validation/validators.py`,
+`writers/*.py`, including `writers/tsv.py`). Windowing, direction, and the TSV writer,
+each once tracked here as "not yet built," are all implemented and tested as of this
+revision; where this doc still describes something not yet built, it says so explicitly
+rather than by omission.
 
 ---
 
@@ -92,11 +95,16 @@ way too, even though the predicted identity is not - see section 3.
 
 ## 3. Long sequences: context length, windowing, and bidirectional prediction
 
-**Status: specified (spec section 5.6), not yet implemented.** This section is the
-specification `analysis/windowing.py` and `analysis/direction.py` (worker issue #279)
-must satisfy; nothing below is live in `worker/src/dna_entropy/` today. The single-pass,
-forward-only prototype behaviour described in `worker/docs-legacy/DESIGN.md` remains what
-actually runs until #279 lands. See the [design spec, section
+**Status: implemented (worker issue #279, closed).** `analysis/windowing.py` and
+`analysis/direction.py` satisfy the specification below; MEASURED 2026-09-19 against the
+committed source, 381+ tests passing. This landed with one real bug along the way,
+found by reading rather than by a failing test: `windowing.halved()`'s OOM-retry only
+actually shrank the window when the ceiling, not the context length, was the binding
+constraint, so the retry silently re-ran the identical window shape on any GPU tier with
+headroom to spare (issue #313, fixed; the Pushback table's OOM row below now describes
+the fixed behaviour). The single-pass, forward-only prototype behaviour described in
+`worker/docs-legacy/DESIGN.md` is superseded for anything windowing- or direction-related.
+See the [design spec, section
 5.6](superpowers/specs/2026-09-18-dna-entropy-graph-design.md#56-context-window-and-bidirectional-prediction-owners-three-points-2026-09-18-confirmed-2026-09-19)
 for the full owner rationale; this section restates only what a reader of `docs/` needs
 without re-deriving it, plus one worked example the spec doesn't spell out numerically.
@@ -155,7 +163,14 @@ neither number has run on a GPU yet).
 - **Both, separate tracks**: emits `.entropy.fwd.*` and `.entropy.rev.*` alongside the
  combined track - three full sets of the position-indexed outputs in section 5.
 - **Forward only** / **Reverse only**: single direction. Forward-only reproduces the
- prototype's output bit-for-bit, including the uniform, 2.0-bit first base.
+ prototype's output within a `1e-6` floating-point tolerance, including the uniform,
+ 2.0-bit first base — **not** exact bit-identity. MEASURED 2026-09-19 (issue #316): the
+ comparison originally asserted exact equality against a real, recorded prototype fixture
+ (the actual prototype, run for real, 201 values) and passed locally, then failed on CI's
+ Linux runner because `log2` can differ in its last bit across numpy/libm builds on
+ different platforms. "Bit-for-bit" was never a promise this pipeline could actually keep;
+ the tolerance is three orders tighter than the project's own `1e-3` direction-parity bar,
+ and the test name no longer overclaims.
 
 **Pushback (validated locally in the app before any VM is created; the worker
 re-validates the same rules, since the app's check is a convenience, not the boundary):**
@@ -200,12 +215,52 @@ numbers); uppercase.
  1-based position of the first `U` and a suggestion to turn the option on. With the
  option on, every `U` is converted to `T` and the count is recorded as a notice.
 2. **Empty**: raise if nothing is left after cleaning.
-3. **Alphabet**: only `A C G T` pass in **strict mode** (pasted/typed sequence). In
- **N-tolerant mode** (`allow_ambiguity=True`, used automatically for real GenBank and
- FASTA files, which routinely carry ambiguity codes), IUPAC codes (`N R Y S W K M B D H
- V`) are kept with a notice instead of failing; any character outside both A/C/G/T and
- the IUPAC set still fails, reporting the first offending character, its 1-based
- position, and the total count of bad characters.
+3. **Alphabet**: only `A C G T` pass without any special handling. An IUPAC ambiguity code
+ (`N R Y S W K M B D H V`) is handled per **`ambiguityPolicy`** (manifest
+ `inputs[].ambiguityPolicy`; CLI `--ambiguity`; default **`keep`**) — MEASURED 2026-09-19,
+ issue #249. A character that is neither `A/C/G/T` nor a recognized IUPAC code is
+ **always** an error regardless of policy, reporting the first offending character, its
+ 1-based position, and the total count of bad characters; that is a genuinely invalid
+ character, not an ambiguity question.
+
+ **What does the entropy value mean at a position that was an N?** The raw sequence,
+ ambiguity code and all, goes straight to Evo 2's tokenizer under `keep` — the `(L, 4)`
+ output is still well-formed (section 1's contract holds regardless), but the *input
+ token* at that position is one the model almost certainly saw far less often during
+ training than a real base: routinely, for `N` (real assemblies are full of `N`-run gaps),
+ and rarely to never for the other ten IUPAC codes (used for degenerate/heterozygous
+ positions, e.g. primer design). So the entropy value at an ambiguous position is not "how
+ sure is the model this position is a definite base" the way it is everywhere else on the
+ track — it is "what did the model do with a token it may have rarely or never seen."
+ Read an ambiguous stretch's entropy with that caveat, not as an ordinary base-confidence
+ reading.
+
+ The three policies:
+ - **`keep`** (default) — the code is fed to the predictor exactly as written, per the
+   paragraph above. Most information-preserving: the entropy at that position reflects
+   the model's response to that *specific* token. This is also, undocumented until now,
+   a real behaviour change from the prototype-parity default this doc previously
+   described: the paste path used to have a stricter *implicit* default (ambiguity codes
+   were never tolerated for a pasted/typed sequence at all, because the old
+   `allow_ambiguity` boolean was simply never passed for that path) while GenBank/FASTA
+   input silently allowed them; all three input paths now share the same explicit
+   `keep` default.
+ - **`mask`** — every ambiguity code is normalized to a single canonical `N` before the
+   predictor sees it (a notice records which original codes were present and how many).
+   Trades away which specific code was originally there for more consistent behaviour,
+   since `N` is the one non-ACGT token a real genomic model is most likely to have a
+   well-defined response to.
+ - **`error`** — the run refuses outright if the input contains any ambiguity code,
+   naming the first one, its position, and the total count. For a user who needs every
+   position to be a genuine, unambiguous base call, or who wants to be forced to decide
+   rather than have the tool decide quietly.
+
+ **A real "wired to nothing" bug this replaces**: the old `allowAmbiguity` manifest field
+ was parsed but never actually consulted downstream — `readers/input.py` hardcoded
+ `True` for GenBank/FASTA regardless of what the manifest said, and never passed anything
+ for the paste path. An app declaring `allowAmbiguity: false` had zero effect. `job_contract.md`
+ §3 covers the wire-format side of this fix (the field rename and the old field's
+ now-honest no-op tolerance); this section is the science-meaning side.
 4. **Length vs. context cap**: `--max-len` (default 8,192 nt in the prototype; this is the
  single-pass cap the new context-window feature in section 3 replaces with windowing -
  the cap only rejects when windowing is unavailable, e.g. the Mock predictor path with
@@ -241,20 +296,23 @@ transform.
 | `<name>.entropy.geneious.gff3` | GFF3 | **1-based, inclusive**: one 1 bp feature per position, `pos = start - 1 + i + 1` | Full-resolution entropy as a GFF3 feature track, because **Geneious Prime imports GFF3 but not WIG or bedGraph as a graph track** (in Geneious those are export-only, from the Graphs tab). Each feature carries the entropy value in both the GFF3 score column and an `entropy` qualifier; shade the track with Geneious's *Color by / Heatmap* on either. | MEASURED (prototype team; recorded in `worker/docs-legacy/DESIGN.md` and the docstring of `writers/geneious.py`) |
 | `<name>.genes.gff3` | GFF3 | **1-based, inclusive**: `f.begin + offset` .. `f.end + offset` where `offset = start - 1` | Gene features on the same contig and coordinate frame as the entropy track: the input's own genes for GenBank input (`source=genbank`, written only when the input actually carries genes), or Prodigal's predictions for FASTA/paste input with `--genes` on (`source=pyrodigal`). | MEASURED, `writers/gff.py` |
 | `stats.txt` (GenBank input) / `<name>.summary.txt` (FASTA/paste input) | plain text | n/a | Per-contig `EntropySummary`: length, mean, min, max, and the 0-based array index of each extreme (see section 2 - add `start` to get a genomic position). | MEASURED, `writers/summary.py` |
-| `<name>.entropy.tsv` (**new**) | TSV | **not yet built - see note below** | Per-position entropy in a plain, spreadsheet-friendly table, one row per base. | Not yet implemented; worker issue tracked under spec 5.5's new `TsvWriter` |
+| `<name>.entropy.tsv` | TSV | **1-based, inclusive**, matching WIG and both GFF3 flavours - see note below | Per-position entropy in a plain, spreadsheet-friendly table, one row per base. | MEASURED 2026-09-19, `writers/tsv.py` |
 
-**A note on the new Entropy TSV, since the spec names it but does not design it:** this
-doc fixes the convention now so the first implementation has a shape to land in, rather
-than inventing one at code-review time. Proposed columns: `position\tbase\tentropy_bits`
-for `Forward only`/`Reverse only`/`Both, combined`/`Both, averaged` runs, or
-`position\tbase\tentropy_fwd\tentropy_rev\tentropy_combined` for `Both, separate tracks`.
-**Coordinates: 1-based, inclusive**, matching WIG and both GFF3 flavours (the majority of
-this table) rather than bedGraph's half-open convention, on the reasoning that a
-spreadsheet-opened TSV is read directly against 1-based GenBank/UniProt-style positions by
-a biologist, not fed to a half-open-aware parser. This is a documentation-time decision,
-not an owner `DECISION` issue (it changes no cost, no product shape, and is trivially
-reversible before the writer exists) - but the implementer should treat the column layout
-above as a proposal to confirm in the same PR that adds `TsvWriter`, not as unreviewable.
+**A note on the Entropy TSV's shape (issue #281/#46, closed):** this doc proposed the
+convention before `TsvWriter` existed, so the first implementation had a shape to land in
+rather than inventing one at code-review time; the shipped writer confirms it exactly, no
+changes. Columns: `position\tbase\tentropy_bits` for `Forward only`/`Reverse only`/
+`Both, combined`/`Both, averaged` runs, or
+`position\tbase\tentropy_fwd\tentropy_rev\tentropy_combined` for `Both, separate tracks`
+(one sheet with three number columns to compare directly, rather than three separate
+files - bedGraph/WIG do get separate `.fwd`/`.rev` files, since those serve a viewer, not
+a human reading rows). **Coordinates: 1-based, inclusive**, matching WIG and both GFF3
+flavours (the majority of this table) rather than bedGraph's half-open convention, on the
+reasoning that a spreadsheet-opened TSV is read directly against 1-based GenBank/UniProt-
+style positions by a biologist, not fed to a half-open-aware parser. A multi-record file
+stays exactly 3 (or 5) columns rather than growing a `contig` column: each contig's block
+is introduced by a `# contig: <name>` comment line, and position numbering restarts at
+`start` for each contig, the same per-contig coordinate frame bedGraph/WIG already use.
 
 **Multi-record input**: per spec decision D14, all FASTA records are processed (the
 prototype processed only the first); GenBank multi-record input was already handled via

@@ -180,6 +180,7 @@ in it.
 | `MODEL_DOWNLOAD_FAILED` | `ModelDownloadFailed` | Couldn't download the model | Couldn't download the Evo 2 model. | [Retry] |
 | `MODEL_NEEDS_HOPPER` | `ModelNeedsHopper` | This model needs a bigger, rarer graphics card | This model needs a specific, hard-to-get graphics card that you didn't pick. | [Switch to the default model] |
 | `MODEL_OOM` | `ModelOom` | The sequence window is too big | The sequence window is too big for this graphics card's memory. | [Lower the context length] / [Use a bigger computer] |
+| `BATCH_LIMIT_EXCEEDED` | `BatchLimitExceeded` | This batch is too large | This batch is {files} file(s), {nt} letters total. That's over the configured limit of {maxFiles} files or {maxNt} letters. Cost is GPU time, not file count, so a shorter batch costs less to run. | [Split into smaller batches] / [Raise the limit] |
 | `INPUT_INVALID` | `InputInvalid` | Something is wrong with your input | Verbatim from the validator, already plain (see `docs/user_guide/03-run.md`). | [Fix the input] / [Turn on Treat as RNA] |
 | `HEARTBEAT_LOST` | `HeartbeatLost` | The computer stopped reporting progress | The computer stopped reporting progress. It may just be slow, or it may have genuinely stopped. | [Stop it] / [Delete it] / [Keep waiting] |
 | `VM_DIED` | `VmDied` | The computer stopped before finishing | The computer was shut down before finishing (hardware or a safety limit). Outputs so far were saved. | [Download partial results] / [Retry] |
@@ -191,6 +192,21 @@ in it.
 | `BUCKET_MISSING` | `BucketMissing` | Your cloud storage is gone | Your results storage was deleted outside the app. | [Recreate it] |
 | `DOWNLOAD_FAILED` | `DownloadFailed` | Can't reach Google Cloud | Can't reach Google Cloud right now. Check your internet connection. Your results stay in the cloud for your full retention period regardless. | [Retry] |
 | `SPEND_CAP` | `SpendCap` | This would go over your spending cap | This run would go over your monthly warning cap. | [Run anyway] / [Change the cap] |
+
+**`INPUT_INVALID`'s Actions column is not one fixed pair - it depends on which validator
+check actually failed** (`science_and_formats.md` section 4 names five, in order: RNA,
+empty, alphabet/ambiguity, length-vs-cap, minimum-length), the same way the zone ladder's
+narration above is not one fixed line. `[Turn on Treat as RNA]` is only correct for the
+RNA check (a `U` seen with the option off); showing it for, say, an ambiguity-policy
+refusal would be a button that does nothing for that user's actual problem. The one added
+here now that `ambiguityPolicy: "error"` (issue #249) is a real, user-reachable refusal:
+a sequence containing an IUPAC ambiguity code (`N`, or one of the rarer codes), refused
+because the run was configured to require every position be an unambiguous base call.
+`Body` stays verbatim from the validator (it already names the code, its position, and the
+count, per `science_and_formats.md` section 4) and `Actions` is `[Fix the input]` /
+`[Allow ambiguity codes]`, the second one switching this run's `ambiguityPolicy` from
+`error` to `keep` (or `mask`) rather than requiring the user to edit their file - the
+`error` policy exists for a user who wants to be asked, not one who has no other option.
 
 `NETWORK` (Appendix B's own alias for a subset of `DOWNLOAD_FAILED`-shaped failures) is
 folded into the `DownloadFailed` row above rather than kept as a separate one, matching
