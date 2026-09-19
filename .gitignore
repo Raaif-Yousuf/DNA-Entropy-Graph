@@ -29,3 +29,6 @@ runs/
 # OS
 Thumbs.db
 desktop.ini
+
+# Private conventions donor (CLAIR) copied for mining only; never published
+legacy/clair/
