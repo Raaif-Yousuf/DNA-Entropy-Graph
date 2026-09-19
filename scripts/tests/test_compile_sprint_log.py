@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -273,3 +274,118 @@ def test_check_and_dry_run_are_mutually_exclusive():
         capture_output=True, text=True, timeout=15,
     )
     assert proc.returncode == 2
+
+
+def _commit_file(root: Path, rel: str, content: str, ts: int) -> None:
+    """Write `rel` under `root` and commit it with a fixed, known commit
+    time (`ts`, Unix seconds) -- both author and committer date pinned, so
+    `_bulk_commit_times()`'s `%ct` reads back exactly `ts` regardless of
+    when the test actually runs."""
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    env = dict(os.environ)
+    env["GIT_AUTHOR_DATE"] = f"@{ts} +0000"
+    env["GIT_COMMITTER_DATE"] = f"@{ts} +0000"
+    subprocess.run(["git", "add", rel], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"commit {rel}"],
+        cwd=root, check=True, capture_output=True, env=env,
+    )
+
+
+def test_bulk_commit_times_reads_newest_commit_time_per_file(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    changelog_dir = root / "docs" / "changelog.d"
+    _commit_file(root, "docs/changelog.d/a-branch.md", "- fragment A\n", 1_700_000_000)
+    _commit_file(root, "docs/changelog.d/b-branch.md", "- fragment B\n", 1_700_000_500)
+
+    times = csl._bulk_commit_times(root, changelog_dir)
+
+    assert times["docs/changelog.d/a-branch.md"] == 1_700_000_000.0
+    assert times["docs/changelog.d/b-branch.md"] == 1_700_000_500.0
+
+
+def test_bulk_commit_times_keeps_newest_when_a_file_is_committed_twice(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    changelog_dir = root / "docs" / "changelog.d"
+    _commit_file(root, "docs/changelog.d/a-branch.md", "- first version\n", 1_700_000_000)
+    # git log's default order is newest-first, so this second, later commit
+    # to the SAME file must be the one _bulk_commit_times() keeps.
+    _commit_file(root, "docs/changelog.d/a-branch.md", "- edited version\n", 1_700_009_000)
+
+    times = csl._bulk_commit_times(root, changelog_dir)
+
+    assert times["docs/changelog.d/a-branch.md"] == 1_700_009_000.0
+
+
+def test_bulk_commit_times_empty_for_untracked_directory(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    changelog_dir = root / "docs" / "changelog.d"
+    changelog_dir.mkdir(parents=True)
+    (changelog_dir / "untracked.md").write_text("- never committed\n", encoding="utf-8")
+
+    times = csl._bulk_commit_times(root, changelog_dir)
+
+    assert times == {}
+
+
+def test_sort_key_uses_bulk_times_without_any_subprocess_call(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    frag = root / "docs" / "changelog.d" / "a-branch.md"
+    frag.parent.mkdir(parents=True)
+    frag.write_text("- fragment A\n", encoding="utf-8")
+    bulk_times = {"docs/changelog.d/a-branch.md": 1_700_000_000.0}
+
+    def _fail(*a, **k):
+        raise AssertionError("_sort_key must not shell out when bulk_times has the entry")
+
+    monkeypatch.setattr(subprocess, "run", _fail)
+
+    assert csl._sort_key(frag, root, bulk_times) == 1_700_000_000.0
+
+
+def test_sort_key_falls_back_to_mtime_when_path_missing_from_bulk_times(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    frag = root / "docs" / "changelog.d" / "untracked.md"
+    frag.parent.mkdir(parents=True)
+    frag.write_text("- never committed\n", encoding="utf-8")
+
+    key = csl._sort_key(frag, root, bulk_times={})
+
+    assert key == frag.stat().st_mtime
+
+
+def test_sort_key_falls_back_to_per_file_git_log_when_bulk_times_is_none(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    _commit_file(root, "docs/changelog.d/a-branch.md", "- fragment A\n", 1_700_000_000)
+    frag = root / "docs" / "changelog.d" / "a-branch.md"
+
+    key = csl._sort_key(frag, root, bulk_times=None)
+
+    assert key == 1_700_000_000.0
+
+
+def test_compile_fragments_orders_by_bulk_commit_time_newest_first(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    _make_sprint_log(root)
+    _commit_file(root, "docs/changelog.d/older.md", "- older fragment\n", 1_700_000_000)
+    _commit_file(root, "docs/changelog.d/newer.md", "- newer fragment\n", 1_700_009_000)
+
+    rc = csl.compile_fragments(root, dry_run=False)
+    assert rc == 0
+
+    result = (root / "docs" / "sprint_log.md").read_text(encoding="utf-8")
+    assert result.index("newer fragment") < result.index("older fragment")

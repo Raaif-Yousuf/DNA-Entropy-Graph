@@ -98,6 +98,40 @@ Exit codes
 `gh` is only needed for `--all-open`, for open/closed state, and for the
 milestone/label/related-issue lookups above. Without it the script still runs
 and reports state as "unknown", with no milestone or related-issue data.
+
+Why `--all-open` produced zero bytes at backlog scale (issue #307)
+--------------------------------------------------------------------
+MEASURED 2026-09-19, on this repo's own ~270-issue backlog: the root cause
+was buffering, not the network. `stdout` redirected to a file (not a TTY,
+which is exactly what `--all-open > out.txt` and a backgrounded run both
+are) is fully block-buffered by Python's default -- nothing reaches the file
+until either the internal buffer fills or the process exits. A 30-issue
+timed run confirmed this directly: the output file measured 0 bytes at 48
+of the run's ~64 total seconds, then jumped to its full ~28 KB essentially
+at once. The run was never hung; it was working the entire time and saying
+nothing. Fixed by putting `stdout` in line-buffered mode
+(`sys.stdout.reconfigure(..., line_buffering=True)`, right where the
+existing encoding reconfigure already runs) and by restructuring `main()`
+to print and flush each issue's report as soon as that issue is evidence-
+gathered, instead of gathering evidence for every issue first and only
+printing at the end -- the second half matters on its own even with
+line-buffering, because a version that still buffers ALL issues in memory
+before the first `print()` call would still show nothing until the whole
+sweep finished.
+
+The SPEED problem was real but secondary, and came from the same shape
+twice: `fill_reviewed_shas`, `fill_related_issues` and `fill_node_id_matches`
+each independently re-fetched `gh issue view --repo <repo> --json
+body,comments` (or just `body`) for the SAME issue when more than one of
+them fired for it -- up to three redundant network round-trips per gated
+issue. They now share one `get_issue_thread()` fetch per issue, and when
+`--all-open`'s own bulk `gh issue list` call already carries `body` and
+`comments` (it does, as of this fix: `gh issue list --json` supports both
+fields directly, so the whole backlog's thread text arrives in the SAME one
+call `gh_list` already made for state/milestone/labels), none of the three
+needs a further per-issue call AT ALL. `--limit` and `--label` (see `--help`)
+bound the normal case to a few dozen issues rather than the whole backlog,
+which is what most invocations actually want.
 """
 
 from __future__ import annotations
@@ -116,11 +150,22 @@ from pathlib import Path
 # titles are arbitrary user text (an arrow U+2192, an em dash, anything).
 # `--all-open` must never die mid-sweep with UnicodeEncodeError over a title
 # it does not control; the report must never be the thing that fails on them.
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):  # already-wrapped or non-reconfigurable
-        pass
+# `line_buffering=True` on stdout specifically is the fix for issue #307:
+# redirected to a file or a pipe (not a TTY -- exactly `--all-open > out.txt`,
+# or any backgrounded run), Python's default is fully block-buffered, so
+# nothing reaches the file until the internal buffer fills or the process
+# exits. See the module docstring's own "Why --all-open produced zero bytes"
+# section for the measurement. stderr does not get the same treatment: it is
+# progress/diagnostic chatter only (see --progress), never the report itself,
+# and Python's own stderr is unbuffered/line-buffered by default already.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+except (AttributeError, ValueError):  # already-wrapped or non-reconfigurable
+    pass
+try:
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 REPO = "Raaif-Yousuf/DNA-Entropy-Graph"
 
@@ -247,6 +292,14 @@ class IssueMeta:
     title: str = ""
     milestone: str = ""             # "" means none set
     labels: tuple[str, ...] = ()
+    # Body + every comment body, concatenated -- populated ONLY when the
+    # bulk `gh issue list` call that built this IssueMeta also asked for
+    # `body,comments` (see `gh_list`). None means "not fetched in bulk, ask
+    # for it per-issue if you need it"; "" is a real, fetched, empty thread.
+    # This is issue #307's own redundancy fix: fill_reviewed_shas,
+    # fill_related_issues and fill_node_id_matches each used to re-fetch
+    # this same text per issue independently; see `get_issue_thread`.
+    thread_text: str | None = None
 
     @property
     def deferred(self) -> bool:
@@ -269,6 +322,10 @@ class Evidence:
     title: str = ""
     milestone: str = ""
     labels: tuple[str, ...] = ()
+    # See IssueMeta.thread_text: None until either bulk-prefetched (copied
+    # from IssueMeta in `assemble_evidence`) or fetched once, lazily, by
+    # `get_issue_thread`.
+    thread_text: str | None = None
     commits: list[Commit] = field(default_factory=list)
     # bucket -> list of (repo-relative path, first matching line)
     hits: dict[str, list[tuple[str, str]]] = field(default_factory=lambda: defaultdict(list))
@@ -571,6 +628,17 @@ def scan_commits(
 def _issue_meta_from_json(data: dict, fallback_state: str = "") -> IssueMeta:
     milestone = data.get("milestone") or {}
     labels = data.get("labels") or []
+    # `body`/`comments` are present only when the caller's `gh --json` field
+    # list asked for them (gh_list's bulk call does; gh_state's per-issue
+    # state-only call does not) -- absence (the field missing entirely from
+    # `data`) means "not fetched", kept as None; PRESENT but empty is a real,
+    # fetched, empty thread and must stay "" so `get_issue_thread` never
+    # re-fetches it.
+    thread_text = None
+    if "body" in data or "comments" in data:
+        thread = str(data.get("body") or "") + "\n"
+        thread += "\n".join(str(c.get("body") or "") for c in data.get("comments") or [])
+        thread_text = thread
     return IssueMeta(
         state=str(data.get("state", fallback_state)).lower(),
         title=data.get("title", ""),
@@ -578,6 +646,7 @@ def _issue_meta_from_json(data: dict, fallback_state: str = "") -> IssueMeta:
         labels=tuple(
             str(l.get("name", "")) for l in labels if isinstance(l, dict)
         ),
+        thread_text=thread_text,
     )
 
 
@@ -607,43 +676,71 @@ def gh_state(numbers: list[int], root: Path,
     return states
 
 
-def fill_reviewed_shas(root: Path, ev: dict[int, Evidence]) -> None:
+def get_issue_thread(root: Path, n: int, e: Evidence) -> str:
+    """Body + every comment body, concatenated -- the one fetch
+    `fill_reviewed_shas_one`, `fill_related_issues_one` (its outbound half)
+    and `fill_node_id_matches_one` all need, shared instead of each of them
+    independently re-fetching it (issue #307). `e.thread_text` is already
+    populated when the bulk `gh_list` sweep asked for `body,comments` (the
+    `--all-open` and `--label` paths); this only calls `gh` when that is
+    `None` (an explicit-numbers-only run whose state came from `gh_state`'s
+    lighter per-issue call, which does not fetch the thread). The result is
+    cached back onto `e.thread_text` so a second call this run, if any,
+    never re-fetches either.
+    """
+    if e.thread_text is not None:
+        return e.thread_text
+    raw = _run(["gh", "issue", "view", str(n), "--repo", REPO, "--json", "body,comments"], root)
+    thread = ""
+    if raw:
+        try:
+            data = json.loads(raw)
+            thread = str(data.get("body") or "") + "\n"
+            thread += "\n".join(str(c.get("body") or "") for c in data.get("comments") or [])
+        except json.JSONDecodeError:
+            pass
+    e.thread_text = thread
+    return thread
+
+
+def fill_reviewed_shas_one(root: Path, n: int, e: Evidence) -> None:
     """Note which implementing commits the issue's own thread already cites.
 
     Fetched ONLY for issues that would otherwise report SUSPECT. A sweep of the
     whole backlog would otherwise pay a comments round-trip per issue to learn
     something that changes nothing for the ~85% that are not suspect.
     """
-    for n, e in ev.items():
-        if e.state != "open" or not e.implementing_commits:
-            continue
-        raw = _run(
-            ["gh", "issue", "view", str(n), "--repo", REPO, "--json", "body,comments"], root
-        )
-        if not raw:
-            continue
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        thread = str(data.get("body") or "")
-        thread += "\n".join(str(c.get("body") or "") for c in data.get("comments") or [])
-        e.reviewed_shas = [c.sha for c in e.implementing_commits if c.sha in thread]
+    if e.state != "open" or not e.implementing_commits:
+        return
+    thread = get_issue_thread(root, n, e)
+    e.reviewed_shas = [c.sha for c in e.implementing_commits if c.sha in thread]
 
 
-def gh_list(root: Path, state: str) -> dict[int, IssueMeta]:
+def gh_list(root: Path, state: str, limit: int = 400, label: str | None = None) -> dict[int, IssueMeta]:
     """Every issue in `state`, as number -> IssueMeta, in one call.
 
     Milestone and labels ride along in the SAME bulk call: `gh issue
     list --json` accepts them exactly like `number,title,state`, so showing
     the milestone next to every verdict costs nothing extra over a sweep that
     was already making this one call.
+
+    So do `body` and `comments` (issue #307): `gh issue list --json` accepts
+    them exactly the same way, and doing so here means `fill_reviewed_shas`,
+    `fill_related_issues` and `fill_node_id_matches` need NO further
+    per-issue `gh issue view` call at all for anything this bulk sweep
+    already covers -- see `get_issue_thread` and the module docstring's own
+    "Why --all-open produced zero bytes" section for the redundancy this
+    replaced (up to three separate re-fetches of the same text per issue).
+
+    `label` filters server-side via `gh issue list --label`, which is how
+    `--label` scopes a run to one area without this script doing its own
+    filtering after the fact.
     """
-    raw = _run(
-        ["gh", "issue", "list", "--repo", REPO, "--state", state,
-         "--limit", "400", "--json", "number,title,state,milestone,labels"],
-        root,
-    )
+    cmd = ["gh", "issue", "list", "--repo", REPO, "--state", state,
+           "--limit", str(limit), "--json", "number,title,state,milestone,labels,body,comments"]
+    if label:
+        cmd += ["--label", label]
+    raw = _run(cmd, root)
     if not raw:
         return {}
     return {
@@ -652,7 +749,7 @@ def gh_list(root: Path, state: str) -> dict[int, IssueMeta]:
     }
 
 
-def fill_related_issues(root: Path, ev: dict[int, Evidence]) -> None:
+def fill_related_issues_one(root: Path, n: int, e: Evidence, ev: dict[int, Evidence]) -> None:
     """Surface a fix that landed under a DIFFERENT issue number.
 
     This script's verdict rests entirely on the literal `#N` appearing in a
@@ -682,72 +779,62 @@ def fill_related_issues(root: Path, ev: dict[int, Evidence]) -> None:
     issues that already show a clean implementing commit make none of the
     extra round trips below.
     """
-    for n, e in ev.items():
-        if e.state == "unknown" or e.implementing_commits:
+    if e.state == "unknown" or e.implementing_commits:
+        return
+
+    # number -> (direction, state, title). Populated with state/title
+    # already in hand where possible: the timeline event carries both for
+    # free, and `ev` already knows them for any sibling already processed
+    # this run. Only an outbound-only number (found solely in this issue's
+    # OWN body/comments, which give a number but nothing else) needs a
+    # further lookup.
+    candidates: dict[int, tuple[str, str, str]] = {}
+
+    raw = _run(
+        [
+            "gh", "api", f"repos/{REPO}/issues/{n}/timeline", "--paginate",
+            "-q", '.[] | select(.event=="cross-referenced") | '
+                  '[(.source.issue.number|tostring), .source.issue.state, '
+                  '.source.issue.title] | join(":::")',
+        ],
+        root,
+    )
+    for line in raw.splitlines():
+        parts = line.split(":::", 2)
+        if len(parts) != 3:
             continue
+        try:
+            m = int(parts[0])
+        except ValueError:
+            continue
+        if m != n:
+            candidates[m] = ("mentions this issue elsewhere (GitHub cross-reference)",
+                              parts[1], parts[2])
 
-        # number -> (direction, state, title). Populated with state/title
-        # already in hand where possible: the timeline event carries both for
-        # free, and `ev` already knows them for any sibling in this same
-        # batch. Only an outbound-only number (found solely in this issue's
-        # OWN body/comments, which give a number but nothing else) needs a
-        # further lookup.
-        candidates: dict[int, tuple[str, str, str]] = {}
+    thread = get_issue_thread(root, n, e)
+    for m in _issue_refs(thread):
+        if m == n or m in candidates:
+            continue
+        candidates[m] = ("this issue's own body/comments mention it", "", "")
 
-        raw = _run(
-            [
-                "gh", "api", f"repos/{REPO}/issues/{n}/timeline", "--paginate",
-                "-q", '.[] | select(.event=="cross-referenced") | '
-                      '[(.source.issue.number|tostring), .source.issue.state, '
-                      '.source.issue.title] | join(":::")',
-            ],
-            root,
-        )
-        for line in raw.splitlines():
-            parts = line.split(":::", 2)
-            if len(parts) != 3:
-                continue
-            try:
-                m = int(parts[0])
-            except ValueError:
-                continue
-            if m != n:
-                candidates[m] = ("mentions this issue elsewhere (GitHub cross-reference)",
-                                  parts[1], parts[2])
-
-        raw = _run(
-            ["gh", "issue", "view", str(n), "--repo", REPO, "--json", "body,comments"], root
-        )
-        if raw:
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = {}
-            thread = str(data.get("body") or "") + "\n"
-            thread += "\n".join(str(c.get("body") or "") for c in data.get("comments") or [])
-            for m in _issue_refs(thread):
-                if m == n or m in candidates:
-                    continue
-                candidates[m] = ("this issue's own body/comments mention it", "", "")
-
-        for m, (direction, other_state, other_title) in candidates.items():
-            if not other_state:
-                if m in ev:
-                    other_state, other_title = ev[m].state, ev[m].title
-                else:
-                    raw = _run(
-                        ["gh", "issue", "view", str(m), "--repo", REPO,
-                         "--json", "state,title"], root
-                    )
-                    other_state, other_title = "unknown", ""
-                    if raw:
-                        try:
-                            data = json.loads(raw)
-                            other_state = str(data.get("state", "")).lower()
-                            other_title = data.get("title", "")
-                        except json.JSONDecodeError:
-                            pass
-            e.related.append((m, other_state, other_title, direction))
+    for m, (direction, other_state, other_title) in candidates.items():
+        if not other_state:
+            if m in ev:
+                other_state, other_title = ev[m].state, ev[m].title
+            else:
+                raw = _run(
+                    ["gh", "issue", "view", str(m), "--repo", REPO,
+                     "--json", "state,title"], root
+                )
+                other_state, other_title = "unknown", ""
+                if raw:
+                    try:
+                        data = json.loads(raw)
+                        other_state = str(data.get("state", "")).lower()
+                        other_title = data.get("title", "")
+                    except json.JSONDecodeError:
+                        pass
+        e.related.append((m, other_state, other_title, direction))
 
 
 # A blind spot distinct from `fill_related_issues`'s own: `related` needs
@@ -977,25 +1064,28 @@ def find_node_id_matches(root: Path, symbol: str, use_cache: bool = True) -> lis
     return matches
 
 
-def fill_node_id_matches(root: Path, ev: dict[int, Evidence], use_cache: bool = True) -> None:
+def fill_node_id_matches_one(root: Path, n: int, e: Evidence, use_cache: bool = True) -> None:
     """See the module comment above `_NODE_ID_RE`: the shape of a fixing
-    commit with no `#N` anywhere for `fill_related_issues` to find. Gated
-    identically to `fill_related_issues` (only issues with no implementing
-    commit of their own, only once state is known) so the ~85% of issues
-    that already show a clean implementing commit pay nothing extra."""
-    for n, e in ev.items():
-        if e.state == "unknown" or e.implementing_commits:
-            continue
-        raw = _run(["gh", "issue", "view", str(n), "--repo", REPO, "--json", "body"], root)
-        body = ""
-        if raw:
-            try:
-                body = str(json.loads(raw).get("body") or "")
-            except json.JSONDecodeError:
-                pass
-        for symbol in extract_node_id_candidates(e.title, body):
-            for sha, path in find_node_id_matches(root, symbol, use_cache=use_cache):
-                e.node_id_matches.append((symbol, sha, path))
+    commit with no `#N` anywhere for `fill_related_issues_one` to find.
+    Gated identically to it (only issues with no implementing commit of
+    their own, only once state is known) so the ~85% of issues that already
+    show a clean implementing commit pay nothing extra.
+
+    Reads the symbol out of the SAME shared thread `get_issue_thread` (n, e)
+    returns -- body AND comments, not body alone as the original per-issue
+    fetch here used to ask for. A test function name quoted in a COMMENT
+    (an owner or reviewer pointing at it after the fact) is exactly as valid
+    a candidate as one in the issue body itself; scanning strictly more text
+    than before only widens what this candidate generator can find, it does
+    not change what `verdict()` decides (this list is a candidate list, per
+    the module docstring above `fill_related_issues_one`, never the verdict
+    itself)."""
+    if e.state == "unknown" or e.implementing_commits:
+        return
+    thread = get_issue_thread(root, n, e)
+    for symbol in extract_node_id_candidates(e.title, thread):
+        for sha, path in find_node_id_matches(root, symbol, use_cache=use_cache):
+            e.node_id_matches.append((symbol, sha, path))
 
 
 def scan(root: Path, numbers: list[int],
@@ -1044,134 +1134,136 @@ def scan(root: Path, numbers: list[int],
             ev[n].title = meta.title
             ev[n].milestone = meta.milestone
             ev[n].labels = meta.labels
-
-    # After state is known: these two passes key off `state`, and must not
-    # fire when --no-gh has already ruled GitHub out.
-    if any(e.state != "unknown" for e in ev.values()):
-        fill_reviewed_shas(root, ev)
-        fill_related_issues(root, ev)
-        fill_node_id_matches(root, ev, use_cache=use_cache)
+            ev[n].thread_text = meta.thread_text
 
     return ev
 
 
-def report(ev: dict[int, Evidence], suspect_only: bool) -> int:
-    suspects = 0
-    for n in sorted(ev):
-        e = ev[n]
-        level, why = e.verdict()
-        if level == "SUSPECT":
-            suspects += 1
-        elif suspect_only:
+def report_one(n: int, e: Evidence, suspect_only: bool) -> str:
+    """Render and print one issue's block immediately (never batched --
+    issue #307's own fix), and return its verdict level so the streaming
+    caller can count suspects and decide the exit code without this
+    function needing to know about any OTHER issue. Printing is skipped
+    (but the level is still returned) when `suspect_only` suppresses a
+    non-SUSPECT verdict -- the caller still needs the level to keep an
+    accurate running count even for an issue it never prints."""
+    level, why = e.verdict()
+    if level != "SUSPECT" and suspect_only:
+        return level
+
+    head = f"#{n}" + (f"  {e.title[:68]}" if e.title else "")
+    print(f"\n{'=' * 78}\n{head}\n{'-' * 78}")
+    print(f"  state    : {e.state}")
+    # a milestone or post-v1 label is a PRIORITY decision, not a
+    # gap this script found -- print it unconditionally so "safe to
+    # start" (a commit-graph fact) is never read alone as "worth doing".
+    if e.milestone or e.labels:
+        label_note = f"  labels: {', '.join(e.labels)}" if e.labels else ""
+        print(f"  milestone: {e.milestone or '(none)'}{label_note}")
+    if e.deferred:
+        print(
+            f"  DEFERRED : milestone/label says {e.milestone or 'post-v1'!r} -- "
+            "the owner already deferred this. Dispatching it now is a priority "
+            "decision, not a gap. Read the thread before starting."
+        )
+    print(f"  verdict  : {level} -- {why}")
+
+    if e.commits:
+        print(f"  commits  : {len(e.commits)}")
+        for c in e.commits[:6]:
+            if not c.touched_source:
+                mark = "docs"
+            elif c.merged:
+                mark = "SRC "
+            else:
+                mark = "UNMERGED"
+            extra = f"  [{len(c.source_files)} source file(s)]" if c.touched_source else ""
+            cited = "  (cited in the issue thread)" if c.sha in e.reviewed_shas else ""
+            print(f"             [{mark}] {c.sha} {c.subject[:78]}{extra}{cited}")
+            # Surface it, don't make the reader re-derive it. A
+            # commit naming more than one issue is exactly the shape that
+            # cost three `git show` calls to catch once already.
+            other_refs = [r for r in _issue_refs(c.subject) if r != n]
+            if other_refs:
+                print(
+                    "                    ALSO NAMES: "
+                    + ", ".join(f"#{r}" for r in other_refs)
+                    + " -- if that issue's own subject differs from #"
+                    + str(n) + "'s, this diff may not really be about #"
+                    + str(n) + ". Check the files below against both."
+                )
+            if c.touched_source:
+                for p in c.source_files[:8]:
+                    print(f"                    {p}")
+                if len(c.source_files) > 8:
+                    print(f"                    ... and {len(c.source_files) - 8} more file(s)")
+            if c.body:
+                for bl in c.body.splitlines()[:4]:
+                    print(f"                    {bl[:100]}")
+        if len(e.commits) > 6:
+            print(f"             ... and {len(e.commits) - 6} more")
+
+    # Source mentions carry their line: it is the fastest way to see whether
+    # a module implements the issue or documents the gap it left, and it is
+    # where the work starts either way.
+    for bucket in ("code", "tests"):
+        paths = e.hits.get(bucket) or []
+        if not paths:
             continue
+        print(f"  {bucket:<9}: {len(paths)}")
+        for p, line in paths[:6]:
+            print(f"             {p}")
+            if line:
+                print(f"               | {line}")
+        if len(paths) > 6:
+            print(f"             ... and {len(paths) - 6} more")
 
-        head = f"#{n}" + (f"  {e.title[:68]}" if e.title else "")
-        print(f"\n{'=' * 78}\n{head}\n{'-' * 78}")
-        print(f"  state    : {e.state}")
-        # a milestone or post-v1 label is a PRIORITY decision, not a
-        # gap this script found -- print it unconditionally so "safe to
-        # start" (a commit-graph fact) is never read alone as "worth doing".
-        if e.milestone or e.labels:
-            label_note = f"  labels: {', '.join(e.labels)}" if e.labels else ""
-            print(f"  milestone: {e.milestone or '(none)'}{label_note}")
-        if e.deferred:
-            print(
-                f"  DEFERRED : milestone/label says {e.milestone or 'post-v1'!r} -- "
-                "the owner already deferred this. Dispatching it now is a priority "
-                "decision, not a gap. Read the thread before starting."
-            )
-        print(f"  verdict  : {level} -- {why}")
+    docs = e.hits.get("docs") or []
+    if docs:
+        print(f"  docs     : {len(docs)}  ({', '.join(p for p, _ in docs[:4])}"
+              f"{', ...' if len(docs) > 4 else ''})")
 
-        if e.commits:
-            print(f"  commits  : {len(e.commits)}")
-            for c in e.commits[:6]:
-                if not c.touched_source:
-                    mark = "docs"
-                elif c.merged:
-                    mark = "SRC "
-                else:
-                    mark = "UNMERGED"
-                extra = f"  [{len(c.source_files)} source file(s)]" if c.touched_source else ""
-                cited = "  (cited in the issue thread)" if c.sha in e.reviewed_shas else ""
-                print(f"             [{mark}] {c.sha} {c.subject[:78]}{extra}{cited}")
-                # Surface it, don't make the reader re-derive it. A
-                # commit naming more than one issue is exactly the shape that
-                # cost three `git show` calls to catch once already.
-                other_refs = [r for r in _issue_refs(c.subject) if r != n]
-                if other_refs:
-                    print(
-                        "                    ALSO NAMES: "
-                        + ", ".join(f"#{r}" for r in other_refs)
-                        + " -- if that issue's own subject differs from #"
-                        + str(n) + "'s, this diff may not really be about #"
-                        + str(n) + ". Check the files below against both."
-                    )
-                if c.touched_source:
-                    for p in c.source_files[:8]:
-                        print(f"                    {p}")
-                    if len(c.source_files) > 8:
-                        print(f"                    ... and {len(c.source_files) - 8} more file(s)")
-                if c.body:
-                    for bl in c.body.splitlines()[:4]:
-                        print(f"                    {bl[:100]}")
-            if len(e.commits) > 6:
-                print(f"             ... and {len(e.commits) - 6} more")
+    if e.in_totest:
+        print("  totest   : an open row in docs/ToTest.md")
 
-        # Source mentions carry their line: it is the fastest way to see whether
-        # a module implements the issue or documents the gap it left, and it is
-        # where the work starts either way.
-        for bucket in ("code", "tests"):
-            paths = e.hits.get(bucket) or []
-            if not paths:
-                continue
-            print(f"  {bucket:<9}: {len(paths)}")
-            for p, line in paths[:6]:
-                print(f"             {p}")
-                if line:
-                    print(f"               | {line}")
-            if len(paths) > 6:
-                print(f"             ... and {len(paths) - 6} more")
+    # This issue has no implementing commit of its OWN -- the exact
+    # case where "nothing shipped" and "shipped under a different number"
+    # look identical from the commit graph alone.
+    if e.related:
+        print(f"  related  : {len(e.related)} issue(s) this verdict does NOT account for")
+        for m, other_state, other_title, direction in e.related[:6]:
+            title_part = f"  {other_title[:60]}" if other_title else ""
+            print(f"             #{m} ({other_state}){title_part}")
+            print(f"               | {direction} -- check its own commits before trusting "
+                  f"\"no trace\" above")
+        if len(e.related) > 6:
+            print(f"             ... and {len(e.related) - 6} more")
 
-        docs = e.hits.get("docs") or []
-        if docs:
-            print(f"  docs     : {len(docs)}  ({', '.join(p for p, _ in docs[:4])}"
-                  f"{', ...' if len(docs) > 4 else ''})")
+    # No `#N` text anywhere links this issue to its own fix, so `related`
+    # above cannot find it either -- only a commit that genuinely
+    # DEFINES the test/symbol this issue's title or body names,
+    # confirmed by parsing it, not by grepping for it.
+    if e.node_id_matches:
+        print(
+            f"  node-ids : {len(e.node_id_matches)} commit(s) AST-confirmed to "
+            "define a symbol this issue's own title/body names, with no "
+            "#-reference connecting them. NOT part of the "
+            "verdict above; go read the commit."
+        )
+        for symbol, sha, path in e.node_id_matches[:6]:
+            print(f"             {symbol}")
+            print(f"               | {sha}  {path}")
+        if len(e.node_id_matches) > 6:
+            print(f"             ... and {len(e.node_id_matches) - 6} more")
 
-        if e.in_totest:
-            print("  totest   : an open row in docs/ToTest.md")
+    return level
 
-        # This issue has no implementing commit of its OWN -- the exact
-        # case where "nothing shipped" and "shipped under a different number"
-        # look identical from the commit graph alone.
-        if e.related:
-            print(f"  related  : {len(e.related)} issue(s) this verdict does NOT account for")
-            for m, other_state, other_title, direction in e.related[:6]:
-                title_part = f"  {other_title[:60]}" if other_title else ""
-                print(f"             #{m} ({other_state}){title_part}")
-                print(f"               | {direction} -- check its own commits before trusting "
-                      f"\"no trace\" above")
-            if len(e.related) > 6:
-                print(f"             ... and {len(e.related) - 6} more")
 
-        # No `#N` text anywhere links this issue to its own fix, so `related`
-        # above cannot find it either -- only a commit that genuinely
-        # DEFINES the test/symbol this issue's title or body names,
-        # confirmed by parsing it, not by grepping for it.
-        if e.node_id_matches:
-            print(
-                f"  node-ids : {len(e.node_id_matches)} commit(s) AST-confirmed to "
-                "define a symbol this issue's own title/body names, with no "
-                "#-reference connecting them. NOT part of the "
-                "verdict above; go read the commit."
-            )
-            for symbol, sha, path in e.node_id_matches[:6]:
-                print(f"             {symbol}")
-                print(f"               | {sha}  {path}")
-            if len(e.node_id_matches) > 6:
-                print(f"             ... and {len(e.node_id_matches) - 6} more")
-
+def print_footer(total: int, suspects: int) -> int:
+    """The closing summary + standing caveat, printed once after every
+    issue has streamed. Returns the exit code (1 if any SUSPECT, else 0)."""
     print(f"\n{'=' * 78}")
-    print(f"{len(ev)} issue(s) checked, {suspects} suspect.")
+    print(f"{total} issue(s) checked, {suspects} suspect.")
     if suspects:
         print("SUSPECT is a prompt to go read the commit -- not a conclusion.")
     print(
@@ -1184,12 +1276,68 @@ def report(ev: dict[int, Evidence], suspect_only: bool) -> int:
     return 1 if suspects else 0
 
 
+def run_stream(
+    root: Path,
+    numbers: list[int],
+    known: dict[int, IssueMeta] | None,
+    use_cache: bool,
+    suspect_only: bool,
+    show_progress: bool = True,
+) -> int:
+    """The streaming entry point issue #307 exists to add: gather the BULK,
+    issue-independent evidence once (`scan()` -- cached commit log, one
+    tree-scan pass, bulk `gh` state/thread fetch), then loop issue by
+    issue, fetching only what THAT issue still needs (the per-issue
+    enrichment calls, now gated exactly as before but no longer batched
+    across the whole backlog first), printing and flushing its block
+    immediately. A redirected or backgrounded run therefore shows real,
+    growing output from the first issue onward, instead of the zero bytes
+    a fully-buffered, gather-everything-then-print design produced at
+    backlog scale -- see the module docstring's own root-cause section.
+
+    `show_progress` prints one `[i/N] #n -> LEVEL` line per issue to
+    STDERR only, never stdout: the real report (what a human or another
+    tool reads back) is not touched by it either way, matching --help's own
+    description of --no-progress.
+    """
+    ev = scan(root, numbers, known, use_cache=use_cache)
+    ordered = sorted(ev)
+    total = len(ordered)
+    # These two passes key off `state`, and must not fire when --no-gh has
+    # already ruled GitHub out for every issue (all states are "unknown").
+    has_gh = any(e.state != "unknown" for e in ev.values())
+
+    suspects = 0
+    for i, n in enumerate(ordered, start=1):
+        e = ev[n]
+        if has_gh:
+            fill_reviewed_shas_one(root, n, e)
+            fill_related_issues_one(root, n, e, ev)
+            fill_node_id_matches_one(root, n, e, use_cache=use_cache)
+
+        level = report_one(n, e, suspect_only)
+        if level == "SUSPECT":
+            suspects += 1
+        sys.stdout.flush()  # belt-and-suspenders alongside line_buffering=True (see module top)
+
+        if show_progress:
+            print(f"[{i}/{total}] #{n} -> {level}", file=sys.stderr, flush=True)
+
+    return print_footer(total, suspects)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Check whether GitHub issues are already addressed in this repo.",
     )
     ap.add_argument("numbers", nargs="*", type=int, help="issue numbers to check")
     ap.add_argument("--all-open", action="store_true", help="check every open issue (needs gh)")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="with --all-open: fetch at most this many issues (newest first). "
+                         "Unset means the full backlog (up to 400). The recommended normal "
+                         "use, per issue #307, is a few dozen: --all-open --limit 30")
+    ap.add_argument("--label", help="with --all-open: scope to issues carrying this one label "
+                                     "(e.g. area:worker), filtered server-side by `gh issue list --label`")
     ap.add_argument("--suspect-only", action="store_true",
                     help="print only issues with a SUSPECT verdict")
     ap.add_argument("--root", help="checkout to scan (default: the current directory's)")
@@ -1198,10 +1346,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-scan-cache", action="store_true",
                     help="force a fresh `git log --all` pass instead of reading the "
                          "HEAD-keyed cache; use when debugging the cache itself")
+    ap.add_argument("--no-progress", action="store_true",
+                    help="do not print a [i/N] progress line to stderr as each issue completes "
+                         "(the real report on stdout is unaffected either way)")
     args = ap.parse_args(argv)
 
     if args.all_open and args.no_gh:
         ap.error("--all-open needs GitHub; it cannot be combined with --no-gh")
+    if args.label and not args.all_open:
+        ap.error("--label only applies to --all-open")
 
     root = repo_root(args.root)
 
@@ -1214,7 +1367,7 @@ def main(argv: list[str] | None = None) -> int:
         # a test that fails for reasons unrelated to the code.
         known = {n: IssueMeta(state="unknown") for n in numbers}
     if args.all_open:
-        known = gh_list(root, "open")
+        known = gh_list(root, "open", limit=args.limit or 400, label=args.label)
         if not known:
             print("error: --all-open needs `gh` and a working GitHub auth", file=sys.stderr)
             return 2
@@ -1222,7 +1375,12 @@ def main(argv: list[str] | None = None) -> int:
     if not numbers:
         ap.error("give at least one issue number, or --all-open")
 
-    return report(scan(root, numbers, known, use_cache=not args.no_scan_cache), args.suspect_only)
+    return run_stream(
+        root, numbers, known,
+        use_cache=not args.no_scan_cache,
+        suspect_only=args.suspect_only,
+        show_progress=not args.no_progress,
+    )
 
 
 if __name__ == "__main__":

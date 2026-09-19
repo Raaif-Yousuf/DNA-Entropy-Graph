@@ -49,8 +49,61 @@ def _fragment_files(fragments_dir: Path) -> list[Path]:
     return [p for p in sorted(fragments_dir.glob("*.md")) if p.name not in IGNORED]
 
 
-def _sort_key(path: Path, root: Path) -> float:
-    """Newest-first ordering: git last-commit time, else file mtime."""
+def _bulk_commit_times(root: Path, fragments_dir: Path) -> dict[str, float]:
+    """Every currently-tracked file under `fragments_dir`, mapped to its
+    newest commit's Unix timestamp -- ONE `git log` pass over the whole
+    directory, not one `git log -1 -- <file>` subprocess per fragment.
+
+    Issue #307 found this exact shape (`git log` once per item, serially)
+    in `issue_precheck.py` at backlog scale; the same anti-pattern already
+    existed here in miniature. It costs nothing observable with the handful
+    of fragments a normal merge folds, which is why nobody noticed, but "the
+    backlog only grows" applies just as much to a busy multi-agent merge
+    day's fragment count, so it is fixed here too rather than left for the
+    day it is not a handful.
+
+    `git log`'s own default order is newest-commit-first, so the FIRST time
+    a given filename appears in the `--name-only` stream is that file's most
+    recent commit; `dict.setdefault` below relies on exactly that to take
+    only the first (newest) hit per file.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "log", "--format=\x01%ct", "--name-only", "--", str(fragments_dir)],
+            cwd=root, capture_output=True, text=True, timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+
+    times: dict[str, float] = {}
+    current_ts: float | None = None
+    for line in out.splitlines():
+        if line.startswith("\x01"):
+            try:
+                current_ts = float(line[1:])
+            except ValueError:
+                current_ts = None
+            continue
+        name = line.strip()
+        if not name or current_ts is None:
+            continue
+        times.setdefault(name, current_ts)
+    return times
+
+
+def _sort_key(path: Path, root: Path, bulk_times: dict[str, float] | None = None) -> float:
+    """Newest-first ordering: git last-commit time (from the bulk pass when
+    given one), else file mtime -- the fallback a fragment that was just
+    written and never committed always needs, bulk pass or not."""
+    if bulk_times is not None:
+        rel = path.resolve().relative_to(root.resolve()).as_posix()
+        ts = bulk_times.get(rel)
+        if ts is not None:
+            return ts
+        return path.stat().st_mtime
+
+    # No bulk pass supplied: the single-file fallback, kept for any direct
+    # caller (this module's own tests exercise both paths deliberately).
     try:
         out = subprocess.run(
             ["git", "log", "-1", "--format=%ct", "--", str(path)],
@@ -171,7 +224,8 @@ def compile_fragments(root: Path, dry_run: bool = False) -> int:
     while insert_at < len(log_lines) and not log_lines[insert_at].strip():
         insert_at += 1
 
-    fragments.sort(key=lambda item: _sort_key(item[0], root), reverse=True)
+    bulk_times = _bulk_commit_times(root, fragments_dir)
+    fragments.sort(key=lambda item: _sort_key(item[0], root, bulk_times), reverse=True)
 
     block: list[str] = []
     for path, text in fragments:
