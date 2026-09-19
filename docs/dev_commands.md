@@ -177,7 +177,22 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py
 ```
 
-Each reads the tool-call payload from stdin per `scripts/hooks/README.md`.
+Each reads the tool-call payload from stdin per `scripts/hooks/README.md`, so running one
+with no input will simply wait.
+
+All five, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
+and exercises both the allow and the deny arm:
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\hooks\run_hook.py --self-test
+worker\.venv\Scripts\python.exe scripts\hooks\block_git_stash.py --self-test
+worker\.venv\Scripts\python.exe scripts\hooks\block_recursive_delete.py --self-test
+worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py --self-test
+worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py --self-test
+```
+
+That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing
+what I asked for", which is the question you actually have when a command is denied.
 
 ## GitHub (`gh`)
 
