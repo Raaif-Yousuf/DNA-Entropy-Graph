@@ -56,7 +56,10 @@ Every brief needs, at minimum:
 | **"Never a GPU test on the laptop; GPU tests only via `scripts/cloud_gpu_test.ps1`"** | Hard Rule 15 |
 | **"Never create a cloud resource outside `scripts/cloud_gpu_test.ps1` unless the brief says so and names the budget"** | No cloud spend without an explicit, budgeted exception |
 | **"Never close a GitHub issue; the orchestrator closes on verification"** | An agent closing its own unmerged or unverified fix reproduces the exact issue `working-an-issue` exists to prevent |
-| **"Never `git stash`, `git push --force`, or a recursive delete inside the repo"** | These are denied at the settings/hook level (see `.claude/settings.json`) but state them anyway so the agent has the right instinct, not just the block |
+| **The git model, in one line** | Shared checkout: "never run any `git` command at all; the orchestrator holds every one". Worktree per agent: "never `git stash`, `git push --force`, or a recursive delete inside the repo". See "While they run"; do not mix the two wordings |
+| **"Never a recursive delete inside the repo"** | Denied at the settings/hook level (see `.claude/settings.json`) but state it anyway, so the agent has the right instinct and not just the block |
+| **The exact paths it owns, and the paths it must not touch** | The single check the shared-checkout model rests on. `scripts/agent_wave.ps1 -Start` refuses a wave whose assignments overlap |
+| **Its own pytest `--basetemp`** | MEASURED 2026-09-19: concurrent runs race in the default Windows temp directory, and the teardown `PermissionError` reads as a real test failure |
 
 **Name the skills. Do not paraphrase them.** Every brief that touches a bug,
 a fix, or anything reported as done must tell the agent, in these words, to
@@ -105,16 +108,37 @@ check the process yourself, then message the agent with the *facts* ("the
 build is finished, here is the size and mtime, stop polling and run the
 remaining steps in the foreground"). Do not just say "continue".
 
-**`git stash` is dangerous the moment more than one worktree (or more than
-one agent in the same tree) is active.** It is shared across every worktree
-of a repository because they all share one `.git`. Two agents doing a
-revert-check in the same window can have their working sets swap. The safe
-moves: copy files aside, or `git checkout -b` (which preserves uncommitted
-changes in place). Put the ban in the brief in these words, not just "no
-stash" — a bare ban with no replacement loses to the reflex, because
-revert-checking is something you actively ask agents to do.
+**Decide which git model the wave runs under, and say it in the brief.**
+There are two, and the recipes below differ entirely between them.
+`scripts/agent_wave.ps1` implements both.
 
-The revert-check recipe that belongs in every brief that asks for one:
+**Shared checkout (the default, and what `agent_wave.ps1 -Start` assumes).**
+Every agent works in the one tree, on a disjoint set of owned paths. In this
+model **agents run no `git` command at all** — not `add`, not `commit`, not
+`checkout`, not even a read-only `status` or `diff`. The orchestrator holds
+every git command and reads the tree on an agent's behalf. This is deliberately
+stricter than banning the dangerous subcommands: "never touch git" is one
+instinct an agent can hold, where "never touch git except for this named
+recipe" is a rule with an exception, and the exception is what gets reached for
+under pressure. Put it in the brief in those words.
+
+The cost is that an agent cannot revert-check its own fix. That is the
+orchestrator's job in this model: the agent reports which test should go red
+without the fix, and the orchestrator does the reverting, or accepts a
+test-first transcript as the evidence instead.
+
+MEASURED 2026-09-19: a wave of three agents in one tree ran a whole night this
+way with no collision. All three then died within seconds of each other on a
+spend limit, mid-edit, and because no agent had ever run git, every partial
+change was exactly where the path assignment said it would be.
+
+**Worktree per agent** (`agent_wave.ps1 -Isolation Worktree`). Each agent has
+its own tree and may use git inside it. Here the stash ban matters and needs a
+replacement, because the stash stack is shared across every worktree of a
+repository — they all share one `.git` — so two agents revert-checking in the
+same window can have their working sets swap. Give the recipe, not just the
+ban; a bare ban with no alternative loses to the reflex, because
+revert-checking is something you actively ask for:
 
 ```
 git diff > <scratchpad>/fix.patch      # keep the fix
@@ -123,6 +147,9 @@ git checkout -- <the source files>     # revert ONLY the source, keep the tests
 git apply <scratchpad>/fix.patch       # restore
 git diff --stat                        # prove the restore is byte-exact
 ```
+
+`git checkout -b` also preserves uncommitted changes in place and is the way to
+park work. `git stash` is not, and is blocked by a hook either way.
 
 **Killing a process by IMAGE NAME is banned during a wave. Kill only PIDs
 you started, and only by PID.** A cleanup command that matches every process
