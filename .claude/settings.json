@@ -97,21 +97,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_git_stash.py ] && \"$PY\" scripts/hooks/block_git_stash.py || true",
+            "command": "PY=$(command -v python3 || command -v python); if [ -z \"$PY\" ]; then printf %s '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"The repo safety guards cannot run: no Python interpreter on PATH. Fix PATH, or remove this hook deliberately rather than leaving it silently disabled.\"}}'; else \"$PY\" scripts/hooks/run_hook.py block_git_stash; fi",
             "shell": "bash",
             "timeout": 10,
             "statusMessage": "Checking for git stash..."
           },
           {
             "type": "command",
-            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_recursive_delete.py ] && \"$PY\" scripts/hooks/block_recursive_delete.py || true",
+            "command": "PY=$(command -v python3 || command -v python); if [ -z \"$PY\" ]; then printf %s '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"The repo safety guards cannot run: no Python interpreter on PATH. Fix PATH, or remove this hook deliberately rather than leaving it silently disabled.\"}}'; else \"$PY\" scripts/hooks/run_hook.py block_recursive_delete; fi",
             "shell": "bash",
             "timeout": 10,
             "statusMessage": "Checking for a recursive delete inside the repo..."
           },
           {
             "type": "command",
-            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_unlabelled_vm_create.py ] && \"$PY\" scripts/hooks/block_unlabelled_vm_create.py || true",
+            "command": "PY=$(command -v python3 || command -v python); if [ -z \"$PY\" ]; then printf %s '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"The repo safety guards cannot run: no Python interpreter on PATH. Fix PATH, or remove this hook deliberately rather than leaving it silently disabled.\"}}'; else \"$PY\" scripts/hooks/run_hook.py block_unlabelled_vm_create; fi",
             "shell": "bash",
             "timeout": 10,
             "statusMessage": "Checking a cloud create carries labels + max-run-duration..."
@@ -123,7 +123,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PY=$(command -v python3 || command -v python); [ -n \"$PY\" ] && [ -f scripts/hooks/block_agent_dispatch_in_worktree.py ] && \"$PY\" scripts/hooks/block_agent_dispatch_in_worktree.py || true",
+            "command": "PY=$(command -v python3 || command -v python); if [ -z \"$PY\" ]; then printf %s '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"The repo safety guards cannot run: no Python interpreter on PATH. Fix PATH, or remove this hook deliberately rather than leaving it silently disabled.\"}}'; else \"$PY\" scripts/hooks/run_hook.py block_agent_dispatch_in_worktree; fi",
             "shell": "bash",
             "timeout": 10,
             "statusMessage": "Checking whether this is a worktree..."
