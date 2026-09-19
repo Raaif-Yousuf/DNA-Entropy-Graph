@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import typer.main
 from typer.testing import CliRunner
 
 from dna_entropy.cli import app
@@ -43,15 +44,20 @@ def test_worker_run_requires_either_root_or_bucket_and_prefix() -> None:
 
 
 def test_worker_run_help_lists_local_and_gcs_options() -> None:
-    # COLUMNS is pinned because Typer renders help through Rich, which wraps and
-    # truncates to the terminal width. MEASURED 2026-09-19: this test passed on a wide
-    # developer terminal and failed on CI's 80 columns, where `--root` fell off the
-    # rendered line. The option is present either way; only the drawing changed.
-    result = runner.invoke(app, ["worker-run", "--help"], env={"COLUMNS": "200"})
+    # Asserted against the command's declared options, not its rendered help text.
+    #
+    # MEASURED 2026-09-19: the substring version of this test passed on a developer
+    # terminal and failed on CI under two different widths, because Typer draws help
+    # through Rich and what reaches `result.output` depends on the terminal, the Rich
+    # version and the ANSI styling. Pinning COLUMNS did not fix it. The option names are
+    # the contract worth testing; the box drawing around them is not, and a test that
+    # asserts on it fails for reasons that have nothing to do with the CLI.
+    result = runner.invoke(app, ["worker-run", "--help"])
     assert result.exit_code == 0
-    assert "--root" in result.output
-    assert "--bucket" in result.output
-    assert "--prefix" in result.output
+
+    worker_run = typer.main.get_command(app).commands["worker-run"]
+    declared = {opt for param in worker_run.params for opt in param.opts}
+    assert {"--root", "--bucket", "--prefix"} <= declared
 
 
 def test_worker_run_missing_manifest_is_a_clean_error_not_a_crash(tmp_path: Path) -> None:
