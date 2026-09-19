@@ -849,3 +849,114 @@ def test_heartbeat_seconds_default_still_matches_pre_existing_behavior(
     runner_module.run_job(store)
 
     assert captured["interval_seconds"] == min(30.0, DEFAULT_INTERVAL_SECONDS)
+
+
+# --- manifest.worker.version surfaced on mismatch (issue #344) -------------------------
+
+
+def test_mismatched_declared_worker_version_produces_a_notice(tmp_path: Path) -> None:
+    """manifest.worker.version is the app's DECLARED expectation, not necessarily the
+    actually-running build's own version (WorkerRef's own docstring) -- but before this
+    fix nothing ever compared the two, so a real mismatch (an app talking to a stale or
+    newer worker image than it expects) was invisible. Visibility only, per the issue's
+    own scope -- this must not refuse or fail the job, only surface the disagreement."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, worker={"image": "ghcr.io/x@sha256:test", "version": "9.9.9"})
+    _seed_fasta_input(store)
+
+    result = run_job(store, worker_version="1.2.3")
+
+    assert result.status == "done"
+    progress_lines = [
+        json.loads(line) for line in store.read_text("progress.jsonl").splitlines() if line.strip()
+    ]
+    messages = [p["message"] for p in progress_lines]
+    assert any("9.9.9" in m and "1.2.3" in m for m in messages)
+
+
+def test_matching_declared_worker_version_produces_no_mismatch_notice(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, worker={"image": "ghcr.io/x@sha256:test", "version": "1.2.3"})
+    _seed_fasta_input(store)
+
+    result = run_job(store, worker_version="1.2.3")
+
+    assert result.status == "done"
+    progress_lines = [
+        json.loads(line) for line in store.read_text("progress.jsonl").splitlines() if line.strip()
+    ]
+    messages = [p["message"] for p in progress_lines]
+    assert not any("version" in m.lower() and "1.2.3" in m and "mismatch" in m.lower() for m in messages)
+
+
+def test_no_declared_worker_version_produces_no_mismatch_notice(tmp_path: Path) -> None:
+    # WorkerRef.version defaults to "" when the manifest's "worker" section omits it --
+    # an undeclared expectation is not a mismatch against anything.
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)  # no "worker" section at all
+    _seed_fasta_input(store)
+
+    result = run_job(store, worker_version="1.2.3")
+
+    assert result.status == "done"
+    progress_lines = [
+        json.loads(line) for line in store.read_text("progress.jsonl").splitlines() if line.strip()
+    ]
+    messages = [p["message"] for p in progress_lines]
+    assert not any("mismatch" in m.lower() for m in messages)
+
+
+# --- result.json local fallback on a persistent store outage (issue #341, DECISION) ----
+
+
+def test_result_json_write_failure_writes_a_local_fallback_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sharp end of #341: a run that finishes successfully but cannot write
+    result.json (the store is down at exactly the wrong moment) must not lose its own
+    outcome. A local-disk fallback copy is written independent of the broken store, so a
+    human who later inspects this VM's disk (a snapshot, or before instanceTerminationAction
+    deletes it) can still recover what actually happened."""
+    from dna_entropy.worker import status as status_module
+
+    fallback_dir = tmp_path / "fallback"
+    monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", fallback_dir)
+
+    real_store = LocalBlobstore(tmp_path / "store")
+    _write_manifest(real_store)
+    _seed_fasta_input(real_store)
+
+    real_write_text = real_store.write_text
+
+    def _fail_only_result_json(path, text):
+        if path == RESULT_PATH:
+            raise BlobstoreError("simulated failure writing result.json")
+        return real_write_text(path, text)
+
+    real_store.write_text = _fail_only_result_json  # type: ignore[method-assign]
+
+    result = run_job(real_store)  # must not raise despite the injected failure
+
+    assert result.status == "done"
+    fallback_path = fallback_dir / "20260918-142233-k7q2vx-result.json"
+    assert fallback_path.exists()
+    doc = json.loads(fallback_path.read_text(encoding="utf-8"))
+    assert doc["status"] == "done"
+    assert doc["jobId"] == "20260918-142233-k7q2vx"
+
+
+def test_result_json_success_never_writes_a_local_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dna_entropy.worker import status as status_module
+
+    fallback_dir = tmp_path / "fallback"
+    monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", fallback_dir)
+
+    store = LocalBlobstore(tmp_path / "store")
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    run_job(store)
+
+    assert not fallback_dir.exists()

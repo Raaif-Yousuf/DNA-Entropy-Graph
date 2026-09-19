@@ -15,6 +15,12 @@
       "note": "Issue #250's own code ('the manifest declares a schema this worker build does not understand'), with a clear two-versions message already \u2014 but not yet a row in docs/copy_catalog.md. Flagged as a real gap on issue #254."
     },
     {
+      "code": "MODEL_UNKNOWN",
+      "raisedBy": "dna_entropy.predictors.hardware.UnknownModelError",
+      "retriable": false,
+      "note": "Issue #346: the hardware gate used to fail OPEN for a model id it did not recognise, so a typo reached a paid GPU VM and failed several minutes in, after the boot and the weight download. It now refuses at the gate, naming the id it did not know and the ids it does. Not yet a row in docs/copy_catalog.md; the message names both halves already, so the gap is copy review rather than missing information."
+    },
+    {
       "code": "MODEL_NEEDS_HOPPER",
       "raisedBy": "dna_entropy.predictors.hardware.ModelNeedsHopperError",
       "retriable": false,

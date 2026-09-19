@@ -58,6 +58,17 @@ WORKER_ERROR_CODES: tuple[ErrorCodeSpec, ...] = (
         "yet a row in docs/copy_catalog.md. Flagged as a real gap on issue #254.",
     ),
     ErrorCodeSpec(
+        "MODEL_UNKNOWN",
+        "dna_entropy.predictors.hardware.UnknownModelError",
+        retriable=False,
+        note="Issue #346: the hardware gate used to fail OPEN for a model id it did not "
+        "recognise, so a typo reached a paid GPU VM and failed several minutes in, after "
+        "the boot and the weight download. It now refuses at the gate, naming the id it "
+        "did not know and the ids it does. Not yet a row in docs/copy_catalog.md; the "
+        "message names both halves already, so the gap is copy review rather than "
+        "missing information.",
+    ),
+    ErrorCodeSpec(
         "MODEL_NEEDS_HOPPER",
         "dna_entropy.predictors.hardware.ModelNeedsHopperError",
         retriable=False,

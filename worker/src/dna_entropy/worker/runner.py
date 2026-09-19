@@ -36,7 +36,13 @@ from .errors import is_retriable
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError
 from .result import InputResult, JobResult, ResultTiming
-from .status import DEFAULT_INTERVAL_SECONDS, GpuInfo, StatusWriter, WorkerInfo
+from .status import (
+    DEFAULT_INTERVAL_SECONDS,
+    GpuInfo,
+    StatusWriter,
+    WorkerInfo,
+    write_local_fallback,
+)
 
 RESULT_PATH = "result.json"
 MANIFEST_PATH = "manifest.json"
@@ -226,6 +232,18 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
         worker=WorkerInfo(version=worker_version, image=manifest.worker.image),
     )
     status.start()
+    # issue #344: manifest.worker.version is the app's DECLARED expectation, not
+    # necessarily the actually-running build's own version (WorkerRef's own docstring) --
+    # this was never compared to anything, so a real disagreement (an app talking to a
+    # stale or newer worker image than it expects) was invisible. Visibility only, per
+    # the issue's own scope: never refuses or fails the job, and an undeclared
+    # expectation (the default "") is not a mismatch against anything.
+    if manifest.worker.version and manifest.worker.version != worker_version:
+        status.notice(
+            f"manifest declares worker.version={manifest.worker.version!r} but this "
+            f"build is {worker_version!r} -- proceeding anyway (visibility only, not "
+            "a refusal)."
+        )
     # issue #338: manifest.limits.cancelPollSeconds now actually reaches the throttle
     # CancelWatcher applies to its own store round-trips (see cancel.py's docstring).
     cancel = CancelWatcher(store, poll_interval_seconds=float(manifest.limits.cancel_poll_seconds))
@@ -298,7 +316,7 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     # state" signal, checked before status.json's heartbeat on every app launch.
     #
     # issue #320: this write, status.stop(), and apply_lifecycle() used to run as three
-    # unguarded statements in a row — a BlobstoreError writing result.json skipped BOTH
+    # unguarded statements in a row - a BlobstoreError writing result.json skipped BOTH
     # the status stop and the lifecycle call, leaving status.json stuck at a non-terminal
     # stage with no result.json ever appearing, and (separately) a VM that failed to stop
     # or delete itself with nothing recording that it happened. Each step is now
@@ -309,6 +327,17 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
         write_json(store, RESULT_PATH, result.to_dict())
     except BlobstoreError as exc:
         status.notice(f"result.json write failed: {exc}", level="error")
+        # issue #341, DECISION: the sharp end of a persistent store outage is a run that
+        # finished successfully and cannot say so. A local-disk fallback copy, independent
+        # of the (broken) configured store, is the only thing standing between "the app
+        # concludes this job died" and the job's own real outcome being recoverable at all
+        # (see status.py's LOCAL_FALLBACK_DIR docstring for exactly what this can and
+        # cannot guarantee - it does not survive instanceTerminationAction=DELETE).
+        try:
+            fallback_path = write_local_fallback(manifest.job_id, "result", result.to_dict())
+            status.notice(f"result.json written to a local fallback instead: {fallback_path}")
+        except OSError as fallback_exc:
+            status.notice(f"local result.json fallback also failed: {fallback_exc}", level="error")
 
     status.stop()
 
@@ -340,7 +369,7 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
                 effective_action = "stop"
             status.notice(
                 f"lifecycle: afterTask='keep' requested but the keep-alive queue/idle "
-                f"timer is not implemented yet (issue #93) — applying "
+                f"timer is not implemented yet (issue #93) - applying "
                 f"afterKeepAlive={effective_action!r} now instead of leaving the VM "
                 "running with no expiry (Hard Rule 11)."
             )

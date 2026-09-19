@@ -29,6 +29,7 @@ import json
 from dataclasses import dataclass, field
 
 from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, TrackFormat
+from ..predictors.hardware import MODEL_REQUIREMENTS, model_requirement
 from .batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
 
 # Exactly one schema version exists today (job_contract.md §8). A worker that sees a
@@ -150,10 +151,37 @@ class PredictorSpec:
 
     @staticmethod
     def from_dict(d: dict) -> PredictorSpec:
+        kind = str(d.get("kind", "mock"))
+        model = str(d.get("model", "evo2_7b"))
+        precision = str(d.get("precision", "bf16"))
+        # issue #343, decided: predictor.precision is cross-checked against the model's
+        # OWN real hardware requirement (predictors/hardware.py's MODEL_REQUIREMENTS),
+        # not treated as pure provenance. Nothing downstream reads this field to
+        # CONFIGURE the predictor at all -- the model id alone determines the real
+        # precision used (predictors/hardware.py's own docstring: "gates on the device's
+        # ACTUAL reported compute capability", never on a manifest-declared string) -- so
+        # an app that believes it is choosing "bf16" for a model that will actually run
+        # fp8 (or vice versa) is silently wrong with nothing to tell it, until this check.
+        # Only cross-checked for the real ("evo") predictor, never "mock" (precision is
+        # meaningless there), and only for a model id predictors/hardware.py actually
+        # recognizes -- an unrecognized model id is predictors.hardware's OWN refusal
+        # (UnknownModelError/MODEL_UNKNOWN, issue #346), raised later with a clearer,
+        # dedicated message; this check must not preempt that with a confusing
+        # "precision mismatch" for a model it does not even know.
+        if kind == "evo" and model in MODEL_REQUIREMENTS:
+            expected = model_requirement(model).precision
+            if precision != expected:
+                raise ManifestError(
+                    f"manifest.json predictor.precision {precision!r} does not match "
+                    f"model {model!r}'s required precision {expected!r} "
+                    "(predictors/hardware.py's model/GPU matrix is authoritative -- "
+                    "nothing reads this field to configure the predictor, so a "
+                    "mismatched value would be silently wrong rather than honored)."
+                )
         return PredictorSpec(
-            kind=str(d.get("kind", "mock")),
-            model=str(d.get("model", "evo2_7b")),
-            precision=str(d.get("precision", "bf16")),
+            kind=kind,
+            model=model,
+            precision=precision,
             device=str(d.get("device", "cuda")),
             seed=int(d.get("seed", 0)),
         )
@@ -281,9 +309,6 @@ class JobManifest:
     lifecycle: Lifecycle
     store: StoreSpec
     worker: WorkerRef = field(default_factory=WorkerRef)
-    # Not part of the wire contract — internal bookkeeping only — so excluded from the
-    # generated schema entirely rather than appearing as a nonsensical free-form "raw" field.
-    raw: dict = field(repr=False, default_factory=dict, metadata={"json_exclude": True})
 
     @staticmethod
     def parse(text: str) -> JobManifest:
@@ -326,7 +351,6 @@ class JobManifest:
             lifecycle=lifecycle,
             store=store,
             worker=worker,
-            raw=d,
         )
 
     def build_run_config(

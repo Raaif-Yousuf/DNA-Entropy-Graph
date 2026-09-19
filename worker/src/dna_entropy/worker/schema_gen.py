@@ -105,8 +105,9 @@ def dataclass_to_schema(cls: type, *, title: str | None = None) -> JsonSchema:
     ``field(metadata={"json_name": "jobId"})``; this function reads that metadata and uses
     it for the schema's property name (and in ``required``) instead of the Python
     attribute name. ``field(metadata={"json_exclude": True})`` drops a field from the
-    schema entirely (for Python-only bookkeeping fields with no wire representation, e.g.
-    ``JobManifest.raw``).
+    schema entirely, for a Python-only bookkeeping field with no wire representation (no
+    current field in this package uses it — ``JobManifest.raw`` was the example until
+    issue #361 deleted it as genuinely dead code, not a real bookkeeping need).
     """
     hints = typing.get_type_hints(cls)
     properties: dict[str, JsonSchema] = {}
