@@ -1,0 +1,4 @@
+LOCUS       trunc    10 bp    DNA
+FEATURES             Location/Qualifiers
+     gene            1..5
+                     /gene=

@@ -1,0 +1,6 @@
+LOCUS       nosource    5 bp    DNA
+DEFINITION  no origin block.
+FEATURES             Location/Qualifiers
+     gene            1..5
+                     /gene="x"
+//
