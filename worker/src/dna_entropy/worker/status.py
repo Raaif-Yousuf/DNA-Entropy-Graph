@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from .blobstore import Blobstore, BlobstoreError, write_json
 
@@ -30,6 +32,40 @@ _MAX_PROGRESS_LINES = 2000
 # re-upload cadence (job_contract.md §4-5) — one shared tick satisfies both instead of two
 # independent timers.
 DEFAULT_INTERVAL_SECONDS = 10.0
+
+# issue #341, DECISION (agent-made, reversible): after this many CONSECUTIVE store-write
+# failures, an outage is treated as persistent rather than a blip and escalated (see
+# StatusWriter._escalate_persistent_outage). Comfortably under the app's own "dead if not
+# RUNNING" 180s death-detection window (job_contract.md §5) at the fastest heartbeat
+# interval this build ever uses (DEFAULT_INTERVAL_SECONDS=10s -> 50s to reach this
+# threshold), so an operator watching stderr/the serial console sees the escalation well
+# before the app gives up on the job — not because the worker can prove the outage will
+# never end (it cannot: a store outage and a bucket permanently gone look identical from
+# here), but because "possibly recoverable" and "silent forever" must not read the same.
+PERSISTENT_OUTAGE_THRESHOLD = 5
+
+# issue #341: a local-disk breadcrumb, independent of the configured (possibly broken)
+# Blobstore, for the two documents whose loss is most expensive: the last known status
+# snapshot, and — the sharp end — a finished run's own result.json if the store cannot
+# take the final write at all. NOT a replacement for the real store, and not guaranteed to
+# survive: a VM that reaches instanceTerminationAction=DELETE (Hard Rule 10) loses its
+# whole disk, fallback included. This only helps a VM that is merely STOPPED (the app's
+# own death-detection default) or one a human inspects via a disk snapshot before deletion
+# — a real gap this session cannot close (no SSH anywhere in this design, cloud_design.md
+# §9), only shrink. THEORY (unverified): this has never been checked against a real VM's
+# actual disk layout or lifecycle; see docs/ToTest.md.
+LOCAL_FALLBACK_DIR = Path(tempfile.gettempdir()) / "dna-entropy-fallback"
+
+
+def write_local_fallback(job_id: str, kind: str, data: dict) -> Path:
+    """Best-effort local-disk copy of a status/result document. ``kind`` is ``"status"``
+    or ``"result"`` (names the file only). Raises :class:`OSError` on failure — callers
+    decide whether that is fatal; both call sites in this package treat it as best-effort
+    and swallow it, the same discipline as every other store-outage path here."""
+    LOCAL_FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
+    path = LOCAL_FALLBACK_DIR / f"{job_id}-{kind}.json"
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8", newline="\n")
+    return path
 
 
 def utc_now_iso() -> str:
@@ -116,7 +152,14 @@ class StatusWriter:
     from a real pipeline failure to the catch-all ``except Exception`` around it —
     discarding correctly computed work because telling someone about it didn't work.
     :attr:`consecutive_write_failures` is exposed for a caller that wants to notice a
-    *persistent* outage rather than a blip (nothing in this repo reads it yet).
+    *persistent* outage rather than a blip. **issue #341, DECISION (agent-made,
+    reversible):** :meth:`_safe_write` itself is now that caller — crossing
+    :data:`PERSISTENT_OUTAGE_THRESHOLD` escalates on stderr and writes a local-disk
+    fallback snapshot (:func:`write_local_fallback`) rather than retrying silently
+    forever. The run is never aborted from in here: this class has no way to distinguish
+    "the bucket is gone forever" from "a three-minute network blip", and guessing wrong
+    toward abort would throw away already-completed, expensive GPU compute for a job that
+    might otherwise finish and simply need its result reported another way.
     """
 
     def __init__(
@@ -288,6 +331,32 @@ class StatusWriter:
             # being up. Never includes anything from `snapshot`/`text` (no sequence
             # content, no file names — same discipline as issue #253's log redaction).
             print(f"status writer: {what} write failed ({n} consecutive): {exc}", file=sys.stderr)
+            # issue #341: escalate exactly once per outage episode (not every tick past
+            # the threshold, which would just be the same blip line repeated forever).
+            if n == PERSISTENT_OUTAGE_THRESHOLD:
+                self._escalate_persistent_outage()
         else:
             with self._lock:
                 self._consecutive_write_failures = 0
+
+    def _escalate_persistent_outage(self) -> None:
+        """issue #341, DECISION: crossing :data:`PERSISTENT_OUTAGE_THRESHOLD` prints an
+        ESCALATED line (distinguishable on stderr/serial console from the per-blip line
+        above) and best-effort writes the current status snapshot to local disk — see
+        :data:`LOCAL_FALLBACK_DIR`'s own docstring for exactly what this can and cannot
+        guarantee. Never raises: a failure writing the FALLBACK must not become a new,
+        different way for the worker to crash.
+        """
+        with self._lock:
+            n = self._consecutive_write_failures
+            snapshot = json.loads(json.dumps(self._state))
+        print(
+            f"status writer: ESCALATED - {n} consecutive store writes have failed for "
+            f"job {self._job_id}; this looks like a persistent outage, not a blip. "
+            "Writing a local fallback status snapshot.",
+            file=sys.stderr,
+        )
+        try:
+            write_local_fallback(self._job_id, "status", snapshot)
+        except OSError as exc:
+            print(f"status writer: local fallback write also failed: {exc}", file=sys.stderr)

@@ -458,3 +458,55 @@ def test_build_run_config_outputs_still_wins_over_analysis_format_when_specified
     m = JobManifest.parse(_manifest(analysis={"format": "wig"}, outputs=["bedgraph"]))
     cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
     assert cfg.track_format is TrackFormat.BEDGRAPH
+
+
+# --- JobManifest.raw (issue #361) -------------------------------------------------------
+
+
+def test_job_manifest_has_no_raw_field() -> None:
+    """Issue #361: JobManifest.raw held the original parsed dict but nothing ever read
+    it -- not this package, not scripts/, not even a test. job_contract.md section 8's
+    own documented behaviour for an unknown field is "tolerated (ignored)", not
+    "preserved for later re-emission" -- there is no forward-compatibility feature this
+    field was actually supporting. Deleted rather than given a consumer."""
+    m = JobManifest.parse(_manifest())
+    assert not hasattr(m, "raw")
+
+
+# --- predictor.precision cross-checked against the model (issue #343) ------------------
+
+
+def test_precision_matching_the_model_parses_fine() -> None:
+    m = JobManifest.parse(_manifest(predictor={"kind": "evo", "model": "evo2_7b", "precision": "bf16"}))
+    assert m.predictor.precision == "bf16"
+
+
+def test_precision_disagreeing_with_a_known_model_is_rejected() -> None:
+    # evo2_7b is bf16-only (predictors/hardware.py's own MODEL_REQUIREMENTS) -- fp8 here
+    # can never be honored, since nothing reads predictor.precision to configure the
+    # predictor at all; the model id alone determines the real precision used.
+    with pytest.raises(ManifestError):
+        JobManifest.parse(_manifest(predictor={"kind": "evo", "model": "evo2_7b", "precision": "fp8"}))
+
+
+def test_precision_disagreeing_with_a_hopper_model_is_rejected() -> None:
+    with pytest.raises(ManifestError):
+        JobManifest.parse(_manifest(predictor={"kind": "evo", "model": "evo2_20b", "precision": "bf16"}))
+
+
+def test_precision_is_not_cross_checked_for_the_mock_predictor() -> None:
+    # The mock predictor ignores precision entirely -- a manifest built for local/dev
+    # testing should not have to know evo2_7b's real hardware requirement.
+    m = JobManifest.parse(_manifest(predictor={"kind": "mock", "model": "evo2_7b", "precision": "fp8"}))
+    assert m.predictor.precision == "fp8"
+
+
+def test_precision_is_not_cross_checked_for_an_unrecognized_model() -> None:
+    # An unrecognized model id is predictors.hardware's OWN refusal (UnknownModelError,
+    # MODEL_UNKNOWN, issue #346), raised later at predictor-construction time with a
+    # clearer, dedicated message -- this manifest-level check must not preempt it with a
+    # confusing "precision mismatch" for a model it does not actually recognize.
+    m = JobManifest.parse(
+        _manifest(predictor={"kind": "evo", "model": "not_a_real_model", "precision": "fp8"})
+    )
+    assert m.predictor.model == "not_a_real_model"

@@ -288,3 +288,79 @@ def test_update_never_raises_on_a_transient_write_failure(tmp_path: Path) -> Non
     # state is there.
     status = _status(real_store)
     assert status["stage"] == "running"
+
+
+# --- persistent outage escalation (issue #341, DECISION) -------------------------------
+
+
+def test_persistent_outage_crosses_threshold_and_writes_a_local_fallback(tmp_path: Path, monkeypatch) -> None:
+    """A store that NEVER recovers must be treated differently from a blip: once
+    consecutive failures cross PERSISTENT_OUTAGE_THRESHOLD, the worker writes a
+    local-disk snapshot independent of the (broken) configured store."""
+    import dna_entropy.worker.status as status_module
+
+    fallback_dir = tmp_path / "fallback"
+    monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", fallback_dir)
+
+    real_store = LocalBlobstore(tmp_path / "store")
+    always_failing = _FlakyStore(real_store, fail_method="write_text", fail_times=999)
+    w = status_module.StatusWriter(always_failing, "outage-job", interval_seconds=999)
+
+    for _ in range(status_module.PERSISTENT_OUTAGE_THRESHOLD + 2):
+        w.update(percent=1.0)
+
+    assert w.consecutive_write_failures >= status_module.PERSISTENT_OUTAGE_THRESHOLD
+    fallback_path = fallback_dir / "outage-job-status.json"
+    assert fallback_path.exists()
+    doc = json.loads(fallback_path.read_text(encoding="utf-8"))
+    assert doc["jobId"] == "outage-job"
+
+
+def test_persistent_outage_prints_an_escalated_line_distinguishable_from_a_blip(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    import dna_entropy.worker.status as status_module
+
+    monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", tmp_path / "fallback")
+    real_store = LocalBlobstore(tmp_path / "store")
+    always_failing = _FlakyStore(real_store, fail_method="write_text", fail_times=999)
+    w = status_module.StatusWriter(always_failing, "outage-job2", interval_seconds=999)
+
+    for _ in range(status_module.PERSISTENT_OUTAGE_THRESHOLD):
+        w.update(percent=1.0)
+
+    err = capsys.readouterr().err
+    assert "ESCALATED" in err
+    assert err.isascii()  # Hard Rule 5: ASCII-safe console output, never a glyph
+
+
+def test_a_blip_under_the_threshold_never_escalates(tmp_path: Path, monkeypatch) -> None:
+    import dna_entropy.worker.status as status_module
+
+    fallback_dir = tmp_path / "fallback"
+    monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", fallback_dir)
+
+    real_store = LocalBlobstore(tmp_path / "store")
+    # Fails fewer times than the threshold, then recovers -- a blip, not an outage.
+    flaky = _FlakyStore(
+        real_store,
+        fail_method="write_text",
+        fail_times=status_module.PERSISTENT_OUTAGE_THRESHOLD - 1,
+    )
+    w = status_module.StatusWriter(flaky, "blip-job", interval_seconds=999)
+
+    for _ in range(status_module.PERSISTENT_OUTAGE_THRESHOLD + 2):
+        w.update(percent=1.0)
+
+    assert w.consecutive_write_failures == 0  # recovered
+    assert not fallback_dir.exists()
+
+
+def test_write_local_fallback_writes_utf8_with_lf(tmp_path, monkeypatch) -> None:
+    import dna_entropy.worker.status as status_module
+
+    monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", tmp_path / "fallback")
+    path = status_module.write_local_fallback("job-x", "result", {"status": "done"})
+    raw = path.read_bytes()
+    assert b"\r\n" not in raw  # newline="\n", never CRLF
+    assert json.loads(raw.decode("utf-8"))["status"] == "done"
