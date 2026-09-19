@@ -57,12 +57,16 @@ your session actually uses (`claude config` or the path a session prints on
 start) before copying, or the memory will sit there unread.
 
 `MEMORY.md` is the index loaded every session; other files are pulled in on
-relevance. Start there. Two of the 27 lessons are marked `(THEORY)` in the
-index — a claim this session could not verify against a real current tool
-version (Geneious's track-import support, igv.js building a genome directly
-from GenBank) — check the file itself before trusting either as fact, and
-replace the note with a `MEASURED <date>:` finding once checked (Hard Rule
-18).
+relevance. Start there. Three of the 27 lessons are marked `(THEORY)` in the
+index: `flash-attn-has-no-cu12-wheel-for-torch-2-9.md` (unresolved: check
+PyPI/the flash-attn release page before pinning `[evo]` extras),
+`geneious-imports-gff3-not-wig.md` (Geneious itself is now MEASURED — the
+file still marks SnapGene and Benchling `(THEORY)`, which remain
+unverified), and `igv-web-cannot-build-a-genome-from-genbank.md`
+(unresolved: needs a real igv.js instance against a real GenBank-derived
+input, which does not exist until `app/`, issue #61, does). Check the file
+itself before trusting a claim, and replace a THEORY note with a
+`MEASURED <date>:` finding once checked (Hard Rule 18).
 
 ## Memory and secrets
 

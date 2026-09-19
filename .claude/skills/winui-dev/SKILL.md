@@ -13,6 +13,12 @@ day-to-day mechanics of building and debugging it; the architectural rules
 `CLAUDE.md` and are not repeated here except where a command or a pitfall
 needs them.
 
+**`app/` does not exist yet (issue #61), and neither does `scripts/dev_app.ps1`.**
+Nothing below runs today; this skill fixes the conventions now so they are
+already correct policy for whoever builds `app/`, the same way `docs/`
+already carries the design docs ahead of the code. `docs/dev_commands.md`
+and `docs/environment.md` track current status.
+
 ## Commands
 
 ```powershell

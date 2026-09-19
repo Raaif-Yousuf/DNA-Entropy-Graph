@@ -1,17 +1,23 @@
-# Geneious's track-import support needs verifying per format (THEORY)
+# Geneious needs GFF3, not WIG/bedGraph, for a graph track (MEASURED)
 
-THEORY (unverified this session): third-party genome tools do not all
-accept the same track file formats. IGV accepts `.wig`/bedGraph-style
-tracks natively; some other desktop tools in this app's target list
-(Geneious, SnapGene, Benchling) are reported anecdotally to prefer or
-require GFF3-style annotation tracks for some import paths rather than a
-raw signal/`.wig` track, but this has **not been directly verified against
-a real current version of any of them** as part of this session's work.
+MEASURED (prototype team; recorded in `worker/docs-legacy/DESIGN.md`, the
+docstring of `worker/src/dna_entropy/writers/geneious.py`, and
+`docs/science_and_formats.md`'s viewer-support matrix, section 6): third-party
+genome tools do not all accept the same track file formats. IGV accepts
+`.wig`/bedGraph-style tracks natively as a graph track; **Geneious Prime does
+not** — it imports GFF3 but not WIG or bedGraph as a graph track (those are
+export-only, from its Graphs tab), which is exactly why this app produces a
+separate, Geneious-specific GFF3 file (`writers/geneious.py`) carrying the
+entropy value in both the score column and an `entropy` qualifier, rather
+than pointing Geneious at the same bedGraph/WIG file IGV uses.
 
-**Before shipping export support for a given viewer, check its real, current
-import behaviour against a real exported file** — do not trust this note or
-any other secondhand claim about a specific tool's format support. Record
-the verified result as `MEASURED <date>:` in
-`docs/science_and_formats.md`'s viewer-support matrix once checked, and
-delete or correct this THEORY note to match (Hard Rule 18: disproving a
-theory replaces it).
+**This is settled for Geneious specifically; SnapGene and Benchling are not.**
+`docs/science_and_formats.md`'s viewer-support matrix still marks both of
+those `THEORY (unverified)`: the GenBank `/note` qualifier is *expected* to
+display like any other annotation in each tool's sequence-editor view, but
+neither has been confirmed against a real, current install. The underlying
+lesson still applies there and to any future viewer this app targets: check
+real, current import behaviour against a real exported file before shipping
+an export claim, and record the result as `MEASURED <date>:` in that
+matrix rather than trusting a secondhand or anecdotal claim (Hard Rule 18:
+disproving a theory replaces it).

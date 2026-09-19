@@ -58,5 +58,5 @@ would confirm or replace it (Hard Rule 18).
 ### Stack facts to verify, not assume
 
 - [FluentAssertions 8+ is commercial](fluentassertions-8-is-commercial.md) — why this repo uses Shouldly instead
-- [Geneious's track-import support](geneious-imports-gff3-not-wig.md) `(THEORY)` — verify per viewer before shipping export claims
+- [Geneious needs GFF3, not WIG/bedGraph, for a graph track](geneious-imports-gff3-not-wig.md) — MEASURED for Geneious; SnapGene/Benchling are still `(THEORY)` in `docs/science_and_formats.md`'s matrix
 - [igv.js may not build a genome from GenBank directly](igv-web-cannot-build-a-genome-from-genbank.md) `(THEORY)` — verify against the pinned igv.js version

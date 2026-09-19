@@ -9,7 +9,11 @@ GitHub Issues is the only tracker (Hard Rule 17). No `ROADMAP.md`,
 `TODO.md`, or `known_issues.md` — the repository itself is the record of what
 is known, what is open, and what already shipped. This skill exists so an
 agent asks the repository what it already knows before rebuilding, and states
-what "done" means before closing.
+what "done" means before closing. Filing a new, project-tracked issue uses
+`scripts/new_issue.ps1`, which renders this repo's canonical body shape
+(Why / Done when / Observable / Docs touched / Tests / Out of scope / Cloud
+money) directly; add `-Apply` to file it via `gh issue create` once the
+rendered body looks right.
 
 ## 1. Before you start: ask the commit graph
 

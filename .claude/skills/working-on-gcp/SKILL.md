@@ -26,6 +26,16 @@ The CPU walking-skeleton path (Hard Rule 6, MockPredictor) does not need a
 GPU and is fine to exercise once #21 (OAuth) and a project exist; a real
 Evo 2 run is blocked on #24 specifically.
 
+**`scripts/cloud_gpu_test.ps1` exists (issue #317), but `-Apply` does not
+work yet.** Dry-run (the default, no flag) is real today: it prints the
+plan, labels, and cost/duration math with zero cloud calls, and `-SelfTest`
+exercises that path. `-Apply` looks for a built `CloudCli` (issue #60,
+itself built from `app/`, issue #61) and fails clearly, naming #60/#61/#24,
+rather than silently falling back to a raw `gcloud` call, which Appendix
+C's own permission design denies an agent on purpose. Every reference to
+`cloud_gpu_test.ps1` below describes what it will do once `-Apply` works;
+none of it runs today.
+
 ## The one rule every VM this app creates must follow
 
 Hard Rules 9 and 10, restated as a preflight checklist because this is where
