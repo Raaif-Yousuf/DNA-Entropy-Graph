@@ -59,3 +59,38 @@ def test_fuzz_genbank_reader_never_raises_a_raw_exception(path: Path) -> None:
         pass
     except Exception as exc:  # noqa: BLE001
         pytest.fail(f"{path.name} raised a raw {type(exc).__name__}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# The corpus has to survive the round trip through git, or it is testing
+# something other than what it says.
+#
+# MEASURED 2026-09-19: `.gitattributes` declared `*.fasta text` with
+# `eol=lf`, so `fasta_crlf_and_lonecr_mixed.fasta` was committed with its
+# CRLFs already rewritten to LF. The test suite passed either way, because it
+# ran against the working tree, where the bytes were still right. A fresh
+# clone would have got a different file and tested a different thing, and
+# nothing would have said so.
+#
+# These two assert the bytes that give three fixtures their whole reason to
+# exist. They fail if that normalization ever comes back.
+# ---------------------------------------------------------------------------
+
+
+def test_the_crlf_fixture_still_contains_crlf() -> None:
+    raw = (MALFORMED_DIR / "fasta_crlf_and_lonecr_mixed.fasta").read_bytes()
+    assert b"\r\n" in raw, (
+        "the CRLF fixture has been normalized to LF, so it no longer tests mixed line "
+        "endings -- check .gitattributes for a `text`/`eol=lf` rule covering "
+        "worker/tests/data/malformed/"
+    )
+    assert b"\rT" in raw, "the lone-CR part of the mixed-line-ending fixture is gone"
+
+
+def test_the_byte_level_fixtures_still_contain_their_bytes() -> None:
+    assert b"\x00" in (MALFORMED_DIR / "fasta_null_bytes.fasta").read_bytes()
+    assert (MALFORMED_DIR / "fasta_utf16_truncated.fasta").read_bytes()[:2] in (
+        b"\xff\xfe",
+        b"\xfe\xff",
+    ), "the UTF-16 fixture has lost its byte-order mark"
+    assert b"\r" in (MALFORMED_DIR / "genbank_lone_cr.gb").read_bytes()
