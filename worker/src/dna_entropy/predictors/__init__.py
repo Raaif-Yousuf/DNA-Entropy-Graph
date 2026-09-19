@@ -8,7 +8,7 @@ from .base import (
     PredictorOOMError,
     check_probability_matrix,
 )
-from .logits import aligned_acgt_probs
+from .logits import aligned_acgt_probs, normalize_model_output
 from .mock import MockPredictor
 
 # NB: EvoPredictor is intentionally NOT imported here — it pulls in torch/evo2, which
@@ -22,5 +22,6 @@ __all__ = [
     "PredictorOOMError",
     "check_probability_matrix",
     "aligned_acgt_probs",
+    "normalize_model_output",
     "MockPredictor",
 ]
