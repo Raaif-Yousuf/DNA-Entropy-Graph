@@ -1,14 +1,19 @@
 """Tests for scripts/triage_diagnostics.py.
 
-The manifest/status/progress/result schema asserted against here is
-documented in docs/superpowers/specs/2026-09-18-appendix-b-cloud-design.md
-sections 3.2-3.4; the dna_entropy.worker subpackage that will actually write
-these files (issue #278) does not exist in code yet, so every fixture below
-is hand-built JSON matching the DOCUMENTED shape, not real worker output.
-If issue #278 lands with different field names, `triage_diagnostics.py`'s
-own `SCHEMA_FIELDS` block is the one place to update, and the fixtures here
-would need the same rename to keep passing -- that coupling is deliberate,
-see this module's own top docstring.
+The dna_entropy.worker subpackage (issue #278) now exists and
+`worker/src/dna_entropy/worker/schema_gen.py` generates real JSON Schema
+from its own dataclasses (docs/contract/{manifest,status,result}.schema.json).
+The fixtures below (MANIFEST, STATUS_FAILED, ...) are still hand-built JSON,
+not bytes a real worker actually wrote, but their field names and shape now
+match that generated schema (reconciled this round -- see
+`triage_diagnostics.py`'s own "SCHEMA RECONCILIATION" module-docstring
+section for what disagreed and which direction each was), except the four
+fields `_SCHEMA_FIELDS_KNOWN_GAPS` documents as app-written and not modelled
+by the worker's own dataclasses (createdAt/createdBy.*, result.error.code's
+sub-shape). `test_schema_fields_reconciles_with_the_real_generated_schema`
+below is what actually proves SCHEMA_FIELDS agrees with the real schema, in
+both directions, against this repo's own generated files -- not just
+against these fixtures.
 """
 
 from __future__ import annotations
@@ -313,6 +318,215 @@ def test_cli_data_dir_with_no_local_runs_reports_and_exits_2():
     )
     # No local runs found and no other targets given -> same as "no targets".
     assert proc.returncode == 2
+
+
+def test_help_documents_check_schema_flag():
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "triage_diagnostics.py"), "--help"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert "--check-schema" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# Schema reconciliation (this round): SCHEMA_FIELDS vs. the real generated
+# schema, both directions, plus the worker's own error-code registry.
+# ---------------------------------------------------------------------------
+
+def test_schema_fields_reconciles_with_the_real_generated_schema():
+    """The whole point: run td's own hand-maintained SCHEMA_FIELDS against
+    THIS repo's real docs/contract/*.schema.json (not a fixture) and prove
+    they agree, in both directions. This is what makes a future drift a red
+    pytest run instead of a silent "nothing found" during a real incident."""
+    forward = td.validate_schema_fields()
+    assert forward == [], f"SCHEMA_FIELDS names path(s) the generated schema does not have: {forward}"
+    reverse = td.find_uncovered_schema_fields()
+    assert reverse == [], f"the generated schema has field(s) SCHEMA_FIELDS does not read: {reverse}"
+
+
+def test_validate_schema_fields_catches_a_path_the_schema_does_not_have(tmp_path):
+    """A deliberately incomplete synthetic schema (real SCHEMA_FIELDS
+    against a fixture, not the repo's own schema) proves validate_schema_
+    fields actually reports specific missing paths, not just "something is
+    wrong somewhere"."""
+    (tmp_path / "manifest.schema.json").write_text(
+        json.dumps({"type": "object", "properties": {}}), encoding="utf-8",
+    )
+    # status/result left unwritten entirely -- _load_generated_schemas must
+    # not crash on a missing file, just omit that document.
+    problems = td.validate_schema_fields(tmp_path)
+    assert any("job_id: manifest.jobId is not in the generated schema" in p for p in problems)
+    assert any("no generated schema readable for document 'status'" in p for p in problems)
+
+
+def test_find_uncovered_schema_fields_catches_a_new_field(tmp_path):
+    """A synthetic schema with one extra field no SCHEMA_FIELDS entry points
+    at -- the "schema grew a field, nobody taught this tool to read it"
+    direction, the actual shape of the inputs[].ambiguityPolicy /
+    manifest.limits.maxInputs gaps this round found for real."""
+    (tmp_path / "manifest.schema.json").write_text(json.dumps({
+        "type": "object",
+        "properties": {
+            "jobId": {"type": "string"},
+            "brandNewField": {"type": "string"},
+        },
+    }), encoding="utf-8")
+    (tmp_path / "status.schema.json").write_text(json.dumps({"type": "object", "properties": {}}), encoding="utf-8")
+    (tmp_path / "result.schema.json").write_text(json.dumps({"type": "object", "properties": {}}), encoding="utf-8")
+    uncovered = td.find_uncovered_schema_fields(tmp_path)
+    assert "manifest.brandNewField" in uncovered
+
+
+def test_flatten_schema_scalar_paths_skips_arrays():
+    schema = {"type": "object", "properties": {
+        "inputs": {"type": "array", "items": {"type": "object"}},
+        "jobId": {"type": "string"},
+    }}
+    paths = td._flatten_schema_scalar_paths(schema)
+    assert paths == {("jobId",)}
+
+
+def test_load_known_error_codes_includes_the_worker_registry(tmp_path):
+    (tmp_path / "error-codes.json").write_text(json.dumps({
+        "codes": [{"code": "TOTALLY_NEW_WORKER_CODE"}],
+    }), encoding="utf-8")
+    codes = td.load_known_error_codes(tmp_path)
+    assert "TOTALLY_NEW_WORKER_CODE" in codes
+    assert "GPU_STOCKOUT" in codes  # the static cloud taxonomy is still unioned in
+
+
+def test_load_known_error_codes_falls_back_when_file_missing(tmp_path):
+    assert td.load_known_error_codes(tmp_path) == td.KNOWN_CLOUD_ERROR_CODES
+
+
+def test_known_error_codes_includes_real_worker_registry_codes():
+    """Against THIS repo's real docs/contract/error-codes.json: the three
+    codes the static Appendix B taxonomy never listed must now be
+    recognised, since KNOWN_ERROR_CODES is computed from the real file."""
+    for code in ("MANIFEST_INVALID", "WORKER_VERSION_MISMATCH", "BATCH_LIMIT_EXCEEDED"):
+        assert code not in td.KNOWN_CLOUD_ERROR_CODES, (
+            f"{code} was added to the static taxonomy -- update this test's premise"
+        )
+        assert code in td.KNOWN_ERROR_CODES
+
+
+def test_cli_check_schema_exits_zero_against_this_repo():
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "triage_diagnostics.py"), "--check-schema"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "agrees with the generated schema" in proc.stdout
+
+
+def test_check_schema_exits_one_on_a_forward_disagreement(tmp_path):
+    (tmp_path / "manifest.schema.json").write_text(json.dumps({"type": "object", "properties": {}}), encoding="utf-8")
+    (tmp_path / "status.schema.json").write_text(json.dumps({"type": "object", "properties": {}}), encoding="utf-8")
+    (tmp_path / "result.schema.json").write_text(json.dumps({"type": "object", "properties": {}}), encoding="utf-8")
+    assert td.check_schema(tmp_path) == 1
+
+
+# ---------------------------------------------------------------------------
+# inputs[] summaries and cross-file jobId consistency (this round: neither
+# existed before -- manifest.inputs[]/result.inputs[] are arrays, so they
+# never fit SCHEMA_FIELDS' flat dotted-path shape at all).
+# ---------------------------------------------------------------------------
+
+MANIFEST_TWO_INPUTS = {
+    **MANIFEST,
+    "inputs": [
+        {"id": "in1", "path": "input/a.gb", "name": "A", "ambiguityPolicy": "mask"},
+        {"id": "in2", "path": "input/b.gb", "name": "B", "ambiguityPolicy": "error"},
+    ],
+}
+
+RESULT_TWO_INPUTS = {
+    "schema": 1, "jobId": MANIFEST["jobId"], "status": "failed",
+    "inputs": [
+        {"id": "in1", "status": "done", "outputs": ["output/a.wig"]},
+        {"id": "in2", "status": "failed", "error": {"code": "INPUT_INVALID"}},
+    ],
+    "timing": {"startedAt": "2026-09-18T15:00:00Z", "finishedAt": "2026-09-18T15:20:00Z"},
+}
+
+
+def test_manifest_input_ambiguity_policies_reads_every_input():
+    bundle = {"manifest": MANIFEST_TWO_INPUTS}
+    assert td.manifest_input_ambiguity_policies(bundle) == {"in1": "mask", "in2": "error"}
+
+
+def test_manifest_input_ambiguity_policies_defaults_to_keep_when_absent():
+    bundle = {"manifest": MANIFEST}  # MANIFEST's single input has no ambiguityPolicy key
+    assert td.manifest_input_ambiguity_policies(bundle) == {"in1": "keep"}
+
+
+def test_manifest_input_ambiguity_policies_empty_without_manifest():
+    assert td.manifest_input_ambiguity_policies({}) == {}
+
+
+def test_result_input_statuses_reads_every_input():
+    bundle = {"result": RESULT_TWO_INPUTS}
+    assert td.result_input_statuses(bundle) == {"in1": "done", "in2": "failed"}
+
+
+def test_result_input_statuses_empty_without_result():
+    assert td.result_input_statuses({}) == {}
+
+
+def test_job_id_mismatches_empty_when_all_agree():
+    bundle = {"manifest": MANIFEST, "status": STATUS_FAILED, "result": RESULT_TWO_INPUTS}
+    assert td.job_id_mismatches(bundle) == []
+
+
+def test_job_id_mismatches_detects_a_real_disagreement():
+    bad_status = {**STATUS_FAILED, "jobId": "some-other-job-entirely"}
+    bundle = {"manifest": MANIFEST, "status": bad_status}
+    mismatches = td.job_id_mismatches(bundle)
+    assert any("some-other-job-entirely" in m for m in mismatches)
+
+
+def test_job_id_mismatches_empty_with_fewer_than_two_documents():
+    assert td.job_id_mismatches({"manifest": MANIFEST}) == []
+
+
+def test_cli_reports_inputs_summary_and_ambiguity_policy(tmp_path):
+    _write_job(tmp_path, manifest=MANIFEST_TWO_INPUTS, result=RESULT_TWO_INPUTS)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "triage_diagnostics.py"), str(tmp_path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "in1: ambiguityPolicy=mask  result=done" in out
+    assert "in2: ambiguityPolicy=error  result=failed" in out
+
+
+def test_cli_flags_a_job_id_mismatch(tmp_path):
+    bad_status = {**STATUS_FAILED, "jobId": "mismatched-job-id"}
+    _write_job(tmp_path, status=bad_status)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "triage_diagnostics.py"), str(tmp_path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0
+    assert "job id MISMATCH" in proc.stdout
+    assert "mismatched-job-id" in proc.stdout
+
+
+def test_cli_recognises_a_worker_registry_error_code_not_in_static_taxonomy(tmp_path):
+    """MANIFEST_INVALID is real (docs/contract/error-codes.json) but was
+    never in the static Appendix B section 7 taxonomy -- before
+    KNOWN_ERROR_CODES existed, a job that failed with this code would have
+    been wrongly flagged "not in the documented taxonomy"."""
+    status = {**STATUS_FAILED, "error": {**STATUS_FAILED["error"], "code": "MANIFEST_INVALID"}}
+    _write_job(tmp_path, status=status)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "triage_diagnostics.py"), str(tmp_path)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0
+    assert "MANIFEST_INVALID" in proc.stdout
+    assert "not in the documented taxonomy" not in proc.stdout
 
 
 def test_cli_two_bundles_prints_delta_section(tmp_path):
