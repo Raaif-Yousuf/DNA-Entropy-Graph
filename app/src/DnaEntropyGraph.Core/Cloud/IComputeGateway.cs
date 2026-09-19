@@ -21,16 +21,70 @@ public interface IComputeGateway
 
 /// <summary>
 /// The request to create one VM. Hard Rule 10: every VM carries the
-/// standard labels and a <c>maxRunDuration</c> - <c>VmSpec</c> is where that
-/// precondition is meant to be enforced before a request is ever built
-/// (the enforcing guard itself is issue #68's scope, not #61's).
+/// standard labels (<c>app</c>, <c>installation-id</c>, <c>job-id</c>,
+/// <c>model</c>, <c>app-version</c>, <c>lifecycle</c>) and a
+/// <c>maxRunDuration</c> plus <c>instanceTerminationAction</c>.
+/// <see cref="EnsurePreconditions"/> is the guard from issue #68: called by
+/// every real gateway before a Compute Insert request is ever built, so an
+/// unlabelled resource - invisible to the Cloud page, therefore a leak
+/// (Hard Rule 9/10) - can never reach the API in the first place.
 /// </summary>
 public sealed record VmSpec(
-    string JobId,
     string InstallationId,
+    string JobId,
     string Model,
     string AppVersion,
+    string Lifecycle,
     string MachineType,
-    TimeSpan MaxRunDuration);
+    TimeSpan MaxRunDuration,
+    string TerminationAction)
+{
+    /// <summary>The <c>app</c> label's fixed value - every DNA Entropy Graph resource carries the same one.</summary>
+    public const string AppLabelValue = "dna-entropy-graph";
+
+    /// <summary>
+    /// Throws naming the first missing precondition. Never silently
+    /// defaults a missing field - an optional label with a sensible
+    /// default is exactly the "hides a missing caller" shape wired-to-nothing
+    /// warns about.
+    /// </summary>
+    public void EnsurePreconditions()
+    {
+        Require(InstallationId, "installation-id");
+        Require(JobId, "job-id");
+        Require(Model, "model");
+        Require(AppVersion, "app-version");
+        Require(Lifecycle, "lifecycle");
+        Require(TerminationAction, "instanceTerminationAction");
+
+        if (MaxRunDuration <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("VmSpec is missing a positive maxRunDuration (Hard Rule 10).");
+        }
+    }
+
+    /// <summary>The six standard labels (Hard Rule 10), keyed exactly as the Cloud page discovers them by.</summary>
+    public IReadOnlyDictionary<string, string> ToLabels()
+    {
+        EnsurePreconditions();
+        return new Dictionary<string, string>
+        {
+            ["app"] = AppLabelValue,
+            ["installation-id"] = InstallationId,
+            ["job-id"] = JobId,
+            ["model"] = Model,
+            ["app-version"] = AppVersion,
+            ["lifecycle"] = Lifecycle,
+        };
+    }
+
+    private static void Require(string value, string labelName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException($"VmSpec is missing required label '{labelName}' (Hard Rule 10).");
+        }
+    }
+}
 
 public sealed record VmDescriptor(string Name, string Zone, string Status);
