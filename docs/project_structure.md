@@ -79,7 +79,12 @@ DNA-Entropy-Graph/
 │   ├── dna-entropy.spec  LICENSE.prototype  CLAUDE.legacy.md  README.legacy.md   FROZEN, REFERENCE-verdict, not live
 │   └── packaging/  scripts/       FROZEN prototype packaging scripts, REFERENCE-verdict
 │
-├── app/                           DOES NOT EXIST YET — issue #61
+├── app/                           C# solution skeleton (issue #61, HAND)
+│   ├── DnaEntropyGraph.sln  Directory.Build.props  Directory.Packages.props  global.json  nuget.config   live
+│   ├── src/  DnaEntropyGraph.Core/  .Cloud/  .Persistence/  .LocalEngine/  .Presentation/  .App/         live
+│   ├── tools/DnaEntropyGraph.CloudCli/                                            live, stub (no subcommands yet)
+│   └── tests/  *.Core.Tests/ *.Cloud.Tests/ *.Persistence.Tests/ *.Presentation.Tests/        live
+│       DnaEntropyGraph.Guards.Tests/ (DiResolutionTests)  DnaEntropyGraph.App.UiTests/ (all skipped)     live
 │
 ├── .claude/
 │   ├── settings.json              live

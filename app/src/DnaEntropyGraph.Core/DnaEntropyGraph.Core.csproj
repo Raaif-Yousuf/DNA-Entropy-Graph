@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Hard Rule 7: only DnaEntropyGraph.Cloud may reference Google.*. This
+    project must never gain a PackageReference to any Google.* or torch/onnx
+    package (Hard Rule 6) - Guards.Tests's csproj scan (issue #68) enforces
+    this mechanically once it exists; until then, this comment and the
+    dependency-arrow diagram in docs/architecture.md are the contract.
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.Core</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.Core</RootNamespace>
+  </PropertyGroup>
+
+</Project>

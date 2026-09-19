@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    docs/architecture.md: the "Run on this PC" path launches the worker as a
+    CHILD PROCESS, never in-process (Hard Rule 6). This project never
+    references torch/onnx/any inference package.
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.LocalEngine</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.LocalEngine</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+  </ItemGroup>
+
+</Project>

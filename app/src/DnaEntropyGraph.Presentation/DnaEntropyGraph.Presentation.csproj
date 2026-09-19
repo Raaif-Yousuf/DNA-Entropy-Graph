@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Hard Rule 8: NO WinUI reference here. This is what lets every ViewModel
+    test run with no UI thread (app/tests/DnaEntropyGraph.Presentation.Tests).
+    Depends on Core's interfaces only, never on Cloud or Persistence
+    directly (docs/architecture.md section 2's dependency-arrow diagram).
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.Presentation</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.Presentation</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+  </ItemGroup>
+
+</Project>

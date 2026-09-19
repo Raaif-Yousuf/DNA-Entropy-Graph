@@ -1,7 +1,12 @@
 # Architecture: the app/worker split, the job lifecycle, and where state lives
 
-**Status: as-designed, not yet as-built.** MEASURED 2026-09-19: `app/` does not exist yet
-(tracked by issue #61); `worker/src/dna_entropy/` exists and runs today, but nothing under
+**Status: as-designed, partly as-built.** MEASURED 2026-09-19: `app/`'s solution skeleton
+exists (issue #61) with all thirteen projects, central package management, and a DI
+resolution test that resolves all eight ViewModels through the same registration
+`App.xaml.cs` itself calls. Everything behind those interfaces is still a placeholder:
+`FakeGcp` and no `Google.*` package at all, an in-memory `RunRepository` and
+`SettingsStore`, no Views beyond an empty shell, and a `LocalJobRunner` that throws rather
+than pretending. `worker/src/dna_entropy/` exists and runs today, but nothing under
 it yet reads a manifest or talks to Google Cloud (see `job_contract.md`'s own status
 line). This doc describes the target shape from the approved design spec, marked
 throughout where a piece is live versus planned, so a reader can tell "how it works" from
@@ -68,7 +73,7 @@ LocalEngine -> Core
 lets `Presentation.Tests` run every ViewModel test with no WinUI reference and no real
 Google Cloud call.
 
-## 3. Projects and their responsibility (planned; `app/` does not exist yet)
+## 3. Projects and their responsibility (the `app/` skeleton exists per issue #61; implementations mostly still planned)
 
 | Project | Owns |
 |---|---|

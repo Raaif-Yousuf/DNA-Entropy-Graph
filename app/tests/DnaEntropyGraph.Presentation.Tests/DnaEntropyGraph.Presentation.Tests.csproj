@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.Presentation.Tests</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.Presentation.Tests</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NSubstitute" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Presentation\DnaEntropyGraph.Presentation.csproj" />
+  </ItemGroup>
+
+</Project>

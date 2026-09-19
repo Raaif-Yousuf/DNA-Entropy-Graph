@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Hard Rule 7: this is the ONLY project allowed to reference Google.*.
+    The skeleton (#61) does not yet reference any Google.Cloud.* package -
+    the real gateway implementations (GoogleAuthService, ProjectSetupService,
+    VmAllocator, ...) are a follow-up issue under this epic. FakeGcp below
+    is real: it is what every other test project depends on instead of a
+    real Google Cloud project.
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.Cloud</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.Cloud</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+  </ItemGroup>
+
+</Project>
