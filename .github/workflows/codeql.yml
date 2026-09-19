@@ -41,17 +41,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # csharp is added by issue #61, when app/ exists and there is something to build.
-        language: [python, actions]
+        # csharp added 2026-09-19 (issue #197): #61 closed, app/DnaEntropyGraph.sln exists
+        # and every lane's dotnet build already runs against it for real.
+        language: [python, actions, csharp]
     steps:
       - uses: actions/checkout@v7
+
+      # csharp only: CodeQL's autobuild heuristic is not reliable for an unpackaged,
+      # x64-platform, central-package-managed WinUI 3 solution (Directory.Build.props,
+      # global.json's pinned SDK) - an explicit restore+build mirrors ci-app.yml's own
+      # working build step instead of hoping autobuild guesses the same invocation.
+      - uses: actions/setup-dotnet@v6
+        if: matrix.language == 'csharp'
+        with:
+          global-json-file: app/global.json
 
       - uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
 
+      - name: build (csharp)
+        if: matrix.language == 'csharp'
+        working-directory: app
+        run: |
+          dotnet restore
+          dotnet build -c Release -p:Platform=x64 --no-restore
+
       - uses: github/codeql-action/autobuild@v3
+        if: matrix.language != 'csharp'
 
       - uses: github/codeql-action/analyze@v3
         with:
