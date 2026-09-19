@@ -1,0 +1,23 @@
+{
+  "$schema_note": "Not a real JSON Schema; documents the contract for humans/xUnit.",
+  "description": "The always-on keeper's instance-state decision table: given what gcloud.find_instance reported for the singleton box, decide whether to acquire/start/leave-alone. Extracted from the DNA-Entropy-Genbank prototype (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b) before its cloud/ package was gutted (issue #280/#284). Reproduces dna_entropy.cloud.keeper._next_action(existing: (zone, status) | None) -> (action, zone).",
+  "function_signature": "_next_action(existing: tuple[str, str] | None) -> tuple[str, str | None]",
+  "source_file": "worker/legacy/cloud/keeper.py (moved there by #280; originally worker/src/dna_entropy/cloud/keeper.py)",
+  "source": {
+    "repo": "DNA-Entropy-Genbank (local checkout, matches the migration inventory commit exactly)",
+    "commit": "8026bf5c4afbe3021c1f7e79a17a93af4eaad84b",
+    "generated_by": "worker/scratch_gen_keeper_fixtures.py, run once against that checkout's own .venv, then deleted (not committed -- see issue #213's closing report for the exact command)",
+    "verified": "Every case here was produced by actually CALLING the prototype's real _next_action() (not read off its test file's asserted values), and cross-checked against tests/test_keeper.py::test_next_action's own 7 parametrized cases, which it matches exactly. This is a pure function of two strings with no I/O, no floating point, and no machine-dependent output -- exact-value comparison is safe for every field here, unlike the stdout-bearing fixtures in this same directory."
+  },
+  "actions": ["acquire", "start", "up"],
+  "cases": [
+    {"id": "no_box_found", "existing": null, "action": "acquire", "zone": null},
+    {"id": "running", "existing": ["us-central1-a", "RUNNING"], "action": "up", "zone": "us-central1-a"},
+    {"id": "blank_status_is_transitional", "existing": ["us-central1-a", ""], "action": "up", "zone": "us-central1-a"},
+    {"id": "staging", "existing": ["us-central1-a", "STAGING"], "action": "up", "zone": "us-central1-a"},
+    {"id": "terminated", "existing": ["us-central1-a", "TERMINATED"], "action": "start", "zone": "us-central1-a"},
+    {"id": "stopped", "existing": ["us-central1-a", "STOPPED"], "action": "start", "zone": "us-central1-a"},
+    {"id": "suspended", "existing": ["us-central1-a", "SUSPENDED"], "action": "start", "zone": "us-central1-a"}
+  ],
+  "port_note": "This decision table itself is superseded by design D1 (\"Per-job VM, found by label, never by fixed name ... no shared singleton\") -- there is no single BOX_NAME instance to look up any more, so this exact function has no direct C# port. Recorded because the STATE-CLASSIFICATION logic (which statuses count as up/stopped/transitional) is still the right reference for whatever per-job VM state polling the C# reconciler does (design section 4.4), even though the surrounding acquire/start/leave-alone decision it drove does not carry over."
+}

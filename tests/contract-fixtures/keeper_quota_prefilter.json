@@ -1,0 +1,39 @@
+{
+  "$schema_note": "Not a real JSON Schema; documents the contract for humans/xUnit.",
+  "description": "The always-on keeper's region quota pre-filter: narrows the zone list to regions that actually have GPU quota before trying to create a box, so a zone-by-zone create loop does not spam 'no quota in this region' for regions that were never going to work. Extracted from the DNA-Entropy-Genbank prototype (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b) before its cloud/ package was gutted (issue #280/#284). Reproduces dna_entropy.cloud.keeper._apply_quota_health(cfg, all_zones, project) -> None (mutates cfg.zones in place), matching tests/test_keeper.py's 3 cases (test_apply_quota_health_narrows_to_quota_regions / _keeps_all_when_query_unknown / _keeps_all_when_zero_quota_everywhere).",
+  "function_signature": "_apply_quota_health(cfg: CloudConfig, all_zones: list[str], project: str) -> None",
+  "source_file": "worker/legacy/cloud/keeper.py (moved there by #280; originally worker/src/dna_entropy/cloud/keeper.py)",
+  "source": {
+    "repo": "DNA-Entropy-Genbank (local checkout, matches the migration inventory commit exactly)",
+    "commit": "8026bf5c4afbe3021c1f7e79a17a93af4eaad84b",
+    "generated_by": "worker/scratch_gen_keeper_fixtures.py, run once against that checkout's own .venv (Python 3.12.10), then deleted (not committed -- see issue #213's closing report for the exact command)",
+    "verified": "Every case here was produced by actually CALLING the prototype's real _apply_quota_health() with a CloudConfig() and a monkeypatched gcloud.list_region_gpu_quota, then reading the real cfg.zones it mutated."
+  },
+  "float_and_timestamp_warning": "The prototype's raw captured stdout contains a `[YYYY-MM-DD HH:MM:SS]` wall-clock timestamp per line -- not part of this fixture, same reason as keeper_setup_diagnosis.json. `result_zones` (a list of zone name strings, no floats) is exact and safe to compare directly.",
+  "cases": [
+    {
+      "id": "narrows_to_quota_regions",
+      "quota_query_result": {"us-central1": {"NVIDIA_L4_GPUS": 6.0}},
+      "all_zones": ["us-central1-a", "us-central1-b", "us-east1-b", "europe-west4-a"],
+      "result_zones": ["us-central1-a", "us-central1-b"],
+      "expected_substrings": ["GPU quota available in 1 region(s): us-central1"]
+    },
+    {
+      "id": "keeps_all_when_query_unknown",
+      "quota_query_result": null,
+      "all_zones": ["us-central1-a", "us-east1-b"],
+      "result_zones": ["us-central1-a", "us-east1-b"],
+      "expected_substrings": ["Could not read GPU quota; will try all regions."],
+      "note": "None means the quota query itself failed (transport error, permission, etc.) -- distinct from an empty dict below. Cannot tell whether quota exists, so keeps every zone rather than narrowing on missing information."
+    },
+    {
+      "id": "keeps_all_when_zero_quota_everywhere",
+      "quota_query_result": {},
+      "all_zones": ["us-central1-a", "us-east1-b"],
+      "result_zones": ["us-central1-a", "us-east1-b"],
+      "expected_substrings": ["No GPU quota found in ANY region for this project (this is the fixable part).", "Your project has no L4 GPU quota yet"],
+      "note": "An empty dict (query succeeded, genuinely zero quota everywhere) still keeps every zone -- the prototype's own comment explains why: 'the quota API under-reports' sometimes, so the real per-zone create error is still a more trustworthy final answer than trusting this query's zero outright. Same None-vs-{} distinction as cloud_quota_parsing.json and keeper_setup_diagnosis.json's flags_no_quota case."
+    }
+  ],
+  "port_note": "This narrowing logic (only try zones in regions with confirmed quota) is directly useful for the C# zone/offer escalation ladder (design section 5.4, appendix B section 4.4) regardless of the always-on-keeper context it originally ran in -- unlike keeper_next_action.json's decision table, THIS behavior is not tied to the singleton-box concept D1 removes; it is a per-attempt optimization that applies equally to a per-job VM create."
+}

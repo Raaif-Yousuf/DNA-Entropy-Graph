@@ -1,0 +1,62 @@
+{
+  "$schema_note": "Not a real JSON Schema; documents the contract for humans/xUnit.",
+  "description": "The always-on keeper's one-time GCP setup health report: project reachable, billing enabled, Compute Engine API enabled (auto-enabling it if off), and GPU quota present. Extracted from the DNA-Entropy-Genbank prototype (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b) before its cloud/ package was gutted (issue #280/#284). Reproduces dna_entropy.cloud.keeper._diagnose_setup(cfg, account, project) -> bool, matching all 7 scenarios in tests/test_keeper.py's setup-doctor section (test_diagnose_setup_all_ok / _flags_billing_off / _auto_enables_api_when_off / _reports_when_api_enable_fails / _flags_unreachable_project / _flags_no_quota / _unknown_billing_is_warning_not_blocking).",
+  "function_signature": "_diagnose_setup(cfg: CloudConfig, account: str, project: str) -> bool",
+  "source_file": "worker/legacy/cloud/keeper.py (moved there by #280; originally worker/src/dna_entropy/cloud/keeper.py)",
+  "source": {
+    "repo": "DNA-Entropy-Genbank (local checkout, matches the migration inventory commit exactly)",
+    "commit": "8026bf5c4afbe3021c1f7e79a17a93af4eaad84b",
+    "generated_by": "worker/scratch_gen_keeper_fixtures.py, run once against that checkout's own .venv (Python 3.12.10), then deleted (not committed -- see issue #213's closing report for the exact command)",
+    "verified": "Every case here was produced by actually CALLING the prototype's real _diagnose_setup() with the SAME gcloud.* monkeypatches tests/test_keeper.py's own _setup_env() helper uses, and capturing real stdout via contextlib.redirect_stdout -- not read off the test file's asserted substrings."
+  },
+  "float_and_timestamp_warning": "The prototype's raw captured stdout for every case below contains a `[YYYY-MM-DD HH:MM:SS]` wall-clock timestamp per line (keeper.py's own _stamp() helper) -- machine- and run-time-dependent, and NOT part of this fixture. Only `ok` (a bool) and `expected_substrings` (exact text fragments the prototype's own test suite already asserts against, cross-checked here against the real captured stdout to confirm each one really appears) are frozen. This is deliberately the same assertion granularity the prototype's own tests use (`assert \"billing is NOT enabled\" in capsys.readouterr().out`), not full-text equality, because full-text equality would be asserting on the timestamp too.",
+  "cases": [
+    {
+      "id": "all_ok",
+      "mocked": {"project_state": "ACTIVE", "billing_enabled": [true, "True"], "api_enabled": [true, "compute.googleapis.com"], "enable_api": [true, ""], "quota": {"us-central1": {"NVIDIA_L4_GPUS": 4.0}}},
+      "ok": true,
+      "expected_substrings": ["OK: project 'proj' is reachable.", "OK: billing is enabled.", "OK: Compute Engine API is enabled.", "OK: GPU quota present in 1 region(s): us-central1", "Setup looks good. Securing a GPU..."]
+    },
+    {
+      "id": "flags_billing_off",
+      "mocked": {"project_state": "ACTIVE", "billing_enabled": [false, "False"], "api_enabled": [true, "compute.googleapis.com"], "enable_api": [true, ""], "quota": {"us-central1": {"NVIDIA_L4_GPUS": 4.0}}},
+      "ok": false,
+      "expected_substrings": ["ERROR: billing is NOT enabled - GCP will not create any VM.", "Fix: link a billing account at https://console.cloud.google.com/billing", "Setup problem(s) found above."]
+    },
+    {
+      "id": "auto_enables_api_when_off",
+      "mocked": {"project_state": "ACTIVE", "billing_enabled": [true, "True"], "api_enabled": [false, ""], "enable_api": [true, ""], "quota": {"us-central1": {"NVIDIA_L4_GPUS": 4.0}}},
+      "ok": true,
+      "expected_substrings": ["Compute Engine API is not enabled - enabling it now (takes ~30-60s)...", "OK: enabled the Compute Engine API.", "Setup looks good. Securing a GPU..."],
+      "note": "API-off is NOT treated as a blocker by itself -- the prototype calls enable_api() automatically and only fails setup if THAT also fails (see reports_when_api_enable_fails below). The C# first-run wizard should make an explicit decision about whether to auto-enable on the user's behalf like this or ask first (#204); the prototype's choice was silent auto-enable, recorded here as what it did, not as a recommendation."
+    },
+    {
+      "id": "reports_when_api_enable_fails",
+      "mocked": {"project_state": "ACTIVE", "billing_enabled": [true, "True"], "api_enabled": [false, ""], "enable_api": [false, "PERMISSION_DENIED: serviceusage.services.enable"], "quota": {"us-central1": {"NVIDIA_L4_GPUS": 4.0}}},
+      "ok": false,
+      "expected_substrings": ["Compute Engine API is not enabled - enabling it now (takes ~30-60s)...", "ERROR: could not enable the Compute Engine API automatically.", "gcloud said: PERMISSION_DENIED: serviceusage.services.enable", "Fix it by hand: gcloud services enable compute.googleapis.com"],
+      "note": "The exact remediation text from the underlying API call is surfaced verbatim, not paraphrased -- worth preserving in the C# port since it is what actually lets a non-expert user self-fix."
+    },
+    {
+      "id": "flags_unreachable_project",
+      "mocked": {"project_state": null, "billing_enabled": [true, "True"], "api_enabled": [true, "compute.googleapis.com"], "enable_api": [true, ""], "quota": {"us-central1": {"NVIDIA_L4_GPUS": 4.0}}},
+      "ok": false,
+      "expected_substrings": ["ERROR: project 'proj' is not accessible from a@b.com.", "Check the ID: gcloud config set project YOUR_PROJECT_ID"]
+    },
+    {
+      "id": "flags_no_quota",
+      "mocked": {"project_state": "ACTIVE", "billing_enabled": [true, "True"], "api_enabled": [true, "compute.googleapis.com"], "enable_api": [true, ""], "quota": {}},
+      "ok": false,
+      "expected_substrings": ["ERROR: no GPU quota in any region (a one-time request is needed).", "Your project has no L4 GPU quota yet - this is a one-time request.", "Metric:   NVIDIA_L4_GPUS"],
+      "note": "quota={} (an empty dict, not None) means 'the query succeeded and found zero quota everywhere' -- the same None-vs-{} distinction cloud_quota_parsing.json's list_region_gpu_quota cases already document. Confirm the C# port keeps that distinction: None means 'could not read quota, unknown', {} means 'read successfully, quota is genuinely zero'."
+    },
+    {
+      "id": "unknown_billing_is_warning_not_blocking",
+      "mocked": {"project_state": "ACTIVE", "billing_enabled": [null, "Cloud Billing API has not been used"], "api_enabled": [true, "compute.googleapis.com"], "enable_api": [true, ""], "quota": {"us-central1": {"NVIDIA_L4_GPUS": 4.0}}},
+      "ok": true,
+      "expected_substrings": ["WARN: could not verify billing (Cloud Billing API has not been used).", "Often just the Cloud Billing API being off"],
+      "note": "billing_enabled returning null (unknown, not False) must WARN, never block -- a project the keeper genuinely cannot introspect is not the same as one it has confirmed is broken. This is the one case in this file worth the most care to port correctly, since getting it wrong in the strict direction would block a user whose project is actually fine."
+    }
+  ],
+  "port_note": "The FOUR CHECKS here (project reachable, billing enabled, API enabled, GPU quota present) are directly useful reference for the C# SetupHealthService (design section 5.2, tracked by #204) -- a mis-configured project producing exactly this symptom (creates attempted, nothing provisions) is real and the checks correctly diagnose it. What does NOT carry over is the CALLING CONTEXT: this was a one-time report printed once at the start of an always-on keeper trying to acquire a single named box (BOX_NAME) forever, and the always-on singleton keeper itself is explicitly removed by design D1 (\"Per-job VM, found by label, never by fixed name ... no shared singleton\"). The four checks are still worth running before EVERY job's VM create, not just once at keeper start."
+}

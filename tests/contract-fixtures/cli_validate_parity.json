@@ -1,0 +1,50 @@
+{
+  "$schema_note": "Not a real JSON Schema; documents the contract for humans/xUnit.",
+  "description": "CLI parity vectors for `dna-entropy validate`: exact exit code and stdout+stderr text (typer.testing.CliRunner's combined `output`) for a fixed set of invocations, captured from the ACTUAL DNA-Entropy-Genbank prototype (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b) and cross-checked byte-for-byte against the current worker CLI at fixture-build time (issue #212). Exit codes and text are exact-value comparisons on purpose -- this command has no floating point or timing anywhere in it, unlike #316's entropy-value fixture.",
+  "command": "dna-entropy validate",
+  "source": {
+    "repo": "DNA-Entropy-Genbank (local checkout, matches the migration inventory commit exactly)",
+    "commit": "8026bf5c4afbe3021c1f7e79a17a93af4eaad84b",
+    "generated_by": "worker/scratch_gen_validate_parity.py, run once against that checkout's own .venv (Python 3.12.10) via typer.testing.CliRunner, then deleted (not committed) -- see issue #212's closing report for the exact command.",
+    "verified": "Every case's exit_code/output was independently re-invoked against the CURRENT worker CLI (dna_entropy.cli.app) at fixture-build time and confirmed byte-for-byte identical before being frozen here."
+  },
+  "cases": [
+    {
+      "id": "genbank_file_is_not_genbank_aware",
+      "args": ["validate", "-i", "tests/data/sample.gb"],
+      "stdin": null,
+      "exit_code": 1,
+      "output": "ERROR: Found 'U' at position 4: this looks like RNA. Re-run with --rna to convert U->T, or paste a DNA sequence.\n",
+      "note": "This is issue #212's own 'Observable' example command -- and it is NOT the 'prints notices' success case that phrasing implies. `validate` (in BOTH the prototype and the current worker -- confirmed identical, not a port regression) always reads its input through the plain PASTE reader (PasteReader -> validate_sequence directly), never through the GenBank/FASTA-aware readers.input.load_input. A .gb file's raw text (LOCUS/FEATURES/ORIGIN header lines) gets run through the same crude cleaner a pasted sequence would, and the first 'U' anywhere in that text (well before any real sequence data) trips the RNA heuristic. This is a genuine, pre-existing LIMITATION inherited unchanged from the prototype, not something introduced by the port -- and not something this fixture silently patches, since fixing `validate` to be format-aware is a scope decision, not a parity task. Flagged in issue #212's closing report."
+    },
+    {
+      "id": "paste_with_digits_and_lowercase_stdin",
+      "args": ["validate"],
+      "stdin": "acgt123ACGT\n",
+      "exit_code": 0,
+      "output": "  - Removed 3 digit character(s) (e.g. line numbers).\n  - Warning: sequence is short (8 nt); entropy near the start is dominated by the model's prior.\nOK: valid sequence, 8 nt\n"
+    },
+    {
+      "id": "paste_with_u_and_rna_flag",
+      "args": ["validate", "--rna"],
+      "stdin": "ACGU\n",
+      "exit_code": 0,
+      "output": "  - Converted 1 U->T (RNA input).\n  - Warning: sequence is short (4 nt); entropy near the start is dominated by the model's prior.\nOK: valid sequence, 4 nt\n"
+    },
+    {
+      "id": "paste_short_sequence_warns",
+      "args": ["validate"],
+      "stdin": "ACGT\n",
+      "exit_code": 0,
+      "output": "  - Warning: sequence is short (4 nt); entropy near the start is dominated by the model's prior.\nOK: valid sequence, 4 nt\n"
+    },
+    {
+      "id": "paste_u_without_rna_flag_errors",
+      "args": ["validate"],
+      "stdin": "ACGU\n",
+      "exit_code": 1,
+      "output": "ERROR: Found 'U' at position 4: this looks like RNA. Re-run with --rna to convert U->T, or paste a DNA sequence.\n"
+    }
+  ],
+  "known_divergence": "The current worker's `--max-len` maps to RunConfig.max_total_len (the outer sanity bound), not RunConfig.max_len (the per-window GPU ceiling) the way the prototype's identically-named flag did -- a DELIBERATE, already-documented divergence (validation/validators.py's own docstring: 'this command only cleans/validates, it never runs windowing, so there is no separate per-pass ceiling to set here'), not a bug. None of the cases above exercise --max-len, so this does not affect what is frozen here; recorded for whoever next extends this fixture."
+}

@@ -20,7 +20,7 @@
       "start": 1,
       "rna": false,
       "genes": true,
-      "allowAmbiguity": true,
+      "ambiguityPolicy": "keep",
       "fastaRecords": "all"
     }
   ],

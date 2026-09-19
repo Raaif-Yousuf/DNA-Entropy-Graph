@@ -32,3 +32,6 @@ desktop.ini
 
 # Private conventions donor (CLAIR) copied for mining only; never published
 legacy/clair/
+
+# Stray agent scratch directories; session work belongs in the harness scratchpad.
+scratchpad/

@@ -49,6 +49,15 @@ COPY src ./src
 # CUDA/flash-attn integration) rather than reusing it, that is exactly the kind of
 # incompatibility issue #37's spike exists to catch — this Dockerfile cannot detect that
 # without actually running on a GPU.
+#
+# NOT locked against worker/uv.lock (issue #255), unlike Dockerfile.cpu, for the same
+# reason the base tag above isn't pinned by digest yet: `uv.lock` was resolved on a
+# machine with no CUDA stack, so it cannot know what torch/evo2 versions are actually
+# compatible with whatever this NGC base ships. Freezing an untested pin here would give
+# false confidence, the same mistake an unverified digest pin would be. Once issue #37's
+# spike runs this image on real hardware, re-resolve `uv.lock` (or a dedicated cuda-extra
+# lock) INCLUDING the NGC base's own torch build as a constraint, and switch this line to
+# the same `uv export --locked` pattern Dockerfile.cpu uses.
 RUN pip install ".[genes,evo]"
 
 # Weights are NOT baked into the image (design D6): the worker fetches/mirrors them via

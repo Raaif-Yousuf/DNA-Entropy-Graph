@@ -51,6 +51,39 @@ def version() -> None:
     typer.echo(f"dna-entropy {__version__}")
 
 
+_MOVED_MESSAGE = (
+    "ERROR: {name!r} is gone from this build. It used to drive Evo 2 on a "
+    "user-managed gcloud GPU box directly from this CLI; the approved design talks to "
+    "Google's APIs from the DNA-Entropy-Graph app instead (no gcloud, no SSH -- "
+    "docs/superpowers/specs/2026-09-18-dna-entropy-graph-design.md section 3). Use the "
+    "app, or 'dna-entropy worker-run' if you are driving the worker directly from a "
+    "manifest.json."
+)
+
+
+# issue #212: `cloudrun`/`keep-gpu` are gone (issue #277), but a user typing the old
+# command out of habit got Typer's own generic "No such command" error before this --
+# which renders with Unicode box-drawing characters (a real bug: FEATURES.md section
+# 8.4's own documented rule is "ASCII-safe console output throughout ... because lab
+# users run a Windows cp1252 console that crashes on Unicode glyphs", and that crash is
+# exactly reproducible by piping Typer's default error through a cp1252 stdout).
+# `hidden=True` keeps them out of `--help`'s command list (they are not a supported
+# feature to advertise) while still answering with a clear, ASCII-only, ERROR-prefixed
+# message -- matching every other error path in this CLI -- if someone does type them.
+@app.command(hidden=True)
+def cloudrun() -> None:
+    """Removed. See the app instead."""
+    typer.secho(_MOVED_MESSAGE.format(name="cloudrun"), fg=typer.colors.RED, err=True)
+    raise typer.Exit(code=1)
+
+
+@app.command("keep-gpu", hidden=True)
+def keep_gpu() -> None:
+    """Removed. See the app instead."""
+    typer.secho(_MOVED_MESSAGE.format(name="keep-gpu"), fg=typer.colors.RED, err=True)
+    raise typer.Exit(code=1)
+
+
 @app.command()
 def run(
     input: str | None = typer.Option(

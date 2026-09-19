@@ -37,14 +37,37 @@ WORKDIR /opt/worker
 # Only what setuptools needs to build+install the package (see pyproject.toml's
 # `[tool.setuptools.packages.find] where = ["src"]`) — copied separately from the rest of
 # the repo so an unrelated source change elsewhere in worker/ doesn't invalidate this
-# layer's pip-install cache.
-COPY pyproject.toml ./
+# layer's pip-install cache. `uv.lock` is copied alongside `pyproject.toml` (not `src`)
+# for the same cache-locality reason.
+COPY pyproject.toml uv.lock ./
+
+# Reproducible install (issue #255): `pip install ".[genes]"` resolves against whatever
+# versions of numpy/biopython/typer/pyrodigal happen to be current on PyPI the day the
+# image is built — a rebuild next month can silently pick up different, untested
+# versions even though the base image digest above never changes. `uv export --locked`
+# instead reads the exact versions already resolved and committed in `uv.lock`, and
+# FAILS the build outright if `uv.lock` disagrees with `pyproject.toml` (a stale lockfile
+# someone forgot to regenerate) rather than silently re-resolving, which would defeat the
+# whole point. `uv` itself is pinned by exact version (matching the version this repo's
+# own dev tooling uses) and removed again in the same layer so it never ships in the
+# final image. `--no-hashes`: this repo does not currently commit to a hash-pinned
+# supply chain (no `uv.lock` hash verification workflow exists yet); dropping hashes
+# keeps this a version pin, not a false promise of hash verification nothing checks.
+RUN pip install "uv==0.12.13" \
+    && uv export --locked --no-hashes --no-emit-project --extra genes -o requirements.lock.txt \
+    && pip uninstall -y uv \
+    && pip install --no-deps -r requirements.lock.txt
+
 COPY src ./src
 
 # [genes] (pyrodigal) is a pure/portable C-extension wheel, no GPU toolchain needed, so it
 # ships in the CPU image too — gene-calling should work identically on the CPU build.
 # Deliberately NOT [evo] (torch/evo2/flash-attn): that is the -cuda image's whole job.
-RUN pip install ".[genes]"
+# `--no-deps`: every dependency was already installed, exactly per uv.lock, above; this
+# step only adds the local `dna_entropy` package itself, so pip has no reason to consult
+# PyPI again (and no opportunity to silently resolve a dependency version differently
+# than the lockfile said).
+RUN pip install --no-deps .
 
 # Run as non-root (least privilege; this container never needs to write anywhere but its
 # own tmp/work directories, which docker run's -v /work:/work mount already covers on the

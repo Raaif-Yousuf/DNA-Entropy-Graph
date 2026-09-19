@@ -27,14 +27,23 @@ def test_help_lists_no_cloudrun_or_keep_gpu() -> None:
     assert "keep-gpu" not in result.output
 
 
-def test_cloudrun_command_is_gone() -> None:
-    result = runner.invoke(app, ["cloudrun", "--help"])
-    assert result.exit_code != 0
+def test_cloudrun_prints_a_clear_use_the_app_message() -> None:
+    """issue #212: not just gone -- typing the old command must get a clear, ASCII-only
+    ERROR message, not Typer's own generic "No such command" (which renders with Unicode
+    box-drawing characters and would crash a real cp1252 Windows console)."""
+    result = runner.invoke(app, ["cloudrun"])
+    assert result.exit_code == 1
+    assert "cloudrun" in result.output
+    assert "ERROR" in result.output
+    assert result.output.isascii()
 
 
-def test_keep_gpu_command_is_gone() -> None:
-    result = runner.invoke(app, ["keep-gpu", "--help"])
-    assert result.exit_code != 0
+def test_keep_gpu_prints_a_clear_use_the_app_message() -> None:
+    result = runner.invoke(app, ["keep-gpu"])
+    assert result.exit_code == 1
+    assert "keep-gpu" in result.output
+    assert "ERROR" in result.output
+    assert result.output.isascii()
 
 
 def test_worker_run_requires_either_root_or_bucket_and_prefix() -> None:
@@ -145,3 +154,193 @@ def test_ambiguity_flag_keep_default_accepts_an_ambiguous_sequence(tmp_path) -> 
         input="ATGCATGCNNNNATGCATGCATGCATGCATGC\n",
     )
     assert result.exit_code == 0, result.output
+
+
+# --- CLI parity against the prototype (issue #212) -------------------------------------
+
+FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "contract-fixtures"
+DATA = Path(__file__).parent / "data"
+
+
+def test_validate_matches_the_prototype_exactly_on_every_recorded_case() -> None:
+    """The issue's own Observable, made durable: every case in
+    cli_validate_parity.json was captured from the REAL DNA-Entropy-Genbank prototype
+    (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b) and must still match exactly,
+    exit code and text both -- including the genbank_file_is_not_genbank_aware case,
+    which is NOT a success case (see that case's own `note`: `validate` has never been
+    format-aware, in the prototype or here, and this fixture documents that rather than
+    silently fixing it as part of a parity task)."""
+    cases = json.loads((FIXTURES / "cli_validate_parity.json").read_text(encoding="utf-8"))["cases"]
+    assert len(cases) == 5
+    for case in cases:
+        # The fixture's args were captured relative to the PROTOTYPE's own repo root
+        # ("tests/data/sample.gb"); translate the one file-based case to this repo's
+        # equivalent absolute path rather than depending on pytest's own CWD.
+        args = [str(DATA / "sample.gb") if a == "tests/data/sample.gb" else a for a in case["args"]]
+        result = runner.invoke(app, args, input=case["stdin"])
+        assert result.exit_code == case["exit_code"], f"{case['id']}: {result.output!r}"
+        assert result.output == case["output"], case["id"]
+
+
+# --- exhaustive flag coverage (issue #212): FEATURES.md section 8.1 plus everything ----
+# added since (windowing/direction/ambiguity/tsv). "An earlier audit flagged that nobody
+# had checked the list exhaustively" -- this section is that check, both structurally
+# (every declared option has a name on this list, nothing silently added or removed) and
+# behaviorally (each flag's actual effect, not just that it parses).
+
+
+def _declared_option_names(command_name: str) -> set[str]:
+    click_app = typer.main.get_command(app)
+    cmd = click_app.commands[command_name]
+    names: set[str] = set()
+    for param in cmd.params:
+        names.update(param.opts)
+        names.update(getattr(param, "secondary_opts", None) or [])
+    return names
+
+
+def test_run_declares_exactly_the_expected_option_surface() -> None:
+    # FEATURES.md section 8.1's original list (--input/-i, --name, --informat,
+    # --predictor, --model, --device, --out/-o, --format, --start, --max-len, --rna,
+    # --genes/--no-genes, --seed) plus everything added since: --max-total-len and
+    # --context-length/-k (windowing, issue #279), --direction (issue #279),
+    # --ambiguity (issue #249), --tsv/--no-tsv (issue #281).
+    expected = {
+        "--input",
+        "-i",
+        "--name",
+        "--informat",
+        "--predictor",
+        "--model",
+        "--device",
+        "--out",
+        "-o",
+        "--format",
+        "--start",
+        "--max-len",
+        "--max-total-len",
+        "--context-length",
+        "-k",
+        "--direction",
+        "--rna",
+        "--ambiguity",
+        "--genes",
+        "--no-genes",
+        "--tsv",
+        "--no-tsv",
+        "--seed",
+    }
+    assert _declared_option_names("run") == expected
+
+
+def test_validate_declares_exactly_the_expected_option_surface() -> None:
+    expected = {"--input", "-i", "--rna", "--max-len"}
+    assert _declared_option_names("validate") == expected
+
+
+def test_start_flag_shifts_the_reported_track_coordinate(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "clistart", "--out", str(out_dir), "--start", "1001", "--format", "wig"],
+        input="ACGT" * 30,
+    )
+    assert result.exit_code == 0, result.output
+    wig = (out_dir / "clistart" / "clistart.entropy.wig").read_text(encoding="utf-8")
+    assert "start=1001" in wig
+
+
+def test_format_flag_selects_bedgraph_vs_wig_output_file(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app, ["run", "--name", "clifmt", "--out", str(out_dir), "--format", "wig"], input="ACGT" * 30
+    )
+    assert result.exit_code == 0, result.output
+    written = {p.name for p in (out_dir / "clifmt").iterdir()}
+    assert any(n.endswith(".wig") for n in written)
+    assert not any(n.endswith(".bedgraph") for n in written)
+
+
+def test_seed_flag_makes_the_mock_predictor_reproducible(tmp_path) -> None:
+    seq = "ACGT" * 30
+    out_a = tmp_path / "a"
+    out_b = tmp_path / "b"
+    for out_dir, name in ((out_a, "seeda"), (out_b, "seedb")):
+        r = runner.invoke(app, ["run", "--name", name, "--out", str(out_dir), "--seed", "7"], input=seq)
+        assert r.exit_code == 0, r.output
+    a = (out_a / "seeda" / "seeda.entropy.bedgraph").read_text(encoding="utf-8")
+    b = (out_b / "seedb" / "seedb.entropy.bedgraph").read_text(encoding="utf-8")
+    # Same seed, same sequence -> byte-identical entropy track (modulo the track name).
+    assert a.replace("seeda", "X") == b.replace("seedb", "X")
+
+
+def test_direction_flag_is_echoed_in_the_summary_line(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--name",
+            "clidir",
+            "--out",
+            str(out_dir),
+            "--direction",
+            "forward-only",
+            "--context-length",
+            "128",
+        ],
+        input="ACGT" * 60,
+    )
+    assert result.exit_code == 0, result.output
+    assert "direction=forward-only" in result.output
+    assert "K=128" in result.output
+
+
+def test_genes_flag_reports_a_gene_count_in_the_summary(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "cligenes", "--out", str(out_dir), "--genes"],
+        input="ATGAAACGTATTTTTAAACCCGGGTAA" * 10,
+    )
+    assert result.exit_code == 0, result.output
+    # Whether or not Prodigal actually finds a gene in this synthetic sequence, the
+    # summary must at least not have crashed asking for one; a real gene count line only
+    # appears when genes were found, which this loose sequence may or may not produce --
+    # the flag's own wiring (not the annotator's accuracy) is what this test guards.
+    written = {p.name for p in (out_dir / "cligenes").iterdir()}
+    assert any(n.endswith(".genes.gff3") for n in written)
+
+
+def test_rna_flag_on_run_converts_u_to_t(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app, ["run", "--name", "clirna", "--out", str(out_dir), "--rna"], input="ACGU" * 10
+    )
+    assert result.exit_code == 0, result.output
+    fasta = (out_dir / "clirna" / "clirna.fasta").read_text(encoding="utf-8")
+    assert "U" not in fasta.split("\n", 1)[1]  # header line aside, no U survives in the sequence body
+
+
+def test_informat_flag_forces_paste_even_with_a_gb_like_name(tmp_path) -> None:
+    """--informat overrides extension/content sniffing (FEATURES.md 8.1)."""
+    src = tmp_path / "weird.gb"
+    src.write_text("ACGT" * 30, encoding="utf-8")  # not real GenBank text, forced as paste anyway
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "cliinformat", "--out", str(out_dir), "-i", str(src), "--informat", "paste"],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_validate_rna_flag_converts_u_to_t() -> None:
+    result = runner.invoke(app, ["validate", "--rna"], input="ACGUACGUACGUACGU\n")
+    assert result.exit_code == 0, result.output
+    assert "Converted" in result.output and "U->T" in result.output
+
+
+def test_validate_max_len_flag_rejects_an_oversized_sequence() -> None:
+    result = runner.invoke(app, ["validate", "--max-len", "10"], input="ACGT" * 20)
+    assert result.exit_code == 1
+    assert "exceeds" in result.output
