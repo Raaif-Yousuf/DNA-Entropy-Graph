@@ -75,6 +75,8 @@ def check_probability_matrix(probs: np.ndarray, seq_len: int) -> np.ndarray:
         raise ValueError(f"probabilities must have shape ({seq_len}, {NUM_NUCLEOTIDES}), got {probs.shape}")
     if probs.dtype != np.float32:
         raise ValueError(f"probabilities must be float32, got {probs.dtype}")
+    if np.any(np.isnan(probs)):
+        raise ValueError("probabilities must not contain NaN")
     if np.any(probs < 0.0) or np.any(probs > 1.0):
         raise ValueError("probabilities must lie in [0, 1]")
     row_sums = probs.sum(axis=1)

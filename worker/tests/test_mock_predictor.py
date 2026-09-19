@@ -84,6 +84,13 @@ def test_check_rejects_rows_not_summing_to_one() -> None:
         check_probability_matrix(bad, seq_len=5)
 
 
+def test_check_rejects_nan_with_a_clear_message() -> None:
+    bad = np.full((3, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[1, 2] = np.nan
+    with pytest.raises(ValueError, match="NaN"):
+        check_probability_matrix(bad, seq_len=3)
+
+
 def test_check_accepts_valid_matrix() -> None:
     good = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
     assert check_probability_matrix(good, seq_len=5) is good
