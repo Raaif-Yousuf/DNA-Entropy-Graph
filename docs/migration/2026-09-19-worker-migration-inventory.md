@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-19
 **Source repos:**
-- `C:\Users\raaif\DNA-Entropy-Genbank` (primary; current prototype, 127 tests) at commit `8026bf5c4afbe3021c1f7e79a17a93af4eaad84b`
-- `C:\Users\raaif\DNA-Entropy` (older prototype; ephemeral-VM reference only) at commit `c0f2375314a7d96be89c84d775c99110579a0582`
+- `<user-home>\DNA-Entropy-Genbank` (primary; current prototype, 127 tests) at commit `8026bf5c4afbe3021c1f7e79a17a93af4eaad84b`
+- `<user-home>\DNA-Entropy` (older prototype; ephemeral-VM reference only) at commit `c0f2375314a7d96be89c84d775c99110579a0582`
 
 **What was copied where** (verbatim, no source edits; see `worker/.gitignore`, carried over unchanged, for what stays untracked):
 
@@ -227,12 +227,12 @@ Everything below lives in the gutted `cloud/keeper.py`, `cloud/orchestrator.py`,
 `uv` is on PATH (`uv 0.12.13`). Environment set up and tests run exactly as specified:
 
 ```
-uv venv C:\Users\raaif\DNA-Entropy-Graph\worker\.venv --python 3.12
-uv pip install -e "C:\Users\raaif\DNA-Entropy-Graph\worker[dev]"
-C:\Users\raaif\DNA-Entropy-Graph\worker\.venv\Scripts\python.exe -m pytest C:\Users\raaif\DNA-Entropy-Graph\worker\tests -m "not gpu" -q
+uv venv <user-home>\DNA-Entropy-Graph\worker\.venv --python 3.12
+uv pip install -e "<user-home>\DNA-Entropy-Graph\worker[dev]"
+<user-home>\DNA-Entropy-Graph\worker\.venv\Scripts\python.exe -m pytest <user-home>\DNA-Entropy-Graph\worker\tests -m "not gpu" -q
 ```
 
-- The venv's interpreter is `C:\Users\raaif\AppData\Local\Programs\Python\Python312\python.exe` (confirmed via `uv venv` output) — **not** the MSYS2 python at `C:\msys64`.
+- The venv's interpreter is `<user-home>\AppData\Local\Programs\Python\Python312\python.exe` (confirmed via `uv venv` output) — **not** the MSYS2 python at `C:\msys64`.
 - `uv pip install -e ".[dev]"` succeeded, installing `dna-entropy==0.0.1` (editable) plus `numpy==2.5.3`, `biopython==1.88`, `typer==0.27.2`, `pytest==9.1.1`, and their transitive deps (15 packages total).
 - Result (verbatim summary line):
 
@@ -250,7 +250,7 @@ C:\Users\raaif\DNA-Entropy-Graph\worker\.venv\Scripts\python.exe -m pytest C:\Us
 ## Proposed P0 cleanup issues
 
 The same list is saved as JSON at
-`C:\Users\raaif\AppData\Local\Temp\claude\<project-slug>-DNA-Entropy-Graph\dc1bc05e-4761-4567-8c38-d22e1fe0c611\scratchpad\p0_worker.json`.
+`<user-home>\AppData\Local\Temp\claude\<project-slug>-DNA-Entropy-Graph\dc1bc05e-4761-4567-8c38-d22e1fe0c611\scratchpad\p0_worker.json`.
 
 1. **`worker: drop cloudrun and keep-gpu from the CLI`**
    Why: `cli.py` still exposes `cloudrun` and `keep-gpu`, which shell out to gcloud/SSH and manage an always-on singleton VM that the approved design explicitly removes (§3). Leaving them in place invites wiring the WinUI app to the wrong lifecycle.

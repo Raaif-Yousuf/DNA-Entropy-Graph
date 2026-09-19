@@ -98,7 +98,7 @@ betterstack|resend\.|<clair-domain>|cloudflare|r2\.dev`, UUID-shaped strings,
 IPs, `AZURE_|TRUSTED_SIGNING|tenant|client_id|clientId`) after all edits:
 
 - **Emails: 0. Private org/repo slug (`<private-org>`): 0. Absolute
-  user-home paths (`Users\raaif`, `<project-slug>` slug forms): 0. UUIDs: 0.**
+  user-home paths (`<user-home>`, `<project-slug>` slug forms): 0. UUIDs: 0.**
 - Remaining matches are exactly the judgement-call items above: `hetzner` /
   `coolify` (2 inert `.md` link slugs + 1 already-redacted prose line's link
   target in `MEMORY.md`), loopback IPs/URLs (`127.0.0.1`, `http://host/x`),
