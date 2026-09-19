@@ -1,0 +1,154 @@
+{
+  "$schema_note": "Not a real JSON Schema; documents the contract for humans/xUnit.",
+  "description": "Buckets a GCP `compute instances create` failure's stderr text into a taxonomy bucket. Extracted from the DNA-Entropy-Genbank prototype (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b) before its cloud/ package was gutted from the worker package (issue #280/#277). Reproduces `dna_entropy.cloud.gcloud.classify_create_error(stderr: str) -> str` for a future C# `DnaEntropyGraph.Core.ErrorCatalog`/structured-error classifier (see docs/migration/2026-09-19-worker-migration-inventory.md, 'cloud/gcloud.py — GCP wrapper surface').",
+  "function_signature": "classify_create_error(stderr: str) -> str",
+  "source_file": "worker/legacy/cloud/gcloud.py (moved there by #280; originally worker/src/dna_entropy/cloud/gcloud.py)",
+  "buckets": [
+    "billing",
+    "api_disabled",
+    "quota",
+    "stockout",
+    "already_exists",
+    "permission",
+    "network",
+    "other"
+  ],
+  "matching_notes": [
+    "Matching is case-insensitive substring matching on stderr.lower(); buckets are checked in a fixed priority order (see 'evaluation_order').",
+    "billing is checked before quota because some billing errors also mention the word 'account'.",
+    "'other' is the fallback when no bucket's conditions match."
+  ],
+  "evaluation_order": ["billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "network", "other"],
+  "bucket_conditions": {
+    "billing": "'billing' in s AND ('enable' in s OR 'disabled' in s OR 'not found' in s OR 'not active' in s OR 'account' in s)",
+    "api_disabled": "'has not been used in project' in s OR 'accessnotconfigured' in s OR 'serviceusage' in s OR ('compute' in s AND 'api' in s AND ('disabled' in s OR 'not enabled' in s)) OR 'it is disabled' in s",
+    "quota": "'quota' in s",
+    "stockout": "'stockout' in s OR 'zone_resource_pool_exhausted' in s OR 'does not have enough resources' in s OR 'resource_availability' in s",
+    "already_exists": "'already exists' in s OR 'resource already exists' in s",
+    "permission": "'permission' in s OR 'forbidden' in s OR 'not authorized' in s OR 'iam' in s",
+    "network": "'could not reach' in s OR 'connection' in s OR 'network is unreachable' in s OR 'timed out' in s OR 'timeout' in s",
+    "other": "none of the above matched"
+  },
+  "cases": [
+    {
+      "id": "quota-nvidia-l4",
+      "stderr": "Quota 'NVIDIA_L4_GPUS' exceeded. Limit: 0.0",
+      "expected_bucket": "quota",
+      "from_prototype_test": "test_classify_create_error[Quota 'NVIDIA_L4_GPUS' exceeded. Limit: 0.0-quota]"
+    },
+    {
+      "id": "stockout-zone-resource-pool-exhausted",
+      "stderr": "ZONE_RESOURCE_POOL_EXHAUSTED ... does not have enough resources",
+      "expected_bucket": "stockout",
+      "from_prototype_test": "test_classify_create_error[ZONE_RESOURCE_POOL_EXHAUSTED ... does not have enough resources-stockout]"
+    },
+    {
+      "id": "permission-required-compute-instances-create",
+      "stderr": "Required 'compute.instances.create' permission",
+      "expected_bucket": "permission",
+      "from_prototype_test": "test_classify_create_error[Required 'compute.instances.create' permission-permission]"
+    },
+    {
+      "id": "other-unrelated-failure",
+      "stderr": "some unrelated failure",
+      "expected_bucket": "other",
+      "from_prototype_test": "test_classify_create_error[some unrelated failure-other]"
+    },
+    {
+      "id": "billing-account-disabled-state-absent",
+      "stderr": "The billing account for the owning project is disabled in state absent",
+      "expected_bucket": "billing",
+      "from_prototype_test": "test_classify_create_error[The billing account for the owning project is disabled in state absent-billing]"
+    },
+    {
+      "id": "billing-must-be-enabled",
+      "stderr": "Billing must be enabled for activation of service(s)",
+      "expected_bucket": "billing",
+      "from_prototype_test": "test_classify_create_error[Billing must be enabled for activation of service(s)-billing]"
+    },
+    {
+      "id": "api-disabled-has-not-been-used-in-project",
+      "stderr": "Compute Engine API has not been used in project 123 before or it is disabled",
+      "expected_bucket": "api_disabled",
+      "from_prototype_test": "test_classify_create_error[Compute Engine API has not been used in project 123 before or it is disabled-api_disabled]"
+    },
+    {
+      "id": "api-disabled-access-not-configured",
+      "stderr": "accessNotConfigured: Compute Engine API is disabled",
+      "expected_bucket": "api_disabled",
+      "from_prototype_test": "test_classify_create_error[accessNotConfigured: Compute Engine API is disabled-api_disabled]"
+    },
+    {
+      "id": "network-could-not-reach-connection-timed-out",
+      "stderr": "Could not reach the server; connection timed out",
+      "expected_bucket": "network",
+      "from_prototype_test": "test_classify_create_error[Could not reach the server; connection timed out-network]"
+    },
+    {
+      "id": "billing-no-account-found-supplementary",
+      "stderr": "No billing account found for project 'my-project'",
+      "expected_bucket": "billing",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the 'not found' + 'account' branch of the billing condition, not present verbatim in the prototype's parametrized cases but reachable via classify_create_error's own logic."
+    },
+    {
+      "id": "billing-account-not-active-supplementary",
+      "stderr": "Billing account is not active for this project",
+      "expected_bucket": "billing",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the 'not active' branch of the billing condition."
+    },
+    {
+      "id": "api-disabled-serviceusage-supplementary",
+      "stderr": "SERVICE_DISABLED: serviceusage.googleapis.com is disabled for consumer",
+      "expected_bucket": "api_disabled",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the 'serviceusage' branch."
+    },
+    {
+      "id": "api-disabled-compute-api-not-enabled-supplementary",
+      "stderr": "Compute Engine API not enabled for this project, please enable it",
+      "expected_bucket": "api_disabled",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the ('compute' AND 'api' AND 'not enabled') branch."
+    },
+    {
+      "id": "stockout-plain-word-supplementary",
+      "stderr": "The zone is experiencing a stockout for this resource type, try another zone",
+      "expected_bucket": "stockout",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the plain 'stockout' branch."
+    },
+    {
+      "id": "stockout-resource-availability-supplementary",
+      "stderr": "RESOURCE_AVAILABILITY: no resources available in this zone",
+      "expected_bucket": "stockout",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the 'resource_availability' branch (case-insensitive)."
+    },
+    {
+      "id": "already-exists-supplementary",
+      "stderr": "The resource 'projects/x/zones/us-central1-a/instances/dna-entropy-box' already exists",
+      "expected_bucket": "already_exists",
+      "from_prototype_test": null,
+      "note": "Supplementary: 'already_exists' has no dedicated parametrized case in test_classify_create_error, but is a real bucket used by _try_sequential/_try_parallel to detect a pre-existing box; reproduced directly from the function's own condition."
+    },
+    {
+      "id": "permission-forbidden-supplementary",
+      "stderr": "PERMISSION_DENIED: Forbidden - caller does not have the required IAM role",
+      "expected_bucket": "permission",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the 'forbidden'/'iam' branches."
+    },
+    {
+      "id": "network-network-unreachable-supplementary",
+      "stderr": "dial tcp: network is unreachable",
+      "expected_bucket": "network",
+      "from_prototype_test": null,
+      "note": "Supplementary: exercises the 'network is unreachable' branch."
+    }
+  ],
+  "verified_against_source": "Manually verified against worker/src/dna_entropy/cloud/gcloud.py:classify_create_error during extraction on 2026-09-19, before the cloud/ package was relocated by issue #280.",
+  "consumed_by": "https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/213 (worker: contract fixtures for the prototype's error classification and quota parsing cases, re-expressed for the C# port) tracks wiring this file into a DnaEntropyGraph.Core.ErrorCatalog xUnit test; not yet wired.",
+  "related_docs": "docs/migration/2026-09-19-worker-migration-inventory.md section 'cloud/gcloud.py — GCP wrapper surface'"
+}

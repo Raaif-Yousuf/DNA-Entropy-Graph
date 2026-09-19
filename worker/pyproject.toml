@@ -6,7 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "dna-entropy"
 version = "0.0.1"
 description = "Per-position information entropy of DNA via the Evo 2 genomic language model, exported for IGV."
-readme = "README.md"
+# No `readme` field: `README.legacy.md` describes the retired gcloud/keeper prototype
+# workflow (see worker/legacy/dna-entropy-v1/ and worker/legacy/cloud/) and would be
+# misleading as this package's PyPI-style readme. The worker's real docs live under
+# docs/science_and_formats.md (see docs/migration/2026-09-19-worker-migration-inventory.md,
+# "worker/README.legacy.md" row) once that lands; point `readme` at it then.
 requires-python = ">=3.10"
 # Core deps stay light so the mock-predictor pipeline installs and runs with no GPU.
 # Biopython is pure-Python (+ numpy, already a dep) and powers GenBank/FASTA I/O, which
@@ -24,8 +28,10 @@ dev = ["pytest>=7"]
 evo = ["torch", "evo2"]
 # Gene boundaries (optional, prokaryotic).
 genes = ["pyrodigal>=3"]
-# Building the double-click Windows .exe (see packaging/build_exe.ps1).
-package = ["pyinstaller>=6"]
+# No `package`/pyinstaller extra: the worker ships as a container image (design D6),
+# not a double-click .exe. `worker/packaging/build_exe.ps1` and `worker/*.spec` stay as
+# REFERENCE only (see docs/migration/2026-09-19-worker-migration-inventory.md) for their
+# torch/evo2/flash-attn/pyrodigal exclude-list discipline, but are not part of any install.
 
 [project.scripts]
 dna-entropy = "dna_entropy.cli:main"

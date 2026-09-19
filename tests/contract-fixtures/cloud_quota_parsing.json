@@ -1,0 +1,64 @@
+{
+  "description": "GCP region GPU-quota CSV parsing and the accelerator-to-metric-name mapping. Extracted from the DNA-Entropy-Genbank prototype (commit 8026bf5c4afbe3021c1f7e79a17a93af4eaad84b) before its cloud/ package was gutted from the worker package (issue #280/#277). Reproduces `dna_entropy.cloud.gcloud.list_region_gpu_quota` and `dna_entropy.cloud.gcloud.gpu_quota_metric` for a future C# `DnaEntropyGraph.Core.GpuPlanner` (see docs/migration/2026-09-19-worker-migration-inventory.md, 'cloud/gcloud.py — GCP wrapper surface').",
+  "source_file": "worker/legacy/cloud/gcloud.py (moved there by #280; originally worker/src/dna_entropy/cloud/gcloud.py)",
+  "gpu_quota_metric": {
+    "function_signature": "gpu_quota_metric(accelerator: str) -> str",
+    "description": "Maps a GPU accelerator type string to its Compute Engine quota metric name. Matching is case-insensitive substring matching, checked in order l4 -> a100 -> t4 -> v100, falling back to GPUS_ALL_REGIONS for anything unrecognized.",
+    "cases": [
+      {"accelerator": "nvidia-l4", "expected_metric": "NVIDIA_L4_GPUS", "from_prototype_test": true},
+      {"accelerator": "nvidia-tesla-a100", "expected_metric": "NVIDIA_A100_GPUS", "from_prototype_test": true},
+      {"accelerator": "nvidia-tesla-t4", "expected_metric": "NVIDIA_T4_GPUS", "from_prototype_test": true},
+      {"accelerator": "something-weird", "expected_metric": "GPUS_ALL_REGIONS", "from_prototype_test": true},
+      {"accelerator": "nvidia-tesla-v100", "expected_metric": "NVIDIA_V100_GPUS", "from_prototype_test": false,
+       "note": "Supplementary: v100 branch exists in gpu_quota_metric's source but has no dedicated parametrized test case in the prototype."}
+    ]
+  },
+  "list_region_gpu_quota": {
+    "function_signature": "list_region_gpu_quota(metrics: Sequence[str], project: Optional[str] = None, *, timeout: float = 60) -> Optional[dict[str, dict[str, float]]]",
+    "description": "Runs a single `gcloud compute regions list --flatten=quotas[] --format=csv[no-heading](name,quotas.metric,quotas.limit,quotas.usage)` call and parses the CSV into {region: {metric: available}}. available = limit - usage, clamped at 0. Rows whose metric is not in the requested set, or whose limit is <= 0, are dropped. Returns None (distinct from an empty dict) when the underlying gcloud query itself fails, so callers can tell 'quota unknown' apart from 'quota is genuinely zero everywhere'.",
+    "csv_row_format": "region,metric,limit,usage",
+    "cases": [
+      {
+        "id": "parses_available",
+        "from_prototype_test": "test_list_region_gpu_quota_parses_available",
+        "requested_metrics": ["NVIDIA_L4_GPUS", "NVIDIA_A100_GPUS"],
+        "query_succeeded": true,
+        "csv_rows": [
+          "us-central1,NVIDIA_L4_GPUS,8.0,2.0",
+          "us-east1,NVIDIA_L4_GPUS,0.0,0.0",
+          "europe-west4,NVIDIA_A100_GPUS,4.0,4.0"
+        ],
+        "row_notes": {
+          "us-central1,NVIDIA_L4_GPUS,8.0,2.0": "8 - 2 = 6 available",
+          "us-east1,NVIDIA_L4_GPUS,0.0,0.0": "limit <= 0 -> dropped entirely (no quota granted at all, not the same as 'fully used')",
+          "europe-west4,NVIDIA_A100_GPUS,4.0,4.0": "4 - 4 = 0 available, but limit > 0 so the region/metric IS kept, with value 0.0"
+        },
+        "expected": {
+          "us-central1": {"NVIDIA_L4_GPUS": 6.0},
+          "europe-west4": {"NVIDIA_A100_GPUS": 0.0}
+        }
+      },
+      {
+        "id": "returns_none_on_query_failure",
+        "from_prototype_test": "test_list_region_gpu_quota_returns_none_on_failure",
+        "requested_metrics": ["NVIDIA_L4_GPUS"],
+        "query_succeeded": false,
+        "csv_rows": [],
+        "expected": null,
+        "note": "Non-zero gcloud return code (or a GcloudError/subprocess timeout) means the query failed; the function returns None, which callers must treat as 'unknown', not 'zero'."
+      },
+      {
+        "id": "empty_metrics_is_empty_without_a_query",
+        "from_prototype_test": "test_list_region_gpu_quota_empty_metrics_is_empty",
+        "requested_metrics": [],
+        "query_succeeded": null,
+        "csv_rows": null,
+        "expected": {},
+        "note": "An empty metrics list short-circuits to {} before any gcloud call is made."
+      }
+    ]
+  },
+  "verified_against_source": "Manually verified against worker/src/dna_entropy/cloud/gcloud.py:list_region_gpu_quota and :gpu_quota_metric during extraction on 2026-09-19, before the cloud/ package was relocated by issue #280.",
+  "consumed_by": "https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/213 (worker: contract fixtures for the prototype's error classification and quota parsing cases, re-expressed for the C# port) tracks wiring this file into a DnaEntropyGraph.Core.GpuPlanner xUnit test; not yet wired.",
+  "related_docs": "docs/migration/2026-09-19-worker-migration-inventory.md section 'cloud/gcloud.py — GCP wrapper surface'"
+}

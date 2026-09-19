@@ -15,11 +15,9 @@ import typer
 
 from . import __version__, pipeline
 from .annotators.base import AnnotatorError
-from .cloud import CloudConfig, GcloudError, LLM_HINT, run_in_cloud
 from .config import DEFAULT_MAX_LEN, PredictorKind, RunConfig, TrackFormat
 from .pipeline import load_and_validate
 from .predictors.base import PredictorError
-from .readers.input import load_input
 from .validation.validators import ValidationError
 
 app = typer.Typer(
@@ -129,117 +127,25 @@ def validate(
     typer.secho(f"OK: valid sequence, {len(result)} nt", fg=typer.colors.GREEN)
 
 
-def _try_local_evo(
-    *, name: str, input: Optional[str], informat: Optional[str], out_dir: str,
-    genes: bool, rna: bool,
-) -> bool:
-    """Attempt a local Evo run on this machine's GPU. Return True on success, False on any
-    failure (so the caller can fall back to the cloud). Never raises."""
-    typer.secho("  Trying this computer's NVIDIA GPU first...", fg=typer.colors.CYAN)
-    cfg = RunConfig(
-        name=name, input_path=input, informat=informat, predictor=PredictorKind.EVO,
-        device="cuda", out_dir=out_dir, genes=genes, rna=rna,
-    )
-    try:
-        result = pipeline.run(cfg)
-    except Exception as exc:  # no CUDA, evo/torch not installed, OOM, etc. -> use the cloud
-        typer.secho(f"  Local GPU run unavailable ({exc}). Falling back to Google Cloud...",
-                    fg=typer.colors.YELLOW)
-        return False
-    v = result.all_values
-    typer.secho(f"OK: ran locally. {result.total_nt} nt, entropy mean={v.mean():.3f} bits.",
-                fg=typer.colors.GREEN)
-    typer.echo(f"  files: {out_dir}")
-    return True
-
-
-@app.command()
-def cloudrun(
-    input: Optional[str] = typer.Option(None, "--input", "-i", help="Read sequence from file (default: stdin)."),
-    name: str = typer.Option(..., "--name", prompt="Name for this run (used for the folder and file names)", help="Output base name; prompts if omitted."),
-    out: Optional[str] = typer.Option(None, "--out", "-o", help="Base folder (default: your Downloads); files go in <out>/<name>/."),
-    informat: Optional[str] = typer.Option(None, "--informat", help="Force input format: genbank|fasta|paste (default: auto-detect)."),
-    genes: bool = typer.Option(True, "--genes/--no-genes", help="Call gene boundaries (FASTA/paste only; ignored for GenBank input)."),
-    rna: bool = typer.Option(False, "--rna", help="Convert U->T (treat input as RNA)."),
-    prefer_local: bool = typer.Option(False, "--prefer-local", help="Try this computer's NVIDIA GPU first; fall back to Google Cloud if it fails."),
-    project: Optional[str] = typer.Option(None, "--project", help="GCP project (default: your active gcloud project)."),
-    zone: Optional[str] = typer.Option(None, "--zone", help="Force a GPU zone (default: auto)."),
-    ssh_key_file: Optional[str] = typer.Option(None, "--ssh-key-file", help="Custom SSH key file (advanced/testing)."),
+@app.command("worker-run")
+def worker_run(
+    manifest: str = typer.Option(..., "--manifest", "-m", help="Path to the job manifest (manifest.json) uploaded to the per-job VM's bucket prefix."),
 ) -> None:
-    """Run Evo 2 on a GPU and save the results.
+    """Run one job from a manifest: read it, run the pipeline, write status/result. STUB.
 
-    Uses the always-on cloud box (start keep_gpu.py first); this app never creates or
-    deletes a VM. With --prefer-local it tries a local NVIDIA GPU first and falls back to
-    the cloud automatically. Accepts a GenBank file (genes preserved), FASTA, or a pasted
-    sequence.
+    This is the seed of the manifest-driven worker entrypoint that issue #278 ("worker: add
+    the worker subpackage (manifest, status heartbeat, blobstore, cancel, lifecycle)")
+    implements in full. It intentionally does nothing yet and always exits non-zero rather
+    than pretend to succeed, so nothing downstream (a startup script, a container ENTRYPOINT)
+    can mistake this stub for a working job runner.
     """
-    safe_name = _sanitize_name(name)
-    if not safe_name:
-        typer.secho("ERROR: that name has no usable characters (use letters/digits).", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
-    base_dir = Path(out) if out else Path.home() / "Downloads"
-
-    # Validate locally first so we never spend cloud time on bad input.
-    load_cfg = RunConfig(name=safe_name, input_path=input, informat=informat, rna=rna)
-    try:
-        loaded = load_input(load_cfg)
-    except (ValidationError, ValueError) as exc:
-        typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
-    for notice in loaded.notices:
-        typer.secho(f"  - {notice}", fg=typer.colors.YELLOW)
-
-    # Optionally try this machine's GPU first; on ANY failure, fall through to the cloud.
-    if prefer_local and _try_local_evo(
-        name=safe_name, input=input, informat=informat, out_dir=str(base_dir / safe_name),
-        genes=genes, rna=rna,
-    ):
-        return
-
-    # For GenBank/FASTA, upload the original file so genes/format survive to the VM.
-    input_file = input if (input and loaded.source_kind != "paste") else None
-
-    cfg = CloudConfig(project=project, ssh_key_file=ssh_key_file)
-    if zone:
-        cfg.zones = [zone]
-
-    try:
-        local = run_in_cloud(
-            seq=loaded.seq, name=safe_name, base_dir=base_dir, genes=genes, cfg=cfg,
-            input_file=input_file,
-        )
-    except GcloudError as exc:
-        typer.secho(f"\nERROR: {exc}", fg=typer.colors.RED, err=True)
-        typer.secho(LLM_HINT, fg=typer.colors.CYAN, err=True)
-        raise typer.Exit(code=1)
-    except Exception as exc:  # never show a raw traceback to a lab user
-        typer.secho(f"\nERROR: unexpected problem: {exc}", fg=typer.colors.RED, err=True)
-        typer.secho(LLM_HINT, fg=typer.colors.CYAN, err=True)
-        raise typer.Exit(code=1)
-
-    typer.secho(f"OK: done. Your files are in {local}", fg=typer.colors.GREEN)
-
-
-@app.command("keep-gpu")
-def keep_gpu(
-    project: Optional[str] = typer.Option(None, "--project", help="GCP project (default: your active gcloud project)."),
-    zone: Optional[str] = typer.Option(None, "--zone", help="Force a GPU zone (default: auto, retries all zones)."),
-    ssh_key_file: Optional[str] = typer.Option(None, "--ssh-key-file", help="Custom SSH key file (advanced/testing)."),
-    no_install: bool = typer.Option(False, "--no-install", help="Do not pre-install the Evo stack (secure the box only)."),
-) -> None:
-    """Keep a GPU VM running 24/7 in YOUR Google Cloud (run once, leave open, delete VM when done)."""
-    from .cloud.keeper import keep_alive
-
-    cfg = CloudConfig(project=project, ssh_key_file=ssh_key_file)
-    if zone:
-        cfg.zones = [zone]
-    try:
-        keep_alive(cfg, install_evo=not no_install)
-    except KeyboardInterrupt:
-        typer.secho(
-            "\n  Keeper stopped. NOTE: the GPU VM is still RUNNING and billing. Delete it when done.",
-            fg=typer.colors.YELLOW,
-        )
+    typer.secho(
+        f"ERROR: 'worker-run' is a stub (manifest={manifest!r} not read). "
+        "The manifest/status/blobstore worker loop is tracked in issue #278 and not "
+        "implemented yet.",
+        fg=typer.colors.RED, err=True,
+    )
+    raise typer.Exit(code=2)
 
 
 def main() -> None:
