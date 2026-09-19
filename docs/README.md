@@ -54,6 +54,7 @@ Full description of what each carries: [`.claude/README.md`](../.claude/README.m
 | The science: `(L,4)`, entropy, windowing, direction, writers | [`science_and_formats.md`](science_and_formats.md) |
 | Cloud: preflight, error classes, labels, cost, termination | [`cloud_design.md`](cloud_design.md) · [`gcp_setup_manual.md`](gcp_setup_manual.md) |
 | WinUI patterns, copy rules, theme, state-to-UI table | [`ui_conventions.md`](ui_conventions.md) |
+| Narration, phase titles, and the error catalog (the .resw source table) | [`copy_catalog.md`](copy_catalog.md) |
 | Trust boundaries: account, container, VM, bucket, laptop | [`threat_model.md`](threat_model.md) |
 | Packaging, signing, update channel, version lockstep | [`packaging_design.md`](packaging_design.md) |
 | Cutting a release, step by step | [`release_runbook.md`](release_runbook.md) |

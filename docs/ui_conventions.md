@@ -114,7 +114,11 @@ silently overwritten.
 
 Reading this table alongside `architecture.md` section 4 (the `JobPhase` state machine
 itself) is the fastest way to answer "what should this page show right now" for any
-run-progress or history-row state.
+run-progress or history-row state. This table is the UI *behavior* per phase (buttons,
+cost ticker, history chip); the actual title/sub-text copy shown to the user, and every
+live narration string the "Stage list row" column below only summarizes, are in
+[`copy_catalog.md`](copy_catalog.md) sections 1 and 2, the single source both `.resw` and
+this table draw from.
 
 | `JobPhase` | Stage list row | Cost ticker | Cancel/Stop/Delete buttons | History chip |
 |---|---|---|---|---|
@@ -138,6 +142,8 @@ they must babysit a multi-minute run.
 
 ## Related
 
+[`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text
+this file's tables reference rather than repeat),
 [`architecture.md`](architecture.md) (the `JobPhase` state machine this table maps),
 [`cloud_design.md`](cloud_design.md) (the error taxonomy `ErrorCatalog` renders),
 [Appendix A, sections 2, 5,
