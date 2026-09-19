@@ -99,9 +99,11 @@ def require_hardware(
     *,
     device: str,
     compute_capability: tuple[int, int] | None,
+    gpu_count: int | None = None,
 ) -> None:
     """Raise :class:`ModelNeedsHopperError` if ``model_id`` needs Hopper and the offered
-    device does not qualify. No-op for every other model.
+    device does not qualify, or if it needs more GPUs than are visible. No-op for every
+    other model.
 
     Args:
         model_id: the requested Evo model id.
@@ -110,6 +112,14 @@ def require_hardware(
             device, or ``None`` when there is no CUDA device at all (``device != "cuda"``,
             or CUDA is unavailable) — callers pass the REAL value; this module never
             imports torch itself so it stays testable with a synthetic tuple.
+        gpu_count: ``torch.cuda.device_count()``, or ``None`` when unknown. ``evo2_40b``
+            needs TWO H100 80 GB GPUs (:data:`MODEL_REQUIREMENTS`'s own
+            ``min_gpu_count``); without this check, a single-GPU H100 box would pass the
+            compute-capability gate above and only fail later, deep inside multi-GPU
+            model loading, with a confusing error instead of this module's own clear,
+            named one. ``None`` skips this check entirely (a caller that does not know
+            its GPU count yet gets the same behavior this function had before this
+            parameter existed, never a false refusal).
     """
     req = model_requirement(model_id)
     if not req.needs_hopper:
@@ -117,15 +127,22 @@ def require_hardware(
 
     if device != "cuda" or compute_capability is None:
         raise ModelNeedsHopperError(
-            f"{model_id} needs an H100-class GPU ({req.note}); no CUDA device is "
-            f"available (device={device!r}). Use {FALLBACK_MODEL} instead — it runs on "
-            "an L4 or A100."
+            f"{model_id} needs {req.precision} precision on an H100-class GPU "
+            f"({req.note}); no CUDA device is available (device={device!r}). Use "
+            f"{FALLBACK_MODEL} instead — it runs on an L4 or A100."
         )
     if compute_capability < HOPPER_COMPUTE_CAPABILITY:
         got = f"sm_{compute_capability[0]}{compute_capability[1]}"
         want = f"sm_{HOPPER_COMPUTE_CAPABILITY[0]}{HOPPER_COMPUTE_CAPABILITY[1]}"
         raise ModelNeedsHopperError(
-            f"{model_id} needs an H100-class GPU ({req.note}); this device reports "
-            f"compute capability {got}, which is below Hopper ({want}). "
-            f"Use {FALLBACK_MODEL} instead — it runs on an L4 or A100."
+            f"{model_id} needs {req.precision} precision on an H100-class GPU "
+            f"({req.note}); this device reports compute capability {got}, which is "
+            f"below Hopper ({want}). Use {FALLBACK_MODEL} instead — it runs on an L4 "
+            "or A100."
+        )
+    if gpu_count is not None and gpu_count < req.min_gpu_count:
+        raise ModelNeedsHopperError(
+            f"{model_id} needs {req.min_gpu_count} H100-class GPUs ({req.note}), but "
+            f"only {gpu_count} {'is' if gpu_count == 1 else 'are'} visible to this "
+            f"process. Use {FALLBACK_MODEL} instead — it runs on a single L4 or A100."
         )

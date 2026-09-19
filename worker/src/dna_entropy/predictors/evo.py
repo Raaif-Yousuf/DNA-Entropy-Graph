@@ -17,7 +17,7 @@ from evo2 import Evo2
 
 from .base import PredictorError, PredictorOOMError, check_probability_matrix
 from .hardware import require_hardware
-from .logits import aligned_acgt_probs
+from .logits import aligned_acgt_probs, normalize_model_output
 
 
 class EvoPredictor:
@@ -34,11 +34,17 @@ class EvoPredictor:
         self.max_context = max_context
 
         # MODEL_NEEDS_HOPPER (design section 5.9): gate BEFORE any weight download. Reads
-        # the device's REAL compute capability — never trusts the model name alone.
+        # the device's REAL compute capability — never trusts the model name alone. Also
+        # reads the REAL gpu count: evo2_40b needs two H100s, and checking only ONE
+        # device's compute capability would let a single-GPU H100 box through to fail
+        # later, deep inside multi-GPU model loading, instead of here with a clear,
+        # named error (issue found during the lane-B audit).
         capability = None
+        gpu_count = None
         if device == "cuda" and torch.cuda.is_available():
             capability = tuple(torch.cuda.get_device_capability())
-        require_hardware(model, device=device, compute_capability=capability)
+            gpu_count = torch.cuda.device_count()
+        require_hardware(model, device=device, compute_capability=capability, gpu_count=gpu_count)
 
         try:
             self._model = Evo2(model)
@@ -61,18 +67,17 @@ class EvoPredictor:
         """Normalize the model's return into a 2D ``(L, vocab)`` logits tensor.
 
         Tolerates evo2 versions that return a tuple, an object with ``.logits``, or a
-        bare tensor, with or without a batch dimension.
+        bare tensor, with or without a batch dimension. The unwrap steps themselves live
+        in the torch-free :func:`~dna_entropy.predictors.logits.normalize_model_output`
+        (unit-tested on any machine, per CLAUDE.md's Critical Pitfalls -- do not
+        "simplify" them); this wrapper only translates an unrecognized shape into a named
+        :class:`PredictorError` instead of letting a bare ``AttributeError``/``TypeError``
+        leak from three lines further down the call stack (issue #293).
         """
-        out = raw
-        # Evo2 returns a nested tuple like ((logits, inference_params), ...); unwrap
-        # to the first tensor regardless of nesting depth.
-        while isinstance(out, (tuple, list)):
-            out = out[0]
-        if hasattr(out, "logits"):
-            out = out.logits
-        if out.ndim == 3:  # (batch, L, vocab)
-            out = out[0]
-        return out
+        try:
+            return normalize_model_output(raw)
+        except ValueError as exc:
+            raise PredictorError(f"Evo model returned an unrecognized output shape: {exc}") from exc
 
     def predict(self, seq: str) -> np.ndarray:
         if self.max_context and len(seq) > self.max_context:
