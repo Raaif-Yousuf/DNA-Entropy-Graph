@@ -6,72 +6,88 @@
 
 ## What this session was
 
-An unattended overnight run: one orchestrator and three Sonnet subagents at a time, each on a disjoint set
-of file paths, with the orchestrator holding every `git` command so concurrent agents could not capture
-each other's half-finished work. Everything is committed and pushed to `main`.
+One orchestrator and three Sonnet subagents at a time, each on a disjoint set of file paths, with the
+orchestrator holding every `git` command. Everything is committed and pushed to `main`, and `ci-worker`,
+`ci-docs`, `ci-app` and `codeql` are green.
 
-**Every `P0` is closed.** The migration cleanup that blocked all other work is done, and v0.1 is unblocked.
+**Every `P0` is closed.** The migration is done and `app/` is now the entire remaining product.
 
-## What landed
+## What exists and is green
 
-- **`.github/`**: the 22-label source of truth, issue forms that carry the Done-when and Observable
-  contract, a decision form that demands a recommendation and a reversal cost, the PR template,
-  dependabot, and `ci-worker` / `ci-docs` / `ci-app` / `codeql`. Every CI step that guards a file which
-  does not exist yet prints a notice, passes, and starts enforcing the moment that file lands.
-- **`CLAUDE.md`**, `AGENTS.md`, seven skills, the `cold-diff-reviewer` agent, 27 memory seed files, and
-  `.claude/settings.json`.
-- **`scripts/`**: four repo-safety hooks behind a fail-closed dispatcher, `issue_precheck`,
-  `compile_sprint_log`, `sync_memory`, `triage_diagnostics`, `sync_labels.ps1`, and six `check_*.py`
-  guards that `ci-docs` runs automatically. **207 tests.**
-- **`worker/`**: the prototype's `cloud` package gutted, with its quota regexes and error taxonomy
-  preserved as shared vectors at `tests/contract-fixtures/`; then windowing, bidirectional direction,
-  model gating, multi-record FASTA, the TSV writer, and the whole `dna_entropy.worker` subpackage
-  (manifest, status, blobstore, cancel, lifecycle, runner, weights, entry point).
-  **309 tests, up from 147.**
-- **`docs/`**: the developer set, the design and science set, and a ten-page user guide, then audited
-  against itself for rule numbering, stage names, error codes, coordinate systems and shared numbers.
+- **`worker/`**: the whole `dna_entropy` package plus the `worker` subpackage (manifest, status, blobstore
+  with a real retry policy, cancel, lifecycle, runner, weights, CLI), windowing and bidirectional
+  direction, model gating, the TSV writer, batch limits, an ambiguity policy, partial results on failure,
+  and a log-redaction guard. Ruff is live over the whole package.
+- **Contract**: `docs/contract/*.schema.json` and `error-codes.json` are generated from the worker's own
+  dataclasses, with a drift check CI runs. Golden vectors for the C# port live in
+  `tests/contract-fixtures/`, produced by running the prototype rather than by reading its tests.
+- **`vm/startup.sh`** and a **CPU container** that really builds and really runs a job.
+- **`scripts/`**: about twenty, including seven self-testing guards, four safety hooks behind a fail-closed
+  dispatcher, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1` and `cloud_gpu_test.ps1`.
+- **`docs/`**: the developer set, the design and science set, a ten-page user guide, and
+  `copy_catalog.md`, which holds every phase, narration line and error message the app will show.
 
 ## Start here next session
 
-1. **Answer the two new `DECISION` issues.** Both are one decision each and both block real work:
-   - **#301** `pyrodigal` is GPLv3 and is already imported by the worker. Recommendation and a
-     compliance checklist are in the issue; the recommended answer is a scoped carve-out, not dropping
-     gene calling.
-   - **#302** memory sync published personal session memory into this public repo. The fix is
-     implemented and the hooks are off until you say yes.
+1. **`OWNER_TODO.md`.** It is one prioritised list, roughly 90 minutes, with a one-line recommendation for
+   each of the fifteen open `DECISION` issues so you can agree or overrule without opening them. The two
+   that matter most are **#301** (pyrodigal is GPLv3 and already imported) and **#302** (memory sync
+   published personal memory into the public repo; the fix is implemented and the hooks are off until you
+   say yes).
 2. **#266, five minutes with a browser.** Every GPU price in
-   `docs/research/2026-09-19-gpu-pricing-and-instances.md` is `THEORY (unverified)` because Google Cloud
-   and AWS now render pricing only in JavaScript and the old public price list is a 404. The note names
-   the exact pages to read. **#303** is the sharper one: the spec's A100 Spot range disagrees with every
-   source by two to four times, and the cost estimator is built on it.
-3. **Then v0.1**, in the order the spec's section 8 gives: the two week-1 spikes
-   (`packaging: spike: WinUI 3 unpackaged + Velopack`, `packaging: spike: NGC PyTorch base`) can run in
-   parallel with everything else, then `worker/vm/startup.sh` (#45) and the container images (#36), then
-   the `app/` skeleton (#61) and the cloud gateways.
+   `docs/research/2026-09-19-gpu-pricing-and-instances.md` is `THEORY (unverified)`, because both vendors
+   now render pricing only in JavaScript and the old public price list is a 404. The note names the exact
+   pages to read. **#303** is sharper: the spec's A100 Spot range disagrees with every source by two to
+   four times, and the cost estimator is built on it.
+3. **Then `app/`**, starting with the two week-1 spikes (#35 Velopack and #37 the NGC base) and the
+   solution skeleton (#61).
 
 ## What is true but not proven
 
-`lifecycle.py` and `GcsBlobstore` are implemented and unit-tested against fakes, and have **never run
-against real Google Cloud**, because nothing this session was allowed to spend money. The same goes for
-every cloud path in the repo. Those are ToTest rows, not claims.
+**Nothing cloud-facing has ever run against real Google Cloud.** `lifecycle.py`, `GcsBlobstore`'s retry
+path, `startup.sh`, `cloud_gpu_test.ps1 -Apply` and `Dockerfile.cuda` are implemented, tested against
+fakes, and unproven. They are rows in `docs/ToTest.md`, each naming its false pass, not claims. See the
+cost estimate below before booking a session to drain them.
+
+## Roughly what draining the cloud ToTest queue costs
+
+All figures trace to `docs/research/2026-09-19-gpu-pricing-and-instances.md` and are `THEORY` pending
+#266. Rates used: L4 `g2-standard-8` ~$0.85/h on demand and ~$0.18/h Spot; A100 40 `a2-highgpu-1g`
+~$3.67/h; `pd-balanced` ~$0.10/GB/month, so a 150 GB boot disk is ~$0.02/h and ~$15/month if forgotten.
+
+| Session | What it covers | Rough cost |
+|---|---|---|
+| Smoke only | The CPU walking skeleton on `e2-small`, no GPU | under $0.10 |
+| Minimum acceptance | Drain the four current ToTest rows: lifecycle stop/delete, `GcsBlobstore` against a real bucket, `startup.sh`, one real 7B run | $3 to $6 |
+| Extensive | The above plus the zone ladder, an A100 fallback, forced stockout and quota failures, retention and leak sweeps, two accounts, repeated runs | $45 to $75 |
+| Extensive on Spot | Same, L4 and A100 on Spot with preemption deliberately exercised | $15 to $25 |
+
+The first run in any project adds roughly eight minutes while the 7B weights download, and that download
+is once per project, not once per run.
+
+**The number that actually matters is none of the above.** A forgotten running L4 is about $20/day and an
+A100 about $88/day, so one VM left up over a weekend costs more than the entire test campaign. The guards
+against that already exist and have never run for real: `maxRunDuration` with
+`instanceTerminationAction=DELETE` on every VM, the worker stopping or deleting itself through the Compute
+API, `cloud_gpu_test.ps1`'s end-of-run leak assertion, and the app's nothing-left-running sweep (#113).
+Drain the lifecycle ToTest row first, because it is the one that proves the others can be trusted.
 
 ## How to run an overnight wave like this one
 
 Three agents, disjoint paths, one shared brief, the orchestrator owning git and the full test suite, and
-only one agent allowed to run pytest at a time (several concurrent runs exhaust this machine's RAM). Pass
-each agent its own pytest `--basetemp`; the default Windows temp directory races between concurrent runs
-and that cost real time to diagnose. #300 tracks turning this into a script.
+only one agent running pytest at a time. Give each agent its own `--basetemp`. `scripts/agent_wave.ps1`
+does all of this and refuses a wave whose path assignments overlap.
 
-## Traps this session paid for, on top of the ones already in `CLAUDE.md`
+## Traps this session paid for, beyond the ones in `CLAUDE.md`
 
-- A settings-file hook that mirrors memory into the repo will publish whatever it finds, including notes
-  about a person, and will overwrite a curated file that happens to share a filename with its source.
-- A guard whose shell wrapper ends in `|| true` stops guarding silently, and everyone keeps believing it
-  works because the ban is written down in three places.
-- Asserting on Typer's `--help` output tests Rich's line wrapping, not your CLI. It passes on a wide
-  terminal and fails on CI's 80 columns.
-- Dependabot fails the whole run when an ecosystem's manifest does not exist yet.
-- Both cloud vendors now serve pricing only to a browser. Plan for an authenticated API call (#214), not
-  for scraping.
-- The donor scripts arrived carrying about thirty of the donor project's issue numbers in their comments.
-  In this repo those numbers point at nothing, or at an unrelated issue.
+- A guard that passes because the thing it checks does not exist, or because an optional dependency is
+  missing, is not passing. Three separate shapes of this were found and fixed tonight, the last one a
+  check that printed OK for validation it had just announced it was skipping.
+- A subagent's report is a claim, not evidence. One claimed a retry policy that was not in the file, and
+  it reached a pushed commit message before a different agent caught it by reading the file.
+- Exact float equality is not portable. A parity fixture passed on Windows and failed on Linux CI because
+  `log2` may differ in the last bit.
+- Asserting on a CLI's rendered `--help` tests the terminal width, not the CLI.
+- In PowerShell, `$script:x++` inside a closure resolves to file scope, which made every `.ps1` self-test
+  report PASS regardless of failures.
+- Both cloud vendors now serve pricing only to a browser; plan for an authenticated API call (#214).
