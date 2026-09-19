@@ -44,9 +44,16 @@ relates to Issues and `sprint_log.md`.
 
 ## Queue
 
-Empty. No issue has been closed against unproven behaviour yet — this table
-starts with no rows, and no row below is invented ahead of a real closure.
+Three rows, all `Needs: cpu-vm` and all from the same closing commit, so they
+drain in one sitting per Rule 4: the worker subpackage (#278) implements
+every cloud-facing path (the Compute API lifecycle calls, the real GCS REST
+path, and the app/worker version-mismatch refusal #250 also asks for) and
+tests every one of them against `LocalBlobstore` and a scripted fake, per
+its own closing comment, because nothing tonight was allowed to spend
+money. None of it has ever touched a real Google Cloud project.
 
 | # | Closed by (commit sha) | Needs | Do this | Passing looks like | False pass looks like |
 | --- | --- | --- | --- | --- | --- |
-| *(none yet)* | | | | | |
+| #278 | dcd89a7 | cpu-vm | On a real Compute Engine VM (any machine type, no GPU needed) with the worker service account attached, run a real job through to a terminal status with `lifecycle.afterTask=stop`, then again with `afterTask=delete`, and watch the VM's real state (Console or `instances.aggregatedList`) rather than only the worker's own exit code. | The VM reaches `TERMINATED` (stop) or disappears (delete) within seconds of the worker's terminal status, and the Compute operation history shows the stop/delete request came from the worker's service account via the metadata token, well before `maxRunDuration` could have expired. | The VM eventually reaches `TERMINATED` or is deleted, but only because `scheduling.maxRunDuration` expired and `instanceTerminationAction=DELETE` fired, indistinguishable from a real pass by looking at the VM's final state alone; only the operation's actor and timing tell them apart. |
+| #278 | dcd89a7 | cpu-vm | From that same VM, run the CPU smoke test (mock predictor, `-cpu` image) against a real `gs://` bucket so `GcsBlobstore` writes `status.json`/`progress.jsonl`/`result.json`/outputs through the real metadata-token REST path, then read every one of them back. | Every object the worker claims to have written is a real, readable object in the bucket (`gsutil ls`/Console), the bytes round-trip exactly, and the app (or `gsutil cp`) can download `result.json` and every output afterward. | `pytest -m "not gpu"` stays green (309 passed, 2 skipped), it already is, and proves nothing here, since every one of those tests runs against the in-memory fake `Blobstore`, which does not exercise the real REST calls, auth header, retries, or GCS's own generation semantics. |
+| #278 | dcd89a7 | cpu-vm | Build or point the app's dev override at a worker image whose supported schema disagrees with a real app build's `manifest.json.schema`, run one real job through the actual container on a real VM, and watch what the app shows (#250's scope; #278 shipped the worker-side half). | The job fails within seconds of the container starting; `status.json.error.code` is `WORKER_VERSION_MISMATCH` naming both the manifest's declared schema and the worker's supported version; the app (once `app/`, issue #61, exists) shows exactly one action. | `worker/tests/test_worker_manifest.py` and `test_worker_runner.py`'s in-process schema-mismatch tests pass (they already do), they prove the Python refusal logic is correct, not that a real container boot-and-refuse cycle reads as a clean, one-action failure to a user rather than a hang or a raw stack trace, since `app/` does not exist yet to render that action at all. |
