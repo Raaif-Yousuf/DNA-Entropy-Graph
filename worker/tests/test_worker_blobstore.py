@@ -9,6 +9,7 @@ have been sent (method, URL, headers, body) and feeds back a canned response.
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -238,8 +239,6 @@ def test_gcs_exists_true_when_object_found() -> None:
 
 
 def test_gcs_exists_false_on_404() -> None:
-    import urllib.error
-
     opener = _RecordingOpener(
         [
             _token_response(),
@@ -251,8 +250,6 @@ def test_gcs_exists_false_on_404() -> None:
 
 
 def test_gcs_other_http_error_raises_blobstore_error() -> None:
-    import urllib.error
-
     opener = _RecordingOpener(
         [
             _token_response(),
@@ -306,3 +303,175 @@ def test_gcs_upload_file_missing_local_source_raises(tmp_path: Path) -> None:
     store = GcsBlobstore("bucket", "jobs/x/", opener=_RecordingOpener([]))
     with pytest.raises(BlobstoreError):
         store.upload_file(tmp_path / "missing.txt", "output/x")
+
+
+# --- retry policy (issue #322): bounded backoff, 401-refresh-once, no retry on 403/404 -
+
+
+def _no_sleep(_seconds: float) -> None:
+    """Injected in place of time.sleep — every retry test must run instantly."""
+
+
+def _fixed_jitter() -> float:
+    return 0.0  # deterministic backoff timing, not that any test asserts on the value
+
+
+def test_gcs_retries_a_503_then_succeeds(tmp_path: Path) -> None:
+    """The issue's own Observable: a transport returning 503 twice then 200 sees the
+    upload succeed."""
+    local = tmp_path / "out.txt"
+    local.write_text("result data", encoding="utf-8")
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.HTTPError("url", 503, "Service Unavailable", {}, None),
+            urllib.error.HTTPError("url", 503, "Service Unavailable", {}, None),
+            _FakeResponse(b"{}"),
+        ]
+    )
+    store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+    store.upload_file(local, "output/x/x.txt")  # must not raise
+    # 1 token fetch + 3 upload attempts (2 failed, 1 succeeded).
+    assert len(opener.requests) == 4
+
+
+def test_gcs_retries_429_and_5xx_but_not_other_4xx() -> None:
+    for code in (429, 500, 502, 503, 504):
+        opener = _RecordingOpener(
+            [
+                _token_response(),
+                urllib.error.HTTPError("url", code, "retriable", {}, None),
+                _FakeResponse(b"{}"),
+            ]
+        )
+        store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+        store.write_text("status.json", "{}")  # succeeds on the 2nd attempt
+        assert len(opener.requests) == 3, f"HTTP {code} did not retry"
+
+
+def test_gcs_a_403_makes_exactly_one_request_no_retry() -> None:
+    """The issue's own Observable: a transport returning 403 sees exactly one request
+    made — retrying a permission error just wastes paid VM time to reach the same answer."""
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
+        ]
+    )
+    store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+    with pytest.raises(BlobstoreError):
+        store.write_text("status.json", "{}")
+    # 1 token fetch + exactly 1 write attempt — the 403 must not have been retried.
+    assert len(opener.requests) == 2
+
+
+def test_gcs_a_404_without_not_found_ok_makes_exactly_one_request() -> None:
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.HTTPError("url", 404, "Not Found", {}, None),
+        ]
+    )
+    store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+    with pytest.raises(BlobstoreError):
+        store.read_text("missing.json")
+    assert len(opener.requests) == 2
+
+
+def test_gcs_a_401_refreshes_the_token_once_and_retries() -> None:
+    opener = _RecordingOpener(
+        [
+            _token_response(),  # initial token
+            urllib.error.HTTPError("url", 401, "Unauthorized", {}, None),
+            _token_response(),  # refreshed token after invalidate()
+            _FakeResponse(b"{}"),
+        ]
+    )
+    store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+    store.write_text("status.json", "{}")  # must not raise
+    assert len(opener.requests) == 4
+    token_fetches = [r for r in opener.requests if "metadata.google.internal" in r.full_url]
+    assert len(token_fetches) == 2  # the token really was re-fetched, not just reused
+
+
+def test_gcs_a_second_consecutive_401_after_the_one_refresh_is_not_retried_again() -> None:
+    """ "Refreshes the token once" — a token that is STILL rejected after that one refresh
+    is a real auth problem, not a blip, and must not consume the whole retry budget
+    re-fetching a token that keeps not working."""
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.HTTPError("url", 401, "Unauthorized", {}, None),
+            _token_response(),
+            urllib.error.HTTPError("url", 401, "Unauthorized", {}, None),
+        ]
+    )
+    store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+    with pytest.raises(BlobstoreError):
+        store.write_text("status.json", "{}")
+    assert len(opener.requests) == 4  # exactly: token, 401, refreshed token, 401 -- then give up
+
+
+def test_gcs_gives_up_after_the_stated_number_of_attempts() -> None:
+    """A persistent (not just transient) outage must not retry forever."""
+    from dna_entropy.worker.blobstore import _WRITE_MAX_ATTEMPTS
+
+    responses = [_token_response()] + [
+        urllib.error.HTTPError("url", 503, "Service Unavailable", {}, None)
+        for _ in range(_WRITE_MAX_ATTEMPTS)
+    ]
+    opener = _RecordingOpener(responses)
+    store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+    with pytest.raises(BlobstoreError):
+        store.write_text("status.json", "{}")
+    # 1 token fetch + exactly _WRITE_MAX_ATTEMPTS attempts, no more.
+    assert len(opener.requests) == 1 + _WRITE_MAX_ATTEMPTS
+
+
+def test_gcs_a_bare_connection_error_is_retried_like_a_5xx(tmp_path: Path) -> None:
+    """Not every transient failure has an HTTP status at all -- urllib raises a bare
+    URLError for a connection reset/timeout/DNS failure."""
+    local = tmp_path / "out.txt"
+    local.write_text("data", encoding="utf-8")
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.URLError("connection reset"),
+            _FakeResponse(b"{}"),
+        ]
+    )
+    store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
+    store.upload_file(local, "output/x/x.txt")  # must not raise
+    assert len(opener.requests) == 3
+
+
+def test_gcs_upload_gets_a_larger_retry_budget_than_a_status_write(tmp_path: Path) -> None:
+    """issue #322's own requirement: losing a heartbeat is cheap (StatusWriter tolerates
+    it, #318); losing an uploaded result is not. The budgets must actually differ."""
+    from dna_entropy.worker.blobstore import _TRANSFER_MAX_ATTEMPTS, _WRITE_MAX_ATTEMPTS
+
+    assert _TRANSFER_MAX_ATTEMPTS > _WRITE_MAX_ATTEMPTS
+
+
+def test_gcs_retries_use_a_growing_backoff_not_a_fixed_one(tmp_path: Path) -> None:
+    """Bounded exponential backoff, not a fixed retry interval -- the delay passed to
+    sleep() must not be the same every time."""
+    delays: list[float] = []
+    local = tmp_path / "out.txt"
+    local.write_text("data", encoding="utf-8")
+    opener = _RecordingOpener(
+        [
+            _token_response(),
+            urllib.error.HTTPError("url", 503, "x", {}, None),
+            urllib.error.HTTPError("url", 503, "x", {}, None),
+            urllib.error.HTTPError("url", 503, "x", {}, None),
+            _FakeResponse(b"{}"),
+        ]
+    )
+    store = GcsBlobstore(
+        "bucket", "jobs/x/", opener=opener, sleep=lambda s: delays.append(s), rand=_fixed_jitter
+    )
+    store.upload_file(local, "output/x/x.txt")
+    assert len(delays) == 3
+    assert delays == sorted(delays)  # non-decreasing
+    assert delays[-1] > delays[0]  # genuinely grew, not a fixed interval

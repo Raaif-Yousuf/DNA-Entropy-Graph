@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Generate/check ``docs/contract/{manifest,status,result}.schema.json`` from the
-worker's own dataclasses (issue #39) — never hand-written beside them.
+"""Generate/check ``docs/contract/{manifest,status,result,error-codes}.json`` from the
+worker's own dataclasses (issues #39, #254) — never hand-written beside them.
 
 Usage (from the repo root):
 
@@ -37,6 +37,7 @@ WORKER_SRC = REPO_ROOT / "worker" / "src"
 if str(WORKER_SRC) not in sys.path:
     sys.path.insert(0, str(WORKER_SRC))
 
+from dna_entropy.worker.errors import WORKER_ERROR_CODES  # noqa: E402
 from dna_entropy.worker.manifest import JobManifest  # noqa: E402
 from dna_entropy.worker.result import JobResult  # noqa: E402
 from dna_entropy.worker.schema_gen import top_level_schema  # noqa: E402
@@ -57,6 +58,27 @@ SCHEMAS: dict[str, tuple[type, str]] = {
 def render(cls: type, filename: str, title: str) -> str:
     schema = top_level_schema(cls, schema_id=f"{_ID_BASE}/{filename}", title=title)
     return json.dumps(schema, indent=2) + "\n"
+
+
+def render_error_codes() -> str:
+    """``docs/contract/error-codes.json`` (issue #254) — a plain data document, not a
+    JSON Schema, generated from ``dna_entropy.worker.errors.WORKER_ERROR_CODES`` the same
+    generate-and-``--check`` way the schemas above are, so the worker and a future C#
+    ``ErrorCatalog`` cannot silently drift."""
+    payload = {
+        "$id": f"{_ID_BASE}/error-codes.json",
+        "generatedFrom": "dna_entropy.worker.errors.WORKER_ERROR_CODES",
+        "codes": [
+            {
+                "code": spec.code,
+                "raisedBy": spec.raised_by,
+                "retriable": spec.retriable,
+                "note": spec.note,
+            }
+            for spec in WORKER_ERROR_CODES
+        ],
+    }
+    return json.dumps(payload, indent=2) + "\n"
 
 
 def _validate_sample_manifests(manifest_schema: dict) -> list[str]:
@@ -98,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     rendered: dict[str, str] = {
         filename: render(cls, filename, title) for filename, (cls, title) in SCHEMAS.items()
     }
+    rendered["error-codes.json"] = render_error_codes()
 
     if args.check:
         drifted = []
@@ -120,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
             for failure in sample_failures:
                 print(f"Sample manifest failed validation: {failure}", file=sys.stderr)
             return 1
-        print("OK: docs/contract/*.schema.json match the worker's dataclasses.")
+        print("OK: docs/contract/*.json match the worker's dataclasses/error-code registry.")
         if FIXTURES_DIR.is_dir():
             n = len(list(FIXTURES_DIR.glob("*.json")))
             print(f"OK: {n} sample manifest(s) under {FIXTURES_DIR.relative_to(REPO_ROOT)} validate.")

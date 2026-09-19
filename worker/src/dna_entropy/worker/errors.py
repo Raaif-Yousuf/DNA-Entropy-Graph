@@ -91,11 +91,11 @@ WORKER_ERROR_CODES: tuple[ErrorCodeSpec, ...] = (
         "BATCH_LIMIT_EXCEEDED",
         "dna_entropy.worker.batch_limits.BatchLimitError",
         retriable=False,
-        note="Not yet in docs/copy_catalog.md's 34 codes — issue #248's own new code, "
-        "raised before any per-input work starts when a batch exceeds "
-        "manifest.limits.maxInputs/maxTotalNt. Flagged as a real gap, same disposition "
-        "as MANIFEST_INVALID/WORKER_VERSION_MISMATCH above (see #248's closing report "
-        "for suggested copy).",
+        note="Matches docs/copy_catalog.md's BatchLimitExceeded row (added after issue "
+        "#248 shipped this code; the catalog's {files}/{nt}/{maxFiles}/{maxNt} template "
+        "fields are exactly what batch_limits.format_batch_limit_message() reports). "
+        "Raised before any per-input work starts when a batch exceeds "
+        "manifest.limits.maxInputs/maxTotalNt.",
     ),
     ErrorCodeSpec(
         "GPU_NOT_VISIBLE",

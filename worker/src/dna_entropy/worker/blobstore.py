@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -218,10 +220,42 @@ class MetadataTokenProvider:
         self._cached = _CachedToken(value=token, expires_at=now + expires_in)
         return token
 
+    def invalidate(self) -> None:
+        """Force the next :meth:`get` to fetch a fresh token, rather than serving the
+        cached one that a 401 may already indicate is stale/revoked (issue #322)."""
+        self._cached = None
+
+
+# Retry policy (issue #322). Two budgets, not one: a status/progress write is recoverable
+# by simply waiting for the next heartbeat tick (StatusWriter's own `_safe_write`, #318,
+# already tolerates the eventual failure gracefully) and result.json's own write is
+# further protected by run_job()'s three-step tail (#320: a failed write there still lets
+# status.stop()/apply_lifecycle() run). An UPLOADED OUTPUT FILE or a DOWNLOADED INPUT has
+# no such second life: the bytes exist nowhere else once the VM that produced/needs them
+# stops or deletes itself, so those get a materially larger budget. Reads (manifest,
+# exists, list_prefix) sit in between: important enough to not give up after one blip, but
+# each individual read is retried again by its own caller in most real call patterns
+# (CancelWatcher polls repeatedly; a failed manifest read is fatal either way).
+_WRITE_MAX_ATTEMPTS = 4
+_READ_MAX_ATTEMPTS = 4
+_TRANSFER_MAX_ATTEMPTS = 6  # upload_file / download_file: actual job data, no second copy
+
+_RETRIABLE_STATUS: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+_BASE_BACKOFF_SECONDS = 0.5
+_MAX_BACKOFF_SECONDS = 8.0
+
 
 class GcsBlobstore:
     """Metadata-token REST against the GCS JSON API. Not exercised against real GCS by
     anything in this repo yet — see the module docstring.
+
+    Retries transient failures (429/5xx, and a bare connection/timeout error) with
+    bounded exponential backoff plus jitter; a 401 refreshes the cached token once and
+    retries; any other 4xx (403, a real 404 without ``not_found_ok``, ...) never retries
+    — spending minutes of paid VM time to reach the same answer is its own failure. Every
+    attempt is logged (status code / error only — never a path or file content, matching
+    issue #253's log-redaction discipline) so a support bundle shows whether a run was
+    fighting the network.
     """
 
     def __init__(
@@ -231,11 +265,15 @@ class GcsBlobstore:
         *,
         opener: HttpOpener = default_http_opener,
         token_provider: MetadataTokenProvider | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        rand: Callable[[], float] = random.random,
     ) -> None:
         self.bucket = bucket
         self.prefix = prefix.rstrip("/") + "/" if prefix else ""
         self._opener = opener
         self._tokens = token_provider or MetadataTokenProvider(opener=opener)
+        self._sleep = sleep
+        self._rand = rand
 
     def _object_name(self, path: str) -> str:
         p = Path(path)
@@ -246,34 +284,85 @@ class GcsBlobstore:
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._tokens.get()}"}
 
-    def _request(self, req: urllib.request.Request, *, not_found_ok: bool = False):
-        try:
-            return self._opener(req)
-        except urllib.error.HTTPError as exc:
-            if not_found_ok and exc.code == 404:
-                return None
-            raise BlobstoreError(f"GCS request failed ({exc.code}): {exc.reason}") from exc
-        except urllib.error.URLError as exc:
-            raise BlobstoreError(f"GCS request failed: {exc}") from exc
+    def _request(
+        self,
+        build_request: Callable[[], urllib.request.Request],
+        *,
+        what: str,
+        max_attempts: int,
+        not_found_ok: bool = False,
+    ):
+        """Send one logical request, retrying per the policy in the class docstring.
+
+        ``build_request`` is a FACTORY, not a pre-built request: a 401 retry needs a
+        fresh ``Authorization`` header, so the request must be rebuilt after
+        :meth:`MetadataTokenProvider.invalidate` runs, not merely resent.
+        """
+        token_refreshed = False
+        delay = _BASE_BACKOFF_SECONDS
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self._opener(build_request())
+            except urllib.error.HTTPError as exc:
+                code = exc.code
+                print(f"GcsBlobstore: {what} attempt {attempt} -> HTTP {code}", file=sys.stderr)
+                if not_found_ok and code == 404:
+                    return None
+                if code == 401 and not token_refreshed:
+                    # Once, not forever: a token that is STILL rejected after a refresh is
+                    # a real auth problem, not a blip — the next branch's "not retriable"
+                    # check catches that on the following iteration.
+                    token_refreshed = True
+                    self._tokens.invalidate()
+                    continue
+                if code not in _RETRIABLE_STATUS:
+                    raise BlobstoreError(f"GCS request failed ({code}): {exc.reason}") from exc
+                if attempt >= max_attempts:
+                    raise BlobstoreError(
+                        f"GCS request failed after {attempt} attempts ({code}): {exc.reason}"
+                    ) from exc
+            except urllib.error.URLError as exc:
+                # Connection refused/reset, DNS failure, timeout — urllib raises these as
+                # a bare URLError (HTTPError, caught above, is a URLError subclass with a
+                # real HTTP status; this branch only ever sees the non-HTTP kind).
+                print(f"GcsBlobstore: {what} attempt {attempt} -> {exc}", file=sys.stderr)
+                if attempt >= max_attempts:
+                    raise BlobstoreError(f"GCS request failed after {attempt} attempts: {exc}") from exc
+            self._sleep(delay + self._rand() * delay)  # full jitter: wait in [delay, 2*delay)
+            delay = min(delay * 2, _MAX_BACKOFF_SECONDS)
 
     def read_text(self, path: str) -> str:
         return self._download_bytes(path).decode("utf-8")
 
     def write_text(self, path: str, text: str) -> None:
-        self._upload_bytes(path, text.encode("utf-8"), content_type="text/plain; charset=utf-8")
+        self._upload_bytes(
+            path,
+            text.encode("utf-8"),
+            content_type="text/plain; charset=utf-8",
+            max_attempts=_WRITE_MAX_ATTEMPTS,
+        )
 
     def exists(self, path: str) -> bool:
         name = urllib.request.quote(self._object_name(path), safe="")
         url = f"{_STORAGE_API}/b/{self.bucket}/o/{name}"
-        req = urllib.request.Request(url, headers=self._auth_headers())
-        resp = self._request(req, not_found_ok=True)
+        resp = self._request(
+            lambda: urllib.request.Request(url, headers=self._auth_headers()),
+            what="exists",
+            max_attempts=_READ_MAX_ATTEMPTS,
+            not_found_ok=True,
+        )
         return resp is not None
 
     def list_prefix(self, prefix: str) -> list[str]:
         full_prefix = self._object_name(prefix)
         url = f"{_STORAGE_API}/b/{self.bucket}/o?prefix={urllib.request.quote(full_prefix, safe='')}"
-        req = urllib.request.Request(url, headers=self._auth_headers())
-        resp = self._request(req)
+        resp = self._request(
+            lambda: urllib.request.Request(url, headers=self._auth_headers()),
+            what="list_prefix",
+            max_attempts=_READ_MAX_ATTEMPTS,
+        )
         payload = json.loads(resp.read().decode("utf-8"))
         names = [item["name"] for item in payload.get("items", [])]
         # Strip this job's own prefix so callers see paths relative to it, like LocalBlobstore.
@@ -287,21 +376,32 @@ class GcsBlobstore:
     def upload_file(self, local_src: Path, path: str) -> None:
         if not local_src.exists():
             raise BlobstoreError(f"local file not found: {local_src}")
-        self._upload_bytes(path, local_src.read_bytes(), content_type="application/octet-stream")
+        self._upload_bytes(
+            path,
+            local_src.read_bytes(),
+            content_type="application/octet-stream",
+            max_attempts=_TRANSFER_MAX_ATTEMPTS,
+        )
 
     def _download_bytes(self, path: str) -> bytes:
         name = urllib.request.quote(self._object_name(path), safe="")
         url = f"{_STORAGE_API}/b/{self.bucket}/o/{name}?alt=media"
-        req = urllib.request.Request(url, headers=self._auth_headers())
-        resp = self._request(req)
+        resp = self._request(
+            lambda: urllib.request.Request(url, headers=self._auth_headers()),
+            what="download",
+            max_attempts=_TRANSFER_MAX_ATTEMPTS,
+        )
         return resp.read()
 
-    def _upload_bytes(self, path: str, data: bytes, *, content_type: str) -> None:
+    def _upload_bytes(self, path: str, data: bytes, *, content_type: str, max_attempts: int) -> None:
         # A single PUT/POST of the whole object body is atomic at the object level in GCS
         # — no reader ever observes a partial object — so no temp-object-then-rename dance
         # is needed here the way LocalBlobstore needs one for a plain filesystem.
         name = urllib.request.quote(self._object_name(path), safe="")
         url = f"{_STORAGE_UPLOAD_API}/b/{self.bucket}/o?uploadType=media&name={name}"
-        headers = {**self._auth_headers(), "Content-Type": content_type}
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        self._request(req)
+
+        def _build() -> urllib.request.Request:
+            headers = {**self._auth_headers(), "Content-Type": content_type}
+            return urllib.request.Request(url, data=data, headers=headers, method="POST")
+
+        self._request(_build, what="upload", max_attempts=max_attempts)
