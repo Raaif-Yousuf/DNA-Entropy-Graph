@@ -17,7 +17,20 @@ from ..annotators.base import GeneFeature
 from .base import write_text_lf
 
 # GFF3 column-9 reserved characters that must be percent-encoded in attribute values.
-_GFF3_RESERVED = {";": "%3B", "=": "%3D", "&": "%26", ",": "%2C", "\t": "%09", "\n": "%0A"}
+# "%" MUST be escaped first, and before every other character here: it is the escape
+# character itself, so escaping it first guarantees none of the OTHER escapes' own "%"
+# output (e.g. the "%3B" produced for a literal ";") gets re-escaped into "%253B", and
+# that a literal "%1;" in the input can never be misread as an escaped "%1" plus a bare
+# ";" by a downstream percent-decoder (issue found during the lane-B writers audit).
+_GFF3_RESERVED = {
+    "%": "%25",
+    ";": "%3B",
+    "=": "%3D",
+    "&": "%26",
+    ",": "%2C",
+    "\t": "%09",
+    "\n": "%0A",
+}
 
 
 def _escape(value: str) -> str:
