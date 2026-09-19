@@ -19,6 +19,7 @@ DATA = Path(__file__).parent / "data"
 SAMPLE_GB = str(DATA / "sample.gb")
 MULTI_GB = str(DATA / "multi.gb")
 SAMPLE_FA = str(DATA / "sample.fasta")
+SPLICED_GB = str(DATA / "spliced.gb")
 
 
 # --- detection ----------------------------------------------------------------------
@@ -65,6 +66,29 @@ def test_read_genbank_extracts_seq_and_genes() -> None:
     assert (a.begin, a.end, a.strand, a.gene_id) == (1, 42, "+", "geneA")
     assert (b.begin, b.end, b.strand, b.gene_id) == (85, 126, "-", "geneB")
     assert any("not re-annotated" in n for n in notices)
+
+
+def test_read_genbank_flags_compound_locations_instead_of_collapsing_silently() -> None:
+    """#295: a join(...)/complement(join(...)) gene must not silently collapse to its
+    bounding box — the reader must say so, loudly, and name the real exon segments."""
+    records, notices = read_genbank(SPLICED_GB)
+    assert len(records) == 1
+    rec = records[0]
+    by_id = {f.gene_id: f for f in rec.features}
+
+    # Three GeneFeatures still come back (no cardinality change downstream) — the two
+    # compound ones keep their outer bounding box as begin/end...
+    assert (by_id["splicedA"].begin, by_id["splicedA"].end, by_id["splicedA"].strand) == (1, 130, "+")
+    assert (by_id["splicedB"].begin, by_id["splicedB"].end, by_id["splicedB"].strand) == (151, 200, "-")
+    assert (by_id["plainC"].begin, by_id["plainC"].end, by_id["plainC"].strand) == (40, 60, "+")
+
+    # ...but each compound one is now flagged with a notice naming its real segments, and
+    # the plain (non-compound) gene is never mentioned by one.
+    compound_notices = [n for n in notices if "compound" in n.lower()]
+    assert len(compound_notices) == 2
+    assert any("splicedA" in n and "1..30, 101..130" in n for n in compound_notices)
+    assert any("splicedB" in n and "151..170, 181..200" in n for n in compound_notices)
+    assert not any("plainC" in n for n in compound_notices)
 
 
 # --- FASTA reader -------------------------------------------------------------------
@@ -224,6 +248,18 @@ def test_load_input_paste_stays_strict(tmp_path: Path) -> None:
 
 
 # --- multi-record GenBank: ALL records processed ------------------------------------
+
+
+def test_load_input_enforces_max_total_len_across_all_genbank_records_not_per_record() -> None:
+    """#314: MULTI_GB has two records (58 bp + 57 bp = 115 bp total). Each is well under
+    a 100-bp cap on its own, so a per-record-only check would let the 115-bp file through
+    a documented "outer sanity bound on total input length" of 100."""
+    cfg = RunConfig(name="mt", input_path=MULTI_GB, max_total_len=100)
+    with pytest.raises(ValidationError) as exc:
+        load_input(cfg)
+    msg = str(exc.value)
+    assert "100" in msg
+    assert "115" in msg
 
 
 def test_read_genbank_returns_all_records() -> None:
