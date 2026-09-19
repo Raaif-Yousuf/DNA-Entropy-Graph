@@ -2,21 +2,21 @@
   "_README": "Keys are '<CODE>:<Symbol>' exactly as scripts/check_app_wiring.py prints them. The value is why the finding is accepted, and it should name the issue that will make it stop firing. Checked in BOTH directions: an entry whose finding no longer fires fails the run, so this file cannot rot into a list of things that used to be true. Delete an entry the moment its page lands.",
   "_WHY_THIS_FILE_IS_LONG_TODAY": "Every entry below is the same fact said twenty-five times: app/ is a skeleton whose ViewModels exist and whose Views do not, so every command and every observable property is genuinely bound to nothing. That is not a false positive; it is the guard correctly describing an unfinished app. Each entry names the issue whose page will bind it, and the entry must be deleted in that issue's own PR.",
 
-  "UNBOUND-COMMAND:ShellViewModel.NavigateToCommand": "#62 builds the NavigationView that binds it",
-  "UNBOUND-OBSERVABLE:ShellViewModel.CurrentPageKey": "#62 builds the NavigationView that binds it",
   "ORPHAN-RESOURCE:AppDisplayName": "#62: no view shows the app name yet",
-  "ORPHAN-RESOURCE:ShellTitle.Text": "#62: the shell title bar does not exist yet",
+
+  "CODE-ONLY-COMMAND:ShellViewModel.NavigateToCommand": "#62, done: NavigationView.SelectionChanged is an event, not a bindable Command= property in WinUI 3 - MainWindow.xaml.cs's handler is the only way to wire a NavigationView selection to a RelayCommand, so this stays C#-only by construction, not by omission.",
 
   "UNBOUND-COMMAND:WizardViewModel.SignInCommand": "#99 builds the first-run wizard pages",
-  "TEST-ONLY-OBSERVABLE:WizardViewModel.IsSignedIn": "#99 builds the first-run wizard pages; the TEST-ONLY classification is a name collision with FakeGcp.IsSignedIn in Cloud.Tests",
+  "CODE-ONLY-OBSERVABLE:WizardViewModel.IsSignedIn": "#99 builds the first-run wizard pages; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.IsSignedIn, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.IsSignedIn in Cloud.Tests.",
 
   "TEST-ONLY-COMMAND:NewRunViewModel.BrowseCommand": "#63 builds the New run page; today only NewRunViewModelTests drives it",
   "TEST-ONLY-OBSERVABLE:NewRunViewModel.SelectedInputPath": "#63 builds the New run page; today only NewRunViewModelTests reads it",
   "TEST-ONLY-OBSERVABLE:NewRunViewModel.ModelId": "#63 builds the New run page's model picker",
 
-  "UNBOUND-COMMAND:RunProgressViewModel.CancelCommand": "#66 builds the run progress page",
-  "UNBOUND-OBSERVABLE:RunProgressViewModel.FractionComplete": "#66 builds the run progress page",
   "CODE-ONLY-OBSERVABLE:RunProgressViewModel.JobId": "#66; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",
+  "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CanCancel": "#66, done: CanCancel only ever drives CancelCommand's CanExecute via [NotifyCanExecuteChangedFor]; WinUI's Button.Command already syncs IsEnabled from ICommand.CanExecuteChanged, so no view ever needs to read the bool property itself.",
+  "TEST-ONLY-OBSERVABLE:RunProgressViewModel.IsVmActionable": "#66, done: same reasoning as CanCancel above, for StopVmCommand/DeleteVmCommand.",
+  "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CurrentPhase": "#66, done: RunProgressPage binds the derived StageTitle text, not the raw JobPhase enum; a future accessibility pass (docs/ui_conventions.md section 5's LiveSetting=Polite) may bind CurrentPhase directly for Narrator, which would clear this entry.",
 
   "UNBOUND-COMMAND:ResultsViewModel.LoadCommand": "#102 builds the Results page",
   "CODE-ONLY-OBSERVABLE:ResultsViewModel.JobId": "#102; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",
@@ -25,7 +25,7 @@
   "UNBOUND-COMMAND:HistoryViewModel.OpenRunCommand": "#101 builds the Runs page",
 
   "UNBOUND-COMMAND:CloudResourcesViewModel.ConfirmDeleteCommand": "#105 builds the Cloud page",
-  "TEST-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the TEST-ONLY classification is a name collision with FakeGcp.SelectedProjectId in Cloud.Tests, see the script docstring on name matching",
+  "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests.",
 
   "TEST-ONLY-COMMAND:SettingsViewModel.SetThemeCommand": "#104 builds the Settings page",
   "TEST-ONLY-OBSERVABLE:SettingsViewModel.Theme": "#104 builds the Settings page",

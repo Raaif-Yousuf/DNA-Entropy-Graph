@@ -38,7 +38,12 @@ internal static class XamlInlineStringScanner
 
             foreach (var attribute in UserFacingAttributes)
             {
-                foreach (Match match in Regex.Matches(text, $"{attribute}=\"([^\"]*)\""))
+                // \b before the attribute name: without it, "Header" also
+                // matches inside "AlwaysShowHeader=" (MEASURED 2026-09-19,
+                // issue #62 - NavigationView.AlwaysShowHeader="True" was
+                // flagged as an inline "Header" string, a real false
+                // positive on legitimate markup, not a violation).
+                foreach (Match match in Regex.Matches(text, $"\\b{attribute}=\"([^\"]*)\""))
                 {
                     attributesScanned++;
                     var value = match.Groups[1].Value;

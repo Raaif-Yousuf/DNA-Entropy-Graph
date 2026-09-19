@@ -140,6 +140,31 @@ back." This is true by construction (the job lives entirely in the bucket and on
 not in the app's own memory), and stating it plainly is what keeps a user from feeling
 they must babysit a multi-minute run.
 
+## 8. Two `XamlCompiler.exe` traps, MEASURED 2026-09-19 (issue #62)
+
+Both crash this repo's pinned Windows App SDK version's `XamlCompiler.exe` with **no
+diagnostic output at all** - not a normal `error WMC....` line, exit code 1 and nothing
+else, confirmed by direct invocation, `dotnet build -v:diag`, and reading the tool's own
+`output.json` (absent or stale on the failing run). Both were isolated to one attribute/one
+resource entry on an otherwise-empty `Window`, in a multi-hour bisection this note exists
+to save the next person from repeating:
+
+- **`ExtendsContentIntoTitleBar="True"` as a XAML attribute on `<Window>`.** Set it from
+  code-behind instead: `ExtendsContentIntoTitleBar = true;` as a plain one-line assignment
+  in the constructor (after `InitializeComponent()`), same for `SystemBackdrop = new
+  MicaBackdrop();`. Neither assignment branches, so both stay legal in `*.xaml.cs`
+  under Hard Rule 8.
+- **A `Window.Resources` (or likely any `<Resources>`) entry instantiating a custom,
+  locally-defined `IValueConverter`.** Use an `x:Bind` **method call** instead of a
+  converter resource: a plain `public static` function (e.g.
+  `App/Converters/VisibilityHelper.FromBool(bool) -> Visibility`) referenced directly as
+  `{x:Bind converters:VisibilityHelper.FromBool(ViewModel.SomeBool), Mode=OneWay}`. This
+  needs no resource dictionary entry and builds clean.
+
+If a future Windows App SDK bump fixes either of these upstream, this section (and the
+workaround it documents) should be removed in the same commit as the version bump, not
+left as unnecessary caution.
+
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text

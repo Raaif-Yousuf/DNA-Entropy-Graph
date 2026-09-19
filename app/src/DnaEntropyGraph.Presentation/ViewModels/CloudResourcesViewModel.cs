@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
 
@@ -9,14 +10,16 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
 {
     private readonly IGcpAccount _gcpAccount;
     private readonly IDialogService _dialogService;
+    private readonly IStringResourceProvider _strings;
 
     [ObservableProperty]
     private string? _selectedProjectId;
 
-    public CloudResourcesViewModel(IGcpAccount gcpAccount, IDialogService dialogService)
+    public CloudResourcesViewModel(IGcpAccount gcpAccount, IDialogService dialogService, IStringResourceProvider strings)
     {
         _gcpAccount = gcpAccount;
         _dialogService = dialogService;
+        _strings = strings;
         _selectedProjectId = gcpAccount.SelectedProjectId;
     }
 
@@ -24,8 +27,8 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     private async Task ConfirmDeleteAsync(CancellationToken cancellationToken)
     {
         await _dialogService.ConfirmAsync(
-            "Delete this cloud resource?",
-            "This stops billing for it. This cannot be undone.",
+            _strings.GetString("ConfirmDeleteResource.Title"),
+            _strings.GetString("ConfirmDeleteResource.Body"),
             cancellationToken).ConfigureAwait(false);
     }
 }

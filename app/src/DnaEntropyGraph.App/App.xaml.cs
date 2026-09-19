@@ -29,8 +29,13 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        var window = new MainWindow();
-        Services.GetRequiredService<NavigationService>().Initialize(window.RootFrame);
+        var window = new MainWindow(
+            Services.GetRequiredService<Presentation.ViewModels.ShellViewModel>(),
+            Services.GetRequiredService<Core.Abstractions.ISettingsStore>(),
+            Services.GetRequiredService<Services.WindowPlacementService>());
+        var navigationService = Services.GetRequiredService<NavigationService>();
+        navigationService.Initialize(window.RootFrame);
+        Startup.NavigationRoutes.RegisterAll(navigationService);
         window.Activate();
         _window = window;
     }

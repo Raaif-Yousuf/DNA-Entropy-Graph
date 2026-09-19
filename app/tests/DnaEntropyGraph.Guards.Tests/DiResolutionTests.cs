@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.App.Startup;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
@@ -19,7 +20,15 @@ public class DiResolutionTests
     private static ServiceProvider BuildRealServiceProvider()
     {
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph();
+
+        // A throwaway temp directory, never the real
+        // %LOCALAPPDATA%\DNAEntropyGraph\: ValidateOnBuild below eagerly
+        // constructs every singleton, including SqliteDatabase, whose
+        // constructor really does create its parent directory - a guard
+        // test must not leave that behind on the real machine it runs on
+        // (MEASURED 2026-09-19: it did, before this fix - see
+        // ServiceRegistration.AddDnaEntropyGraph's own doc comment).
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value);
 
         // ValidateOnBuild walks every registration eagerly and throws
         // immediately, naming the exact missing type, instead of waiting
@@ -29,6 +38,33 @@ public class DiResolutionTests
             ValidateOnBuild = true,
             ValidateScopes = true,
         });
+    }
+
+    /// <summary>
+    /// One temp directory per test run (not per call - several tests in
+    /// this file each build their own provider), deleted when the process
+    /// exits via <see cref="AppDomain.ProcessExit"/> since no single test
+    /// owns "last" here and a shared xunit fixture would be more ceremony
+    /// than this warrants for a directory that never holds more than an
+    /// empty folder (see the doc comment on <c>AddDnaEntropyGraph</c>: DI
+    /// validation alone never opens the database or writes settings.json).
+    /// </summary>
+    private static class TempAppDataRoot
+    {
+        public static string Value { get; } = CreateAndRegisterCleanup();
+
+        private static string CreateAndRegisterCleanup()
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"deg-guard-appdata-{Guid.NewGuid():n}");
+            AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+            {
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+            };
+            return path;
+        }
     }
 
     [Fact]
@@ -71,6 +107,10 @@ public class DiResolutionTests
             typeof(DnaEntropyGraph.Core.Abstractions.IToastService),
             typeof(DnaEntropyGraph.Core.Abstractions.INavigator),
             typeof(DnaEntropyGraph.Core.Abstractions.IDialogService),
+            typeof(DnaEntropyGraph.Presentation.Services.IStringResourceProvider),
+            typeof(DnaEntropyGraph.Presentation.Services.IRunVmActions),
+            typeof(DnaEntropyGraph.Presentation.Services.ILogTailReader),
+            typeof(IMessenger),
             typeof(DnaEntropyGraph.Core.Cloud.IComputeGateway),
             typeof(DnaEntropyGraph.Core.Cloud.IStorageGateway),
             typeof(DnaEntropyGraph.Core.Cloud.IProjectSetupGateway),
