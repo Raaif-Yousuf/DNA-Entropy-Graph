@@ -7,6 +7,13 @@
     the plain net10.0 default below.
   -->
   <PropertyGroup>
+    <!--
+      scripts/check_version_lockstep.py (issue #33): this must always equal
+      worker/pyproject.toml's [project].version exactly. That file is not
+      mine to edit - if the worker version ever moves, update this one line
+      to match it, never the other file.
+    -->
+    <Version>0.0.1</Version>
     <TargetFramework>net10.0</TargetFramework>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>

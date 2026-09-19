@@ -23,6 +23,11 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, CancellationToken cancellationToken)
     {
+        // Hard Rule 10, enforced here exactly as a real gateway must: a spec
+        // missing a label or a maxRunDuration never reaches "creation", real
+        // or fake.
+        spec.EnsurePreconditions();
+
         var vm = new VmDescriptor($"deg-{spec.JobId}", "us-central1-a", "RUNNING");
         _vms[vm.Name] = vm;
         return Task.FromResult(vm);
