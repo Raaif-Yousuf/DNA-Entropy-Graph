@@ -13,6 +13,7 @@ Requires `pwsh` (PowerShell 7+) on PATH; skipped, not failed, if absent.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -57,6 +58,14 @@ def _init_repo(root: Path) -> None:
 # Self-test bridge and --help
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason=(
+        "agent_wave.ps1's self-test asserts Windows path shapes. pwsh runs on Linux "
+        "but Join-Path and the path separator do not match there, so the failure "
+        "would be about the platform rather than about the script."
+    ),
+)
 def test_self_test_passes():
     proc = _run("-SelfTest", timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -14,10 +14,13 @@ see this module's own top docstring.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
+
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -84,6 +87,14 @@ def _write_job(root: Path, manifest=MANIFEST, status=STATUS_FAILED, stages=DEFAU
 # Pure helpers
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason=(
+        "Windows path semantics: pathlib joins with / on POSIX, so the expected "
+        "backslash path can never compare equal there. The behaviour under test is "
+        "Windows-only by construction (LOCALAPPDATA)."
+    ),
+)
 def test_default_local_data_dir_honours_localappdata(monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\someone\AppData\Local")
     assert td.default_local_data_dir() == Path(r"C:\Users\someone\AppData\Local\DNAEntropyGraph")
