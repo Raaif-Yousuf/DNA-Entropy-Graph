@@ -60,6 +60,7 @@ Full description of what each carries: [`.claude/README.md`](../.claude/README.m
 | Cutting a release, step by step | [`release_runbook.md`](release_runbook.md) |
 | The verification queue: closed-but-unproven-on-a-real-build | [`ToTest.md`](ToTest.md) |
 | What shipped, newest first | [`sprint_log.md`](sprint_log.md) |
+| How work lands: branches, pull requests, merging, local guards | [`branching_and_prs.md`](branching_and_prs.md) |
 | The branch-to-sprint-log write path | [`changelog.d/README.md`](changelog.d/README.md) |
 | Dated design specs | [`superpowers/specs/`](superpowers/specs/) |
 | Dated research notes | [`research/`](research/) — one file per note, `YYYY-MM-DD-<slug>.md`, per the template skeleton below |
