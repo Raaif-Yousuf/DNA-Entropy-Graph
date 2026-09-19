@@ -33,14 +33,17 @@ explicitly (Hard Rule 20). See `msys2-python-on-path` in
 worker\.venv\Scripts\python.exe -m dna_entropy --help
 ```
 
-**ruff (lint/format): pending #285.** `worker/pyproject.toml` has no
-`[tool.ruff]` table yet, so `ci-worker.yml` skips lint entirely rather than
-failing on an absent config (it detects this and prints a notice). Once
-#285 lands:
+**ruff (lint/format): no longer pending, #285 landed.**
+`worker/pyproject.toml` now has `[tool.ruff]`/`[tool.ruff.lint]`/
+`[tool.ruff.lint.isort]` tables, so `ci-worker.yml`'s lint step actually
+runs rather than printing a skip notice. Run via `uvx` (not installed into
+the dev venv itself — nothing in `worker/pyproject.toml`'s own dependency
+groups pulls `ruff` in, on purpose, so the venv stays exactly what the
+package itself needs):
 
 ```powershell
-worker\.venv\Scripts\python.exe -m ruff check worker
-worker\.venv\Scripts\python.exe -m ruff format --check worker
+uvx ruff check worker
+uvx ruff format --check worker
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -88,6 +91,25 @@ python scripts\issue_precheck.py --all-open --suspect-only
 ```
 
 ```powershell
+scripts\sync_labels.ps1                                 # report only: CREATE/UPDATE/PRUNE vs .github/labels.yml
+scripts\sync_labels.ps1 -Apply                          # actually make the GitHub calls
+scripts\sync_labels.ps1 -Apply -Prune                   # also delete a label labels.yml no longer names
+```
+
+```powershell
+scripts\new_issue.ps1 -Title "area: imperative title" -Why "..." -DoneWhen @("...") `
+    -Observable "..." -DocsTouched @("docs/x.md") -Tests @("worker/tests/test_x.py") `
+    -OutOfScope "..." -CloudMoney "none"                # renders the full Appendix C section 6 shape; add -Apply to file it
+```
+
+```powershell
+scripts\agent_wave.ps1 -Start -SpecFile wave.json       # plan/brief a wave of concurrent agents on disjoint paths
+scripts\agent_wave.ps1 -Status
+scripts\agent_wave.ps1 -Down
+scripts\agent_wave.ps1 -SelfTest
+```
+
+```powershell
 python scripts\compile_sprint_log.py                   # fold docs/changelog.d/ into sprint_log.md
 python scripts\compile_sprint_log.py --dry-run
 python scripts\compile_sprint_log.py --check            # fragment-shape only, what ci-docs.yml runs
@@ -107,18 +129,41 @@ python scripts\triage_diagnostics.py <bundle.zip>
 python scripts\triage_diagnostics.py --data-dir           # every local run under %LOCALAPPDATA%\DNAEntropyGraph\
 python scripts\triage_diagnostics.py <bundle.zip> --full  # every progress line, no capping
 python scripts\triage_diagnostics.py <bundle.zip> --tail 200
+python scripts\triage_diagnostics.py --check-schema       # verify SCHEMA_FIELDS against the real generated schema; a gate, not a triage mode
 ```
 
-## `scripts/check_*.py` (repo/docs guards) — mostly pending
+```powershell
+python scripts\gen_manifest_schema.py                     # regenerate docs/contract/{manifest,status,result,error-codes}.json from the worker's own dataclasses
+python scripts\gen_manifest_schema.py --check              # exit 1 if the checked-in files would differ (what ci-worker.yml's `contract` job runs)
+```
 
-`ci-docs.yml`'s `checks` job runs every `scripts/check_*.py` that exists and
-prints a notice if none do — it tightens automatically as each lands rather
-than needing a workflow edit per issue. None exist as of this writing.
-Expected, per Appendix C's repo layout and various P0 issues: `check_docs_
-index.py` (#25 range), `check_changelog_fragments.py`,
-`check_version_lockstep.py`, `check_third_party_notices.py` (#34),
-`check_totest_format.py`, `gen_third_party_notices.py`,
-`gen_manifest_schema.py` (#39).
+## `scripts/check_*.py` (repo/docs guards) — exist today
+
+**Updated 2026-09-19: no longer pending.** `ci-docs.yml`'s `checks` job runs
+every `scripts/check_*.py` that exists via a glob loop (`for script in
+scripts/check_*.py`) — it tightens automatically as each one lands, with no
+workflow edit per issue, which is why grepping the workflow file for a
+script's literal name finds nothing even once that script is fully wired in;
+read the loop, not the filename, when checking whether a guard is enforced.
+Seven exist as of this revision, each with a `--self-test` flag that runs
+against synthetic fixtures:
+
+```powershell
+python scripts\check_docs_index.py            # every docs/*.md is reachable from docs/README.md's index
+python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs values, and real commit shas (--max-age-days 45 default)
+python scripts\check_user_home_paths.py       # no literal absolute user-home path in a tracked file (use %USERPROFILE%/$HOME instead)
+python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (currently a no-op notice: the file itself doesn't exist yet, #34)
+python scripts\check_version_lockstep.py      # every version-bearing file agrees
+python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
+python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
+python scripts\<any check_*.py> --self-test   # every one of the seven supports this
+```
+
+**Running `scripts/tests/` itself** — the hooks, the label/memory sync, `compile_sprint_log.py`, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1`, and every `check_*.py` guard above all have their own test file here, run as one suite (issue #311's own scripts-tests CI job runs exactly this, on Ubuntu, with full git history since some tests exercise git-aware code paths):
+
+```powershell
+uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
+```
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 
@@ -154,16 +199,27 @@ anything marked `gpu` needs a real CUDA GPU the dev box does not have
 (`dev-laptop-has-no-cuda` memory seed).
 
 ```powershell
-scripts\cloud_gpu_test.ps1                   # pending: script does not exist yet
+scripts\cloud_gpu_test.ps1                   # dry-run (default): prints the plan, machine type, zone, estimated cost/minutes, creates nothing
+scripts\cloud_gpu_test.ps1 -Apply            # NOT functional yet — see below
+scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
-Once it exists: launches a labelled VM in the owner's GCP project (blocked
-on `OWNER_TODO.md` item 2 / issue #24 until a project and GPU quota exist),
-runs `pytest -m gpu` on it, and tears the VM down. Read `working-on-gcp`
-before running it even once it exists — it creates real, billed cloud
-resources. Launch detached and poll rather than blocking a single tool call
-on it (a real run is 6-20 minutes; see the `a-tool-call-caps-at-600s`
-memory seed).
+**Updated 2026-09-19: the script exists (issue #317), dry-run is real,
+`-Apply` deliberately is not yet.** The dry-run path (labels, cost/duration
+math, the leak-check and interrupt-safety contract) is provable today with
+zero cloud spend and is exercised by `-SelfTest`. `-Apply` looks for a built
+`CloudCli` (issue #60, itself built from `app/`, issue #61) and fails
+clearly, naming #60/#61/#24, rather than silently falling back to a raw
+`gcloud` call — Appendix C's permission design denies `gcloud` to an agent
+on purpose, and a script that quietly substitutes it under the hood would
+defeat that. `docs/ToTest.md` carries the row for exercising `-Apply` for
+real once `CloudCli` exists. Once it works: launches a labelled VM in the
+owner's GCP project (blocked on `OWNER_TODO.md` item 2 / issue #24 until a
+project and GPU quota exist), runs `pytest -m gpu` on it, and tears the VM
+down. Read `working-on-gcp` before running it for real even once `-Apply`
+works — it creates real, billed cloud resources. Launch detached and poll
+rather than blocking a single tool call on it (a real run is 6-20 minutes;
+see the `a-tool-call-caps-at-600s` memory seed).
 
 ## PowerShell equivalents of common Unix commands
 
