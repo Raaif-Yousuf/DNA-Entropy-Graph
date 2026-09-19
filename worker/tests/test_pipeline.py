@@ -367,3 +367,137 @@ def test_on_window_exception_before_any_contig_completes_writes_nothing(tmp_path
     with pytest.raises(_Stop):
         pipeline.run(cfg, raw="ATGCATGCATGC", on_window=lambda: (_ for _ in ()).throw(_Stop()))
     assert list(Path(tmp_path).iterdir()) == []
+
+
+# --- per-writer suppression flags (issue #304): output files on disk, not just RunConfig ----
+
+
+def test_include_flags_all_off_writes_nothing_but_tsv(tmp_path: Path) -> None:
+    """Every include_* writer flag off except include_tsv -> exactly one file on disk."""
+    cfg = RunConfig(
+        name="onlytsv",
+        out_dir=str(tmp_path),
+        include_fasta=False,
+        include_track=False,
+        include_geneious=False,
+        include_stats=False,
+        include_genbank=False,
+        include_genes_gff3=False,
+        include_tsv=True,
+    )
+    result = pipeline.run(cfg, raw="ATGCATGCATGC")
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert on_disk == {"onlytsv.entropy.tsv"}
+    assert {Path(p).name for p in result.outputs} == on_disk
+
+
+def test_include_track_false_omits_the_track_file_from_disk(tmp_path: Path) -> None:
+    cfg = RunConfig(name="notrack", out_dir=str(tmp_path), include_track=False)
+    pipeline.run(cfg, raw="ATGCATGCATGC")
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert "notrack.entropy.bedgraph" not in on_disk
+    assert "notrack.fasta" in on_disk  # every other default writer still ran
+
+
+def test_include_fasta_false_omits_fasta_from_disk(tmp_path: Path) -> None:
+    cfg = RunConfig(name="nofasta", out_dir=str(tmp_path), include_fasta=False)
+    pipeline.run(cfg, raw="ATGCATGCATGC")
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert "nofasta.fasta" not in on_disk
+    assert "nofasta.entropy.bedgraph" in on_disk
+
+
+def test_include_genbank_false_omits_bonus_genbank_from_disk(tmp_path: Path) -> None:
+    cfg = RunConfig(name="nogb", out_dir=str(tmp_path), include_genbank=False)
+    pipeline.run(cfg, raw="ATGCATGCATGC")
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert "nogb.gb" not in on_disk
+
+
+def test_include_geneious_false_omits_geneious_gff3_from_disk(tmp_path: Path) -> None:
+    cfg = RunConfig(name="nogen", out_dir=str(tmp_path), include_geneious=False)
+    pipeline.run(cfg, raw="ATGCATGCATGC")
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert "nogen.entropy.geneious.gff3" not in on_disk
+
+
+def test_include_stats_false_omits_summary_from_disk(tmp_path: Path) -> None:
+    cfg = RunConfig(name="nostats", out_dir=str(tmp_path), include_stats=False)
+    pipeline.run(cfg, raw="ATGCATGCATGC")
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert "nostats.summary.txt" not in on_disk
+
+
+def test_include_flags_on_genbank_input_suppress_the_matching_files(tmp_path: Path) -> None:
+    cfg = RunConfig(
+        name="gbsup",
+        input_path=str(DATA / "multi.gb"),
+        out_dir=str(tmp_path),
+        include_fasta=False,
+        include_geneious=False,
+        include_stats=False,
+        include_tsv=False,
+    )
+    pipeline.run(cfg)
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert "gbsup.fasta" not in on_disk
+    assert "gbsup.entropy.geneious.gff3" not in on_disk
+    assert "stats.txt" not in on_disk
+    assert "gbsup.entropy.tsv" not in on_disk
+    assert "gbsup.gb" in on_disk  # include_genbank stayed on (default True)
+
+
+# --- fastaRecords="first" (issue #306): truncates to the first record, on disk -------------
+
+
+THREE_RECORD_FASTA_FOR_RECORDS_FLAG = (
+    ">record_one first locus\n"
+    "ACGTACGTACGTACGTACGTACGTACGTACGT\n"
+    ">record_two second locus\n"
+    "TTTTGGGGCCCCAAAATTTTGGGGCCCCAAAA\n"
+    ">record_three third locus\n"
+    "GATCGATCGATCGATCGATCGATCGATCGATC\n"
+)
+
+
+def test_fasta_records_first_processes_only_the_first_record(tmp_path: Path) -> None:
+    p = tmp_path / "three.fasta"
+    p.write_text(THREE_RECORD_FASTA_FOR_RECORDS_FLAG, encoding="utf-8")
+    out_dir = tmp_path / "out"
+    cfg = RunConfig(name="three", input_path=str(p), out_dir=str(out_dir), fasta_records="first")
+    result = pipeline.run(cfg)
+    assert result.contigs == 1
+    assert result.total_nt == 32
+    fasta_path = next(f for f in result.outputs if f.endswith("three.fasta"))
+    text = Path(fasta_path).read_text(encoding="utf-8")
+    assert text.count(">") == 1
+    assert "three_1" in text
+    assert "record_two" not in text and "record_three" not in text
+
+
+def test_fasta_records_all_is_the_default_and_processes_every_record(tmp_path: Path) -> None:
+    p = tmp_path / "three.fasta"
+    p.write_text(THREE_RECORD_FASTA_FOR_RECORDS_FLAG, encoding="utf-8")
+    out_dir = tmp_path / "out"
+    cfg = RunConfig(name="three", input_path=str(p), out_dir=str(out_dir))
+    assert cfg.fasta_records == "all"
+    result = pipeline.run(cfg)
+    assert result.contigs == 3
+
+
+def test_fasta_records_first_notice_names_the_dropped_record_count(tmp_path: Path) -> None:
+    p = tmp_path / "three.fasta"
+    p.write_text(THREE_RECORD_FASTA_FOR_RECORDS_FLAG, encoding="utf-8")
+    cfg = RunConfig(name="three", input_path=str(p), out_dir=str(tmp_path), fasta_records="first")
+    result = pipeline.run(cfg)
+    assert any("fastaRecords='first'" in n and "2 other" in n for n in result.notices)
+
+
+def test_fasta_records_first_does_not_affect_genbank_multi_record_input(tmp_path: Path) -> None:
+    # job_contract.md §3: fastaRecords is documented as FASTA-specific; a GenBank input's
+    # own multi-record handling must be untouched even if fasta_records happens to be "first".
+    cfg = RunConfig(
+        name="gb", input_path=str(DATA / "multi.gb"), out_dir=str(tmp_path), fasta_records="first"
+    )
+    result = pipeline.run(cfg)
+    assert result.contigs > 1

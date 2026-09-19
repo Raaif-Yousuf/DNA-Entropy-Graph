@@ -75,6 +75,17 @@ def _require(d: dict, key: str, *, where: str) -> object:
 
 _AMBIGUITY_POLICIES: dict[str, AmbiguityPolicy] = {p.value: p for p in AmbiguityPolicy}
 
+# issue #306: "all" | "first" — validated the same way ambiguityPolicy/direction already
+# are, so a typo'd value fails loudly at manifest-parse time instead of being silently
+# read as "all" by str(d.get(...)) with no check at all.
+_FASTA_RECORDS_VALUES: frozenset[str] = frozenset({"all", "first"})
+
+# Found during the #304 audit: analysis.format was accepted as any string with no
+# validation (unlike direction/ambiguityPolicy/fastaRecords right above), and — a
+# separate, worse bug — build_run_config never actually consulted the parsed value at
+# all (see build_run_config's own note). Validated here the same way as everywhere else.
+_TRACK_FORMAT_VALUES: dict[str, TrackFormat] = {t.value: t for t in TrackFormat}
+
 
 @dataclass
 class InputSpec:
@@ -110,6 +121,12 @@ class InputSpec:
             raise ManifestError(
                 f"manifest.json inputs[].ambiguityPolicy {raw_policy!r} is not one of {valid}"
             )
+        raw_fasta_records = str(d.get("fastaRecords", "all"))
+        if raw_fasta_records not in _FASTA_RECORDS_VALUES:
+            valid = sorted(_FASTA_RECORDS_VALUES)
+            raise ManifestError(
+                f"manifest.json inputs[].fastaRecords {raw_fasta_records!r} is not one of {valid}"
+            )
         return InputSpec(
             id=str(_require(d, "id", where="inputs[]")),
             path=str(_require(d, "path", where="inputs[]")),
@@ -119,7 +136,7 @@ class InputSpec:
             rna=bool(d.get("rna", False)),
             genes=bool(d.get("genes", False)),
             ambiguity_policy=policy,
-            fasta_records=str(d.get("fastaRecords", "all")),
+            fasta_records=raw_fasta_records,
         )
 
 
@@ -149,7 +166,7 @@ class AnalysisSpec:
     stride: int = 4096
     direction: Direction = Direction.BOTH_COMBINED
     # The wire field is literally "format", not "trackFormat" (job_contract.md §3's example).
-    track_format: str = field(default="bedgraph", metadata={"json_name": "format"})  # bedgraph | wig
+    track_format: TrackFormat = field(default=TrackFormat.BEDGRAPH, metadata={"json_name": "format"})
 
     @staticmethod
     def from_dict(d: dict) -> AnalysisSpec:
@@ -158,12 +175,17 @@ class AnalysisSpec:
         if direction is None:
             valid = sorted({*_DIRECTION_ALIASES.keys()})
             raise ManifestError(f"manifest.json analysis.direction {raw_direction!r} is not one of {valid}")
+        raw_track_format = str(d.get("format", TrackFormat.BEDGRAPH.value))
+        track_format = _TRACK_FORMAT_VALUES.get(raw_track_format)
+        if track_format is None:
+            valid = sorted(_TRACK_FORMAT_VALUES.keys())
+            raise ManifestError(f"manifest.json analysis.format {raw_track_format!r} is not one of {valid}")
         return AnalysisSpec(
             context_length=int(d.get("contextLength", 4096)),
             window=int(d.get("window", 8192)),
             stride=int(d.get("stride", 4096)),
             direction=direction,
-            track_format=str(d.get("format", "bedgraph")),
+            track_format=track_format,
         )
 
 
@@ -318,20 +340,50 @@ class JobManifest:
         runner has already staged it locally (via the blobstore) and where local outputs
         should land before being uploaded.
 
-        Note on ``outputs`` selection: the manifest's ``outputs`` array names the desired
-        output FILES (e.g. ``"bedgraph"``, ``"tsv"``, ``"genes_gff3"``), but
-        ``pipeline.run()`` does not yet support suppressing individual writers beyond
-        ``track_format`` (bedgraph vs. wig), ``include_tsv``, and ``genes`` (which also
-        gates the genes GFF3) — see the filed follow-up issue for full per-output
-        selection. This method maps what it can onto those three knobs and otherwise
-        writes the pipeline's normal full output set.
+        Note on ``outputs`` selection (issue #304): the manifest's ``outputs`` array names
+        every desired output FILE individually (e.g. ``"bedgraph"``, ``"tsv"``,
+        ``"genes_gff3"``) — see ``docs/job_contract.md`` §3 for the full vocabulary. An
+        **empty/omitted** ``outputs`` array means "unspecified", not "nothing wanted", and
+        is treated as "everything" (matching this method's pre-existing ``include_tsv``
+        fallback) so a manifest that never mentions ``outputs`` at all keeps getting the
+        pipeline's full normal output set. A **non-empty** ``outputs`` array is taken
+        literally: anything not named is suppressed via the matching ``RunConfig.include_*``
+        flag (``config.py``), so a manifest naming fewer desired outputs actually produces
+        fewer files on disk, not the full set regardless.
         """
         informat = None if input_spec.informat == "auto" else input_spec.informat
-        track_format = (
-            TrackFormat.WIG
-            if "wig" in self.outputs and "bedgraph" not in self.outputs
-            else TrackFormat.BEDGRAPH
-        )
+        outputs_specified = bool(self.outputs)
+
+        def _wanted(name: str) -> bool:
+            return (name in self.outputs) if outputs_specified else True
+
+        # analysis.format (found during the #304 audit) was parsed onto AnalysisSpec and
+        # never consulted here at all -- this method used to derive the format purely
+        # from `outputs` membership, always falling back to bedgraph regardless of what
+        # analysis.format said, so a manifest declaring analysis.format="wig" with no
+        # `outputs` key silently got bedgraph anyway. `outputs`, when non-empty, remains
+        # the literal, authoritative suppression list (issue #304's own scope: a manifest
+        # asking for exactly ["bedgraph"] must not get wig just because analysis.format
+        # said so); analysis.format is the fallback for the common case where `outputs`
+        # says nothing about format at all.
+        if outputs_specified:
+            track_format = (
+                TrackFormat.WIG
+                if "wig" in self.outputs and "bedgraph" not in self.outputs
+                else TrackFormat.BEDGRAPH
+            )
+        else:
+            track_format = self.analysis.track_format
+        # include_track: whichever single format track_format selected must itself have
+        # been asked for (not just "some track format or other") before the flag stays on.
+        include_track = _wanted(track_format.value)
+        # Two DIFFERENT questions, deliberately kept separate: whether Prodigal should run
+        # at all (a real compute cost, opt-in only — unaffected by "outputs unspecified
+        # means everything", exactly like before this method supported suppression at
+        # all) vs. whether the resulting genes.gff3 FILE gets written once genes exist
+        # (a plain suppression toggle, like every other include_* flag here).
+        explicit_genes_gff3_requested = "genes_gff3" in self.outputs
+        include_genes_gff3 = _wanted("genes_gff3")
         return RunConfig(
             name=input_spec.name,
             input_path=local_input_path,
@@ -345,9 +397,16 @@ class JobManifest:
             max_len=self.analysis.window,  # the GPU ceiling IS the app-derived window
             context_length=self.analysis.context_length,
             direction=self.analysis.direction,
-            genes=input_spec.genes or ("genes_gff3" in self.outputs),
+            genes=input_spec.genes or explicit_genes_gff3_requested,
             rna=input_spec.rna,
             seed=self.predictor.seed,
-            include_tsv=("tsv" in self.outputs) if self.outputs else True,
+            include_tsv=_wanted("tsv"),
             ambiguity_policy=input_spec.ambiguity_policy,
+            fasta_records=input_spec.fasta_records,
+            include_fasta=_wanted("fasta"),
+            include_track=include_track,
+            include_geneious=_wanted("geneious_gff3"),
+            include_stats=_wanted("stats"),
+            include_genbank=_wanted("genbank"),
+            include_genes_gff3=include_genes_gff3,
         )

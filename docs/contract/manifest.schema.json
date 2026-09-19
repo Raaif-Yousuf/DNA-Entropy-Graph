@@ -101,7 +101,11 @@
           ]
         },
         "format": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "bedgraph",
+            "wig"
+          ]
         }
       }
     },
