@@ -141,6 +141,48 @@ def test_apply_lifecycle_http_error_from_compute_api_raises_lifecycle_error() ->
         apply_lifecycle("stop", opener=opener)
 
 
+def test_apply_lifecycle_returns_the_operations_response_body() -> None:
+    """issue #321: a 2xx HTTP status only means the Compute API accepted the operation,
+    not that stop/delete actually completed. The caller (runner.py) needs the response
+    body -- at minimum the operation id -- rather than it being discarded."""
+    opener = _RecordingOpener(
+        [
+            _text("proj"),
+            _text("projects/1/zones/us-central1-a"),
+            _text("deg-job1"),
+            _token(),
+            _FakeResponse(json.dumps({"name": "operation-123", "status": "PENDING"}).encode()),
+        ]
+    )
+    op = apply_lifecycle("stop", opener=opener)
+    assert op == {"name": "operation-123", "status": "PENDING"}
+
+
+def test_apply_lifecycle_keep_returns_none() -> None:
+    opener = _RecordingOpener([])
+    assert apply_lifecycle("keep", opener=opener) is None
+
+
+def test_apply_lifecycle_raises_when_the_2xx_body_itself_reports_an_error() -> None:
+    """issue #321: some Compute API failure modes surface as an `error` field in the
+    SAME 2xx response body, not as an HTTP error status -- a 2xx alone is not success."""
+    opener = _RecordingOpener(
+        [
+            _text("proj"),
+            _text("projects/1/zones/us-central1-a"),
+            _text("deg-job1"),
+            _token(),
+            _FakeResponse(
+                json.dumps(
+                    {"name": "operation-456", "error": {"code": 400, "message": "resource locked"}}
+                ).encode()
+            ),
+        ]
+    )
+    with pytest.raises(LifecycleError, match="resource locked"):
+        apply_lifecycle("delete", opener=opener)
+
+
 def test_apply_lifecycle_never_shells_out() -> None:
     """Documentation-as-test: this module's only side effect is an HTTP POST to the
     Compute API — never a subprocess, never an ssh/scp/shutdown command

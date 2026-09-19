@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from dna_entropy.config import Direction, PredictorKind, TrackFormat
+from dna_entropy.config import AmbiguityPolicy, Direction, PredictorKind, TrackFormat
 from dna_entropy.worker.manifest import (
     CURRENT_SCHEMA_VERSION,
     SUPPORTED_SCHEMA_VERSIONS,
@@ -146,7 +146,7 @@ def test_parses_the_full_documented_example() -> None:
                 "start": 1,
                 "rna": False,
                 "genes": True,
-                "allowAmbiguity": True,
+                "ambiguityPolicy": "mask",
                 "fastaRecords": "all",
             }
         ],
@@ -168,6 +168,7 @@ def test_parses_the_full_documented_example() -> None:
     assert len(m.inputs) == 1
     assert m.inputs[0].name == "SetTnpB"
     assert m.inputs[0].genes is True
+    assert m.inputs[0].ambiguity_policy is AmbiguityPolicy.MASK
     assert m.predictor.kind == "evo"
     assert m.analysis.context_length == 4096
     assert m.analysis.window == 8192
@@ -220,6 +221,48 @@ def test_the_old_forward_reverse_aliases_are_no_longer_accepted() -> None:
         JobManifest.parse(_manifest(analysis={"direction": "reverse"}))
 
 
+# --- ambiguity policy: keep / mask / error, per input (issue #249) --------------------
+
+
+def test_ambiguity_policy_defaults_to_keep_when_omitted() -> None:
+    m = JobManifest.parse(_manifest())
+    assert m.inputs[0].ambiguity_policy is AmbiguityPolicy.KEEP
+
+
+@pytest.mark.parametrize(
+    "spelling, expected",
+    [
+        ("keep", AmbiguityPolicy.KEEP),
+        ("mask", AmbiguityPolicy.MASK),
+        ("error", AmbiguityPolicy.ERROR),
+    ],
+)
+def test_ambiguity_policy_spellings(spelling: str, expected: AmbiguityPolicy) -> None:
+    m = JobManifest.parse(
+        _manifest(inputs=[{"id": "in1", "path": "input/x", "name": "x", "ambiguityPolicy": spelling}])
+    )
+    assert m.inputs[0].ambiguity_policy is expected
+
+
+def test_unknown_ambiguity_policy_spelling_is_rejected() -> None:
+    with pytest.raises(ManifestError):
+        JobManifest.parse(
+            _manifest(inputs=[{"id": "in1", "path": "input/x", "name": "x", "ambiguityPolicy": "sideways"}])
+        )
+
+
+def test_the_old_allow_ambiguity_boolean_field_is_tolerated_but_no_longer_read() -> None:
+    """issue #249: allowAmbiguity was parsed but never actually consulted anywhere
+    downstream before this issue (a real "wired to nothing" gap, not just a rename). An
+    old manifest still sending it must not error (unknown fields are tolerated,
+    job_contract.md §8) -- it just has no effect any more; ambiguityPolicy is what
+    matters now."""
+    m = JobManifest.parse(
+        _manifest(inputs=[{"id": "in1", "path": "input/x", "name": "x", "allowAmbiguity": False}])
+    )
+    assert m.inputs[0].ambiguity_policy is AmbiguityPolicy.KEEP  # the real default, not affected
+
+
 # --- build_run_config: the manifest -> RunConfig bridge -------------------------------
 
 
@@ -239,6 +282,14 @@ def test_build_run_config_maps_core_fields() -> None:
     assert cfg.context_length == 2048
     assert cfg.max_len == 4096  # the app-derived window becomes the worker's ceiling
     assert cfg.direction is Direction.BOTH_AVERAGED
+
+
+def test_build_run_config_maps_ambiguity_policy_per_input() -> None:
+    m = JobManifest.parse(
+        _manifest(inputs=[{"id": "in1", "path": "input/x", "name": "x", "ambiguityPolicy": "error"}])
+    )
+    cfg = m.build_run_config(m.inputs[0], local_input_path="x", local_out_dir="y")
+    assert cfg.ambiguity_policy is AmbiguityPolicy.ERROR
 
 
 def test_build_run_config_window_reproduces_itself_when_recomputed() -> None:

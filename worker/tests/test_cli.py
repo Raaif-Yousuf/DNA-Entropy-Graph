@@ -122,3 +122,26 @@ def test_tsv_flag_default_on_writes_the_tsv_file(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     written = {p.name for p in (out_dir / "clitsvon").iterdir()}
     assert any(name.endswith(".entropy.tsv") for name in written)
+
+
+def test_ambiguity_flag_error_actually_refuses_an_ambiguous_sequence(tmp_path) -> None:
+    """Regression guard: --ambiguity is a real, wired-through option, not a flag that
+    parses but is never passed into RunConfig (issue #249)."""
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "cliamb", "--out", str(out_dir), "--ambiguity", "error"],
+        input="ATGCATGCNNNNATGCATGCATGCATGCATGC\n",
+    )
+    assert result.exit_code != 0
+    assert "ambiguity" in result.output.lower()
+
+
+def test_ambiguity_flag_keep_default_accepts_an_ambiguous_sequence(tmp_path) -> None:
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["run", "--name", "cliambkeep", "--out", str(out_dir)],  # --ambiguity defaults to keep
+        input="ATGCATGCNNNNATGCATGCATGCATGCATGC\n",
+    )
+    assert result.exit_code == 0, result.output

@@ -28,7 +28,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from ..config import Direction, PredictorKind, RunConfig, TrackFormat
+from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, TrackFormat
+from .batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
 
 # Exactly one schema version exists today (job_contract.md §8). A worker that sees a
 # HIGHER schema than it understands must refuse; there is no compatibility shim for any
@@ -72,6 +73,9 @@ def _require(d: dict, key: str, *, where: str) -> object:
     return d[key]
 
 
+_AMBIGUITY_POLICIES: dict[str, AmbiguityPolicy] = {p.value: p for p in AmbiguityPolicy}
+
+
 @dataclass
 class InputSpec:
     """One entry of ``manifest.json``'s ``inputs`` array."""
@@ -83,13 +87,29 @@ class InputSpec:
     start: int = 1
     rna: bool = False
     genes: bool = False
-    allow_ambiguity: bool = field(default=True, metadata={"json_name": "allowAmbiguity"})
+    # issue #249: keep | mask | error — see config.AmbiguityPolicy and
+    # docs/science_and_formats.md for what each does to the entropy numbers. Replaces the
+    # old boolean ``allowAmbiguity`` field, which was parsed but never actually consulted
+    # anywhere downstream (readers/input.py hardcoded True for GenBank/FASTA and never
+    # passed it at all for paste) — a real "wired to nothing" gap this issue also closes,
+    # not just a rename. An old manifest still sending ``allowAmbiguity`` is unaffected:
+    # unknown fields are tolerated (job_contract.md §8), same as any other schema drift.
+    ambiguity_policy: AmbiguityPolicy = field(
+        default=AmbiguityPolicy.KEEP, metadata={"json_name": "ambiguityPolicy"}
+    )
     fasta_records: str = field(
         default="all", metadata={"json_name": "fastaRecords"}
     )  # all | first (D14: "all" is the default; "first" is parity-only)
 
     @staticmethod
     def from_dict(d: dict) -> InputSpec:
+        raw_policy = str(d.get("ambiguityPolicy", AmbiguityPolicy.KEEP.value))
+        policy = _AMBIGUITY_POLICIES.get(raw_policy)
+        if policy is None:
+            valid = sorted(_AMBIGUITY_POLICIES.keys())
+            raise ManifestError(
+                f"manifest.json inputs[].ambiguityPolicy {raw_policy!r} is not one of {valid}"
+            )
         return InputSpec(
             id=str(_require(d, "id", where="inputs[]")),
             path=str(_require(d, "path", where="inputs[]")),
@@ -98,7 +118,7 @@ class InputSpec:
             start=int(d.get("start", 1)),
             rna=bool(d.get("rna", False)),
             genes=bool(d.get("genes", False)),
-            allow_ambiguity=bool(d.get("allowAmbiguity", True)),
+            ambiguity_policy=policy,
             fasta_records=str(d.get("fastaRecords", "all")),
         )
 
@@ -152,6 +172,13 @@ class Limits:
     max_run_seconds: int = field(default=14400, metadata={"json_name": "maxRunSeconds"})
     cancel_poll_seconds: int = field(default=10, metadata={"json_name": "cancelPollSeconds"})
     heartbeat_seconds: int = field(default=30, metadata={"json_name": "heartbeatSeconds"})
+    # Cost guardrails (issue #248) — a batch-level policy cap, not a technical ceiling
+    # (windowing already tiles any length); see worker/batch_limits.py's module docstring
+    # for why the DEFAULTS below are a reasonable starting point, not a derived number.
+    # Living in the manifest, not hardcoded in the worker, so the app and the worker
+    # re-validate against the SAME number rather than two that could drift.
+    max_inputs: int = field(default=DEFAULT_MAX_INPUTS, metadata={"json_name": "maxInputs"})
+    max_total_nt: int = field(default=DEFAULT_MAX_TOTAL_NT, metadata={"json_name": "maxTotalNt"})
 
     @staticmethod
     def from_dict(d: dict) -> Limits:
@@ -159,6 +186,8 @@ class Limits:
             max_run_seconds=int(d.get("maxRunSeconds", 14400)),
             cancel_poll_seconds=int(d.get("cancelPollSeconds", 10)),
             heartbeat_seconds=int(d.get("heartbeatSeconds", 30)),
+            max_inputs=int(d.get("maxInputs", DEFAULT_MAX_INPUTS)),
+            max_total_nt=int(d.get("maxTotalNt", DEFAULT_MAX_TOTAL_NT)),
         )
 
 
@@ -320,4 +349,5 @@ class JobManifest:
             rna=input_spec.rna,
             seed=self.predictor.seed,
             include_tsv=("tsv" in self.outputs) if self.outputs else True,
+            ambiguity_policy=input_spec.ambiguity_policy,
         )

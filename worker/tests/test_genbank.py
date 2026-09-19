@@ -119,13 +119,24 @@ def test_read_fasta_flags_duplicate_headers(tmp_path: Path) -> None:
     assert any("repeat across records" in n for n in notices)
 
 
-# --- lenient N validation -----------------------------------------------------------
+# --- ambiguity policy: keep / mask / error (issue #249) ------------------------------
 
 
-def test_validate_tolerates_n_when_allowed() -> None:
-    v = validate_sequence("ACGTNNNACGT", allow_ambiguity=True)
+def test_validate_keep_policy_preserves_the_original_codes() -> None:
+    v = validate_sequence("ACGTNNNACGT", ambiguity_policy="keep")
     assert v.seq == "ACGTNNNACGT"
-    assert any("ambiguity" in n.lower() for n in v.notices)
+    assert any("kept" in n.lower() and "ambiguity" in n.lower() for n in v.notices)
+
+
+def test_validate_mask_policy_normalizes_every_code_to_n() -> None:
+    v = validate_sequence("ACGTRYSACGT", ambiguity_policy="mask")
+    assert v.seq == "ACGTNNNACGT"  # R, Y, S all become N; ACGT bases untouched
+    assert any("masked" in n.lower() and "ambiguity" in n.lower() for n in v.notices)
+
+
+def test_validate_mask_policy_leaves_n_itself_unchanged() -> None:
+    v = validate_sequence("ACGTNNNACGT", ambiguity_policy="mask")
+    assert v.seq == "ACGTNNNACGT"
 
 
 def test_validate_rejects_n_by_default() -> None:
@@ -133,9 +144,20 @@ def test_validate_rejects_n_by_default() -> None:
         validate_sequence("ACGTNNNACGT")
 
 
-def test_validate_still_rejects_true_garbage_even_when_lenient() -> None:
+def test_validate_error_policy_rejects_any_ambiguity_code_explicitly() -> None:
+    with pytest.raises(ValidationError, match="ambiguity"):
+        validate_sequence("ACGTNNNACGT", ambiguity_policy="error")
+
+
+def test_validate_still_rejects_true_garbage_under_every_policy() -> None:
+    for policy in ("keep", "mask", "error"):
+        with pytest.raises(ValidationError):
+            validate_sequence("ACGT@@@ACGT", ambiguity_policy=policy)
+
+
+def test_validate_rejects_an_unknown_ambiguity_policy_value() -> None:
     with pytest.raises(ValidationError):
-        validate_sequence("ACGT@@@ACGT", allow_ambiguity=True)
+        validate_sequence("ACGTNNNACGT", ambiguity_policy="sideways")
 
 
 # --- GenBank writer round-trip ------------------------------------------------------

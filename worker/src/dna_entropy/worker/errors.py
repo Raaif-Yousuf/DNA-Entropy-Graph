@@ -88,6 +88,16 @@ WORKER_ERROR_CODES: tuple[ErrorCodeSpec, ...] = (
         "starts.",
     ),
     ErrorCodeSpec(
+        "BATCH_LIMIT_EXCEEDED",
+        "dna_entropy.worker.batch_limits.BatchLimitError",
+        retriable=False,
+        note="Not yet in docs/copy_catalog.md's 34 codes — issue #248's own new code, "
+        "raised before any per-input work starts when a batch exceeds "
+        "manifest.limits.maxInputs/maxTotalNt. Flagged as a real gap, same disposition "
+        "as MANIFEST_INVALID/WORKER_VERSION_MISMATCH above (see #248's closing report "
+        "for suggested copy).",
+    ),
+    ErrorCodeSpec(
         "GPU_NOT_VISIBLE",
         "worker/vm/startup.sh (nvidia-smi wait loop)",
         retriable=False,

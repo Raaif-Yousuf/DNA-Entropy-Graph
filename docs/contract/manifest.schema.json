@@ -37,8 +37,13 @@
           "genes": {
             "type": "boolean"
           },
-          "allowAmbiguity": {
-            "type": "boolean"
+          "ambiguityPolicy": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "mask",
+              "error"
+            ]
           },
           "fastaRecords": {
             "type": "string"
@@ -117,6 +122,12 @@
           "type": "integer"
         },
         "heartbeatSeconds": {
+          "type": "integer"
+        },
+        "maxInputs": {
+          "type": "integer"
+        },
+        "maxTotalNt": {
           "type": "integer"
         }
       }

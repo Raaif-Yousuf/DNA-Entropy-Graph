@@ -24,6 +24,22 @@ class TrackFormat(str, Enum):
     WIG = "wig"
 
 
+class AmbiguityPolicy(str, Enum):
+    """What to do with an IUPAC ambiguity code (``N``, ``R``, ``Y``, ...) — one of the 11
+    single-letter codes for "more than one possible base here" that real GenBank/FASTA
+    files routinely contain (assembly gaps, masked repeats, degenerate primer positions),
+    but which are NOT one of the four bases the predictor's ``(L, 4)`` contract is built
+    on (issue #249). See docs/science_and_formats.md for what each policy does to the
+    entropy numbers at an ambiguous position — this is a science decision, not just an
+    input-cleaning one: whichever policy runs, the model still produces SOME probability
+    distribution at that position, but what that distribution means differs by policy.
+    """
+
+    KEEP = "keep"  # feed the original code straight to the predictor, unmodified
+    MASK = "mask"  # normalize every code to a single canonical N before predicting
+    ERROR = "error"  # refuse the input outright if it contains any ambiguity code
+
+
 class Direction(str, Enum):
     """How forward and reverse-complement predictions combine into one entropy track.
 
@@ -81,6 +97,15 @@ class RunConfig:
     # K: user-settable context length (section 5.6, point 1).
     context_length: int = DEFAULT_CONTEXT_LENGTH
     direction: Direction = Direction.BOTH_COMBINED
+    # issue #249: default KEEP matches what GenBank/FASTA inputs already did before this
+    # policy had a name (validate_sequence was always called with allow_ambiguity=True
+    # for those two formats) — real-world files routinely carry N runs, and refusing
+    # them by default would make the tool unusable on a large fraction of real data. A
+    # pasted single sequence used to get a STRICTER, undocumented default (ambiguity
+    # codes always rejected, since allow_ambiguity was never passed for that path at
+    # all); this now applies the SAME policy everywhere, which is a real, deliberate
+    # behavior change for that one path, not an accident.
+    ambiguity_policy: AmbiguityPolicy = AmbiguityPolicy.KEEP
     genes: bool = False
     rna: bool = False
     seed: int = 0

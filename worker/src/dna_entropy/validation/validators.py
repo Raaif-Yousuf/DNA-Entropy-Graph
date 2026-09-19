@@ -11,12 +11,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..config import DEFAULT_MAX_LEN
+from ..config import DEFAULT_MAX_LEN, AmbiguityPolicy
 from ..redact import describe_len
 
 _ACGT: frozenset[str] = frozenset("ACGT")
-# IUPAC nucleotide ambiguity codes — recognized so we can give a helpful message,
-# but not supported yet (future work).
+# The 11 single-letter IUPAC nucleotide ambiguity codes (issue #249): distinguished from a
+# genuinely invalid character so `ambiguity_policy` (keep/mask/error) can apply to them
+# specifically, rather than treating "not ACGT" as one undifferentiated error bucket.
 _AMBIGUITY: frozenset[str] = frozenset("NRYSWKMBDHV")
 
 # Below this length, entropy is dominated by the model's prior near the start; warn only.
@@ -71,7 +72,7 @@ def validate_sequence(
     max_len: int = DEFAULT_MAX_LEN,
     rna: bool = False,
     min_len: int = DEFAULT_MIN_LEN,
-    allow_ambiguity: bool = False,
+    ambiguity_policy: AmbiguityPolicy | str = AmbiguityPolicy.ERROR,
 ) -> ValidatedSequence:
     """Clean and validate ``raw`` into a :class:`ValidatedSequence`.
 
@@ -80,15 +81,25 @@ def validate_sequence(
         max_len: single-pass context cap; longer sequences are rejected.
         rna: if True, convert ``U`` -> ``T`` instead of rejecting RNA input.
         min_len: warn (do not fail) below this length.
-        allow_ambiguity: if True, IUPAC ambiguity codes (``N`` etc.) are kept with a
-            notice instead of failing. Used for real GenBank/FASTA files, which routinely
-            contain ``N``; the pasted-sequence path stays strict A/C/G/T.
+        ambiguity_policy: what to do with an IUPAC ambiguity code (``N``, ``R``, ...) —
+            see :class:`~dna_entropy.config.AmbiguityPolicy` and
+            docs/science_and_formats.md for what each policy does to the entropy at that
+            position (issue #249). This function's own default is the strict one
+            (``ERROR``); ``RunConfig.ambiguity_policy`` (``KEEP`` by default) is the one
+            that actually reaches a real run — every caller here passes its own choice
+            explicitly rather than relying on this default.
 
     Raises:
-        ValidationError: on RNA without ``rna=True``, empty input, non-ACGT characters
-            (ambiguity codes allowed only when ``allow_ambiguity``), or length over
-            ``max_len``.
+        ValidationError: on RNA without ``rna=True``, empty input, a non-ACGT
+            non-ambiguity-code character (always an error, regardless of policy — that is
+            not an ambiguity question), an ambiguity code under ``ERROR`` policy, or
+            length over ``max_len``.
     """
+    try:
+        ambiguity_policy = AmbiguityPolicy(ambiguity_policy)
+    except ValueError as exc:
+        valid = sorted(p.value for p in AmbiguityPolicy)
+        raise ValidationError(f"ambiguity_policy {ambiguity_policy!r} is not one of {valid}") from exc
     notices: list[str] = []
 
     text, n = _strip_leading_header(raw)
@@ -115,23 +126,42 @@ def validate_sequence(
     bad = [i for i, c in enumerate(seq) if c not in _ACGT]
     if bad:
         non_iupac = [i for i in bad if seq[i] not in _AMBIGUITY]
-        if allow_ambiguity and not non_iupac:
-            # Every offending char is a recognized IUPAC ambiguity code — keep them.
-            codes = sorted({seq[i] for i in bad})
-            notices.append(
-                f"Kept {len(bad)} ambiguity code(s) ({', '.join(codes)}); entropy at those "
-                "positions reflects the model's prediction, not a definite base."
-            )
-        else:
-            i = (non_iupac or bad)[0]
+        if non_iupac:
+            # A character that is neither A/C/G/T NOR a recognized IUPAC ambiguity code
+            # is always an error, whatever ambiguity_policy says — that is a genuinely
+            # invalid character, not an ambiguity question.
+            i = non_iupac[0]
             c = seq[i]
-            hint = ""
-            if c in _AMBIGUITY:
-                hint = f" '{c}' is an IUPAC ambiguity code, which isn't supported yet."
             raise ValidationError(
                 f"Invalid character {c!r} at position {i + 1} "
-                f"({len(bad)} non-ACGT character(s) total). "
-                f"Only A, C, G, T are allowed.{hint}"
+                f"({len(bad)} non-ACGT character(s) total). Only A, C, G, T are allowed."
+            )
+
+        # Every offending char IS a recognized IUPAC ambiguity code from here on — which
+        # of the three policies applies (issue #249; docs/science_and_formats.md explains
+        # what each does to the entropy numbers at these positions):
+        codes = sorted({seq[i] for i in bad})
+        if ambiguity_policy is AmbiguityPolicy.ERROR:
+            i = bad[0]
+            c = seq[i]
+            raise ValidationError(
+                f"Ambiguity code {c!r} at position {i + 1} "
+                f"({len(bad)} total: {', '.join(codes)}). This run's ambiguity policy is "
+                "'error' (refuse). Choose 'keep' or 'mask' to run anyway, or clean the "
+                "input to plain A/C/G/T."
+            )
+        if ambiguity_policy is AmbiguityPolicy.MASK:
+            seq = "".join("N" if c not in _ACGT else c for c in seq)
+            notices.append(
+                f"Masked {len(bad)} ambiguity code(s) ({', '.join(codes)}) to 'N'; entropy "
+                "at those positions reflects the model's prediction for 'N', not the "
+                "original code (docs/science_and_formats.md)."
+            )
+        else:  # AmbiguityPolicy.KEEP
+            notices.append(
+                f"Kept {len(bad)} ambiguity code(s) ({', '.join(codes)}); entropy at those "
+                "positions reflects the model's prediction for that exact code, not a "
+                "definite base (docs/science_and_formats.md)."
             )
 
     if len(seq) > max_len:

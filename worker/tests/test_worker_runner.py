@@ -9,12 +9,37 @@ from pathlib import Path
 
 import pytest
 
-from dna_entropy.worker.blobstore import LocalBlobstore
+from dna_entropy.worker.blobstore import BlobstoreError, LocalBlobstore
 from dna_entropy.worker.cancel import CANCEL_PATH
 from dna_entropy.worker.manifest import ManifestSchemaError
 from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job
 
 DATA = Path(__file__).parent / "data"
+
+
+class _FlakyStore:
+    """Wraps a real blobstore, making ``fail_method`` raise :class:`BlobstoreError` the
+    first ``fail_times`` calls, then delegating normally (issues #318/#319/#320: a
+    transient GCS blip, simulated without any real network)."""
+
+    def __init__(self, inner, *, fail_method: str, fail_times: int) -> None:
+        self._inner = inner
+        self._fail_method = fail_method
+        self._fail_times = fail_times
+        self.call_count = 0
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if name != self._fail_method:
+            return attr
+
+        def _flaky(*args, **kwargs):
+            self.call_count += 1
+            if self.call_count <= self._fail_times:
+                raise BlobstoreError(f"simulated transient failure #{self.call_count}")
+            return attr(*args, **kwargs)
+
+        return _flaky
 
 
 def _write_manifest(store: LocalBlobstore, **overrides) -> dict:
@@ -190,6 +215,274 @@ def test_cancellation_mid_job_keeps_partial_results_for_completed_inputs(tmp_pat
     assert store.list_prefix("output/a")
     result_doc = json.loads(store.read_text(RESULT_PATH))
     assert result_doc["status"] == "cancelled"
+
+
+# --- batch-level cost guardrails (issue #248) ------------------------------------------
+
+
+def test_batch_exceeding_max_inputs_is_refused_before_any_processing(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "too-many-files",
+        "inputs": [
+            {"id": "in1", "path": "input/a.fasta", "name": "a"},
+            {"id": "in2", "path": "input/b.fasta", "name": "b"},
+        ],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "limits": {"maxInputs": 1},  # the batch has 2
+        "store": {"kind": "localdir", "root": "unused"},
+    }
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/a.fasta", ">a\n" + "ACGT" * 40 + "\n")
+    store.write_text("input/b.fasta", ">b\n" + "ACGT" * 40 + "\n")
+
+    result = run_job(store)
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error["code"] == "BATCH_LIMIT_EXCEEDED"
+    assert "2" in result.error["message"]  # the real file count, not a bare "too large"
+    assert result.inputs == []  # refused before any per-input work happened
+    assert not store.list_prefix("output/")  # nothing uploaded, nothing run
+
+
+def test_batch_exceeding_max_total_nt_is_refused_before_any_processing(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "too-much-nt",
+        "inputs": [{"id": "in1", "path": "input/a.fasta", "name": "a"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "limits": {"maxTotalNt": 10},  # the one input is 160 nt
+        "store": {"kind": "localdir", "root": "unused"},
+    }
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/a.fasta", ">a\n" + "ACGT" * 40 + "\n")  # 160 nt
+
+    result = run_job(store)
+
+    assert result.status == "failed"
+    assert result.error["code"] == "BATCH_LIMIT_EXCEEDED"
+    assert "160" in result.error["message"]  # the real measured total, not a bare "too large"
+    assert result.inputs == []
+    assert not store.list_prefix("output/")
+
+
+def test_batch_within_configured_limits_proceeds_normally(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "within-limits",
+        "inputs": [{"id": "in1", "path": "input/a.fasta", "name": "a"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "limits": {"maxInputs": 5, "maxTotalNt": 1000},
+        "store": {"kind": "localdir", "root": "unused"},
+    }
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/a.fasta", ">a\n" + "ACGT" * 40 + "\n")  # 160 nt, well under 1000
+
+    result = run_job(store)
+
+    assert result.status == "done"
+    assert result.inputs[0].status == "done"
+
+
+def test_default_limits_apply_when_the_manifest_omits_the_limits_section(tmp_path: Path) -> None:
+    """A manifest that never mentions `limits` at all must still get the worker's own
+    default cost guardrail, not an unbounded batch."""
+    from dna_entropy.worker.batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
+    from dna_entropy.worker.manifest import JobManifest
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)  # no "limits" key at all
+    _seed_fasta_input(store)
+
+    m = JobManifest.parse(store.read_text(MANIFEST_PATH))
+    assert m.limits.max_inputs == DEFAULT_MAX_INPUTS
+    assert m.limits.max_total_nt == DEFAULT_MAX_TOTAL_NT
+
+    result = run_job(store)
+    assert result.status == "done"  # a single 160 nt input is nowhere near either default
+
+
+# --- partial results survive a mid-input crash, not just a mid-job cancel (#252) ------
+#
+# job_contract.md §6 already promises this for cancellation ("uploads whatever outputs
+# were already produced ... partial results are always kept, never discarded"), and
+# pipeline.run() ALREADY writes whatever contigs completed to local disk, best-effort,
+# before re-raising ANY exception from its per-contig loop -- cancellation is just the
+# one case that happened to be exercised. The gap: `_run_one_input` never uploaded those
+# local files when pipeline.run() raised, for either cause. Both tests below use the
+# SAME fix (one upload path, not two) via the two different triggers.
+
+
+def _seed_three_record_fasta_input(store: LocalBlobstore, path: str = "input/locus.fasta") -> None:
+    store.write_text(
+        path,
+        ">rec1\n" + "ACGT" * 20 + "\n>rec2\n" + "ACGT" * 20 + "\n>rec3\n" + "ACGT" * 20 + "\n",
+    )
+
+
+def test_crash_partway_through_a_multi_record_input_uploads_completed_contigs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash on the 3rd of 3 records must not discard the first 2 records' work: their
+    output files (written to local disk by pipeline.run()'s own best-effort partial
+    write) must already be uploaded by the time the input's "failed" InputResult is
+    returned, and result.json must point at them."""
+    import dna_entropy.pipeline as pipeline_module
+    from dna_entropy.predictors.mock import MockPredictor
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_three_record_fasta_input(store)
+
+    calls = {"n": 0}
+
+    class _CrashOnThirdRecord:
+        def __init__(self, seed: int = 0) -> None:
+            self._inner = MockPredictor(seed=seed)
+
+        def predict(self, seq):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise RuntimeError("simulated crash analyzing the third record")
+            return self._inner.predict(seq)
+
+    monkeypatch.setattr(pipeline_module, "MockPredictor", _CrashOnThirdRecord)
+
+    result = run_job(store)
+
+    assert result.status == "done"  # job level: one bad input doesn't fail the whole job
+    assert result.inputs[0].status == "failed"
+    assert result.inputs[0].error is not None
+    assert calls["n"] == 3  # proves the crash really happened on the 3rd record, not the 1st
+
+    uploaded = store.list_prefix("output/locus")
+    assert uploaded, "the 2 completed records' outputs were never uploaded"
+    assert result.inputs[0].outputs, "result.json does not point at the uploaded partial outputs"
+    for path in result.inputs[0].outputs:
+        assert path in uploaded
+
+
+def test_cancellation_partway_through_one_inputs_records_uploads_completed_contigs_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation seen BETWEEN two records of the SAME input (not between two whole
+    inputs, which #278/§6's own test already covers) must still upload the record(s) that
+    finished first, and record this input as "cancelled" -- not silently drop it out of
+    result.json, which would orphan the very files this test proves get uploaded."""
+    import dna_entropy.pipeline as pipeline_module
+    from dna_entropy.predictors.mock import MockPredictor
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_three_record_fasta_input(store)
+
+    calls = {"n": 0}
+
+    class _CancelOnSecondCall:
+        def __init__(self, seed: int = 0) -> None:
+            self._inner = MockPredictor(seed=seed)
+
+        def predict(self, seq):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                store.write_text(CANCEL_PATH, "")
+            return self._inner.predict(seq)  # 2nd record's own prediction still "succeeds"...
+
+    monkeypatch.setattr(pipeline_module, "MockPredictor", _CancelOnSecondCall)
+
+    result = run_job(store)
+
+    assert result.status == "cancelled"
+    assert len(result.inputs) == 1  # the input is NOT silently missing from result.json
+    assert result.inputs[0].status == "cancelled"
+    # ...but the cancellation is seen right after, so only the 1st record's work survives.
+    assert calls["n"] == 2
+
+    uploaded = store.list_prefix("output/locus")
+    assert uploaded, "the 1 completed record's outputs were never uploaded"
+    assert result.inputs[0].outputs
+    for path in result.inputs[0].outputs:
+        assert path in uploaded
+
+
+# --- a status-write blip must never fail real work (issues #318/#319/#320) ------------
+
+
+def test_a_transient_status_write_blip_during_processing_does_not_fail_a_good_input(
+    tmp_path: Path,
+) -> None:
+    """issue #319: status.update()/notice() run synchronously inside pipeline.run()'s
+    per-contig hook (_on_contig), inside _run_one_input's catch-all `except Exception`.
+    Before the fix, a transient status-write blip there was indistinguishable from a
+    real pipeline failure, and correctly computed work was discarded as "failed" /
+    INPUT_INVALID because telling someone about it didn't work."""
+    real_store = LocalBlobstore(tmp_path)
+    _write_manifest(real_store)
+    _seed_three_record_fasta_input(real_store)
+
+    # write_text underlies status.json/progress.jsonl only (input staging uses
+    # download_file/upload_file, not write_text) -- fails the first 2 status-ish writes,
+    # landing squarely inside the per-record processing window, not job setup (which
+    # already happened above, against the real store).
+    flaky = _FlakyStore(real_store, fail_method="write_text", fail_times=2)
+
+    result = run_job(flaky)
+
+    assert result.status == "done"
+    assert result.inputs[0].status == "done"  # NOT "failed" -- the blip must not count
+    assert result.inputs[0].error is None
+    assert flaky.call_count >= 2, "the test never actually exercised the injected failure"
+
+
+def test_result_json_write_failure_still_stops_status_and_applies_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """issue #320: write_json(RESULT_PATH), status.stop(), and apply_lifecycle() used to
+    run unguarded in sequence -- a BlobstoreError writing result.json skipped both the
+    status stop and the lifecycle call. Here the store is "gcs"-kind so apply_lifecycle
+    would be attempted; lifecycle.py's own metadata-server call fails immediately in this
+    sandbox (no real VM), which must be caught and logged, not left to crash run_job or
+    to silently skip status.stop()."""
+    real_store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "result-write-blip",
+        "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "lifecycle": {"afterTask": "stop"},
+        "store": {"kind": "gcs", "bucket": "fake-bucket", "prefix": "jobs/x/"},
+    }
+    real_store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    real_store.write_text("input/locus.fasta", ">seq\n" + "ACGT" * 40 + "\n")
+
+    # Only RESULT_PATH's own write is made to fail (targeted, not every write_text call --
+    # a real StatusWriter write failure is already covered by the #318/#319 tests above).
+    real_write_text = real_store.write_text
+
+    def _fail_only_result_json(path, text):
+        if path == RESULT_PATH:
+            raise BlobstoreError("simulated failure writing result.json")
+        return real_write_text(path, text)
+
+    real_store.write_text = _fail_only_result_json  # type: ignore[method-assign]
+
+    result = run_job(real_store)  # must not raise despite the injected failure
+
+    assert result.status == "done"  # the in-memory result still reflects the real outcome
+    # status.json's LAST write still happened (status.stop() was not skipped): its own
+    # write_text call is for "status.json", not RESULT_PATH, so it went through the real
+    # (non-failing) path above and is readable.
+    real_store.write_text = real_write_text  # restore before reading, for clarity
+    status_doc = json.loads(real_store.read_text("status.json"))
+    assert status_doc["stage"] == "done"
 
 
 # --- per-input failure isolation (docs/job_contract.md §7) ----------------------------

@@ -8,11 +8,13 @@ memory and re-uploads it whole on every tick.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from .blobstore import Blobstore, write_json
+from .blobstore import Blobstore, BlobstoreError, write_json
 
 STATUS_PATH = "status.json"
 PROGRESS_PATH = "progress.jsonl"
@@ -101,6 +103,20 @@ class StatusWriter:
     exists to avoid (job_contract.md §5: the app calls a job dead after 180-600s of
     silence). :meth:`update`/:meth:`notice` ALSO write immediately on every call, so a
     stage transition or a notice is never delayed by up to a full tick either.
+
+    **A store write here never raises** (issues #318/#319): every actual write goes
+    through :meth:`_safe_write`, which catches :class:`~.blobstore.BlobstoreError` and
+    counts it rather than propagating. Two distinct failure modes this closes: (1) an
+    unhandled exception in a background thread's target silently kills that thread —
+    without this, one transient GCS blip (401/429/500/timeout) would permanently stop the
+    heartbeat for the rest of the job, and the app's own 180-second death-detection rule
+    would give up on a job that is running fine; (2) :meth:`update`/:meth:`notice` are
+    called SYNCHRONOUSLY from inside ``pipeline.run()``'s cooperative-cancellation hooks
+    (``runner.py``'s ``_on_contig``), so a write failure there used to be indistinguishable
+    from a real pipeline failure to the catch-all ``except Exception`` around it —
+    discarding correctly computed work because telling someone about it didn't work.
+    :attr:`consecutive_write_failures` is exposed for a caller that wants to notice a
+    *persistent* outage rather than a blip (nothing in this repo reads it yet).
     """
 
     def __init__(
@@ -138,6 +154,13 @@ class StatusWriter:
         self._progress_seq = 0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._consecutive_write_failures = 0
+
+    @property
+    def consecutive_write_failures(self) -> int:
+        """How many store writes in a row have failed just now (0 once one succeeds)."""
+        with self._lock:
+            return self._consecutive_write_failures
 
     def set_vm(self, gpu: GpuInfo, *, name: str | None = None) -> None:
         """Report the VM/GPU identity — job_contract.md's own callout: "its first line
@@ -237,10 +260,34 @@ class StatusWriter:
             self._state["heartbeatSeq"] = self._heartbeat_seq
             self._state["updatedAt"] = utc_now_iso()
             snapshot = json.loads(json.dumps(self._state))  # deep copy under the lock
-        write_json(self._store, STATUS_PATH, snapshot)
+        self._safe_write(lambda: write_json(self._store, STATUS_PATH, snapshot), what="status.json")
 
     def _write_progress(self) -> None:
         with self._lock:
             lines = [json.dumps(p) for p in self._progress]
         text = "\n".join(lines) + ("\n" if lines else "")
-        self._store.write_text(PROGRESS_PATH, text)
+        self._safe_write(lambda: self._store.write_text(PROGRESS_PATH, text), what="progress.jsonl")
+
+    def _safe_write(self, write: Callable[[], None], *, what: str) -> None:
+        """Run one store write; never let it propagate (issues #318/#319 — see the class
+        docstring). Only :class:`~.blobstore.BlobstoreError` is swallowed — a store's own
+        transport/auth/HTTP failures are ALWAYS wrapped in that (both
+        :class:`~.blobstore.LocalBlobstore` and :class:`~.blobstore.GcsBlobstore` do this
+        uniformly), so a genuine bug elsewhere (e.g. a non-JSON-serializable value
+        accidentally placed in ``detail``) still surfaces loudly instead of being eaten
+        forever by an overly broad catch.
+        """
+        try:
+            write()
+        except BlobstoreError as exc:
+            with self._lock:
+                self._consecutive_write_failures += 1
+                n = self._consecutive_write_failures
+            # progress.jsonl/status.json may themselves be unreachable right now, so this
+            # can't rely on either — stderr is the one channel not gated on the store
+            # being up. Never includes anything from `snapshot`/`text` (no sequence
+            # content, no file names — same discipline as issue #253's log redaction).
+            print(f"status writer: {what} write failed ({n} consecutive): {exc}", file=sys.stderr)
+        else:
+            with self._lock:
+                self._consecutive_write_failures = 0

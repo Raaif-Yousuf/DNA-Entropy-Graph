@@ -19,6 +19,7 @@ from .config import (
     DEFAULT_CONTEXT_LENGTH,
     DEFAULT_MAX_LEN,
     DEFAULT_MAX_TOTAL_LEN,
+    AmbiguityPolicy,
     Direction,
     PredictorKind,
     RunConfig,
@@ -103,6 +104,12 @@ def run(
         help="both-combined|both-averaged|both-separate|forward-only|reverse-only.",
     ),
     rna: bool = typer.Option(False, "--rna", help="Convert U->T (treat input as RNA)."),
+    ambiguity: str = typer.Option(
+        "keep",
+        "--ambiguity",
+        help="What to do with an IUPAC ambiguity code (N, R, Y, ...): keep it as-is, mask "
+        "it to N, or refuse the input outright. keep|mask|error (docs/science_and_formats.md).",
+    ),
     genes: bool = typer.Option(
         False,
         "--genes/--no-genes",
@@ -143,11 +150,12 @@ def run(
             context_length=context_length,
             direction=Direction(direction),
             rna=rna,
+            ambiguity_policy=AmbiguityPolicy(ambiguity),
             genes=genes,
             include_tsv=tsv,
             seed=seed,
         )
-    except ValueError as exc:  # bad --predictor/--format/--direction value
+    except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 

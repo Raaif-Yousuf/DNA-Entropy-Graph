@@ -17,6 +17,7 @@ fake HTTP transport; none makes a real network call.
 
 from __future__ import annotations
 
+import json
 import urllib.error
 import urllib.request
 from typing import Literal
@@ -63,20 +64,35 @@ def apply_lifecycle(
     *,
     opener: HttpOpener = default_http_opener,
     token_provider: MetadataTokenProvider | None = None,
-) -> None:
+) -> dict | None:
     """Apply ``after`` to the CURRENT VM: ``"stop"``/``"delete"`` call the Compute API on
     self; ``"keep"`` is a no-op (the VM stays RUNNING, e.g. for
     ``manifest.lifecycle.afterTask == "keep"`` before an ``idle``/keep-alive wait).
+    Returns the Compute API's own response body for ``"stop"``/``"delete"`` (``None`` for
+    ``"keep"``, which makes no request).
 
     This is the PRIMARY cleanup mechanism, not a backstop — ``instanceTerminationAction
     =DELETE`` (fired only at the VM's ``maxRunDuration`` deadline) and a startup-script
     ``shutdown -h`` deadman are both backstops for when THIS call fails to run at all, per
     docs/cloud_design.md §8.
+
+    **issue #321**: a 2xx HTTP status here only means the Compute API *accepted* the
+    ``stop``/``delete`` request — both are long-running asynchronous Operations, and a 2xx
+    response does not mean the instance has actually stopped or been deleted yet, only
+    that Google queued the attempt. This function does **not** poll the operation to
+    completion: issue #256 already owns proper operation polling on the app side, and
+    polling here would delay this VM's own exit for marginal benefit on a
+    self-terminating action that two independent backstops already cover (see the
+    docstring above). What it DOES do, which the previous version silently skipped: read
+    the response body and raise :class:`LifecycleError` if the body itself already
+    reports an ``error`` (some failure modes surface there rather than as an HTTP error
+    status), and hand the parsed body back to the caller so at least the operation's own
+    id is recorded (``runner.py`` logs it via a notice) rather than discarded outright.
     """
     if after not in _VALID_ACTIONS:
         raise LifecycleError(f"unknown lifecycle action {after!r}, expected one of {_VALID_ACTIONS}")
     if after == "keep":
-        return
+        return None
 
     tokens = token_provider or MetadataTokenProvider(opener=opener)
     project, zone, name = self_instance_identity(opener=opener)
@@ -87,8 +103,13 @@ def apply_lifecycle(
         headers={"Authorization": f"Bearer {tokens.get()}"},
     )
     try:
-        opener(req)
+        with opener(req) as resp:  # type: ignore[union-attr]
+            body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise LifecycleError(f"Compute API {after} failed ({exc.code}): {exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise LifecycleError(f"Compute API {after} failed: {exc}") from exc
+
+    if isinstance(body, dict) and body.get("error"):
+        raise LifecycleError(f"Compute API {after} accepted but reports an error: {body['error']}")
+    return body if isinstance(body, dict) else None

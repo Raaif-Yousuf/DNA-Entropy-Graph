@@ -179,7 +179,7 @@ def test_windowing_is_transparent_in_the_single_window_case(tmp_path: Path) -> N
     from dna_entropy.validation.validators import validate_sequence
 
     records, _ = read_fasta(SAMPLE_FA)
-    validated = validate_sequence(records[0].seq, allow_ambiguity=True)
+    validated = validate_sequence(records[0].seq, ambiguity_policy="keep")
     seq = validated.seq
     assert len(seq) < 8192  # single-window path
 

@@ -17,7 +17,6 @@ docs/job_contract.md is the contract this satisfies. The high-level shape:
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import shutil
 import tempfile
@@ -28,7 +27,9 @@ from pathlib import Path
 from .. import __version__ as WORKER_VERSION
 from .. import pipeline
 from ..predictors.base import PredictorError
+from ..readers.input import load_input
 from ..validation.validators import ValidationError
+from .batch_limits import BatchLimitError, check_batch_limits
 from .blobstore import Blobstore, BlobstoreError, write_json
 from .cancel import CancelWatcher, JobCancelledError
 from .errors import is_retriable
@@ -53,6 +54,62 @@ def _free_disk_gb(path: Path) -> float:
         return -1.0
 
 
+def _upload_local_outputs(store: Blobstore, local_out: Path, input_spec: InputSpec) -> list[str]:
+    """Upload every file currently sitting in ``local_out`` to ``output/<input name>/``
+    and return the destination paths (issue #252).
+
+    ONE upload path, used for a normal completion AND for whatever a crash or a
+    cancellation left behind — not two separately-maintained ones. ``pipeline.run()``
+    already writes whatever contigs/records completed to ``local_out``, best-effort,
+    before re-raising ANY exception out of its per-contig loop (job_contract.md §6:
+    "partial results are always kept, never discarded" — that promise was already true on
+    local disk; the gap this closes is that nothing then uploaded them). Safe to call on a
+    ``local_out`` that does not exist yet (nothing was ever written) — returns ``[]``.
+    """
+    if not local_out.is_dir():
+        return []
+    uploaded: list[str] = []
+    for local_path in sorted(p for p in local_out.iterdir() if p.is_file()):
+        dest = f"output/{input_spec.name}/{local_path.name}"
+        store.upload_file(local_path, dest)
+        uploaded.append(dest)
+    return uploaded
+
+
+def _measure_batch_total_nt(store: Blobstore, manifest: JobManifest, tmp: Path) -> int:
+    """Sum every input's actual nt count, cheaply, before any predictor runs (issue #248).
+
+    Downloads and parses each input with the same :func:`~..readers.input.load_input`
+    the real per-input run uses later — no duplicated parsing logic — but does none of
+    the expensive part (no predictor call, no windowing). Re-downloads each input a
+    second time (the real run stages it again under its own path); accepted as a cheap
+    trade-off rather than restructuring the per-input download into a two-phase
+    measure-then-run design, since I/O is not what a cost limit exists to protect against.
+
+    A bad/missing/malformed input is silently skipped HERE (counted as 0 nt) rather than
+    raised: this function's only job is measuring total nt for the batch-level guardrail,
+    and reporting *that* particular input's own real problem is `_run_one_input`'s job,
+    later, on the real pass — raising it here instead would turn an isolated per-input
+    failure into a batch-wide refusal, a regression from today's per-input isolation
+    (job_contract.md §7).
+    """
+    total = 0
+    for input_spec in manifest.inputs:
+        try:
+            local_input = tmp / "prescan" / Path(input_spec.path).name
+            store.download_file(input_spec.path, local_input)
+            cfg = manifest.build_run_config(
+                input_spec,
+                local_input_path=str(local_input),
+                local_out_dir=str(tmp / "prescan-out"),
+            )
+            loaded = load_input(cfg)
+            total += sum(len(c.seq) for c in loaded.contigs)
+        except Exception:
+            continue
+    return total
+
+
 def _run_one_input(
     store: Blobstore,
     manifest: JobManifest,
@@ -61,12 +118,16 @@ def _run_one_input(
     status: StatusWriter,
     cancel: CancelWatcher,
 ) -> InputResult:
-    """Stage, run, and upload results for one manifest input. Raises
-    :class:`~.cancel.JobCancelledError` if cancellation is seen (job-level, not per-input);
-    any other failure is caught and reported as a "failed" :class:`InputResult` so a batch
-    with one bad input still finishes the rest (job_contract.md §7)."""
+    """Stage, run, and upload results for one manifest input. A cancellation or any other
+    failure seen BEFORE this input even starts propagates out (job-level: stop the whole
+    job before doing any work on it, nothing to upload). A cancellation or failure seen
+    WHILE this input is running is caught here and reported as a "cancelled"/"failed"
+    :class:`InputResult` — with whatever contigs/records completed first already uploaded
+    (issue #252) — so a batch with one bad input still finishes the rest, and a
+    cancellation mid-input never silently drops that input out of ``result.json``
+    (job_contract.md §7)."""
     status.update(stage="running", detail={"input": input_spec.id})
-    cancel.check_or_raise()
+    cancel.check_or_raise()  # pre-start: nothing has run yet, nothing to upload if this fires
 
     def _on_window() -> None:
         cancel.check_or_raise()
@@ -74,6 +135,10 @@ def _run_one_input(
     def _on_contig(contig) -> None:
         cancel.check_or_raise()
         status.update(detail={"input": input_spec.id, "contig": contig.name})
+
+    # local_out is computed before the try block (just a path join, no I/O) so the except
+    # branches below can always find it, even if staging the input itself is what failed.
+    local_out = tmp / "output" / input_spec.name
 
     # Staging the input, building its RunConfig, AND running the pipeline are all inside
     # this one try/except: a missing/unreadable input file must fail only THIS input, the
@@ -83,7 +148,6 @@ def _run_one_input(
         local_input = tmp / "input" / Path(input_spec.path).name
         store.download_file(input_spec.path, local_input)
 
-        local_out = tmp / "output" / input_spec.name
         cfg = manifest.build_run_config(
             input_spec,
             local_input_path=str(local_input),
@@ -91,7 +155,14 @@ def _run_one_input(
         )
         result = pipeline.run(cfg, on_window=_on_window, on_contig=_on_contig)
     except JobCancelledError:
-        raise  # job-level: stop the whole job, not just this input
+        # Cancellation mid-input (between two windows/contigs of THIS input), distinct
+        # from the pre-start check above: this input already did real work, so it is
+        # reported — with that work uploaded — rather than silently vanishing from
+        # result.json, which would orphan the very files just uploaded. The caller
+        # (run_job) checks `cancel.is_cancelled` after every input to stop the loop; it
+        # does not need this to propagate as an exception to do that.
+        uploaded = _upload_local_outputs(store, local_out, input_spec)
+        return InputResult(id=input_spec.id, status="cancelled", outputs=uploaded)
     except Exception as exc:
         # A specific exception's OWN `.code` (ModelNeedsHopperError -> MODEL_NEEDS_HOPPER,
         # PredictorOOMError -> MODEL_OOM, ...) always wins over the generic fallback below
@@ -111,13 +182,13 @@ def _run_one_input(
         error: dict = {"code": code, "message": str(exc), "retriable": is_retriable(code)}
         if code == "WORKER_CRASH":
             error["detail"] = traceback.format_exc()
-        return InputResult(id=input_spec.id, status="failed", error=error)
+        # issue #252: whatever contigs/records completed before the crash are already on
+        # local disk (pipeline.run()'s own best-effort write) — upload them so one bad
+        # record doesn't cost the whole input, not just the whole job.
+        uploaded = _upload_local_outputs(store, local_out, input_spec)
+        return InputResult(id=input_spec.id, status="failed", error=error, outputs=uploaded)
 
-    uploaded: list[str] = []
-    for local_path in result.outputs:
-        dest = f"output/{input_spec.name}/{Path(local_path).name}"
-        store.upload_file(Path(local_path), dest)
-        uploaded.append(dest)
+    uploaded = _upload_local_outputs(store, local_out, input_spec)
     for note in result.notices:
         status.notice(note, data={"input": input_spec.id})
 
@@ -156,16 +227,41 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
             status.set_vm(GpuInfo())  # no GPU identity available off a real VM (yet)
             status.notice(f"worker starting; free disk {_free_disk_gb(tmp)} GB")
 
+            # Cost guardrail (issue #248), before any predictor call: cheap to measure
+            # (I/O + parsing only, no GPU), so a batch that exceeds manifest.limits is
+            # refused before spending anything, not partway through.
+            total_nt = _measure_batch_total_nt(store, manifest, tmp)
+            check_batch_limits(
+                n_inputs=len(manifest.inputs),
+                total_nt=total_nt,
+                max_inputs=manifest.limits.max_inputs,
+                max_total_nt=manifest.limits.max_total_nt,
+            )
+
             for input_spec in manifest.inputs:
                 input_results.append(_run_one_input(store, manifest, input_spec, tmp, status, cancel))
+                if cancel.is_cancelled:
+                    break  # stop the whole job, not just this input (job_contract.md §6)
 
+    except BatchLimitError as exc:
+        job_status = "failed"
+        job_error = {"code": exc.code, "message": str(exc), "retriable": False}
+        status.notice(f"batch refused: {exc}", level="error")
     except JobCancelledError:
-        job_status = "cancelled"
-        status.notice("job cancelled (control/cancel seen)", level="notice")
+        # Seen BEFORE an input even started (_run_one_input's own pre-start check raises
+        # directly, since nothing ran yet and there is nothing to upload) — the mid-input
+        # case is handled inside _run_one_input itself, which returns a "cancelled"
+        # InputResult instead of raising, so the `for` loop above can finish appending it
+        # and stop cleanly via `cancel.is_cancelled` rather than unwinding through here.
+        pass
     except Exception as exc:  # a whole-job-level crash outside any single input's handling
         job_status = "failed"
         job_error = {"code": "WORKER_CRASH", "message": str(exc), "retriable": False}
         status.notice(f"job-level crash: {exc}", level="error")
+
+    if job_status != "failed" and cancel.is_cancelled:
+        job_status = "cancelled"
+        status.notice("job cancelled (control/cancel seen)", level="notice")
 
     finished_at = _utc_now_iso()
     status.update(
@@ -186,7 +282,19 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     # Written LAST, after every output is confirmed uploaded — job_contract.md §7: its
     # mere presence, not just its contents, is the app's "this job reached a terminal
     # state" signal, checked before status.json's heartbeat on every app launch.
-    write_json(store, RESULT_PATH, result.to_dict())
+    #
+    # issue #320: this write, status.stop(), and apply_lifecycle() used to run as three
+    # unguarded statements in a row — a BlobstoreError writing result.json skipped BOTH
+    # the status stop and the lifecycle call, leaving status.json stuck at a non-terminal
+    # stage with no result.json ever appearing, and (separately) a VM that failed to stop
+    # or delete itself with nothing recording that it happened. Each step is now
+    # independent: one failing must not skip the next. `status.notice()` itself can never
+    # raise (issues #318/#319), so calling it from inside these except blocks is safe even
+    # if the SAME store outage caused the failure being reported.
+    try:
+        write_json(store, RESULT_PATH, result.to_dict())
+    except BlobstoreError as exc:
+        status.notice(f"result.json write failed: {exc}", level="error")
 
     status.stop()
 
@@ -196,8 +304,21 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     # the `apply_lifecycle` call at all, so no test in this repo exercises it against a
     # real network no matter how this function is invoked.
     if manifest.store.kind == "gcs" and manifest.lifecycle.after_task != "keep":
-        # best-effort; instanceTerminationAction=DELETE is the backstop
-        with contextlib.suppress(LifecycleError):
-            apply_lifecycle(manifest.lifecycle.after_task)
+        try:
+            # issue #321: a 2xx HTTP status only means the Compute API ACCEPTED the
+            # operation, not that stop/delete actually completed — apply_lifecycle()
+            # now returns the operation's own response body (or raises if that body
+            # itself already reports an error) instead of discarding it.
+            operation = apply_lifecycle(manifest.lifecycle.after_task)
+            op_id = (operation.get("name") or operation.get("id")) if operation else None
+            if op_id:
+                status.notice(f"lifecycle {manifest.lifecycle.after_task}: operation {op_id} accepted")
+        except LifecycleError as exc:
+            # best-effort; instanceTerminationAction=DELETE and startup.sh's own
+            # exit-code-driven cleanup dispatch are both independent backstops for
+            # exactly this case (see #320's closing report for why that softens the
+            # consequence) — but a failure here is now AT LEAST visible, not silently
+            # swallowed the way `contextlib.suppress(LifecycleError)` used to leave it.
+            status.notice(f"lifecycle apply failed: {exc}", level="error")
 
     return result

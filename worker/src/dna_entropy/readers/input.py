@@ -73,7 +73,9 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
         records, notices = read_genbank(cfg.input_path)
         contigs: list[Contig] = []
         for i, rec in enumerate(records):
-            v = validate_sequence(rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, allow_ambiguity=True)
+            v = validate_sequence(
+                rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
+            )
             notices += v.notices
             contigs.append(
                 Contig(
@@ -89,7 +91,9 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
         records, notices = read_fasta(cfg.input_path)
         contigs: list[Contig] = []
         for i, rec in enumerate(records):
-            v = validate_sequence(rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, allow_ambiguity=True)
+            v = validate_sequence(
+                rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
+            )
             notices += v.notices
             contigs.append(
                 Contig(
@@ -101,6 +105,6 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
         return LoadedInput(contigs=contigs, notices=notices, source_kind=kind)
 
     text = raw if raw is not None else PasteReader(cfg.input_path).read()
-    v = validate_sequence(text, max_len=cfg.max_total_len, rna=cfg.rna)
+    v = validate_sequence(text, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy)
     contig = Contig(name=_safe_contig_name(cfg.name, 0, 1), seq=v.seq)
     return LoadedInput(contigs=[contig], notices=v.notices, source_kind=detect.PASTE)
