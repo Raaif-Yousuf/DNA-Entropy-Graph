@@ -32,6 +32,30 @@ present, but the standing convention is still to exclude it explicitly with
 exclusion is a statement of intent, a self-skip is a fallback for when that
 statement was forgotten.
 
+## Property-based tests (Hypothesis)
+
+`worker/tests/test_property_*.py` (issues #367/#368, parents #160/#162) generate inputs
+rather than sample them, for properties a handful of hand-picked examples cannot cover:
+
+- `test_property_windowing_direction.py`: window coverage and the closed-form pass-count
+  formula over the whole valid `(L, K, ceiling)` space; the Hard Rule 3 `(L, 4)` contract
+  (shape, dtype, row-sum, entropy bound) for generated sequences; entropy invariance under
+  the reverse-complement column permutation; the seam recorded in provenance matching
+  where the forward/reverse combiner actually switched.
+- `test_property_fuzz_readers.py`: the GenBank/FASTA readers, fuzzed over arbitrary bytes
+  and over mutated copies of the real `sample.fasta`/`sample.gb` fixtures (byte flips,
+  deletions, insertions, truncations, encoding swaps). Property: every input parses to a
+  genuine record set or raises one of the three registered clean exception types, never
+  anything else.
+
+Every property has an explicit `@settings(max_examples=..., deadline=None)` budget (never
+the Hypothesis default) -- larger for pure Python/NumPy properties, smaller for properties
+that drive `MockPredictor.predict` or a real Biopython parse, since a large budget is
+itself a RAM/time cost when several agents run concurrently. `hypothesis` is a `dev`-only
+extra in `worker/pyproject.toml`; it is MPL-2.0, not MIT (see
+`docs/changelog.d/test-367-property-windowing-direction.md` and the `DECISION` issue this
+recorded under Hard Rule 21).
+
 ## Fixtures
 
 `worker/tests/conftest.py` carries shared fixtures (currently: `sample_seq`,
