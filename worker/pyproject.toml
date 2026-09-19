@@ -23,7 +23,18 @@ dependencies = [
 
 [project.optional-dependencies]
 # Dev: laptop / CI, no GPU needed.
-dev = ["pytest>=7", "jsonschema>=4"]
+# hypothesis is MPL-2.0, NOT MIT/Apache/BSD (MEASURED 2026-09-19 against PyPI's own
+# license_expression metadata; issue #368's own body assumed MIT without checking, which
+# is exactly the mistake Hard Rule 21 exists to catch before a dependency lands, not
+# after). Hard Rule 21's own text scopes the MIT/Apache/BSD requirement to "anything that
+# ships" -- this extra is explicitly dev/CI-only and is never installed into the
+# container image (see the comment on `dev` above and worker/Dockerfile.cpu/.cuda, which
+# install core + `[evo]` only, never `[dev]`). docs/hard_rules.md's own carve-out section
+# says no dev-only-dependency carve-out is currently recorded (unlike the donor project's
+# own dev-only MPL-2.0 precedent) and that one needs a DECISION issue rather than a silent
+# addition here -- see DECISION issue filed this session (worker: hypothesis is dev-only
+# and MPL-2.0, not MIT; scope Hard Rule 21 to shipped code or record a carve-out).
+dev = ["pytest>=7", "jsonschema>=4", "hypothesis>=6.100"]
 # Evo: GPU box only (see docs/EVO_SETUP.md). Heavy; never a core dep.
 evo = ["torch", "evo2"]
 # Gene boundaries (optional, prokaryotic).

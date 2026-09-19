@@ -148,14 +148,24 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     # has to be done here, before the text reaches Bio.GenBank.Scanner.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     try:
-        # #349: every malformed-content failure this scanner raises for GenBank/EMBL is
-        # documented and observed to be a ValueError (including its own
-        # Bio.GenBank.ParserFailureError, itself a ValueError subclass) -- MEASURED
-        # 2026-09-19 against a missing-ORIGIN-block fixture and this repo's own test
-        # suite. list() is what actually drives the parser, since SeqIO.parse() returns
-        # a lazy generator that raises only once iterated.
+        # #349's own claim here ("every malformed-content failure this scanner raises for
+        # GenBank/EMBL is documented and observed to be a ValueError") is DISPROVEN
+        # (Hard Rule 18: replacing the claim rather than leaving it beside a correction) --
+        # MEASURED 2026-09-19 (issue #368's Hypothesis property fuzzing, mutating a real
+        # fixture): a feature qualifier continuation line missing its leading '/' (e.g.
+        # `gene="geneB"` instead of `/gene="geneB"`) drives Bio.GenBank.Scanner into one of
+        # its own internal bare `assert` statements (Scanner.py's feature-table parser has
+        # several: `assert len(qualifiers) > 0`, `assert key == qualifiers[-1][0]`, and
+        # others elsewhere in the same module), which raises a raw `AssertionError`, not a
+        # `ValueError` -- see worker/tests/data/malformed/genbank_qualifier_missing_slash.gb
+        # and test_fuzz_readers.py's corpus-driven regression test for this exact fixture.
+        # `AssertionError` is caught alongside `ValueError` for exactly the same reason
+        # `ValueError` is: it is Biopython's OWN signal that the input violates an
+        # assumption its scanner makes, not a genuine internal-logic-error class this code
+        # would want to keep visible as a crash. list() is what actually drives the parser,
+        # since SeqIO.parse() returns a lazy generator that raises only once iterated.
         parsed = list(SeqIO.parse(io.StringIO(text), "genbank"))
-    except ValueError as exc:
+    except (ValueError, AssertionError) as exc:
         # readers/fasta.py never has this failure class at all (it is hand-rolled, no
         # third-party parser to escape from) -- this is GenBank agreeing with FASTA's
         # blanket guarantee that a malformed file never reaches the caller as a raw
