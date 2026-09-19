@@ -78,8 +78,10 @@ sequence had produced so far is saved; download the partial results, or retry on
 full-price option, which is not interruptible. *(`VM_DIED`, `SPOT_PREEMPTED`)*
 
 **"The analysis program failed"**, a genuine software problem, not something you did
-wrong. The technical log is attached to this error; please file an issue with it.
-*(`WORKER_CRASH`)*
+wrong. If your file had several records, or your batch had several files, whatever
+finished before the failure is still uploaded and downloadable; only the one record or
+file that was running when it failed is missing. The technical log is attached to this
+error; please file an issue with it. *(`WORKER_CRASH`)*
 
 **"The computer started but never became ready"**, the graphics card did not come up
 correctly on this particular rented computer, which happens occasionally. Delete it and
@@ -88,6 +90,15 @@ retry; a fresh computer almost always works. *(`GPU_NOT_VISIBLE`)*
 **"Couldn't download the analysis software onto the computer"**, a temporary network
 problem between the rented computer and the software it needs. Click **Retry**.
 *(`IMAGE_PULL_FAILED`)*
+
+**"Your app and your analysis software don't match"**, this can happen right after the
+app updates itself, if the cloud side has not caught up yet. It usually clears up on its
+own within a few minutes; if it does not, check for an app update and install it.
+*(`WORKER_VERSION_MISMATCH`)*
+
+**"Something went wrong before your analysis could start"**, a bug on the app's side, not
+something you did. Please file an issue; there is nothing to fix on your end.
+*(`MANIFEST_INVALID`)*
 
 **"The computer stopped reporting progress"**, the app has not heard from the rented
 computer in a while; it may just be slow, or it may have genuinely stopped. You can wait
@@ -131,6 +142,11 @@ full retention period regardless of when you manage to download them.
 **"This run would go over your monthly warning cap"**, you set a spending limit in
 Settings and this run's estimated cost would cross it. Click **Run anyway** if you are
 sure, or raise the cap in Settings. *(`SPEND_CAP`)*
+
+**"This batch is too large"**, more files or letters than the batch ceiling allows (see
+[03-run.md](03-run.md)), a cost guard rather than an arbitrary restriction. The message
+gives your batch's actual numbers against the limit; split it into smaller runs, or raise
+the limit yourself if you mean to run this much at once. *(`BATCH_LIMIT_EXCEEDED`)*
 
 ## Related
 

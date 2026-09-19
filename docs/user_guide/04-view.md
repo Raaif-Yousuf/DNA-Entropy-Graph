@@ -17,6 +17,13 @@ Entropy is not, by itself, a claim that a position is "good" or "bad," it is a m
 predictability, one useful signal among others you bring to reading your sequence, not a
 verdict.
 
+**If a stretch of your track looks odd over a run of `N`s or other ambiguous letters**,
+that is expected: by default this app feeds those positions to the model exactly as
+written, so the entropy value there reflects an unusual letter the model rarely or never
+saw during training, not an ordinary confidence reading. See
+[`docs/science_and_formats.md`](../science_and_formats.md) for the other ways to handle
+them and how to choose one.
+
 ## The seam marker
 
 By default, the app reads your sequence in both directions and stitches the two readings

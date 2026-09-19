@@ -66,6 +66,10 @@ built from arithmetic on the single-plasmid numbers above, not a measurement of 
 written. Treat it as a ballpark, and trust the app's own live estimate on your actual
 files over this number.
 
+This is also why a batch has a ceiling (50 files or 20 million letters, by default, see
+[03-run.md](03-run.md)): cost scales with what you run, so a batch large enough to matter
+for your bill is worth catching before the computer even starts, not after.
+
 **On the bigger A100 computer**, the same runs cost roughly four to six times as much per
 minute of computer time, so a run that costs 10 cents on the default L4 tier costs
 somewhere around 40 cents to a dollar on A100. Most people never need to touch this

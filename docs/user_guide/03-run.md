@@ -9,16 +9,25 @@ On the **New run** page, either:
 - Click **Paste sequence...** and type or paste letters directly.
 
 You can add more than one file at once; the app runs them as a batch and gives you
-results for each. GenBank and FASTA files are detected automatically by their contents,
-not just their file extension, so a renamed file still works.
+results for each, up to a limit on how many files or how many total letters one batch can
+hold (50 files or 20 million letters, by default). That ceiling is there for cost, not
+policy: a batch large enough to matter for your bill should be caught before you press
+Run, not discovered afterward. If you go over it, the app tells you your batch's actual
+numbers against the limit and lets you either split the batch or raise the limit yourself;
+see [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for why the ceiling is set where it
+is. GenBank and FASTA files are detected automatically by their contents, not just their
+file extension, so a renamed file still works.
 
 Each file you add gets its own small summary: how many records it contains, how many
 letters (nucleotides), how many genes it found, and any notices. A green check means it
 is ready to run. A yellow notice is something worth knowing but not a problem, for
-example, "found a header line, ignoring it." A red message is something you need to fix
-before the file can run, and it tells you exactly what is wrong and where, for example,
-"found the letter U at position 12: this looks like RNA," with a button to turn on
-**Treat as RNA** right there if that is what you meant.
+example, "found a header line, ignoring it," or that a real GenBank/FASTA file contained
+a handful of `N`s or other ambiguous letters, which by default this app keeps and runs
+with rather than rejecting (see [04-view.md](04-view.md) for what that means for the
+entropy track). A red message is something you need to fix before the file can run, and
+it tells you exactly what is wrong and where, for example, "found the letter U at
+position 12: this looks like RNA," with a button to turn on **Treat as RNA** right there
+if that is what you meant.
 
 ## Name your run
 
