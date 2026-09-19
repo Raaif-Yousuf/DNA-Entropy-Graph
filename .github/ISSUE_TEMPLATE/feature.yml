@@ -1,0 +1,101 @@
+name: Work item
+description: A piece of work with a falsifiable Done when and a visible observable.
+title: "<area>: <imperative verb phrase>"
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Title format is `<area>: <imperative verb phrase>`, for example
+        `cloud: classify billing-disabled before quota`. The area matches the label you pick below.
+        An issue without a filled "Done when" and "Observable" is labelled `needs-criteria` and is not worked.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Add the matching `area:` label after filing.
+      options:
+        - app
+        - worker
+        - cloud
+        - viewer
+        - local-engine
+        - docs
+        - packaging
+        - ux
+        - aws
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - v0.1 walking skeleton
+        - v0.2 real Evo on GPU
+        - v0.3 daily-use polish
+        - v1.0 lab release
+        - v1.1 multi-cloud (AWS)
+        - post-v1
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: >
+        One paragraph. The user-visible or money-visible problem, or the capability.
+        If you claim a cause, mark it `MEASURED <date>:` or `THEORY (unverified):`.
+    validations:
+      required: true
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: Falsifiable. A person runs ONE command or opens ONE screen and says yes or no.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: observable
+    attributes:
+      label: Observable that proves it is wired
+      description: >
+        The single thing that differs between "this works" and "this compiles, passes tests and does nothing".
+        Name where to look: a screen, a bucket object, a history row, a log line, a CloudCli output.
+    validations:
+      required: true
+  - type: checkboxes
+    id: docs
+    attributes:
+      label: Docs touched
+      options:
+        - label: "`docs/<file>.md`"
+        - label: "`docs/user_guide/<page>.md` (if the user can see the change)"
+        - label: "`CLAUDE.md` (only if a rule, the stack or a pitfall changes)"
+        - label: "`docs/changelog.d/<branch>.md`"
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      value: |
+        - `app/tests/DnaEntropyGraph.<Proj>.Tests/<Class>Tests.cs`: <what it asserts>
+        - `worker/tests/test_<module>.py`: <what it asserts>
+        - ToTest row needed? <no, because ... | yes: Needs = app-dev | installer | gpu-vm | cpu-vm | two-accounts | local-gpu>
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this issue deliberately does not do, with the issue number that does.
+  - type: textarea
+    id: cloud-money
+    attributes:
+      label: Cloud money
+      description: "none, or: machine type, expected minutes, expected cost, and who pays."
+      value: none
+    validations:
+      required: true

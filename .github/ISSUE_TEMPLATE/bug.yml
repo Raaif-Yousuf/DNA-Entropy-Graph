@@ -1,0 +1,73 @@
+name: Something went wrong
+description: Report a failure you saw in the app, the worker or a cloud run.
+title: "<area>: <what happens> when <condition>"
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the symptom, not the cause. "Nothing happens after I press Run" is a better title than
+        "the OAuth token is stale". Finding the cause is our job.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+  - type: dropdown
+    id: step
+    attributes:
+      label: Which step were you on?
+      options:
+        - Checking your files
+        - Uploading
+        - Starting a GPU computer
+        - Preparing the computer
+        - Analysing
+        - Saving results
+        - Downloading
+        - Cleaning up
+        - First-run setup
+        - Somewhere else, or before a run started
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Settings > About, or the title bar on a development build.
+    validations:
+      required: true
+  - type: input
+    id: worker-digest
+    attributes:
+      label: Worker image digest
+      description: The run's details page shows this. Leave blank if the run never reached a computer.
+  - type: textarea
+    id: cloud-error
+    attributes:
+      label: The message the app showed you
+      description: Copy it exactly, including any code such as GPU_STOCKOUT or NO_GPU_QUOTA.
+      render: text
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: >
+        Settings > Diagnostics > Save diagnostics, then drag the zip here.
+        It contains no sequence data and no file names.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      value: |
+        - [ ] The same steps no longer produce this failure.
+        - [ ] A test reproduces the failure and fails before the fix.
+    validations:
+      required: true

@@ -1,0 +1,45 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/worker"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+    # torch, evo2, flash-attn and transformer-engine are pinned against a specific CUDA build.
+    # Bumping any of them is a spike with a GPU acceptance run, not a dependency update.
+    ignore:
+      - dependency-name: torch
+      - dependency-name: evo2
+      - dependency-name: flash-attn
+      - dependency-name: transformer-engine
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directory: "/app"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+    groups:
+      dotnet:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: "/worker"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build

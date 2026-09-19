@@ -1,0 +1,139 @@
+name: ci-docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    name: repo guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The conventions donor is a private repository copied onto the owner's PC only.
+      # It is gitignored; this fails the build if it is ever committed to this public repo.
+      - name: The private donor copy is not committed
+        run: |
+          if git ls-files --error-unmatch legacy/clair >/dev/null 2>&1; then
+            echo "::error title=private donor committed::legacy/clair is tracked. It must never be committed to this public repo."
+            git ls-files legacy/clair | head -20
+            exit 1
+          fi
+          echo "legacy/clair is not tracked. Good."
+
+      # A user-home path in a tracked file leaks a real person's account name and
+      # breaks the file for everyone else.
+      - name: No absolute user-home paths in tracked files
+        run: |
+          pattern='(C:\\+Users\\+[A-Za-z0-9._-]+|/home/[a-z][a-z0-9._-]*|/Users/[A-Za-z0-9._-]+)'
+          # docs/migration/ records the redaction that already happened and names the placeholder.
+          if git grep -nIE "$pattern" -- . ':!docs/migration/**' ':!.github/workflows/ci-docs.yml' > /tmp/hits.txt; then
+            echo "::error title=user-home path committed::Replace it with a placeholder such as %USERPROFILE% or <your-home>."
+            cat /tmp/hits.txt
+            exit 1
+          fi
+          echo "No user-home paths in tracked files. Good."
+
+      - name: AGENTS.md stays a stub
+        run: |
+          if [ ! -f AGENTS.md ]; then
+            echo "::notice title=AGENTS.md missing::Not created yet (issue #268)."
+            exit 0
+          fi
+          lines=$(wc -l < AGENTS.md)
+          if [ "$lines" -ge 20 ]; then
+            echo "::error title=AGENTS.md too long::$lines lines. It is a pointer to CLAUDE.md, not a second rulebook. Keep it under 20."
+            exit 1
+          fi
+          echo "AGENTS.md is $lines lines. Good."
+
+      # User-facing copy uses plain hyphens. Em dashes read as machine-written and
+      # break the plain-voice rule for lab users.
+      - name: No em dashes in user-facing copy
+        run: |
+          set +e
+          git grep -nI $'\u2014' -- 'docs/user_guide/**' '*.resw' '.github/ISSUE_TEMPLATE/**' 'README.md' > /tmp/emdash.txt
+          found=$?
+          set -e
+          if [ $found -eq 0 ]; then
+            echo "::error title=em dash in user-facing copy::Use a plain hyphen or rewrite the sentence."
+            cat /tmp/emdash.txt
+            exit 1
+          fi
+          echo "No em dashes in user-facing copy. Good."
+
+  checks:
+    name: docs consistency checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Each check enables itself when its script lands, so this job tightens
+      # automatically rather than needing a workflow edit per issue.
+      - name: Run every scripts/check_*.py that exists
+        run: |
+          shopt -s nullglob
+          found=0
+          for script in scripts/check_*.py; do
+            found=1
+            echo "::group::$script"
+            python "$script"
+            echo "::endgroup::"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::notice title=no checks yet::scripts/check_*.py does not exist yet (issues #25 to #33)."
+          fi
+
+      - name: Changelog fragment shape
+        run: |
+          if [ -f scripts/compile_sprint_log.py ]; then
+            python scripts/compile_sprint_log.py --check
+          else
+            echo "::notice title=changelog check skipped::scripts/compile_sprint_log.py does not exist yet (issue #272)."
+          fi
+
+  links:
+    name: markdown links
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Offline: local file links only. External links change under us and would
+          # make an unrelated PR red.
+          #
+          # Excluded on purpose:
+          #   legacy/**, worker/legacy/**, worker/*.legacy.md, worker/docs-legacy/**
+          #     Frozen copies of the prototypes. Their links point at the prototype's own
+          #     tree and are wrong here by construction; rewriting them would falsify the copy.
+          #   docs/superpowers/specs/**
+          #     A spec describes the repo we are building, so it links to docs that do not
+          #     exist yet. Those links are checked by docs/README.md's index instead
+          #     (scripts/check_docs_index.py, issue #25) once the docs set lands.
+          args: >-
+            --offline --no-progress --include-fragments
+            --exclude-path legacy
+            --exclude-path worker/legacy
+            --exclude-path worker/docs-legacy
+            --exclude-path docs/superpowers/specs
+            --exclude-path worker/CLAUDE.legacy.md
+            --exclude-path worker/README.legacy.md
+            './**/*.md'
+          fail: true

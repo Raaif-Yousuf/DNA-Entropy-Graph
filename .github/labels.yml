@@ -1,0 +1,79 @@
+# Label set for Raaif-Yousuf/DNA-Entropy-Graph.
+# This file is the source of truth. Apply it with:
+#   pwsh scripts/sync_labels.ps1              # show the diff
+#   pwsh scripts/sync_labels.ps1 -Apply       # create, recolour and re-describe
+#   pwsh scripts/sync_labels.ps1 -Apply -Prune  # also delete labels not listed here
+# Colours are hex without the leading '#', which is what the GitHub API wants.
+# Source: docs/superpowers/specs/2026-09-18-appendix-c-repo-conventions.md section 5.
+
+# --- Priority -----------------------------------------------------------------
+- name: P0
+  color: "7B0000"
+  description: "Blocks all other work: migration cleanup, gutting legacy code, safety"
+- name: P1
+  color: "B60205"
+  description: Blocks the current milestone or loses data or money
+- name: P2
+  color: "D93F0B"
+  description: Should ship in the current milestone
+- name: P3
+  color: "FBCA04"
+  description: Nice to have, any milestone
+
+# --- Area (one per issue; matches the title prefix) ----------------------------
+- name: area:app
+  color: "1D76DB"
+  description: "C# app: ViewModels, Core, Persistence"
+- name: area:worker
+  color: "0E8A16"
+  description: "Python package: science, writers, container"
+- name: area:cloud
+  color: "5319E7"
+  description: GCP calls, preflight, VM lifecycle, startup script
+- name: area:viewer
+  color: "006B75"
+  description: igv.js, WebView2, ScottPlot
+- name: area:local-engine
+  color: "0052CC"
+  description: Local NVIDIA GPU execution
+- name: area:docs
+  color: "C5DEF5"
+  description: docs/, user guide, CLAUDE.md, .claude
+- name: area:packaging
+  color: "BFD4F2"
+  description: Installer, signing, updates, CI, release, images
+- name: area:ux
+  color: "F9D0C4"
+  description: Copy, flows, theme, accessibility
+- name: area:aws
+  color: "FF9900"
+  description: Amazon Web Services provider
+
+# --- Shape --------------------------------------------------------------------
+- name: epic
+  color: "3E4B9E"
+  description: Parent with sub-issues; never worked directly
+- name: DECISION
+  color: "000000"
+  description: Owner call required; body is a decision record
+- name: owner
+  color: "000000"
+  description: Only the owner can do this (accounts, dashboards, money)
+- name: spike
+  color: "5319E7"
+  description: Time-boxed feasibility check; output is an answer, not code
+- name: needs-criteria
+  color: "FEF2C0"
+  description: Body lacks Done-when or Observable; not to be worked
+- name: wired-to-nothing
+  color: "E99695"
+  description: Filed as this shape; feeds the skill's count
+- name: good-first-issue
+  color: "7057FF"
+  description: Bounded, no cloud money, has a test to copy
+- name: accessibility
+  color: "F143AB"
+  description: Barrier affecting people with disabilities
+- name: post-v1
+  color: "EEEEEE"
+  description: Explicitly not before v1.0

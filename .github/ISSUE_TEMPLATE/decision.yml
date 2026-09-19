@@ -1,0 +1,53 @@
+name: Decision record
+description: A question only the owner can answer. The body is the record.
+title: "DECISION: <question>?"
+labels: ["DECISION"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: The question
+      description: One sentence, ending in a question mark.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What is true today
+      description: >
+        Facts, each marked `MEASURED <date>:` or `THEORY (unverified):`.
+        A decision made on an unmarked guess is how this project wastes a week.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      value: |
+        | Option | What it costs | What it buys | What it forecloses |
+        |---|---|---|---|
+        | A |  |  |  |
+        | B |  |  |  |
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+      description: Name one option and say why. Never present a menu without a recommendation.
+    validations:
+      required: true
+  - type: textarea
+    id: blocked
+    attributes:
+      label: What is blocked on this
+      description: Issue numbers. If nothing is blocked, say so and say when the answer is needed.
+    validations:
+      required: true
+  - type: textarea
+    id: reversal
+    attributes:
+      label: How to reverse it
+      description: If the owner later disagrees, what has to change and how expensive is that?
+    validations:
+      required: true

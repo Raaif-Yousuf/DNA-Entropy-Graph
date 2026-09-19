@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Something went wrong while using the app
+    url: https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/blob/main/docs/user_guide/07-when-something-goes-wrong.md
+    about: Start here. Most run failures have a named cause and one action to take.
+  - name: How much does a run cost?
+    url: https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/blob/main/docs/user_guide/06-costs-and-cleanup.md
+    about: What you pay for, how to see it, and how to be sure nothing is left running.

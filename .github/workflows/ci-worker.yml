@@ -1,0 +1,127 @@
+name: ci-worker
+
+on:
+  pull_request:
+    paths:
+      - "worker/**"
+      - ".github/workflows/ci-worker.yml"
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - ".github/workflows/ci-worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (not gpu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Create the environment
+        working-directory: worker
+        run: |
+          uv venv
+          uv pip install -e ".[dev,genes]"
+
+      # Lint is enabled by the presence of a ruff config, so it starts enforcing
+      # the moment worker/pyproject.toml gains a [tool.ruff] table (issue #285).
+      - name: Is ruff configured?
+        id: ruff-config
+        working-directory: worker
+        run: |
+          if [ -f ruff.toml ] || [ -f .ruff.toml ] || grep -q '^\[tool\.ruff' pyproject.toml; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=ruff not configured::worker/pyproject.toml has no [tool.ruff] table, so lint is skipped. See issue #285."
+          fi
+
+      - name: ruff check
+        if: steps.ruff-config.outputs.configured == 'true'
+        working-directory: worker
+        run: uvx ruff check .
+
+      - name: ruff format --check
+        if: steps.ruff-config.outputs.configured == 'true'
+        working-directory: worker
+        run: uvx ruff format --check .
+
+      - name: pytest
+        working-directory: worker
+        run: uv run pytest tests -m "not gpu" -q --junitxml=../pytest-worker.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-worker
+          path: pytest-worker.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build:
+    name: sdist and wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: uv build
+        working-directory: worker
+        run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-dist
+          path: worker/dist/*
+          retention-days: 7
+
+  contract:
+    name: manifest schema and startup script
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      # Each check turns itself on when the file it guards lands. Until then it
+      # prints a notice, so a missing guard is visible in the run log rather than silent.
+      - name: manifest schema drift (issue #39)
+        run: |
+          if [ -f scripts/gen_manifest_schema.py ]; then
+            uv run --with jsonschema python scripts/gen_manifest_schema.py --check
+          else
+            echo "::notice title=schema check skipped::scripts/gen_manifest_schema.py does not exist yet (issue #39)."
+          fi
+
+      - name: shellcheck the VM startup script (issue #45)
+        run: |
+          if [ -f worker/vm/startup.sh ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+            shellcheck worker/vm/startup.sh
+          else
+            echo "::notice title=shellcheck skipped::worker/vm/startup.sh does not exist yet (issue #45)."
+          fi
+
+      - name: CPU container smoke (issue #36)
+        run: |
+          if [ -f worker/Dockerfile.cpu ]; then
+            docker build -f worker/Dockerfile.cpu -t dna-entropy-worker:cpu worker
+            docker run --rm dna-entropy-worker:cpu dna-entropy-worker selftest
+          else
+            echo "::notice title=container smoke skipped::worker/Dockerfile.cpu does not exist yet (issue #36)."
+          fi

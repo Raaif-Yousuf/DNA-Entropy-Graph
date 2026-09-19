@@ -1,0 +1,105 @@
+name: ci-app
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/ci-app.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/ci-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # app/ does not exist until issue #61. The path filter above means this
+      # workflow does not run before then; this guard covers a manual dispatch.
+      - name: Does the solution exist?
+        id: sln
+        shell: bash
+        run: |
+          if [ -f app/DnaEntropyGraph.sln ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=no solution yet::app/DnaEntropyGraph.sln does not exist yet (issue #61)."
+          fi
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.sln.outputs.exists == 'true'
+        with:
+          global-json-file: app/global.json
+
+      - name: restore
+        if: steps.sln.outputs.exists == 'true'
+        working-directory: app
+        run: dotnet restore
+
+      - name: format
+        if: steps.sln.outputs.exists == 'true'
+        working-directory: app
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: build
+        if: steps.sln.outputs.exists == 'true'
+        working-directory: app
+        run: dotnet build -c Release -p:Platform=x64 --no-restore -warnaserror
+
+      # UI tests need an interactive session; they run from the ToTest queue, not CI.
+      - name: test
+        if: steps.sln.outputs.exists == 'true'
+        working-directory: app
+        run: >
+          dotnet test -c Release -p:Platform=x64 --no-build
+          --filter "FullyQualifiedName!~UiTests"
+          --logger "trx;LogFileName=app-tests.trx"
+          --collect:"XPlat Code Coverage"
+
+      - name: Upload test results
+        if: always() && steps.sln.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-tests
+          path: |
+            app/**/TestResults/**
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: publish self-contained
+        if: steps.sln.outputs.exists == 'true'
+        working-directory: app
+        run: >
+          dotnet publish src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj
+          -c Release -p:Platform=x64 -r win-x64 --self-contained true
+          -o publish
+
+      # Unsigned. Signing happens only in release.yml, which asserts its secrets exist.
+      - name: vpk pack (unsigned)
+        if: steps.sln.outputs.exists == 'true'
+        working-directory: app
+        run: |
+          dotnet tool install -g vpk
+          vpk pack --packId DnaEntropyGraph --packVersion 0.0.0-ci --packDir publish --outputDir releases
+
+      - uses: actions/upload-artifact@v4
+        if: steps.sln.outputs.exists == 'true'
+        with:
+          name: installer-unsigned
+          path: app/releases/**
+          retention-days: 7
+          if-no-files-found: ignore
