@@ -25,7 +25,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # app/ does not exist until issue #61. The path filter above means this
       # workflow does not run before then; this guard covers a manual dispatch.
@@ -40,7 +40,7 @@ jobs:
             echo "::notice title=no solution yet::app/DnaEntropyGraph.sln does not exist yet (issue #61)."
           fi
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         if: steps.sln.outputs.exists == 'true'
         with:
           global-json-file: app/global.json
@@ -72,7 +72,7 @@ jobs:
 
       - name: Upload test results
         if: always() && steps.sln.outputs.exists == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: app-tests
           path: |
@@ -96,7 +96,7 @@ jobs:
           dotnet tool install -g vpk
           vpk pack --packId DnaEntropyGraph --packVersion 0.0.0-ci --packDir publish --outputDir releases
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.sln.outputs.exists == 'true'
         with:
           name: installer-unsigned

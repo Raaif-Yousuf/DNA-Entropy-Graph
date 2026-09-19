@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The conventions donor is a private repository copied onto the owner's PC only.
       # It is gitignored; this fails the build if it is ever committed to this public repo.
@@ -35,7 +35,7 @@ jobs:
       # A user-home path in a tracked file leaks a real person's account name and
       # breaks the file for everyone else. The guard lives in scripts/ so it can be
       # run locally with the same code CI runs, and it self-tests both arms.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -82,10 +82,10 @@ jobs:
       # every ToTest row is a commit this repo actually has, and the default shallow
       # clone (depth 1) does not have it, so every row failed with "not a commit this
       # repo has". The check is right; the clone was wrong.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -122,10 +122,10 @@ jobs:
     timeout-minutes: 10
     steps:
       # Full history: some of these tests exercise git-aware code paths.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: pytest scripts/tests
@@ -136,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: lychee
         uses: lycheeverse/lychee-action@v2
         with:

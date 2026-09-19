@@ -32,7 +32,7 @@ jobs:
         # csharp is added by issue #61, when app/ exists and there is something to build.
         language: [python, actions]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: github/codeql-action/init@v3
         with:
@@ -54,8 +54,8 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
           # The project ships MIT-licensed software and vendors igv.js (MIT).
