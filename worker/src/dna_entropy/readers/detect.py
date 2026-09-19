@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .encoding import read_text
+
 # Source kinds used throughout the pipeline.
 GENBANK = "genbank"
 FASTA = "fasta"
@@ -26,9 +28,11 @@ def detect_kind(path: str | None) -> str:
         return GENBANK
     if ext in _FASTA_EXT:
         return FASTA
-    # Unknown extension: sniff the first non-blank line.
+    # Unknown extension: sniff the first non-blank line. #330: decode through the same
+    # shared encoding.py as every other reader, so a BOM-prefixed file sniffs correctly
+    # instead of falling through to PASTE because the BOM defeated the checks below.
     try:
-        head = Path(path).read_text(encoding="utf-8", errors="replace")
+        head = read_text(path)
     except OSError:
         return PASTE
     for line in head.splitlines():

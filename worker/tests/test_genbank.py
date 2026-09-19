@@ -20,6 +20,7 @@ SAMPLE_GB = str(DATA / "sample.gb")
 MULTI_GB = str(DATA / "multi.gb")
 SAMPLE_FA = str(DATA / "sample.fasta")
 SPLICED_GB = str(DATA / "spliced.gb")
+OUT_OF_RANGE_GB = str(DATA / "out_of_range.gb")
 
 
 # --- detection ----------------------------------------------------------------------
@@ -39,6 +40,18 @@ SPLICED_GB = str(DATA / "spliced.gb")
 )
 def test_detect_by_extension(path, expected) -> None:
     assert detect.detect_kind(path) == expected
+
+
+def test_detect_by_content_sniff_ignores_a_utf8_bom(tmp_path: Path) -> None:
+    """#330: a UTF-8 BOM must not defeat the '>'/'LOCUS' content sniff for an unknown
+    extension -- the BOM decodes to a literal U+FEFF character that str.startswith(">")
+    does not see through on its own."""
+    gb = tmp_path / "mystery_bom.dat"
+    gb.write_bytes(b"\xef\xbb\xbfLOCUS       foo    10 bp\n//\n")
+    assert detect.detect_kind(str(gb)) == detect.GENBANK
+    fa = tmp_path / "mystery2_bom.dat"
+    fa.write_bytes(b"\xef\xbb\xbf>seq1\nACGT\n")
+    assert detect.detect_kind(str(fa)) == detect.FASTA
 
 
 def test_detect_by_content_sniff(tmp_path: Path) -> None:
@@ -68,6 +81,19 @@ def test_read_genbank_extracts_seq_and_genes() -> None:
     assert any("not re-annotated" in n for n in notices)
 
 
+def test_read_genbank_strips_a_utf8_bom(tmp_path: Path) -> None:
+    """#330: a BOM-prefixed GenBank file must parse identically to its BOM-free twin,
+    not raise "No GenBank records found" because Biopython's own file-reading never saw
+    a real 'LOCUS' line."""
+    raw = Path(SAMPLE_GB).read_bytes()
+    p = tmp_path / "bom_sample.gb"
+    p.write_bytes(b"\xef\xbb\xbf" + raw)
+    records, notices = read_genbank(str(p))
+    assert len(records) == 1
+    assert len(records[0].seq) == 126
+    assert len(records[0].features) == 2
+
+
 def test_read_genbank_flags_compound_locations_instead_of_collapsing_silently() -> None:
     """#295: a join(...)/complement(join(...)) gene must not silently collapse to its
     bounding box — the reader must say so, loudly, and name the real exon segments."""
@@ -91,6 +117,41 @@ def test_read_genbank_flags_compound_locations_instead_of_collapsing_silently() 
     assert not any("plainC" in n for n in compound_notices)
 
 
+def test_read_genbank_drops_a_feature_whose_coordinates_exceed_the_record_length() -> None:
+    """#331: a gene whose recorded end is beyond its own record's ORIGIN length (a
+    feature-table/ORIGIN mismatch -- truncation, hand-editing, corruption) must not be
+    silently kept with a wrong span. It is dropped, loudly, and the rest of the record's
+    genes are unaffected."""
+    records, notices = read_genbank(OUT_OF_RANGE_GB)
+    assert len(records) == 1
+    rec = records[0]
+    by_id = {f.gene_id: f for f in rec.features}
+
+    assert "badgene" not in by_id  # dropped: 40..500 on a 60 nt record
+    assert "goodgene" in by_id  # unaffected: still reported normally
+    assert (by_id["goodgene"].begin, by_id["goodgene"].end) == (10, 30)
+
+    dropped_notices = [n for n in notices if "badgene" in n]
+    assert len(dropped_notices) == 1
+    assert "60 nt" in dropped_notices[0]
+    assert "40..500" in dropped_notices[0]
+
+
+def test_read_genbank_keeps_a_partial_feature_whose_end_legitimately_exceeds_the_record() -> None:
+    """#331: a GenBank `>` partial-end marker is the one legitimate reason a feature's
+    given end coordinate sits past the record's own sequence length -- it is GenBank's
+    own way of saying the feature is known to continue beyond what was given. This must
+    NOT be dropped or flagged as a mismatch the way an unmarked overrun is."""
+    records, notices = read_genbank(OUT_OF_RANGE_GB)
+    rec = records[0]
+    by_id = {f.gene_id: f for f in rec.features}
+
+    assert "partialgene" in by_id
+    assert by_id["partialgene"].partial is True
+    assert (by_id["partialgene"].begin, by_id["partialgene"].end) == (45, 1000)
+    assert not any("partialgene" in n for n in notices)
+
+
 # --- FASTA reader -------------------------------------------------------------------
 
 
@@ -98,6 +159,28 @@ def test_read_fasta_single_record() -> None:
     records, notices = read_fasta(SAMPLE_FA)
     assert len(records) == 1
     assert records[0].seq and set(records[0].seq.upper()) <= set("ACGTN")
+
+
+def test_read_fasta_strips_a_utf8_bom(tmp_path: Path) -> None:
+    """#330: a BOM-prefixed FASTA is still a valid FASTA -- it must not be rejected
+    with "No FASTA records found" just because the header line starts with a BOM."""
+    p = tmp_path / "bom.fasta"
+    p.write_bytes(b"\xef\xbb\xbf>seq1\nACGTACGT\n")
+    records, notices = read_fasta(str(p))
+    assert len(records) == 1
+    assert records[0].header == "seq1"
+    assert records[0].seq == "ACGTACGT"
+
+
+def test_read_fasta_decodes_utf16_bom(tmp_path: Path) -> None:
+    """#330: a UTF-16 FASTA (Windows Notepad's "Unicode" save option) must decode in
+    full, not turn every non-ASCII-looking byte pair into U+FFFD."""
+    p = tmp_path / "utf16.fasta"
+    p.write_bytes(">seq1\nACGTACGT\n".encode("utf-16"))
+    records, notices = read_fasta(str(p))
+    assert len(records) == 1
+    assert records[0].header == "seq1"
+    assert records[0].seq == "ACGTACGT"
 
 
 def test_read_fasta_multi_record_returns_all_records(tmp_path: Path) -> None:

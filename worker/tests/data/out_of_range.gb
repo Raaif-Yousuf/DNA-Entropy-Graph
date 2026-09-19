@@ -1,0 +1,21 @@
+LOCUS       oob_locus                 60 bp    DNA              UNK 01-JAN-1980
+DEFINITION  Out-of-range feature GenBank test fixture (issue #331).
+ACCESSION   oob_locus
+VERSION     oob_locus
+KEYWORDS    .
+SOURCE      .
+  ORGANISM  .
+            .
+FEATURES             Location/Qualifiers
+     gene            10..30
+                     /gene="goodgene"
+                     /locus_tag="OOB_0001"
+     gene            40..500
+                     /gene="badgene"
+                     /locus_tag="OOB_0002"
+     gene            45..>1000
+                     /gene="partialgene"
+                     /locus_tag="OOB_0003"
+ORIGIN
+        1 acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt
+//

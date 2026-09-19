@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from ..annotators.base import GeneFeature
 from ..redact import describe_len
+from .encoding import read_text
 
 
 class GenBankReadError(ValueError):
@@ -55,6 +56,7 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
     gene_feats = [f for f in record.features if f.type == "gene"]
     cds_feats = [f for f in record.features if f.type == "CDS"]
     source = gene_feats or cds_feats
+    seq_len = len(record.seq)
 
     features: list[GeneFeature] = []
     notices: list[str] = []
@@ -65,9 +67,42 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
         begin = int(loc.start) + 1  # Biopython is 0-based half-open -> our 1-based inclusive
         end = int(loc.end)
         strand = "-" if loc.strand == -1 else "+"
-        partial = "<" in str(loc.start) or ">" in str(loc.end)
+        partial_end = ">" in str(loc.end)
+        partial = "<" in str(loc.start) or partial_end
         gene_id = _feature_id(f)
-        if isinstance(loc, CompoundLocation):
+        is_compound = isinstance(loc, CompoundLocation)
+
+        # issue #331: a feature's own coordinates must fit inside this record's actual
+        # ORIGIN length, or the file's feature table disagrees with its own sequence data
+        # (truncated download, hand-edited LOCUS/ORIGIN, corruption) — accepting it as-is
+        # would let writers/genbank.py silently slice a wrong, out-of-range span for its
+        # mean-entropy note. A single (non-compound) feature carrying a `>` PARTIAL end
+        # marker is the one legitimate reason its end can sit past the record's own
+        # length: that is GenBank's own way of saying "known to continue beyond what was
+        # given" (THEORY (unverified): confirmed against this reader's own synthetic
+        # fixture, not a corpus of real partial GenBank records — revisit if a real file
+        # disagrees). A compound (spliced or origin-wrapping) feature's parts must each
+        # fit fully in bounds regardless of a partial marker; a legitimate origin wrap
+        # already satisfies this per-part (#128's intended circular-plasmid shape is not
+        # affected by this check), so only a genuine mismatch ever trips it. Anything
+        # that fails this is a data mismatch, not a biological statement, and is dropped
+        # — never silently kept with a wrong span — with a notice naming why.
+        parts = loc.parts if is_compound else [loc]
+        allow_end_overrun = partial_end and not is_compound
+        malformed = any(int(p.start) < 0 or int(p.end) <= int(p.start) for p in parts) or (
+            not allow_end_overrun and any(int(p.end) > seq_len for p in parts)
+        )
+        if malformed:
+            notices.append(
+                f"GenBank feature {gene_id!r} has coordinates {begin}..{end}, which fall "
+                f"outside record {record.id!r}'s own sequence length of {seq_len} nt; "
+                "dropped from the gene features (not reported) rather than kept with a "
+                "wrong span. This means the file's feature table disagrees with its own "
+                "ORIGIN block; check the file was not truncated or hand-edited."
+            )
+            continue
+
+        if is_compound:
             # Sorted ascending by genomic start, not transcript/part order (Biopython
             # writes a minus-strand join()'s parts in transcription order, i.e. highest
             # coordinate first) — a biologist reading the notice wants segments in
@@ -92,9 +127,19 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     Features are 1-based inclusive, sequence-relative (matching :class:`GeneFeature`).
     Records whose ORIGIN block is empty (no nucleotides) are skipped with a notice.
     """
+    import io
+
     from Bio import SeqIO  # local import keeps import cost off unrelated paths
 
-    parsed = list(SeqIO.parse(path, "genbank"))
+    # #330: decode through the same shared encoding.py as every other reader, rather
+    # than letting Biopython open the path itself. MEASURED 2026-09-19: handing
+    # Biopython a raw path makes it open the file with Python's default text-mode
+    # encoding, which is the OS locale encoding, not UTF-8 -- on this Windows box that
+    # is cp1252, silently DIFFERENT from readers/fasta.py and readers/paste.py's forced
+    # UTF-8, and would decode differently again on a UTF-8-locale Linux box. Decoding
+    # ourselves first makes GenBank agree with every other reader and strips a BOM
+    # before Biopython's scanner ever sees a 'LOCUS' line.
+    parsed = list(SeqIO.parse(io.StringIO(read_text(path)), "genbank"))
     if not parsed:
         raise GenBankReadError("No GenBank records found in the file.")
 

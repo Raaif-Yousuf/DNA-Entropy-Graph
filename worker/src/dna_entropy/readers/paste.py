@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+
+from .encoding import decode_bytes, read_text
 
 
 class PasteReader:
@@ -17,15 +18,15 @@ class PasteReader:
         self.path = path
 
     def read(self) -> str:
-        # #294: match readers/fasta.py and readers/detect.py, which both decode with
-        # errors="replace" rather than raising UnicodeDecodeError on the first bad byte —
-        # a pasted file with any non-UTF-8 byte (Windows-1252 export, a stray binary/copy
-        # artifact) is common enough on real lab machines that it must reach the normal
-        # validation-stage ValidationError, not crash the process outright. Reading stdin
-        # via its underlying buffer (rather than the text-mode ``sys.stdin.read()``) makes
-        # the paste-from-stdin path agree with the paste-from-file path on this, since
-        # both are the same "paste" reader and a biologist piping a file in should not see
-        # different crash behaviour than pointing at it by path.
+        # #294/#330: decode through the one shared encoding.py so a non-UTF-8 byte
+        # (Windows-1252 export, a stray binary/copy artifact) reaches the normal
+        # validation-stage ValidationError instead of crashing, and a UTF-8/UTF-16 BOM
+        # is handled instead of surviving as a literal character or a wall of U+FFFD.
+        # Reading stdin via its underlying buffer (rather than the text-mode
+        # ``sys.stdin.read()``) makes the paste-from-stdin path agree with the
+        # paste-from-file path on this, since both are the same "paste" reader and a
+        # biologist piping a file in should not see different behaviour than pointing at
+        # it by path.
         if self.path is not None:
-            return Path(self.path).read_text(encoding="utf-8", errors="replace")
-        return sys.stdin.buffer.read().decode("utf-8", errors="replace")
+            return read_text(self.path)
+        return decode_bytes(sys.stdin.buffer.read())
