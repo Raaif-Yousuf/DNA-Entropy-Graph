@@ -98,30 +98,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
 
-      # Each check turns itself on when the file it guards lands. Until then it
-      # prints a notice, so a missing guard is visible in the run log rather than silent.
-      - name: manifest schema drift (issue #39)
-        run: |
-          if [ -f scripts/gen_manifest_schema.py ]; then
-            uv run --with jsonschema python scripts/gen_manifest_schema.py --check
-          else
-            echo "::notice title=schema check skipped::scripts/gen_manifest_schema.py does not exist yet (issue #39)."
-          fi
+      # Unconditional since #39 landed the script. A missing file now fails the step
+      # loudly instead of reverting to notice-and-pass, which is what
+      # scripts/check_guard_drift.py exists to catch.
+      - name: manifest schema drift
+        run: uv run --with jsonschema python scripts/gen_manifest_schema.py --check
 
-      - name: shellcheck the VM startup script (issue #45)
+      # Unconditional since #45 landed the script.
+      - name: shellcheck the VM startup script
         run: |
-          if [ -f worker/vm/startup.sh ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-            shellcheck worker/vm/startup.sh
-          else
-            echo "::notice title=shellcheck skipped::worker/vm/startup.sh does not exist yet (issue #45)."
-          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck worker/vm/startup.sh
 
-      - name: CPU container smoke (issue #36)
+      # Unconditional since #36 landed the Dockerfile. Dockerfile.cuda is not built here:
+      # it needs an NVIDIA base and a GPU runtime, and is marked UNVERIFIED in the file.
+      - name: CPU container smoke
         run: |
-          if [ -f worker/Dockerfile.cpu ]; then
-            docker build -f worker/Dockerfile.cpu -t dna-entropy-worker:cpu worker
-            docker run --rm dna-entropy-worker:cpu dna-entropy-worker selftest
-          else
-            echo "::notice title=container smoke skipped::worker/Dockerfile.cpu does not exist yet (issue #36)."
-          fi
+          docker build -f worker/Dockerfile.cpu -t dna-entropy-worker:cpu worker
+          docker run --rm dna-entropy-worker:cpu dna-entropy-worker selftest
