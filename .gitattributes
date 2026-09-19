@@ -5,3 +5,10 @@
 *.ico binary
 *.gb text
 *.fasta text
+
+# The malformed-input fuzz corpus is bytes, not text: several fixtures exist
+# precisely to carry CRLF, lone CR, NUL bytes, UTF-16 or binary garbage, and
+# git's eol=lf normalization silently rewrites them into a different file than
+# the one the tests were written against (MEASURED 2026-09-19: a CRLF fixture
+# was committed with its CRLFs already stripped).
+worker/tests/data/malformed/** -text
