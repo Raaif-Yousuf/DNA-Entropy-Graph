@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    docs/tests.md: "Not CI - needs an interactive session." Every test here
+    is [Skip]-ped rather than deleted, so the project still proves it builds
+    against the real App/Presentation assemblies without ever needing a
+    desktop session in an agent/CI run. FlaUI.UIA3 (the smoke-test package
+    named in the spec) is not yet referenced - wiring a real UI smoke test
+    is a follow-up issue once there is a page to click.
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.App.UiTests</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.App.UiTests</RootNamespace>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.App\DnaEntropyGraph.App.csproj" />
+  </ItemGroup>
+
+</Project>

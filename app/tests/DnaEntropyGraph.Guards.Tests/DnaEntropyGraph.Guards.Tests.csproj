@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    docs/tests.md: "fast (seconds not minutes)". This project targets the
+    same Windows-flavored TargetFramework as DnaEntropyGraph.App (a plain
+    net10.0 project cannot ProjectReference a net10.0-windows one) so it can
+    call the real ServiceRegistration.AddDnaEntropyGraph and resolve the
+    real production DI graph - no UseWinUI, no XAML compilation here, only
+    a project reference.
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.Guards.Tests</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.Guards.Tests</RootNamespace>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Presentation\DnaEntropyGraph.Presentation.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Cloud\DnaEntropyGraph.Cloud.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Persistence\DnaEntropyGraph.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.LocalEngine\DnaEntropyGraph.LocalEngine.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.App\DnaEntropyGraph.App.csproj" />
+  </ItemGroup>
+
+</Project>

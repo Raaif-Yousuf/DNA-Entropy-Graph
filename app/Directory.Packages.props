@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- App (WinUI 3) -->
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="1.8.250916003" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.6584" />
+
+    <!-- Presentation (MVVM), no WinUI reference -->
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+
+    <!-- DI, used by App -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+
+    <!-- Tests: xUnit v3, Shouldly, NSubstitute (Hard Rule 21 - not FluentAssertions 8+, not Moq) -->
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageVersion Include="Shouldly" Version="4.3.0" />
+    <PackageVersion Include="NSubstitute" Version="6.2.0" />
+  </ItemGroup>
+</Project>

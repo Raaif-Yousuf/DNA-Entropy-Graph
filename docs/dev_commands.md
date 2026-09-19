@@ -60,20 +60,37 @@ cd ..
 
 ## App (C#, WinUI 3) — pending #61
 
-**`app/` does not exist yet.** Everything in this section is what will work
-once issue #61 lands; none of it runs today. `ci-app.yml` already checks for
-`app/DnaEntropyGraph.sln` and no-ops with a notice if it is absent, which is
-the current state.
+**`app/` exists as of issue #61** (thirteen projects, five test projects, a
+DI resolution test). `scripts\dev_app.ps1` below still does not.
+
+The build commands run from the repo root:
 
 ```powershell
 dotnet restore app
 dotnet format app --verify-no-changes --no-restore
 dotnet build app/DnaEntropyGraph.sln -c Debug -p:Platform=x64
 dotnet build app/DnaEntropyGraph.sln -c Release -p:Platform=x64 -warnaserror
-dotnet test app/DnaEntropyGraph.sln
-dotnet test app/tests/DnaEntropyGraph.Guards.Tests               # fast, seconds
-dotnet test app/DnaEntropyGraph.sln --filter "FullyQualifiedName!~UiTests"
 ```
+
+**`dotnet test` does not.** MEASURED 2026-09-19: it must run with `app/`, or a
+directory inside it, as the **working directory**:
+
+```powershell
+cd app
+dotnet test tests/DnaEntropyGraph.Guards.Tests/DnaEntropyGraph.Guards.Tests.csproj   # fast, seconds
+dotnet test DnaEntropyGraph.sln
+```
+
+Run from the repo root instead and it fails with *"Testing with VSTest target
+is no longer supported"*, which reads like a broken test project and is not.
+On the .NET 10 SDK, `dotnet test` on an xunit.v3 / Microsoft.Testing.Platform
+project needs `global.json`'s `test.runner` setting, and that setting is
+resolved from the **current working directory**, not from the project path.
+`app/global.json` has it; the repo root has no `global.json` at all.
+
+The consequence worth remembering is for CI: `ci-app.yml` (issue #31) needs
+`working-directory: app` on its test step, or it will fail on a solution that
+builds and tests perfectly well by hand.
 
 ```powershell
 scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches against FakeGcp

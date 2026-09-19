@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    MEASURED 2026-09-19 (orchestrator, throwaway project outside this repo):
+    an unpackaged WinUI 3 app restores, compiles its XAML (App.xbf,
+    MainWindow.xbf appear in the output) and builds from the dotnet CLI
+    alone, zero warnings, with exactly these properties and exactly these
+    two packages. Do not change TargetFramework/TargetPlatformMinVersion/
+    RuntimeIdentifier without re-measuring - see LANE_APP_BRIEF.md.
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.App</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.App</RootNamespace>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <SelfContained>true</SelfContained>
+    <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DnaEntropyGraph.Presentation\DnaEntropyGraph.Presentation.csproj" />
+    <ProjectReference Include="..\DnaEntropyGraph.Cloud\DnaEntropyGraph.Cloud.csproj" />
+    <ProjectReference Include="..\DnaEntropyGraph.Persistence\DnaEntropyGraph.Persistence.csproj" />
+    <ProjectReference Include="..\DnaEntropyGraph.LocalEngine\DnaEntropyGraph.LocalEngine.csproj" />
+  </ItemGroup>
+
+  <!--
+    Hard Rule 13: every user-visible string lives in
+    Strings\en-US\Resources.resw, referenced via x:Uid, never inline. The
+    .NET SDK includes it as a PRIResource by default from the project
+    directory - an explicit <PRIResource Include> here is a duplicate-item
+    build error (NETSDK1022), not a no-op.
+  -->
+
+</Project>

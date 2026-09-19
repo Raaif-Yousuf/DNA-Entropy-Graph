@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    docs/architecture.md section 6: SqliteDatabase, migrations under
+    PRAGMA user_version, RunRepository, SettingsStore, DpapiTokenStore.
+    The skeleton's implementations below are in-memory placeholders so the
+    DI graph and Guards.Tests/DiResolutionTests are real today; wiring
+    Microsoft.Data.Sqlite + Dapper and the numbered migrations is a
+    follow-up issue under this epic, not #61's scope.
+  -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.Persistence</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.Persistence</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+  </ItemGroup>
+
+</Project>

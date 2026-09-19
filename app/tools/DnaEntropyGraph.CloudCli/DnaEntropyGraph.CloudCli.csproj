@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Console host used by scripts (resources list, bucket describe, vm create for tests) - docs/superpowers/specs Appendix A section 1. -->
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.CloudCli</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.CloudCli</RootNamespace>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Cloud\DnaEntropyGraph.Cloud.csproj" />
+  </ItemGroup>
+
+</Project>
