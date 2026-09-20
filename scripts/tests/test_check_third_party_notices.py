@@ -42,7 +42,7 @@ def test_check_notices_present_generator_missing_gives_clean_notice(tmp_path):
     assert notices
 
 
-def test_check_against_this_repos_real_tree_is_clean():
+def test_check_against_this_repos_real_tree_is_clean(real_dependency_tree):
     """THIRD-PARTY-NOTICES.md and scripts/gen_third_party_notices.py both exist and agree
     as of this session (issue #34 landed): the real generate-and-diff must find this
     repo's own committed file clean, not merely a synthetic fixture. This is the one test
@@ -54,7 +54,7 @@ def test_check_against_this_repos_real_tree_is_clean():
     assert notices == []
 
 
-def test_a_planted_stale_line_in_the_real_committed_file_is_caught(tmp_path):
+def test_a_planted_stale_line_in_the_real_committed_file_is_caught(real_dependency_tree, tmp_path):
     """Copies this repo's real, currently-clean THIRD-PARTY-NOTICES.md, appends one line,
     and proves the real generator (not a fake) disagrees with it -- the decisive proof that
     this check is not a false pass on the real dependency tree, only on synthetic fixtures."""

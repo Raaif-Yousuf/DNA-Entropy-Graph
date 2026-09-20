@@ -1,24 +1,9 @@
 name: codeql
 
-# CI runs ON DEMAND ONLY (owner's decision, 2026-09-19). Start a run with:
-#
-#     gh workflow run codeql.yml
-#     gh run watch
-#
-# or the "Run workflow" button on the Actions tab. Nothing here fires on a push, a pull
-# request or a schedule.
-#
-# To restore automatic CI, delete `workflow_dispatch:` below and uncomment this block:
-#
-#   on:
-#     pull_request:
-#       branches: [main]
-#     push:
-#       branches: [main]
-#     schedule:
-#       # Weekly, so a new advisory is found without waiting for the next PR.
-#       - cron: "17 3 * * 1"
-#     workflow_dispatch:
+# On demand only, unlike the other three workflows in this directory. The csharp lane
+# does a full Windows dotnet restore+build on top of the Python and Actions lanes, and
+# that is not worth paying for on every PR - it stays a manual gate (`gh workflow run
+# codeql.yml`) until there is a reason to want it on a schedule or a push instead.
 on:
   workflow_dispatch:
 

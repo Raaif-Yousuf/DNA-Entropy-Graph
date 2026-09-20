@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import typer.main
 from typer.testing import CliRunner
 
@@ -362,6 +363,7 @@ def test_direction_flag_is_echoed_in_the_summary_line(tmp_path) -> None:
 
 
 def test_genes_flag_reports_a_gene_count_in_the_summary(tmp_path) -> None:
+    pytest.importorskip("pyrodigal")
     out_dir = tmp_path / "out"
     result = runner.invoke(
         app,

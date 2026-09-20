@@ -4,7 +4,8 @@
   The sharpest is #62's: a `.resw` not packed as a PRI resource gives a window whose every label
   is blank, which reads as an unfinished layout rather than a broken build, so the row names the
   six string ids to check by hand because not one has ever been seen rendered.
-- Fixed a literal user-home path (`C:\Users\lab\Downloads`) committed in
-  `SettingsStoreTests.cs`. `check_user_home_paths.py` caught it, but only on the end-of-wave
-  sweep: the guard had been run before that lane merged and not after, which is the argument for
-  running the full guard set per lane rather than per night.
+- Fixed a literal user-home path (a real lab account's `Downloads` folder, hardcoded instead
+  of `%USERPROFILE%\Downloads`) committed in `SettingsStoreTests.cs`. `check_user_home_paths.py`
+  caught it, but only on the end-of-wave sweep: the guard had been run before that lane merged
+  and not after, which is the argument for running the full guard set per lane rather than per
+  night.
