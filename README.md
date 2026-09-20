@@ -1,82 +1,62 @@
 # DNA Entropy Graph
 
-A Windows app for lab biologists, being built now. You drop a GenBank or FASTA file (or
-paste a sequence), press Run, and get a per-base Shannon entropy track: a number from 0
-to 2 bits at every position, showing how predictable that position looks to a genomic
-language model (Evo 2). You view it in a built-in genome viewer or open it in IGV,
-Geneious, SnapGene, or Benchling.
+I am building a Windows app for lab biologists who want a per-base Shannon entropy track
+without opening a terminal. You drop in a GenBank or FASTA file, press Run, and get a number
+from 0 to 2 bits at every position showing how predictable that base looks to the Evo 2
+genomic language model, ready to open in IGV, Geneious, SnapGene or Benchling.
 
-The analysis runs on a rented computer with a graphics card, for a few minutes, inside
-your own Google Cloud project, paid for by you. Nobody involved with this project can see
-your account, your files, or your bill. No terminal, no `gcloud`, no SSH, nothing on our
-servers. [`docs/threat_model.md`](docs/threat_model.md) has the full, honest account of
-what that setup does and does not expose.
+## How it works
 
-## What it needs
+- Evo 2 needs a GPU, so rather than asking you to own one or asking you to trust me with your
+  sequences, the app rents a GPU machine for a few minutes inside your own Google Cloud
+  project, runs the job there, downloads the results and cleans the machine up. There is no
+  server of mine in the path and no account of mine on your project; the bill is yours and
+  visible to you. [`docs/threat_model.md`](docs/threat_model.md) is the honest account of what
+  that design does and does not expose.
+- The science is a Python package in `worker/` that ships as a container image. It reads the
+  sequence, runs it through the model over a sliding window in both directions, turns the
+  per-base probabilities into Shannon entropy, and writes bedGraph, wig, GFF3 and TSV tracks.
+- The Windows app in `app/` is C# and WinUI 3 and owns everything else: input validation, the
+  job state machine, retry-safe cloud calls, cost tracking and a SQLite run history. It talks
+  to Google Cloud through its own gateway layer, with an in-memory fake behind the same
+  interfaces for tests.
+- A run is usually well under a dollar. The cost people forget is that a stopped machine's
+  disk keeps charging, so the app tracks every resource it created and offers to delete it.
 
-- A Windows 11 PC (the packaged app is Windows-only for now).
-- A Google account, with a payment method you are comfortable putting on file. Runs are
-  usually well under a dollar each; see
-  [`docs/user_guide/06-costs-and-cleanup.md`](docs/user_guide/06-costs-and-cleanup.md)
-  for real worked examples, including the cost people forget (a stopped rented
-  computer's disk keeps costing a small amount until it is deleted).
+## Where it stands
 
-## If you are here to use it
+Not shipped. There is no installer and no v1. Measured on 2026-09-20, Windows 11:
 
-Start with [`docs/user_guide/README.md`](docs/user_guide/README.md), written for you, not
-for a developer: what the app does, what it costs, and a page-by-page walkthrough from
-install to your first run. **There is no installer yet** (see Status below); the guide
-describes the app as designed, ahead of the first release, so you know what to expect once
-one exists.
+| part | state | evidence |
+| --- | --- | --- |
+| worker pipeline, stand-in predictor | runs end to end, no GPU needed | 810 passed, 2 skipped |
+| app shell, run history, run progress | builds and launches | 327 tests, 0 failing, 1 skipped |
+| Evo 2 on a real GPU | never run | no GPU on the machine it is written on |
+| any call to a real Google Cloud project | never run | every cloud path is covered against a fake only |
 
-## Status
+[`docs/ToTest.md`](docs/ToTest.md) is the queue of what has to be proven on real
+infrastructure before anyone trusts it there, and the
+[issues](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues) are the only tracker.
 
-**Not shipped. No installer, no v0.1 release yet.** Being honest about exactly where
-things stand, since a README that implies a working product wastes your time finding out
-otherwise:
+## Build and run
 
-- The design is approved (the full spec is linked below) and the GitHub issue tracker is
-  the single source of truth for what is done and what is left.
-- The Windows app (`app/`, C#/WinUI 3) does not exist as code yet.
-- The science package (`worker/`, Python) is ported, runs, and its tests pass on a laptop
-  with no GPU (`worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu"`).
-  It has not yet been run end to end against a real Google Cloud project; every cloud
-  path is implemented and has only ever been exercised against an in-memory fake so far.
-  See [`docs/ToTest.md`](docs/ToTest.md) for the exact queue of what still needs proving
-  on real infrastructure before anyone should trust it there.
-- A full developer documentation set exists under [`docs/`](docs/README.md): architecture,
-  the app-worker contract, the science, cloud design, packaging, and more, indexed from
-  [`docs/README.md`](docs/README.md).
-- Milestones, in order: `v0.1 walking skeleton` (a full run with a stand-in model on a
-  plain cloud computer) → `v0.2 real Evo on GPU` → `v0.3 daily-use polish` →
-  `v1.0 lab release` (the first signed installer) → `v1.1 multi-cloud (AWS)`. See the
-  [milestones page](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/milestones) for
-  current progress; a number written here would go stale by the time you read it.
+```
+git clone https://github.com/Raaif-Yousuf/DNA-Entropy-Graph
+cd DNA-Entropy-Graph\app && dotnet build -c Release -p:Platform=x64
+py -m venv ..\worker\.venv && ..\worker\.venv\Scripts\pip install -e ..\worker[dev]
+..\worker\.venv\Scripts\dna-entropy run --input ..\worker\tests\data\sample.gb --name demo --out out
+```
 
-## If you are here to develop it
+Tests: `dotnet test -c Release -p:Platform=x64` from `app/`, and
+`worker\.venv\Scripts\python -m pytest worker/tests -m "not gpu"` from the repo root.
 
-- [`docs/onboarding.md`](docs/onboarding.md): first hour on a fresh Windows 11 box, to a
-  green worker test suite.
-- [`docs/README.md`](docs/README.md): the full documentation index, reading order, and
-  which doc owns which fact.
-- [`CLAUDE.md`](CLAUDE.md): the project's own hard rules and stack, if you are an AI
-  agent working in this repo, or a developer who wants the same quick reference.
-- [Design spec](docs/superpowers/specs/2026-09-18-dna-entropy-graph-design.md): the
-  approved design everything else is built from.
-- [Issues](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues) and
-  [milestones](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/milestones): the only
-  tracker. No `ROADMAP.md`, no `TODO.md`.
+To use the app rather than build it, start at
+[`docs/user_guide/README.md`](docs/user_guide/README.md). To work on it, start at
+[`docs/onboarding.md`](docs/onboarding.md) and [`docs/README.md`](docs/README.md).
 
-## Lineage
-
-This project succeeds two command-line prototypes:
+This succeeds two command-line prototypes,
 [dna-entropy](https://github.com/Raaif-Yousuf/dna-entropy) and
-[DNA-Entropy-GenBank](https://github.com/Raaif-Yousuf/DNA-Entropy-GenBank). The Python
-science package (`dna_entropy`) is ported from them, largely unchanged, and runs inside
-a container on the rented cloud computer or on a local NVIDIA GPU; the Windows app and
-the direct-to-Google-Cloud design are new. See [`FEATURES.md`](FEATURES.md) for the
-prototypes' own feature inventory, the starting point this project was scoped from.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+[DNA-Entropy-GenBank](https://github.com/Raaif-Yousuf/DNA-Entropy-GenBank); the Python science
+package is ported from them, and the app and the direct-to-Google-Cloud design are new.
+[`FEATURES.md`](FEATURES.md) has the prototypes' own feature inventory. MIT licensed, see
+[LICENSE](LICENSE).
