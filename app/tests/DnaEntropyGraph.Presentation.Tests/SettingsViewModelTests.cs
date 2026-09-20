@@ -50,7 +50,7 @@ public class SettingsViewModelTests
         var settingsStore = Substitute.For<ISettingsStore>();
         var toastService = Substitute.For<IToastService>();
         var strings = Substitute.For<IStringResourceProvider>();
-        strings.GetString("ThemeUpdated.Title").Returns("Theme updated (from resw)");
+        strings.GetString("ThemeUpdated_Title").Returns("Theme updated (from resw)");
         var viewModel = new SettingsViewModel(settingsStore, toastService, strings);
 
         viewModel.SetThemeCommand.Execute("Dark");

@@ -602,7 +602,7 @@ def _status_marker(
 
 # (should_flag, sample_text, expected_pattern_name_substring_or_None)
 _SELF_TEST_CASES: tuple[tuple[bool, str, str | None], ...] = (
-    (True, "contact me at raaif.yousuf@vanderbilt.edu for details", "email"),
+    (True, "contact me at a.researcher@university.example for details", "email"),
     (True, "ya29.a0AfH6SMBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "google-oauth-access-token"),
     (True, "AIzaSyD1234567890abcdefghijklmnopqrstuv", "google-api-key"),
     (True, "GOCSPX-abcdefghijklmnopqrstuvwx1234", "google-oauth-client-secret"),

@@ -26,9 +26,12 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     [RelayCommand]
     private async Task ConfirmDeleteAsync(CancellationToken cancellationToken)
     {
+        // Plain (non-dotted) resw keys: this call site never goes through
+        // x:Uid, and a dotted key here would miss the PRI's compiled
+        // resource path (see ShellViewModel.BuildStatusPillText's comment).
         await _dialogService.ConfirmAsync(
-            _strings.GetString("ConfirmDeleteResource.Title"),
-            _strings.GetString("ConfirmDeleteResource.Body"),
+            _strings.GetString("ConfirmDeleteResource_Title"),
+            _strings.GetString("ConfirmDeleteResource_Body"),
             cancellationToken).ConfigureAwait(false);
     }
 }
