@@ -42,8 +42,15 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     private readonly ConcurrentDictionary<(string Name, string Zone), VmDescriptor> _vms = new();
 
     // --- Account ---
-    private bool _signedIn = true;
-    private string? _selectedProjectId = "fake-project";
+    // Issue #424: a fresh profile is not signed in to any Google account and
+    // has no selected project - the always-signed-in default here
+    // contradicted that (MEASURED: the shell's status pill read a signed-in
+    // project name on a fresh profile instead of "Not signed in"). A test
+    // that needs a signed-in fake arms it explicitly through
+    // WithSelectedProject/WithSignedOut below, the same fluent-setter
+    // convention every other scripted state in this class already follows.
+    private bool _signedIn;
+    private string? _selectedProjectId;
 
     // --- Project-wide scripted failures (abort a zone ladder immediately) ---
     private readonly HashSet<string> _billingOffProjects = new(StringComparer.Ordinal);
@@ -211,6 +218,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         return this;
     }
 
+    /// <summary>Explicitly the fresh-profile default (issue #424): signed out, with no selected project. Kept as an explicit setter, not just the implicit default, so a test can restate the state it depends on.</summary>
     public FakeGcp WithSignedOut()
     {
         _signedIn = false;
@@ -218,8 +226,10 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         return this;
     }
 
+    /// <summary>Arms this fake as signed in to <paramref name="projectId"/> (issue #424: the default is signed out, so a test that needs a signed-in account arms it explicitly here rather than relying on a constructor default).</summary>
     public FakeGcp WithSelectedProject(string projectId)
     {
+        _signedIn = true;
         _selectedProjectId = projectId;
         return this;
     }

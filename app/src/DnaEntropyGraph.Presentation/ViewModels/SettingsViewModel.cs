@@ -30,6 +30,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         Theme = theme;
         _settingsStore.SetString(ThemeKey, theme);
-        _toastService.ShowToast(_strings.GetString("ThemeUpdated.Title"), theme);
+        // Plain (non-dotted) resw key: see ShellViewModel.BuildStatusPillText's comment.
+        _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), theme);
     }
 }

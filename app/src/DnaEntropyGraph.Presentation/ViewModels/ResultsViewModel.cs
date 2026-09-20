@@ -28,7 +28,8 @@ public sealed partial class ResultsViewModel : ObservableObject
         var runs = await _runRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
         if (runs.Count == 0)
         {
-            _toastService.ShowToast(_strings.GetString("NoRunsYet.Title"), _strings.GetString("NoRunsYet.Body"));
+            // Plain (non-dotted) resw keys: see ShellViewModel.BuildStatusPillText's comment.
+            _toastService.ShowToast(_strings.GetString("NoRunsYet_Title"), _strings.GetString("NoRunsYet_Body"));
         }
     }
 }

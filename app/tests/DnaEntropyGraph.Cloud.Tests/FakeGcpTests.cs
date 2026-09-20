@@ -93,4 +93,27 @@ public class FakeGcpTests
         gcp.IsSignedIn.ShouldBeFalse();
         gcp.SelectedProjectId.ShouldBeNull();
     }
+
+    [Fact]
+    public void A_fresh_fake_is_not_signed_in_with_no_selected_project()
+    {
+        // Issue #424: a fresh profile is not signed in to any Google
+        // account. The always-signed-in-to-"fake-project" default this
+        // fake used to carry contradicted that - a ShellViewModel built
+        // against an unscripted FakeGcp would show a signed-in status pill
+        // on what is supposed to be a fresh profile.
+        var gcp = new FakeGcp();
+
+        gcp.IsSignedIn.ShouldBeFalse();
+        gcp.SelectedProjectId.ShouldBeNull();
+    }
+
+    [Fact]
+    public void WithSelectedProject_arms_the_fake_as_signed_in_to_that_project()
+    {
+        var gcp = new FakeGcp().WithSelectedProject("my-project");
+
+        gcp.IsSignedIn.ShouldBeTrue();
+        gcp.SelectedProjectId.ShouldBe("my-project");
+    }
 }

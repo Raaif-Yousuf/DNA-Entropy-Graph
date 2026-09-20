@@ -18,19 +18,19 @@
   <data name="ShellTitle.Text" xml:space="preserve">
     <value>DNA Entropy Graph</value>
   </data>
-  <data name="ConfirmDeleteResource.Title" xml:space="preserve">
+  <data name="ConfirmDeleteResource_Title" xml:space="preserve">
     <value>Delete this cloud resource?</value>
   </data>
-  <data name="ConfirmDeleteResource.Body" xml:space="preserve">
+  <data name="ConfirmDeleteResource_Body" xml:space="preserve">
     <value>This stops billing for it. This cannot be undone.</value>
   </data>
-  <data name="NoRunsYet.Title" xml:space="preserve">
+  <data name="NoRunsYet_Title" xml:space="preserve">
     <value>No runs yet</value>
   </data>
-  <data name="NoRunsYet.Body" xml:space="preserve">
+  <data name="NoRunsYet_Body" xml:space="preserve">
     <value>Start a run to see results here.</value>
   </data>
-  <data name="ThemeUpdated.Title" xml:space="preserve">
+  <data name="ThemeUpdated_Title" xml:space="preserve">
     <value>Theme updated</value>
   </data>
   <data name="NavNewRun.Content" xml:space="preserve">
@@ -45,10 +45,10 @@
   <data name="NavSettings.Content" xml:space="preserve">
     <value>Settings</value>
   </data>
-  <data name="StatusPillNotSignedIn.Text" xml:space="preserve">
+  <data name="StatusPillNotSignedIn" xml:space="preserve">
     <value>Not signed in</value>
   </data>
-  <data name="StatusPillSignedIn.Text" xml:space="preserve">
+  <data name="StatusPillSignedIn" xml:space="preserve">
     <value>Signed in - {0}</value>
   </data>
   <data name="RunProgressCancel.Content" xml:space="preserve">
@@ -63,16 +63,16 @@
   <data name="RunProgressStayOpenBanner.Message" xml:space="preserve">
     <value>You can close the app. The run continues in the cloud and results download when you come back.</value>
   </data>
-  <data name="ConfirmStopVm.Title" xml:space="preserve">
+  <data name="ConfirmStopVm_Title" xml:space="preserve">
     <value>Stop this rented computer now?</value>
   </data>
-  <data name="ConfirmStopVm.Body" xml:space="preserve">
+  <data name="ConfirmStopVm_Body" xml:space="preserve">
     <value>Its storage still costs a small amount until you delete it. Your run stops making progress.</value>
   </data>
-  <data name="ConfirmDeleteVm.Title" xml:space="preserve">
+  <data name="ConfirmDeleteVm_Title" xml:space="preserve">
     <value>Delete this rented computer now?</value>
   </data>
-  <data name="ConfirmDeleteVm.Body" xml:space="preserve">
+  <data name="ConfirmDeleteVm_Body" xml:space="preserve">
     <value>This cannot be undone. Nothing about this run keeps costing money afterward.</value>
   </data>
   <data name="PhaseValidating_Title" xml:space="preserve">
