@@ -54,7 +54,7 @@ def test_pattern_names_are_unique():
 
 
 def test_find_secrets_flags_email_with_line_number():
-    hits = sm.find_secrets("line one\ncontact raaif.yousuf@vanderbilt.edu\nline three")
+    hits = sm.find_secrets("line one\ncontact a.researcher@university.example\nline three")
     assert any(h.pattern_name == "email" and h.line_no == 2 for h in hits)
 
 
@@ -67,9 +67,9 @@ def test_find_secrets_does_not_flag_ordinary_prose():
 
 
 def test_find_secrets_redacts_the_match_in_its_own_report():
-    hits = sm.find_secrets("raaif.yousuf@vanderbilt.edu")
+    hits = sm.find_secrets("a.researcher@university.example")
     assert hits
-    assert "raaif.yousuf@vanderbilt.edu" not in hits[0].redacted
+    assert "a.researcher@university.example" not in hits[0].redacted
 
 
 def test_find_secrets_does_not_flag_scrubbed_placeholder_paths():
@@ -100,7 +100,7 @@ def test_push_refuses_whole_batch_when_one_file_has_a_secret(live_and_mirror):
     live, mirror = live_and_mirror
     name, content = _memory_file("clean", "project", "- evo2 returns a nested tuple\n")
     (live / name).write_text(content, encoding="utf-8")
-    name, content = _memory_file("leaky", "project", "contact raaif.yousuf@vanderbilt.edu\n")
+    name, content = _memory_file("leaky", "project", "contact a.researcher@university.example\n")
     (live / name).write_text(content, encoding="utf-8")
 
     rc = sm.run("push", apply_changes=True)
@@ -139,7 +139,7 @@ def test_push_allow_flagged_skip_copies_clean_and_skips_flagged(live_and_mirror)
     live, mirror = live_and_mirror
     name, content = _memory_file("clean", "project", "- evo2 returns a nested tuple\n")
     (live / name).write_text(content, encoding="utf-8")
-    name, content = _memory_file("leaky", "project", "contact raaif.yousuf@vanderbilt.edu\n")
+    name, content = _memory_file("leaky", "project", "contact a.researcher@university.example\n")
     (live / name).write_text(content, encoding="utf-8")
 
     rc = sm.run("push", apply_changes=True, allow_flagged_skip=True)
@@ -151,7 +151,7 @@ def test_push_allow_flagged_skip_copies_clean_and_skips_flagged(live_and_mirror)
 
 def test_push_dry_run_writes_nothing_but_reports_flagged(live_and_mirror, capsys):
     live, mirror = live_and_mirror
-    name, content = _memory_file("leaky", "project", "contact raaif.yousuf@vanderbilt.edu\n")
+    name, content = _memory_file("leaky", "project", "contact a.researcher@university.example\n")
     (live / name).write_text(content, encoding="utf-8")
 
     rc = sm.run("push", apply_changes=True, dry_run=True)
@@ -334,7 +334,7 @@ def test_push_include_personal_still_runs_the_secret_scan(live_and_mirror):
     """--include-personal widens WHAT is eligible; it must not widen what
     the secret scanner allows through."""
     live, mirror = live_and_mirror
-    name, content = _memory_file("prefs", "feedback", "contact raaif.yousuf@vanderbilt.edu\n")
+    name, content = _memory_file("prefs", "feedback", "contact a.researcher@university.example\n")
     (live / name).write_text(content, encoding="utf-8")
 
     rc = sm.run("push", apply_changes=True, include_personal=True)
@@ -410,7 +410,7 @@ def test_pull_copies_mirror_to_live_without_scanning(live_and_mirror):
     # Even a mirror file that WOULD be flagged on push is not blocked on
     # pull: it is already committed content, not a new exposure.
     (mirror / "already-committed.md").write_text(
-        "contact raaif.yousuf@vanderbilt.edu\n", encoding="utf-8"
+        "contact a.researcher@university.example\n", encoding="utf-8"
     )
 
     rc = sm.run("pull", apply_changes=True)
@@ -508,7 +508,7 @@ def test_cli_allow_flagged_skip_without_push_errors():
 
 def test_cli_push_end_to_end_refuses_on_planted_secret(live_and_mirror):
     live, mirror = live_and_mirror
-    name, content = _memory_file("leaky", "project", "contact raaif.yousuf@vanderbilt.edu\n")
+    name, content = _memory_file("leaky", "project", "contact a.researcher@university.example\n")
     (live / name).write_text(content, encoding="utf-8")
 
     import os
