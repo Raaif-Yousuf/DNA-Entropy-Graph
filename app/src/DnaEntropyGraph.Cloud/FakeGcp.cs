@@ -87,7 +87,21 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public string? SelectedProjectId => _selectedProjectId;
 
-    public Task SignInAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    /// <summary>
+    /// Issue #424's other half: WizardViewModel.SignInAsync reads
+    /// IGcpAccount.IsSignedIn right after awaiting this call to decide
+    /// whether to navigate on - a no-op here would leave that flow wired to
+    /// nothing against this fake. Signs in to "fake-project", the same
+    /// project id this fake always reported before it defaulted to signed
+    /// out; a test that needs a specific project id still arms it
+    /// explicitly through <see cref="WithSelectedProject"/>.
+    /// </summary>
+    public Task SignInAsync(CancellationToken cancellationToken)
+    {
+        _signedIn = true;
+        _selectedProjectId = "fake-project";
+        return Task.CompletedTask;
+    }
 
     // ----------------------------------------------------------------
     // Scripting API - one line per scenario, as issue #49 asks for.

@@ -109,6 +109,23 @@ public class FakeGcpTests
     }
 
     [Fact]
+    public async Task SignInAsync_flips_a_fresh_fake_to_signed_in()
+    {
+        // Issue #424's own Tests line: "a new FakeGcp instance is not
+        // signed in until SignInAsync is called; SignInAsync flips
+        // IsSignedIn to true." WizardViewModel.SignInAsync reads
+        // IGcpAccount.IsSignedIn right after awaiting this call to decide
+        // whether to navigate on - a no-op SignInAsync would leave that
+        // flow wired to nothing against this fake.
+        var gcp = new FakeGcp();
+
+        await gcp.SignInAsync(CancellationToken.None);
+
+        gcp.IsSignedIn.ShouldBeTrue();
+        gcp.SelectedProjectId.ShouldNotBeNull();
+    }
+
+    [Fact]
     public void WithSelectedProject_arms_the_fake_as_signed_in_to_that_project()
     {
         var gcp = new FakeGcp().WithSelectedProject("my-project");

@@ -11,7 +11,10 @@
   fresh profile's status pill never actually read "Not signed in" against the fake. The
   default is now signed out with no selected project; `WithSelectedProject` arms a
   signed-in fake explicitly (`WithSignedOut` restates the default for a test that depends
-  on it).
+  on it). `SignInAsync` now actually flips the fake to signed in (to `fake-project`) instead
+  of no-opping, per issue #424's own "Done when" -- `WizardViewModel.SignInAsync` reads
+  `IGcpAccount.IsSignedIn` right after awaiting this call, so a no-op left that flow wired
+  to nothing against this fake.
 - Added `DnaEntropyGraph.Guards.Tests.StringResourceKeyGuardTests`: scans every C#
   `strings.GetString("...")` call site against the real `Resources.resw` and fails if a
   looked-up key is dotted or has no matching entry, so this bug class cannot recur silently.
