@@ -26,3 +26,12 @@
   it refused to pack at all. It is now `0.0.1-ci.<run number>`. The artifact is a
   seven-day throwaway that is never published, so nothing about the version is meaningful
   beyond being one vpk accepts.
+- Named the five library test projects explicitly in `ci-app.yml`'s test step instead of
+  running the whole solution. MEASURED 2026-09-20: a solution-wide `dotnet test` hung at
+  that step on windows-latest twice in a row (runs 35528323292 and 35529823866, both
+  cancelled by hand after more than twenty minutes on a step that takes nine seconds when
+  it works). The one assembly that is not a plain library is
+  `DnaEntropyGraph.App.UiTests`, which is WinUI-app-hosted and so starts a real desktop app
+  in a session with no interactive desktop; every test in it is `[Fact(Skip=...)]` today,
+  so leaving it out costs no coverage. Locally the five projects are 309 tests, 0 failing,
+  0 skipped.

@@ -63,13 +63,30 @@ jobs:
       # the right reason, but it had never run a single test, and an exit code
       # of 0 there would have been a permanently green job testing nothing.
       #
-      # The UI tests need no filter: they are all `[Fact(Skip=...)]` and report
-      # as skipped. TRX and coverage need the Microsoft.Testing.Extensions.*
-      # packages referenced first -- see the follow-up issue; passing the flags
-      # without them reproduces the same "Zero tests ran" failure.
+      # TRX and coverage need the Microsoft.Testing.Extensions.* packages
+      # referenced first -- see the follow-up issue; passing the flags without
+      # them reproduces the same "Zero tests ran" failure.
+      #
+      # MEASURED 2026-09-20: a solution-wide `dotnet test` hung at this step on
+      # windows-latest, twice in a row (runs 35528323292 and 35529823866, both
+      # cancelled by hand after the step had been running for over twenty
+      # minutes; the step takes nine seconds when it works, and twenty-five
+      # seconds locally). Every test assembly here is a plain library except
+      # DnaEntropyGraph.App.UiTests, which is WinUI-app-hosted, so the runner
+      # starts a real desktop app inside a session that has no interactive
+      # desktop. Every test in it is `[Fact(Skip=...)]` today, so naming the
+      # five library projects explicitly loses no coverage at all and removes
+      # the only thing in the run that opens a window. Put UiTests back the day
+      # it has a test that does something, together with whatever makes it
+      # terminate on a runner.
       - name: test
         working-directory: app
-        run: dotnet test -c Release -p:Platform=x64 --no-build
+        run: |
+          dotnet test tests/DnaEntropyGraph.Core.Tests/DnaEntropyGraph.Core.Tests.csproj -c Release -p:Platform=x64 --no-build
+          dotnet test tests/DnaEntropyGraph.Cloud.Tests/DnaEntropyGraph.Cloud.Tests.csproj -c Release -p:Platform=x64 --no-build
+          dotnet test tests/DnaEntropyGraph.Persistence.Tests/DnaEntropyGraph.Persistence.Tests.csproj -c Release -p:Platform=x64 --no-build
+          dotnet test tests/DnaEntropyGraph.Presentation.Tests/DnaEntropyGraph.Presentation.Tests.csproj -c Release -p:Platform=x64 --no-build
+          dotnet test tests/DnaEntropyGraph.Guards.Tests/DnaEntropyGraph.Guards.Tests.csproj -c Release -p:Platform=x64 --no-build
 
       - name: publish self-contained
         working-directory: app
