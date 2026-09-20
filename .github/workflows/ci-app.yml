@@ -1,27 +1,19 @@
 name: ci-app
 
-# CI runs ON DEMAND ONLY (owner's decision, 2026-09-19). Start a run with:
+# Runs on every pull request that touches app/ (or this file), plus on demand:
 #
 #     gh workflow run ci-app.yml
 #     gh run watch
 #
-# or the "Run workflow" button on the Actions tab. Nothing here fires on a push, a pull
-# request or a schedule.
-#
-# To restore automatic CI, delete `workflow_dispatch:` below and uncomment this block:
-#
-#   on:
-#     pull_request:
-#       paths:
-#         - "app/**"
-#         - ".github/workflows/ci-app.yml"
-#     push:
-#       branches: [main]
-#       paths:
-#         - "app/**"
-#         - ".github/workflows/ci-app.yml"
-#     workflow_dispatch:
+# or the "Run workflow" button on the Actions tab. No push trigger and no schedule -
+# a PR's own check is the gate, and this build is a Windows dotnet build plus a vpk
+# pack, too heavy to run again on every push to main after the PR that already ran it
+# merges.
 on:
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/ci-app.yml"
   workflow_dispatch:
 
 permissions:

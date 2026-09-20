@@ -1,21 +1,16 @@
 name: ci-docs
 
-# CI runs ON DEMAND ONLY (owner's decision, 2026-09-19). Start a run with:
+# Runs on every pull request, plus on demand:
 #
 #     gh workflow run ci-docs.yml
 #     gh run watch
 #
-# or the "Run workflow" button on the Actions tab. Nothing here fires on a push, a pull
-# request or a schedule.
-#
-# To restore automatic CI, delete `workflow_dispatch:` below and uncomment this block:
-#
-#   on:
-#     pull_request:
-#     push:
-#       branches: [main]
-#     workflow_dispatch:
+# or the "Run workflow" button on the Actions tab. No path filter - the guards, the
+# link check and the changelog-fragment check all read across the whole tree, not just
+# docs/, so a PR that never touches docs/ can still break one of them. No push trigger
+# and no schedule - a PR's own check is the gate.
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:
