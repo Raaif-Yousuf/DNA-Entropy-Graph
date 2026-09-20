@@ -10,3 +10,14 @@
   with `pytest.importorskip("pyrodigal")`, matching how `test_annotator.py`
   already guards itself; `ci-worker.yml` installs the `genes` extra, so the
   test still runs for real there.
+- Skipped, rather than failed, the three THIRD-PARTY-NOTICES tests that run against the
+  real dependency tree when the machine cannot enumerate it. They need a `dotnet` that can
+  restore `app/` (impossible on a Linux runner: the app is WinUI 3 and its packages are
+  Windows-only) and a populated `worker/.venv` with the optional extras, which is
+  gitignored. `ci-docs.yml` already excludes the script itself from its guard loop for
+  exactly this reason (#416); its tests were not excluded, so turning on pull-request CI
+  made them red for a reason unrelated to any change under test. The new
+  `scripts/tests/conftest.py` probes both prerequisites once per session and skips with a
+  reason naming the missing one. Confirmed both arms: with only the `dev` extra installed
+  the three skip and the rest of the suite is 337 passed, and after
+  `pip install -e "worker[dev,genes]"` all 17 tests in the two files run for real and pass.

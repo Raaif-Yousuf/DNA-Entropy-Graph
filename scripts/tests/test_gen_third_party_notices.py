@@ -77,7 +77,7 @@ def test_render_names_every_shipped_dependency_passed_in():
     assert "pkgtwo" in rendered
 
 
-def test_generate_against_the_real_repo_tree_runs_end_to_end():
+def test_generate_against_the_real_repo_tree_runs_end_to_end(real_dependency_tree):
     """The decisive, non-synthetic test: this actually shells out to `dotnet list package`
     for every shipped project and to worker/.venv for every worker dependency. Slow (real
     subprocesses), but a fixture-only test suite would never catch a broken --app-root/
