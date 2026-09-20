@@ -43,7 +43,7 @@ public class ShellViewModelTests
         var gcpAccount = Substitute.For<IGcpAccount>();
         gcpAccount.IsSignedIn.Returns(false);
         var strings = Substitute.For<IStringResourceProvider>();
-        strings.GetString("StatusPillNotSignedIn.Text").Returns("Not signed in");
+        strings.GetString("StatusPillNotSignedIn").Returns("Not signed in");
         var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings);
 
         viewModel.StatusPillText.ShouldBe("Not signed in");
@@ -57,7 +57,7 @@ public class ShellViewModelTests
         gcpAccount.IsSignedIn.Returns(true);
         gcpAccount.SelectedProjectId.Returns("deg-123-abc");
         var strings = Substitute.For<IStringResourceProvider>();
-        strings.GetString("StatusPillSignedIn.Text").Returns("Signed in - {0}");
+        strings.GetString("StatusPillSignedIn").Returns("Signed in - {0}");
         var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings);
 
         viewModel.StatusPillText.ShouldBe("Signed in - deg-123-abc");
@@ -74,11 +74,11 @@ public class ShellViewModelTests
         var gcpAccount = Substitute.For<IGcpAccount>();
         gcpAccount.IsSignedIn.Returns(false);
         var strings = Substitute.For<IStringResourceProvider>();
-        strings.GetString("StatusPillNotSignedIn.Text").Returns("(from resw) Not signed in");
+        strings.GetString("StatusPillNotSignedIn").Returns("(from resw) Not signed in");
         var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings);
 
         viewModel.StatusPillText.ShouldBe("(from resw) Not signed in");
-        strings.Received(1).GetString("StatusPillNotSignedIn.Text");
+        strings.Received(1).GetString("StatusPillNotSignedIn");
     }
 
     [Fact]

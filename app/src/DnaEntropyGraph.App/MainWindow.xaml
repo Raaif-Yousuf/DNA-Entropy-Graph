@@ -34,10 +34,19 @@
                 Grid.Column="0"
                 VerticalAlignment="Center"
                 Margin="16,0,0,0" />
+            <!--
+                MEASURED 2026-09-20: with a 16 DIP right margin the status pill
+                sat directly underneath the minimise, maximise and close
+                buttons, which the system draws on top of an
+                ExtendsContentIntoTitleBar window and which this app does not
+                own. "Not signed in" and the close button overlapped on screen.
+                The three caption buttons are 46 DIP wide each, so 154 clears
+                them with a 16 DIP gap, in DIPs so it holds at any scale.
+            -->
             <TextBlock
                 Grid.Column="1"
                 VerticalAlignment="Center"
-                Margin="0,0,16,0"
+                Margin="0,0,154,0"
                 Text="{x:Bind ViewModel.StatusPillText, Mode=OneWay}" />
         </Grid>
 

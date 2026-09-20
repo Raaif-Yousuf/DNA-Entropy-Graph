@@ -136,9 +136,10 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
+        // Plain (non-dotted) resw keys: see ShellViewModel.BuildStatusPillText's comment.
         var confirmed = await _dialogService.ConfirmAsync(
-            _strings.GetString("ConfirmStopVm.Title"),
-            _strings.GetString("ConfirmStopVm.Body"),
+            _strings.GetString("ConfirmStopVm_Title"),
+            _strings.GetString("ConfirmStopVm_Body"),
             cancellationToken).ConfigureAwait(false);
 
         if (!confirmed)
@@ -157,9 +158,10 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
+        // Plain (non-dotted) resw keys: see ShellViewModel.BuildStatusPillText's comment.
         var confirmed = await _dialogService.ConfirmAsync(
-            _strings.GetString("ConfirmDeleteVm.Title"),
-            _strings.GetString("ConfirmDeleteVm.Body"),
+            _strings.GetString("ConfirmDeleteVm_Title"),
+            _strings.GetString("ConfirmDeleteVm_Body"),
             cancellationToken).ConfigureAwait(false);
 
         if (!confirmed)

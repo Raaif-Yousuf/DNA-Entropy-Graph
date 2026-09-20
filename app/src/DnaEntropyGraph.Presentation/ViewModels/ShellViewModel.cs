@@ -63,8 +63,20 @@ public sealed partial class ShellViewModel : ObservableObject
 
     private static bool IsTerminal(JobPhase phase) => phase is JobPhase.Completed or JobPhase.PartiallyCompleted or JobPhase.Cancelled or JobPhase.Failed;
 
+    // Keys are the plain, non-dotted resw names ("StatusPillSignedIn", not
+    // "StatusPillSignedIn.Text"): a .resw entry named "Foo.Text" compiles
+    // into the PRI as the nested resource path "Foo/Text", which is exactly
+    // what x:Uid's own "Uid.Property" convention relies on for a XAML
+    // binding. A code call through ResourceLoader.GetString(key) has no such
+    // convention - it looks up the literal key string, so a dotted key here
+    // misses the compiled path and ReswStringResourceProvider's not-found
+    // fallback returns the key itself (MEASURED: the title bar showed the
+    // literal text "StatusPillSignedIn.Text"). Only keys that are also
+    // looked up via x:Uid (ShellTitle.Text, NavNewRun.Content, ...) keep the
+    // dotted form; every key reached exclusively from code stays plain, the
+    // same convention the Phase*_Title keys already use.
     private static string BuildStatusPillText(IGcpAccount gcpAccount, IStringResourceProvider strings)
         => gcpAccount.IsSignedIn
-            ? string.Format(strings.GetString("StatusPillSignedIn.Text"), gcpAccount.SelectedProjectId)
-            : strings.GetString("StatusPillNotSignedIn.Text");
+            ? string.Format(strings.GetString("StatusPillSignedIn"), gcpAccount.SelectedProjectId)
+            : strings.GetString("StatusPillNotSignedIn");
 }
