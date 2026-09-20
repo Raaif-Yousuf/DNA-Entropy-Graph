@@ -18,3 +18,9 @@
 - Added `DnaEntropyGraph.Guards.Tests.StringResourceKeyGuardTests`: scans every C#
   `strings.GetString("...")` call site against the real `Resources.resw` and fails if a
   looked-up key is dotted or has no matching entry, so this bug class cannot recur silently.
+- Moved the status pill out from under the window caption buttons. With a 16 DIP right
+  margin it sat directly beneath the minimise, maximise and close buttons that the system
+  draws over an `ExtendsContentIntoTitleBar` window, so "Not signed in" and the close
+  button overlapped on screen. The three buttons are 46 DIP wide each, so a 154 DIP margin
+  clears them with a 16 DIP gap and holds at any display scale because the margin is in
+  DIPs.
