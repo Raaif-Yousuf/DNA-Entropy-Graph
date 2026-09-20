@@ -21,3 +21,8 @@
   reason naming the missing one. Confirmed both arms: with only the `dev` extra installed
   the three skip and the rest of the suite is 337 passed, and after
   `pip install -e "worker[dev,genes]"` all 17 tests in the two files run for real and pass.
+- Fixed `ci-app.yml`'s vpk pack step, which turned the first pull-request run of that
+  workflow red: `--packVersion 0.0.0-ci` is below the `0.0.1` floor vpk 1.2.0 enforces, so
+  it refused to pack at all. It is now `0.0.1-ci.<run number>`. The artifact is a
+  seven-day throwaway that is never published, so nothing about the version is meaningful
+  beyond being one vpk accepts.

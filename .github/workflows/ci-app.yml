@@ -79,11 +79,19 @@ jobs:
           -o publish
 
       # Unsigned. Signing happens only in release.yml, which asserts its secrets exist.
+      #
+      # MEASURED 2026-09-20 (run 35528077325, the first pull-request run of this
+      # workflow): --packVersion was 0.0.0-ci and vpk 1.2.0 refused it outright with
+      # "Invalid package version '0.0.0-ci', it must be >= 0.0.1". Every step before this
+      # one passed, so the pack was the only thing between a green job and a red one, and
+      # nothing about it is release-specific: this artifact is a throwaway uploaded for
+      # seven days and never published. 0.0.1 is the lowest version vpk will take, and the
+      # run number keeps two runs of the same commit from producing the same package id.
       - name: vpk pack (unsigned)
         working-directory: app
         run: |
           dotnet tool install -g vpk
-          vpk pack --packId DnaEntropyGraph --packVersion 0.0.0-ci --packDir publish --outputDir releases
+          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --outputDir releases
 
       - uses: actions/upload-artifact@v7
         with:
