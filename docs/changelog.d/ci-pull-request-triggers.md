@@ -35,3 +35,10 @@
   in a session with no interactive desktop; every test in it is `[Fact(Skip=...)]` today,
   so leaving it out costs no coverage. Locally the five projects are 309 tests, 0 failing,
   0 skipped.
+- Left `ci-app.yml` on `workflow_dispatch` after all, with the measurement written into the
+  file. Its `test` step hangs on windows-latest: three runs (35528323292, 35529823866,
+  35530219025) all had to be cancelled by hand after six to twenty-five minutes on a step
+  that takes nine seconds when it works and about 25 seconds locally. Dropping the only
+  WinUI-app-hosted test assembly did not fix it. A check that never finishes in front of
+  every pull request is worse than one run by hand, so `ci-worker` and `ci-docs` go to
+  pull requests now and this one follows when the hang is understood. Filed as an issue.

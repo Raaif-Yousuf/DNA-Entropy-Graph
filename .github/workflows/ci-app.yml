@@ -1,19 +1,36 @@
 name: ci-app
 
-# Runs on every pull request that touches app/ (or this file), plus on demand:
+# On demand only, for now:
 #
 #     gh workflow run ci-app.yml
 #     gh run watch
 #
-# or the "Run workflow" button on the Actions tab. No push trigger and no schedule -
-# a PR's own check is the gate, and this build is a Windows dotnet build plus a vpk
-# pack, too heavy to run again on every push to main after the PR that already ran it
-# merges.
+# or the "Run workflow" button on the Actions tab. No push trigger and no schedule.
+#
+# This workflow is the one that is NOT yet on pull requests, unlike ci-worker and
+# ci-docs, and the reason is measured rather than a preference. MEASURED 2026-09-20:
+# its `test` step hangs on windows-latest. Three runs, all cancelled by hand after the
+# step had been running for between six and twenty-five minutes:
+#
+#   35528323292  solution-wide `dotnet test`                     hung
+#   35529823866  solution-wide `dotnet test`                     hung
+#   35530219025  five library projects, no WinUI-hosted assembly hung
+#
+# The same commands finish in about 25 seconds locally on Windows 11, and the same
+# step took nine seconds on run 35528077325 earlier the same day, so this is not
+# slowness. Dropping DnaEntropyGraph.App.UiTests, the only WinUI-app-hosted test
+# assembly, did not fix it, which rules out the obvious first suspect. Turning this on
+# for pull requests before that is understood would put a check that never finishes in
+# front of every PR, which is worse than running it by hand. Restore the block below
+# once a run of it completes:
+#
+#   on:
+#     pull_request:
+#       paths:
+#         - "app/**"
+#         - ".github/workflows/ci-app.yml"
+#     workflow_dispatch:
 on:
-  pull_request:
-    paths:
-      - "app/**"
-      - ".github/workflows/ci-app.yml"
   workflow_dispatch:
 
 permissions:
