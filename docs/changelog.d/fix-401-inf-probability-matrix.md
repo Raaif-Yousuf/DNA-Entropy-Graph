@@ -1,0 +1,1 @@
+- Fixed #401: `check_probability_matrix` now names inf explicitly with offending row indices before the [0, 1] range check, mirroring the NaN diagnosis from #347. Extracted shared `_format_row_preview` helper for NaN and inf row previews. Updated `docs/science_and_formats.md`.

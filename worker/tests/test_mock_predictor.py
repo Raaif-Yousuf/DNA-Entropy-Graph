@@ -123,3 +123,53 @@ def test_check_nan_message_does_not_talk_about_row_sum_deviation() -> None:
     with pytest.raises(ValueError) as exc:
         check_probability_matrix(bad, seq_len=5)
     assert "deviation" not in str(exc.value)
+
+
+# --- inf diagnosis (issue #401) ---------------------------------------------------------
+#
+# An inf probability was already CAUGHT before this fix -- np.any(probs > 1.0) or
+# np.any(probs < 0.0) catches +/-inf -- but only incidentally, via "probabilities must lie
+# in [0, 1]". That message reads like a normalization problem, whereas an inf in a probability
+# matrix is a predictor bug on the GPU (the same class of fault as NaN). The message should
+# name inf explicitly and list the offending row indices.
+
+
+def test_check_rejects_inf_with_a_message_naming_inf() -> None:
+    bad = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[2, 0] = np.inf
+    with pytest.raises(ValueError, match="inf"):
+        check_probability_matrix(bad, seq_len=5)
+
+
+def test_check_rejects_negative_inf_with_a_message_naming_inf() -> None:
+    bad = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[1, 0] = -np.inf
+    with pytest.raises(ValueError, match="inf"):
+        check_probability_matrix(bad, seq_len=5)
+
+
+def test_check_inf_message_names_the_offending_row_indices() -> None:
+    bad = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[2, 0] = np.inf
+    bad[4, 3] = -np.inf
+    with pytest.raises(ValueError) as exc:
+        check_probability_matrix(bad, seq_len=5)
+    msg = str(exc.value)
+    assert "2" in msg and "4" in msg
+
+
+def test_check_inf_message_does_not_say_must_lie_in_0_1() -> None:
+    # Before the fix this fell through to the [0, 1] range check and reported a confusing
+    # "probabilities must lie in [0, 1]" instead of naming inf as the actual cause.
+    bad = np.full((5, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[0, 0] = np.inf
+    with pytest.raises(ValueError) as exc:
+        check_probability_matrix(bad, seq_len=5)
+    assert "must lie in [0, 1]" not in str(exc.value)
+
+
+def test_check_row_preview_truncation_when_more_than_ten_rows() -> None:
+    bad = np.full((15, NUM_NUCLEOTIDES), 0.25, dtype=np.float32)
+    bad[:, 0] = np.inf
+    with pytest.raises(ValueError, match=r"\+5 more"):
+        check_probability_matrix(bad, seq_len=15)
