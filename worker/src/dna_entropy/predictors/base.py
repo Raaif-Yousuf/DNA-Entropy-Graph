@@ -62,6 +62,12 @@ class Predictor(Protocol):
         ...
 
 
+def _format_row_preview(rows: np.ndarray, max_preview: int = 10) -> str:
+    preview = ", ".join(str(int(i)) for i in rows[:max_preview])
+    more = "" if rows.size <= max_preview else f", +{rows.size - max_preview} more"
+    return f"[{preview}{more}]"
+
+
 def check_probability_matrix(probs: np.ndarray, seq_len: int) -> np.ndarray:
     """Assert that ``probs`` satisfies the Predictor contract; return it unchanged.
 
@@ -83,9 +89,17 @@ def check_probability_matrix(probs: np.ndarray, seq_len: int) -> np.ndarray:
     # the affected rows directly instead of sending the reader looking in the wrong place.
     nan_rows = np.unique(np.nonzero(np.isnan(probs))[0])
     if nan_rows.size:
-        preview = ", ".join(str(int(i)) for i in nan_rows[:10])
-        more = "" if nan_rows.size <= 10 else f", +{nan_rows.size - 10} more"
-        raise ValueError(f"probabilities contain NaN in {nan_rows.size} row(s): [{preview}{more}]")
+        rows_str = _format_row_preview(nan_rows)
+        raise ValueError(f"probabilities contain NaN in {nan_rows.size} row(s): {rows_str}")
+    # Named explicitly (issue #401): inf was already CAUGHT before this check existed --
+    # np.any(probs > 1.0) and np.any(probs < 0.0) catch +/-inf -- but only incidentally,
+    # via a message reading "probabilities must lie in [0, 1]". That message reads like a
+    # normalization problem, whereas an inf is a predictor bug on the GPU (the same class of
+    # fault as NaN). Name inf and the affected rows directly before the range check.
+    inf_rows = np.unique(np.nonzero(np.isinf(probs))[0])
+    if inf_rows.size:
+        rows_str = _format_row_preview(inf_rows)
+        raise ValueError(f"probabilities contain inf in {inf_rows.size} row(s): {rows_str}")
     if np.any(probs < 0.0) or np.any(probs > 1.0):
         raise ValueError("probabilities must lie in [0, 1]")
     row_sums = probs.sum(axis=1)

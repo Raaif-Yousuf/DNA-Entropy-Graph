@@ -38,11 +38,12 @@ def predict(self, seq: str) -> np.ndarray:
 MEASURED 2026-09-19 (`worker/src/dna_entropy/predictors/base.py`): the column order
 `NUCLEOTIDES = ("A", "C", "G", "T")` is fixed across the whole codebase and must never be
 reordered; `check_probability_matrix` guards this boundary at runtime (shape, dtype
-`float32`, values in `[0, 1]`, each row sums to `1.0` within `1e-4`) and raises
-`ValueError` naming exactly what failed. This is the one place downstream code trusts
-without re-checking, and the one place a real-model bug has actually shown up twice
-(CLAUDE.md's Critical Pitfalls: evo2 returning a nested tuple, and the tokenizer's ids
-coming back as `uint8` - both caught by this guard).
+`float32`, explicit NaN and inf checks with offending row indices, values in `[0, 1]`,
+each row sums to `1.0` within `1e-4`) and raises `ValueError` naming exactly what failed
+(distinguishing GPU predictor faults like NaN and inf from normalization or range errors).
+This is the one place downstream code trusts without re-checking, and the one place a
+real-model bug has actually shown up twice (CLAUDE.md's Critical Pitfalls: evo2 returning
+a nested tuple, and the tokenizer's ids coming back as `uint8` - both caught by this guard).
 
 This is why the model is a swap point and nothing else is: entropy, windowing, direction
 combination, and every writer consume only this array. None of them know or care whether
