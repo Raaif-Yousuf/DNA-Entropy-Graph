@@ -56,9 +56,7 @@ To use the app rather than build it, start at
 [`docs/user_guide/README.md`](docs/user_guide/README.md). To work on it, start at
 [`docs/onboarding.md`](docs/onboarding.md) and [`docs/README.md`](docs/README.md).
 
-This succeeds two command-line prototypes,
-[dna-entropy](https://github.com/Raaif-Yousuf/dna-entropy) and
-[DNA-Entropy-GenBank](https://github.com/Raaif-Yousuf/DNA-Entropy-GenBank); the Python science
+This succeeds two command-line prototypes I have since retired; the Python science
 package is ported from them, and the app and the direct-to-Google-Cloud design are new.
 [`FEATURES.md`](FEATURES.md) has the prototypes' own feature inventory. MIT licensed, see
 [LICENSE](LICENSE).
