@@ -157,6 +157,51 @@ def test_block_recursive_delete_allows_named_files_and_outside_repo(command):
     assert rm_hook.verdict(command) is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Remove-Item -Recurse -Force $env:DNA_TEST_OUT\\pm-abc",
+        "Remove-Item -Recurse -Force ${env:DNA_TEST_OUT}\\pm-abc",
+        "rm -rf $DNA_TEST_OUT/pm-abc",
+        "rm -rf ${DNA_TEST_OUT}/pm-abc",
+    ],
+)
+def test_block_recursive_delete_expands_a_variable_that_points_outside_the_repo(command, monkeypatch, tmp_path):
+    monkeypatch.setenv("DNA_TEST_OUT", str(tmp_path))
+    assert rm_hook.verdict(command) is None  # tmp_path is outside the repo
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Remove-Item -Recurse -Force $env:DNA_TEST_UNSET\\pm-abc",
+        "rm -rf $DNA_TEST_UNSET/x",
+        "rm -rf ${DNA_TEST_UNSET}/x",
+    ],
+)
+def test_block_recursive_delete_fails_closed_on_an_unset_variable(command, monkeypatch):
+    monkeypatch.delenv("DNA_TEST_UNSET", raising=False)
+    assert rm_hook.verdict(command) is not None
+
+
+@pytest.mark.parametrize("command", ["rm -rf $DNA_TEST_REPO/.scratch", "Remove-Item -Recurse -Force $env:DNA_TEST_REPO\\.scratch"])
+def test_block_recursive_delete_blocks_a_variable_that_points_into_the_repo(command, monkeypatch):
+    monkeypatch.setenv("DNA_TEST_REPO", str(rm_hook.REPO_ROOT))
+    assert rm_hook.verdict(command) is not None
+
+
+def test_block_recursive_delete_ignores_the_value_of_a_common_parameter():
+    """MEASURED 2026-10-02: the value after -ErrorAction was read as a repo-relative TARGET, so a piped
+    `Get-ChildItem $env:TEMP -Filter pm-* | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue` was denied."""
+    piped = "Get-ChildItem $env:TEMP -Directory | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue"
+    assert rm_hook.verdict(piped) is None
+    assert rm_hook.verdict("Get-ChildItem x | Remove-Item -Recurse -Force -ea Ignore") is None
+    # ... but a real repo target next to such a parameter is still refused, before or after it.
+    assert rm_hook.verdict("Remove-Item -Recurse -Force .scratch -ErrorAction SilentlyContinue") is not None
+    assert rm_hook.verdict("Remove-Item -ErrorAction SilentlyContinue -Recurse -Force .scratch") is not None
+    assert rm_hook.verdict("Remove-Item -Recurse -Force -Path .scratch -ErrorAction Stop") is not None
+
+
 def test_block_recursive_delete_end_to_end_denies():
     code, decision = _run_hook(
         HOOKS_DIR / "block_recursive_delete.py",

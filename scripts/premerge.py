@@ -44,8 +44,8 @@ PYTEST GATES (MEASURED 2026-10-02)
 The first full run reported worker-pytest and scripts-tests as FAIL although every test passed:
 both crashed afterwards in pytest's own `cleanup_dead_symlinks` on the SHARED default basetemp
 (`%TEMP%\\pytest-of-<user>\\pytest-current`, a race with any other pytest running). So every pytest gate
-gets its own private `--basetemp` (under `--log-dir` when given, else a temp dir premerge creates
-and removes) plus `-p no:cacheprovider`, and its verdict comes from the TEST OUTCOME, not the exit
+gets its own private `--basetemp` (a SHORT temp dir premerge creates, never under `--log-dir`, #469; removed
+when everything passed) plus `-p no:cacheprovider`, and its verdict comes from the TEST OUTCOME, not the exit
 code alone (`classify_pytest`): failed or errored tests are FAIL; a run that printed only passes
 and then exited non-zero is an ERROR naming that (an infrastructure death, not a test failure,
 and not a PASS either); no summary at all is an ERROR.
@@ -70,6 +70,7 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -420,20 +421,44 @@ def render_summary(results: Sequence[Result], tail_lines: int = 25) -> tuple[str
     return _ascii("\n".join(lines)), 0
 
 
+def _rmtree_force(path: Path) -> None:
+    """rmtree that also removes read-only files: git writes its objects read-only, and a plain
+    `rmtree(ignore_errors=True)` silently left every pytest basetemp that held a git repo behind."""
+    def clear(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+    shutil.rmtree(path, onexc=clear)
+
+
+def _finish_basetemp(own_tmp: Path, results: Sequence[Result], emit: Callable[[str], None]) -> None:
+    """Remove the basetemp when every gate passed, keep it otherwise, and SAY which happened. Never raises: this runs in a
+    `finally` after every gate already ran, and a file locked by antivirus must not lose the summary."""
+    clean = bool(results) and all(r.status not in (FAIL, ERROR) for r in results)
+    if clean:
+        try:
+            _rmtree_force(own_tmp)
+        except OSError as exc:
+            emit(_ascii(f"basetemp kept (could not remove it: {type(exc).__name__}): {own_tmp}"))
+            return
+        emit(f"basetemp removed: {own_tmp}")
+    else:
+        emit(f"basetemp kept: {own_tmp}")
+
+
 def run_all(gates: Sequence[Gate], log_dir: Path | None = None,
             runner: Callable[[Gate], Result] | None = None, emit: Callable[[str], None] = print
             ) -> tuple[list[Result], str, int]:
-    """Run the gates in order. Pytest gates each get a private --basetemp: under `log_dir` when given,
-    else a temp dir created here and removed at the end (the shared default basetemp raced; see the
-    module docstring)."""
+    """Run the gates in order. Pytest gates each get a private --basetemp in a SHORT temp dir created here (never under
+    `log_dir`: MEASURED 2026-10-02 #469, a basetemp 160+ chars deep made git fail inside test_land_pr's temp bare repos).
+    The dir is removed at the end when every gate passed, kept for debugging otherwise; with a log dir its path is
+    written to `<log_dir>/basetemp.txt`. (The shared default basetemp raced; see the module docstring.)"""
     own_tmp: Path | None = None
     if runner is None:
+        own_tmp = Path(tempfile.mkdtemp(prefix="pm-"))
+        basetemp_root = own_tmp
         if log_dir is not None:
-            basetemp_root = log_dir / "basetemp"
-        else:
-            own_tmp = Path(tempfile.mkdtemp(prefix="premerge-basetemp-"))
-            basetemp_root = own_tmp
-        basetemp_root.mkdir(parents=True, exist_ok=True)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "basetemp.txt").write_text(str(own_tmp) + "\n", encoding="utf-8", newline="\n")
 
         def runner(gate: Gate) -> Result:  # noqa: F811 - the default runner closes over the basetemp root
             return run_gate(gate, basetemp_root=basetemp_root)
@@ -443,7 +468,7 @@ def run_all(gates: Sequence[Gate], log_dir: Path | None = None,
         results = _run_each(gates, runner, emit, log_dir)
     finally:
         if own_tmp is not None:
-            shutil.rmtree(own_tmp, ignore_errors=True)
+            _finish_basetemp(own_tmp, results, emit)
     summary, code = render_summary(results)
     if log_dir is not None:
         (log_dir / "summary.txt").write_text(summary + "\n", encoding="utf-8", newline="\n")
@@ -551,7 +576,8 @@ def self_test() -> bool:
         seen = [next(line for line in r.output.splitlines() if line.startswith("ARGV")) for r in results]
         bases = [line.split("--basetemp ")[1].split(" -p")[0] for line in seen]
         expect("each pytest gate gets its own --basetemp", len(set(bases)) == 2 and all(b for b in bases), str(seen))
-        expect("... under the log dir when one is given", all(Path(b).parent == Path(logs) / "basetemp" for b in bases), str(bases))
+        expect("... under one short temp root, recorded in the log dir", all(Path(b).parent == Path(bases[0]).parent for b in bases)
+               and (Path(logs) / "basetemp.txt").read_text(encoding="utf-8").strip() == str(Path(bases[0]).parent), str(bases))
         expect("... with the cache provider off", all("no:cacheprovider" in s for s in seen))
 
     eol_only = (

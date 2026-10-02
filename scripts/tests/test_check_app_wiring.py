@@ -355,3 +355,125 @@ def test_it_reads_the_real_app_tree_when_one_exists():
         return
     _, scan, _ = caw.collect_findings(app)
     assert scan.cs_files, "the guard read zero .cs files from a tree that has them"
+
+
+# --- #461: three false results, each reproduced by a fixture first ----------------------------------------
+
+
+def _registration(*adds: str) -> str:
+    body = "".join(f"    {a}\n" for a in adds)
+    return (
+        "public static class ServiceRegistration {\n"
+        "  public static IServiceCollection AddDemo(this IServiceCollection s) {\n"
+        f"{body}    return s;\n  }}\n}}\n"
+    )
+
+
+def _findings(root: Path):
+    return caw.collect_findings(root)[0]
+
+
+def test_a_constructor_parameter_with_a_default_value_parses_to_its_type():
+    text = (
+        "public sealed class C { public C(IFoo foo, Action<string, JobPhase>? onPhase = null, int retries = 3, "
+        "string name = \"a,b\") { } }"
+    )
+    assert caw._constructor_parameters(text, "C") == ["IFoo", "Action<string,JobPhase>", "int", "string"]
+
+
+def test_a_defaulted_unregistered_parameter_is_not_an_unregistered_dependency_and_never_named_equals(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Runner>();"),
+        "src/Demo.App/Services/Runner.cs": (
+            "public sealed class Runner { public Runner(Action<string, JobPhase>? onPhaseChanged = null) { } }\n"
+        ),
+    })
+    symbols = [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"]
+    assert symbols == [], symbols  # was: ['Runner(=)']
+
+
+def test_a_required_unregistered_parameter_next_to_a_defaulted_one_is_still_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Runner>();"),
+        "src/Demo.App/Services/Runner.cs": (
+            "public sealed class Runner { public Runner(INeverRegistered x, Action? cb = null) { } }\n"
+        ),
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == ["Runner(INeverRegistered)"]
+
+
+def test_a_registered_type_taken_with_a_default_value_still_counts_as_consumed(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Runner>();", "s.AddSingleton<IClock, Clock>();"),
+        "src/Demo.App/Services/Runner.cs": "public sealed class Runner { public Runner(IClock? clock = null) { } }\n",
+        "src/Demo.App/Services/Clock.cs": "public sealed class Clock : IClock { }\n",
+    })
+    assert not [f for f in _findings(root) if f.symbol == "IClock"]
+
+
+def test_the_instance_registration_form_registers_the_type(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Consumer>();", "s.AddSingleton(new Dep());"),
+        "src/Demo.App/Services/Consumer.cs": "public sealed class Consumer { public Consumer(Dep d) { } }\n",
+        "src/Demo.App/Services/Dep.cs": "public sealed class Dep { }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == []  # was: Consumer(Dep)
+
+
+def test_an_instance_registered_type_nobody_asks_for_is_still_a_dead_registration(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton(new Orphan());"),
+        "src/Demo.App/Services/Orphan.cs": "public sealed class Orphan { }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "DEAD-REGISTRATION"] == ["Orphan"]
+
+
+def _unbound_caption_tree(root: Path, reader: str) -> Path:
+    _wired(root)
+    page = root / "src/Demo.App/Views/ThingPage.xaml"
+    page.write_text(page.read_text(encoding="utf-8").replace('Text="{Binding Caption}"', ""), encoding="utf-8")
+    (root / "src/Demo.Core").mkdir(parents=True, exist_ok=True)
+    (root / "src/Demo.Core/Options.cs").write_text("public sealed record Options { public string? Caption { get; init; } }\n",
+                                                   encoding="utf-8")
+    (root / "src/Demo.App/Services").mkdir(parents=True, exist_ok=True)
+    (root / "src/Demo.App/Services/Reader.cs").write_text(reader, encoding="utf-8")
+    return root
+
+
+def test_a_comment_that_spells_a_member_access_is_not_a_read(tmp_path):
+    root = _unbound_caption_tree(tmp_path / "w", "public class Reader {\n  // see ThingViewModel.Caption\n  /* vm.Caption */\n}\n")
+    codes = _codes(root)
+    assert "UNBOUND-OBSERVABLE" in codes and "CODE-ONLY-OBSERVABLE" not in codes
+
+
+def test_a_read_through_another_declared_type_name_is_not_a_read_of_this_member(tmp_path):
+    root = _unbound_caption_tree(tmp_path / "w", "public class Reader { string A() => Options.Caption; }\n")
+    codes = _codes(root)
+    assert "UNBOUND-OBSERVABLE" in codes and "CODE-ONLY-OBSERVABLE" not in codes
+
+
+def test_a_read_through_the_owning_type_name_or_an_instance_is_still_a_read(tmp_path):
+    for reader in ("public class Reader { string A() => ThingViewModel.Caption; }\n",
+                   "public class Reader { string A(object o) => o.Caption; }\n"):
+        root = _unbound_caption_tree(tmp_path / f"w{abs(hash(reader))}", reader)
+        assert "CODE-ONLY-OBSERVABLE" in _codes(root), reader
+
+
+def test_a_url_in_a_string_literal_is_not_mistaken_for_a_comment(tmp_path):
+    root = _unbound_caption_tree(
+        tmp_path / "w", 'public class Reader { string A(Vm v) { var u = "http://x"; return v.Caption; } }\n')
+    assert "CODE-ONLY-OBSERVABLE" in _codes(root)
+
+
+def test_a_read_through_a_variable_declared_as_another_type_is_not_a_read_of_this_member(tmp_path):
+    """The real #461 shape: `options.ModelId` where `options` is a `RunOptions` parameter, not the ViewModel."""
+    root = _unbound_caption_tree(tmp_path / "w", "public class Reader { string A(Options options) => options.Caption; }\n")
+    codes = _codes(root)
+    assert "UNBOUND-OBSERVABLE" in codes and "CODE-ONLY-OBSERVABLE" not in codes
+
+
+def test_a_variable_of_unknown_or_owning_type_is_still_a_read(tmp_path):
+    for reader in ("public class Reader { string A(ThingViewModel options) => options.Caption; }\n",
+                   "public class Reader { string A() { var options = Make(); return options.Caption; } }\n"):
+        root = _unbound_caption_tree(tmp_path / f"v{abs(hash(reader))}", reader)
+        assert "CODE-ONLY-OBSERVABLE" in _codes(root), reader

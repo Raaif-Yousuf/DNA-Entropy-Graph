@@ -96,6 +96,14 @@ part of this docstring worth reading twice:
   means "no field with a name nothing reads", not "no unread field". The same
   caveat applies here, word for word.
 
+  Three cheap refinements narrow that for C# member READS (#461, MEASURED 2026-10-02): comments are blanked
+  before matching; a read through the literal name of another declared class (`RunOptions.ModelId`) is not a read
+  of this member; and neither is a read through a variable whose declaration in the same file names another
+  declared class (`RunOptions options` ... `options.ModelId`). A `var`, a field declared elsewhere or a property
+  chain (`vm.Options.ModelId`) stays a name match, so those still mask. Constructor parameters with a default
+  value parse to their type and, being optional, are never an UNREGISTERED-DEPENDENCY; `AddSingleton(new Foo())`
+  registers `Foo`.
+
 - **`DANGLING-BINDING` resolves the ViewModel by naming convention only.** A
   page whose DataContext is set to something the convention does not name is
   skipped entirely rather than guessed at, and the skip is reported in the
@@ -189,6 +197,8 @@ _CLASS_DECL = re.compile(
 _ADD_SERVICE = re.compile(
     r"\.Add(?:Singleton|Transient|Scoped)\s*<([^>;]+)>",
 )
+# The instance form (#461): `services.AddSingleton(new Foo())` / `AddSingleton(new Foo { ... })`.
+_ADD_SERVICE_INSTANCE = re.compile(r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*new\s+([\w.]+)")
 _GET_SERVICE = re.compile(r"\.Get(?:Required)?Service\s*<\s*([\w\.]+)\s*>")
 
 _X_UID = re.compile(r'x:Uid\s*=\s*"([^"]+)"')
@@ -318,7 +328,20 @@ def _mentions(identifier: str, texts: dict[Path, str]) -> list[Path]:
     return [p for p, t in texts.items() if pattern.search(t)]
 
 
-def _member_mentions(identifier: str, texts: dict[Path, str]) -> list[Path]:
+# Strings are matched first and kept, so `"http://x"` is not read as the start of a `//` comment.
+_COMMENT_OR_STRING = re.compile(
+    r'@"(?:[^"]|"")*"|"(?:[^"\\\n]|\\.)*"|//[^\n]*|/\*.*?\*/',
+    re.DOTALL,
+)
+
+
+def _strip_comments(text: str) -> str:
+    """Blank `//` and `/* */` comments (so a comment spelling `X.Member` is not a read); string literals stay."""
+    return _COMMENT_OR_STRING.sub(lambda m: m.group(0) if m.group(0)[0] in '@"' else " ", text)
+
+
+def _member_mentions(identifier: str, texts: dict[Path, str], owner: str | None = None,
+                     class_names: frozenset[str] = frozenset()) -> list[Path]:
     """Files that READ this member, as opposed to merely spelling the name.
 
     A bare name match counts an unrelated type's identically named property as
@@ -326,12 +349,30 @@ def _member_mentions(identifier: str, texts: dict[Path, str]) -> list[Path]:
     `NewRunViewModel.ModelId`, which is not a read of anything. Requiring a
     member access (`x.ModelId`) or a `nameof(ModelId)` excludes declarations,
     and that is the whole difference between a read and a coincidence. It is
-    still name-matched, not type-resolved - see this script's docstring.
+    still name-matched, not type-resolved - see this script's docstring, with
+    two cheap refinements (#461, MEASURED 2026-10-02): comments are blanked first, and when the
+    receiver is the literal name of ANOTHER class declared in the tree (`RunOptions.ModelId`) it is
+    a read of that class, not of `owner`. An instance receiver (`vm.ModelId`) stays a match.
     """
     pattern = re.compile(
-        rf"(?:\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b"
+        rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b"
     )
-    return [p for p, t in texts.items() if pattern.search(t)]
+    hits: list[Path] = []
+    for path, text in texts.items():
+        for match in pattern.finditer(_strip_comments(text)):
+            recv = match.group("recv")
+            other_type = owner is not None and recv in class_names and recv != owner
+            if owner is not None and recv and not other_type:
+                # An instance whose declaration (`RunOptions options`) is visible in this file: its type decides.
+                declared = re.search(rf"(?<![\w.])([A-Z]\w*)(?:<[^>;]*>)?\??\s+{re.escape(recv)}\b", _strip_comments(text))
+                other_type = bool(declared) and declared.group(1) in class_names and declared.group(1) != owner
+            if match.group("access").startswith("nameof"):
+                other_type = False
+            if other_type:
+                continue
+            hits.append(path)
+            break
+    return hits
 
 
 def _owning_class(text: str, offset: int) -> str:
@@ -363,8 +404,50 @@ def _members_of(text: str) -> set[str]:
     return members
 
 
-def _constructor_parameters(text: str, class_name: str) -> list[str]:
-    """Parameter type names of `public <class_name>(...)`, in order."""
+def _split_top_level(body: str) -> list[str]:
+    """Split a parameter list on commas that are not inside <>, (), [] or a string literal."""
+    parts: list[str] = []
+    depth = 0
+    in_string = False
+    current = ""
+    for char in body + ",":
+        if char == '"' and not current.endswith("\\"):
+            in_string = not in_string
+        if not in_string:
+            if char in "<([":
+                depth += 1
+            elif char in ">)]":
+                depth -= 1
+            if char == "," and depth == 0:
+                parts.append(current.strip())
+                current = ""
+                continue
+        current += char
+    return [p for p in parts if p]
+
+
+def _cut_default(token: str) -> tuple[str, bool]:
+    """(declaration without its default value, whether it had one). The default starts at the first `=` outside
+    <>, () and [] (a generic's own `=` cannot occur there)."""
+    depth = 0
+    for index, char in enumerate(token):
+        if char in "<([":
+            depth += 1
+        elif char in ">)]":
+            depth -= 1
+        elif char == "=" and depth == 0:
+            return token[:index], True
+    return token, False
+
+
+def _constructor_parameters(text: str, class_name: str, skip_defaults: bool = False) -> list[str]:
+    """Parameter type names of `public <class_name>(...)`, in order.
+
+    A default value (`Action<string, JobPhase>? onPhase = null`) is cut off first (#461, MEASURED 2026-10-02: the
+    old whitespace split read the type as `=`). Generic arguments are kept, spaces removed. With `skip_defaults`
+    the optional parameters are left out: the container supplies the default when nothing is registered, so an
+    unregistered optional parameter is not an UNREGISTERED-DEPENDENCY.
+    """
     match = re.search(
         rf"public\s+{re.escape(class_name)}\s*\(([^)]*)\)",
         text,
@@ -372,26 +455,18 @@ def _constructor_parameters(text: str, class_name: str) -> list[str]:
     )
     if not match:
         return []
-    body = match.group(1).strip()
-    if not body:
-        return []
     types: list[str] = []
-    depth = 0
-    current = ""
-    for char in body + ",":
-        if char in "<([":
-            depth += 1
-        elif char in ">)]":
-            depth -= 1
-        if char == "," and depth == 0:
-            token = current.strip()
-            if token:
-                parts = token.split()
-                if len(parts) >= 2:
-                    types.append(parts[-2].split(".")[-1].rstrip("?"))
-            current = ""
-        else:
-            current += char
+    for token in _split_top_level(match.group(1).strip()):
+        declaration, has_default = _cut_default(token)
+        if has_default and skip_defaults:
+            continue
+        declaration = re.sub(r"^(?:\[[^\]]*\]\s*)+", "", declaration.strip())
+        pieces = declaration.rsplit(None, 1)
+        if len(pieces) < 2:
+            continue
+        type_text = re.sub(r"\s+", "", pieces[0]).rstrip("?")
+        head, bracket, rest = type_text.partition("<")
+        types.append(head.split(".")[-1] + bracket + rest)
     return types
 
 
@@ -412,6 +487,10 @@ def _registered_types(text: str) -> tuple[set[str], set[str]]:
             continue
         every.update(tokens)
         services.add(tokens[0])
+    for match in _ADD_SERVICE_INSTANCE.finditer(text):
+        name = match.group(1).split(".")[-1]
+        every.add(name)
+        services.add(name)
     return every, services
 
 
@@ -423,6 +502,7 @@ def _registered_types(text: str) -> tuple[set[str], set[str]]:
 def _check_members(scan: Scan) -> list[Finding]:
     findings: list[Finding] = []
     xaml_text = scan.xaml_text
+    class_names = frozenset(m.group(1) for text in scan.cs_files.values() for m in _CLASS_DECL.finditer(text))
 
     for path, text in scan.cs_files.items():
         if _is_test_path(path):
@@ -445,8 +525,9 @@ def _check_members(scan: Scan) -> list[Finding]:
         for identifier, kind, symbol in candidates:
             if re.search(rf"\b{re.escape(identifier)}\b", xaml_text):
                 continue
-            prod = _member_mentions(identifier, scan.production_cs(exclude=path))
-            tests = _member_mentions(identifier, scan.test_cs(exclude=path))
+            member_owner = symbol.split(".")[0]
+            prod = _member_mentions(identifier, scan.production_cs(exclude=path), member_owner, class_names)
+            tests = _member_mentions(identifier, scan.test_cs(exclude=path), member_owner, class_names)
             noun = "command" if kind == "COMMAND" else "observable property"
             a_noun = "A command" if kind == "COMMAND" else "An observable property"
             generator = (
@@ -561,7 +642,7 @@ def _check_di(scan: Scan) -> list[Finding]:
         if entry is None:
             continue
         path, text = entry
-        for param in _constructor_parameters(text, type_name):
+        for param in _constructor_parameters(text, type_name, skip_defaults=True):
             if param in _NON_SERVICE_PARAM_TYPES or param in registered:
                 continue
             findings.append(
@@ -1022,6 +1103,23 @@ def self_test() -> int:
             found = _codes(broken)
             check(f"{code} fires on {label}", code in found, f"got {sorted(found)}")
 
+        # 3b. The three false results of #461, one fixture each (revert the fix and these fail).
+        check(
+            "a constructor parameter with a default value parses to its type",
+            _constructor_parameters(
+                "public class C { public C(IFoo f, Action<string, JobPhase>? cb = null) { } }", "C"
+            ) == ["IFoo", "Action<string,JobPhase>"],
+        )
+        check(
+            "the instance registration form registers the type",
+            _registered_types("s.AddSingleton(new Dep());")[0] == {"Dep"},
+        )
+        probe = {Path("Reader.cs"): "class R { // see Vm.Caption\n string A() => Options.Caption; }"}
+        check(
+            "a comment and another declared type's property are not reads of this member",
+            _member_mentions("Caption", probe, "Vm", frozenset({"Vm", "Options"})) == [],
+        )
+
         # 4. The allowlist is checked in both directions.
         stale_root = base / "stale"
         stale_root.mkdir()
@@ -1046,7 +1144,7 @@ def self_test() -> int:
     if failures:
         print(f"SELF-TEST FAILED: {len(failures)} check(s): {', '.join(failures)}")
         return 1
-    print(f"SELF-TEST PASSED: {len(cases) + 4} checks.")
+    print(f"SELF-TEST PASSED: {len(cases) + 7} checks.")
     return 0
 
 

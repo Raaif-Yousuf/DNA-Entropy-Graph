@@ -27,6 +27,7 @@ def world(tmp_path):
 def _land(world, branch="fix/x", paths=(), hunks=None, checks="pass", **kwargs):
     kwargs.setdefault("allow_no_checks", False)
     kwargs.setdefault("dry_run", False)
+    kwargs.setdefault("grace", 0.0)  # tests never wait for real; the grace tests below use a fake clock
     return lp.land(world.ctx(checks), branch, list(paths), hunks or {}, "fix: the thing", None,
                    poll=0.0, timeout=kwargs.pop("timeout", 30.0), **kwargs)
 
@@ -173,6 +174,58 @@ def test_no_checks_is_refused_by_default_and_allowed_on_request(world, capsys):
     (world.work / "other.txt").write_bytes(b"edited again\n")
     assert _land(world, "fix/n2", paths=["other.txt"], checks="none", allow_no_checks=True) == lp.EXIT_OK
     assert _merge_called(world)
+
+
+class FakeTime:
+    """A clock whose sleep advances it, so a 120 s grace period costs no wall time."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _fake_ctx(world, checks):
+    ft = FakeTime()
+    ctx = world.ctx(checks)
+    ctx.sleep, ctx.clock = ft.sleep, ft.clock
+    return ctx, ft
+
+
+def test_checks_that_appear_on_the_third_poll_are_waited_for_and_land(world):
+    (world.work / "other.txt").write_bytes(b"edited\n")
+    ctx, ft = _fake_ctx(world, "appear_third")
+    code = lp.land(ctx, "fix/g", ["other.txt"], {}, "fix: grace", None, False, False, 5.0, 1800.0, grace=120.0)
+    assert code == lp.EXIT_OK
+    polls = [c for c in world.calls() if c[:2] == ["pr", "checks"]]
+    assert len(polls) == 3
+    assert _merge_called(world)
+    assert ft.now < 120.0  # stopped waiting as soon as the first check showed up
+
+
+def test_no_checks_after_the_grace_period_reports_how_long_it_waited(world, capsys):
+    (world.work / "other.txt").write_bytes(b"edited\n")
+    ctx, ft = _fake_ctx(world, "none")
+    code = lp.land(ctx, "fix/g2", ["other.txt"], {}, "fix: grace", None, False, False, 5.0, 1800.0, grace=120.0)
+    assert code == lp.EXIT_RED
+    err = capsys.readouterr().err
+    assert "after waiting 120 s" in err
+    assert ft.now >= 120.0
+    assert not _merge_called(world)
+
+
+def test_allow_no_checks_still_waits_out_the_grace_period_first(world):
+    (world.work / "other.txt").write_bytes(b"edited\n")
+    ctx, ft = _fake_ctx(world, "appear_third")
+    code = lp.land(ctx, "fix/g3", ["other.txt"], {}, "fix: grace", None, True, False, 5.0, 1800.0, grace=120.0)
+    assert code == lp.EXIT_OK
+    assert len([c for c in world.calls() if c[:2] == ["pr", "checks"]]) == 3  # did not merge on poll 1
 
 
 def test_pending_checks_are_polled_until_green(world):
