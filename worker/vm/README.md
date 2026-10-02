@@ -59,3 +59,13 @@ changes what the next app build sends.
   runs the first real GPU/CPU smoke VM should confirm `status.json` shows `booting` then
   `installing` before the worker's first line, and that `logs/startup.log` lands in the
   bucket, per issue #45's own "Observable that proves it is wired".
+
+## Keep-alive (issue #464)
+
+`deg-lifecycle=keep` with `lifecycle.keepAliveMinutes > 0` in the manifest: the worker leaves the VM alone and
+the script's `keep_hold` waits out the window (read from `/work/manifest.json` by `keep_plan`), capped to end at
+least 10 minutes before `maxRunDuration`, then calls `cleanup` with `afterKeepAlive` (`stop` or `delete`, never
+`keep`). Only a successful run (exit 0) is held: a failed (2) or cancelled (3) run applies `afterKeepAlive`
+at once (DECISION, agent-made on the owner's behalf, reversible). The window is measured from VM boot
+(`/proc/uptime`). No window, an unreadable manifest, or any error means stop immediately. Backstops after that: the
+`shutdown -h` deadman and `maxRunDuration` with `instanceTerminationAction=DELETE`.

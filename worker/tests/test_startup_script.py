@@ -149,3 +149,147 @@ def test_uses_curl_unconditionally_no_gcloud_dependency() -> None:
     code = _code_only()
     assert "gcloud" not in code
     assert "curl" in code
+
+
+# --- lifecycle=keep (issue #464): the script owns the keep-alive window ------------------
+
+
+def _extract_function(name: str) -> str:
+    import re
+
+    m = re.search(rf"^{name}\(\) \{{\n.*?\n\}}\n", _text(), re.DOTALL | re.MULTILINE)
+    assert m, f"no {name}() function found in startup.sh"
+    return m.group(0)
+
+
+def _keep_plan(manifest: str | None, max_run_min: int, elapsed_s: int) -> str:
+    """Run the REAL keep_plan() text from startup.sh in bash against a manifest. The manifest
+    is written by bash itself into its own temp dir: the `bash` on a Windows PATH may be Git
+    Bash, MSYS or WSL, and each spells Windows paths differently, so no path crosses over."""
+    lines = [_extract_function("keep_plan"), 'cd "$(mktemp -d)" || exit 1']
+    if manifest is not None:
+        lines += ["cat > manifest.json <<'MANIFEST'", manifest, "MANIFEST"]
+    lines.append(f"keep_plan manifest.json {max_run_min} {elapsed_s}")
+    script = "\n".join(lines) + "\n"
+    result = subprocess.run(["bash", "-s"], input=script.encode("utf-8"), capture_output=True)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    return result.stdout.decode("utf-8").strip()
+
+
+def _bash_available() -> bool:
+    return shutil.which("bash") is not None
+
+
+needs_bash = pytest.mark.skipif(not _bash_available(), reason="no bash on PATH")
+
+
+def _bash_has_python3() -> bool:
+    if shutil.which("bash") is None:
+        return False
+    return subprocess.run(["bash", "-c", "command -v python3"], capture_output=True).returncode == 0
+
+
+needs_bash_python3 = pytest.mark.skipif(not _bash_has_python3(), reason="no bash with python3 on PATH")
+
+
+def _lifecycle(**kw) -> str:
+    import json
+
+    return json.dumps({"lifecycle": kw})
+
+
+@needs_bash_python3
+@pytest.mark.parametrize(
+    ("manifest", "max_run_min", "elapsed_s", "expected"),
+    [
+        # the window is honoured and afterKeepAlive is the action applied when it ends
+        (_lifecycle(afterTask="keep", keepAliveMinutes=30, afterKeepAlive="delete"), 240, 100, "1800 delete"),
+        (_lifecycle(afterTask="keep", keepAliveMinutes=5), 240, 0, "300 stop"),
+        # Hard Rule 11: the window can never outlive maxRunDuration (10 minute margin kept)
+        (_lifecycle(afterTask="keep", keepAliveMinutes=600), 60, 0, "3000 stop"),
+        (_lifecycle(afterTask="keep", keepAliveMinutes=30), 60, 3500, "0 stop"),
+        # no window, a negative one, or a nonsense one: nothing to hold the VM for
+        (_lifecycle(afterTask="keep"), 240, 0, "0 stop"),
+        (_lifecycle(afterTask="keep", keepAliveMinutes=-5), 240, 0, "0 stop"),
+        (_lifecycle(afterTask="keep", keepAliveMinutes="soon"), 240, 0, "0 stop"),
+        # keep can never be the action AFTER the window; unknown spellings stop
+        (_lifecycle(afterTask="keep", keepAliveMinutes=5, afterKeepAlive="keep"), 240, 0, "300 stop"),
+        (_lifecycle(afterTask="keep", keepAliveMinutes=5, afterKeepAlive="Delete "), 240, 0, "300 stop"),
+        # an unreadable manifest fails safe, to stop now
+        ("{not json", 240, 0, "0 stop"),
+        (None, 240, 0, "0 stop"),
+    ],
+)
+def test_keep_plan_bounds_the_window_and_always_ends_in_stop_or_delete(
+    manifest: str | None, max_run_min: int, elapsed_s: int, expected: str
+) -> None:
+    assert _keep_plan(manifest, max_run_min, elapsed_s) == expected
+
+
+def test_keep_is_held_for_its_window_not_stopped_immediately() -> None:
+    """Issue #464: `cleanup "$LIFECYCLE"` with keep used to stop the VM at once. The
+    exit-code dispatch must route keep through keep_hold, and keep_hold must end in a
+    cleanup of the planned (never `keep`) action."""
+    import re
+
+    code = _code_only()
+    case = re.search(r"case \$rc in(.*?)\nesac", code, re.DOTALL)
+    assert case
+    _, _, backstop = case.group(1).partition("*)")
+    assert re.search(r'"\$LIFECYCLE" = "?keep"?', backstop), backstop
+    assert "keep_hold" in backstop
+    assert 'cleanup "$LIFECYCLE"' in backstop  # the non-keep branch is unchanged
+    hold = _extract_function("keep_hold")
+    assert "keep_plan" in hold
+    assert 'cleanup "$after"' in hold
+    assert "sleep" in hold and "shutdown -h" not in hold
+
+
+# --- keep_hold: only a SUCCESSFUL run is held (DECISION, agent-made, reversible) ---------
+
+
+def _run_keep_hold(rc: int, uptime_line: str = "5.00 12.00") -> list[str]:
+    """Source the REAL keep_hold() with stubs for everything it touches (keep_plan prints a
+    30 minute delete plan, cleanup/sleep record their calls, sleep advances $SECONDS, cut
+    stands in for /proc/uptime) and return the recorded calls."""
+    lines = [
+        _extract_function("keep_hold"),
+        'MAX_RUN_MIN=240; LOG=""',
+        'keep_plan() { echo "1800 delete"; }',
+        'cleanup() { LOG="$LOG cleanup:$1"; }',
+        'sleep() { LOG="$LOG sleep"; SECONDS=$((SECONDS + $1)); }',
+        f'cut() {{ echo "{uptime_line}"; }}',
+        f"keep_hold {rc} >/dev/null",
+        'echo "$LOG"',
+    ]
+    result = subprocess.run(
+        ["bash", "-s"], input=("\n".join(lines) + "\n").encode("utf-8"), capture_output=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    return result.stdout.decode("utf-8").split()
+
+
+@needs_bash
+@pytest.mark.parametrize("rc", [2, 3])
+def test_a_failed_or_cancelled_keep_run_applies_after_keep_alive_immediately(rc: int) -> None:
+    """DECISION (agent-made on the owner's behalf, reversible): a failed (2) or cancelled
+    (3) run is NOT held for its keep-alive window, because that bills idle GPU time for a
+    job that produced nothing worth keeping warm for. afterKeepAlive applies at once."""
+    assert _run_keep_hold(rc) == ["cleanup:delete"]  # no sleep at all
+
+
+@needs_bash
+def test_a_successful_keep_run_is_held_for_the_whole_window_then_cleaned_up() -> None:
+    calls = _run_keep_hold(0)
+    assert calls[-1] == "cleanup:delete"
+    assert calls.count("sleep") == 1800 // 15
+
+
+def test_keep_hold_measures_elapsed_time_from_vm_boot_not_script_start() -> None:
+    hold = _extract_function("keep_hold")
+    assert "/proc/uptime" in hold
+    assert 'keep_plan /work/manifest.json "$MAX_RUN_MIN" "$SECONDS"' not in hold
+
+
+def test_the_exit_code_dispatch_passes_the_worker_exit_code_to_keep_hold() -> None:
+    assert 'keep_hold "$rc"' in _code_only()

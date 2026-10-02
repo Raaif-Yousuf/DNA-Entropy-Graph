@@ -12,7 +12,7 @@ import pytest
 from dna_entropy.worker.blobstore import BlobstoreError, LocalBlobstore
 from dna_entropy.worker.cancel import CANCEL_PATH
 from dna_entropy.worker.manifest import ManifestSchemaError
-from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job
+from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job, run_job_outcome
 
 DATA = Path(__file__).parent / "data"
 
@@ -724,72 +724,92 @@ def test_unrecognized_exception_falls_back_to_worker_crash(
 # --- lifecycle.afterTask == "keep" must never be an unbounded no-op (Hard Rule 11) -----
 
 
-def test_after_task_keep_applies_after_keep_alive_instead_of_running_forever(
-    tmp_path: Path,
-) -> None:
-    """Found auditing #304/#306: manifest.lifecycle.keepAliveMinutes/afterKeepAlive were
-    parsed but never consumed anywhere, and run_job's own lifecycle block skipped
-    apply_lifecycle ENTIRELY whenever afterTask == "keep" -- meaning a manifest asking
-    for "keep" left the VM running with literally zero worker-side enforcement of any
-    kind, violating Hard Rule 11 ("keep alive always has an expiry, never indefinitely").
-    The real keep-alive queue/idle-timer feature is issue #93 and is not built here;
-    until it is, "keep" must safely degrade to afterKeepAlive (default "stop") rather
-    than a true no-op, with a loud notice explaining why."""
-    real_store = LocalBlobstore(tmp_path)
+def _keep_store(tmp_path: Path, job_id: str, lifecycle: dict) -> LocalBlobstore:
+    store = LocalBlobstore(tmp_path)
     manifest = {
         "schema": 1,
-        "jobId": "keep-job",
+        "jobId": job_id,
         "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
         "predictor": {"kind": "mock", "seed": 0},
         "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
-        "lifecycle": {"afterTask": "keep", "keepAliveMinutes": 30, "afterKeepAlive": "delete"},
+        "lifecycle": lifecycle,
         "store": {"kind": "gcs", "bucket": "fake-bucket", "prefix": "jobs/x/"},
     }
-    real_store.write_text(MANIFEST_PATH, json.dumps(manifest))
-    real_store.write_text("input/locus.fasta", ">seq\n" + "ACGT" * 40 + "\n")
-
-    result = run_job(real_store)  # no real metadata server in this sandbox
-
-    assert result.status == "done"
-    progress_lines = [
-        json.loads(line) for line in real_store.read_text("progress.jsonl").splitlines() if line.strip()
-    ]
-    messages = [p["message"] for p in progress_lines]
-    # The substitution actually happened (not skipped): a notice names it...
-    assert any("afterTask='keep'" in m and "afterKeepAlive='delete'" in m for m in messages)
-    # ...and apply_lifecycle was actually ATTEMPTED with the substituted action (there is
-    # no real metadata server in this sandbox, so it fails -- proving it was called at
-    # all, which the old "skip lifecycle entirely for keep" behavior never did).
-    assert any("lifecycle apply failed" in m for m in messages)
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/locus.fasta", ">seq\n" + "ACGT" * 40 + "\n")
+    return store
 
 
-def test_after_task_keep_with_after_keep_alive_also_keep_falls_back_to_stop(
-    tmp_path: Path,
+def _messages(store: LocalBlobstore) -> list[str]:
+    return [json.loads(ln)["message"] for ln in store.read_text("progress.jsonl").splitlines() if ln.strip()]
+
+
+@pytest.fixture
+def lifecycle_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "dna_entropy.worker.runner.apply_lifecycle", lambda action, **_: calls.append(action) or {}
+    )
+    return calls
+
+
+def test_keep_with_a_window_is_left_to_startup_sh_which_enforces_the_expiry(
+    tmp_path: Path, lifecycle_calls: list[str]
 ) -> None:
-    """A malformed manifest asking for "keep" both ways must not loop or truly no-op --
-    the worker forces a safe, terminating default ("stop") rather than propagate a second
-    "keep"."""
-    real_store = LocalBlobstore(tmp_path)
-    manifest = {
-        "schema": 1,
-        "jobId": "double-keep-job",
-        "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
-        "predictor": {"kind": "mock", "seed": 0},
-        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
-        "lifecycle": {"afterTask": "keep", "afterKeepAlive": "keep"},
-        "store": {"kind": "gcs", "bucket": "fake-bucket", "prefix": "jobs/x/"},
-    }
-    real_store.write_text(MANIFEST_PATH, json.dumps(manifest))
-    real_store.write_text("input/locus.fasta", ">seq\n" + "ACGT" * 40 + "\n")
+    """Issue #464: a keep-alive run used to be stopped by the worker the moment the job
+    ended (keep degraded to afterKeepAlive at once), so the user's window never happened.
+    With keepAliveMinutes > 0 the worker now makes NO Compute call and reports no
+    lifecycle applied (so `dna-entropy-worker run` exits 0/2/3, not 10/11); worker/vm/
+    startup.sh holds the VM for the window and then applies afterKeepAlive."""
+    store = _keep_store(
+        tmp_path, "keep-job", {"afterTask": "keep", "keepAliveMinutes": 30, "afterKeepAlive": "delete"}
+    )
 
-    result = run_job(real_store)
+    outcome = run_job_outcome(store)
 
-    assert result.status == "done"
-    progress_lines = [
-        json.loads(line) for line in real_store.read_text("progress.jsonl").splitlines() if line.strip()
-    ]
-    messages = [p["message"] for p in progress_lines]
-    assert any("lifecycle apply failed" in m for m in messages)  # stop was attempted, not skipped
+    assert outcome.result.status == "done"
+    assert lifecycle_calls == []
+    assert outcome.lifecycle_applied is None
+    assert any("30 minutes" in m and "'delete'" in m and "startup.sh" in m for m in _messages(store))
+
+
+def test_keep_with_no_window_degrades_to_after_keep_alive_immediately(
+    tmp_path: Path, lifecycle_calls: list[str]
+) -> None:
+    """Hard Rule 11: with no window there is nothing to hold the VM for, so "keep" must
+    not be an unbounded no-op; it applies afterKeepAlive now, with a notice."""
+    store = _keep_store(tmp_path, "keep-0", {"afterTask": "keep", "afterKeepAlive": "delete"})
+
+    outcome = run_job_outcome(store)
+
+    assert lifecycle_calls == ["delete"]
+    assert outcome.lifecycle_applied == "delete"
+    assert any("afterTask='keep'" in m and "afterKeepAlive='delete'" in m for m in _messages(store))
+
+
+def test_keep_with_after_keep_alive_also_keep_and_no_window_falls_back_to_stop(
+    tmp_path: Path, lifecycle_calls: list[str]
+) -> None:
+    """A malformed manifest asking for "keep" both ways must not truly no-op: the worker
+    forces a terminating default."""
+    store = _keep_store(tmp_path, "double-keep", {"afterTask": "keep", "afterKeepAlive": "keep"})
+
+    run_job_outcome(store)
+
+    assert lifecycle_calls == ["stop"]
+
+
+@pytest.mark.parametrize("task", ["stop", "delete"])
+def test_stop_and_delete_are_still_applied_by_the_worker_itself(
+    tmp_path: Path, lifecycle_calls: list[str], task: str
+) -> None:
+    """Neighbour: only keep-with-a-window moved to the script."""
+    store = _keep_store(tmp_path, f"plain-{task}", {"afterTask": task, "keepAliveMinutes": 30})
+
+    outcome = run_job_outcome(store)
+
+    assert lifecycle_calls == [task]
+    assert outcome.lifecycle_applied == task
 
 
 # --- limits.heartbeatSeconds must actually reach StatusWriter's tick interval ----------
@@ -1094,6 +1114,27 @@ def test_result_json_is_written_after_every_uploaded_output(tmp_path: Path) -> N
     outputs = [p for p in (tmp_path / "output").rglob("*") if p.is_file()]
     assert outputs
     assert all(p.stat().st_mtime_ns <= result_mtime for p in outputs)
+
+
+def test_result_json_is_the_newest_object_in_the_whole_store(tmp_path: Path) -> None:
+    """Issue #41's observable: with a 3-input manifest, result.json is the newest file of
+    ALL of them - not only newer than the outputs. status.json's and progress.jsonl's final
+    snapshot (``StatusWriter.stop()``) used to be written AFTER result.json, so a reader
+    listing the store by age saw a non-terminal-looking object as the latest write.
+
+    Scope, stated honestly: this is a ``localdir`` run, which has no lifecycle step and no
+    result-write failure, so it checks outputs plus the final status snapshot only. On a
+    ``gcs`` job the lifecycle's own progress.jsonl notices are written after result.json
+    (docs/job_contract.md section 7); this test does not claim otherwise."""
+    store = _three_input_store(tmp_path)
+    run_job(store)
+    result_mtime = (tmp_path / RESULT_PATH).stat().st_mtime_ns
+    others = {
+        p.name: p.stat().st_mtime_ns for p in tmp_path.rglob("*") if p.is_file() and p.name != RESULT_PATH
+    }
+    assert "status.json" in others and "progress.jsonl" in others  # vacuity: the files exist
+    newer = sorted(name for name, m in others.items() if m > result_mtime)
+    assert newer == [], f"written after result.json: {newer}"
 
 
 def test_provenance_records_the_input_sha256(tmp_path: Path) -> None:

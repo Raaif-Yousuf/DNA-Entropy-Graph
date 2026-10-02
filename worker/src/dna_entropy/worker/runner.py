@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import os
 import shutil
 import tempfile
 import time
@@ -37,9 +38,10 @@ from .batch_limits import BatchLimitError, check_batch_limits
 from .blobstore import Blobstore, BlobstoreError, GcsBlobstore, write_json
 from .cancel import CancelWatcher, JobCancelledError
 from .errors import is_retriable
+from .gpu import detect_gpu
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError, StoreSpec
-from .result import InputResult, JobResult, ResultFile, ResultStats, ResultTiming
+from .result import InputResult, JobResult, ResultFile, ResultGpu, ResultStats, ResultTiming
 from .status import (
     DEFAULT_INTERVAL_SECONDS,
     GpuInfo,
@@ -393,12 +395,18 @@ def run_job_outcome(
     input_results: list[InputResult] = []
     job_status = "done"
     job_error: dict | None = None
+    gpu = GpuInfo()
 
     try:
         with tempfile.TemporaryDirectory(prefix="deg-job-") as tmpdir:
             tmp = Path(tmpdir)
-            status.set_vm(GpuInfo())  # no GPU identity available off a real VM (yet)
-            status.notice(f"worker starting; free disk {_free_disk_gb(tmp)} GB")
+            # Issue #74: the GPU identity comes from nvidia-smi (worker/gpu.py), never from
+            # the manifest. "GPU: none" on a CPU VM or a local run is said in words, so the
+            # first progress line always tells the app what hardware this really is.
+            gpu = detect_gpu()  # (pre-initialised below the try so result.json can read it)
+            status.set_vm(gpu, name=os.environ.get("DEG_VM_NAME") or None)
+            gpu_label = f"{gpu.name} (driver {gpu.driver})" if gpu.name else "no GPU detected"
+            status.notice(f"worker starting; GPU: {gpu_label}; free disk {_free_disk_gb(tmp)} GB")
 
             # Cost guardrail (issue #248), before any predictor call: cheap to measure
             # (I/O + parsing only, no GPU), so a batch that exceeds manifest.limits is
@@ -452,6 +460,7 @@ def run_job_outcome(
         status=job_status,
         inputs=input_results,
         timing=ResultTiming(startedAt=started_at, finishedAt=finished_at),
+        gpu=ResultGpu(name=gpu.name, zone=gpu.zone),
         error=job_error,
     )
     # Written LAST, after every output is confirmed uploaded — job_contract.md §7: its
@@ -466,6 +475,15 @@ def run_job_outcome(
     # independent: one failing must not skip the next. `status.notice()` itself can never
     # raise (issues #318/#319), so calling it from inside these except blocks is safe even
     # if the SAME store outage caused the failure being reported.
+    #
+    # issue #41, the TRUE write order: every output upload, the heartbeat's final
+    # status.json/progress.jsonl snapshot (stop() below), then result.json, and only then
+    # progress.jsonl notices. Those later notices are lifecycle-related or error reports
+    # (the keep-window, no-window and operation-accepted notices after this point, and the
+    # result-write-failure notices just below), and each re-uploads progress.jsonl. So
+    # result.json is the newest object when it appears, but it is NOT the last write the
+    # worker ever makes; that residual is deliberate and the app does not wait for it.
+    status.stop()
     try:
         write_json(store, RESULT_PATH, result.to_dict())
     except BlobstoreError as exc:
@@ -482,38 +500,37 @@ def run_job_outcome(
         except OSError as fallback_exc:
             status.notice(f"local result.json fallback also failed: {fallback_exc}", level="error")
 
-    status.stop()
-
     # Lifecycle only applies to a real cloud VM; a local run has no VM to stop/delete. This
     # is the module the overnight brief says to implement but never call for real — a
     # local/localdir job never reaches the `apply_lifecycle` call at all, so no test in
     # this repo exercises it against a real network no matter how this function is invoked.
     lifecycle_applied: str | None = None
     if manifest.store.kind == "gcs":
-        # Found auditing #304/#306: `lifecycle.afterTask == "keep"` used to skip this
-        # entire block, and `keepAliveMinutes`/`afterKeepAlive` were parsed but never
-        # consumed anywhere — a manifest requesting "keep" left the VM RUNNING with
-        # literally zero worker-side enforcement, forever. That violates Hard Rule 11
-        # ("keep alive always has an expiry, never indefinitely"): the real keep-alive
-        # queue/idle-timer feature (waiting for a follow-up job, per job_contract.md §1's
-        # `vms/<vm>/queue/`) is issue #93 and is NOT implemented here. Until it is, "keep"
-        # safely degrades to `afterKeepAlive` (default "stop") instead of a true no-op —
-        # with no SSH anywhere in this design (cloud_design.md §9), an unattended "keep"
-        # VM's only other backstop is the VM's own maxRunDuration/
-        # instanceTerminationAction=DELETE hard ceiling (Hard Rule 10), which is untested
-        # against a real project tonight (docs/ToTest.md) and should not be the ONLY thing
-        # standing between a "keep" job and an open-ended bill.
+        # Hard Rule 11: "keep" always has an expiry. Issue #464 (MEASURED by reading
+        # the code, 2026-10-02): "keep" used to degrade to afterKeepAlive at once, so a
+        # keep-alive run was stopped the moment the job ended. Now:
+        #   - keepAliveMinutes > 0: the worker makes NO Compute call and reports no
+        #     lifecycle applied (exit 0/2/3). worker/vm/startup.sh holds the VM for the
+        #     window, capped inside maxRunDuration, then applies afterKeepAlive.
+        #   - no window: nothing to hold the VM for, so afterKeepAlive is applied now (a
+        #     "keep" with both fields "keep" falls back to "stop").
+        # The follow-up-job queue that makes a warm VM useful is issue #93.
         effective_action = manifest.lifecycle.after_task
         if effective_action == "keep":
-            effective_action = manifest.lifecycle.after_keep_alive
-            if effective_action == "keep":
-                # A malformed manifest asking "keep" both ways — force a safe, terminating
-                # default rather than propagate a second "keep" (there is nothing left to
-                # degrade to).
-                effective_action = "stop"
+            after_window = manifest.lifecycle.after_keep_alive
+            if after_window not in ("stop", "delete"):
+                after_window = "stop"
+            window = manifest.lifecycle.keep_alive_minutes
+            if window > 0:
+                status.notice(
+                    f"lifecycle: keeping the VM for {window} minutes, then applying "
+                    f"{after_window!r}; startup.sh holds the window and enforces the expiry "
+                    "(Hard Rule 11), the worker makes no Compute call."
+                )
+                return RunOutcome(result=result, lifecycle_applied=None)
+            effective_action = after_window
             status.notice(
-                f"lifecycle: afterTask='keep' requested but the keep-alive queue/idle "
-                f"timer is not implemented yet (issue #93) - applying "
+                f"lifecycle: afterTask='keep' with no keepAliveMinutes - applying "
                 f"afterKeepAlive={effective_action!r} now instead of leaving the VM "
                 "running with no expiry (Hard Rule 11)."
             )

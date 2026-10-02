@@ -9,6 +9,7 @@ Rules are specified in docs/DESIGN.md §5.
 from __future__ import annotations
 
 import re
+import string
 from dataclasses import dataclass, field
 
 from ..config import DEFAULT_MAX_LEN, AmbiguityPolicy
@@ -24,6 +25,8 @@ _REPLACEMENT_CHAR = "�"
 # genuinely invalid character so `ambiguity_policy` (keep/mask/error) can apply to them
 # specifically, rather than treating "not ACGT" as one undifferentiated error bucket.
 _AMBIGUITY: frozenset[str] = frozenset("NRYSWKMBDHV")
+# a-z -> A-Z and nothing else (issue #468): see _normalize.
+_ASCII_UPPER = str.maketrans(string.ascii_lowercase, string.ascii_uppercase)
 
 # Below this length, entropy is dominated by the model's prior near the start; warn only.
 DEFAULT_MIN_LEN: int = 10
@@ -67,7 +70,11 @@ def _normalize(text: str) -> tuple[str, list[str]]:
     n_digits = sum(c.isdigit() for c in no_ws)
     if n_digits:
         notices.append(f"Removed {n_digits} digit character(s) (e.g. line numbers).")
-    seq = re.sub(r"\d", "", no_ws).upper()
+    # ASCII-only uppercase (issue #468): str.upper() is Unicode-aware, so it turned sharp s
+    # into "SS" and long s into "S" (a valid IUPAC code), lengthening the sequence and
+    # laundering a non-DNA letter into a base. A non-ASCII character is left exactly as typed
+    # so validate_sequence refuses it at its true position.
+    seq = re.sub(r"\d", "", no_ws).translate(_ASCII_UPPER)
     return seq, notices
 
 
@@ -151,8 +158,12 @@ def validate_sequence(
             # invalid character, not an ambiguity question.
             i = non_iupac[0]
             c = seq[i]
+            # A non-ASCII letter is named by code point: the message reaches the console
+            # (Hard Rule 5: ASCII only) and a lookalike glyph would not tell the user which
+            # character to remove.
+            shown = repr(c) if c.isascii() else f"U+{ord(c):04X}"
             raise ValidationError(
-                f"Invalid character {c!r} at position {i + 1} "
+                f"Invalid character {shown} at position {i + 1} "
                 f"({len(bad)} non-ACGT character(s) total). Only A, C, G, T are allowed."
             )
 

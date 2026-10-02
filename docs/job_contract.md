@@ -8,9 +8,15 @@ is what the worker actually parses/writes today, cross-checked against
 `docs/contract/*.schema.json` — generated directly from the worker's own dataclasses by
 `scripts/gen_manifest_schema.py --check`, and the shape authority where this prose and
 that generated schema would ever disagree (this document is the authority for *meaning*,
-not shape). The C# `DnaEntropyGraph.Core` contract DTOs (`JobManifest`, `WorkerStatus`,
-`ProgressEvent`, `WorkerResult`) do not exist yet (`app/` is not built, issue #61) and
-still have this document and the generated schemas to satisfy when they do. None of this
+not shape). The C# side has only skeleton stubs so far:
+`app/src/DnaEntropyGraph.Core/Contract/JobManifest.cs` holds four records, `JobManifest`
+(`JobId`, `ModelId`, `InputObjectKeys` only), `ProgressEvent`, `WorkerStatus` and
+`WorkerResult`, each a few fields wide and nowhere near this document's shape (no
+`lifecycle`, `analysis`, `predictor`, `outputs` or `limits` on `JobManifest`; no `files`,
+`stats` or `notices` on `WorkerResult`). Nothing validates them against
+`docs/contract/*.schema.json` and no C# code writes a `manifest.json` yet (MEASURED
+2026-10-02: grep of `app/src` finds no manifest serialiser), so this document and the
+generated schemas are still what the real DTOs must satisfy. None of this
 has been exercised against a real GCP project or a real GPU VM yet — see
 [`docs/ToTest.md`](ToTest.md) for exactly which cloud-facing paths remain unproven on real
 infrastructure despite being implemented and unit-tested. The authoritative source this
@@ -168,7 +174,7 @@ and `predictor.device` may be `cuda:0`.
 | `limits.cancelPollSeconds` | How often the worker's `control/cancel` check does a real store round-trip, default `10` | **Fixed 2026-09-19** (found auditing #304, issue #338): parsed but never consumed - `CancelWatcher.poll()` did a real store `exists()` call on *every* cooperative-cancellation checkpoint (once per window, once per contig) with no throttling, regardless of this field. A long batch tiled into many small windows meant a real store query per window. `CancelWatcher` now throttles its real round-trip to at most once per `cancelPollSeconds` of wall-clock time (returning the last-known result in between); the checkpoint itself is still called every window/contig, only the underlying store query is throttled, so the latency-to-effect budget in section 6 below is unchanged. |
 | `limits.maxInputs` | Batch-level cost guardrail: max input files per job, default `50` | Issue #248. A policy cap tied to money, not a technical ceiling - windowing already tiles a sequence of any length. The worker re-validates this itself (`worker/batch_limits.py`) even if the app is expected to check first, the same "a misconfigured or bypassed client must never silently produce an unbounded bill" reasoning as every other worker-side re-check in this contract. Exceeding it refuses the **whole batch** before any predictor runs - `result.json` reports `status: "failed"`, `error.code: "BATCH_LIMIT_EXCEEDED"`, `inputs: []` (nothing was attempted). See section 7 below. |
 | `limits.maxTotalNt` | Batch-level cost guardrail: max total nt across every input in the job, default `20,000,000` | Same mechanism and disposition as `maxInputs` immediately above; the worker measures the batch's real, actual nt count (via the same input parser the real run uses) before checking either limit, so the refusal message names the batch's own real numbers rather than a generic "too large." |
-| `lifecycle.afterTask` | `stop \| delete \| keep` | What the worker does to its own VM once every output is uploaded and `result.json` is written. **Fixed 2026-09-19** (found auditing #304; Hard Rule 11 violation): `"keep"` used to skip the worker's lifecycle step entirely, and `lifecycle.keepAliveMinutes`/`lifecycle.afterKeepAlive` were parsed but never consumed anywhere - a manifest requesting `"keep"` left the VM running with **zero** worker-side expiry, ever, violating "keep alive always has an expiry, never indefinitely." The real keep-alive queue/idle-timer feature (waiting for a follow-up job via the `vms/<vm>/queue/` layout in section 1) is issue #93 and is still not implemented. Until it is, `run_job` now safely degrades `"keep"` to `lifecycle.afterKeepAlive` (default `"stop"`) instead of a true no-op, logging a notice explaining why; a manifest that sets `afterKeepAlive` to `"keep"` too falls back to `"stop"` rather than propagate a second unbounded keep. Note this is a **worker-side** safety net only - the VM's own `maxRunDuration`/`instanceTerminationAction=DELETE` hard ceiling (Hard Rule 10) is the real backstop regardless, and is itself unverified against a real GCP project tonight (`docs/ToTest.md`). |
+| `lifecycle.afterTask` | `stop \| delete \| keep` | What the worker does to its own VM once every output is uploaded and `result.json` is written. **Fixed 2026-09-19** (found auditing #304; Hard Rule 11 violation): `"keep"` used to skip the worker's lifecycle step entirely, and `lifecycle.keepAliveMinutes`/`lifecycle.afterKeepAlive` were parsed but never consumed anywhere - a manifest requesting `"keep"` left the VM running with **zero** worker-side expiry, ever, violating "keep alive always has an expiry, never indefinitely." **Fixed 2026-10-02 (issue #464):** with `keepAliveMinutes > 0` the worker now makes no Compute call and reports no lifecycle applied (the process exits `0`/`2`/`3`, not `10`/`11`); `worker/vm/startup.sh` holds the VM for that many minutes, capped so the VM is stopped or deleted at least 10 minutes before `maxRunDuration`, and then applies `afterKeepAlive` (`stop` or `delete`; `keep` is read as `stop`). **DECISION (agent-made on the owner's behalf, reversible): only a successful run (exit code `0`) is held for its window; a failed (`2`) or cancelled (`3`) run applies `afterKeepAlive` immediately**, since holding it would bill idle GPU time for a job that produced nothing worth keeping warm for. The window is measured from VM boot (`/proc/uptime`), not from the script's start. With no window (`keepAliveMinutes` absent or `0`) there is nothing to hold, so the worker applies `afterKeepAlive` immediately with a notice, as before. The follow-up-job queue that makes a warm VM useful (`vms/<vm>/queue/`, section 1) is issue #93 and is still not implemented. Expiry backstops, in order: the script's capped wait, the `shutdown -h +N` deadman, and the VM's own `maxRunDuration`/`instanceTerminationAction=DELETE` hard ceiling (Hard Rule 10) is the real backstop regardless, and is itself unverified against a real GCP project tonight (`docs/ToTest.md`). |
 | `store.bucket` / `store.prefix` | The GCS bucket and `jobs/<jobId>/` prefix of a `gcs` job | Redundant with `jobId` by construction; carried explicitly so the worker never has to assemble the path itself. **Cross-checked 2026-10-02 (issue #448)**: they used to be parsed and read by nothing, so a manifest naming another bucket than the one the worker was started against was silently accepted. `run_job` now refuses a mismatch with `ManifestError` ("Start the job again from the app") before anything is written, as it does for a schema mismatch (no `result.json`). An empty field means "not declared" and is not checked. |
 | `store.root` | The local job folder of a `localdir` job | Informational (diagnostics bundle only). Deliberately **not** cross-checked against the store the worker was started with: it is the user's own folder on the same machine and Windows path spellings (case, 8.3 names, junctions) would cause false refusals. |
 | `worker.version` | The app's DECLARED expectation for the worker build (`worker.image` is the pinned digest actually run) | **Fixed 2026-09-19 (issue #344)**: parsed but never compared to anything - only `worker.image` was ever echoed into `status.json`, so an app talking to a genuinely different worker build than it expected had no way to notice. `run_job` now logs a `progress.jsonl` notice when `worker.version` is declared (non-empty) and disagrees with the actually-running build's own version - visibility only, per the issue's own scope; it never refuses or fails the job on a mismatch. |
@@ -364,6 +370,26 @@ returns them; if the Compute API call failed, the ordinary code is returned so t
 script's own cleanup remains the backstop. The call is `POST .../instances/<name>/stop` for
 stop and `DELETE .../instances/<name>` for delete (there is no `/delete` verb).
 
+**GPU identity (issue #74, MEASURED 2026-10-02 against `worker/gpu.py`):** before any input runs, the
+worker asks `nvidia-smi --query-gpu=name,driver_version` (10 s timeout, never raises) and
+reports the first GPU in `status.json` (`vm.gpu`, `vm.driver`, `vm.zone` from `DEG_ZONE`, `vm.name`
+from `DEG_VM_NAME`), in `result.json`'s `gpu.name`/`gpu.zone`, and in its first progress line
+("worker starting; GPU: NVIDIA L4 (driver 580.82.07); free disk N GB", or "no GPU detected"). Until
+this change those fields were always `null`, so the app had no worker-side proof a GPU was present.
+`gpu.spot` is still always `false` (the worker does not know it). Proven here with an injected
+`nvidia-smi`, not on a real VM.
+
+**Write order at the end of a job (issue #41, MEASURED 2026-10-02 against `worker/runner.py`):**
+every output upload, then the heartbeat's final `status.json`/`progress.jsonl` snapshot
+(`StatusWriter.stop()`), then `result.json`, then the lifecycle call, with only
+`progress.jsonl` notices after `result.json`: each `status.notice()` re-uploads the whole
+file. Those late notices are the lifecycle ones (the keep-window notice, the
+no-`keepAliveMinutes` notice, "operation accepted") and the error notices when writing
+`result.json` itself fails. So `result.json` is the newest object in the store at the moment
+it appears, but it is NOT the last write the worker makes; the app does not wait for the
+residual. The residual is real on a `gcs` job and on a result-write failure. A `localdir` run
+has no lifecycle, and that is the case the newest-object test checks.
+
 `result.json` existing at all is the app's signal that the worker reached a terminal
 state - the app's `JobReconciler` checks for its existence *first*, before falling back
 to `status.json`'s heartbeat, on every launch (`architecture.md` section 4). This is why
@@ -374,8 +400,8 @@ confirmed uploaded, is the same discipline the prototype's cloud modules already
 continuously but writing the terminal marker last) and the reason a torn or half-uploaded
 result is not a state this contract allows.
 
-**MEASURED 2026-09-19 (issue #320, closed):** the worker's own tail - write `result.json`,
-stop the heartbeat, apply the after-task lifecycle - is three independent steps, each
+**MEASURED 2026-09-19 (issue #320, closed):** the worker's own tail - stop the heartbeat, write
+`result.json`, apply the after-task lifecycle - is three independent steps, each
 wrapped so a failure in one does not silently skip the next. Earlier, a transient store
 failure writing `result.json` itself (the one write this whole section is about) would
 skip both the heartbeat's final write and the lifecycle call outright; now each step's own
