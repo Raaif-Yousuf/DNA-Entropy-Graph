@@ -165,7 +165,9 @@ def load_and_validate(cfg: RunConfig, raw: str | None = None) -> ValidatedSequen
     """Read (unless ``raw`` is supplied) and validate into a clean sequence."""
     if raw is None:
         raw = read_raw(cfg)
-    return validate_sequence(raw, max_len=cfg.max_total_len, rna=cfg.rna)
+    return validate_sequence(
+        raw, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
+    )
 
 
 def build_predictor(cfg: RunConfig) -> Predictor:
