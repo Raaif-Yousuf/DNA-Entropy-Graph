@@ -389,3 +389,20 @@ def test_compile_fragments_orders_by_bulk_commit_time_newest_first(tmp_path):
 
     result = (root / "docs" / "sprint_log.md").read_text(encoding="utf-8")
     assert result.index("newer fragment") < result.index("older fragment")
+
+
+def test_compile_fragments_writes_lf_only_even_on_windows(tmp_path):
+    """Hard Rule 5 (#444): MEASURED 2026-10-02 the fold wrote 995 CRLFs into
+    docs/sprint_log.md on Windows because write_text had no newline="\n"."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    docs = root / "docs"
+    (docs / "changelog.d").mkdir(parents=True)
+    (docs / "sprint_log.md").write_bytes(f"# Sprint log\n\n{csl.HEADING}\n\n- older\n".encode())
+    (docs / "changelog.d" / "a-branch.md").write_bytes(b"- fragment A\n")
+
+    assert csl.compile_fragments(root, dry_run=False) == 0
+
+    raw = (docs / "sprint_log.md").read_bytes()
+    assert b"fragment A" in raw
+    assert b"\r" not in raw

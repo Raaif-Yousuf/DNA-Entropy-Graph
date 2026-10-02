@@ -45,7 +45,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 TOTEST_RELATIVE = "docs/ToTest.md"
@@ -176,9 +176,9 @@ def row_age_days(commit_dt: datetime, now: datetime) -> int:
     pure function so --self-test never needs a real git history to prove
     the arithmetic and the threshold comparison are right."""
     if commit_dt.tzinfo is None:
-        commit_dt = commit_dt.replace(tzinfo=timezone.utc)
+        commit_dt = commit_dt.replace(tzinfo=UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     return (now - commit_dt).days
 
 
@@ -187,7 +187,7 @@ def is_stale(age_days: int, max_age_days: int) -> bool:
 
 
 def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[str]:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     path = root / TOTEST_RELATIVE
     if not path.is_file():
         return [f"{TOTEST_RELATIVE} does not exist"]
@@ -272,7 +272,7 @@ def _init_throwaway_repo(root: Path) -> str:
     run("init", "-q")
     run("config", "user.email", "test@example.com")
     run("config", "user.name", "Test")
-    (root / "f.txt").write_text("x\n", encoding="utf-8")
+    (root / "f.txt").write_text("x\n", encoding="utf-8", newline="\n")
     run("add", "f.txt")
     run("commit", "-q", "-m", "initial")
     sha = subprocess.run(
@@ -287,9 +287,9 @@ def self_test() -> bool:
     ok = True
 
     # --- pure logic: no git, no filesystem ---
-    now = datetime(2026, 9, 19, tzinfo=timezone.utc)
-    fresh = datetime(2026, 9, 1, tzinfo=timezone.utc)  # 18 days old
-    old = datetime(2026, 6, 1, tzinfo=timezone.utc)    # well over 45 days old
+    now = datetime(2026, 9, 19, tzinfo=UTC)
+    fresh = datetime(2026, 9, 1, tzinfo=UTC)  # 18 days old
+    old = datetime(2026, 6, 1, tzinfo=UTC)    # well over 45 days old
 
     if row_age_days(fresh, now) != 18:
         print(f"FAIL row_age_days: expected 18, got {row_age_days(fresh, now)}")

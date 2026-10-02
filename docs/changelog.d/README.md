@@ -18,6 +18,13 @@ conflict with any other branch's fragment, and the fragment is folded into
 - Write it in the **same commit** as the behaviour change it describes (Hard
   Rule 16). A commit with a behaviour change and no fragment is missing its
   docs update, not deferring it.
+- **Which changes need a fragment** (enforced by
+  `scripts/check_changelog_fragments.py --base <ref>`, #429; run by `scripts/premerge.py` and by
+  `ci-docs.yml` on pull requests): a change to `worker/src/`, `worker/vm/`, `app/src/`, `scripts/`
+  (not `scripts/tests/`), `.github/workflows/`, `worker/pyproject.toml` or `worker/Dockerfile*`.
+  **No fragment needed:** anything under `docs/`, any `tests/` directory, any `*.md`. A fragment
+  counts if it is added or modified in the diff; a modified `docs/sprint_log.md` also counts (the
+  fold already deleted the fragment); a deleted fragment does not.
 - One bullet is normal; more than one is fine if the branch did more than
   one thing worth recording.
 

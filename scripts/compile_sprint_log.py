@@ -238,7 +238,8 @@ def compile_fragments(root: Path, dry_run: bool = False) -> int:
         return 0
 
     log_lines[insert_at:insert_at] = block
-    sprint_log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    # newline="\n": Hard Rule 5. Without it Windows writes CRLF (#444).
+    sprint_log.write_text("\n".join(log_lines) + "\n", encoding="utf-8", newline="\n")
     for path, _ in fragments:
         path.unlink()
     print(f"Prepended {len(fragments)} fragment(s) to {sprint_log.name}; "

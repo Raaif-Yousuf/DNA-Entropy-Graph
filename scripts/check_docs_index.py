@@ -61,9 +61,7 @@ def _is_external_or_anchor(target: str) -> bool:
         return True
     if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", t):  # scheme://... (http, https, mailto is caught below too)
         return True
-    if t.startswith("mailto:"):
-        return True
-    return False
+    return t.startswith("mailto:")
 
 
 def _strip_link_target(target: str) -> str:
@@ -179,15 +177,15 @@ def _build_fixture(root: Path) -> None:
         "[a dir](linked_dir/)\n\n"
         "[an anchor only](#section)\n\n"
         "[external](https://example.com)\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
-    (docs / "linked.md").write_text("linked\n", encoding="utf-8")
-    (docs / "unlinked.md").write_text("orphan\n", encoding="utf-8")
-    (docs / "linked_dir" / "inner.md").write_text("inner\n", encoding="utf-8")
-    (docs / "migration" / "record.md").write_text("excluded dir\n", encoding="utf-8")
-    (docs / "superpowers" / "specs" / "spec.md").write_text("excluded dir\n", encoding="utf-8")
-    (docs / "changelog.d" / "a-branch.md").write_text("- excluded dir\n", encoding="utf-8")
-    (root / "CLAUDE.md").write_text("root file the index links to\n", encoding="utf-8")
+    (docs / "linked.md").write_text("linked\n", encoding="utf-8", newline="\n")
+    (docs / "unlinked.md").write_text("orphan\n", encoding="utf-8", newline="\n")
+    (docs / "linked_dir" / "inner.md").write_text("inner\n", encoding="utf-8", newline="\n")
+    (docs / "migration" / "record.md").write_text("excluded dir\n", encoding="utf-8", newline="\n")
+    (docs / "superpowers" / "specs" / "spec.md").write_text("excluded dir\n", encoding="utf-8", newline="\n")
+    (docs / "changelog.d" / "a-branch.md").write_text("- excluded dir\n", encoding="utf-8", newline="\n")
+    (root / "CLAUDE.md").write_text("root file the index links to\n", encoding="utf-8", newline="\n")
 
 
 def self_test() -> bool:

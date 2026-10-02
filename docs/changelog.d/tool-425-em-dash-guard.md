@@ -1,0 +1,1 @@
+- **Em-dash guard has a self-test (#425)**: the inline `git grep` in `ci-docs.yml` is now `scripts/check_em_dash.py`, same four watched globs, with a `--self-test` that plants an em dash under each glob and watches the guard name file and line. The glob loop in `ci-docs.yml` runs it; `premerge.py` discovers it.
