@@ -80,14 +80,31 @@ Google Cloud call.
 | `DnaEntropyGraph.App` | The WinUI 3 executable: Views, Controls, WinUI-bound services (`NavigationService`, `ThemeService`, toasts, file-association activation), the vendored viewer assets, localized strings. |
 | `DnaEntropyGraph.Presentation` | Every ViewModel (`ShellViewModel`, `WizardViewModel`, `NewRunViewModel`, `RunProgressViewModel`, `ResultsViewModel`, `HistoryViewModel`, `CloudResourcesViewModel`, `SettingsViewModel`). No WinUI reference (CLAUDE.md rule 8), so it is xUnit-testable with a synchronous `IDispatcher`. |
 | `DnaEntropyGraph.Core` | `RunOptions`, the contract DTOs (`JobManifest`, `ProgressEvent`, `WorkerStatus`, `WorkerResult`), `JobPhase`/`JobStateMachine`, `ErrorCatalog`, `GpuPlanner`/`ModelGpuLinker`, `CostEstimator`, the C# port of the input sniffer/validator (`SequenceSniffer`, `SequenceValidator` - mirrors `worker/src/dna_entropy/validation/validators.py`, kept aligned via shared `tests/contract-fixtures/` vectors), `RunNamer`. |
-| `DnaEntropyGraph.Cloud` | **The only project referencing `Google.*`** (CLAUDE.md rule 7). Every gateway interface (`IComputeGateway`, `IStorageGateway`, `IProjectSetupGateway`, `IQuotaGateway`, ...), the real Google-backed implementations, `GcpProvisioner` (the zone ladder), `VmLifecycleService`, `CloudJobRunner`, `CloudResourceInventory`, `StartupScriptBuilder`, and `FakeGcp` (the in-memory test double every other test project depends on instead of a real project). |
+| `DnaEntropyGraph.Cloud` | **The only project referencing `Google.*`** (CLAUDE.md rule 7). Every gateway interface (`IComputeGateway`, `IStorageGateway`, `IProjectSetupGateway`, `IQuotaGateway`, ...), the real Google-backed implementations, `GcpProvisioner` (the zone ladder), `VmLifecycleService`, `CloudJobRunner`, `CloudResourceInventory`, `StartupMetadata`, and `FakeGcp` (the in-memory test double every other test project depends on instead of a real project). |
 | `DnaEntropyGraph.Persistence` | `SqliteDatabase`, numbered migrations under `PRAGMA user_version`, `RunRepository`, `CloudResourceRepository`, `ProjectRepository`, `SettingsStore`, `DpapiTokenStore`. |
 | `DnaEntropyGraph.LocalEngine` | `LocalEngineManager` (install/repair/health of the local `uv`-managed venv or WSL2 fallback per D15), `LocalJobRunner` (launches the worker as a child process), `RunTargetResolver` (Cloud / This PC / Auto). |
 | `DnaEntropyGraph.CloudCli` (tool) | A console host for scripts: `resources list`, `bucket describe`, `vm create` - used by `scripts/cloud_gpu_test.ps1` and by nothing user-facing. |
 
-`JobEngine` (in `App`, singleton) owns the active runners, survives navigation, and
+`JobEngine` (in `App`, singleton) owns the active runs, survives navigation, and
 publishes `RunProgressChanged`/`RunPhaseChanged` over `WeakReferenceMessenger` so any page
 can subscribe without the runner needing a reference back to the UI.
+
+**Implemented (issue #428)**: `JobEngine` delegates a cloud run to `CloudJobRunner`, which
+`ServiceRegistration` registers as a singleton whose phase callback sends
+`RunPhaseChangedMessage` (after the runner has written the phase to `IRunRepository`).
+`StartRunAsync` writes the run row up front (write-ahead: options, project, installation
+id, VM name, machine type), then runs the runner on a background task, so the call returns
+a job id immediately. `CloudJobRequestFactory` turns `RunOptions` into the request (the
+six labels, `maxRunDuration`, `DELETE` termination action, GPU tier to machine type, zone
+preference first); `InstallationId` is generated once and kept in `settings.json`.
+`CancelRunAsync` cancels the run's token, waits for the runner to stop writing phases,
+then `CloudJobRunner.CancelAsync` deletes the job's VMs (found by label) and records
+Cancelled. `IRunVmActions.StopVmAsync`/`DeleteVmAsync` call the runner's label-based
+Stop/Delete. A run with no selected project, or with a target other than Cloud/Auto
+(local runs are issue #174), is recorded as Failed with error code `no_project` or
+`target_not_supported` instead of being silently dropped. Not yet wired from
+`RunOptions`: input staging and result download (the request carries no object keys, so
+the runner transfers nothing), and the gateways behind the interfaces are still `FakeGcp`.
 
 ## 4. The `JobPhase` state machine
 
@@ -98,6 +115,12 @@ Draft -> Validating -> Uploading -> Provisioning -> Preparing -> Running -> Fina
 any non-terminal --(user)--> Cancelling -> Cancelled
 Local target: Validating -> PreparingEngine -> Running -> Downloading(copy) -> Completed
 ```
+
+The model loads **once per job** (worker issues #41 and #44): the worker's `model-loading`
+stage runs one time and every input in the job reuses the loaded model, so a multi-input job
+pays the load cost once, not per input. After the last input the worker applies the
+lifecycle action itself and the VM-side script treats exit `10`/`11` as "already stopped /
+deleted" (docs/cloud_design.md section 8).
 
 - **`Provisioning`** spans from the VM create/start request through the worker's first
  `booting` status write. **`Preparing`** spans the worker's `installing`

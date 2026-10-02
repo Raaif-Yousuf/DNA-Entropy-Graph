@@ -1,0 +1,1 @@
+- feat(cloud): the VM startup script is embedded from worker/vm/startup.sh and attached with its per-job attributes by StartupMetadata, which rejects any job id, bucket, image or run time the script could not safely consume and enforces the 256 KiB per value and 512 KiB total metadata limits; CloudJobRunner attaches it when a worker image is set (#261)

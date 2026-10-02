@@ -12,4 +12,11 @@
     <RootNamespace>DnaEntropyGraph.Core</RootNamespace>
   </PropertyGroup>
 
+  <!-- Issue #261: worker/vm/startup.sh is the single source of the VM startup
+       script; StartupMetadata attaches this exact text as the startup-script
+       metadata value. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../../../worker/vm/startup.sh" LogicalName="startup.sh" />
+  </ItemGroup>
+
 </Project>

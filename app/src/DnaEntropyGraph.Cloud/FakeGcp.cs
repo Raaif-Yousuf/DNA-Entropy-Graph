@@ -35,7 +35,7 @@ namespace DnaEntropyGraph.Cloud;
 /// failure is armed afterward through the fluent setters below, never
 /// through a constructor argument.
 /// </summary>
-public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGateway, IQuotaGateway, IGcpAccount
+public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGateway, IQuotaGateway, IGcpAccount, ICloudTokenRefresher
 {
     private readonly TimeProvider _timeProvider;
 
@@ -64,6 +64,17 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     private readonly Dictionary<string, int> _quotaExceededRemainingByZone = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<(string Name, string Zone)> _alreadyExistingVmKeys = new();
     private int _networkFailuresRemaining;
+
+    // --- Transient / auth failures (issue #258): consumed by the next calls to ANY gateway method ---
+    private readonly ConcurrentQueue<VmSpec> _createdSpecs = new();
+    private int _timeoutsRemaining;
+    private int _createAttempts;
+    private CloudError? _createFailure;
+    private int _createFailureRemaining;
+    private CreateGate? _createGate;
+    private int _transientFailuresRemaining;
+    private CloudError? _transientError;
+    private int _unauthorizedRemaining;
 
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
@@ -197,6 +208,118 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         return this;
     }
 
+    /// <summary>
+    /// The next <paramref name="count"/> calls to ANY gateway method fail with
+    /// HTTP <paramref name="httpStatus"/> (issue #258: 503 for the retry
+    /// policy, 429 for rate limiting), then calls succeed again. The
+    /// <see cref="CloudErrorKind"/> is whatever <see cref="CloudErrorClassifier"/>
+    /// derives from the error, exactly as a real gateway would set it.
+    /// </summary>
+    public FakeGcp WithTransientFailures(int httpStatus, int count, string message = "The service is currently unavailable.", string? code = null)
+    {
+        _transientError = new CloudError(code, httpStatus, message);
+        _transientFailuresRemaining = count;
+        return this;
+    }
+
+    /// <summary>The next <paramref name="count"/> calls to ANY gateway method fail with HTTP 401 (an expired token). <see cref="RefreshAsync"/> does not clear them: they are consumed by calls.</summary>
+    public FakeGcp WithUnauthorized(int count)
+    {
+        _unauthorizedRemaining = count;
+        return this;
+    }
+
+    /// <summary>Every spec that passed <see cref="VmSpec.EnsurePreconditions"/> in <see cref="CreateVmAsync"/>, in order, including a replayed create (tests assert what was actually sent, e.g. the startup metadata, issue #261).</summary>
+    public IReadOnlyList<VmSpec> CreatedSpecs => _createdSpecs.ToList();
+
+    /// <summary>
+    /// The next <paramref name="count"/> calls to ANY gateway method throw a
+    /// <see cref="TaskCanceledException"/> while the caller's token is NOT
+    /// cancelled: what an HttpClient or gRPC deadline looks like.
+    /// </summary>
+    public FakeGcp WithCallTimeouts(int count)
+    {
+        _timeoutsRemaining = count;
+        return this;
+    }
+
+    /// <summary>
+    /// The next <paramref name="times"/> <see cref="CreateVmAsync"/> calls (any
+    /// zone) fail with <paramref name="error"/>, classified as a real gateway
+    /// would. Unlike <see cref="WithTransientFailures"/> only creates consume
+    /// it, so a test can script "every zone answers 503 ZONE_RESOURCE_POOL_EXHAUSTED"
+    /// without preflight calls using it up.
+    /// </summary>
+    public FakeGcp WithCreateFailure(CloudError error, int times)
+    {
+        _createFailure = error;
+        _createFailureRemaining = times;
+        return this;
+    }
+
+    /// <summary>How many <see cref="CreateVmAsync"/> calls passed spec validation (including ones that then failed).</summary>
+    public int CreateAttempts => Volatile.Read(ref _createAttempts);
+
+    /// <summary>
+    /// Makes <see cref="CreateVmAsync"/> block until <see cref="ReleaseCreate"/>
+    /// (a create in flight). With <paramref name="ignoreCancellation"/> the
+    /// call does not honour its token while blocked, like a request already
+    /// accepted by the API: the VM then exists even though the caller gave up.
+    /// </summary>
+    public FakeGcp WithBlockedCreate(bool ignoreCancellation = false)
+    {
+        _createGate = new CreateGate(ignoreCancellation);
+        return this;
+    }
+
+    /// <summary>Completes when a blocked <see cref="CreateVmAsync"/> has started waiting.</summary>
+    public Task CreateVmEntered => _createGate?.Entered.Task ?? Task.CompletedTask;
+
+    public void ReleaseCreate() => _createGate?.Release.TrySetResult();
+
+    private sealed class CreateGate
+    {
+        public CreateGate(bool ignoreCancellation) => IgnoreCancellation = ignoreCancellation;
+
+        public bool IgnoreCancellation { get; }
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    /// <summary>How many times the resilience pipeline asked this fake to refresh the token.</summary>
+    public int TokenRefreshCount { get; private set; }
+
+    /// <summary>A real implementation refreshes the OAuth access token; the fake only counts the request.</summary>
+    public Task RefreshAsync(CancellationToken cancellationToken)
+    {
+        TokenRefreshCount++;
+        return Task.CompletedTask;
+    }
+
+    private void ThrowIfScriptedTransient()
+    {
+        if (_timeoutsRemaining > 0)
+        {
+            _timeoutsRemaining--;
+            throw new TaskCanceledException("The request was canceled due to the configured timeout.");
+        }
+
+        if (_unauthorizedRemaining > 0)
+        {
+            _unauthorizedRemaining--;
+            var unauthorized = new CloudError("UNAUTHENTICATED", 401, "Request had invalid authentication credentials.");
+            throw new CloudOperationException(unauthorized, CloudErrorClassifier.Classify(unauthorized));
+        }
+
+        if (_transientFailuresRemaining > 0 && _transientError is not null)
+        {
+            _transientFailuresRemaining--;
+            throw new CloudOperationException(_transientError, CloudErrorClassifier.Classify(_transientError));
+        }
+    }
+
     /// <summary>Sets the regional GPU quota <see cref="GetGpuQuotaAsync"/> reports for one (region, accelerator) pair. Anything not set here reports the default of 1 (the always-succeeds baseline).</summary>
     public FakeGcp WithGpuQuota(string region, string acceleratorType, int available)
     {
@@ -254,12 +377,42 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
     {
+        var gate = _createGate;
+        return gate is null ? CreateVmCore(spec, zone, cancellationToken) : CreateAfterGateAsync(gate, spec, zone, cancellationToken);
+    }
+
+    private async Task<VmDescriptor> CreateAfterGateAsync(CreateGate gate, VmSpec spec, string zone, CancellationToken cancellationToken)
+    {
+        gate.Entered.TrySetResult();
+        if (gate.IgnoreCancellation)
+        {
+            await gate.Release.Task.ConfigureAwait(false);
+        }
+        else
+        {
+            await gate.Release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return await CreateVmCore(spec, zone, cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task<VmDescriptor> CreateVmCore(VmSpec spec, string zone, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
         // Hard Rule 10, enforced here exactly as a real gateway must: a spec
         // missing a label, a maxRunDuration, or carrying a value the real
         // API would reject anyway, never reaches "creation" - checked
         // before any scripted failure below, so this ordering is provable
         // even when nothing is scripted at all.
         spec.EnsurePreconditions();
+        _createdSpecs.Enqueue(spec);
+        Interlocked.Increment(ref _createAttempts);
+
+        if (_createFailure is not null && _createFailureRemaining > 0)
+        {
+            _createFailureRemaining--;
+            throw new CloudOperationException(_createFailure, CloudErrorClassifier.Classify(_createFailure));
+        }
 
         var key = (spec.VmName, zone);
 
@@ -316,6 +469,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        ThrowIfScriptedTransient();
         var key = (vmName, zone);
         if (!_vms.TryGetValue(key, out var vm))
         {
@@ -333,6 +487,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        ThrowIfScriptedTransient();
         var key = (vmName, zone);
         if (_vms.TryGetValue(key, out var vm))
         {
@@ -344,6 +499,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        ThrowIfScriptedTransient();
         _vms.TryRemove((vmName, zone), out _);
         return Task.CompletedTask;
     }
@@ -362,6 +518,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     /// </summary>
     public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
     {
+        ThrowIfScriptedTransient();
         var name = $"deg-{jobId}";
         IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
         return Task.FromResult(matches);
@@ -372,29 +529,48 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     // ----------------------------------------------------------------
 
     public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
-        => Task.FromResult($"deg-{projectId}-fake");
+    {
+        ThrowIfScriptedTransient();
+        return Task.FromResult($"deg-{projectId}-fake");
+    }
 
     public Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
-        => Task.CompletedTask;
+    {
+        ThrowIfScriptedTransient();
+        return Task.CompletedTask;
+    }
 
     public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
-        => Task.FromResult<Stream>(new MemoryStream());
+    {
+        ThrowIfScriptedTransient();
+        return Task.FromResult<Stream>(new MemoryStream());
+    }
 
     // ----------------------------------------------------------------
     // IProjectSetupGateway
     // ----------------------------------------------------------------
 
     public Task<ProjectLifecycleState> GetProjectStateAsync(string projectId, CancellationToken cancellationToken)
-        => Task.FromResult(_projectStates.TryGetValue(projectId, out var state) ? state : ProjectLifecycleState.Active);
+    {
+        ThrowIfScriptedTransient();
+        return Task.FromResult(_projectStates.TryGetValue(projectId, out var state) ? state : ProjectLifecycleState.Active);
+    }
 
     public Task<bool> IsBillingEnabledAsync(string projectId, CancellationToken cancellationToken)
-        => Task.FromResult(!_billingOffProjects.Contains(projectId));
+    {
+        ThrowIfScriptedTransient();
+        return Task.FromResult(!_billingOffProjects.Contains(projectId));
+    }
 
     public Task<bool> IsComputeApiEnabledAsync(string projectId, CancellationToken cancellationToken)
-        => Task.FromResult(!_apiDisabledProjects.Contains(projectId));
+    {
+        ThrowIfScriptedTransient();
+        return Task.FromResult(!_apiDisabledProjects.Contains(projectId));
+    }
 
     public Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken)
     {
+        ThrowIfScriptedTransient();
         // Real `gcloud services enable` is idempotent; scripting it as an
         // immediate, unconditional clear matches that, minus the real
         // API's ~30-60s LRO delay (tracked as a known gap in issue #390).
@@ -408,6 +584,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
     {
+        ThrowIfScriptedTransient();
         var regional = _regionalQuota.TryGetValue((region.ToLowerInvariant(), acceleratorType.ToLowerInvariant()), out var configured)
             ? configured
             : DefaultRegionalQuota;

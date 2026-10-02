@@ -111,4 +111,46 @@
   <data name="PhaseCancelled_Title" xml:space="preserve">
     <value>Cancelled</value>
   </data>
+  <data name="RunError_no_project" xml:space="preserve">
+    <value>No Google Cloud project is selected. Open Settings, choose a project, then start the run again.</value>
+  </data>
+  <data name="RunError_target_not_supported" xml:space="preserve">
+    <value>Running on this PC is not available yet. Choose Cloud as the place to run, then start the run again.</value>
+  </data>
+  <data name="RunError_billing" xml:space="preserve">
+    <value>Billing is not turned on for your Google Cloud project. Turn it on in the Google Cloud console, then start the run again.</value>
+  </data>
+  <data name="RunError_api_disabled" xml:space="preserve">
+    <value>The Compute Engine service is switched off in your Google Cloud project. Switch it on in the Google Cloud console, then start the run again.</value>
+  </data>
+  <data name="RunError_quota" xml:space="preserve">
+    <value>Your project has no graphics card allowance in the places we tried. Ask Google to raise it in the Google Cloud console, then start the run again.</value>
+  </data>
+  <data name="RunError_stockout" xml:space="preserve">
+    <value>Google had no free graphics cards in any place we tried. Start the run again in a few minutes.</value>
+  </data>
+  <data name="RunError_already_exists" xml:space="preserve">
+    <value>A rented computer for this run already exists. Open the Cloud page and delete it, then start the run again.</value>
+  </data>
+  <data name="RunError_permission" xml:space="preserve">
+    <value>Your Google account is not allowed to do this, or its sign-in has expired. Sign in again from Settings, then start the run again.</value>
+  </data>
+  <data name="RunError_org_policy" xml:space="preserve">
+    <value>Your organization blocks this action in the project. Ask your Google Cloud administrator to allow it, or choose a different project in Settings.</value>
+  </data>
+  <data name="RunError_network" xml:space="preserve">
+    <value>Google Cloud could not be reached. Check your internet connection, then start the run again.</value>
+  </data>
+  <data name="RunError_vm_unhealthy" xml:space="preserve">
+    <value>The rented computer stopped or was lost during the run. Start the run again.</value>
+  </data>
+  <data name="RunError_lifecycle_unverified" xml:space="preserve">
+    <value>The rented computer did not stop when it should have. Open the Cloud page and delete it so it stops billing.</value>
+  </data>
+  <data name="RunError_cancel_failed" xml:space="preserve">
+    <value>We could not delete the rented computer while cancelling. Open the Cloud page and delete it so it stops billing.</value>
+  </data>
+  <data name="RunError_other" xml:space="preserve">
+    <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
+  </data>
 </root>

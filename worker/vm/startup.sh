@@ -99,7 +99,11 @@ cleanup() {
   local url="https://compute.googleapis.com/compute/v1/projects/${PROJECT}/zones/${ZONE}/instances/${NAME}"
   case "$1" in
     delete) curl -sf -X DELETE -H "Authorization: Bearer $(token)" "$url" || true ;;
-    *)      curl -sf -X POST   -H "Authorization: Bearer $(token)" "${url}/stop" || true ;;
+    # "keep" stops too, on purpose and for now (issue #464): nothing here knows the
+    # keep-alive window, and Hard Rule 11 forbids keeping a VM with no expiry, so
+    # stopping early is the only safe reading until the window has an owner. Any
+    # unknown value also stops: the billing meter must never be left running.
+    stop|keep|*) curl -sf -X POST -H "Authorization: Bearer $(token)" "${url}/stop" || true ;;
   esac
 }
 
@@ -177,11 +181,17 @@ docker run --rm \
 rc=$?
 
 # worker/src/dna_entropy/worker/cli.py's exit-code contract:
-#   0 done | 2 failed | 3 cancelled | 10 request-stop | 11 request-delete
-# (10/11 are reserved for a future worker-initiated override; not produced by this build,
-# but handled here so a future worker build can start using them with no script change.)
+#   0 done | 2 failed | 3 cancelled | 10 stopped-by-worker | 11 deleted-by-worker
+# 10/11 mean the worker already stopped/deleted this VM itself through the Compute API
+# (and its accepted call takes precedence over the outcome; result.json carries the real
+# outcome). Calling the API a second time would repeat a finished action, so for 10/11
+# this only uploads the startup log and exits. If the worker's own call failed it returns
+# the ordinary outcome code instead, and 0/2/3 still run cleanup "$LIFECYCLE" as the
+# backstop.
 case $rc in
-  10) cleanup stop ;;
-  11) cleanup delete ;;
+  10|11)
+    kill "$RELAY_PID" 2>/dev/null || true
+    put_object /var/log/deg-startup.log "jobs/${JOB}/logs/startup.log" || true
+    ;;
   *)  cleanup "$LIFECYCLE" ;;
 esac

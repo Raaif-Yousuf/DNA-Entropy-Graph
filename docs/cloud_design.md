@@ -189,7 +189,7 @@ mapping exists yet (there is no real, non-fake gateway implementation), only
 **Consumed, issue #58**: `CloudJobRunner.ProvisionAsync` (`app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs`)
 is the first production caller - it classifies every `CloudOperationException` a create
 attempt throws and applies exactly the abort-vs-continue column below (project-wide kinds
-return the failure immediately; quota/stockout/network/other try the next zone). The
+return the failure immediately; quota/stockout/other try the next zone; **network aborts the ladder too**, because another zone cannot fix an unreachable API and trying them all would end as a false stockout). The
 Health page (#208) is still unbuilt and still has no caller of its own.
 
 | Signal | Class | Ladder behaviour |
@@ -256,10 +256,18 @@ this repo's redaction rules). Consequences this drives directly:
 - Every VM this app creates has `scheduling.maxRunDuration` set (default 4 h, max 24 h,
  user-configurable within that range) **and** `instanceTerminationAction=DELETE` as the
  backstop - but the backstop is not the primary cleanup mechanism.
-- `worker/vm/startup.sh` (not yet written; issue #45/#74) ends every path - success,
- failure, or cancellation - by calling the Compute API **on itself**, using its own
- metadata-token credentials, to `stop` or `delete` per the job's `lifecycle.afterTask`.
- It never calls `shutdown -h` as the primary mechanism.
+- `worker/vm/startup.sh` ends every path - success, failure, or cancellation - with the VM
+ stopped or deleted **through the Compute API on itself**, using its own metadata-token
+ credentials, per the job's `lifecycle.afterTask`. A stop is `POST .../instances/<name>/stop`;
+ a delete is `DELETE .../instances/<name>` (a DELETE on the instance resource, not a POST to
+ a `/delete` sub-path). It never calls `shutdown -h` as the primary mechanism.
+- **Who applies it.** The worker applies the lifecycle itself when it can (worker issue #44)
+ and then exits `10` (it stopped the VM) or `11` (it deleted the VM). Those exit codes mean
+ "already applied": the script only uploads `logs/startup.log` and exits, and never calls
+ the Compute API a second time. If the worker's own call failed it exits `0`/`2`/`3`
+ (its ordinary outcome) and the script's `cleanup "$LIFECYCLE"` runs as the backstop.
+ `lifecycle=keep` is currently treated as stop by that backstop (issue #464: nothing in
+ the script knows the keep-alive window, and a VM must never be kept with no expiry).
 - A `shutdown -h +N` deadman is armed as a genuine last resort only, in case the API call
  itself is what failed.
 - The app **independently verifies** the VM reached its terminal state after
@@ -340,6 +348,19 @@ instance - already-passed happy-path phases are silently skipped
 `FindByJobIdAsync` first (section 3, issue #257) - so a second call after a crash *is* the
 resume path, not a distinct one someone has to remember to call.
 
+**Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
+`architecture.md` section 3. Three runner behaviours exist for that caller:
+`RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a
+`CloudOperationException` keeps its `CloudErrorKind`, anything else is `Other`;
+cancellation still propagates), so a run never stays in its last phase after an unexpected
+error (Hard Rule 11); `SetPhaseAsync` updates the existing run row (`existing with {
+Phase }`) and stamps `FinishedAt` on a terminal phase, because the SQLite repository
+replaces every column on upsert and a blank record would wipe the options and project the
+engine wrote first; and `CancelAsync` ignores a job id it never saw, records `Cancelled`
+for a run cancelled while still in `Draft` (during preflight), and otherwise goes through
+`Cancelling`. `StopVmAsync`/`DeleteVmAsync` find the job's VMs by label and act on each,
+so "Stop VM now" works from any runner instance.
+
 **`OperationPoller`** (`app/src/DnaEntropyGraph.Core/Cloud/OperationPoller.cs`, issue #256):
 the one place that polls-with-backoff (1s doubling to a 10s cap) against a deadline,
 distinguishing a real operation error from its own `OPERATION_POLL_TIMEOUT` (classified as
@@ -356,6 +377,92 @@ last-good-zone-first, tier-escalating ladder section 3 describes. `PreflightAsyn
 quota check also uses a placeholder accelerator-type string (`"gpu"`), because `VmSpec` has
 no accelerator-type field yet (only `MachineType`) - see this round's changelog fragment
 and issue tracker for the follow-up.
+
+## 12. Retry, token refresh and the offline breaker (issue #258)
+
+**Implemented**: `CloudCallPipeline` (`app/src/DnaEntropyGraph.Cloud/CloudCallPipeline.cs`,
+Polly.Core 8.6.5, BSD-3-Clause) is the one policy in front of every gateway call.
+`ResilientComputeGateway`/`ResilientStorageGateway`/`ResilientProjectSetupGateway`/
+`ResilientQuotaGateway` wrap each interface method; `ServiceRegistration` resolves every
+gateway through them, so the real Google-backed gateways go *inside* the wrappers and get
+the policy for free.
+
+| Failure | What happens |
+| --- | --- |
+| HTTP 429/500/502/503/504 **whose error does not classify as a permanent kind**, a transport failure (`HttpRequestException`, or a `CloudOperationException` of kind `network` with no status), a timeout (an `OperationCanceledException` while the caller's own token is not cancelled) | Retried up to `CloudRetryOptions.MaxRetryAttempts` (4) with exponential backoff (1s base, 20s cap) and jitter. When retries run out the caller gets a `CloudOperationException` of kind `network` (the original error text and status are kept) |
+| Stockout, quota, billing, API-off, permission, org-policy or already-exists, **whatever the HTTP status** (Compute reports a stockout as 503 `ZONE_RESOURCE_POOL_EXHAUSTED`) | **Not retried and not counted by the breaker.** Waiting cannot fix them, and counting a four-zone stockout ladder would open the breaker and make a stockout read as offline (CLAUDE.md: quota is not stockout). The pipeline classifies before deciding |
+| HTTP 401 | `ICloudTokenRefresher.RefreshAsync` once, then the call is replayed once. A second 401 becomes kind `permission` (sign in again) |
+| 403, 409, 412, stockout, anything else | Untouched: `CloudErrorClassifier` and the zone ladder own them |
+| Most recent calls failed (6+ calls in 30s, 80% transient failures) | The breaker opens for 30s. Calls fail fast as kind `network` with code `OFFLINE` and are not sent. **Cleanup bypasses the breaker**: `StopVm`, `DeleteVm` and `FindByJobId` go through a second pipeline with the same retries and no breaker, because they are what stops the meter; if a cancel's cleanup still fails the run is recorded `Failed` with code `cancel_failed`, never left in `Cancelling`. `CloudCallPipeline.IsOffline`/`OfflineChanged` report it; it closes after a successful half-open call |
+
+Retrying a mutating call is safe only because of two earlier decisions: `CreateVmAsync`
+carries a deterministic request id (issue #257, so a replay is idempotent) and stop/delete
+are idempotent. An upload is replayed only when its stream can seek (the decorator rewinds
+it); a non-seekable stream gets one attempt and no 401 replay.
+
+Every retry is reported to `ICloudCallObserver` (operation, attempt, delay, status, kind,
+the API error text, never a sequence, file name or email). `CloudRetryLog` keeps the last
+200 in memory. THEORY (unverified): Serilog is not wired into the app yet, so the log is
+not in the diagnostics zip; when it is, forward `OnRetry` there.
+
+The pipeline's kind is kept end to end: `CloudJobRunner.ProvisionAsync` uses the kind the
+gateway threw instead of re-classifying the error text (which turned `network` into `other`,
+walked every zone and reported a stockout), and a run failure is recorded as a code
+(`RunErrorCodes`) with the raw text only in `ErrorDetail`; the UI shows the `RunError_<code>`
+resource string (Hard Rule 13).
+
+**Not yet wired**: nothing in the UI reads `IsOffline` (the offline banner), and
+`ICloudTokenRefresher` is implemented only by `FakeGcp` (the real OAuth refresh arrives with
+the real auth service). `ResilientGatewayTests.Every_method_of_every_gateway_goes_through_the_pipeline`
+fails if a method is added to a gateway interface without being routed through the pipeline.
+`FakeGcp.WithTransientFailures(status, count)` and `WithUnauthorized(count)` script these
+failures against any gateway method.
+
+## 13. The startup script and its metadata (issue #261)
+
+**Design correction.** Issue #261 was filed as "render the script from a template with
+escaped values". The script is not rendered: `worker/vm/startup.sh` is a fixed template
+(see `worker/vm/README.md`) that reads every per-job value back from the instance's own
+metadata attributes with `meta()`. So there is nothing to escape into the script text. The
+real risk is on the *attribute* side: the script then uses those values inside a JSON
+document, a `docker pull`, and a shell arithmetic expansion (`shutdown -h "+$(( MAX_RUN_MIN
++ 15 ))"`, where a value such as `a[$(cmd)]` would execute). A quoting layer in C# cannot
+make that safe, so the builder **validates** each value against the exact shape the script
+can consume and throws before a request is built.
+
+**Implemented**: `StartupMetadata` (`app/src/DnaEntropyGraph.Core/Cloud/StartupMetadata.cs`).
+`worker/vm/startup.sh` is embedded in `DnaEntropyGraph.Core` as an `EmbeddedResource`
+(single source of truth; CRLF normalised to LF, because a CR breaks the shebang on the VM).
+`StartupMetadata.Build` returns `startup-script` plus the six attributes the script reads:
+
+| Attribute | Accepted shape | Why |
+| --- | --- | --- |
+| `deg-job-id` | 1-63 of `a-z 0-9 _ -` | printed into JSON by `status()` and into object names |
+| `deg-bucket` | 3-63 of `a-z 0-9 . _ -`, starts and ends alphanumeric | used in `gs://` and REST URLs |
+| `deg-worker-image` | `name[:tag]@sha256:<64 hex>` | pulled by digest, never a mutable tag; also stops a value like `--privileged` reaching `docker` |
+| `deg-expect-gpu` | `true` / `false` | compared literally by the script |
+| `deg-lifecycle` | `stop` / `delete` / `keep` | `case` word in `cleanup()` |
+| `deg-max-run-min` | whole minutes, 1 to 100000 (rounded up) | goes into shell arithmetic, so digits only by construction |
+
+`StartupMetadata.EnsureSize` enforces Compute Engine's limits in UTF-8 bytes: 256 KiB per
+value, 512 KiB in total. `VmSpec.EnsurePreconditions` calls it on the new `VmSpec.Metadata`
+property, so every gateway (and `FakeGcp`) rejects an oversized spec before a request is
+built. The real script is about 9 KB, well inside both limits.
+
+`CloudJobRunner` attaches the metadata once the bucket name is known (`CloudJobRequest.WorkerImage`
+set means attach; null means create the VM with none). An invalid value fails the run before
+any VM exists. `JobEngine` reads the image reference from the `worker_image` setting; the
+digest allowlist that should supply it is not built, so with the setting unset a VM is created
+without a startup script.
+
+**Verification**: `StartupMetadataTests` (Core.Tests) prove the embedded text equals
+`worker/vm/startup.sh`, that every `meta instance/attributes/<x>` the script reads is set by
+`Build`, that unusual job ids, buckets and images are rejected, and the size limits.
+`shellcheck worker/vm/startup.sh` already runs in CI (`ci-worker.yml`, "shellcheck the VM startup
+script") and exits 0 locally via `uv run --with shellcheck-py shellcheck`. Because the script
+text never varies with a job, one shellcheck run covers every render; a per-render shellcheck
+would be vacuous. There is no Verify snapshot: the embedded-equals-source test is the stronger
+check, and the attribute set is asserted key by key.
 
 ## Related
 

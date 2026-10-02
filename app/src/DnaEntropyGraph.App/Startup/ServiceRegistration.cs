@@ -5,6 +5,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
+using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -65,10 +66,25 @@ public static class ServiceRegistration
         // gateways land; it backs every Core/Cloud interface at once.
         services.AddSingleton<FakeGcp>();
         services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
-        services.AddSingleton<IComputeGateway>(sp => sp.GetRequiredService<FakeGcp>());
-        services.AddSingleton<IStorageGateway>(sp => sp.GetRequiredService<FakeGcp>());
-        services.AddSingleton<IProjectSetupGateway>(sp => sp.GetRequiredService<FakeGcp>());
-        services.AddSingleton<IQuotaGateway>(sp => sp.GetRequiredService<FakeGcp>());
+
+        // Issue #258: every gateway the app resolves is wrapped in the one
+        // resilience pipeline (retry with jitter on 429/5xx/transport, a
+        // single token refresh on 401, a circuit breaker for the offline
+        // banner). The real Google-backed gateways replace FakeGcp INSIDE
+        // these wrappers. A test that needs fast retries registers its own
+        // CloudRetryOptions after calling this method (the last one wins).
+        services.AddSingleton<CloudRetryOptions>(_ => new CloudRetryOptions());
+        services.AddSingleton<CloudRetryLog>();
+        services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<CloudRetryLog>());
+        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<CloudCallPipeline>(sp => new CloudCallPipeline(
+            sp.GetRequiredService<CloudRetryOptions>(),
+            sp.GetRequiredService<ICloudTokenRefresher>(),
+            sp.GetRequiredService<ICloudCallObserver>()));
+        services.AddSingleton<IComputeGateway>(sp => new ResilientComputeGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        services.AddSingleton<IStorageGateway>(sp => new ResilientStorageGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        services.AddSingleton<IProjectSetupGateway>(sp => new ResilientProjectSetupGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        services.AddSingleton<IQuotaGateway>(sp => new ResilientQuotaGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
 
         // Persistence (issue #67: real SQLite + settings.json under
         // %LOCALAPPDATA%\DNAEntropyGraph\, docs/architecture.md section 6).
@@ -88,6 +104,21 @@ public static class ServiceRegistration
         // interfaces it implements, the same multi-interface-single-instance
         // pattern FakeGcp uses above, so RunProgressViewModel's IRunVmActions
         // and IJobEngine consumers always see the same tracked run state.
+        // CloudJobRunner (issue #428): the state machine every cloud run goes
+        // through. Its phase callback publishes the message ShellViewModel and
+        // RunProgressViewModel subscribe to, after the runner has committed
+        // the phase to IRunRepository.
+        services.AddSingleton<CloudJobRunner>(sp =>
+        {
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new CloudJobRunner(
+                sp.GetRequiredService<IComputeGateway>(),
+                sp.GetRequiredService<IStorageGateway>(),
+                sp.GetRequiredService<IProjectSetupGateway>(),
+                sp.GetRequiredService<IQuotaGateway>(),
+                sp.GetRequiredService<IRunRepository>(),
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IRunVmActions>(sp => sp.GetRequiredService<JobEngine>());

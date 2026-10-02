@@ -27,6 +27,13 @@ public sealed record VmSpec(
     TimeSpan MaxRunDuration,
     string TerminationAction)
 {
+    /// <summary>
+    /// Instance metadata items (the startup script and the <c>deg-*</c>
+    /// attributes it reads; see <see cref="StartupMetadata"/>). Null means
+    /// the gateway sets none. Not a label: it is checked for size only.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
+
     /// <summary>The <c>app</c> label's fixed value - every DNA Entropy Graph resource carries the same one.</summary>
     public const string AppLabelValue = "dna-entropy-graph";
 
@@ -87,6 +94,11 @@ public sealed record VmSpec(
         if (MaxRunDuration <= TimeSpan.Zero)
         {
             throw new InvalidOperationException("VmSpec is missing a positive maxRunDuration (Hard Rule 10).");
+        }
+
+        if (Metadata is not null)
+        {
+            StartupMetadata.EnsureSize(Metadata);
         }
 
         if (VmName.Length > 63 || !GcpResourceNamePattern.IsMatch(VmName))
