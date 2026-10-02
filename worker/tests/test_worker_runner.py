@@ -960,3 +960,147 @@ def test_result_json_success_never_writes_a_local_fallback(
     run_job(store)
 
     assert not fallback_dir.exists()
+
+
+# --- issue #41: one predictor per batch; result.json carries stats, notices, sha256 ------
+
+
+def _three_input_store(tmp_path: Path, **overrides) -> LocalBlobstore:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(
+        store,
+        inputs=[{"id": f"in{i}", "path": f"input/s{i}.fasta", "name": f"s{i}"} for i in (1, 2, 3)],
+        **overrides,
+    )
+    for i in (1, 2, 3):
+        store.write_text(f"input/s{i}.fasta", f">seq{i}" + chr(10) + "ACGT" * (40 + i) + chr(10))
+    return store
+
+
+def test_one_predictor_instance_serves_the_whole_batch(tmp_path: Path) -> None:
+    from dna_entropy.predictors.mock import MockPredictor
+
+    store = _three_input_store(tmp_path)
+    built: list[object] = []
+    predicted_lengths: list[int] = []
+
+    class _Recording(MockPredictor):
+        def predict(self, seq):
+            predicted_lengths.append(len(seq))
+            return super().predict(seq)
+
+    def _factory(cfg):
+        built.append(cfg)
+        return _Recording(seed=cfg.seed)
+
+    result = run_job(store, predictor_factory=_factory)
+
+    assert [i.status for i in result.inputs] == ["done", "done", "done"]
+    assert len(built) == 1, "the model must be loaded once per batch, not once per input"
+    # The wired-to-nothing check: the ONE instance actually served every input's windows
+    # (each input is a single window of its own length: 4 * (40 + i) nt).
+    assert predicted_lengths == [164, 168, 172]
+
+
+def test_batch_with_a_shared_predictor_matches_per_input_fresh_predictors(tmp_path: Path) -> None:
+    """Sharing the predictor must not change a single output byte (mock is stateless)."""
+    shared = _three_input_store(tmp_path / "shared")
+    run_job(shared)
+    for i in (1, 2, 3):
+        solo_dir = tmp_path / f"solo{i}"
+        solo = LocalBlobstore(solo_dir)
+        _write_manifest(solo, inputs=[{"id": "in1", "path": "input/x.fasta", "name": f"s{i}"}])
+        solo.write_text("input/x.fasta", f">seq{i}" + chr(10) + "ACGT" * (40 + i) + chr(10))
+        run_job(solo)
+        a = shared.read_text(f"output/s{i}/s{i}.entropy.bedgraph")
+        b = solo.read_text(f"output/s{i}/s{i}.entropy.bedgraph")
+        assert a == b
+
+
+def test_a_predictor_that_fails_to_build_is_built_once_and_fails_every_input(tmp_path: Path) -> None:
+    from dna_entropy.predictors.base import PredictorError
+
+    store = _three_input_store(tmp_path)
+    calls = 0
+
+    def _factory(cfg):
+        nonlocal calls
+        calls += 1
+        raise PredictorError("no weights")
+
+    result = run_job(store, predictor_factory=_factory)
+
+    assert calls == 1, "a failed model load must not be retried once per remaining input"
+    assert [i.status for i in result.inputs] == ["failed", "failed", "failed"]
+    assert all(i.error and "no weights" in i.error["message"] for i in result.inputs)
+
+
+def test_result_json_lists_each_output_file_with_its_sha256_and_size(tmp_path: Path) -> None:
+    import hashlib
+
+    store = _three_input_store(tmp_path)
+    run_job(store)
+    doc = json.loads(store.read_text(RESULT_PATH))
+    for entry in doc["inputs"]:
+        assert entry["files"], entry
+        assert [f["path"] for f in entry["files"]] == entry["outputs"]
+        for f in entry["files"]:
+            data = (tmp_path / f["path"]).read_bytes()
+            assert f["sha256"] == hashlib.sha256(data).hexdigest()
+            assert f["bytes"] == len(data)
+
+
+def test_result_json_carries_per_input_stats_and_notices(tmp_path: Path) -> None:
+    store = _three_input_store(tmp_path)
+    run_job(store)
+    doc = json.loads(store.read_text(RESULT_PATH))
+    first = doc["inputs"][0]
+    assert first["stats"]["contigs"] == 1
+    assert first["stats"]["totalNt"] == 4 * 41
+    assert (
+        0.0
+        <= first["stats"]["minEntropy"]
+        <= first["stats"]["meanEntropy"]
+        <= first["stats"]["maxEntropy"]
+        <= 2.0
+    )
+    assert isinstance(first["notices"], list)
+
+
+def test_input_notices_are_recorded_per_input_in_result_json(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    store.write_text("input/locus.fasta", ">seq" + chr(10) + "ACGT" * 4 + chr(10))  # 16 nt, K=128
+    run_job(store)
+    entry = json.loads(store.read_text(RESULT_PATH))["inputs"][0]
+    assert entry["status"] == "done"
+    assert any("shorter than the context length" in n for n in entry["notices"])
+
+
+def test_a_failed_input_has_no_stats_but_still_has_the_fields(tmp_path: Path) -> None:
+    store = _three_input_store(tmp_path)
+    (tmp_path / "input" / "s2.fasta").unlink()
+    run_job(store)
+    second = json.loads(store.read_text(RESULT_PATH))["inputs"][1]
+    assert second["status"] == "failed"
+    assert second["stats"] is None
+    assert second["files"] == []
+
+
+def test_result_json_is_written_after_every_uploaded_output(tmp_path: Path) -> None:
+    store = _three_input_store(tmp_path)
+    run_job(store)
+    result_mtime = (tmp_path / RESULT_PATH).stat().st_mtime_ns
+    outputs = [p for p in (tmp_path / "output").rglob("*") if p.is_file()]
+    assert outputs
+    assert all(p.stat().st_mtime_ns <= result_mtime for p in outputs)
+
+
+def test_provenance_records_the_input_sha256(tmp_path: Path) -> None:
+    import hashlib
+
+    store = _three_input_store(tmp_path)
+    run_job(store)
+    prov = json.loads((tmp_path / "output" / "s1" / "provenance.json").read_text(encoding="utf-8"))
+    expected = hashlib.sha256((tmp_path / "input" / "s1.fasta").read_bytes()).hexdigest()
+    assert prov["input_sha256"] == expected

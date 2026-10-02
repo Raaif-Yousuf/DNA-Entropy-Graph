@@ -4,6 +4,10 @@
   "allowed": {
     "JobResult.*": "result.json's own shape. JobResult.to_dict() is dataclasses.asdict(self), so every field here travels to the C# app as JSON and is read there, never by this package. The guard sees no attribute load because asdict() names nothing. Deliberately a class-wide entry: this dataclass IS the wire document, so a new field on it is a new JSON key, not a new behaviour someone forgot to wire.",
     "ResultTiming.*": "Nested inside result.json, same reason as JobResult.*.",
+    "ResultFile.*": "Nested inside result.json (one entry per output file, #41), same reason as JobResult.*.",
+    "ResultStats.*": "Nested inside result.json (per-input entropy stats, #41), same reason as JobResult.*.",
+    "InputResult.files": "result.json per-input file list with sha256 (#41), written via asdict() and read by the app, same reason as JobResult.*.",
+    "InputResult.stats": "result.json per-input stats (#41), written via asdict() and read by the app, same reason as JobResult.*.",
     "ResultGpu.*": "Nested inside result.json, same reason as JobResult.*.",
     "StatusDocument.*": "status.json's own shape, written by StatusWriter and read by the app's poller. Same asdict() reason as JobResult.*. This is the document CLAUDE.md calls the only health signal there is, so its fields being app-facing rather than worker-facing is the design, not a gap.",
     "VmRef.*": "Nested inside status.json, same reason as StatusDocument.*.",

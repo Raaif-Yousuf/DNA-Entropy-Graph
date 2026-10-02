@@ -1,0 +1,1 @@
+- feat(worker): a batch loads the model once (`run_job(predictor_factory=)`, `pipeline.run(predictor=)`, a failed load is not retried per input), `result.json` inputs gain `files` (path, sha256, bytes), `notices` and `stats`, and `provenance.json` records `input_sha256` (#41)

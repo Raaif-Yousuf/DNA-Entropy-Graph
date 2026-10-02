@@ -61,6 +61,7 @@ testpaths = ["tests"]
 # Plain `pytest` runs everything; on the laptop use `pytest -m "not gpu"`.
 markers = [
     "gpu: requires a CUDA GPU and the Evo stack (skipped without one)",
+    "gcs: runs the shared blobstore contract against GcsBlobstore over an in-memory fake of the GCS JSON API (no network; runs in the default suite)",
 ]
 
 [tool.ruff]

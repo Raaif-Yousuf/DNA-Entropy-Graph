@@ -27,7 +27,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Protocol, runtime_checkable
 
 
@@ -72,6 +72,32 @@ class Blobstore(Protocol):
         ...
 
 
+def _checked_relative(path: str, *, allow_empty: bool = False) -> str:
+    """Return ``path`` unchanged if it is a plain job-relative path, else raise.
+
+    Rejects, on EVERY platform (the same manifest runs on a Windows PC and a Linux VM):
+    absolute paths in either syntax (``/x``, ``\\x``, ``C:\\x``, ``C:x``), any ``..``
+    component split on either separator, and empty or NUL-containing names. ``Path`` alone
+    is not enough: on Windows ``Path("/abs.txt").is_absolute()`` is False (no drive), yet
+    ``root / "/abs.txt"`` resolves to the drive root, outside the job folder.
+    """
+    if path == "" and allow_empty:
+        return path  # list_prefix("") means "the whole job"
+    if not path or "\0" in path:
+        raise BlobstoreError(f"path must be a non-empty relative path, got {path!r}")
+    posix, win = PurePosixPath(path), PureWindowsPath(path)
+    if (
+        posix.is_absolute()
+        or win.is_absolute()
+        or win.drive
+        or win.root
+        or ".." in posix.parts
+        or ".." in win.parts
+    ):
+        raise BlobstoreError(f"path must be relative and non-escaping, got {path!r}")
+    return path
+
+
 def read_json(store: Blobstore, path: str) -> dict:
     """Read and parse ``path`` as JSON."""
     return json.loads(store.read_text(path))
@@ -101,14 +127,11 @@ class LocalBlobstore:
         self.root.mkdir(parents=True, exist_ok=True)
         self._tmp_counter = 0
 
-    def _resolve(self, path: str) -> Path:
+    def _resolve(self, path: str, *, allow_empty: bool = False) -> Path:
         # Reject absolute/parent-escaping paths outright: every path here is supposed to
         # be relative to the job prefix, and a `../../etc/passwd`-shaped path must never
         # be honoured just because some caller upstream forgot to sanitize it.
-        p = Path(path)
-        if p.is_absolute() or ".." in p.parts:
-            raise BlobstoreError(f"path must be relative and non-escaping, got {path!r}")
-        return self.root / p
+        return self.root / _checked_relative(path, allow_empty=allow_empty)
 
     def read_text(self, path: str) -> str:
         full = self._resolve(path)
@@ -130,7 +153,7 @@ class LocalBlobstore:
         return self._resolve(path).exists()
 
     def list_prefix(self, prefix: str) -> list[str]:
-        base = self._resolve(prefix)
+        base = self._resolve(prefix, allow_empty=True)
         if not base.exists():
             return []
         if base.is_file():
@@ -145,15 +168,27 @@ class LocalBlobstore:
         full = self._resolve(path)
         if not full.exists():
             raise BlobstoreError(f"not found: {path}")
-        local_dest.parent.mkdir(parents=True, exist_ok=True)
-        local_dest.write_bytes(full.read_bytes())
+        self._atomic_write_bytes(local_dest, full.read_bytes())
 
     def upload_file(self, local_src: Path, path: str) -> None:
         if not local_src.exists():
             raise BlobstoreError(f"local file not found: {local_src}")
-        full = self._resolve(path)
-        full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_bytes(local_src.read_bytes())
+        self._atomic_write_bytes(self._resolve(path), local_src.read_bytes())
+
+    def _atomic_write_bytes(self, dest: Path, data: bytes) -> None:
+        """Write ``data`` to a temp sibling of ``dest`` and ``os.replace`` it into place, so
+        a reader never observes a half-written file (issue #40: write_text already did this,
+        upload_file/download_file did not). The temp name contains ``.tmp-`` so
+        :meth:`list_prefix` never reports it."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        self._tmp_counter += 1
+        tmp = dest.with_name(f"{dest.name}.tmp-{os.getpid()}-{self._tmp_counter}")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def delete(self, path: str) -> None:
         """Not part of the Blobstore Protocol (a job never deletes its own files), but
@@ -275,11 +310,8 @@ class GcsBlobstore:
         self._sleep = sleep
         self._rand = rand
 
-    def _object_name(self, path: str) -> str:
-        p = Path(path)
-        if p.is_absolute() or ".." in p.parts:
-            raise BlobstoreError(f"path must be relative and non-escaping, got {path!r}")
-        return f"{self.prefix}{path}"
+    def _object_name(self, path: str, *, allow_empty: bool = False) -> str:
+        return f"{self.prefix}{_checked_relative(path, allow_empty=allow_empty)}"
 
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._tokens.get()}"}
@@ -356,15 +388,27 @@ class GcsBlobstore:
         return resp is not None
 
     def list_prefix(self, prefix: str) -> list[str]:
-        full_prefix = self._object_name(prefix)
-        url = f"{_STORAGE_API}/b/{self.bucket}/o?prefix={urllib.request.quote(full_prefix, safe='')}"
-        resp = self._request(
-            lambda: urllib.request.Request(url, headers=self._auth_headers()),
-            what="list_prefix",
-            max_attempts=_READ_MAX_ATTEMPTS,
-        )
-        payload = json.loads(resp.read().decode("utf-8"))
-        names = [item["name"] for item in payload.get("items", [])]
+        full_prefix = self._object_name(prefix, allow_empty=True)
+        base_url = f"{_STORAGE_API}/b/{self.bucket}/o?prefix={urllib.request.quote(full_prefix, safe='')}"
+        names: list[str] = []
+        page_token: str | None = None
+        while True:
+            # The JSON API returns at most one page (1000 objects) per call and a
+            # `nextPageToken` while more remain; reading only the first page would silently
+            # drop the rest of a large batch's outputs (issue #40).
+            url = base_url
+            if page_token:
+                url += f"&pageToken={urllib.request.quote(page_token, safe='')}"
+            resp = self._request(
+                lambda url=url: urllib.request.Request(url, headers=self._auth_headers()),
+                what="list_prefix",
+                max_attempts=_READ_MAX_ATTEMPTS,
+            )
+            payload = json.loads(resp.read().decode("utf-8"))
+            names += [item["name"] for item in payload.get("items", [])]
+            page_token = payload.get("nextPageToken")
+            if not page_token:
+                break
         # Strip this job's own prefix so callers see paths relative to it, like LocalBlobstore.
         return sorted(n[len(self.prefix) :] if n.startswith(self.prefix) else n for n in names)
 
