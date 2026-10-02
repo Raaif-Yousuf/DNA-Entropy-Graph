@@ -269,7 +269,7 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
 
 
 def test_validate_declares_exactly_the_expected_option_surface() -> None:
-    expected = {"--input", "-i", "--rna", "--max-len"}
+    expected = {"--input", "-i", "--rna", "--max-len", "--ambiguity"}
     assert _declared_option_names("validate") == expected
 
 
@@ -411,3 +411,61 @@ def test_validate_max_len_flag_rejects_an_oversized_sequence() -> None:
     result = runner.invoke(app, ["validate", "--max-len", "10"], input="ACGT" * 20)
     assert result.exit_code == 1
     assert "exceeds" in result.output
+
+
+# --- #392: validate agrees with a real run about ambiguity codes ---------------------------
+
+
+def test_validate_default_keeps_ambiguity_codes_like_a_real_run() -> None:
+    result = runner.invoke(app, ["validate"], input="ACGTNACGT\n")
+    assert result.exit_code == 0, result.output
+    assert "Kept 1 ambiguity code(s) (N)" in result.output
+    assert "OK: valid sequence, 9 nt" in result.output
+
+
+def test_validate_ambiguity_error_refuses_with_the_named_code() -> None:
+    result = runner.invoke(app, ["validate", "--ambiguity", "error"], input="ACGTNACGT\n")
+    assert result.exit_code == 1
+    assert "Ambiguity code 'N' at position 5" in result.output
+
+
+def test_validate_ambiguity_mask_masks_to_n() -> None:
+    result = runner.invoke(app, ["validate", "--ambiguity", "mask"], input="ACGTRACGT\n")
+    assert result.exit_code == 0, result.output
+    assert "Masked 1 ambiguity code(s)" in result.output
+
+
+def test_validate_rejects_an_unknown_ambiguity_value_with_a_named_error() -> None:
+    result = runner.invoke(app, ["validate", "--ambiguity", "bogus"], input="ACGTNACGT\n")
+    assert result.exit_code == 1
+    assert result.output.startswith("ERROR:")
+    assert "bogus" in result.output
+
+
+def test_validate_and_run_agree_on_the_same_ambiguous_input(tmp_path) -> None:
+    for extra in ([], ["--ambiguity", "error"]):
+        v = runner.invoke(app, ["validate", *extra], input="ACGTNACGT" * 4)
+        r = runner.invoke(
+            app, ["run", "--name", "agree", "--out", str(tmp_path), *extra], input="ACGTNACGT" * 4
+        )
+        assert v.exit_code == r.exit_code, (extra, v.output, r.output)
+
+
+def test_load_and_validate_honours_the_config_ambiguity_policy() -> None:
+    from dna_entropy.config import AmbiguityPolicy, RunConfig
+    from dna_entropy.pipeline import load_and_validate
+    from dna_entropy.validation.validators import ValidationError
+
+    assert len(load_and_validate(RunConfig(ambiguity_policy=AmbiguityPolicy.KEEP), raw="ACGTNACGT")) == 9
+    with pytest.raises(ValidationError):
+        load_and_validate(RunConfig(ambiguity_policy=AmbiguityPolicy.ERROR), raw="ACGTNACGT")
+
+
+def test_validate_matches_the_recorded_ambiguity_cases() -> None:
+    data = json.loads((FIXTURES / "cli_validate_parity.json").read_text(encoding="utf-8"))
+    cases = data["ambiguity_cases"]
+    assert len(cases) >= 3
+    for case in cases:
+        result = runner.invoke(app, case["args"], input=case["stdin"])
+        assert result.exit_code == case["exit_code"], case["id"]
+        assert result.output == case["output"], case["id"]

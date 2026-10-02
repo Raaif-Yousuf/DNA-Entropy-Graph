@@ -1,0 +1,1 @@
+- fix(worker): `dna-entropy validate` now takes `--ambiguity keep|mask|error` (default keep, same as `run`) and `load_and_validate` honours `RunConfig.ambiguity_policy`, so validate no longer refuses an N that a real run would accept (#392)

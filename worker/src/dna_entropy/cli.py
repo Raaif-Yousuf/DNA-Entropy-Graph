@@ -238,12 +238,21 @@ def validate(
         help="Outer sanity bound on the whole input (nt) — this command only cleans/validates, "
         "it never runs windowing, so there is no separate per-pass ceiling to set here.",
     ),
+    ambiguity: str = typer.Option(
+        "keep",
+        "--ambiguity",
+        help="What to do with an IUPAC ambiguity code (N, R, Y, ...): keep it as-is, mask "
+        "it to N, or refuse the input outright. keep|mask|error. The default matches `run`, "
+        "so `validate` reports what a real run would do (docs/science_and_formats.md).",
+    ),
 ) -> None:
     """Validate a sequence without running a model."""
-    cfg = RunConfig(input_path=input, rna=rna, max_total_len=max_len)
     try:
+        cfg = RunConfig(
+            input_path=input, rna=rna, max_total_len=max_len, ambiguity_policy=AmbiguityPolicy(ambiguity)
+        )
         result = load_and_validate(cfg)
-    except ValidationError as exc:
+    except (ValidationError, ValueError) as exc:
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 

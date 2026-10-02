@@ -46,5 +46,11 @@
       "output": "ERROR: Found 'U' at position 4: this looks like RNA. Re-run with --rna to convert U->T, or paste a DNA sequence.\n"
     }
   ],
+  "ambiguity_cases_note": "Issue #392: `validate` now takes --ambiguity (default keep, matching `run`) and honours it. Kept apart from `cases` because the C# SequenceValidatorParityTests replays `cases` with a hard-coded Error policy; the C# lane should promote these into `cases` once that test reads --ambiguity. Generated 2026-10-02 by invoking dna_entropy.cli.app through typer.testing.CliRunner.",
+  "ambiguity_cases": [
+    {"id": "ambiguity_default_keeps_n_like_a_real_run", "args": ["validate"], "stdin": "ACGTNACGT\n", "exit_code": 0, "output": "  - Kept 1 ambiguity code(s) (N); entropy at those positions reflects the model's prediction for that exact code, not a definite base (docs/science_and_formats.md).\n  - Warning: sequence is short (9 nt); entropy near the start is dominated by the model's prior.\nOK: valid sequence, 9 nt\n"},
+    {"id": "ambiguity_error_flag_refuses_n", "args": ["validate", "--ambiguity", "error"], "stdin": "ACGTNACGT\n", "exit_code": 1, "output": "ERROR: Ambiguity code 'N' at position 5 (1 total: N). This run's ambiguity policy is 'error' (refuse). Choose 'keep' or 'mask' to run anyway, or clean the input to plain A/C/G/T.\n"},
+    {"id": "ambiguity_mask_flag_masks_n", "args": ["validate", "--ambiguity", "mask"], "stdin": "ACGTNACGT\n", "exit_code": 0, "output": "  - Masked 1 ambiguity code(s) (N) to 'N'; entropy at those positions reflects the model's prediction for 'N', not the original code (docs/science_and_formats.md).\n  - Warning: sequence is short (9 nt); entropy near the start is dominated by the model's prior.\nOK: valid sequence, 9 nt\n"}
+  ],
   "known_divergence": "The current worker's `--max-len` maps to RunConfig.max_total_len (the outer sanity bound), not RunConfig.max_len (the per-window GPU ceiling) the way the prototype's identically-named flag did -- a DELIBERATE, already-documented divergence (validation/validators.py's own docstring: 'this command only cleans/validates, it never runs windowing, so there is no separate per-pass ceiling to set here'), not a bug. None of the cases above exercise --max-len, so this does not affect what is frozen here; recorded for whoever next extends this fixture."
 }
