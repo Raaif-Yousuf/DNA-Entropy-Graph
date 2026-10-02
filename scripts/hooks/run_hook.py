@@ -79,6 +79,7 @@ here is out of scope for this agent.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import sys
@@ -206,7 +207,7 @@ _FAKE_GUARD_GARBAGE = "import sys\nsys.stdout.write('not json at all {{{')\nsys.
 
 
 def _write_guard(hooks_dir: Path, name: str, source: str) -> None:
-    (hooks_dir / f"{name}.py").write_text(source, encoding="utf-8")
+    (hooks_dir / f"{name}.py").write_text(source, encoding="utf-8", newline="\n")
 
 
 def _is_deny(out: str) -> bool:
@@ -332,14 +333,13 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001 -- deliberately blanket: see the docstring above
-        try:
+        # If even emitting the fallback fails there is nothing more this process can safely do.
+        with contextlib.suppress(Exception):
             _deny(
                 f"scripts/hooks/run_hook.py itself raised an unexpected exception: {exc!r}. "
                 "Refused rather than silently allowed through an unenforced guard.",
                 "Blocked: the guard dispatcher crashed unexpectedly.",
             )
-        except Exception:
-            pass  # even emitting the fallback failed; nothing more this process can safely do
         return 0
 
 

@@ -128,7 +128,7 @@ _FAKE_GENERATOR_CRASHES = (
 
 def _write_fake_generator(root: Path, source: str) -> None:
     (root / "scripts").mkdir(parents=True, exist_ok=True)
-    (root / GENERATOR_RELATIVE).write_text(source, encoding="utf-8")
+    (root / GENERATOR_RELATIVE).write_text(source, encoding="utf-8", newline="\n")
 
 
 def self_test() -> bool:

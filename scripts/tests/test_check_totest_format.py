@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -32,8 +32,8 @@ def test_help_exits_zero_and_documents_max_age():
 
 
 def test_row_age_days_pure_arithmetic():
-    now = datetime(2026, 9, 19, tzinfo=timezone.utc)
-    closed = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 19, tzinfo=UTC)
+    closed = datetime(2026, 8, 1, tzinfo=UTC)
     assert ctf.row_age_days(closed, now) == 49
 
 

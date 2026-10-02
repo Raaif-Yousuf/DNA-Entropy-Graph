@@ -66,20 +66,23 @@ one already there, and the next `git merge --ff-only` refuses with a conflict
 nobody can read. A merge commit keeps the branch commit as a parent, so the
 fast-forward afterwards is exact.
 
-**Nothing gates the merge except you.** CI on this repository is **on demand
-only** (owner's decision, 2026-09-19): no workflow fires on a push, a pull
-request or a schedule. A PR with a green look has not been checked by
-anything. Run the guards locally before merging, every time:
+**Nothing reliably gates the merge except you.** The owner's 2026-09-19 decision
+was on-demand CI; MEASURED 2026-10-02 the workflow files differ (see
+`dev_commands.md`, "CI triggers"), and `ci-app.yml` has no automatic trigger at all, so a PR with a
+green look has not been checked for `app/`. The step **before `gh pr create`** is one command:
 
 ```powershell
-worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q
-worker\.venv\Scripts\python.exe scripts\check_user_home_paths.py
-worker\.venv\Scripts\python.exe scripts\check_docs_index.py
-worker\.venv\Scripts\python.exe scripts\compile_sprint_log.py --check
+worker\.venv\Scripts\python.exe scripts\premerge.py --fast    # per lane, minutes
+worker\.venv\Scripts\python.exe scripts\premerge.py           # full, before the merge that closes a wave
 ```
 
-`docs/dev_commands.md` has the full guard list. Once `app/` exists, add
-`dotnet test app/tests/DnaEntropyGraph.Guards.Tests`.
+It runs every `scripts/check_*.py` guard (discovered, so a new one cannot be left out), the
+changelog-fragment presence check against `origin/main` (`git fetch` first), the schema check, both
+ruff gates and the C# format and guard tests with the right working directory and the venv
+interpreter; full mode adds the scripts, worker and C# suites. It exits 1 and names every gate that
+failed. Run it **after** the last merge of a batch too, not only before the first: MEASURED
+2026-09-19, a literal user-home path sat on main for several PRs because the guards ran before one
+lane merged and not after. `dev_commands.md` has the full command and gate list.
 
 To have GitHub check a branch anyway: `gh workflow run ci-worker.yml --ref <branch>`,
 then `gh run watch`.

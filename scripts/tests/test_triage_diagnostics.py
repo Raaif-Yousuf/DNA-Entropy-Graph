@@ -32,7 +32,6 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import triage_diagnostics as td  # noqa: E402
 
-
 MANIFEST = {
     "schema": 1, "jobId": "20260918-142233-k7q2vx", "createdAt": "2026-09-18T14:22:33Z",
     "createdBy": {"installationId": "inst-1", "appVersion": "1.2.3", "accountSub": "sub-1"},

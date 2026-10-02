@@ -425,9 +425,8 @@ def test_pull_never_overwrites_identical_file(live_and_mirror):
     mirror_file.write_text("- x\n", encoding="utf-8")
     live_file = live / "a.md"
     live_file.write_text("- x\n", encoding="utf-8")
-    before = live_file.stat().st_mtime
 
-    sm.copy_over  # sanity import touch
+    assert hasattr(sm, "copy_over")  # sanity: the helper this scenario relies on exists
     new, changed, _only_dst = sm.compare(mirror, live)
     assert new == [] and changed == []
 

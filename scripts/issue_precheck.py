@@ -138,6 +138,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import json
 import re
 import subprocess
@@ -158,14 +159,10 @@ from pathlib import Path
 # section for the measurement. stderr does not get the same treatment: it is
 # progress/diagnostic chatter only (see --progress), never the report itself,
 # and Python's own stderr is unbuffered/line-buffered by default already.
-try:
+with contextlib.suppress(AttributeError, ValueError):  # already-wrapped or non-reconfigurable
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-except (AttributeError, ValueError):  # already-wrapped or non-reconfigurable
-    pass
-try:
+with contextlib.suppress(AttributeError, ValueError):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-except (AttributeError, ValueError):
-    pass
 
 REPO = "Raaif-Yousuf/DNA-Entropy-Graph"
 
@@ -312,7 +309,7 @@ class IssueMeta:
         """
         if self.milestone.strip().lower() == "post-v1":
             return True
-        return any(l.strip().lower() == "post-v1" for l in self.labels)
+        return any(label.strip().lower() == "post-v1" for label in self.labels)
 
 
 @dataclass
@@ -358,7 +355,7 @@ class Evidence:
     def deferred(self) -> bool:
         if self.milestone.strip().lower() == "post-v1":
             return True
-        return any(l.strip().lower() == "post-v1" for l in self.labels)
+        return any(label.strip().lower() == "post-v1" for label in self.labels)
 
     @property
     def implementing_commits(self) -> list[Commit]:
@@ -590,7 +587,7 @@ def _cached_commit_records(root: Path, use_cache: bool = True) -> list[dict]:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(
                 json.dumps({"head": head, "log_depth": LOG_DEPTH, "commits": records}),
-                encoding="utf-8",
+                encoding="utf-8", newline="\n",
             )
         except OSError:
             pass  # best-effort: a cache write failure must never break a real scan
@@ -644,7 +641,7 @@ def _issue_meta_from_json(data: dict, fallback_state: str = "") -> IssueMeta:
         title=data.get("title", ""),
         milestone=str(milestone.get("title", "") if isinstance(milestone, dict) else ""),
         labels=tuple(
-            str(l.get("name", "")) for l in labels if isinstance(l, dict)
+            str(label.get("name", "")) for label in labels if isinstance(label, dict)
         ),
         thread_text=thread_text,
     )
@@ -905,10 +902,9 @@ def _defines_function(source: str, name: str) -> bool:
         tree = ast.parse(source)
     except SyntaxError:
         return False
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-            return True
-    return False
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name for node in ast.walk(tree)
+    )
 
 
 _NODE_ID_SCAN_DIRS = ("worker/tests", "worker/src/dna_entropy")
@@ -984,7 +980,7 @@ def _cached_function_index(root: Path, use_cache: bool = True) -> dict[str, list
     if use_cache and head:
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps({"head": head, "index": index}), encoding="utf-8")
+            cache_path.write_text(json.dumps({"head": head, "index": index}), encoding="utf-8", newline="\n")
         except OSError:
             pass  # best-effort: a cache write failure must never break a real scan
     return index

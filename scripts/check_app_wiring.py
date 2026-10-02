@@ -854,19 +854,19 @@ def _write_wired(root: Path) -> None:
     (root / "src" / "Demo.App" / "Strings" / "en-US").mkdir(parents=True)
 
     (root / "src" / "Demo.Presentation" / "ViewModels" / "NewRunViewModel.cs").write_text(
-        _WIRED_VM, encoding="utf-8"
+        _WIRED_VM, encoding="utf-8", newline="\n"
     )
     (root / "src" / "Demo.App" / "Views" / "NewRunPage.xaml").write_text(
-        _WIRED_XAML, encoding="utf-8"
+        _WIRED_XAML, encoding="utf-8", newline="\n"
     )
     (root / "src" / "Demo.App" / "Startup" / "ServiceRegistration.cs").write_text(
-        _WIRED_REGISTRATION, encoding="utf-8"
+        _WIRED_REGISTRATION, encoding="utf-8", newline="\n"
     )
     (root / "src" / "Demo.App" / "Services" / "FilePickerService.cs").write_text(
-        _WIRED_SERVICE, encoding="utf-8"
+        _WIRED_SERVICE, encoding="utf-8", newline="\n"
     )
     (root / "src" / "Demo.App" / "Strings" / "en-US" / "Resources.resw").write_text(
-        _WIRED_RESW, encoding="utf-8"
+        _WIRED_RESW, encoding="utf-8", newline="\n"
     )
 
 
@@ -1055,13 +1055,13 @@ def _patch(root: Path, relative: str, old: str, new: str) -> None:
     text = path.read_text(encoding="utf-8")
     if old not in text:
         raise AssertionError(f"self-test fixture drift: {old!r} not in {relative}")
-    path.write_text(text.replace(old, new), encoding="utf-8")
+    path.write_text(text.replace(old, new), encoding="utf-8", newline="\n")
 
 
 def _add(root: Path, relative: str, content: str) -> None:
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    path.write_text(content, encoding="utf-8", newline="\n")
 
 
 def main(argv: list[str] | None = None) -> int:

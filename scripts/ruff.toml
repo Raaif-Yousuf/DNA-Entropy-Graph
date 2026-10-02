@@ -1,0 +1,13 @@
+# Lint config for scripts/ (issue #430). Nearest-config wins, so this file, not any
+# user-level or worker/ config, decides what `uvx ruff check scripts` means here.
+#
+# Scope is LINT ONLY for now. `ruff format --check scripts` would rewrite most of the
+# existing files (see docs/dev_commands.md for the measured size), and a mass reformat
+# must land as its own mechanical commit, so no format gate is wired yet.
+line-length = 145
+target-version = "py312"
+
+[lint]
+# Same family as worker/pyproject.toml: real bugs (E, F), import order (I), py312
+# syntax (UP), bugbear (B), simplifications (SIM).
+select = ["E", "F", "I", "UP", "B", "SIM"]

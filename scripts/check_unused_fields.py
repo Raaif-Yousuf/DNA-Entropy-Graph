@@ -198,11 +198,11 @@ class _Collector(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         # Reflective access: getattr(x, "field"), hasattr(x, "field").
-        if isinstance(node.func, ast.Name) and node.func.id in {"getattr", "hasattr"}:
-            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
-                value = node.args[1].value
-                if isinstance(value, str):
-                    self._record(value)
+        is_reflective = isinstance(node.func, ast.Name) and node.func.id in {"getattr", "hasattr"}
+        if is_reflective and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            value = node.args[1].value
+            if isinstance(value, str):
+                self._record(value)
         self.generic_visit(node)
 
 

@@ -65,20 +65,9 @@ jobs:
           fi
           echo "AGENTS.md is $lines lines. Good."
 
-      # User-facing copy uses plain hyphens. Em dashes read as machine-written and
-      # break the plain-voice rule for lab users.
-      - name: No em dashes in user-facing copy
-        run: |
-          set +e
-          git grep -nI $'\u2014' -- 'docs/user_guide/**' '*.resw' '.github/ISSUE_TEMPLATE/**' 'README.md' > /tmp/emdash.txt
-          found=$?
-          set -e
-          if [ $found -eq 0 ]; then
-            echo "::error title=em dash in user-facing copy::Use a plain hyphen or rewrite the sentence."
-            cat /tmp/emdash.txt
-            exit 1
-          fi
-          echo "No em dashes in user-facing copy. Good."
+      # The em-dash rule (Hard Rule 13) is scripts/check_em_dash.py, run by the glob loop in
+      # the `checks` job below and self-tested by scripts/tests/test_check_em_dash.py. It was an
+      # inline git grep here until #425, with no way to prove it could fail.
 
   checks:
     name: docs consistency checks
@@ -130,6 +119,11 @@ jobs:
             echo "::notice title=no checks yet::scripts/check_*.py does not exist yet (issues #25 to #33)."
           fi
 
+      # Presence (#429): behaviour files changed but no fragment was added.
+      - name: Changelog fragment present
+        if: github.event_name == 'pull_request'
+        run: python scripts/check_changelog_fragments.py --base "origin/${{ github.base_ref }}"
+
       - name: Changelog fragment shape
         run: |
           if [ -f scripts/compile_sprint_log.py ]; then
@@ -153,6 +147,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      # Lint first (#430): scripts/ruff.toml is the config; the guards are the last place to be unmaintained.
+      - name: ruff check scripts
+        run: uvx ruff check scripts
       - name: pytest scripts/tests
         run: uv run --with pytest --with pyyaml python -m pytest scripts/tests -q
 

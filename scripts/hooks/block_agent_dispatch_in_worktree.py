@@ -173,7 +173,10 @@ def classify(cwd: str) -> str:
     if paths is None:
         return "unknown"
     git_dir, git_common_dir = paths
-    norm = lambda p: os.path.normcase(os.path.normpath(p))
+
+    def norm(p: str) -> str:
+        return os.path.normcase(os.path.normpath(p))
+
     return "linked_worktree" if norm(git_dir) != norm(git_common_dir) else "primary"
 
 
@@ -254,7 +257,7 @@ def _make_git_repo_with_worktree(tmp_dir):
     run("init", "-q", cwd=primary)
     run("config", "user.email", "test@example.com", cwd=primary)
     run("config", "user.name", "Test", cwd=primary)
-    (primary / "README.md").write_text("hello\n", encoding="utf-8")
+    (primary / "README.md").write_text("hello\n", encoding="utf-8", newline="\n")
     run("add", "README.md", cwd=primary)
     run("commit", "-q", "-m", "initial", cwd=primary)
 

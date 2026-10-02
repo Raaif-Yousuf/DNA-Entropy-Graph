@@ -2,18 +2,26 @@
 
 ## The matrix
 
+**Before `gh pr create`, run the one command that runs every row below that a laptop
+can run: `worker\.venv\Scripts\python.exe scripts\premerge.py` (`--fast` per lane).** See
+[`dev_commands.md`](dev_commands.md#one-command-before-a-pr-scriptspremergepy). The rows are
+what it runs, and where CI runs the same thing.
+
 | Suite | Where | Command | Status |
 | --- | --- | --- | --- |
-| `worker/tests` (not gpu) | Laptop, `ci-worker.yml` (ubuntu-latest) | `worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q` | Live today |
-| `worker/tests` (gpu) | A labelled GCP VM only, via `scripts/cloud_gpu_test.ps1` | `pytest -m gpu` (run on the VM, not the laptop) | Pending — script does not exist yet; blocked on `OWNER_TODO.md` item 2 (#24) for a real project/quota |
-| `app/tests/*.Tests` (unit) | Laptop, `ci-app.yml` (windows-latest) | `dotnet test app/DnaEntropyGraph.sln --filter "FullyQualifiedName!~UiTests"` | Pending #61 (`app/` does not exist yet) |
-| `app/tests/DnaEntropyGraph.Guards.Tests` | Laptop, `ci-app.yml` | `dotnet test app/tests/DnaEntropyGraph.Guards.Tests` | Pending #61; fast (seconds) once it exists, per Appendix C |
-| `app/tests/*.UiTests` | Not CI — needs an interactive session | Manual, or a `docs/ToTest.md` row (`Needs: app-dev`) | Pending #61 |
-| Container smoke (`dna-entropy-worker selftest`) | `ci-worker.yml`'s `contract` job | `docker build -f worker/Dockerfile.cpu ... && docker run ... selftest` | Pending — `worker/Dockerfile.cpu` does not exist yet (issue #36) |
-| `shellcheck worker/vm/startup.sh` | `ci-worker.yml`'s `contract` job | `shellcheck worker/vm/startup.sh` | Pending — `worker/vm/startup.sh` does not exist yet (issue #45) |
-| Manifest schema drift | `ci-worker.yml`'s `contract` job | `python scripts/gen_manifest_schema.py --check` | Pending — script does not exist yet (issue #39) |
-| `docs/` guards (repo hygiene, link check, em-dash scan) | `ci-docs.yml` | See `dev_commands.md`'s `scripts/check_*.py` section | Partially live: the hand-written guards in `ci-docs.yml` itself (no committed private-donor copy, no user-home path, `AGENTS.md` line count, no em dash in user-facing copy, markdown links) run today; the `scripts/check_*.py` set they will eventually delegate to does not exist yet |
-| `cloud-canary.yml` (nightly CPU smoke against the real `CloudJobRunner`) | Owner's GCP project, ~$0.02/run | n/a | Pending — not yet built; needs `app/` and a real project first |
+| `worker/tests` (not gpu) | Laptop (`premerge.py`, full mode), `ci-worker.yml` | `worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q` | Live |
+| `worker/tests` (gpu) | A labelled GCP VM only, via `scripts/cloud_gpu_test.ps1` | `pytest -m gpu` (on the VM, never the laptop) | Dry-run only; `-Apply` waits on `CloudCli` (see `dev_commands.md`) |
+| `app/tests/*.Tests` (unit, five libraries) | Laptop (`premerge.py`, full mode; one gate per discovered project), `ci-app.yml` | `cd app; dotnet test tests/<Project>/<Project>.csproj` (cwd must be `app/`) | Live |
+| `app/tests/DnaEntropyGraph.Guards.Tests` | Laptop (`premerge.py --fast`), `ci-app.yml` | `cd app; dotnet test tests/DnaEntropyGraph.Guards.Tests/DnaEntropyGraph.Guards.Tests.csproj` | Live; seconds |
+| `app/tests/*.UiTests` | Not run by `premerge.py` or CI (WinUI-hosted; hangs under CI) | Manual, or a `docs/ToTest.md` row (`Needs: app-dev`) | Exempt, named in `scripts/premerge.py` |
+| `scripts/tests` (the guards' own tests) | Laptop (`premerge.py`, full mode), `ci-docs.yml`'s `scripts-tests` job | `uv run --with pytest --with pyyaml python -m pytest scripts/tests -q` | Live |
+| `scripts/check_*.py` (every repo guard) | Laptop (`premerge.py`, discovered by glob), `ci-docs.yml`'s `checks` job (same glob) | `worker\.venv\Scripts\python.exe scripts\check_<name>.py` | Live; `check_third_party_notices.py` runs in `premerge.py` full mode only (needs dotnet) |
+| Lint (`ruff check` worker and scripts) | Laptop (`premerge.py`), `ci-worker.yml`, `ci-docs.yml` | `uvx ruff check worker`, `uvx ruff check scripts` | Live; no format gate for `scripts/` yet (#430) |
+| Manifest schema drift | Laptop (`premerge.py`), `ci-worker.yml`'s `contract` job | `python scripts/gen_manifest_schema.py --check` | Live |
+| Container smoke (`dna-entropy-worker selftest`) | `ci-worker.yml`'s `contract` job only | `docker build -f worker/Dockerfile.cpu ... && docker run ... selftest` | Live in CI; not in `premerge.py` (needs Docker) |
+| `shellcheck worker/vm/startup.sh` | `ci-worker.yml`'s `contract` job only | `shellcheck worker/vm/startup.sh` | Live in CI; not in `premerge.py` (no shellcheck on the laptop) |
+| Markdown links | `ci-docs.yml` `links` job; `premerge.py` when `lychee` is installed | `lychee --offline ...` | Live; the gate is SKIPPED, and says so, without lychee |
+| `cloud-canary.yml` (nightly CPU smoke against the real `CloudJobRunner`) | Owner's GCP project, ~$0.02/run | n/a | Pending, not yet built |
 
 ## The `gpu` marker
 
@@ -76,12 +84,13 @@ case per `CloudError` class.
 
 ## Guards
 
-`app/tests/DnaEntropyGraph.Guards.Tests` (pending #61) is where Hard Rules
-1, 3, 6, 7, 8, 9, 10, 12, 13, 20 and 21's mechanical checks will live —
+`app/tests/DnaEntropyGraph.Guards.Tests` is where the C# half of Hard Rules
+1, 3, 6, 7, 8, 9, 10, 12, 13, 20 and 21's mechanical checks lives; the Python half
+is `scripts/check_*.py` (all run by `scripts/premerge.py`) —
 see `docs/hard_rules.md`'s "which rules a machine checks" table for the
 current status of each. No count is stated here on purpose (`docs/README.
 md`'s house-style rule: a number in prose goes stale — run the guard project
-itself to get the current count, once it exists).
+itself to get the current count).
 
 ## Flaky-test policy
 

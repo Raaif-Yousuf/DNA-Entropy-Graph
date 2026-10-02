@@ -1,0 +1,14 @@
+{
+  "_README": "Manifest spec fields that scripts/check_manifest_spec_reads.py reports as read by nothing and that are NOT silent bugs. Every entry needs a reason a human wrote and, where the field is not truly external, the issue that will clear it. The guard fails on a stale entry (the field is read now, or no longer exists), so this file cannot rot into a list of things that used to be true. This is a separate file from unused_fields_allowlist.json because the two guards disagree about what is read: that one matches by name, this one by resolved class.",
+  "_HOW_TO_ADD": "Do not add an entry to make the guard pass. First check whether the field is validated at parse time, consumed only by the app, or genuinely dead. If it is dead, file an issue and name it in the reason.",
+  "allowed": {
+    "AnalysisSpec.stride": "Cross-checked, not consumed: AnalysisSpec.from_dict refuses a stride that disagrees with window - contextLength (#345), comparing a LOCAL variable, so the attribute is never read afterwards. The worker re-derives stride from window and context, so there is nothing to act on. Reverting that refusal would NOT change this guard's verdict; it prevents the state where nobody knew the field was unread.",
+    "PredictorSpec.precision": "Cross-checked, not consumed: PredictorSpec.from_dict refuses a precision that disagrees with the model's real requirement (#343), comparing a local variable. The model id alone determines the precision the predictor uses (predictors/hardware.py), so nothing reads the attribute.",
+    "Limits.max_run_seconds": "An app-side Compute Engine parameter: it becomes scheduling.maxRunDuration on the VM at creation time (Hard Rule 10). It rides in the manifest as provenance. Nothing in the worker should act on it.",
+    "Lifecycle.keep_alive_minutes": "Not honoured yet, deliberately: issue #93 owns the keep-alive queue and VM-side idle timer; until it lands run_job degrades afterTask='keep' to afterKeepAlive (see the #338/#340 fix).",
+    "JobManifest.schema": "Validated before the object exists: JobManifest.parse() checks the schema number from a local variable and raises ManifestSchemaError on a mismatch. The field survives on the object so scripts/gen_manifest_schema.py documents the wire shape.",
+    "StoreSpec.bucket": "Parsed, validated and read by nothing; the worker's store comes from its command line before the manifest can be read. Cross-check or delete: #448.",
+    "StoreSpec.prefix": "Same as StoreSpec.bucket (#448).",
+    "StoreSpec.root": "Same as StoreSpec.bucket (#448)."
+  }
+}

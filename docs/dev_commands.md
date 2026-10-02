@@ -44,6 +44,7 @@ package itself needs):
 ```powershell
 uvx ruff check worker
 uvx ruff format --check worker
+uvx ruff check scripts                      # lint only for scripts/ (#430): see the scripts/tests section
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -100,6 +101,42 @@ scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches a
 **A .NET SDK is required, not just a runtime.** MEASURED on the owner's dev
 machine, 2026-09-19: `dotnet --list-runtimes` showed 8.0/9.0/10.0 present,
 but `dotnet --list-sdks` was empty. See `onboarding.md` step 4.
+
+## One command before a PR: `scripts/premerge.py`
+
+Landing a change used to mean about thirteen commands across two languages and two
+working directories (#431). One command now runs every gate and prints a single summary
+naming each gate that failed:
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\premerge.py --fast   # per lane: guards, lint, schema, fast C# guards
+worker\.venv\Scripts\python.exe scripts\premerge.py          # full: also scripts tests, worker pytest, every C# suite
+worker\.venv\Scripts\python.exe scripts\premerge.py --list   # every gate, its tier, and why
+worker\.venv\Scripts\python.exe scripts\premerge.py --only check_user_home_paths --only ruff-worker-check
+worker\.venv\Scripts\python.exe scripts\premerge.py --skip dotnet-format --log-dir <dir>   # keep each gate's full output
+worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it reports PASS, FAIL and ERROR (stub gates only)
+```
+
+- **It handles the traps for you.** Every `dotnet` gate runs with `app/` as the working
+  directory (the repo root fails with the misleading VSTest error described below). Every
+  Python gate runs on `worker/.venv`, never the PATH python; with no venv the gates ERROR and
+  print the command that creates one. The scripts test suite runs through `uv run --with pytest
+  --with pyyaml` because the venv has no pyyaml.
+- **Statuses.** `FAIL` means the gate ran and said no. `ERROR` means it could not run or finish
+  (tool missing, timeout). `SKIP` is only for an optional tool that is not installed (`lychee`),
+  and is always printed. `FAIL` and `ERROR` both make the exit code 1; selecting zero gates, or
+  naming an unknown gate, is exit 2, never a green run.
+- **A gate cannot be silently left out.** Every `scripts/check_*.py` and every
+  `app/tests/*/*.csproj` is discovered, not listed. An audit fails the run when a workflow runs a
+  `scripts/*.py|ps1` that `premerge.py` does not (add a gate in `build_gates()` or an entry with a
+  reason in `NOT_A_GATE`).
+- **The fragment check needs a base.** `changelog-fragment-present` compares against `--base`
+  (default `origin/main`; `git fetch` first). It fails when behaviour files changed and no
+  `docs/changelog.d/` fragment came with them (rules in `docs/changelog.d/README.md`).
+- **Not in it:** the CPU container smoke (needs Docker) and `shellcheck` (not on the laptop);
+  both stay CI-only. `DnaEntropyGraph.App.UiTests` is exempt (WinUI-hosted).
+- **Timing.** A full run exceeds one tool call's 600 s cap; run `--fast` per lane, and launch the
+  full run detached with `--log-dir` and poll `summary.txt`.
 
 ## Repo-wide scripts (exist today)
 
@@ -163,8 +200,8 @@ scripts/check_*.py`) — it tightens automatically as each one lands, with no
 workflow edit per issue, which is why grepping the workflow file for a
 script's literal name finds nothing even once that script is fully wired in;
 read the loop, not the filename, when checking whether a guard is enforced.
-Nine exist as of this revision, each with a `--self-test` flag that runs
-against synthetic fixtures:
+Twelve exist as of this revision (`scripts/premerge.py --list` always has the current set), each with a
+`--self-test` flag that runs against synthetic fixtures:
 
 ```powershell
 python scripts\check_docs_index.py            # every docs/*.md is reachable from docs/README.md's index
@@ -173,11 +210,22 @@ python scripts\check_user_home_paths.py       # no literal absolute user-home pa
 python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (currently a no-op notice: the file itself doesn't exist yet, #34)
 python scripts\check_version_lockstep.py      # every version-bearing file agrees
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
+python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behaviour files changed => a fragment exists (#429); rules in docs/changelog.d/README.md
+python scripts\check_em_dash.py              # no em dash in user-facing copy: docs/user_guide, *.resw, ISSUE_TEMPLATE, README.md (#425)
+python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
+python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
 python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
 python scripts\check_app_wiring.py            # the C# half of that same bug class: an unbound command, an unbound [ObservableProperty], a dangling {Binding}, an x:Uid with no .resw entry, a service registered and never resolved
-python scripts\<any check_*.py> --self-test   # every one of the nine supports this
+python scripts\<any check_*.py> --self-test   # every one of them supports this
 ```
+
+`check_manifest_spec_reads.py` is the class-resolving companion to `check_unused_fields.py`: that one matches
+attribute reads by name (so `WindowPlan.stride` masked the unread `AnalysisSpec.stride`, #345), this one types the
+receiver first, but only for the manifest spec dataclasses. Its allowlist is
+`scripts/manifest_spec_reads_allowlist.json`, checked in both directions like the others. A receiver it cannot type
+contributes no read, so the fix for a false UNREAD is an annotation, not an allowlist entry; its docstring lists
+the exact resolution rules.
 
 `check_app_wiring.py` takes `--verbose` (also print what it read and which
 pages it skipped), `--json`, and `--root` (default `app`). Its allowlist is
@@ -192,6 +240,12 @@ name-matched, not type-resolved, and it says so in detail.
 ```powershell
 uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
 ```
+
+**Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
+worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
+There is deliberately **no `ruff format --check scripts` gate yet**: MEASURED 2026-10-02, `uvx ruff format --check
+scripts` would rewrite 42 of 44 files (about 1,700 changed lines at the 145 limit). A mass reformat is its own
+mechanical commit and is not wired until someone lands it; the preview is `uvx ruff format --diff scripts`.
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 
@@ -222,11 +276,9 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.p
 That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing
 what I asked for", which is the question you actually have when a command is denied.
 
-## CI is on demand, not automatic
+## CI triggers, and the local gate that does not depend on them
 
-**Owner's decision, 2026-09-19.** None of the four workflows fires on a push, a pull
-request or a schedule. Each is `workflow_dispatch` only, so a run happens when someone
-asks for one:
+**The owner's 2026-09-19 decision was on-demand CI** (no push, pull request or schedule trigger). MEASURED 2026-10-02: the workflow files no longer match it: `ci-docs.yml` has a `pull_request` trigger and `ci-worker.yml` has one for `worker/**`; `ci-app.yml` and `codeql.yml` are `workflow_dispatch` only. Whichever is intended, a green-looking PR is not proof for `app/` (no automatic trigger), so run `scripts/premerge.py` locally. A run on demand:
 
 ```powershell
 gh workflow run ci-worker.yml       # pytest, ruff, build, schema, shellcheck, CPU container
@@ -240,13 +292,11 @@ gh run list --limit 5               # what ran recently and how it went
 Every workflow file carries its original triggers in a comment directly above the `on:`
 block, so restoring automatic CI is uncommenting a block rather than reconstructing one.
 
-**What this means in practice:** nothing checks a commit unless you ask it to. The local
-guards are the same code CI runs, so run them before pushing rather than after:
+**What this means in practice:** the local gates are the same code CI runs, so run them before pushing rather than
+after:
 
 ```powershell
-worker\.venv\Scripts\python.exe -m pytest worker\tests -m "not gpu" -q
-worker\.venv\Scripts\python.exe -m pytest scripts\tests -q
-Get-ChildItem scripts\check_*.py | ForEach-Object { worker\.venv\Scripts\python.exe $_.FullName }
+worker\.venv\Scripts\python.exe scripts\premerge.py --fast
 ```
 
 ## GitHub (`gh`)
