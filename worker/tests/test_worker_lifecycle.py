@@ -103,7 +103,12 @@ def test_apply_lifecycle_stop_posts_to_the_compute_api() -> None:
     assert last.headers.get("Authorization") == "Bearer fake-token"
 
 
-def test_apply_lifecycle_delete_posts_the_delete_verb() -> None:
+def test_apply_lifecycle_delete_is_an_http_delete_on_the_instance_resource() -> None:
+    """Compute REST: stop is ``POST .../instances/<name>/stop`` but delete is
+    ``DELETE .../instances/<name>`` -- there is no ``POST .../delete`` verb (the startup
+    script's own cleanup() already does it this way). A POST to ``/delete`` would 404 and
+    leave the VM (and its disk) billing, with the lifecycle notice reporting a failure the
+    VM's own maxRunDuration is then the only backstop for."""
     opener = _RecordingOpener(
         [
             _text("proj"),
@@ -115,7 +120,9 @@ def test_apply_lifecycle_delete_posts_the_delete_verb() -> None:
     )
     apply_lifecycle("delete", opener=opener)
     last = opener.requests[-1]
-    assert last.full_url.endswith("/instances/deg-job1/delete")
+    assert last.get_method() == "DELETE"
+    assert last.full_url.endswith("/projects/proj/zones/us-central1-a/instances/deg-job1")
+    assert last.headers.get("Authorization") == "Bearer fake-token"
 
 
 def test_apply_lifecycle_unknown_action_is_rejected_without_any_request() -> None:

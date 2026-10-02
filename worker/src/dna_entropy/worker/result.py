@@ -20,13 +20,44 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class ResultFile:
+    """One uploaded output file: its store path, SHA-256 and size (issue #41), so the app
+    can verify a download against what the worker actually uploaded."""
+
+    path: str
+    sha256: str
+    bytes: int
+
+
+@dataclass
+class ResultStats:
+    """Headline numbers for one successfully analysed input (issue #41). Entropy is in
+    bits over every contig of the input (each value in ``[0.0, 2.0]``)."""
+
+    contigs: int
+    totalNt: int
+    meanEntropy: float
+    minEntropy: float
+    maxEntropy: float
+
+
+@dataclass
 class InputResult:
-    """One ``result.json`` ``inputs[]`` entry."""
+    """One ``result.json`` ``inputs[]`` entry.
+
+    ``outputs`` (store paths only) predates ``files`` and is kept as-is for readers of the
+    original contract; ``files`` carries the same paths in the same order plus sha256 and
+    size. ``stats``/``notices`` are only meaningful for a ``done`` input (``None``/``[]``
+    otherwise); a ``failed``/``cancelled`` input still lists whatever partial ``files`` were
+    uploaded."""
 
     id: str
     status: str  # "done" | "failed" | "cancelled"
     outputs: list[str] = field(default_factory=list)
     error: dict | None = None
+    files: list[ResultFile] = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)
+    stats: ResultStats | None = None
 
 
 @dataclass

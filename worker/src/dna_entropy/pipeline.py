@@ -547,6 +547,7 @@ def run(
     on_window: Callable[[], None] | None = None,
     on_contig: Callable[[Contig], None] | None = None,
     provenance_extra: dict[str, Any] | None = None,
+    predictor: Predictor | None = None,
 ) -> RunResult:
     """Run the full pipeline and write all output files (output set depends on input kind).
 
@@ -576,6 +577,12 @@ def run(
     evo2/flash-attn versions, container image digest, input sha256) — see
     ``writers/provenance.py``'s module docstring for exactly why those live outside this
     function's own knowledge and how a caller (``worker/runner.py``) supplies them.
+
+    ``predictor``, when given, is used instead of building one from ``cfg``: a batch
+    runner (``worker/runner.py``, issue #41) loads the model ONCE and passes the same
+    instance to every input. ``None`` (the default, and every CLI/test caller) builds a
+    fresh one, exactly as before. The caller owns the instance's lifetime and must have
+    built it for this ``cfg``'s ``predictor``/``model``/``device``/``seed``.
     """
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
@@ -592,7 +599,8 @@ def run(
             f"fastaRecords='first': analyzing only the first record; {dropped} other "
             "record(s) in this FASTA were not processed"
         ]
-    predictor = build_predictor(cfg)
+    if predictor is None:
+        predictor = build_predictor(cfg)
 
     notices: list[str] = list(loaded.notices)
     processed: list[tuple[Contig, DirectionResult]] = []

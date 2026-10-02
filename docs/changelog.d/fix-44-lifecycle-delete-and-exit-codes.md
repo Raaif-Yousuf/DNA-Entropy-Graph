@@ -1,0 +1,1 @@
+- fix(worker): `apply_lifecycle("delete")` now sends `DELETE` to the instance URL (it POSTed a non-existent `/delete` verb), and `dna-entropy-worker run` exits 10/11 when the worker itself stopped/deleted the VM so the startup script knows not to apply it again (#44, #452)

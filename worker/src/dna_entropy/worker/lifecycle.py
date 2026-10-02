@@ -96,10 +96,17 @@ def apply_lifecycle(
 
     tokens = token_provider or MetadataTokenProvider(opener=opener)
     project, zone, name = self_instance_identity(opener=opener)
-    url = f"{_COMPUTE_API}/projects/{project}/zones/{zone}/instances/{name}/{after}"
+    instance_url = f"{_COMPUTE_API}/projects/{project}/zones/{zone}/instances/{name}"
+    # Compute REST has no `delete` verb: instances.stop is POST <instance>/stop, but
+    # instances.delete is DELETE <instance> itself (worker/vm/startup.sh's cleanup() does
+    # the same). POSTing <instance>/delete would 404 and leave the VM and its disk billing.
+    if after == "delete":
+        method, url = "DELETE", instance_url
+    else:
+        method, url = "POST", f"{instance_url}/{after}"
     req = urllib.request.Request(
         url,
-        method="POST",
+        method=method,
         headers={"Authorization": f"Bearer {tokens.get()}"},
     )
     try:

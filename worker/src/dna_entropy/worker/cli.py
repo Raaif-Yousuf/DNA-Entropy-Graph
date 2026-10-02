@@ -36,14 +36,15 @@ import sys
 from .. import __version__
 from .blobstore import BlobstoreError, GcsBlobstore, LocalBlobstore
 from .manifest import ManifestError
-from .runner import run_job
+from .runner import run_job_outcome
 
 # Exit codes the startup script's cleanup dispatch reads (appendix B section 4.5).
-# Only DONE/FAILED/CANCELLED are ever actually returned today — REQUEST_STOP/
-# REQUEST_DELETE are reserved for a future worker-initiated lifecycle override (e.g. "I
-# hit an unrecoverable OOM, delete me regardless of the configured after-task action")
-# that is not implemented yet; the script's default case (`*) cleanup "$LIFECYCLE"`)
-# already handles every code this worker build can produce correctly.
+# DONE/FAILED/CANCELLED are the job's own outcome. REQUEST_STOP/REQUEST_DELETE (issue #44)
+# mean "this worker already stopped / deleted the VM through the Compute API itself" and
+# take precedence over the outcome code (result.json always carries the real outcome):
+# the script must not apply the same lifecycle a second time. Only a gcs-kind job whose
+# lifecycle call was accepted returns them; if the call failed, the ordinary outcome code
+# is returned so the script's own cleanup() stays the backstop.
 EXIT_DONE = 0
 EXIT_FAILED = 2
 EXIT_CANCELLED = 3
@@ -96,12 +97,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return EXIT_FAILED
 
     try:
-        result = run_job(store)
+        outcome = run_job_outcome(store)
     except (ManifestError, BlobstoreError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_FAILED
 
+    result = outcome.result
     print(f"job {result.jobId}: {result.status}")
+    if outcome.lifecycle_applied == "stop":
+        return EXIT_REQUEST_STOP
+    if outcome.lifecycle_applied == "delete":
+        return EXIT_REQUEST_DELETE
     if result.status == "done":
         return EXIT_DONE
     if result.status == "cancelled":

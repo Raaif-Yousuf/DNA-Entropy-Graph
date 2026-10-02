@@ -36,6 +36,66 @@
               "object",
               "null"
             ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "ResultFile",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string"
+                },
+                "bytes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "bytes"
+              ]
+            }
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stats": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "title": "ResultStats",
+            "properties": {
+              "contigs": {
+                "type": "integer"
+              },
+              "totalNt": {
+                "type": "integer"
+              },
+              "meanEntropy": {
+                "type": "number"
+              },
+              "minEntropy": {
+                "type": "number"
+              },
+              "maxEntropy": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "contigs",
+              "totalNt",
+              "meanEntropy",
+              "minEntropy",
+              "maxEntropy"
+            ]
           }
         },
         "required": [

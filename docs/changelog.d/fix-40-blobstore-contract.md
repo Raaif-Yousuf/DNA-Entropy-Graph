@@ -1,0 +1,1 @@
+- fix(worker): blobstore hardening: rooted/drive paths no longer escape `LocalBlobstore` on Windows (#453), `GcsBlobstore.list_prefix` follows `nextPageToken` (#454), `LocalBlobstore.upload_file`/`download_file` are atomic temp+rename, and one contract test runs against Local and a fake GCS (#40)

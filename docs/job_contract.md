@@ -50,6 +50,17 @@ and field below is identical, only the transport (`GcsBlobstore` vs. `LocalBlobs
 differs (spec 5.5). This is why `Blobstore` is a `Protocol`, not a class: the worker never
 special-cases "am I on a VM".
 
+The `Blobstore` operations are `read_text`, `write_text`, `exists`, `list_prefix`,
+`download_file` and `upload_file` (file-level; there is no `download_dir`/`upload_dir`, since
+the runner uploads a folder file by file). Every path is relative to the job prefix;
+absolute paths (a leading `/` or backslash, or a drive letter) and any `..` component are
+refused by both implementations. Writes are atomic for a reader: `LocalBlobstore` writes a
+temp sibling and `os.replace`s it for `write_text`, `upload_file` and `download_file` alike,
+and a GCS object upload is atomic by itself. `GcsBlobstore.list_prefix` follows
+`nextPageToken`, so a listing is complete past the API's 1000-object page.
+`worker/tests/test_blobstore_contract.py` runs one contract against both implementations
+(GCS over an in-memory fake, marker `gcs`).
+
 ---
 
 ## 2. Identifiers, before any file is written
@@ -317,13 +328,40 @@ actually emit these two stages, is an open question for whoever picks it up next
   "jobId": "20260918-142233-k7q2vx",
   "status": "done",
   "inputs": [
-    {"id": "in1", "status": "done", "outputs": ["output/SetTnpB/SetTnpB.gb", "..."]}
+    {
+      "id": "in1",
+      "status": "done",
+      "outputs": ["output/SetTnpB/SetTnpB.gb", "..."],
+      "files": [{"path": "output/SetTnpB/SetTnpB.gb", "sha256": "9f2c...", "bytes": 48213}],
+      "notices": [],
+      "stats": {"contigs": 1, "totalNt": 9421, "meanEntropy": 1.34, "minEntropy": 0.008, "maxEntropy": 1.99}
+    }
   ],
   "timing": {"startedAt": "2026-09-18T14:23:10Z", "finishedAt": "2026-09-18T15:41:02Z"},
   "gpu": {"name": "NVIDIA L4", "zone": "us-central1-a", "spot": false},
   "error": null
 }
 ```
+
+**Per-input detail (issue #41).** `outputs` is the list of uploaded store paths (unchanged
+from the original contract). `files` lists the same paths in the same order, each with the
+SHA-256 and byte size of what the worker uploaded, so the app can verify a download.
+`notices` is the input's run notices (the yellow lines). `stats` is the input's headline
+numbers across all its contigs (`null` unless the input is `done`). A `failed` or
+`cancelled` input still lists the partial `files` it uploaded, with `notices: []` and
+`stats: null`. The worker loads the model **once per job**, from the first input's
+`predictor` settings, and reuses it for every input; if that load fails, every input fails
+with that same error and the load is not retried per input. `provenance.json`'s
+`input_sha256` is the SHA-256 of the staged input file.
+
+**Process exit codes** (`dna-entropy-worker run`, read by `worker/vm/startup.sh`'s cleanup
+dispatch, issue #44): `0` done, `2` failed, `3` cancelled, `10` the worker stopped the VM
+itself through the Compute API, `11` the worker deleted the VM itself. `10`/`11` mean "the
+lifecycle is already applied, do not apply it again" and win over `0`/`2`/`3` (the job's own
+outcome is always in `result.json`). Only a `gcs`-kind job whose lifecycle call was accepted
+returns them; if the Compute API call failed, the ordinary code is returned so the startup
+script's own cleanup remains the backstop. The call is `POST .../instances/<name>/stop` for
+stop and `DELETE .../instances/<name>` for delete (there is no `/delete` verb).
 
 `result.json` existing at all is the app's signal that the worker reached a terminal
 state - the app's `JobReconciler` checks for its existence *first*, before falling back

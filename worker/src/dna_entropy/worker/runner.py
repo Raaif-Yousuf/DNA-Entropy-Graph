@@ -18,15 +18,18 @@ docs/job_contract.md is the contract this satisfies. The high-level shape:
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import shutil
 import tempfile
 import time
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 
 from .. import __version__ as WORKER_VERSION
 from .. import pipeline
-from ..predictors.base import PredictorError
+from ..config import RunConfig
+from ..predictors.base import Predictor, PredictorError
 from ..readers.input import load_input
 from ..validation.validators import ValidationError
 from .batch_limits import BatchLimitError, check_batch_limits
@@ -35,7 +38,7 @@ from .cancel import CancelWatcher, JobCancelledError
 from .errors import is_retriable
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError
-from .result import InputResult, JobResult, ResultTiming
+from .result import InputResult, JobResult, ResultFile, ResultStats, ResultTiming
 from .status import (
     DEFAULT_INTERVAL_SECONDS,
     GpuInfo,
@@ -60,9 +63,12 @@ def _free_disk_gb(path: Path) -> float:
         return -1.0
 
 
-def _upload_local_outputs(store: Blobstore, local_out: Path, input_spec: InputSpec) -> list[str]:
+def _upload_local_outputs(
+    store: Blobstore, local_out: Path, input_spec: InputSpec
+) -> tuple[list[str], list[ResultFile]]:
     """Upload every file currently sitting in ``local_out`` to ``output/<input name>/``
-    and return the destination paths (issue #252).
+    and return ``(destination paths, the same paths with sha256 and size)`` (issues #252,
+    #41).
 
     ONE upload path, used for a normal completion AND for whatever a crash or a
     cancellation left behind — not two separately-maintained ones. ``pipeline.run()``
@@ -70,16 +76,50 @@ def _upload_local_outputs(store: Blobstore, local_out: Path, input_spec: InputSp
     before re-raising ANY exception out of its per-contig loop (job_contract.md §6:
     "partial results are always kept, never discarded" — that promise was already true on
     local disk; the gap this closes is that nothing then uploaded them). Safe to call on a
-    ``local_out`` that does not exist yet (nothing was ever written) — returns ``[]``.
+    ``local_out`` that does not exist yet (nothing was ever written) — returns ``([], [])``.
+    The hash is taken from the local bytes that are uploaded.
     """
     if not local_out.is_dir():
-        return []
+        return [], []
     uploaded: list[str] = []
+    files: list[ResultFile] = []
     for local_path in sorted(p for p in local_out.iterdir() if p.is_file()):
         dest = f"output/{input_spec.name}/{local_path.name}"
+        digest = hashlib.sha256(local_path.read_bytes()).hexdigest()
         store.upload_file(local_path, dest)
         uploaded.append(dest)
-    return uploaded
+        files.append(ResultFile(path=dest, sha256=digest, bytes=local_path.stat().st_size))
+    return uploaded, files
+
+
+class _SharedPredictor:
+    """Builds the batch's predictor lazily, at most ONCE, and remembers a failure.
+
+    Issue #41 ("one model load per batch"): ``pipeline.run()`` used to build a fresh
+    predictor for every input, so a 3-input Evo batch loaded the model three times. The
+    first input's ``RunConfig`` is the one the predictor is built from (``predictor.*`` is
+    job-level in the manifest, identical for every input). A build that raises is cached
+    and re-raised for every remaining input: a missing-weights or Hopper-only refusal is
+    not going to succeed on the second try, and retrying it per input would repeat a
+    multi-minute model load N times.
+    """
+
+    def __init__(self, factory: Callable[[RunConfig], Predictor]) -> None:
+        self._factory = factory
+        self._predictor: Predictor | None = None
+        self._error: Exception | None = None
+
+    def get(self, cfg: RunConfig, status: StatusWriter) -> Predictor:
+        if self._error is not None:
+            raise self._error
+        if self._predictor is None:
+            status.update(stage="model-loading")
+            try:
+                self._predictor = self._factory(cfg)
+            except Exception as exc:
+                self._error = exc
+                raise
+        return self._predictor
 
 
 def _measure_batch_total_nt(store: Blobstore, manifest: JobManifest, tmp: Path) -> int:
@@ -123,6 +163,7 @@ def _run_one_input(
     tmp: Path,
     status: StatusWriter,
     cancel: CancelWatcher,
+    shared_predictor: _SharedPredictor,
 ) -> InputResult:
     """Stage, run, and upload results for one manifest input. A cancellation or any other
     failure seen BEFORE this input even starts propagates out (job-level: stop the whole
@@ -159,7 +200,15 @@ def _run_one_input(
             local_input_path=str(local_input),
             local_out_dir=str(local_out),
         )
-        result = pipeline.run(cfg, on_window=_on_window, on_contig=_on_contig)
+        predictor = shared_predictor.get(cfg, status)
+        status.update(stage="running", detail={"input": input_spec.id})
+        result = pipeline.run(
+            cfg,
+            on_window=_on_window,
+            on_contig=_on_contig,
+            provenance_extra={"input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest()},
+            predictor=predictor,
+        )
     except JobCancelledError:
         # Cancellation mid-input (between two windows/contigs of THIS input), distinct
         # from the pre-start check above: this input already did real work, so it is
@@ -167,8 +216,8 @@ def _run_one_input(
         # result.json, which would orphan the very files just uploaded. The caller
         # (run_job) checks `cancel.is_cancelled` after every input to stop the loop; it
         # does not need this to propagate as an exception to do that.
-        uploaded = _upload_local_outputs(store, local_out, input_spec)
-        return InputResult(id=input_spec.id, status="cancelled", outputs=uploaded)
+        uploaded, files = _upload_local_outputs(store, local_out, input_spec)
+        return InputResult(id=input_spec.id, status="cancelled", outputs=uploaded, files=files)
     except Exception as exc:
         # A specific exception's OWN `.code` (ModelNeedsHopperError -> MODEL_NEEDS_HOPPER,
         # PredictorOOMError -> MODEL_OOM, ...) always wins over the generic fallback below
@@ -191,19 +240,65 @@ def _run_one_input(
         # issue #252: whatever contigs/records completed before the crash are already on
         # local disk (pipeline.run()'s own best-effort write) — upload them so one bad
         # record doesn't cost the whole input, not just the whole job.
-        uploaded = _upload_local_outputs(store, local_out, input_spec)
-        return InputResult(id=input_spec.id, status="failed", error=error, outputs=uploaded)
+        uploaded, files = _upload_local_outputs(store, local_out, input_spec)
+        return InputResult(id=input_spec.id, status="failed", error=error, outputs=uploaded, files=files)
 
-    uploaded = _upload_local_outputs(store, local_out, input_spec)
+    uploaded, files = _upload_local_outputs(store, local_out, input_spec)
     for note in result.notices:
         status.notice(note, data={"input": input_spec.id})
 
-    return InputResult(id=input_spec.id, status="done", outputs=uploaded)
+    return InputResult(
+        id=input_spec.id,
+        status="done",
+        outputs=uploaded,
+        files=files,
+        notices=list(result.notices),
+        stats=ResultStats(
+            contigs=result.contigs,
+            totalNt=result.total_nt,
+            meanEntropy=float(result.all_values.mean()),
+            minEntropy=float(result.all_values.min()),
+            maxEntropy=float(result.all_values.max()),
+        ),
+    )
 
 
-def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobResult:
-    """Run the full job described by ``manifest.json`` in ``store``. Returns the
-    :class:`JobResult` that was also written to ``result.json``.
+@dataclasses.dataclass(frozen=True)
+class RunOutcome:
+    """What :func:`run_job_outcome` returns: the job's :class:`JobResult` (also written to
+    ``result.json``) plus the one thing ``result.json`` deliberately does not carry.
+
+    ``lifecycle_applied`` is ``"stop"`` or ``"delete"`` when this worker successfully asked
+    the Compute API to stop/delete its own VM (issue #44), else ``None`` (a local run, a
+    failed API call, or no lifecycle to apply). ``dna-entropy-worker run`` turns it into
+    exit code 10/11 so the startup script knows the action was already applied.
+    """
+
+    result: JobResult
+    lifecycle_applied: str | None = None
+
+
+def run_job(
+    store: Blobstore,
+    *,
+    worker_version: str = WORKER_VERSION,
+    predictor_factory: Callable[[RunConfig], Predictor] | None = None,
+) -> JobResult:
+    """Run the full job described by ``manifest.json`` in ``store`` and return the
+    :class:`JobResult` that was also written to ``result.json``. See :func:`run_job_outcome`
+    for the variant that also reports whether the VM lifecycle was applied."""
+    return run_job_outcome(store, worker_version=worker_version, predictor_factory=predictor_factory).result
+
+
+def run_job_outcome(
+    store: Blobstore,
+    *,
+    worker_version: str = WORKER_VERSION,
+    predictor_factory: Callable[[RunConfig], Predictor] | None = None,
+) -> RunOutcome:
+    """Run the full job described by ``manifest.json`` in ``store``. Returns a
+    :class:`RunOutcome` whose ``result`` is the :class:`JobResult` that was also written
+    to ``result.json``.
 
     This is the ``worker-run`` CLI command's real implementation (see
     ``dna_entropy.cli.worker_run``). A manifest schema mismatch or any other manifest
@@ -247,6 +342,8 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     # issue #338: manifest.limits.cancelPollSeconds now actually reaches the throttle
     # CancelWatcher applies to its own store round-trips (see cancel.py's docstring).
     cancel = CancelWatcher(store, poll_interval_seconds=float(manifest.limits.cancel_poll_seconds))
+    # Issue #41: ONE predictor for the whole batch, built lazily from the first input's config.
+    shared_predictor = _SharedPredictor(predictor_factory or pipeline.build_predictor)
     started_at = _utc_now_iso()
 
     input_results: list[InputResult] = []
@@ -271,7 +368,9 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
             )
 
             for input_spec in manifest.inputs:
-                input_results.append(_run_one_input(store, manifest, input_spec, tmp, status, cancel))
+                input_results.append(
+                    _run_one_input(store, manifest, input_spec, tmp, status, cancel, shared_predictor)
+                )
                 if cancel.is_cancelled:
                     break  # stop the whole job, not just this input (job_contract.md §6)
 
@@ -345,6 +444,7 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
     # is the module the overnight brief says to implement but never call for real — a
     # local/localdir job never reaches the `apply_lifecycle` call at all, so no test in
     # this repo exercises it against a real network no matter how this function is invoked.
+    lifecycle_applied: str | None = None
     if manifest.store.kind == "gcs":
         # Found auditing #304/#306: `lifecycle.afterTask == "keep"` used to skip this
         # entire block, and `keepAliveMinutes`/`afterKeepAlive` were parsed but never
@@ -379,6 +479,7 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
             # now returns the operation's own response body (or raises if that body
             # itself already reports an error) instead of discarding it.
             operation = apply_lifecycle(effective_action)
+            lifecycle_applied = effective_action
             op_id = (operation.get("name") or operation.get("id")) if operation else None
             if op_id:
                 status.notice(f"lifecycle {effective_action}: operation {op_id} accepted")
@@ -390,4 +491,4 @@ def run_job(store: Blobstore, *, worker_version: str = WORKER_VERSION) -> JobRes
             # swallowed the way `contextlib.suppress(LifecycleError)` used to leave it.
             status.notice(f"lifecycle apply failed: {exc}", level="error")
 
-    return result
+    return RunOutcome(result=result, lifecycle_applied=lifecycle_applied)
