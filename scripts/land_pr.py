@@ -66,7 +66,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,6 +76,7 @@ BASE = "main"
 REMOTE = "origin"
 DEFAULT_POLL_SECONDS = 20.0
 DEFAULT_WAIT_SECONDS = 30 * 60.0
+DEFAULT_GRACE_SECONDS = 120.0
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EXIT_RED, EXIT_FAILED, EXIT_TIMEOUT = 0, 1, 2, 3, 4, 5
 
@@ -97,6 +98,8 @@ class Ctx:
     gh: list[str] = field(default_factory=lambda: ["gh"])
     gh_env: dict[str, str] | None = None
     log: list[str] = field(default_factory=list)
+    sleep: Callable[[float], None] = time.sleep  # injectable so tests never wait for real
+    clock: Callable[[], float] = time.monotonic
 
     def say(self, message: str) -> None:
         print(message)
@@ -258,8 +261,12 @@ def _gh(ctx: Ctx, *args: str) -> subprocess.CompletedProcess[bytes]:
     return run([*ctx.gh, *args], ctx.repo, env=ctx.gh_env)
 
 
-def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: bool) -> None:
-    deadline = time.monotonic() + timeout
+def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: bool,
+                    grace: float = DEFAULT_GRACE_SECONDS) -> None:
+    """MEASURED 2026-10-02 (#472): GitHub registers no checks for a few seconds after `gh pr create`, so an empty
+    list inside `grace` seconds means "not yet", not "none". Only after the grace period is it "no checks"."""
+    deadline = ctx.clock() + timeout
+    grace_deadline = ctx.clock() + grace
     while True:
         proc = _gh(ctx, "pr", "checks", pr, "--json", "name,bucket")
         text = _text(proc.stdout)
@@ -269,11 +276,15 @@ def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: 
         elif "no checks reported" not in _text(proc.stderr + proc.stdout).lower():
             raise LandError(f"gh pr checks failed ({proc.returncode}): {_text(proc.stderr or proc.stdout)}")
         if not rows:
+            if ctx.clock() < grace_deadline:
+                ctx.sleep(max(poll, 1.0))
+                continue
             if allow_none:
-                ctx.say("no checks reported; continuing because --allow-no-checks was given")
+                ctx.say(f"no checks reported after waiting {grace:.0f} s; continuing because --allow-no-checks was given")
                 return
             raise LandError(
-                f"PR {pr} has no checks reported, so there is nothing proving it green. Run `gh workflow run ci-docs.yml "
+                f"PR {pr} has no checks reported after waiting {grace:.0f} s, so there is nothing "
+                f"proving it green. Run `gh workflow run ci-docs.yml "
                 f"--ref <branch>` or the local gates (scripts/premerge.py) and re-run with --allow-no-checks once satisfied. "
                 f"You are on the branch; the PR is open.", EXIT_RED)
         red = [r["name"] for r in rows if r.get("bucket") in ("fail", "cancel")]
@@ -282,9 +293,9 @@ def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: 
         if all(r.get("bucket") in ("pass", "skipping") for r in rows):
             ctx.say(f"all {len(rows)} check(s) passed")
             return
-        if time.monotonic() > deadline:
+        if ctx.clock() > deadline:
             raise LandError(f"timed out waiting for checks on PR {pr}; it is still open and you are on the branch.", EXIT_TIMEOUT)
-        time.sleep(poll)
+        ctx.sleep(poll)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +305,7 @@ def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: 
 
 def land(ctx: Ctx, branch: str, paths: Sequence[str], hunk_specs: dict[str, list[int]], title: str, body_file: Path | None,
          allow_no_checks: bool, dry_run: bool, poll: float, timeout: float, merge: bool = True,
-         require_premerge: bool = False) -> int:
+         require_premerge: bool = False, grace: float = DEFAULT_GRACE_SECONDS) -> int:
     problems = preflight(ctx, branch, paths, hunk_specs, require_premerge)
     if problems:
         for problem in problems:
@@ -341,7 +352,7 @@ def land(ctx: Ctx, branch: str, paths: Sequence[str], hunk_specs: dict[str, list
         if not merge:
             ctx.say("--no-merge: stopped with the PR open")
             return EXIT_OK
-        wait_for_checks(ctx, pr, poll, timeout, allow_no_checks)
+        wait_for_checks(ctx, pr, poll, timeout, allow_no_checks, grace)
         merged = _gh(ctx, "pr", "merge", pr, "--merge")
         if merged.returncode != 0:
             raise LandError(f"gh pr merge failed: {_text(merged.stderr or merged.stdout)}. PR #{pr} is open; you are on {branch}.")
@@ -402,6 +413,8 @@ if args[:2] == ["pr", "checks"]:
         print(json.dumps([{"name": "ci", "bucket": "pass"}]))
     elif mode == "fail":
         print(json.dumps([{"name": "ci-docs", "bucket": "fail"}, {"name": "ci-worker", "bucket": "pass"}]))
+    elif mode == "appear_third":
+        print(json.dumps([] if state["polls"] < 3 else [{"name": "ci", "bucket": "pass"}]))
     elif mode == "pending_then_pass":
         print(json.dumps([{"name": "ci", "bucket": "pending" if state["polls"] < 3 else "pass"}]))
     else:
@@ -516,13 +529,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--list-hunks", metavar="FILE", help="print the hunks of FILE's working-tree diff and exit")
     ap.add_argument("--title", help="commit subject and PR title")
     ap.add_argument("--body-file", type=Path, help="PR body (also the commit body)")
-    ap.add_argument("--allow-no-checks", action="store_true", help="merge even when the PR reports no checks")
+    ap.add_argument("--allow-no-checks", action="store_true",
+                    help="merge even when the PR reports no checks AFTER the grace period; never a fix for 'checks not registered yet'")
     ap.add_argument("--no-merge", action="store_true", help="stop after opening the PR")
     ap.add_argument("--no-premerge-check", action="store_true",
                     help="do not require a green scripts/premerge.py stamp on HEAD (use deliberately)")
     ap.add_argument("--dry-run", action="store_true", help="run the preflight and stop; changes nothing")
     ap.add_argument("--gh", default=os.environ.get("LAND_PR_GH", "gh"), help="gh command (default: gh; for tests)")
     ap.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
+    ap.add_argument("--grace-seconds", type=float, default=DEFAULT_GRACE_SECONDS,
+                    help="how long to wait for the first check to appear before calling it 'no checks'")
     ap.add_argument("--wait-seconds", type=float, default=DEFAULT_WAIT_SECONDS)
     ap.add_argument("--repo", type=Path, default=Path.cwd(), help="repository (default: cwd)")
     ap.add_argument("--self-test", action="store_true")
@@ -554,7 +570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         hunk_specs = {normalise_path(ctx, p): idx for p, idx in parse_hunk_specs(args.hunks).items()}
         return land(ctx, args.branch, paths, hunk_specs, args.title, args.body_file, args.allow_no_checks, args.dry_run,
                     args.poll_seconds, args.wait_seconds, merge=not args.no_merge,
-                    require_premerge=not args.no_premerge_check)
+                    require_premerge=not args.no_premerge_check, grace=args.grace_seconds)
     except LandError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return exc.code

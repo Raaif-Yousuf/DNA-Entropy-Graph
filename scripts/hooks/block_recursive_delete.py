@@ -186,20 +186,65 @@ def _powershell_is_recursive_force(tokens: list[str]) -> bool:
     return recursive and force
 
 
-def _targets(tokens: list[str]) -> list[str]:
+# PowerShell parameters whose VALUE is never a path to delete. The value token after one of these is not a target:
+# MEASURED 2026-10-02, `-ErrorAction SilentlyContinue` read as a repo-relative target denied a delete aimed at TEMP.
+# (-Path, -LiteralPath and -Exclude/-Include are deliberately absent: the first two ARE targets; the filters are
+# not worth the risk of hiding a target.)
+_PS_VALUE_PARAMS = ("erroraction", "ea", "warningaction", "wa", "informationaction", "ia", "errorvariable", "ev",
+                    "warningvariable", "wv", "outvariable", "ov", "outbuffer", "ob", "pipelinevariable", "pv")
+
+
+def _targets(tokens: list[str], powershell: bool = False) -> list[str]:
     """The non-flag arguments. A PowerShell named parameter's VALUE (the token
     right after `-Path`/`-LiteralPath`) is a target, not a flag, and falls out
-    of this correctly because it does not itself start with `-`."""
+    of this correctly because it does not itself start with `-`. With `powershell`,
+    the value after a common parameter such as `-ErrorAction` is skipped."""
     out: list[str] = []
     seen_ddash = False
+    skip_next = False
     for tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
         if tok == "--":
             seen_ddash = True
             continue
         if not seen_ddash and tok.startswith("-"):
+            if powershell and ":" not in tok and tok.lstrip("-").lower() in _PS_VALUE_PARAMS:
+                skip_next = True
             continue
         out.append(tok)
     return out
+
+
+_ENV_VAR = re.compile(
+    r"\$\{(?:env:)?(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}"  # ${NAME} and ${env:NAME}
+    r"|\$env:(?P<ps>[A-Za-z_][A-Za-z0-9_]*)"  # $env:NAME
+    r"|\$(?P<posix>[A-Za-z_][A-Za-z0-9_]*)",  # $NAME
+    re.IGNORECASE,
+)
+
+
+def _expand_env_vars(target: str) -> str | None:
+    """Expand `$env:NAME`, `${env:NAME}`, `$NAME` and `${NAME}` against os.environ (case-insensitive on Windows).
+    Returns None when any variable is unset, so the caller fails closed. A literal path with no `$` is returned as is.
+    MEASURED 2026-10-02: `Remove-Item -Recurse -Force $env:TEMP/pm-x` was denied as "unknown" while the same command with
+    the literal temp path was allowed."""
+    unresolved = False
+
+    def sub(match: re.Match[str]) -> str:
+        nonlocal unresolved
+        name = match.group("braced") or match.group("ps") or match.group("posix")
+        value = os.environ.get(name)
+        if not value:
+            unresolved = True
+            return ""
+        return value
+
+    expanded = _ENV_VAR.sub(sub, target)
+    if unresolved or "$" in expanded:
+        return None
+    return expanded
 
 
 def _is_inside_repo(target: str) -> bool:
@@ -211,10 +256,14 @@ def _is_inside_repo(target: str) -> bool:
     which is the whole point. An absolute path is resolved and compared
     honestly, so the session scratchpad and system temp dirs stay allowed.
     """
-    if not target or target.startswith("$") or "*" in target or "?" in target:
-        # A variable or a glob cannot be resolved here. Treat a glob as inside
-        # (it is almost certainly repo-relative) and a variable as unknown,
-        # which is the same conservative direction.
+    if target:
+        target = _expand_env_vars(target)
+    if target is None:
+        # An unset (or unparseable) variable cannot be resolved: unknown, so fail closed.
+        return True
+    if not target or "*" in target or "?" in target:
+        # A glob cannot be resolved here. Treat it as inside (it is almost
+        # certainly repo-relative) unless it is anchored at an absolute path.
         return "*" not in target or not os.path.isabs(target)
     expanded = os.path.expandvars(os.path.expanduser(target))
     path = pathlib.Path(expanded)
@@ -241,13 +290,13 @@ def verdict(command: str) -> str | None:
     """Return the reason to deny, or None to stay silent."""
     scanned = _strip_cat_heredoc_bodies(command or "")
 
-    for pattern, is_rf in ((_RM, _posix_rm_is_recursive_force),
-                           (_REMOVE_ITEM, _powershell_is_recursive_force)):
+    for pattern, is_rf, ps in ((_RM, _posix_rm_is_recursive_force, False),
+                               (_REMOVE_ITEM, _powershell_is_recursive_force, True)):
         for match in pattern.finditer(scanned):
             tokens = _split_args(match.group("args"))
             if not is_rf(tokens):
                 continue
-            targets = _targets(tokens)
+            targets = _targets(tokens, ps)
             if not targets:
                 # `rm -rf` with no target does nothing; say nothing.
                 continue
@@ -270,6 +319,8 @@ _DENY_CASES = (
     "Remove-Item -Recurse -Force .scratch",
     "ri -Recurse -Force .scratch",
     "Remove-Item -Recurse -For .scratch",  # PowerShell prefix matching
+    "rm -rf $DNA_SELFTEST_UNSET_VAR/x",  # an unset variable fails closed
+    "Remove-Item -Recurse -Force $env:DNA_SELFTEST_UNSET_VAR\\x",
 )
 
 _ALLOW_CASES = (
@@ -278,6 +329,8 @@ _ALLOW_CASES = (
     "git clean -fd",
     "git checkout -- .scratch/",
     "rm -rf",  # no target
+    "Remove-Item -Recurse -Force $env:TEMP\\pm-abc",  # a variable that expands outside the repo
+    "rm -rf ${TEMP}/pm-abc",
 )
 
 

@@ -1,7 +1,13 @@
 """scripts/check_version_lockstep.py -- worker and app ship the same version.
 
     python scripts/check_version_lockstep.py
+    python scripts/check_version_lockstep.py --tag v1.2.3
     python scripts/check_version_lockstep.py --self-test
+
+`--tag vX.Y.Z` is the release mode (#33): the tag, `worker/pyproject.toml` and `app/Directory.Build.props` must all
+carry X.Y.Z (a prerelease suffix such as `v0.1.0-rc.1` is compared whole). A release needs both halves, so with
+`--tag` a missing `app/Directory.Build.props` is a failure, not the pre-#61 notice. The future release.yml (#178)
+calls it before building: `python scripts/check_version_lockstep.py --tag "${GITHUB_REF_NAME}"`.
 
 The worker image and the app that drives it are versioned together
 (`docs/superpowers/specs/2026-09-18-appendix-c-repo-conventions.md`'s
@@ -70,9 +76,20 @@ def read_app_version(path: Path) -> str | None:
     return None
 
 
-def check(root: Path) -> tuple[list[str], list[str]]:
+_TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$")
+
+
+def check(root: Path, tag: str | None = None) -> tuple[list[str], list[str]]:
     """Return (problems, notices). `notices` are informational
-    (printed but never fail the check); `problems` do."""
+    (printed but never fail the check); `problems` do. With `tag` (release mode) the tag's version must also
+    equal both files' versions, and a missing app/Directory.Build.props is a problem."""
+    tag_version: str | None = None
+    if tag is not None:
+        m = _TAG_RE.match(tag)
+        if not m:
+            return ([f"tag {tag!r} is not of the form vX.Y.Z (a prerelease suffix like -rc.1 is allowed)"], [])
+        tag_version = m.group(1)
+
     worker_path = root / WORKER_PYPROJECT_RELATIVE
     app_path = root / APP_DIRECTORY_BUILD_PROPS_RELATIVE
 
@@ -84,6 +101,9 @@ def check(root: Path) -> tuple[list[str], list[str]]:
         return ([f"{WORKER_PYPROJECT_RELATIVE} has no readable [project].version"], [])
 
     if not app_path.is_file():
+        if tag is not None:
+            return ([f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} does not exist, but tag {tag!r} is a release: "
+                     "a release needs both halves"], [])
         return ([], [
             f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} does not exist yet (issue #{APP_SKELETON_ISSUE}: "
             "app: solution skeleton) -- nothing to check lockstep against; "
@@ -99,6 +119,12 @@ def check(root: Path) -> tuple[list[str], list[str]]:
         return ([
             f"version mismatch: {WORKER_PYPROJECT_RELATIVE} says {worker_version!r}, "
             f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} says {app_version!r}"
+        ], [])
+
+    if tag_version is not None and tag_version != worker_version:
+        return ([
+            f"tag {tag!r} says {tag_version!r} but {WORKER_PYPROJECT_RELATIVE} says {worker_version!r} "
+            f"({APP_DIRECTORY_BUILD_PROPS_RELATIVE} says {app_version!r})"
         ], [])
 
     return ([], [])
@@ -178,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Check that worker/pyproject.toml and app/Directory.Build.props agree on version.",
     )
     ap.add_argument("--root", type=Path, default=Path.cwd(), help="repo root (default: current directory)")
+    ap.add_argument("--tag", default=None, metavar="vX.Y.Z",
+                    help="release mode: the git tag must also equal both versions (what release.yml runs)")
     ap.add_argument("--self-test", action="store_true", help="run against synthetic fixtures and exit")
     args = ap.parse_args(argv)
 
@@ -189,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {root} does not look like this repo (no worker/)", file=sys.stderr)
         return 2
 
-    problems, notices = check(root)
+    problems, notices = check(root, args.tag)
     for n in notices:
         print(f"NOTICE: {n}")
     if problems:

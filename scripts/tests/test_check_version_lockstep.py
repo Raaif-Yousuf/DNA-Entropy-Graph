@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -85,3 +87,66 @@ def test_check_against_this_repos_real_tree_agrees_on_one_version():
     app_version = cvl.read_app_version(repo_root / "app" / "Directory.Build.props")
     assert app_version is not None, "app/Directory.Build.props must carry a readable <Version>."
     assert app_version == cvl.read_worker_version(repo_root / "worker" / "pyproject.toml")
+
+
+# --- --tag vX.Y.Z (the release.yml mode, #33) --------------------------------------------------------
+
+
+def _plant(root: Path, worker: str, app: str) -> None:
+    (root / "worker").mkdir(parents=True)
+    (root / "worker" / "pyproject.toml").write_text(f'[project]\nname = "x"\nversion = "{worker}"\n', encoding="utf-8")
+    (root / "app").mkdir()
+    (root / "app" / "Directory.Build.props").write_text(
+        f"<Project><PropertyGroup><Version>{app}</Version></PropertyGroup></Project>\n", encoding="utf-8")
+
+
+def _cli(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, str(SCRIPTS_DIR / "check_version_lockstep.py"), "--root", str(root), *extra],
+                          capture_output=True, text=True, timeout=30, check=False)
+
+
+def test_a_matching_tag_passes(tmp_path):
+    _plant(tmp_path, "1.2.3", "1.2.3")
+    proc = _cli(tmp_path, "--tag", "v1.2.3")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_a_tag_that_differs_from_both_files_exits_1_naming_both_files_and_the_tag(tmp_path):
+    _plant(tmp_path, "1.2.3", "1.2.3")
+    proc = _cli(tmp_path, "--tag", "v1.2.4")
+    assert proc.returncode == 1
+    assert "worker/pyproject.toml" in proc.stderr and "app/Directory.Build.props" in proc.stderr and "v1.2.4" in proc.stderr
+
+
+def test_a_tag_matching_only_one_file_exits_1_naming_the_other(tmp_path):
+    _plant(tmp_path, "1.2.3", "1.2.2")
+    proc = _cli(tmp_path, "--tag", "v1.2.3")
+    assert proc.returncode == 1
+    assert "app/Directory.Build.props" in proc.stderr and "1.2.2" in proc.stderr
+
+
+def test_a_planted_file_mismatch_without_a_tag_still_exits_1_naming_both_files(tmp_path):
+    _plant(tmp_path, "1.2.3", "1.2.4")
+    proc = _cli(tmp_path)
+    assert proc.returncode == 1
+    assert "worker/pyproject.toml" in proc.stderr and "app/Directory.Build.props" in proc.stderr
+
+
+@pytest.mark.parametrize("tag", ["1.2.3", "v1.2", "vX.Y.Z", "release-1.2.3", ""])
+def test_a_malformed_tag_is_a_problem_not_a_pass(tmp_path, tag):
+    _plant(tmp_path, "1.2.3", "1.2.3")
+    proc = _cli(tmp_path, "--tag", tag)
+    assert proc.returncode == 1
+    assert "vX.Y.Z" in proc.stderr
+
+
+def test_a_prerelease_tag_matches_a_prerelease_version(tmp_path):
+    _plant(tmp_path, "0.1.0-rc.1", "0.1.0-rc.1")
+    assert _cli(tmp_path, "--tag", "v0.1.0-rc.1").returncode == 0
+
+
+def test_a_tag_without_app_skeleton_is_refused_because_a_release_needs_both_halves(tmp_path):
+    (tmp_path / "worker").mkdir()
+    (tmp_path / "worker" / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8")
+    proc = _cli(tmp_path, "--tag", "v1.2.3")
+    assert proc.returncode == 1 and "app/Directory.Build.props" in proc.stderr

@@ -35,11 +35,17 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Create the environment
+      # #466 (MEASURED 2026-10-02): this job used to run `uv pip install -e ".[dev,genes]"`, which re-resolves to
+      # whatever is newest today and ignores worker/uv.lock, so CI tested versions nobody locked and could go
+      # red overnight on an upstream release. Now: fail by name when pyproject.toml and the lock disagree, then
+      # install exactly the lock (same extras as the dev box; [evo] is container-only). Python 3.12 is Hard Rule 20.
+      - name: Lock file is current (uv lock --check)
         working-directory: worker
-        run: |
-          uv venv
-          uv pip install -e ".[dev,genes]"
+        run: uv lock --check
+
+      - name: Create the environment from the lock
+        working-directory: worker
+        run: uv sync --frozen --python 3.12 --extra dev --extra genes
 
       # Lint is enabled by the presence of a ruff config, so it starts enforcing
       # the moment worker/pyproject.toml gains a [tool.ruff] table (issue #285).
@@ -66,7 +72,7 @@ jobs:
 
       - name: pytest
         working-directory: worker
-        run: uv run pytest tests -m "not gpu" -q --junitxml=../pytest-worker.xml
+        run: uv run --frozen pytest tests -m "not gpu" -q --junitxml=../pytest-worker.xml
 
       - name: Upload test results
         if: always()

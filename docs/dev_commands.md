@@ -20,6 +20,14 @@ uv pip install -e ".[dev,genes]"             # core + dev + gene-boundary extras
 cd ..
 ```
 
+**Which command makes the venv, and is `worker/uv.lock` authoritative?** CI (`ci-worker.yml`, `ci-notices.yml`) builds
+from the lock: `uv lock --check` (fails by name when `pyproject.toml` and the lock disagree) then
+`uv sync --frozen --python 3.12 --extra dev --extra genes`, and runs pytest with `uv run --frozen` (#466; before that
+the test job re-resolved with `uv pip install -e`, so CI tested whatever was newest that day). The lock is authoritative
+for CI. The `uv pip install -e` line above is the quick, UNLOCKED dev install and can drift from CI; to match CI exactly
+run `uv sync --frozen --python 3.12 --extra dev --extra genes` in `worker/` instead (MEASURED 2026-10-02 in a scratch
+copy: it reproduced the laptop venv's versions). After editing a dependency bound, run `uv lock` and commit the lock.
+
 ```powershell
 worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q
 worker\.venv\Scripts\python.exe -m pytest worker/tests/test_<module>.py -q -x
@@ -135,7 +143,9 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   `docs/changelog.d/` fragment came with them (rules in `docs/changelog.d/README.md`).
 - **Not in it:** the CPU container smoke (needs Docker) and `shellcheck` (not on the laptop);
   both stay CI-only. `DnaEntropyGraph.App.UiTests` is exempt (WinUI-hosted).
-- **Pytest gates get a private `--basetemp`** (under `--log-dir`, else a temp dir premerge removes) and
+- **Pytest gates get a private `--basetemp`** (a short `%TEMP%\pm-*` dir premerge removes when all gates passed, never under
+  `--log-dir`, whose path is only recorded in `<log-dir>basetemp.txt`; #469: a deep basetemp made `git push` fail inside the
+  temp bare repos of `test_land_pr`, MEASURED 2026-10-02: reproduced with a plain deep path, "remote unpack failed: unable to create temporary object directory"; `core.longpaths=true` on the bare repo also cures it, but a short basetemp fixes every test at once) and
   `-p no:cacheprovider`, and their verdict follows the TEST OUTCOME. MEASURED 2026-10-02: the first full run
   reported both pytest gates as FAIL although every test passed, because both crashed in pytest's own
   `cleanup_dead_symlinks` on the shared default basetemp. A run that prints only passes and then exits
@@ -165,7 +175,9 @@ worker\.venv\Scripts\python.exe scripts\land_pr.py --branch fix/412-x --hunks wo
 - It refuses (changing nothing) on a directory path, a path with no change, an index that already holds staged
   content it did not stage, an existing branch name, a detached HEAD, or a hunk index that does not exist.
 - It waits on `gh pr checks` and merges only when every check passed; a red check stops ON the branch and names the
-  check. **Zero checks is refused** unless `--allow-no-checks` (CI here can be on demand, and "no checks" is not green).
+  check. **Zero checks is refused** unless `--allow-no-checks` (CI here can be on demand, and "no checks" is not green),
+  and only after a grace period (`--grace-seconds`, default 120) in which an empty list is polled again, because GitHub
+  registers checks a few seconds after `gh pr create` (#472). `--allow-no-checks` is never the fix for that.
 - It returns the tree to main with `git checkout -B main origin/main`, never `git switch main` (MEASURED 2026-10-02:
   `switch` refuses when a landed file is still locally modified for another issue). Other lanes' edits stay byte-identical.
 - Hunk staging builds the patch from `git diff` as BYTES and pipes it to `git apply --cached --recount -` (Windows text
@@ -244,6 +256,7 @@ python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs 
 python scripts\check_user_home_paths.py       # no literal absolute user-home path in a tracked file (use %USERPROFILE%/$HOME instead)
 python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (needs dotnet AND the worker venv: runs in premerge full mode and in .github/workflows/ci-notices.yml, #416)
 python scripts\check_version_lockstep.py      # every version-bearing file agrees
+python scripts\check_version_lockstep.py --tag v1.2.3   # release mode (#33): the tag must also equal both versions; a missing app/Directory.Build.props fails. release.yml (#178, not yet written) must call it with "${GITHUB_REF_NAME}" BEFORE building
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
 python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behaviour files changed => a fragment exists (#429); rules in docs/changelog.d/README.md
 python scripts\check_repo_hygiene.py        # legacy/clair is not tracked; AGENTS.md exists and stays under 20 lines (#449)

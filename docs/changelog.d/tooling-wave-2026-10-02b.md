@@ -1,0 +1,6 @@
+- fix(tooling): land_pr.py waits a bounded grace period (`--grace-seconds`, default 120) for the first check to appear before reporting "no checks", and names the wait (#472); premerge.py gives pytest gates a short `%TEMP%` basetemp instead of one under `--log-dir`, which broke test_land_pr's temp bare repos on Windows (#469)
+- fix(tooling): block_recursive_delete.py expands `$env:NAME`, `${env:NAME}`, `$NAME` and `${NAME}` before deciding (an unset variable or one pointing into the repo still blocks) and no longer reads the value after `-ErrorAction` as a delete target, so `Remove-Item -Recurse -Force $env:TEMP\pm-x` is allowed
+- feat(tooling): check_version_lockstep.py gains `--tag vX.Y.Z` (release mode; the tag must equal both versions, a missing app/Directory.Build.props fails) for release.yml to call (#33)
+- fix(tooling): check_app_wiring.py parses constructor parameters with default values, recognises `AddSingleton(new Foo())`, ignores comments and reads through another declared type when matching member reads (#461)
+- fix(ci): ci-worker.yml's test job installs from worker/uv.lock (`uv lock --check`, `uv sync --frozen`, `uv run --frozen`) instead of re-resolving (#466)
+- fix(tooling): premerge.py reports `basetemp removed:` or `basetemp kept:` with the path, never raises from the cleanup, and removes read-only git objects

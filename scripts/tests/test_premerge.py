@@ -140,6 +140,71 @@ def test_the_real_pytest_gates_are_flagged_so_they_get_a_private_basetemp():
     assert gates["worker-pytest"].pytest and gates["scripts-tests"].pytest
 
 
+def test_basetemp_stays_short_however_deep_the_log_dir_is(tmp_path):
+    """#469 MEASURED 2026-10-02: a basetemp under a deep --log-dir (160+ chars) made `git push` into test_land_pr's temp
+    bare remote fail ("unable to create temporary object directory"); the same suite passed from a ~100 char basetemp."""
+    deep = tmp_path.joinpath(*(["d" * 30] * 3))  # past the 160 chars that failed in #469
+    gate = pm.Gate("pt", [sys.executable, "-c", "import sys; print('ARGV', ' '.join(sys.argv[1:]))"], Path.cwd(), pytest=True)
+    results, _, _ = pm.run_all([gate], log_dir=deep, emit=lambda _line: None)
+    base = next(line for line in results[0].output.splitlines() if line.startswith("ARGV")).split("--basetemp ")[1].split(" -p")[0]
+    assert len(base) <= 100, base
+    assert not Path(base).is_relative_to(deep)
+    assert (deep / "basetemp.txt").read_text(encoding="utf-8").strip() == str(Path(base).parent)
+
+
+def test_a_passing_run_removes_its_basetemp_even_with_read_only_git_objects(tmp_path):
+    code = ("import sys, os, stat; d = sys.argv[sys.argv.index('--basetemp') + 1]; os.makedirs(d); "
+            "f = os.path.join(d, 'obj'); open(f, 'w').write('x'); os.chmod(f, stat.S_IREAD); print('1 passed in 0.01s')")
+    gate = pm.Gate("pt", [sys.executable, "-c", code], Path.cwd(), pytest=True)
+    results, _, rc = pm.run_all([gate], log_dir=tmp_path, emit=lambda _line: None)
+    assert rc == 0, results[0].output
+    assert not Path((tmp_path / "basetemp.txt").read_text(encoding="utf-8").strip()).exists()
+
+
+def _pt_gate(name="pt", code="print('1 passed in 0.01s')"):
+    return pm.Gate(name, [sys.executable, "-c", code], Path.cwd(), pytest=True)
+
+
+def test_a_failing_run_keeps_the_basetemp_and_says_where_it_is():
+    lines: list[str] = []
+    results, _, rc = pm.run_all([_pt_gate(code="import sys; print('1 failed in 0.01s'); sys.exit(1)")], emit=lines.append)
+    kept = [x for x in lines if x.startswith("basetemp kept: ")]
+    assert rc == 1 and len(kept) == 1
+    path = Path(kept[0].split("basetemp kept: ")[1])
+    try:
+        assert path.exists()
+    finally:
+        pm._rmtree_force(path)
+
+
+def test_a_passing_run_says_the_basetemp_was_removed():
+    lines: list[str] = []
+    pm.run_all([_pt_gate()], emit=lines.append)
+    assert any(x.startswith("basetemp removed: ") for x in lines)
+
+
+def test_an_undeletable_basetemp_does_not_crash_the_run(monkeypatch):
+    def boom(_path):
+        raise PermissionError("locked by antivirus")
+
+    monkeypatch.setattr(pm, "_rmtree_force", boom)
+    lines: list[str] = []
+    results, summary, rc = pm.run_all([_pt_gate()], emit=lines.append)
+    assert rc == 0 and "PASS" in summary
+    kept = [x for x in lines if x.startswith("basetemp kept (could not remove it: PermissionError): ")]
+    assert len(kept) == 1
+    import shutil as _sh
+    _sh.rmtree(kept[0].split("): ", 1)[1], ignore_errors=True)
+
+
+def test_a_crashing_runner_surfaces_its_own_exception_not_an_unbound_local():
+    def runner(_gate):
+        raise RuntimeError("the real failure")
+
+    with pytest.raises(RuntimeError, match="the real failure"):
+        pm.run_all([_pt_gate()], runner=runner, emit=lambda _l: None)
+
+
 def test_a_pytest_gate_is_started_with_its_own_basetemp_and_no_cache(tmp_path):
     gate = pm.Gate("pt", [sys.executable, "-c", "import sys; print(' '.join(sys.argv[1:]))"], Path.cwd(), pytest=True)
     result = pm.run_gate(gate, basetemp_root=tmp_path)

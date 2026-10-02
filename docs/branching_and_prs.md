@@ -95,6 +95,11 @@ Run `scripts/premerge.py --fast` first, in the working tree before the tool comm
 stamp on the current HEAD (`--no-premerge-check` overrides). The `gh pr create` hook cannot see the `gh` call the tool makes
 internally, so the tool does the same check itself.
 
+GitHub registers no checks for a few seconds after `gh pr create` (MEASURED 2026-10-02, #472), so an empty check list
+inside the grace period (`--grace-seconds`, default 120) is polled again, not reported. "No checks" is only declared
+after that wait and the message says how long it waited. `--allow-no-checks` is for a PR that genuinely has no CI; it is
+never the workaround for "the checks have not shown up yet" (it also waits the grace period first).
+
 ## Closing keywords
 
 A commit message or PR body that says an issue is **not** fixed can still
