@@ -1,124 +1,81 @@
-# Handoff: after the 2026-09-19 six-lane wave
+# Handoff: after the 2026-10-02 three-lane wave
 
 > Overwritten every session. Re-check `git log -1 main` and `gh issue list` before trusting
-> anything here. Counts are deliberately not written down; run
-> `gh issue list --repo Raaif-Yousuf/DNA-Entropy-Graph --limit 500 --json number,labels,milestone`
-> for current numbers.
+> anything here.
 
 ## What this session was
 
-One orchestrator and **six** Sonnet lanes (raised from three mid-run), in one shared checkout,
-each owning a disjoint set of paths, with the orchestrator holding every `git` command. No lane
-ran `git` at all. No path collision all night.
-
-**Seventeen pull requests, one per issue wherever the files allowed.** Every test count in every
-commit message was re-run by the orchestrator before the commit, not quoted from an agent's
-report.
-
-**The app suite went from 51 tests to 316.** The worker suite is at 814. `scripts/tests` is at
-340.
+One orchestrator and three Sonnet lanes in one shared checkout: C# app/cloud, Python worker
+and repo tooling. Each lane owned disjoint paths and the orchestrator ran every `git` command.
+There were 9 merged PRs (#443, #446, #447, #457, #465, #467, #470, #471, plus this handoff) and
+about 30 issues closed. Every test count in a PR body was re-run by the orchestrator, and two
+full `premerge.py` runs covered the combined tree.
 
 ## Start here next session
 
-1. **Launch the app.** It has still never been run, and there is now a great deal more to see
-   than there was: a `NavigationView` shell, a run progress page, Mica, a status pill, theme at
-   startup, window placement persisted through a real SQLite-backed settings store.
-   [`docs/ToTest.md`](docs/ToTest.md) has the row and names the two false passes precisely. The
-   one to watch: a `.resw` that is not packed as a PRI resource gives a window whose every label
-   is **blank**, which reads as an unfinished layout rather than a broken build. Check
-   `ShellTitle`, `NavNewRun`, `NavRuns`, `NavCloud`, `NavSettings` and the `RunProgress*` set
-   specifically, because not one of them has ever been seen rendered.
+1. **Sweep the v0.1 milestone with `issue_precheck.py`.** The previous handoff said five v0.1
+   issues remained. That was wrong: its issue list was truncated at 60, and about 29 are
+   open. Several look already built but never closed (#26, #28, #31, #33 by their titles;
+   #41 and #44 are only waiting on doc and keep-idle boxes). Run
+   `worker\.venv\Scripts\python.exe scripts\issue_precheck.py <every v0.1 number>`, then have
+   one read-only lane classify each issue as DONE, PARTIAL or NOT STARTED with file:line
+   evidence. Lane B did exactly this for nine worker issues this session, and two of them
+   turned out fully built.
+2. **The two P1 wired-to-nothing gaps in the cloud path:** **#460** (no input is uploaded and
+   no output is downloaded; the request carries no object keys) and **#458** (no source for the
+   worker image digest, so a real VM gets no startup script). Until both are fixed, pressing
+   Run reaches a VM that has nothing to do. Next come #204 (SetupHealthService) and #205 (IAM
+   preflight).
+3. **Launch the app.** It has still never been run. `docs/ToTest.md`'s #62 row names what to
+   look for.
 
-2. **Only five `v0.1 walking skeleton` issues remain open**: #204 (SetupHealthService), #205 (IAM
-   permission preflight), #258 (token refresh and retry policy), #261 (startup-script templating)
-   and #266 (the GPU pricing research note, owner-flagged). The milestone is within reach.
+## Tools that exist now and did not this morning
 
-3. **`OWNER_TODO.md` has grown again.** Seven new `DECISION` issues were filed this wave, each
-   marked agent-made and reversible, each carrying its reasoning: **#402** (does Hard Rule 21
-   reach a dev-only MPL-2.0 test dependency), **#413** (does it reach the Windows App SDK's
-   proprietary redistributables), **#404** (how `app.db` corruption is handled on launch),
-   **#408** (`Notes`/`TagsJson` columns added ahead of #141), **#386** and **#387** (two cloud API
-   shapes), **#394** (a RunOptions option set that two spec sections disagree about). **#301,
-   #402 and #413 all point at the same unwritten section of `docs/hard_rules.md`** - rule 21
-   still reads "Carve-out: None currently recorded" while the notices generator now documents
-   the `pyrodigal` GPL-3.0 exception mechanically. That is one edit, not three.
+- **`scripts/premerge.py`** runs every gate (29) with the right interpreter and working
+  directory. `--fast` is per-lane. FAIL, ERROR, SKIP and KNOWN are reported separately. A
+  pytest run that reaches 100% and then crashes in teardown is ERROR, not FAIL. Run it before
+  `gh pr create`. It is red in full mode with `--log-dir` under a deep path until **#469** is
+  fixed (MAX_PATH in `test_land_pr`'s temp bare repo); without `--log-dir` it is fine.
+- **`scripts/land_pr.py`** lands one lane from the shared tree: explicit paths or byte-exact
+  hunks, then PR, wait, merge, and `git checkout -B main origin/main`. **Known bug (#472):** it queries checks seconds after `gh pr create`, sees none, and stops with
+  "no checks reported", so the PR is left open on its branch. Until that is fixed, use
+  `--no-merge` and merge by hand after `gh pr checks --watch`. Never use `--allow-no-checks` to
+  get around it, because it would merge before CI starts.
+- **New guards:** `check_em_dash.py`, `check_write_newline.py` (Hard Rule 5, which now has a
+  mechanical check), `check_manifest_spec_reads.py`, `check_repo_hygiene.py`; a fragment
+  presence check (`check_changelog_fragments --base`); `scripts/ruff.toml`.
+- **`ci-notices.yml`** runs `check_third_party_notices.py` on windows-latest on every
+  dependency-touching PR. Its first real run was green.
+- **`scripts/hooks/require_premerge_before_pr.py`** is written and tested but **not
+  registered** in `.claude/settings.json`. That is deliberate (#451): in a shared-checkout wave,
+  premerge sees other lanes' in-flight edits, so a stamp keyed by HEAD either blocks every PR
+  mid-wave or means less than it claims. Decide whether premerge should run in a temporary
+  worktree of the commit being landed before registering it.
 
-## What exists now that did not this morning
+## Found this session, worth more than the fixes
 
-- **A real app.** Shell, run progress page, navigation, theme, window placement, a string
-  resource provider, and a SQLite run history with forward migrations under `PRAGMA
-  user_version`, WAL, and four repositories.
-- **A real cloud layer.** `FakeGcp` with scripted failures (billing off, API off, quota,
-  stockout, 403, org policy, preempt, already-exists, network), `CloudErrorClassifier` driven by
-  recorded fixtures with their evaluation order, `VmSpec` refusing a spec the real API would
-  reject, an operation poller with backoff and deadlines, and `CloudJobRunner` end to end over
-  the fake.
-- **Surprisal is wired.** It had a module and thirteen passing tests and no caller. It now has a
-  config flag, a CLI flag, three track files, a TSV column and stats, computed inside the
-  existing forward/reverse pass with zero extra predictor calls.
-- **`provenance.json`**, written unconditionally, including on partial and cancelled runs.
-- **`THIRD-PARTY-NOTICES.md` exists**, generated, with a staleness check that is no longer a
-  no-op passing because the file it checked did not exist.
-- **Two new guards**: `scripts/check_app_wiring.py` (nine finding codes for the C# half of
-  wired-to-nothing) and `Guards.Tests/DialogStringLiteralScanner`.
-- **Property-based tests** (Hypothesis) for windowing, direction and the readers.
+- **A framing-free review caught eight defects in a lane's finished, green, mutation-checked
+  cloud diff.** The cold-diff reviewer saw only the patch. It found that a transport timeout
+  left a run non-terminal (Hard Rule 11), that Network failures were reported as Stockout (the
+  exact CLAUDE.md pitfall), that Cancel was blocked by an open circuit breaker, and inline
+  English reaching the UI. Every one was real. Run a cold review on any cloud-path diff
+  before landing it.
+- **The worker deleted its own VM with `POST .../delete`.** Compute's `instances.delete` is an
+  HTTP DELETE on the instance URL. The old test asserted the wrong URL (#452).
+- **The reverse pass fed the model uncomplemented ambiguity codes** under the default `keep`
+  policy (#78). After an OOM halving, the recorded seam was also wrong (#456). Both were
+  wrong numbers with no error.
+- **`compile_sprint_log.py` wrote CRLF on Windows** (#444). A sweep found seven more writers
+  doing the same, and that is now guarded.
 
-## What was found that is worth more than the fixes
+## Open decisions for the owner
 
-**`_combine()` silently collapsed combined mode to a single direction.** After an OOM halving
-shrank `K` in one direction, `_combine()` compared both directions against the same stale shared
-threshold, so the halved one could never re-qualify. No error, no notice, a wrong number in the
-user's output file. Found by asking the lane that filed #407 as a `THEORY` to resolve it rather
-than leave its workaround standing; the theory itself turned out to be half wrong, and the real
-bug was one layer below it.
+#450 (CI trigger intent), and #451 (whether to register the premerge hook, see above). The
+earlier list in `OWNER_TODO.md` still stands: #301, #402 and #413 all point at the one
+unwritten Rule 21 carve-out section (#433).
 
-**A raw `AssertionError` was escaping the GenBank reader.** Biopython's scanner has bare `assert`
-statements, and a feature qualifier missing its leading `/` hits one. `except ValueError` did not
-catch it. This **disproved a claim this repo had already landed** with `MEASURED` and a fixture
-behind it (#349's "every malformed-content failure this scanner raises is a ValueError"). It was
-true of every input anyone had thought to try. Found by property-based fuzzing; 38 example-based
-GenBank tests were green and stayed green.
+## Still unproven
 
-**`analysis.stride` was parsed, never read, and the conclusion that this was fine had already
-been written into `docs/job_contract.md` as settled.** `analysis.window` *is* read (as
-`max_len`); `stride` was not, so a manifest declaring a disagreeing stride was silently
-discarded. `check_unused_fields.py` could not see it because it matches attribute reads by name
-and `DirectionResult.stride` is read - a live instance of the false negative that script
-documents about itself.
-
-**A new copy guard found three real Hard Rule 13 violations on its first run**, and a false
-positive in an existing guard (`AlwaysShowHeader="True"` read as an inline "Header" string, for
-want of a word boundary). Both now have regression tests.
-
-**A high-severity advisory rode in on a new dependency.** `Microsoft.Data.Sqlite` 9.0.9 pulled
-`SQLitePCLRaw.lib.e_sqlite3` 2.1.10 (GHSA-2m69-gcr7-jv3q). It was caught only because
-`TreatWarningsAsErrors` turns NU1903 into a build error, and then only because an unrelated lane
-ran an unrelated cross-project build. Fixed by version bump, never suppressed. #197 now puts
-CodeQL on the C# app so the next one is caught on purpose.
-
-**Two allowlist ratchets fired on schedule with nobody watching.** See
-`.claude/memory/an-allowlist-that-expires-itself.md`.
-
-## Still true, still unproven
-
-**Nothing cloud-facing has ever run against real Google Cloud**, and that is now a much larger
-surface: `CloudJobRunner`, `OperationPoller`, `CloudErrorClassifier`, `VmSpec`'s label
-validation, `FakeGcp`'s whole failure vocabulary, plus everything that was already there.
-`docs/ToTest.md` has a row for each, and the sharpest false pass is stated plainly: **`FakeGcp`
-and the classifier were written by the same agent in the same session against the same document**,
-so a failure shape that document gets wrong is wrong in both and no test between them can see it.
-
-**`check_third_party_notices.py` runs in no CI job** (#416). `ci-docs.yml`'s guard loop cannot
-run it, because that job has neither `dotnet` nor a `worker/.venv`, and it is excluded with a
-visible `::notice` rather than silently. Until #416, a GPL dependency added tomorrow is caught
-only by a human running it.
-
-**The cost ticker does not exist.** #66 shipped the progress page without it, deliberately and
-stated: `CostEstimator` is not in Core and nothing produces per-window progress yet.
-
-## One external contribution
-
-**PR #362** (Voyagerroc-Lab) was reviewed and closed by the owner. Their NaN diagnosis was
-correct and they were twenty minutes ahead of `8ce6653`, but `main` had a strict superset and
-merging would have landed an unreachable branch. **#401** is the follow-up (`inf` has the
-identical flaw), labelled `good-first-issue` and offered to them.
+Nothing cloud-facing has run against real Google Cloud. The new retry/breaker pipeline, the
+cancel paths and `StartupMetadata` are proven only against `FakeGcp`. `docs/ToTest.md` has a
+row for each.
