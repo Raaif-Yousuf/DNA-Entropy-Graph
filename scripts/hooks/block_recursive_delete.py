@@ -266,6 +266,10 @@ def _is_inside_repo(target: str) -> bool:
         # certainly repo-relative) unless it is anchored at an absolute path.
         return "*" not in target or not os.path.isabs(target)
     expanded = os.path.expandvars(os.path.expanduser(target))
+    if os.sep == "/":
+        # PowerShell on Linux accepts a backslash as a separator and POSIX Path does not, so
+        # `$env:REPO\.scratch` read as one file name beside the repo. MEASURED 2026-10-02 on CI.
+        expanded = expanded.replace("\\", "/")
     path = pathlib.Path(expanded)
     # A leading slash is absolute in the POSIX sense even on Windows, where
     # `Path("/tmp/x").is_absolute()` is False because there is no drive. Agents
@@ -329,8 +333,9 @@ _ALLOW_CASES = (
     "git clean -fd",
     "git checkout -- .scratch/",
     "rm -rf",  # no target
-    "Remove-Item -Recurse -Force $env:TEMP\\pm-abc",  # a variable that expands outside the repo
-    "rm -rf ${TEMP}/pm-abc",
+    # a variable that expands outside the repo; self_test() sets it, because Linux CI has no TEMP
+    "Remove-Item -Recurse -Force $env:DNA_SELFTEST_OUTSIDE\\pm-abc",
+    "rm -rf ${DNA_SELFTEST_OUTSIDE}/pm-abc",
 )
 
 
@@ -340,6 +345,9 @@ def self_test() -> int:
     that has never said no."""
     import subprocess
 
+    import tempfile
+
+    os.environ["DNA_SELFTEST_OUTSIDE"] = tempfile.gettempdir()
     failures = 0
     for command in _DENY_CASES:
         if verdict(command) is None:
