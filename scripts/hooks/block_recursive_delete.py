@@ -344,7 +344,6 @@ def self_test() -> int:
     has only ever been run on a clean tree is not a guard; it is a line
     that has never said no."""
     import subprocess
-
     import tempfile
 
     os.environ["DNA_SELFTEST_OUTSIDE"] = tempfile.gettempdir()
