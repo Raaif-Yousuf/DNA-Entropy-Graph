@@ -24,9 +24,18 @@ internal static class RepoPaths
             && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
         .ToArray();
 
-    private static string FindAppRoot()
+    // MEASURED 2026-10-02: under `dotnet test --artifacts-path <dir outside the repo>` (the per-lane
+    // convention for concurrent agents) the output directory is not under app/, so walking up from it
+    // found nothing and 9 guards threw. The compile-time path of this source file is the fallback.
+    private static string FindAppRoot([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        => FindSlnAbove(AppContext.BaseDirectory) ?? FindSlnAbove(Path.GetDirectoryName(thisFile))
+        ?? throw new InvalidOperationException(
+            $"Could not find DnaEntropyGraph.sln by walking up from {AppContext.BaseDirectory} or {thisFile}. " +
+            "A guard that cannot find the app/ tree would silently scan nothing and pass for the wrong reason.");
+
+    private static string? FindSlnAbove(string? start)
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        var dir = string.IsNullOrEmpty(start) ? null : new DirectoryInfo(start);
         while (dir is not null)
         {
             if (File.Exists(Path.Combine(dir.FullName, "DnaEntropyGraph.sln")))
@@ -37,8 +46,6 @@ internal static class RepoPaths
             dir = dir.Parent;
         }
 
-        throw new InvalidOperationException(
-            $"Could not find DnaEntropyGraph.sln by walking up from {AppContext.BaseDirectory}. " +
-            "A guard that cannot find the app/ tree would silently scan nothing and pass for the wrong reason.");
+        return null;
     }
 }

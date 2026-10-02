@@ -1,0 +1,1 @@
+- Guards.Tests now find the `app/` tree when built with `dotnet test --artifacts-path <dir outside the repo>` (the per-lane convention `scripts/heavy.py` applies): `RepoPaths` falls back from the test binary's directory to the compile-time path of its own source file. Before, 9 guards threw under a private artifacts path.
