@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from dna_entropy import pipeline
-from dna_entropy.config import RunConfig
+from dna_entropy.config import RunConfig, TrackFormat
 from dna_entropy.readers import detect
 from dna_entropy.readers.fasta import read_fasta
 from dna_entropy.readers.genbank import GenBankReadError, read_genbank
@@ -400,12 +400,10 @@ def test_pipeline_genbank_input(tmp_path: Path) -> None:
         "tl.gb",
         "tl.fasta",
         "tl.entropy.bedgraph",
-        "tl.entropy.wig",
         "tl.entropy.geneious.gff3",
         "tl.entropy.tsv",
         "tl.genes.gff3",
         "tl.surprisal.bedgraph",
-        "tl.surprisal.wig",
         "tl.surprisal.geneious.gff3",
         "provenance.json",
         "stats.txt",
@@ -477,12 +475,10 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
         "mt.gb",
         "mt.fasta",
         "mt.entropy.bedgraph",
-        "mt.entropy.wig",
         "mt.entropy.geneious.gff3",
         "mt.entropy.tsv",
         "mt.genes.gff3",
         "mt.surprisal.bedgraph",
-        "mt.surprisal.wig",
         "mt.surprisal.geneious.gff3",
         "provenance.json",
         "stats.txt",
@@ -496,11 +492,6 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
     gb_path = next(p for p in result.outputs if p.endswith(".gb"))
     recs = list(SeqIO.parse(gb_path, "genbank"))
     assert len(recs) == 2
-
-    # The WIG has a fixedStep block per record (chrom = each contig name).
-    wig_text = Path(next(p for p in result.outputs if p.endswith(".wig"))).read_text()
-    assert wig_text.count("fixedStep") == 2
-    assert "chrom=mt_1" in wig_text and "chrom=mt_2" in wig_text
 
     # The FASTA (for loading as an IGV genome) holds both contigs, named to match the track.
     fasta_text = Path(next(p for p in result.outputs if p.endswith(".fasta"))).read_text()
@@ -519,3 +510,54 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
     stats = Path(next(p for p in result.outputs if p.endswith("stats.txt"))).read_text()
     assert "records:            2" in stats
     assert "[mt_1]" in stats and "[mt_2]" in stats
+
+
+# --- #412: a GenBank input honours track_format exactly like every other input ------------
+
+
+def test_genbank_wig_format_writes_wig_and_no_bedgraph_for_entropy_and_surprisal(tmp_path: Path) -> None:
+    cfg = RunConfig(name="mt", input_path=MULTI_GB, out_dir=str(tmp_path), track_format=TrackFormat.WIG)
+    result = pipeline.run(cfg)
+    names = {Path(p).name for p in result.outputs}
+    assert "mt.entropy.wig" in names and "mt.surprisal.wig" in names
+    assert not any(n.endswith(".bedgraph") for n in names)
+    on_disk = {p.name for p in tmp_path.iterdir()}
+    assert not any(n.endswith(".bedgraph") for n in on_disk)
+
+    # The WIG has a fixedStep block per record (chrom = each contig name).
+    wig_text = Path(next(p for p in result.outputs if p.endswith("mt.entropy.wig"))).read_text()
+    assert wig_text.count("fixedStep") == 2
+    assert "chrom=mt_1" in wig_text and "chrom=mt_2" in wig_text
+
+
+def test_genbank_bedgraph_format_writes_no_wig(tmp_path: Path) -> None:
+    cfg = RunConfig(name="mt", input_path=MULTI_GB, out_dir=str(tmp_path), track_format=TrackFormat.BEDGRAPH)
+    result = pipeline.run(cfg)
+    assert not any(Path(p).name.endswith(".wig") for p in result.outputs)
+    assert not any(p.suffix == ".wig" for p in tmp_path.iterdir())
+
+
+def test_genbank_and_fasta_inputs_write_the_same_track_files_for_the_same_format(tmp_path: Path) -> None:
+    for fmt, ext in ((TrackFormat.BEDGRAPH, ".bedgraph"), (TrackFormat.WIG, ".wig")):
+        gb_dir, fa_dir = tmp_path / f"gb{ext}", tmp_path / f"fa{ext}"
+        gb = pipeline.run(RunConfig(name="x", input_path=SAMPLE_GB, out_dir=str(gb_dir), track_format=fmt))
+        fa = pipeline.run(RunConfig(name="x", input_path=SAMPLE_FA, out_dir=str(fa_dir), track_format=fmt))
+        gb_tracks = {Path(p).name for p in gb.outputs if p.endswith((".bedgraph", ".wig"))}
+        fa_tracks = {Path(p).name for p in fa.outputs if p.endswith((".bedgraph", ".wig"))}
+        assert gb_tracks == fa_tracks
+        assert gb_tracks and all(n.endswith(ext) for n in gb_tracks)
+
+
+def test_genbank_both_separate_fwd_rev_tracks_follow_the_track_format(tmp_path: Path) -> None:
+    from dna_entropy.config import Direction
+
+    cfg = RunConfig(
+        name="sep",
+        input_path=SAMPLE_GB,
+        out_dir=str(tmp_path),
+        track_format=TrackFormat.WIG,
+        direction=Direction.BOTH_SEPARATE,
+    )
+    names = {Path(p).name for p in pipeline.run(cfg).outputs}
+    assert "sep.entropy.fwd.wig" in names and "sep.entropy.rev.wig" in names
+    assert not any(n.endswith(".bedgraph") for n in names)

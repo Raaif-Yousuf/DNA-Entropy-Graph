@@ -271,7 +271,8 @@ def _write_provenance(
 
 def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
     """GenBank input -> ONE GenBank (all records, genes preserved + entropy notes), a
-    FASTA + bedGraph + WIG + Geneious track (a block per record), and ONE stats.txt.
+    FASTA + one track format (bedGraph or WIG, per ``cfg.track_format``) + Geneious track (a block
+    per record), and ONE stats.txt.
 
     Everything is sourced straight from the GenBank records (sequence and existing genes);
     Prodigal is never run on this path. ``processed`` is a list of ``(Contig, DirectionResult)``.
@@ -281,6 +282,7 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
     regardless.
     """
     outputs: list[str] = []
+    track_writer = _select_track_writer(cfg)
 
     if cfg.include_genbank:
         outputs.append(
@@ -300,36 +302,18 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
         )
     if cfg.include_track:
         outputs.append(
-            BedGraphWriter().write_multi(
+            track_writer.write_multi(
                 name=cfg.name,
                 blocks=[(c.name, dr.values) for c, dr in processed],
                 start=cfg.start,
                 out_dir=cfg.out_dir,
             )
         )
-        outputs.append(
-            WigWriter().write_multi(
-                name=cfg.name,
-                blocks=[(c.name, dr.values) for c, dr in processed],
-                start=cfg.start,
-                out_dir=cfg.out_dir,
-            )
-        )
-        # issue #123: GenBank input writes both bedgraph AND wig unconditionally for
-        # entropy (the pre-existing asymmetry job_contract.md §3 already notes); surprisal
-        # matches that same shape rather than inventing a new one.
+        # issue #123/#412: surprisal uses the SAME track writer as entropy, so the two
+        # can never diverge (and GenBank input honours track_format like every other input).
         if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
             outputs.append(
-                BedGraphWriter().write_multi(
-                    name=cfg.name,
-                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
-                    start=cfg.start,
-                    out_dir=cfg.out_dir,
-                    metric="surprisal",
-                )
-            )
-            outputs.append(
-                WigWriter().write_multi(
+                track_writer.write_multi(
                     name=cfg.name,
                     blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
                     start=cfg.start,
@@ -377,10 +361,10 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
         outputs.append(_write_tsv(cfg, processed))
 
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
-    # record, alongside the combined bedGraph above.
+    # record, alongside the combined track above.
     if cfg.include_track and any(dr.forward_values is not None for _, dr in processed):
         outputs.append(
-            BedGraphWriter().write_multi(
+            track_writer.write_multi(
                 name=cfg.name,
                 blocks=[(c.name, dr.forward_values) for c, dr in processed],
                 start=cfg.start,
@@ -389,7 +373,7 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
             )
         )
         outputs.append(
-            BedGraphWriter().write_multi(
+            track_writer.write_multi(
                 name=cfg.name,
                 blocks=[(c.name, dr.reverse_values) for c, dr in processed],
                 start=cfg.start,
