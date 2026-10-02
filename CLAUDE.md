@@ -52,7 +52,7 @@ Add a carve-out to the guard's allowlist AND `hard_rules.md`, or to neither.
    of `2K` with stride `K` (context length `K`), each run forward and on the reverse
    complement, and combined by `analysis/direction.py`. A per-base rolling window is
    forbidden.
-5. **ASCII-safe console output in the worker; files are UTF-8 with LF.** `OK:` /
+5. **ASCII-safe console output in the worker; files are UTF-8 with LF.** (G) `OK:` /
    `ERROR:` / `-`, never glyphs. Every file writer passes `encoding="utf-8", newline="\n"`.
 
 ### The split (new)
@@ -112,7 +112,8 @@ Add a carve-out to the guard's allowlist AND `hard_rules.md`, or to neither.
 15. **Tests first.** A new class gets its test file before its code; a new worker module
     gets `worker/tests/test_<module>.py` first. Red output in the transcript, then code,
     then green. `dotnet test` and `pytest -m "not gpu"` are green on the laptop before any
-    commit. **GPU tests run only via `scripts/cloud_gpu_test.ps1`** on a labelled VM in the
+    commit; `scripts/premerge.py --fast` runs every gate in one command (full mode only with
+    no agent mid-edit). **GPU tests run only via `scripts/cloud_gpu_test.ps1`** on a labelled VM in the
     owner's project; the dev laptop has an Intel Arc and cannot.
 16. **Docs in the same commit.** Behaviour change -> the relevant `docs/` file changes in
     the same commit. On a branch write `docs/changelog.d/<branch-name>.md` (slashes to
@@ -208,6 +209,14 @@ setting saved and never read. Before reporting anything done, **name the one obs
 that would differ if it were wired to nothing, and check it.** The `/wired-to-nothing`
 skill has the per-shape table.
 
+**Shared-checkout landing and Windows tooling traps.** MEASURED 2026-10-02:
+- `gh issue list` truncates silently (default 30); query `--milestone`/`--label` with `--limit 500`.
+- After a PR merges: `git checkout -B main origin/main` keeps other lanes' uncommitted edits; `git switch main` refuses.
+- Two issues in one file: stage hunks via `git apply --cached` fed **bytes**; Python `text=True` on Windows corrupts the patch (cp1252 + CRLF).
+- `dotnet format --verify-no-changes` fails ENDOFLINE on every file in this autocrlf checkout (#462); premerge reports it as KNOWN.
+- A test that plants a forbidden literal (a user-home path) must build it at runtime, or the real guard flags the test file.
+- Cold-review (`cold-diff-reviewer`, patch only) every cloud-path diff before landing; it found 8 real defects in a green, mutation-checked one.
+
 **Long operations never block a tool call or the UI thread.** Create + boot + pull + run is
 6 to 20 minutes. The runner is a polled state machine, progress is a stream of events, and an
 agent driving `cloud_gpu_test.ps1` launches detached and polls the log.
@@ -238,4 +247,4 @@ agent driving `cloud_gpu_test.ps1` launches detached and polls the log.
 | For the lab user (separate voice) | [docs/user_guide/](docs/user_guide/README.md) |
 | Things only the owner can do | [OWNER_TODO.md](OWNER_TODO.md) |
 
-*Last updated: 2026-09-19 | v0.1 not yet cut.*
+*Last updated: 2026-10-02 | v0.1 not yet cut.*
