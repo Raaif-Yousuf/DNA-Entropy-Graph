@@ -116,3 +116,38 @@ def test_short_sequence_warns_but_passes() -> None:
 
 def test_clean_sequence_has_no_notices() -> None:
     assert validate_sequence("ATGCATGCATGC").notices == []
+
+
+# --- issue #468: a non-ASCII letter is refused, never case-folded into an ASCII one ------
+
+
+@pytest.mark.parametrize(
+    ("letter", "codepoint"),
+    [
+        ("\u00df", "U+00DF"),  # sharp s: str.upper() gives "SS", two valid IUPAC codes
+        ("\u017f", "U+017F"),  # long s: str.upper() gives "S", a valid IUPAC code
+        ("\ufb01", "U+FB01"),  # the "fi" ligature: str.upper() gives "FI"
+        ("\u0131", "U+0131"),  # dotless i: str.upper() gives "I"
+        ("\u212a", "U+212A"),  # Kelvin sign: already uppercase, lowercases to "k"
+    ],
+)
+@pytest.mark.parametrize("policy", ["error", "keep", "mask"])
+def test_non_ascii_letter_is_refused_naming_it_and_its_position(
+    letter: str, codepoint: str, policy: str
+) -> None:
+    with pytest.raises(ValidationError) as exc:
+        validate_sequence("ACGT" + letter + "ACGT", ambiguity_policy=policy)
+    message = str(exc.value)
+    assert codepoint in message
+    assert "position 5" in message  # not shifted by a lengthened sequence
+    assert message.isascii()  # Hard Rule 5: the console never sees a glyph
+
+
+def test_issue_468_reproduction_string_is_refused() -> None:
+    with pytest.raises(ValidationError, match="position 5"):
+        validate_sequence("ACGT" + "\u00df" + "ACGT" + "\u017f" + "ACGT", ambiguity_policy="keep")
+
+
+def test_ascii_lowercase_is_still_uppercased_including_iupac_codes() -> None:
+    result = validate_sequence("acgtnrysw", ambiguity_policy="keep")
+    assert result.seq == "ACGTNRYSW"

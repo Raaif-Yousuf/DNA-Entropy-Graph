@@ -99,12 +99,66 @@ cleanup() {
   local url="https://compute.googleapis.com/compute/v1/projects/${PROJECT}/zones/${ZONE}/instances/${NAME}"
   case "$1" in
     delete) curl -sf -X DELETE -H "Authorization: Bearer $(token)" "$url" || true ;;
-    # "keep" stops too, on purpose and for now (issue #464): nothing here knows the
-    # keep-alive window, and Hard Rule 11 forbids keeping a VM with no expiry, so
-    # stopping early is the only safe reading until the window has an owner. Any
-    # unknown value also stops: the billing meter must never be left running.
+    # "keep" reaching HERE (an error trap, a failed boot step, or the reboot short-circuit)
+    # stops: no window is being honoured on those paths, and Hard Rule 11 forbids keeping a
+    # VM with no expiry. The normal keep path goes through keep_hold, which waits out the
+    # window and then calls cleanup with stop or delete. Any unknown value also stops: the
+    # billing meter must never be left running.
     stop|keep|*) curl -sf -X POST -H "Authorization: Bearer $(token)" "${url}/stop" || true ;;
   esac
+}
+
+# Keep-alive (issue #464, Hard Rule 11): this script owns the window. `deg-lifecycle=keep`
+# used to fall through cleanup() and stop the VM the moment the container exited.
+#
+# keep_plan MANIFEST MAX_RUN_MIN ELAPSED_S prints "<wait seconds> <stop|delete>". The wait
+# is lifecycle.keepAliveMinutes from the manifest, capped so the VM is stopped or deleted
+# at least 10 minutes before maxRunDuration (which, with instanceTerminationAction=DELETE,
+# is the hard backstop; the shutdown deadman armed above is the last resort). Anything
+# unreadable, missing, negative or non-numeric means "0 stop": nothing to hold the VM for,
+# so it stops now. afterKeepAlive can only be stop or delete, never keep.
+keep_plan() {
+  python3 - "$1" "$2" "$3" <<'PY' 2>/dev/null || echo "0 stop"
+import json, sys
+path, max_run_min, elapsed = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+wait, after = 0, "stop"
+try:
+    with open(path, encoding="utf-8") as fh:
+        life = json.load(fh).get("lifecycle") or {}
+    minutes = life.get("keepAliveMinutes", 0)
+    if isinstance(minutes, int) and not isinstance(minutes, bool) and minutes > 0:
+        wait = max(0, min(minutes * 60, max_run_min * 60 - elapsed - 600))
+    if life.get("afterKeepAlive") == "delete":
+        after = "delete"
+except Exception:
+    wait, after = 0, "stop"
+print(wait, after)
+PY
+}
+
+# keep_hold RC: RC is the worker's exit code (0 done, 2 failed, 3 cancelled).
+# DECISION (agent-made on the owner's behalf, reversible): only a SUCCESSFUL run (RC 0) is
+# held for its window. A failed or cancelled run applies afterKeepAlive (default stop)
+# immediately: holding it would bill idle GPU time for a job that produced nothing worth
+# keeping warm for. Elapsed time is the VM's real uptime (/proc/uptime, which also counts
+# the boot and the docker pull), falling back to $SECONDS only if that file is unreadable.
+keep_hold() {
+  local rc=$1 plan wait_s after end up
+  up=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+  plan=$(keep_plan /work/manifest.json "$MAX_RUN_MIN" "${up:-$SECONDS}")
+  wait_s=${plan%% *}
+  after=${plan#* }
+  if [ "$rc" != "0" ]; then
+    echo "keep-alive: worker exit code ${rc} (not a successful run), so no hold: applying ${after} now"
+    wait_s=0
+  else
+    echo "keep-alive: holding the VM for ${wait_s}s, then applying ${after} (maxRunDuration and the shutdown deadman remain the backstops)"
+  fi
+  end=$(( SECONDS + wait_s ))
+  while [ "$SECONDS" -lt "$end" ]; do
+    sleep 15
+  done
+  cleanup "$after"
 }
 
 # Any uncaught error anywhere below this line reports WORKER_CRASH and applies the
@@ -187,11 +241,19 @@ rc=$?
 # outcome). Calling the API a second time would repeat a finished action, so for 10/11
 # this only uploads the startup log and exits. If the worker's own call failed it returns
 # the ordinary outcome code instead, and 0/2/3 still run cleanup "$LIFECYCLE" as the
-# backstop.
+# backstop. With lifecycle=keep the 0/2/3 branch goes to keep_hold: DECISION (agent-made on
+# the owner's behalf, reversible): only rc 0 is held for the keep-alive window; rc 2 and 3
+# apply afterKeepAlive at once.
 case $rc in
   10|11)
     kill "$RELAY_PID" 2>/dev/null || true
     put_object /var/log/deg-startup.log "jobs/${JOB}/logs/startup.log" || true
     ;;
-  *)  cleanup "$LIFECYCLE" ;;
+  *)
+    if [ "$LIFECYCLE" = "keep" ]; then
+      keep_hold "$rc"
+    else
+      cleanup "$LIFECYCLE"
+    fi
+    ;;
 esac
