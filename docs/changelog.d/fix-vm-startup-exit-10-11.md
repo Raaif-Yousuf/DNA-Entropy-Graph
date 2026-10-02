@@ -1,0 +1,1 @@
+- fix(vm): the startup script no longer calls the Compute API again after the worker exits 10 or 11 (it already stopped or deleted the VM); it uploads the startup log and exits; lifecycle keep is documented as stop for now (#464)

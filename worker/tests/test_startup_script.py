@@ -124,10 +124,23 @@ def test_error_trap_reports_worker_crash_and_applies_lifecycle() -> None:
 
 
 def test_exit_code_dispatch_matches_the_cli_contract() -> None:
-    """Must match worker/src/dna_entropy/worker/cli.py's EXIT_* constants exactly."""
-    text = _text()
-    assert "10) cleanup stop" in text.replace(" ", "").replace("\n", " ") or "10) cleanup stop" in text
-    assert "11) cleanup delete" in text.replace(" ", "").replace("\n", " ") or "11) cleanup delete" in text
+    """worker/src/dna_entropy/worker/cli.py (issue #44): exit 10/11 mean the worker already
+    stopped/deleted the VM itself, so the script must NOT apply the lifecycle a second time;
+    every other code (0 done, 2 failed, 3 cancelled) still runs cleanup "$LIFECYCLE" as the
+    backstop."""
+    import re
+
+    from dna_entropy.worker import cli
+
+    assert (cli.EXIT_REQUEST_STOP, cli.EXIT_REQUEST_DELETE) == (10, 11)
+    code = _code_only()
+    case = re.search(r"case \$rc in(.*?)\nesac", code, re.DOTALL)
+    assert case, "no `case $rc in ... esac` dispatch found"
+    body = case.group(1)
+    already_applied, _, backstop = body.partition("*)")
+    assert re.search(r"(^|\s)10\|11\)", already_applied), already_applied
+    assert "cleanup" not in already_applied, "10/11 must not call cleanup (no second Compute API call)"
+    assert 'cleanup "$LIFECYCLE"' in backstop
 
 
 def test_uses_curl_unconditionally_no_gcloud_dependency() -> None:

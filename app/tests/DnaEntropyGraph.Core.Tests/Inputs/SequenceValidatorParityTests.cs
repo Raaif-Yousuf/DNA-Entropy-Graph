@@ -29,7 +29,9 @@ public sealed class SequenceValidatorParityTests
     {
         var json = File.ReadAllText(ContractFixtures.Path("cli_validate_parity.json"));
         var fixture = JsonSerializer.Deserialize<FixtureFile>(json) ?? throw new InvalidOperationException("empty fixture");
-        foreach (var c in fixture.Cases)
+        // `ambiguity_cases` (issue #392) replay through the same assertion: they
+        // exist because `validate` now takes --ambiguity, default keep.
+        foreach (var c in fixture.Cases.Concat(fixture.AmbiguityCases))
         {
             yield return [c];
         }
@@ -54,6 +56,24 @@ public sealed class SequenceValidatorParityTests
             + "is being skipped silently.");
     }
 
+    /// <summary>
+    /// The `ambiguity_cases` block is what proves --ambiguity is read at all: if
+    /// it stopped being replayed, a validator that ignored the policy would
+    /// still pass every other case (none of them contains an ambiguity code).
+    /// </summary>
+    [Fact]
+    public void The_ambiguity_cases_are_replayed_and_cover_all_three_policies()
+    {
+        var ids = Cases().Select(c => ((FixtureCase)c[0]).Id).ToList();
+
+        ids.ShouldContain(id => id.StartsWith("ambiguity_", StringComparison.Ordinal));
+        var policies = Cases().Select(c => PolicyFor((FixtureCase)c[0])).ToHashSet();
+        policies.ShouldBeSubsetOf(Enum.GetValues<AmbiguityPolicy>());
+        policies.ShouldContain(AmbiguityPolicy.Keep);
+        policies.ShouldContain(AmbiguityPolicy.Mask);
+        policies.ShouldContain(AmbiguityPolicy.Error);
+    }
+
     [Theory]
     [MemberData(nameof(Cases))]
     public void Matches_the_real_worker_cli_byte_for_byte(FixtureCase testCase)
@@ -69,7 +89,7 @@ public sealed class SequenceValidatorParityTests
                 maxLen: CliDefaultMaxLen,
                 rna: rna,
                 minLen: SequenceValidator.DefaultMinLen,
-                ambiguityPolicy: AmbiguityPolicy.Error); // the CLI `validate` command never passes a policy through - see class docs
+                ambiguityPolicy: PolicyFor(testCase));
             actualOutput = string.Concat(result.Notices.Select(n => $"  - {n}\n")) + $"OK: valid sequence, {result.Length} nt\n";
             testCase.ExitCode.ShouldBe(0, $"case {testCase.Id} expected exit {testCase.ExitCode} but the C# port accepted the input");
         }
@@ -81,6 +101,28 @@ public sealed class SequenceValidatorParityTests
         }
 
         actualOutput.ShouldBe(testCase.Output, $"case {testCase.Id} diverges from the golden vector");
+    }
+
+    /// <summary>
+    /// The CLI `validate` command's own --ambiguity handling: default keep (the same
+    /// default `run` has), "error" refuses and "mask" masks to N.
+    /// </summary>
+    private static AmbiguityPolicy PolicyFor(FixtureCase testCase)
+    {
+        var index = testCase.Args.IndexOf("--ambiguity");
+        if (index < 0)
+        {
+            return AmbiguityPolicy.Keep;
+        }
+
+        index.ShouldBeLessThan(testCase.Args.Count - 1, $"case {testCase.Id} has --ambiguity with no value");
+        return testCase.Args[index + 1] switch
+        {
+            "keep" => AmbiguityPolicy.Keep,
+            "mask" => AmbiguityPolicy.Mask,
+            "error" => AmbiguityPolicy.Error,
+            var other => throw new InvalidOperationException($"case {testCase.Id}: unknown --ambiguity value '{other}'"),
+        };
     }
 
     private static string ResolveInputText(FixtureCase testCase)
@@ -106,6 +148,9 @@ public sealed class SequenceValidatorParityTests
     {
         [JsonPropertyName("cases")]
         public List<FixtureCase> Cases { get; set; } = [];
+
+        [JsonPropertyName("ambiguity_cases")]
+        public List<FixtureCase> AmbiguityCases { get; set; } = [];
     }
 
     public sealed class FixtureCase

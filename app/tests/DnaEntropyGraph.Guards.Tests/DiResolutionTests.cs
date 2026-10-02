@@ -124,6 +124,37 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void CloudJobRunner_is_registered_and_JobEngine_is_the_same_instance_behind_both_interfaces()
+    {
+        using var provider = BuildRealServiceProvider();
+
+        // Issue #428: a runner nothing constructs is the wired-to-nothing bug.
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.CloudJobRunner>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IJobEngine>()
+            .ShouldBeSameAs(provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.IRunVmActions>());
+    }
+
+    [Fact]
+    public async Task Gateways_resolved_from_the_real_container_retry_transient_failures()
+    {
+        // Issue #258's observable, through the production registration: two
+        // 503s then success completes with two retries logged. If the
+        // gateways were registered without the resilience wrapper, the first
+        // 503 would surface as an exception here.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value);
+        services.AddSingleton(new DnaEntropyGraph.Cloud.CloudRetryOptions { BaseDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero });
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<DnaEntropyGraph.Cloud.FakeGcp>().WithTransientFailures(503, 2);
+
+        var enabled = await provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IProjectSetupGateway>()
+            .IsBillingEnabledAsync("my-project", CancellationToken.None);
+
+        enabled.ShouldBeTrue();
+        provider.GetRequiredService<DnaEntropyGraph.Cloud.CloudRetryLog>().Retries.Count.ShouldBe(2);
+    }
+
+    [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {
         Should.NotThrow(() =>

@@ -1,0 +1,1 @@
+- feat(cloud): every gateway call now goes through one resilience pipeline (Polly.Core, BSD-3-Clause): 429 (not quota) and 5xx and transport failures retry with jittered backoff then give up as a network error, a 401 refreshes the token once, and a circuit breaker exposes an offline flag; FakeGcp can script transient and 401 failures (#258)

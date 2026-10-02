@@ -7,6 +7,11 @@ rendered per job in C# — every per-job value (bucket, job id, worker image dig
 lifecycle action, whether a GPU is expected, max run minutes) is read at boot time from
 this instance's own metadata attributes via `meta()`, not baked into the script text.
 
+The C# side that attaches this script and its attributes to a VM, and validates every
+attribute value before it is sent, is `StartupMetadata` in `DnaEntropyGraph.Core` (issue #261;
+docs/cloud_design.md section 13). This file is embedded into the app as-is, so editing it
+changes what the next app build sends.
+
 ## What it does, in order
 
 1. Reads its own identity and the job's attributes from the instance metadata server.
@@ -24,7 +29,10 @@ this instance's own metadata attributes via `meta()`, not baked into the script 
    `worker/src/dna_entropy/worker/cli.py`. From here the container owns every stage from
    `restoring-cache` through the terminal state, the real heartbeat/progress cadence, and
    uploading outputs.
-7. Interprets the container's exit code and calls `cleanup()`, which stops or deletes the
+7. Interprets the container's exit code. Exit 10/11 mean the worker already stopped or
+   deleted the VM itself through the Compute API (issue #44): the script then only uploads
+   `logs/startup.log` and exits, never repeating the action. Exit 0/2/3 call `cleanup()`,
+   the backstop, which stops or deletes the
    VM **via the Compute API on itself**, using its own metadata-token credentials —
    **never** `shutdown -h` as the primary mechanism. `instanceTerminationAction=DELETE`
    only fires when Compute Engine itself stops the VM at its `maxRunDuration` deadline,

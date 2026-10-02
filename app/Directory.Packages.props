@@ -13,6 +13,9 @@
     <!-- DI, used by App -->
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
 
+    <!-- Cloud: retry, jitter and circuit breaker for every gateway call (issue #258). Polly is BSD-3-Clause. -->
+    <PackageVersion Include="Polly.Core" Version="8.6.5" />
+
     <!-- Tests: xUnit v3, Shouldly, NSubstitute (Hard Rule 21 - not FluentAssertions 8+, not Moq) -->
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
