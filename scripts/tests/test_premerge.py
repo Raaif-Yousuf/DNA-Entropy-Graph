@@ -92,7 +92,7 @@ def test_planted_home_path_is_named_by_the_one_command(tmp_path):
     (tmp_path / "scripts").mkdir()
     shutil.copy(SCRIPTS_DIR / "check_user_home_paths.py", tmp_path / "scripts" / "check_user_home_paths.py")
     leaked = tmp_path / "notes.md"
-    leaked.write_text("see C:\\Users\\realperson\\Downloads\\x.fasta\n", encoding="utf-8", newline="\n")
+    leaked.write_text("see C:\\" + "Users\\realperson\\Downloads\\x.fasta\n", encoding="utf-8", newline="\n")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
 
