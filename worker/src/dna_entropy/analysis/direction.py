@@ -24,14 +24,20 @@ from .entropy import shannon_entropy
 from .surprisal import surprisal as compute_surprisal
 from .windowing import WindowPlan, halved, plan_windows
 
-_COMPLEMENT = str.maketrans("ACGT", "TGCA")
+# The full IUPAC nucleotide alphabet: the 4 bases plus the 11 ambiguity codes. Under
+# ``ambiguityPolicy=keep`` an ambiguity code survives validation and reaches the model, so
+# the reverse pass must complement it (R<->Y, K<->M, B<->V, D<->H; N, S, W are their own
+# complement), not just reverse it (issue #78, MEASURED 2026-10-02). ``mask`` rewrites every
+# code to N during validation, before any windowing, so it never gets here as anything else.
+_COMPLEMENT = str.maketrans("ACGTRYKMBDHVNSW", "TGCAYRMKVHDBNSW")
 
 
 def reverse_complement(seq: str) -> str:
-    """Reverse-complement a validated, uppercase A/C/G/T sequence.
+    """Reverse-complement a validated, uppercase IUPAC nucleotide sequence.
 
     NOT the same as ``seq[::-1]`` (plain reversal) — that is not DNA and is never used
-    here. ``A<->T``, ``C<->G``; the whole string is also reversed so it reads 5'->3'.
+    here. ``A<->T``, ``C<->G`` and the ambiguity codes per the module-level table; the
+    whole string is also reversed so it reads 5'->3'.
     """
     return seq.translate(_COMPLEMENT)[::-1]
 
@@ -357,8 +363,20 @@ def analyze_direction(
             rev_k_used,
             averaged=(direction is Direction.BOTH_AVERAGED),
         )
-        if length >= 2 * context_length:
-            seam = context_length
+        # issue #456, MEASURED 2026-10-02: the seam is where the combiner switches from the
+        # reverse to the forward pass, i.e. the K the FORWARD pass actually ran with
+        # (`fwd_k_used`), and a clean seam exists only when both passes' actual Ks fit the
+        # sequence. After an OOM halving these differ from the configured K; recording the
+        # configured value reported a seam the track does not have.
+        if length >= fwd_k_used + rev_k_used:
+            seam = fwd_k_used
+        for label, k_used in (("forward", fwd_k_used), ("reverse", rev_k_used)):
+            if k_used != context_length:
+                notices.append(
+                    f"After the out-of-memory retry the {label} pass ran with K={k_used} "
+                    f"(configured K={context_length}); the forward/reverse seam follows the "
+                    "K each pass actually ran with."
+                )
         if reduced:
             notices.append(
                 f"{reduced} position(s) near the middle of the sequence had reduced "

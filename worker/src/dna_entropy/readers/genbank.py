@@ -193,6 +193,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     # not get Python's universal-newlines treatment the way str.splitlines() does, so it
     # has to be done here, before the text reaches Bio.GenBank.Scanner.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    parsed: list = []
     try:
         # #349's own claim here ("every malformed-content failure this scanner raises for
         # GenBank/EMBL is documented and observed to be a ValueError") is DISPROVEN
@@ -210,7 +211,11 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         # assumption its scanner makes, not a genuine internal-logic-error class this code
         # would want to keep visible as a crash. list() is what actually drives the parser,
         # since SeqIO.parse() returns a lazy generator that raises only once iterated.
-        parsed = list(SeqIO.parse(io.StringIO(text), "genbank"))
+        # Iterated by hand (not list()) so the failing record's position is known: the
+        # generator raises while reading record `len(parsed) + 1`. Named by INDEX, never by
+        # id (issue #253: a record id is user free text).
+        for parsed_record in SeqIO.parse(io.StringIO(text), "genbank"):
+            parsed.append(parsed_record)
     except (ValueError, AssertionError) as exc:
         # readers/fasta.py never has this failure class at all (it is hand-rolled, no
         # third-party parser to escape from) -- this is GenBank agreeing with FASTA's
@@ -225,8 +230,9 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         else:
             reason = str(exc)
         raise GenBankReadError(
-            f"Could not parse the GenBank file: {reason}. Check the file was not truncated "
-            "or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
+            f"Could not parse the GenBank file (record {len(parsed) + 1}): {reason}. Check the "
+            "file was not truncated or hand-edited, and that its ORIGIN block matches its own "
+            "LOCUS/FEATURES."
         ) from exc
     if not parsed:
         raise GenBankReadError("No GenBank records found in the file.")

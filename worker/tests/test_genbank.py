@@ -561,3 +561,22 @@ def test_genbank_both_separate_fwd_rev_tracks_follow_the_track_format(tmp_path: 
     names = {Path(p).name for p in pipeline.run(cfg).outputs}
     assert "sep.entropy.fwd.wig" in names and "sep.entropy.rev.wig" in names
     assert not any(n.endswith(".bedgraph") for n in names)
+
+
+# --- issue #162: a truncated multi-record file names the record it could not read -----------
+
+
+def test_a_truncated_multi_record_genbank_names_the_record_that_failed(tmp_path: Path) -> None:
+    text = Path(MULTI_GB).read_text(encoding="utf-8")
+    cut = tmp_path / "trunc.gb"
+    cut.write_text(text[: len(text) - 200], encoding="utf-8", newline="\n")  # chops record 2 mid-ORIGIN
+    with pytest.raises(GenBankReadError) as exc:
+        read_genbank(cut)
+    msg = str(exc.value)
+    assert "record 2" in msg, msg
+    assert "truncated" in msg  # the action stays: check the file was not truncated
+
+
+def test_a_malformed_first_record_is_named_record_1() -> None:
+    with pytest.raises(GenBankReadError, match="record 1"):
+        read_genbank(MALFORMED_DIR / "genbank_qualifier_missing_slash.gb")

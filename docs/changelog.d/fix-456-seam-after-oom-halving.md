@@ -1,0 +1,1 @@
+- fix(worker): after an OOM-halving retry the recorded seam is the forward pass's actual K (it was the configured K while the combiner switched at the halved one), and a notice names a reduced K; the seam property test now sweeps halving (#456)

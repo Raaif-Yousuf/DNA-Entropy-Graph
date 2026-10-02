@@ -50,7 +50,11 @@ rather than sample them, for properties a handful of hand-picked examples cannot
   formula over the whole valid `(L, K, ceiling)` space; the Hard Rule 3 `(L, 4)` contract
   (shape, dtype, row-sum, entropy bound) for generated sequences; entropy invariance under
   the reverse-complement column permutation; the seam recorded in provenance matching
-  where the forward/reverse combiner actually switched.
+  where the forward/reverse combiner actually switched, including after an OOM halving in
+  either direction (#456); reverse complement as an involution over the full IUPAC
+  alphabet (#78).
+- `test_property_validation.py` (#160): `validate_sequence` over the full IUPAC alphabet,
+  noise and mixed case, under each of the three ambiguity policies, and over arbitrary text.
 - `test_property_fuzz_readers.py`: the GenBank/FASTA readers, fuzzed over arbitrary bytes
   and over mutated copies of the real `sample.fasta`/`sample.gb` fixtures (byte flips,
   deletions, insertions, truncations, encoding swaps). Property: every input parses to a

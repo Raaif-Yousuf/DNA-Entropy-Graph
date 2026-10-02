@@ -1,0 +1,1 @@
+- fix(worker): the reverse pass now complements IUPAC ambiguity codes (R<->Y, K<->M, B<->V, D<->H) instead of only reversing them, so `ambiguityPolicy=keep` feeds the model a true reverse complement (#78)

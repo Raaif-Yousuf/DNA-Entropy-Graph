@@ -214,6 +214,11 @@ neither number has run on a GPU yet).
  symbols, so it does not change how spread-out the distribution is), which is what makes
  a reverse-pass entropy value directly comparable to a forward-pass one at the same
  genomic position.
+ Ambiguity codes are complemented too (`R<->Y`, `K<->M`, `B<->V`, `D<->H`; `N`, `S`, `W`
+ are their own complement): under `ambiguityPolicy=keep` the code reaches the model, so
+ the reverse pass must hand it the complemented code (**Fixed 2026-10-02, issue #78**: it
+ used to be reversed but left uncomplemented). `mask` rewrites every code to `N` during
+ validation, before any windowing, so the reverse pass only ever sees `N` there.
 
 **Combining the two passes** (`RunOptions.Direction`, default **Both, combined**):
 - **Both, combined**: base `i` takes the forward estimate when it has `>= K` bases of
@@ -223,6 +228,10 @@ neither number has run on a GPU yet).
  first `K` bases come from the reverse read, the rest from the forward read, with one
  **seam** at position `K` - drawn as a marker in the Results viewer and recorded in
  `provenance.json`.
+ **After an out-of-memory retry** (issue #456, fixed 2026-10-02) a pass may run with a
+ smaller `K` than configured; each pass is judged against the `K` it actually ran with, so
+ the seam is the **forward pass's actual `K`** (and exists only when
+ `L >= forward K + reverse K`). The run notices say when a pass ran with a reduced `K`.
 - **Both, averaged**: mean of forward and reverse wherever both have `>= K` context, same
  fallback as above elsewhere.
 - **Both, separate tracks**: emits `.entropy.fwd.*` and `.entropy.rev.*` alongside the

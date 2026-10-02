@@ -28,16 +28,17 @@ from pathlib import Path
 
 from .. import __version__ as WORKER_VERSION
 from .. import pipeline
+from ..analysis.windowing import WindowingError
 from ..config import RunConfig
 from ..predictors.base import Predictor, PredictorError
 from ..readers.input import load_input
 from ..validation.validators import ValidationError
 from .batch_limits import BatchLimitError, check_batch_limits
-from .blobstore import Blobstore, BlobstoreError, write_json
+from .blobstore import Blobstore, BlobstoreError, GcsBlobstore, write_json
 from .cancel import CancelWatcher, JobCancelledError
 from .errors import is_retriable
 from .lifecycle import LifecycleError, apply_lifecycle
-from .manifest import InputSpec, JobManifest, ManifestError
+from .manifest import InputSpec, JobManifest, ManifestError, StoreSpec
 from .result import InputResult, JobResult, ResultFile, ResultStats, ResultTiming
 from .status import (
     DEFAULT_INTERVAL_SECONDS,
@@ -120,6 +121,35 @@ class _SharedPredictor:
                 self._error = exc
                 raise
         return self._predictor
+
+
+def _check_store_matches_manifest(store: Blobstore, spec: StoreSpec) -> None:
+    """Refuse a manifest whose declared GCS ``bucket``/``prefix`` is not the store this
+    worker was started against (issue #448).
+
+    The worker's store is built from its command line before the manifest can even be read
+    (the manifest lives in it), so a manifest naming a different bucket or prefix means the
+    app and the VM disagree about where the job lives; carrying on would write outputs and
+    ``result.json`` where the app is not looking. A field the manifest leaves empty is "not
+    declared" and is not checked. ``store.root`` (a local folder) is deliberately NOT
+    cross-checked: it is the user's own folder on the same machine, and Windows path
+    spellings (case, 8.3 names, junctions) make an equality test a source of false
+    refusals for no protection a GCS bucket mismatch would need.
+    """
+    if not isinstance(store, GcsBlobstore) or spec.kind != "gcs":
+        return
+    declared_prefix = spec.prefix.strip("/")
+    actual_prefix = store.prefix.strip("/")
+    if spec.bucket and spec.bucket != store.bucket:
+        raise ManifestError(
+            f"manifest.json says this job lives in bucket {spec.bucket!r}, but this worker was "
+            f"started against bucket {store.bucket!r}. Start the job again from the app."
+        )
+    if declared_prefix and declared_prefix != actual_prefix:
+        raise ManifestError(
+            f"manifest.json says this job lives under {declared_prefix!r}, but this worker was "
+            f"started against {actual_prefix!r}. Start the job again from the app."
+        )
 
 
 def _measure_batch_total_nt(store: Blobstore, manifest: JobManifest, tmp: Path) -> int:
@@ -229,7 +259,20 @@ def _run_one_input(
         # second-OOM both used to report INPUT_INVALID instead of their real code).
         code = getattr(exc, "code", None)
         if code is None:
-            if isinstance(exc, (ValidationError, PredictorError, ManifestError, BlobstoreError)):
+            # WindowingError (K below 128, an input under 10 nt, a ceiling below K) and
+            # PipelineError (an unusable run name) are user-correctable input problems
+            # whose messages already name the fix (issue #455): not a crash, no traceback.
+            if isinstance(
+                exc,
+                (
+                    ValidationError,
+                    WindowingError,
+                    pipeline.PipelineError,
+                    PredictorError,
+                    ManifestError,
+                    BlobstoreError,
+                ),
+            ):
                 code = "INPUT_INVALID"
             else:
                 code = "WORKER_CRASH"
@@ -308,6 +351,7 @@ def run_job_outcome(
     """
     manifest_text = store.read_text(MANIFEST_PATH)
     manifest = JobManifest.parse(manifest_text)  # ManifestSchemaError/ManifestError propagate
+    _check_store_matches_manifest(store, manifest.store)  # before anything is written (#448)
 
     # Found auditing #304/#306: manifest.limits.heartbeatSeconds was parsed but never
     # reached here, so the worker always ticked at status.py's own hardcoded
