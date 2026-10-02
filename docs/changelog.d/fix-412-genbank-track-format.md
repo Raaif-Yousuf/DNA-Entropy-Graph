@@ -1,0 +1,1 @@
+- fix(worker): a GenBank input now honours the selected track format (bedGraph or WIG) like FASTA/paste input does, instead of always writing both; surprisal and both-separate fwd/rev tracks follow the same choice (#412)
