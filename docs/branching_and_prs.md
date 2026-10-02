@@ -87,6 +87,14 @@ lane merged and not after. `dev_commands.md` has the full command and gate list.
 To have GitHub check a branch anyway: `gh workflow run ci-worker.yml --ref <branch>`,
 then `gh run watch`.
 
+## Landing a lane: `scripts/land_pr.py`
+
+From a shared checkout, `scripts/land_pr.py` (see `dev_commands.md`) does branch, explicit-path commit, push, PR,
+wait-for-green, merge and return-to-main in one call, and leaves every other lane's uncommitted edits untouched.
+Run `scripts/premerge.py --fast` first, in the working tree before the tool commits: `land_pr.py` refuses without a green
+stamp on the current HEAD (`--no-premerge-check` overrides). The `gh pr create` hook cannot see the `gh` call the tool makes
+internally, so the tool does the same check itself.
+
 ## Closing keywords
 
 A commit message or PR body that says an issue is **not** fixed can still

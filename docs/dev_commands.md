@@ -135,8 +135,43 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   `docs/changelog.d/` fragment came with them (rules in `docs/changelog.d/README.md`).
 - **Not in it:** the CPU container smoke (needs Docker) and `shellcheck` (not on the laptop);
   both stay CI-only. `DnaEntropyGraph.App.UiTests` is exempt (WinUI-hosted).
+- **Pytest gates get a private `--basetemp`** (under `--log-dir`, else a temp dir premerge removes) and
+  `-p no:cacheprovider`, and their verdict follows the TEST OUTCOME. MEASURED 2026-10-02: the first full run
+  reported both pytest gates as FAIL although every test passed, because both crashed in pytest's own
+  `cleanup_dead_symlinks` on the shared default basetemp. A run that prints only passes and then exits
+  non-zero is now an `ERROR` saying it was not a test failure and not a pass.
+- **`KNOWN` status.** `dotnet format --verify-no-changes` reports ENDOFLINE on every line of a CRLF checkout
+  (`core.autocrlf=true`, #462). Only when autocrlf is true AND every parsed diagnostic is ENDOFLINE is the
+  gate `KNOWN` (exit 0, printed with the issue number); any other diagnostic, an unparseable failure or
+  autocrlf off stays `FAIL`. THEORY (unverified, written without a dotnet run): the diagnostic line shape is
+  `path(line,col): error ENDOFLINE: ...`; if it differs the parse finds nothing and the gate fails safe.
+- **The stamp.** A green, unfiltered run writes `<git-dir>/premerge-stamp.json` (HEAD sha, mode, time);
+  `scripts/hooks/require_premerge_before_pr.py` refuses `gh pr create` and `gh pr merge` without a fresh
+  stamp for the current HEAD (see `scripts/hooks/README.md`). Committing changes HEAD, so: commit, then run
+  premerge, then `gh pr create`. Escape hatch (logged): `DEG_SKIP_PREMERGE=<reason> gh pr create ...`.
 - **Timing.** A full run exceeds one tool call's 600 s cap; run `--fast` per lane, and launch the
   full run detached with `--log-dir` and poll `summary.txt`.
+
+## Landing a PR from the shared checkout: `scripts/land_pr.py`
+
+One command for the seven git/gh steps, safe while other lanes have uncommitted edits in the same tree (#445):
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\land_pr.py --list-hunks worker/src/dna_entropy/pipeline.py     # hunk indexes of a file's working-tree diff
+worker\.venv\Scripts\python.exe scripts\land_pr.py --branch fix/445-x --paths scripts/a.py docs/b.md --title "fix: ..." --body-file body.md --dry-run
+worker\.venv\Scripts\python.exe scripts\land_pr.py --branch fix/412-x --hunks worker/src/dna_entropy/pipeline.py=0 --paths docs/changelog.d/fix-412-x.md --title "fix: ..." --body-file body.md
+```
+
+- It refuses (changing nothing) on a directory path, a path with no change, an index that already holds staged
+  content it did not stage, an existing branch name, a detached HEAD, or a hunk index that does not exist.
+- It waits on `gh pr checks` and merges only when every check passed; a red check stops ON the branch and names the
+  check. **Zero checks is refused** unless `--allow-no-checks` (CI here can be on demand, and "no checks" is not green).
+- It returns the tree to main with `git checkout -B main origin/main`, never `git switch main` (MEASURED 2026-10-02:
+  `switch` refuses when a landed file is still locally modified for another issue). Other lanes' edits stay byte-identical.
+- Hunk staging builds the patch from `git diff` as BYTES and pipes it to `git apply --cached --recount -` (Windows text
+  mode corrupts non-ASCII context lines and rewrites `\n`). It is Python, not PowerShell, to avoid the
+  `pwsh -Array @(...)` flattening pitfall; list several files after `--paths` separated by spaces.
+- Its tests build a bare remote and a clone under a temp dir with a stub `gh`; nothing touches GitHub.
 
 ## Repo-wide scripts (exist today)
 
@@ -200,17 +235,18 @@ scripts/check_*.py`) — it tightens automatically as each one lands, with no
 workflow edit per issue, which is why grepping the workflow file for a
 script's literal name finds nothing even once that script is fully wired in;
 read the loop, not the filename, when checking whether a guard is enforced.
-Twelve exist as of this revision (`scripts/premerge.py --list` always has the current set), each with a
+Thirteen exist as of this revision (`scripts/premerge.py --list` always has the current set), each with a
 `--self-test` flag that runs against synthetic fixtures:
 
 ```powershell
 python scripts\check_docs_index.py            # every docs/*.md is reachable from docs/README.md's index
 python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs values, and real commit shas (--max-age-days 45 default)
 python scripts\check_user_home_paths.py       # no literal absolute user-home path in a tracked file (use %USERPROFILE%/$HOME instead)
-python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (currently a no-op notice: the file itself doesn't exist yet, #34)
+python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (needs dotnet AND the worker venv: runs in premerge full mode and in .github/workflows/ci-notices.yml, #416)
 python scripts\check_version_lockstep.py      # every version-bearing file agrees
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
 python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behaviour files changed => a fragment exists (#429); rules in docs/changelog.d/README.md
+python scripts\check_repo_hygiene.py        # legacy/clair is not tracked; AGENTS.md exists and stays under 20 lines (#449)
 python scripts\check_em_dash.py              # no em dash in user-facing copy: docs/user_guide, *.resw, ISSUE_TEMPLATE, README.md (#425)
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)

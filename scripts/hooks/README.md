@@ -1,6 +1,6 @@
 # scripts/hooks/ — testing these by hand
 
-Four hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.json`:
+Five hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.json`:
 
 - `block_git_stash.py` -- refuses a mutating `git stash` (the stash stack is shared
   across every worktree of this repo and every concurrent Claude session).
@@ -14,7 +14,14 @@ Four hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.
   `--max-run-duration`, per `docs/superpowers/specs/2026-09-18-appendix-c-repo-conventions.md`
   §4.
 
-All four read a `PreToolUse` JSON payload on stdin and answer with silence (exit 0,
+- `require_premerge_before_pr.py` -- refuses `gh pr create` and `gh pr merge` unless
+  `scripts/premerge.py` passed (green, unfiltered) on the CURRENT HEAD, recorded by
+  `scripts/premerge_stamp.py` in `<git-dir>/premerge-stamp.json` (12 hour expiry). Escape hatch, logged to
+  `<git-dir>/premerge-bypass.log`: `DEG_SKIP_PREMERGE=<reason> gh pr create ...` or the same variable in the
+  environment. Register it in `.claude/settings.json` exactly like the others, with matcher `Bash` and
+  `run_hook.py require_premerge_before_pr`.
+
+All five read a `PreToolUse` JSON payload on stdin and answer with silence (exit 0,
 no stdout) or a deny decision. They never block on their own failure: a malformed
 payload or an unexpected exception exits 0 quietly, because a hook that breaks the
 session when IT has a bug is worse than the bug it guards. `scripts/tests/` holds the
