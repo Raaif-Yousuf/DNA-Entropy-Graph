@@ -38,6 +38,35 @@ def test_reverse_uses_complement_not_reversed_text() -> None:
     assert reverse_complement(seq) == "GGGGTTTT"
 
 
+def test_reverse_complement_complements_every_iupac_ambiguity_code() -> None:
+    """MEASURED 2026-10-02 (issue #78): `reverse_complement("ACGTRYKMBDHVN")` used to return
+    "NVHDBMKYRACGT" -- reversed but R, Y, K, M, B, D, H, V left uncomplemented."""
+    pairs = {"R": "Y", "Y": "R", "K": "M", "M": "K", "B": "V", "V": "B", "D": "H", "H": "D"}
+    for code, comp in pairs.items():
+        assert reverse_complement(code) == comp
+    for self_comp in "NSW":
+        assert reverse_complement(self_comp) == self_comp
+    assert reverse_complement("ACGTRYKMBDHVN") == "NBDHVKMRYACGT"[::1]
+
+
+def test_the_reverse_pass_feeds_the_model_the_true_reverse_complement_of_a_kept_ambiguity_code() -> None:
+    """The observable: under ambiguityPolicy=keep an R reaches the predictor; the reverse
+    pass must hand it a Y at the mirrored position, not another R."""
+    seen: list[str] = []
+
+    class _Recording:
+        def predict(self, window: str) -> np.ndarray:
+            seen.append(window)
+            return MockPredictor(seed=0).predict(window)
+
+    seq = "ACGT" * 3 + "R" + "ACGT" * 3
+    analyze_direction(_Recording(), seq, context_length=8, ceiling=1024, direction=Direction.REVERSE_ONLY)
+    rc = reverse_complement(seq)
+    assert seen and all(w in rc for w in seen), "the model saw something other than rc windows"
+    assert not any("R" in w for w in seen)
+    assert any("Y" in w for w in seen)
+
+
 def test_reverse_complement_is_involutive() -> None:
     seq = "ATGCGTACGTTAGCAACGTACGATCGATCG"
     assert reverse_complement(reverse_complement(seq)) == seq
@@ -594,3 +623,113 @@ def test_surprisal_values_none_only_on_a_hand_built_direction_result() -> None:
         reduced_context_count=0,
     )
     assert hand_built.surprisal_values is None
+
+
+# --- issue #456: after an OOM halving the seam follows the K each pass ACTUALLY ran with -----
+
+
+class _OOMOnFirstPass:
+    """Predictor stub: raises PredictorOOMError on the first window of ONE direction
+    (``"forward"``: a prefix of the sequence; ``"reverse"``: a prefix of its reverse
+    complement; ``None``: never), otherwise delegates to the mock."""
+
+    def __init__(self, seq: str, direction: str | None) -> None:
+        self._prefix = {
+            "forward": seq,
+            "reverse": reverse_complement(seq),
+            None: None,
+        }[direction]
+        self._fired = direction is None
+
+    def predict(self, window: str) -> np.ndarray:
+        if not self._fired and self._prefix.startswith(window):
+            self._fired = True
+            raise PredictorOOMError("simulated OOM")
+        return MockPredictor(seed=0).predict(window)
+
+
+_SEQ_456 = "ACGTTGCAAGCT" * 20  # 240 nt
+
+
+def _combined_and_separate_456(oom_on: str | None, k: int = 16):
+    kwargs = {"context_length": k, "ceiling": 1024}
+    combined = analyze_direction(
+        _OOMOnFirstPass(_SEQ_456, oom_on), _SEQ_456, direction=Direction.BOTH_COMBINED, **kwargs
+    )
+    separate = analyze_direction(
+        _OOMOnFirstPass(_SEQ_456, oom_on), _SEQ_456, direction=Direction.BOTH_SEPARATE, **kwargs
+    )
+    return combined, separate
+
+
+def test_seam_after_a_forward_only_halving_is_the_forward_passes_actual_k() -> None:
+    """MEASURED 2026-10-02 (issue #456): with K=16 and the forward pass halved to K=8, the
+    combiner takes forward from index 8, but the seam used to be reported as 16."""
+    combined, separate = _combined_and_separate_456("forward")
+    assert combined.seam == 8
+    assert combined.context_length == 16  # the configured K stays configured (#407)
+    assert np.allclose(combined.values[:8], separate.reverse_values[:8], atol=1e-5)
+    assert np.allclose(combined.values[8:], separate.forward_values[8:], atol=1e-5)
+    assert any("forward pass ran with K=8" in n for n in combined.notices)
+
+
+def test_seam_after_a_reverse_only_halving_stays_at_the_forward_k() -> None:
+    combined, separate = _combined_and_separate_456("reverse")
+    assert combined.seam == 16  # forward ran with the configured K
+    assert np.allclose(combined.values[:16], separate.reverse_values[:16], atol=1e-5)
+    assert np.allclose(combined.values[16:], separate.forward_values[16:], atol=1e-5)
+    assert any("reverse pass ran with K=8" in n for n in combined.notices)
+
+
+def test_no_halving_means_no_k_notice_and_the_configured_seam() -> None:
+    combined, _ = _combined_and_separate_456(None)
+    assert combined.seam == 16
+    assert not any("pass ran with K=" in n for n in combined.notices)
+
+
+def test_seam_is_none_when_the_actual_ks_no_longer_fit_the_sequence() -> None:
+    """A clean seam needs L >= fwd_K + rev_K. 20 nt with K=16 never had one; check the
+    halved variant too (forward K=8, reverse K=16, L=23 < 24)."""
+    seq = "ACGTTGCAAGCTACGTACGTACG"  # 23 nt
+    result = analyze_direction(
+        _OOMOnFirstPass(seq, "forward"),
+        seq,
+        context_length=16,
+        ceiling=1024,
+        direction=Direction.BOTH_COMBINED,
+    )
+    assert result.seam is None
+
+
+# --- issue #78's observables, stated directly ---------------------------------------------
+
+
+class _UniformFirstRow:
+    """Evo-like boundary: no BOS token, so row 0 is uniform (2.0 bits); the other rows are
+    the mock's deterministic softmax."""
+
+    def predict(self, window: str) -> np.ndarray:
+        probs = MockPredictor(seed=0).predict(window).copy()
+        probs[0] = 0.25
+        return probs
+
+
+def test_the_reverse_track_of_a_reverse_palindromic_sequence_mirrors_the_forward_track() -> None:
+    """ "ACGT" * n equals its own reverse complement, so both passes feed the model the SAME
+    string; the reverse track must then be the forward track read backwards (i -> L-1-i)."""
+    seq = "ACGT" * 30
+    assert reverse_complement(seq) == seq
+    result = analyze_direction(
+        MockPredictor(seed=3), seq, context_length=16, ceiling=1024, direction=Direction.BOTH_SEPARATE
+    )
+    assert np.allclose(result.reverse_values, result.forward_values[::-1], atol=1e-6)
+
+
+def test_the_last_base_of_the_reverse_track_is_the_uniform_row() -> None:
+    seq = "ACGTTGCAAGCT" * 20
+    result = analyze_direction(
+        _UniformFirstRow(), seq, context_length=16, ceiling=1024, direction=Direction.BOTH_SEPARATE
+    )
+    assert result.forward_values[0] == pytest.approx(2.0)
+    assert result.reverse_values[-1] == pytest.approx(2.0)  # rc index 0 maps to original L-1
+    assert result.reverse_values[0] < 2.0 - 1e-3  # and only that end

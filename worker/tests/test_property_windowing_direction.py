@@ -41,6 +41,7 @@ from dna_entropy.analysis import direction as direction_mod
 from dna_entropy.analysis import windowing as windowing_mod
 from dna_entropy.analysis.entropy import MAX_ENTROPY_BITS, shannon_entropy
 from dna_entropy.config import Direction
+from dna_entropy.predictors.base import PredictorOOMError
 from dna_entropy.predictors.mock import MockPredictor
 
 LANE_F_WINDOW_SETTINGS = settings(
@@ -188,6 +189,27 @@ def test_property_reverse_complement_is_the_complement_then_reverse_never_plain_
     assert direction_mod.reverse_complement(seq) == seq.translate(complement_map)[::-1]
 
 
+_IUPAC = "ACGTRYSWKMBDHVN"  # all 15 nucleotide codes: the 4 bases plus the 11 ambiguity codes
+_IUPAC_COMPLEMENT = dict(zip("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN", strict=True))
+
+
+@given(seq=st.text(alphabet=_IUPAC, min_size=1, max_size=300))
+@LANE_F_WINDOW_SETTINGS
+def test_property_reverse_complement_is_involutive_over_the_full_iupac_alphabet(seq: str) -> None:
+    """Issue #78: an ambiguity code kept by ``ambiguityPolicy=keep`` reaches the reverse pass,
+    so the reverse complement must complement it too (R<->Y, K<->M, B<->V, D<->H; N, S, W
+    are their own complement) and stay an involution."""
+    rc = direction_mod.reverse_complement
+    assert rc(rc(seq)) == seq
+
+
+@given(seq=st.text(alphabet=_IUPAC, min_size=1, max_size=300))
+@LANE_F_WINDOW_SETTINGS
+def test_property_reverse_complement_follows_the_iupac_complement_table(seq: str) -> None:
+    expected = "".join(_IUPAC_COMPLEMENT[c] for c in reversed(seq))
+    assert direction_mod.reverse_complement(seq) == expected
+
+
 # ---------------------------------------------------------------------------------------
 # Property 4: the seam matches where the combiner actually switched, generated (K, L).
 # ---------------------------------------------------------------------------------------
@@ -225,6 +247,57 @@ def test_property_seam_matches_where_the_combiner_actually_switched(k: int, extr
     assert combined.seam == k, (k, extra, seed)
     assert np.allclose(combined.values[:k], separate.reverse_values[:k], atol=1e-4), (k, extra, seed)
     assert np.allclose(combined.values[k:], separate.forward_values[k:], atol=1e-4), (k, extra, seed)
+
+
+class _OOMOnFirstPass:
+    """Raises PredictorOOMError on the first window of ONE direction, else the mock.
+
+    ``analyze_direction`` always runs the forward pass first, so the first window of the
+    reverse pass is call number ``n_forward_windows + 1`` (the forward pass is not halved
+    in the "reverse" case, so its window count is the plain plan's). Counting calls, not
+    matching window text, because a periodic sequence reproduces any window elsewhere.
+    """
+
+    def __init__(self, oom_on: str | None, n_forward_windows: int, seed: int) -> None:
+        self._oom_call = {"forward": 1, "reverse": n_forward_windows + 1, None: -1}[oom_on]
+        self._calls = 0
+        self._mock = MockPredictor(seed=seed)
+
+    def predict(self, window: str) -> np.ndarray:
+        self._calls += 1
+        if self._calls == self._oom_call:
+            raise PredictorOOMError("simulated OOM")
+        return self._mock.predict(window)
+
+
+@given(
+    k=st.integers(min_value=2, max_value=30),
+    extra=st.integers(min_value=0, max_value=200),
+    seed=st.integers(min_value=0, max_value=2**31 - 1),
+    oom_on=st.sampled_from([None, "forward", "reverse"]),
+)
+@LANE_F_DIRECTION_SETTINGS
+def test_property_seam_follows_the_k_each_pass_actually_ran_with_after_an_oom_halving(
+    k: int, extra: int, seed: int, oom_on: str | None
+) -> None:
+    """Issue #456 (the halving case #160's seam property never swept): a K-bound OOM retry
+    halves K for ONE direction; the seam is the forward pass's ACTUAL K, defined only when
+    both actual Ks fit, and the combined track switches exactly there."""
+    fwd_k = k // 2 if oom_on == "forward" else k
+    rev_k = k // 2 if oom_on == "reverse" else k
+    # Always >= fwd_k + rev_k, so a clean seam is defined.
+    seq = _adversarial_seq(fwd_k + rev_k + extra)
+    kwargs = {"context_length": k, "ceiling": 8192}
+    n_forward = windowing_mod.plan_windows(len(seq), k, 8192).num_windows
+    combined = direction_mod.analyze_direction(
+        _OOMOnFirstPass(oom_on, n_forward, seed), seq, direction=Direction.BOTH_COMBINED, **kwargs
+    )
+    separate = direction_mod.analyze_direction(
+        _OOMOnFirstPass(oom_on, n_forward, seed), seq, direction=Direction.BOTH_SEPARATE, **kwargs
+    )
+    assert combined.seam == fwd_k, (k, extra, seed, oom_on)
+    assert np.allclose(combined.values[:fwd_k], separate.reverse_values[:fwd_k], atol=1e-4)
+    assert np.allclose(combined.values[fwd_k:], separate.forward_values[fwd_k:], atol=1e-4)
 
 
 if __name__ == "__main__":  # pragma: no cover -- convenience for the mutation check only

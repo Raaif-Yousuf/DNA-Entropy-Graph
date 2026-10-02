@@ -1104,3 +1104,136 @@ def test_provenance_records_the_input_sha256(tmp_path: Path) -> None:
     prov = json.loads((tmp_path / "output" / "s1" / "provenance.json").read_text(encoding="utf-8"))
     expected = hashlib.sha256((tmp_path / "input" / "s1.fasta").read_bytes()).hexdigest()
     assert prov["input_sha256"] == expected
+
+
+# --- issue #455: a user-correctable input problem is INPUT_INVALID, never a crash ----------
+
+
+def _one_input_job(tmp_path: Path, *, context_length: int, seq: str, name: str = "locus") -> dict:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(
+        store,
+        inputs=[{"id": "in1", "path": "input/locus.fasta", "name": name}],
+        analysis={
+            "contextLength": context_length,
+            "window": 2 * context_length,
+            "stride": context_length,
+            "direction": "forward-only",
+        },
+    )
+    store.write_text("input/locus.fasta", ">seq" + chr(10) + seq + chr(10))
+    return run_job(store).to_dict()["inputs"][0]
+
+
+@pytest.mark.parametrize(
+    ("context_length", "seq", "must_name"),
+    [
+        (64, "ACGT" * 100, "128"),  # K below the minimum: the exact threshold is named
+        (128, "ACGTACGTA", "10"),  # input below the 10 nt minimum
+    ],
+)
+def test_windowing_refusals_are_input_invalid_with_no_traceback(
+    tmp_path: Path, context_length: int, seq: str, must_name: str
+) -> None:
+    entry = _one_input_job(tmp_path, context_length=context_length, seq=seq)
+    assert entry["status"] == "failed"
+    assert entry["error"]["code"] == "INPUT_INVALID"
+    assert entry["error"]["retriable"] is False
+    assert "detail" not in entry["error"], "a user-correctable problem must not carry a traceback"
+    assert must_name in entry["error"]["message"]
+
+
+def test_windowing_refusal_messages_name_an_action() -> None:
+    """Hard Rule 13: every error names one action the user can take."""
+    from dna_entropy.analysis.windowing import WindowingError, validate_context
+
+    for kwargs in (
+        {"context_length": 64, "ceiling": 8192, "seq_len": 1000},
+        {"context_length": 128, "ceiling": 8192, "seq_len": 5},
+    ):
+        with pytest.raises(WindowingError) as exc:
+            validate_context(**kwargs)
+        assert any(verb in str(exc.value) for verb in ("Choose", "Use ", "Provide")), str(exc.value)
+
+
+def test_an_unusable_run_name_is_input_invalid_and_the_worker_does_not_report_a_crash(tmp_path: Path) -> None:
+    entry = _one_input_job(tmp_path, context_length=128, seq="ACGT" * 40, name="...")
+    assert entry["error"]["code"] == "INPUT_INVALID"
+    assert "detail" not in entry["error"]
+    assert "Use letters" in entry["error"]["message"]
+
+
+def test_a_user_correctable_failure_does_not_raise_a_worker_crashed_notice(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _one_input_job(tmp_path, context_length=64, seq="ACGT" * 100)
+    progress = store.read_text("progress.jsonl")
+    assert "worker crashed" not in progress
+
+
+# --- issue #448: manifest store.bucket/prefix are cross-checked against the live GCS store ---
+
+
+def _gcs_job(bucket_in_manifest: str, prefix_in_manifest: str, *, store_bucket: str = "bkt-b"):
+    from fake_gcs import FakeGcs
+
+    from dna_entropy.worker.blobstore import GcsBlobstore
+
+    fake = FakeGcs(store_bucket)
+    store = GcsBlobstore(store_bucket, "jobs/j1/", opener=fake, sleep=lambda _s: None)
+    manifest = {
+        "schema": 1,
+        "jobId": "20260918-142233-k7q2vx",
+        "inputs": [{"id": "in1", "path": "input/locus.fasta", "name": "locus"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "lifecycle": {"afterTask": "stop"},
+        "store": {"kind": "gcs", "bucket": bucket_in_manifest, "prefix": prefix_in_manifest},
+    }
+    store.write_text("manifest.json", json.dumps(manifest))
+    store.write_text("input/locus.fasta", ">seq" + chr(10) + "ACGT" * 40 + chr(10))
+    return store, fake
+
+
+def test_a_manifest_naming_another_bucket_is_refused_before_any_work(monkeypatch) -> None:
+    from dna_entropy.worker import runner
+    from dna_entropy.worker.manifest import ManifestError
+
+    monkeypatch.setattr(runner, "apply_lifecycle", lambda *_a, **_k: {})
+    store, fake = _gcs_job("bkt-a", "jobs/j1/")
+    with pytest.raises(ManifestError) as exc:
+        run_job(store)
+    msg = str(exc.value)
+    assert "bkt-a" in msg and "bkt-b" in msg
+    assert "Start the job again" in msg  # Hard Rule 13: names one action
+    assert sorted(k for k in fake.objects) == ["jobs/j1/input/locus.fasta", "jobs/j1/manifest.json"], (
+        "nothing may be written (no status, no outputs, no result) once the cross-check fails"
+    )
+
+
+def test_a_manifest_naming_another_prefix_is_refused(monkeypatch) -> None:
+    from dna_entropy.worker import runner
+    from dna_entropy.worker.manifest import ManifestError
+
+    monkeypatch.setattr(runner, "apply_lifecycle", lambda *_a, **_k: {})
+    store, _fake = _gcs_job("bkt-b", "jobs/other/")
+    with pytest.raises(ManifestError, match="jobs/other"):
+        run_job(store)
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "jobs/j1/",
+        "jobs/j1",
+        "",
+    ],
+)
+def test_a_matching_or_undeclared_bucket_and_prefix_runs_normally(monkeypatch, prefix: str) -> None:
+    from dna_entropy.worker import runner
+
+    monkeypatch.setattr(runner, "apply_lifecycle", lambda *_a, **_k: {"name": "op"})
+    bucket = "bkt-b" if prefix else ""  # an empty declaration means "not declared"
+    store, fake = _gcs_job(bucket, prefix)
+    result = run_job(store)
+    assert result.status == "done"
+    assert "jobs/j1/result.json" in fake.objects

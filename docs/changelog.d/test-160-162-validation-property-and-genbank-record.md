@@ -1,0 +1,1 @@
+- test(worker): property tests for `validate_sequence` over the full IUPAC alphabet (#160) and a truncated multi-record GenBank error now names the record it failed on, by index (#162)

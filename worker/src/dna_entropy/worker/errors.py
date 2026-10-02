@@ -85,8 +85,10 @@ WORKER_ERROR_CODES: tuple[ErrorCodeSpec, ...] = (
     ),
     ErrorCodeSpec(
         "INPUT_INVALID",
-        "dna_entropy.validation.validators.ValidationError (also the generic "
-        "fallback for dna_entropy.worker.blobstore.BlobstoreError/ManifestError reached per-input)",
+        "dna_entropy.validation.validators.ValidationError (also dna_entropy.analysis."
+        "windowing.WindowingError and dna_entropy.pipeline.PipelineError, issue #455, and "
+        "the generic fallback for dna_entropy.worker.blobstore.BlobstoreError/ManifestError "
+        "reached per-input)",
         retriable=False,
         note="Matches docs/copy_catalog.md's InputInvalid row.",
     ),

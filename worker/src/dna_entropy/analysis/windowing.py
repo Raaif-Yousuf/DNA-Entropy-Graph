@@ -137,7 +137,7 @@ def validate_context(*, context_length: int, ceiling: int, seq_len: int) -> list
     if seq_len < MIN_SEQUENCE_LENGTH:
         raise WindowingError(
             f"Sequence length {seq_len} nt is below the minimum of "
-            f"{MIN_SEQUENCE_LENGTH} nt for windowed analysis."
+            f"{MIN_SEQUENCE_LENGTH} nt for windowed analysis. Use a longer sequence."
         )
 
     notices: list[str] = []

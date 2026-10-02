@@ -1,0 +1,1 @@
+- fix(worker): a windowing refusal (K below 128, input under 10 nt) or an unusable run name now reports `INPUT_INVALID` with no traceback instead of `WORKER_CRASH`, and the too-short-input message names its action (#455)

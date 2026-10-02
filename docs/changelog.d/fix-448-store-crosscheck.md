@@ -1,0 +1,1 @@
+- fix(worker): a manifest whose `store.bucket`/`store.prefix` differ from the GCS store the worker was started against is now refused before any work (it was silently accepted); `store.root` stays informational (#448)
