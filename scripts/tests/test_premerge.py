@@ -109,3 +109,93 @@ def test_planted_home_path_is_named_by_the_one_command(tmp_path):
     )
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert "PREMERGE: PASS" in clean.stdout
+
+
+# --- pytest gates and known issues (2026-10-02 first full run) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("rc", "output", "status"),
+    [
+        (0, "398 passed in 12.3s", pm.PASS),
+        (1, "FAILED tests/test_x.py::test_y - assert 1 == 2\n1 failed, 9 passed in 0.5s", pm.FAIL),
+        (1, "2 errors in 0.3s", pm.FAIL),
+        (1, "..........  [100%]\nTraceback (most recent call last):\nPermissionError: [WinError 5]", pm.ERROR),
+        (1, "398 passed in 12.3s\nPermissionError: pytest-current", pm.ERROR),
+        (3, "INTERNALERROR> boom", pm.ERROR),
+        (5, "no tests ran in 0.01s", pm.ERROR),
+    ],
+)
+def test_classify_pytest_follows_the_test_outcome(rc, output, status):
+    assert pm.classify_pytest(rc, output)[0] == status
+
+
+def test_a_crash_after_green_tests_is_never_a_pass_and_says_it_is_not_a_test_failure():
+    status, detail = pm.classify_pytest(1, "....  [100%]\nPermissionError: x")
+    assert status == pm.ERROR and "NOT a test failure" in detail
+
+
+def test_the_real_pytest_gates_are_flagged_so_they_get_a_private_basetemp():
+    gates = {g.name: g for g in pm.build_gates(REPO_ROOT)}
+    assert gates["worker-pytest"].pytest and gates["scripts-tests"].pytest
+
+
+def test_a_pytest_gate_is_started_with_its_own_basetemp_and_no_cache(tmp_path):
+    gate = pm.Gate("pt", [sys.executable, "-c", "import sys; print(' '.join(sys.argv[1:]))"], Path.cwd(), pytest=True)
+    result = pm.run_gate(gate, basetemp_root=tmp_path)
+    assert str(tmp_path / "pt") in result.output and "no:cacheprovider" in result.output
+
+
+EOL = "src/A.cs(1,1): error ENDOFLINE: Fix end of line marker. Replace 2 characters with '\n'. [x.csproj]\n"
+
+
+def test_endofline_is_forgiven_only_on_autocrlf_and_only_when_it_is_the_whole_failure():
+    assert "#462" in (pm.forgive_endofline(EOL * 3, 2, True) or "")
+    assert pm.forgive_endofline(EOL, 2, False) is None
+    assert pm.forgive_endofline(EOL + "src/B.cs(2,2): error IDE0055: Fix formatting.\n", 2, True) is None
+    assert pm.forgive_endofline("Build failed", 1, True) is None
+    assert pm.forgive_endofline(EOL, 0, True) is None
+
+
+def test_the_dotnet_format_gate_has_the_forgive_hook_and_other_gates_do_not():
+    gates = {g.name: g for g in pm.build_gates(REPO_ROOT)}
+    assert gates["dotnet-format"].forgive is not None
+    assert all(g.forgive is None for n, g in gates.items() if n != "dotnet-format")
+
+
+def test_a_known_issue_exits_zero_but_is_printed_with_its_issue():
+    gate = pm.Gate("fmt", [sys.executable, "-c", f"import sys; sys.stdout.write({EOL!r}); sys.exit(2)"], Path.cwd(),
+                   forgive=lambda out, rc, cwd: pm.forgive_endofline(out, rc, True))
+    summary, code = pm.render_summary([pm.run_gate(gate)])
+    assert code == 0 and "KNOWN ISSUE" in summary and "#462" in summary
+
+
+# --- the stamp the PR hook reads (#451) ------------------------------------------------------------
+
+
+def _stub_world(tmp_path, monkeypatch, exit_code=0):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    for key, value in (("user.name", "T"), ("user.email", "t@example.com")):
+        subprocess.run(["git", "config", key, value], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "a.txt").write_text("1\n", encoding="utf-8", newline="\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", "c"], cwd=tmp_path, check=True, capture_output=True)
+    gate = pm.Gate("only-gate", [sys.executable, "-c", f"import sys; sys.exit({exit_code})"], tmp_path)
+    monkeypatch.setattr(pm, "build_gates", lambda *a, **k: [gate])
+    return tmp_path / ".git" / "premerge-stamp.json"
+
+
+def test_a_green_unfiltered_run_writes_the_stamp(tmp_path, monkeypatch):
+    stamp = _stub_world(tmp_path, monkeypatch)
+    assert pm.main(["--root", str(tmp_path), "--fast"]) == 0
+    assert stamp.is_file()
+
+
+def test_a_red_or_filtered_run_writes_no_stamp(tmp_path, monkeypatch):
+    stamp = _stub_world(tmp_path, monkeypatch, exit_code=1)
+    assert pm.main(["--root", str(tmp_path), "--fast"]) == 1
+    assert not stamp.exists()
+    monkeypatch.setattr(pm, "build_gates", lambda *a, **k: [pm.Gate("only-gate", [sys.executable, "-c", "pass"], tmp_path)])
+    assert pm.main(["--root", str(tmp_path), "--fast", "--only", "only-gate"]) == 0
+    assert not stamp.exists()

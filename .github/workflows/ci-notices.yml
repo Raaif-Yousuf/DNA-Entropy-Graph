@@ -1,0 +1,81 @@
+name: ci-notices
+
+# THIRD-PARTY-NOTICES.md freshness (Hard Rule 21), issue #416.
+#
+# scripts/check_third_party_notices.py needs BOTH a dotnet SDK with app/ restored (it runs
+# `dotnet list package` and reads each package's .nuspec from the NuGet cache) AND the
+# worker venv (it reads installed Python package licences through that venv's own python,
+# Hard Rule 20). No other job has both, so ci-docs.yml's generic check_*.py loop skips it and
+# this job is where it actually runs. windows-latest, because app/ targets Windows.
+#
+# Runs when anything that can change the notices changes, plus on demand:
+#
+#     gh workflow run ci-notices.yml
+on:
+  pull_request:
+    paths:
+      - "app/**/*.csproj"
+      - "app/Directory.Build.props"
+      - "app/Directory.Packages.props"
+      - "app/global.json"
+      - "app/nuget.config"
+      - "worker/pyproject.toml"
+      - "worker/uv.lock"
+      - "THIRD-PARTY-NOTICES.md"
+      - "scripts/gen_third_party_notices.py"
+      - "scripts/check_third_party_notices.py"
+      - ".github/workflows/ci-notices.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-notices-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  notices:
+    name: third-party notices are current
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: app/global.json
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # The notices list exact versions, so the venv must be the LOCKED one: `uv sync --frozen`
+      # installs worker/uv.lock as written (never re-resolves), where ci-worker.yml's
+      # `uv pip install -e` would pick whatever is newest today and make this job go red on
+      # an upstream release nobody here chose. Same extras as the dev box ([evo] stays out:
+      # it is container-only, and the generator already curates torch/evo2 as not installed).
+      # Python 3.12 is Hard Rule 20's interpreter; uv.lock carries per-python numpy pins.
+      - name: Create the worker venv from the lock file
+        working-directory: worker
+        run: uv sync --frozen --python 3.12 --extra dev --extra genes
+
+      # Populates %USERPROFILE%\.nuget\packages, where the generator reads each .nuspec.
+      - name: Restore app
+        working-directory: app
+        run: dotnet restore
+
+      # A vacuous pass is the failure this repo has been bitten by: the checker prints a notice
+      # and passes when the notices file or the generator is absent. Both are required here.
+      - name: The notices file and its generator exist
+        shell: pwsh
+        run: |
+          foreach ($path in "THIRD-PARTY-NOTICES.md", "scripts/gen_third_party_notices.py") {
+            if (-not (Test-Path $path)) { Write-Error "$path is missing; the check would pass vacuously."; exit 1 }
+          }
+
+      - name: The checker still says no to a stale file (self-test)
+        run: worker\.venv\Scripts\python.exe scripts/check_third_party_notices.py --self-test
+
+      - name: Notices match a fresh regeneration
+        run: worker\.venv\Scripts\python.exe scripts/check_third_party_notices.py

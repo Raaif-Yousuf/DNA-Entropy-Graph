@@ -28,16 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The conventions donor is a private repository copied onto the owner's PC only.
-      # It is gitignored; this fails the build if it is ever committed to this public repo.
-      - name: The private donor copy is not committed
-        run: |
-          if git ls-files --error-unmatch legacy/clair >/dev/null 2>&1; then
-            echo "::error title=private donor committed::legacy/clair is tracked. It must never be committed to this public repo."
-            git ls-files legacy/clair | head -20
-            exit 1
-          fi
-          echo "legacy/clair is not tracked. Good."
+      # The private-donor and AGENTS.md-stub rules live in scripts/check_repo_hygiene.py, run by the
+      # glob loop in the `checks` job and self-tested by scripts/tests (#449). They were inline shell
+      # here with no way to prove they could fail.
 
       # A user-home path in a tracked file leaks a real person's account name and
       # breaks the file for everyone else. The guard lives in scripts/ so it can be
@@ -51,19 +44,6 @@ jobs:
 
       - name: No absolute user-home paths in tracked files
         run: python scripts/check_user_home_paths.py
-
-      - name: AGENTS.md stays a stub
-        run: |
-          if [ ! -f AGENTS.md ]; then
-            echo "::notice title=AGENTS.md missing::Not created yet (issue #268)."
-            exit 0
-          fi
-          lines=$(wc -l < AGENTS.md)
-          if [ "$lines" -ge 20 ]; then
-            echo "::error title=AGENTS.md too long::$lines lines. It is a pointer to CLAUDE.md, not a second rulebook. Keep it under 20."
-            exit 1
-          fi
-          echo "AGENTS.md is $lines lines. Good."
 
       # The em-dash rule (Hard Rule 13) is scripts/check_em_dash.py, run by the glob loop in
       # the `checks` job below and self-tested by scripts/tests/test_check_em_dash.py. It was an
@@ -97,10 +77,9 @@ jobs:
       # before #34); it would CRASH on "dotnet: command not found", which is a worse
       # failure than simply not running yet - a confusing, unhelpful red build that
       # teaches people to route around this loop rather than fix a real licence problem.
-      # It has no CI job of its own yet (needs dotnet restore for app/ AND a `uv venv`'d
-      # worker/.venv in the same job - see the follow-up filed for this) and must be run
-      # locally (`worker\.venv\Scripts\python.exe scripts\check_third_party_notices.py`)
-      # until that job exists.
+      # It runs in .github/workflows/ci-notices.yml instead (windows-latest, dotnet SDK plus the
+      # locked worker venv; issue #416), and locally via scripts/premerge.py in full mode. This
+      # exclusion stays: this ubuntu job still cannot run it.
       - name: Run every scripts/check_*.py that exists (except third-party-notices, see above)
         run: |
           shopt -s nullglob

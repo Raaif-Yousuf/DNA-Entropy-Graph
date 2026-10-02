@@ -33,9 +33,32 @@ CANNOT SILENTLY LEAVE A GATE OUT
 STATUSES
 --------
 PASS (exit 0), FAIL (the gate ran and said no), ERROR (the gate could not run or finish:
-tool missing, timeout), SKIP (only for an optional tool that is not installed; always printed).
+tool missing, timeout, or pytest dying after its tests), SKIP (only for an optional tool that is
+not installed; always printed), KNOWN (a failure fully explained by a named known issue, see
+below; always printed with the issue number, never silent).
 FAIL and ERROR both make the run fail, but are labelled differently so "the guard caught
 something" is never confused with "the guard did not run".
+
+PYTEST GATES (MEASURED 2026-10-02)
+----------------------------------
+The first full run reported worker-pytest and scripts-tests as FAIL although every test passed:
+both crashed afterwards in pytest's own `cleanup_dead_symlinks` on the SHARED default basetemp
+(`%TEMP%\\pytest-of-<user>\\pytest-current`, a race with any other pytest running). So every pytest gate
+gets its own private `--basetemp` (under `--log-dir` when given, else a temp dir premerge creates
+and removes) plus `-p no:cacheprovider`, and its verdict comes from the TEST OUTCOME, not the exit
+code alone (`classify_pytest`): failed or errored tests are FAIL; a run that printed only passes
+and then exited non-zero is an ERROR naming that (an infrastructure death, not a test failure,
+and not a PASS either); no summary at all is an ERROR.
+
+KNOWN ISSUES
+------------
+`dotnet format --verify-no-changes` reports ENDOFLINE for every line of a CRLF working tree
+(core.autocrlf=true on Windows, `.gitattributes` says eol=lf; #462). Only when git reports
+autocrlf=true, and only when EVERY parsed diagnostic is ENDOFLINE, the gate is KNOWN instead of
+FAIL. Any other diagnostic id, an unparseable failure, or autocrlf off stays FAIL, so a real
+formatting regression cannot hide behind it. THEORY (unverified, dotnet could not be run when this
+was written): the diagnostic line shape is `path(line,col): error ENDOFLINE: ...`; if it differs
+the parse finds nothing and the gate fails safe.
 
 Exit codes: 0 every selected gate passed, 1 a gate FAILED or ERRORED, 2 bad usage.
 Console output is ASCII-only.
@@ -55,7 +78,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-PASS, FAIL, ERROR, SKIP = "PASS", "FAIL", "ERROR", "SKIP"
+PASS, FAIL, ERROR, SKIP, KNOWN = "PASS", "FAIL", "ERROR", "SKIP", "KNOWN"
 
 # Scripts a workflow may reference that are deliberately not pre-merge gates.
 NOT_A_GATE: dict[str, str] = {
@@ -86,6 +109,8 @@ class Gate:
     optional: bool = False  # missing executable -> SKIP instead of ERROR
     timeout: float = DEFAULT_TIMEOUT
     why: str = ""
+    pytest: bool = False  # gets a private --basetemp and an outcome-based verdict
+    forgive: Callable[[str, int, Path], str | None] | None = None  # (output, rc, cwd) -> note or None
 
 
 @dataclass
@@ -171,16 +196,17 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
     gates += [
         Gate("scripts-tests",
              ["uv", "run", "--with", "pytest", "--with", "pyyaml", "python", "-m", "pytest", "scripts/tests", "-q"],
-             root, tier="full", why="the guards' own tests; pyyaml is not in the worker venv"),
+             root, tier="full", pytest=True, why="the guards' own tests; pyyaml is not in the worker venv"),
         Gate("worker-pytest", [py, "-m", "pytest", "worker/tests", "-m", "not gpu", "-q"], root, tier="full",
-             timeout=LONG_TIMEOUT, why="worker suite, no GPU"),
+             timeout=LONG_TIMEOUT, pytest=True, why="worker suite, no GPU"),
     ]
 
     # 4. dotnet: always with app/ as the working directory.
     app = root / "app"
     if app.is_dir():
         gates.append(Gate("dotnet-format", ["dotnet", "format", "--verify-no-changes", "--no-restore"], app,
-                          why="C# formatting (cwd=app/)"))
+                          forgive=_dotnet_format_forgive,
+                          why="C# formatting (cwd=app/); ENDOFLINE-only failures on an autocrlf checkout are KNOWN (#462)"))
         for project in discover_test_projects(root):
             project_name = project.parent.name
             if project_name in EXEMPT_TEST_PROJECTS:
@@ -257,7 +283,60 @@ def _resolve_exe(exe: str) -> str | None:
     return shutil.which(exe)
 
 
-def run_gate(gate: Gate, env: dict[str, str] | None = None) -> Result:
+_PYTEST_COUNTS = re.compile(r"(\d+) (failed|errors?)\b")
+_PYTEST_PASSED = re.compile(r"(\d+) passed\b")
+_PYTEST_FAILURE_LINE = re.compile(r"^(FAILED|ERROR) \S", re.MULTILINE)
+_PYTEST_PROGRESS_DONE = re.compile(r"\[100%\]")
+
+
+def classify_pytest(returncode: int, output: str) -> tuple[str, str]:
+    """(status, detail) for a finished pytest process. The verdict follows the test outcome, so a
+    crash after green tests is never reported as a failing test, and never as a pass."""
+    counts = _PYTEST_COUNTS.search(output)
+    failed_tests = bool(counts) or bool(_PYTEST_FAILURE_LINE.search(output))
+    if returncode == 0:
+        return PASS, ""
+    if failed_tests:
+        return FAIL, counts.group(0) if counts else f"test failures (pytest exit {returncode})"
+    saw_passes = bool(_PYTEST_PASSED.search(output)) or bool(_PYTEST_PROGRESS_DONE.search(output))
+    if saw_passes:
+        return ERROR, (
+            f"pytest reported only passing tests but exited {returncode} afterwards (died in teardown or an "
+            "internal error); NOT a test failure, NOT a pass: read the log tail"
+        )
+    if returncode == 5:
+        return ERROR, "pytest collected no tests (exit 5)"
+    return ERROR, f"pytest exited {returncode} without a test summary (could not run or crashed before finishing)"
+
+
+_DOTNET_DIAGNOSTIC = re.compile(r"\(\d+,\d+\)\s*:\s*(?:(?:error|warning)\s+)?([A-Za-z][A-Za-z0-9_]*)\s*:")
+ISSUE_ENDOFLINE = 462
+
+
+def _autocrlf_is_true(cwd: Path) -> bool:
+    try:
+        proc = subprocess.run(["git", "config", "--get", "core.autocrlf"], cwd=cwd, capture_output=True, check=False,
+                              timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and proc.stdout.decode("utf-8", errors="replace").strip().lower() == "true"
+
+
+def forgive_endofline(output: str, returncode: int, autocrlf_true: bool) -> str | None:
+    """A note when the whole failure is ENDOFLINE on an autocrlf checkout (#462), else None."""
+    if returncode == 0 or not autocrlf_true:
+        return None
+    ids = _DOTNET_DIAGNOSTIC.findall(output)
+    if ids and set(ids) == {"ENDOFLINE"}:
+        return f"{len(ids)} ENDOFLINE finding(s) ignored: core.autocrlf=true on this checkout (#{ISSUE_ENDOFLINE})"
+    return None
+
+
+def _dotnet_format_forgive(output: str, returncode: int, cwd: Path) -> str | None:
+    return forgive_endofline(output, returncode, _autocrlf_is_true(cwd))
+
+
+def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path | None = None) -> Result:
     started = time.monotonic()
     resolved = _resolve_exe(gate.argv[0])
     if resolved is None:
@@ -270,9 +349,12 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None) -> Result:
     child_env = dict(os.environ if env is None else env)
     child_env.setdefault("PYTHONUTF8", "1")
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
+    argv = [resolved, *gate.argv[1:]]
+    if gate.pytest and basetemp_root is not None:
+        argv += ["--basetemp", str(basetemp_root / gate.name), "-p", "no:cacheprovider"]
     try:
         proc = subprocess.run(
-            [resolved, *gate.argv[1:]],
+            argv,
             cwd=gate.cwd,
             capture_output=True,
             timeout=gate.timeout,
@@ -287,8 +369,15 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None) -> Result:
         return Result(gate, ERROR, time.monotonic() - started, detail=f"could not start: {exc}")
     text = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
     seconds = time.monotonic() - started
+    if gate.pytest:
+        status, detail = classify_pytest(proc.returncode, text)
+        return Result(gate, status, seconds, text, detail)
     if proc.returncode == 0:
         return Result(gate, PASS, seconds, text)
+    if gate.forgive is not None:
+        note = gate.forgive(text, proc.returncode, gate.cwd)
+        if note:
+            return Result(gate, KNOWN, seconds, text, note)
     return Result(gate, FAIL, seconds, text, f"exit code {proc.returncode}")
 
 
@@ -299,6 +388,7 @@ def _ascii(text: str) -> str:
 def render_summary(results: Sequence[Result], tail_lines: int = 25) -> tuple[str, int]:
     bad = [r for r in results if r.status in (FAIL, ERROR)]
     skipped = [r for r in results if r.status == SKIP]
+    known = [r for r in results if r.status == KNOWN]
     lines: list[str] = []
     for r in bad:
         lines.append("")
@@ -314,6 +404,8 @@ def render_summary(results: Sequence[Result], tail_lines: int = 25) -> tuple[str
     passed = sum(1 for r in results if r.status == PASS)
     if skipped:
         lines.append("SKIPPED (did not run): " + ", ".join(r.gate.name for r in skipped))
+    for r in known:
+        lines.append(f"KNOWN ISSUE (forgiven, not clean): {r.gate.name}: {r.detail}")
     if bad:
         failed = [r.gate.name for r in bad if r.status == FAIL]
         errored = [r.gate.name for r in bad if r.status == ERROR]
@@ -323,12 +415,43 @@ def render_summary(results: Sequence[Result], tail_lines: int = 25) -> tuple[str
             lines.append("ERRORED gates (could not run): " + ", ".join(errored))
         lines.append(f"PREMERGE: FAIL - {len(bad)} of {len(results)} gate(s) not green, {passed} passed")
         return _ascii("\n".join(lines)), 1
-    lines.append(f"PREMERGE: PASS - {passed} gate(s) green" + (f", {len(skipped)} skipped" if skipped else ""))
+    extras = (f", {len(skipped)} skipped" if skipped else "") + (f", {len(known)} known issue(s)" if known else "")
+    lines.append(f"PREMERGE: PASS - {passed} gate(s) green{extras}")
     return _ascii("\n".join(lines)), 0
 
 
 def run_all(gates: Sequence[Gate], log_dir: Path | None = None,
-            runner: Callable[[Gate], Result] = run_gate, emit: Callable[[str], None] = print) -> tuple[list[Result], str, int]:
+            runner: Callable[[Gate], Result] | None = None, emit: Callable[[str], None] = print
+            ) -> tuple[list[Result], str, int]:
+    """Run the gates in order. Pytest gates each get a private --basetemp: under `log_dir` when given,
+    else a temp dir created here and removed at the end (the shared default basetemp raced; see the
+    module docstring)."""
+    own_tmp: Path | None = None
+    if runner is None:
+        if log_dir is not None:
+            basetemp_root = log_dir / "basetemp"
+        else:
+            own_tmp = Path(tempfile.mkdtemp(prefix="premerge-basetemp-"))
+            basetemp_root = own_tmp
+        basetemp_root.mkdir(parents=True, exist_ok=True)
+
+        def runner(gate: Gate) -> Result:  # noqa: F811 - the default runner closes over the basetemp root
+            return run_gate(gate, basetemp_root=basetemp_root)
+
+    results: list[Result] = []
+    try:
+        results = _run_each(gates, runner, emit, log_dir)
+    finally:
+        if own_tmp is not None:
+            shutil.rmtree(own_tmp, ignore_errors=True)
+    summary, code = render_summary(results)
+    if log_dir is not None:
+        (log_dir / "summary.txt").write_text(summary + "\n", encoding="utf-8", newline="\n")
+    return results, summary, code
+
+
+def _run_each(gates: Sequence[Gate], runner: Callable[[Gate], Result], emit: Callable[[str], None],
+              log_dir: Path | None) -> list[Result]:
     results: list[Result] = []
     for index, gate in enumerate(gates, 1):
         emit(f"[{index}/{len(gates)}] {gate.name} ...")
@@ -338,10 +461,7 @@ def run_all(gates: Sequence[Gate], log_dir: Path | None = None,
         if log_dir is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / f"{gate.name}.log").write_text(result.output, encoding="utf-8", newline="\n")
-    summary, code = render_summary(results)
-    if log_dir is not None:
-        (log_dir / "summary.txt").write_text(summary + "\n", encoding="utf-8", newline="\n")
-    return results, summary, code
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +521,56 @@ def self_test() -> bool:
     except ValueError:
         expect("selecting zero gates is refused", True)
 
+    # Pytest gates: the verdict follows the test outcome (the 2026-10-02 shared-basetemp teardown crash).
+    def pytest_stub(name: str, body: str) -> Gate:
+        return Gate(name, [sys.executable, "-c", body], Path.cwd(), pytest=True, timeout=30.0)
+
+    crash_after_green = pytest_stub(
+        "pt-crash",
+        "import sys\nprint('.' * 10 + ' [100%]')\nprint('Traceback (most recent call last):', file=sys.stderr)\n"
+        "print('PermissionError: [WinError 5] pytest-current', file=sys.stderr)\nsys.exit(1)",
+    )
+    real_failure = pytest_stub(
+        "pt-fail", "import sys\nprint('FAILED tests/test_x.py::test_y - assert 1 == 2')\nprint('1 failed, 9 passed in 0.5s')\nsys.exit(1)"
+    )
+    clean = pytest_stub("pt-pass", "print('10 passed in 0.5s')")
+    no_summary = pytest_stub("pt-nosummary", "import sys\nprint('INTERNALERROR> boom')\nsys.exit(3)")
+    echo_argv = pytest_stub("pt-argv", "import sys\nprint('ARGV', ' '.join(sys.argv[1:]))")
+    other_echo = Gate("pt-argv2", [sys.executable, "-c", "import sys\nprint('ARGV', ' '.join(sys.argv[1:]))"], Path.cwd(),
+                      pytest=True, timeout=30.0)
+    results, summary, code = run_all([crash_after_green, real_failure, clean, no_summary], emit=silent)
+    pstatus = {r.gate.name: r.status for r in results}
+    expect("a pytest that printed 100% then died is ERROR, not FAIL", pstatus["pt-crash"] == ERROR, str(pstatus))
+    expect("... and not PASS either (exit code is 1)", code == 1 and pstatus["pt-crash"] != PASS)
+    expect("... and the reason says it was not a test failure", "NOT a test failure" in summary, summary)
+    expect("a pytest with a failed test is FAIL", pstatus["pt-fail"] == FAIL, str(pstatus))
+    expect("a pytest with passes only and exit 0 is PASS", pstatus["pt-pass"] == PASS, str(pstatus))
+    expect("a pytest with no summary at all is ERROR", pstatus["pt-nosummary"] == ERROR, str(pstatus))
+    with tempfile.TemporaryDirectory() as logs:
+        results, _, _ = run_all([echo_argv, other_echo], log_dir=Path(logs), emit=silent)
+        seen = [next(line for line in r.output.splitlines() if line.startswith("ARGV")) for r in results]
+        bases = [line.split("--basetemp ")[1].split(" -p")[0] for line in seen]
+        expect("each pytest gate gets its own --basetemp", len(set(bases)) == 2 and all(b for b in bases), str(seen))
+        expect("... under the log dir when one is given", all(Path(b).parent == Path(logs) / "basetemp" for b in bases), str(bases))
+        expect("... with the cache provider off", all("no:cacheprovider" in s for s in seen))
+
+    eol_only = (
+        "src/A.cs(1,1): error ENDOFLINE: Fix end of line marker. Replace 2 characters with '\\n'. [x.csproj]\n"
+        "src/B.cs(9,1): error ENDOFLINE: Fix end of line marker. [x.csproj]\n"
+    )
+    mixed = eol_only + "src/C.cs(4,5): error IDE0055: Fix formatting. [x.csproj]\n"
+    expect("ENDOFLINE-only on an autocrlf checkout is forgiven by name",
+           forgive_endofline(eol_only, 2, True) is not None and "#462" in (forgive_endofline(eol_only, 2, True) or ""))
+    expect("ENDOFLINE-only with autocrlf off is NOT forgiven", forgive_endofline(eol_only, 2, False) is None)
+    expect("ENDOFLINE mixed with a real finding is NOT forgiven", forgive_endofline(mixed, 2, True) is None)
+    expect("an unparseable failure is NOT forgiven", forgive_endofline("Unhandled exception: boom", 1, True) is None)
+    expect("a clean run needs no forgiveness", forgive_endofline("", 0, True) is None)
+    known_gate = Gate("stub-known", [sys.executable, "-c", f"import sys; sys.stdout.write({eol_only!r}); sys.exit(2)"],
+                      Path.cwd(), forgive=lambda out, rc, cwd: forgive_endofline(out, rc, True), timeout=30.0)
+    results, ksummary, kcode = run_all([known_gate], emit=silent)
+    expect("a forgiven gate is KNOWN, exits 0 and is printed with its issue",
+           results[0].status == KNOWN and kcode == 0 and "KNOWN ISSUE" in ksummary and "#462" in ksummary, ksummary)
+
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "scripts").mkdir()
@@ -433,6 +603,17 @@ def self_test() -> bool:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+
+def _write_stamp(root: Path, mode: str) -> None:
+    """Record a green, UNFILTERED run for the require_premerge_before_pr hook (#451). A partial run
+    (--only/--skip) proves nothing about the rest, so main() never calls this for one."""
+    import premerge_stamp  # lazy: --self-test and --list need nothing from it
+
+    try:
+        print(f"stamp: {premerge_stamp.write_stamp(root, mode)}")
+    except (RuntimeError, OSError, ValueError) as exc:
+        print(f"NOTE: could not write the premerge stamp ({exc}); the PR hook will not see this run")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -487,6 +668,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if problems:
         print(f"PREMERGE: AUDIT FAILED - {len(problems)} workflow script(s) not covered by this runner")
         return 1
+    if code == 0 and not args.only and not args.skip:
+        _write_stamp(root, mode)
     return code
 
 
