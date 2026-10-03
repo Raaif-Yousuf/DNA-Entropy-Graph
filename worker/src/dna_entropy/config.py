@@ -56,6 +56,26 @@ class Direction(str, Enum):
     REVERSE_ONLY = "reverse-only"
 
 
+class Topology(str, Enum):
+    """Whether the input is a circular molecule (a plasmid) or a linear one (issue #128).
+
+    A circular molecule has no ends: base 1 follows the last base, so every base can have
+    real context on both sides (analysis/direction.py wraps K bases around before the model
+    sees it). ``AUTO`` trusts the input: a GenBank ``LOCUS`` line saying ``circular`` is
+    circular; everything else (FASTA, pasted text, ``linear``) is linear.
+    """
+
+    AUTO = "auto"
+    LINEAR = "linear"
+    CIRCULAR = "circular"
+
+    def resolve(self, declared_circular: bool) -> bool:
+        """Is a contig whose input declared ``declared_circular`` analyzed as circular?"""
+        if self is Topology.AUTO:
+            return declared_circular
+        return self is Topology.CIRCULAR
+
+
 # Default GPU ceiling for a single model forward pass: the largest window W a single call
 # to the predictor may be asked to handle. The 7B model on an L4 supports 8,192 (design
 # section 5.4); bigger GPU tiers raise this. This used to be a hard cap on the WHOLE input
@@ -97,6 +117,8 @@ class RunConfig:
     # K: user-settable context length (section 5.6, point 1).
     context_length: int = DEFAULT_CONTEXT_LENGTH
     direction: Direction = Direction.BOTH_COMBINED
+    # issue #128: circular (plasmid) wrap-around context; AUTO reads the GenBank LOCUS line.
+    topology: Topology = Topology.AUTO
     # issue #249: default KEEP matches what GenBank/FASTA inputs already did before this
     # policy had a name (validate_sequence was always called with allow_ambiguity=True
     # for those two formats) — real-world files routinely carry N runs, and refusing

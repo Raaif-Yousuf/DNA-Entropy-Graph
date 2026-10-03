@@ -60,6 +60,7 @@ def contig_provenance(
     seam: int | None,
     reduced_context_count: int,
     reduced_context_range: tuple[int, int] | None = None,
+    topology: str = "linear",
 ) -> dict[str, Any]:
     """One contig's windowing/direction record.
 
@@ -92,6 +93,9 @@ def contig_provenance(
         "k_used": window - stride,
         "ceiling": ceiling,
         "direction": direction,
+        # issue #128: the topology this contig was ACTUALLY analyzed with ("linear" or
+        # "circular"), after the run's `topology` option and the input's LOCUS line resolved.
+        "topology": topology,
         "seam": seam,
         "reduced_context_count": reduced_context_count,
         # issue #79: WHERE the reduced-context positions are (0-based, half-open), not only
@@ -113,6 +117,7 @@ def build_run_provenance(
     contigs: list[dict[str, Any]],
     wall_time_seconds: float,
     generated_at: str | None = None,
+    topology: str = "auto",
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the full provenance dict. ``contigs`` is a list of
@@ -134,6 +139,9 @@ def build_run_provenance(
             "direction": direction,
             "ambiguity_policy": ambiguity_policy,
             "rna": rna,
+            # issue #128: the REQUESTED topology option ("auto"|"linear"|"circular"); each
+            # contig records the topology it resolved to.
+            "topology": topology,
         },
         "predictor": {
             "kind": predictor_kind,

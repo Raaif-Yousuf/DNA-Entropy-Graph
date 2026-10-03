@@ -106,6 +106,14 @@
             "bedgraph",
             "wig"
           ]
+        },
+        "topology": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "linear",
+            "circular"
+          ]
         }
       }
     },

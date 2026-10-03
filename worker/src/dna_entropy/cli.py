@@ -22,6 +22,7 @@ from .config import (
     Direction,
     PredictorKind,
     RunConfig,
+    Topology,
     TrackFormat,
 )
 from .pipeline import PipelineError, load_and_validate, sanitize_run_name
@@ -128,6 +129,12 @@ def run(
         "--direction",
         help="both-combined|both-averaged|both-separate|forward-only|reverse-only.",
     ),
+    topology: str = typer.Option(
+        "auto",
+        "--topology",
+        help="auto|linear|circular. Circular wraps the sequence around (a plasmid) so the first "
+        "bases get real context; auto reads a GenBank LOCUS line that says circular.",
+    ),
     rna: bool = typer.Option(False, "--rna", help="Convert U->T (treat input as RNA)."),
     ambiguity: str = typer.Option(
         "keep",
@@ -182,6 +189,7 @@ def run(
             max_total_len=max_total_len,
             context_length=context_length,
             direction=Direction(direction),
+            topology=Topology(topology),
             rna=rna,
             ambiguity_policy=AmbiguityPolicy(ambiguity),
             genes=genes,

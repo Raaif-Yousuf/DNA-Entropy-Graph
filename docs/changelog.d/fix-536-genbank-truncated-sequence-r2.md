@@ -1,0 +1,1 @@
+- Worker: a truncated GenBank file (a length on the `LOCUS` line, no sequence) is now refused with the reader's own "re-export the file" error instead of a raw Biopython exception, and a malformed feature line that crashed Biopython's parser with an `IndexError` gets the same clean error naming the record (#536).

@@ -30,6 +30,7 @@ class Contig:
     seq: str
     features: list[GeneFeature] = field(default_factory=list)
     source_id: str = ""  # original record id (kept for provenance)
+    circular: bool = False  # the INPUT declared a circular molecule (GenBank LOCUS), issue #128
 
 
 @dataclass
@@ -192,6 +193,7 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
                     seq=v.seq,
                     features=rec.features,
                     source_id=rec.record_id,
+                    circular=rec.circular,
                 )
             )
         _assert_unique_contig_names(contigs)
