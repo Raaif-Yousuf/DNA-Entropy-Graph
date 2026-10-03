@@ -172,7 +172,7 @@ public class WorkerManifestBuilderTests
         all.ShouldNotContain("wig", "both track formats would let the worker pick the wrong one; TrackFormat decides");
         all.Count.ShouldBe(10);
 
-        var wig = Build(Opts(o => o with { TrackFormat = TrackFormat.Wig }));
+        var wig = Build(Opts(o => o with { TrackFormat = TrackFormat.Wig, OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Wig }));
         Outputs(wig).ShouldContain("wig");
         Outputs(wig).ShouldNotContain("bedgraph");
         wig.GetProperty("analysis").GetProperty("format").GetString().ShouldBe("wig");

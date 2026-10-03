@@ -537,8 +537,7 @@ transform.
 `outputs` vocabulary (`job_contract.md` section 3), from one table, `OutputCatalog` in `DnaEntropyGraph.Core`: wire name,
 label, the input kinds it is offered for, default on or off, and whether it needs genes. Every file is offered for both a
 GenBank input and a FASTA/paste input (`pipeline.py` gates each writer on its own `include_*` flag on both paths). Every
-file is ticked by default except `probs` and `probs_npy` (the worker treats those two as off unless named, even when
-everything else is on). `genes_gff3` and `gene_summary` need genes, so the manifest never names them when gene finding is
+file is ticked by default except `wig` and `probs`/`probs_npy`. The worker writes ONE track format per run (`wig` with `bedgraph` also named gives bedgraph, `manifest.py` `build_run_config`), so `wig` is the alternative to `bedgraph`: the page clears one when the other is ticked, `OutputCatalog.Normalize` keeps the bedgraph if a stored choice names both, and WIG is off by default. The worker treats `probs` and `probs_npy` as off unless named, even when everything else is on. `genes_gff3` and `gene_summary` need genes, so the manifest never names them when gene finding is
 off. A non-empty `outputs` array is read literally by the worker, so a cleared box is a file that is not written; an empty
 selection is refused in the app because the worker would read an empty array as "everything". `smoothed` is sent with no
 `analysis.smoothingWindows`, so the worker's default window (51) applies. The choice is remembered per input kind

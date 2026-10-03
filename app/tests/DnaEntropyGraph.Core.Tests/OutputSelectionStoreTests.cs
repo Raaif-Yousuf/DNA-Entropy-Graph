@@ -69,4 +69,13 @@ public sealed class OutputSelectionStoreTests
 
         settings.Values[OutputSelectionStore.KeyFor(OutputInputKinds.Sequence)].ShouldBe("wig,regions");
     }
+
+    [Fact]
+    public void A_stored_choice_naming_both_track_formats_loads_as_the_bedgraph_only()
+    {
+        var settings = new MemorySettings();
+        settings.Values[OutputSelectionStore.KeyFor(OutputInputKinds.Sequence)] = "bedgraph,wig,stats";
+
+        new OutputSelectionStore(settings).Load(OutputInputKinds.Sequence).ShouldBe(OutputFileKinds.BedGraph | OutputFileKinds.Stats);
+    }
 }

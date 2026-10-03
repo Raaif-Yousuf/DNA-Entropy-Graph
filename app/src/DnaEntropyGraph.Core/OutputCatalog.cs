@@ -38,7 +38,7 @@ public static class OutputCatalog
         new(OutputFileKinds.GenBank, "genbank", "OutputChoice_genbank", OutputInputKinds.Both, DefaultOn: true, NeedsGenes: false),
         new(OutputFileKinds.Fasta, "fasta", "OutputChoice_fasta", OutputInputKinds.Both, true, false),
         new(OutputFileKinds.BedGraph, "bedgraph", "OutputChoice_bedgraph", OutputInputKinds.Both, true, false),
-        new(OutputFileKinds.Wig, "wig", "OutputChoice_wig", OutputInputKinds.Both, true, false),
+        new(OutputFileKinds.Wig, "wig", "OutputChoice_wig", OutputInputKinds.Both, false, false),
         new(OutputFileKinds.GeneiousGff3, "geneious_gff3", "OutputChoice_geneious_gff3", OutputInputKinds.Both, true, false),
         new(OutputFileKinds.GenesGff3, "genes_gff3", "OutputChoice_genes_gff3", OutputInputKinds.Both, true, true),
         new(OutputFileKinds.Smoothed, "smoothed", "OutputChoice_smoothed", OutputInputKinds.Both, true, false),
@@ -53,8 +53,11 @@ public static class OutputCatalog
     /// <summary>Every flag the catalog owns.</summary>
     public static OutputFileKinds Everything { get; } = Entries.Aggregate(OutputFileKinds.None, (all, e) => all | e.Kind);
 
-    /// <summary>The boxes that start checked: every file except the large probability matrix.</summary>
+    /// <summary>The boxes that start checked: every file except WIG (the worker writes one track format per run, so WIG is the alternative to the bedGraph, not an addition) and the large probability matrix.</summary>
     public static OutputFileKinds Defaults { get; } = Entries.Where(e => e.DefaultOn).Aggregate(OutputFileKinds.None, (all, e) => all | e.Kind);
+
+    /// <summary>The worker writes ONE track format per run, so the bedGraph and WIG tracks are alternatives: both ticked keeps the bedGraph (the manifest builder applies the same rule).</summary>
+    public static OutputFileKinds Normalize(OutputFileKinds kinds) => kinds.HasFlag(OutputFileKinds.BedGraph) ? kinds & ~OutputFileKinds.Wig : kinds;
 
     /// <summary>The group an input kind's choice belongs to: GenBank, or sequence (FASTA and pasted text).</summary>
     public static OutputInputKinds GroupFor(InputKind kind) => kind == InputKind.GenBank ? OutputInputKinds.GenBank : OutputInputKinds.Sequence;

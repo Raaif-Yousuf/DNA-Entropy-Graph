@@ -115,26 +115,60 @@ public sealed class NewRunViewModelOutputTests : IDisposable
     }
 
     [Fact]
-    public async Task Unchecking_wig_sends_a_manifest_without_wig_and_a_new_page_starts_with_wig_unchecked()
+    public async Task Ticking_wig_sends_a_manifest_with_wig_and_without_bedgraph_and_a_new_page_starts_that_way()
     {
         var vm = NewViewModel();
         await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
-        Choice(vm, "wig").IsChecked = false;
+        Choice(vm, "wig").IsChecked.ShouldBeFalse("WIG is off by default: the worker writes one track format per run");
+        Choice(vm, "wig").IsChecked = true;
+        Choice(vm, "bedgraph").IsChecked.ShouldBeFalse("the two track formats are alternatives");
 
         await vm.StartRunCommand.ExecuteAsync(null);
 
         var options = LastRunOptions();
-        options.OutputFiles.HasFlag(OutputFileKinds.Wig).ShouldBeFalse();
-        Outputs(options).ShouldNotContain("wig");
-        Outputs(options).ShouldContain("bedgraph");
+        options.TrackFormat.ShouldBe(TrackFormat.Wig);
+        Outputs(options).ShouldContain("wig");
+        Outputs(options).ShouldNotContain("bedgraph");
 
         // The read side: a page built later over the same settings starts from what was remembered.
         var next = NewViewModel();
         await AddFile(next, "b.fasta", ">b\n" + Dna + "\n");
-        Choice(next, "wig").IsChecked.ShouldBeFalse();
-        Choice(next, "bedgraph").IsChecked.ShouldBeTrue();
+        Choice(next, "wig").IsChecked.ShouldBeTrue();
+        Choice(next, "bedgraph").IsChecked.ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task Ticking_bedgraph_again_clears_wig()
+    {
+        var vm = NewViewModel();
+        await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
+        Choice(vm, "wig").IsChecked = true;
+
+        Choice(vm, "bedgraph").IsChecked = true;
+
+        Choice(vm, "wig").IsChecked.ShouldBeFalse();
+        await vm.StartRunCommand.ExecuteAsync(null);
+        LastRunOptions().TrackFormat.ShouldBe(TrackFormat.BedGraph);
+        Outputs(LastRunOptions()).ShouldContain("bedgraph");
+        Outputs(LastRunOptions()).ShouldNotContain("wig");
+    }
+
+    [Fact]
+    public async Task A_remembered_choice_that_could_not_be_saved_still_opens_the_progress_page_once()
+    {
+        var settings = Substitute.For<ISettingsStore>();
+        settings.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new InvalidOperationException("settings broke"));
+        var navigator = Substitute.For<INavigator>();
+        var vm = new NewRunViewModel(
+            Substitute.For<IFilePicker>(), _jobEngine, navigator, _strings,
+            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(settings));
+        await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
+
+        await Should.NotThrowAsync(() => vm.StartRunCommand.ExecuteAsync(null));
+
+        navigator.Received(1).NavigateTo("RunProgress", "job-1");
+        await _jobEngine.Received(1).StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>());
+    }
     [Fact]
     public async Task The_choice_is_remembered_separately_for_a_GenBank_file_and_a_FASTA_file()
     {
@@ -192,32 +226,17 @@ public sealed class NewRunViewModelOutputTests : IDisposable
     }
 
     [Fact]
-    public async Task Choosing_only_wig_runs_the_wig_track_not_bedgraph()
-    {
-        var vm = NewViewModel();
-        await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
-        Choice(vm, "bedgraph").IsChecked = false;
-
-        await vm.StartRunCommand.ExecuteAsync(null);
-
-        var options = LastRunOptions();
-        options.TrackFormat.ShouldBe(TrackFormat.Wig);
-        Outputs(options).ShouldContain("wig");
-        Outputs(options).ShouldNotContain("bedgraph");
-    }
-
-    [Fact]
     public async Task A_run_that_could_not_start_does_not_remember_the_choice()
     {
         _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns<Task<string>>(_ => throw new InvalidOperationException("boom"));
         var vm = NewViewModel();
         await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
-        Choice(vm, "wig").IsChecked = false;
+        Choice(vm, "tsv").IsChecked = false;
 
         await vm.StartRunCommand.ExecuteAsync(null);
 
         var next = NewViewModel();
         await AddFile(next, "b.fasta", ">b\n" + Dna + "\n");
-        Choice(next, "wig").IsChecked.ShouldBeTrue();
+        Choice(next, "tsv").IsChecked.ShouldBeTrue();
     }
 }

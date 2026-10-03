@@ -44,10 +44,10 @@ public sealed partial class OutputCatalogTests
     }
 
     [Fact]
-    public void The_probability_matrix_is_off_by_default_and_every_other_file_is_on()
+    public void Only_wig_and_the_probability_matrix_are_off_by_default()
     {
-        OutputCatalog.Entries.Where(e => !e.DefaultOn).Select(e => e.WireName).ShouldBe(["probs", "probs_npy"]);
-        OutputCatalog.Defaults.ShouldBe(OutputCatalog.Everything & ~(OutputFileKinds.Probs | OutputFileKinds.ProbsNpy));
+        OutputCatalog.Entries.Where(e => !e.DefaultOn).Select(e => e.WireName).ShouldBe(["wig", "probs", "probs_npy"], "WIG is the alternative to the bedGraph track, not an addition: the worker writes one track format per run");
+        OutputCatalog.Defaults.ShouldBe(OutputCatalog.Everything & ~(OutputFileKinds.Wig | OutputFileKinds.Probs | OutputFileKinds.ProbsNpy));
         new RunOptions { ModelId = "m", RunTarget = "Cloud" }.OutputFiles.ShouldBe(OutputCatalog.Defaults);
     }
 
@@ -104,5 +104,12 @@ public sealed partial class OutputCatalogTests
         OutputFileKinds.All.ShouldBe(
             OutputFileKinds.GenBank | OutputFileKinds.Fasta | OutputFileKinds.BedGraph | OutputFileKinds.Wig
             | OutputFileKinds.GeneiousGff3 | OutputFileKinds.GenesGff3 | OutputFileKinds.Stats | OutputFileKinds.EntropyTsv);
+    }
+
+    [Fact]
+    public void Both_track_formats_ticked_normalizes_to_the_bedgraph_because_the_worker_writes_one()
+    {
+        OutputCatalog.Normalize(OutputFileKinds.BedGraph | OutputFileKinds.Wig | OutputFileKinds.Stats).ShouldBe(OutputFileKinds.BedGraph | OutputFileKinds.Stats);
+        OutputCatalog.Normalize(OutputFileKinds.Wig | OutputFileKinds.Stats).ShouldBe(OutputFileKinds.Wig | OutputFileKinds.Stats);
     }
 }

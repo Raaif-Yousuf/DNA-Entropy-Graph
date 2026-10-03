@@ -22,7 +22,7 @@ public sealed class OutputSelectionStore
         var stored = _settings.GetString(KeyFor(group));
         var names = (stored ?? string.Empty).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         var offered = OutputCatalog.For(group).Aggregate(OutputFileKinds.None, (all, e) => all | e.Kind);
-        var chosen = OutputCatalog.FromWireNames(names) & offered;
+        var chosen = OutputCatalog.Normalize(OutputCatalog.FromWireNames(names) & offered);
         return chosen == OutputFileKinds.None ? OutputCatalog.Defaults & offered : chosen;
     }
 

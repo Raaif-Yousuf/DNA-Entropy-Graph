@@ -181,6 +181,14 @@ public sealed partial class NewRunViewModel : ObservableObject
 
         var selection = _outputSelections[group];
         _outputSelections[group] = choice.IsChecked ? selection | choice.Entry.Kind : selection & ~choice.Entry.Kind;
+
+        // The worker writes one track format per run: ticking one of the two track boxes clears the other.
+        if (choice.IsChecked && choice.Entry.Kind is OutputFileKinds.BedGraph or OutputFileKinds.Wig)
+        {
+            var other = choice.Entry.Kind == OutputFileKinds.Wig ? OutputFileKinds.BedGraph : OutputFileKinds.Wig;
+            OutputChoices.FirstOrDefault(c => c.Entry.Kind == other)?.IsChecked = false;
+        }
+
         NotifyOutputChoicesChanged();
     }
 
@@ -484,16 +492,17 @@ public sealed partial class NewRunViewModel : ObservableObject
             return;
         }
 
+        // The run has started and is paid for: open its page first, so nothing the store does can leave the user on a Run button
+        // that starts a second one.
+        _navigator.NavigateTo("RunProgress", jobId);
         try
         {
             _outputStore.Save(group, outputs);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
-            // The run has started; a choice that could not be remembered only means the next run starts from the defaults.
+            // A choice that could not be remembered only means the next run starts from the defaults; it must never reach the command.
         }
-
-        _navigator.NavigateTo("RunProgress", jobId);
     }
 
     private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen;
