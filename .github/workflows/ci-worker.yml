@@ -36,25 +36,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Did this PR touch worker/ or this workflow?
+      # Fail-CLOSED (#31 round 2): the jobs are skipped only when the diff succeeded and EVERY changed path is on a short
+      # known-irrelevant list; any git error runs them. Skipped counts as passing for branch protection, so the old inline
+      # `git diff | grep -Eq` (no pipefail, rename-collapsing, allowlist-shaped) could turn a broken diff into a green PR.
+      # The list and its rules live in scripts/ci_changes_gate.py, pinned by scripts/tests/test_ci_changes_gate.py, which fails
+      # when a path a test or a step of this workflow reads would be skipped.
+      - name: Does this PR change anything ci-worker cares about?
         id: filter
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        # The pattern below is every path the worker tests READ, not just worker/ (a PR editing only a file a test reads must run it,
-        # because Skipped counts as passing). scripts/tests/test_ci_gate_sync.py fails when a test reads a top-level dir
-        # that is not listed here; add it to the pattern when that happens.
-        run: |
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --name-only "$BASE_SHA" HEAD | grep -Eq '^(worker/|tests/|docs/contract/|docs/copy_catalog\.md$|\.github/workflows/ci-worker\.yml$)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=skipped::No change to any path the tests read (see the pattern above) or ci-worker.yml; the jobs below report Skipped, which counts as passing."
-          fi
+        run: python3 scripts/ci_changes_gate.py --workflow ci-worker --event "$EVENT" --base "$BASE_SHA"
 
   test:
     name: pytest (not gpu)
