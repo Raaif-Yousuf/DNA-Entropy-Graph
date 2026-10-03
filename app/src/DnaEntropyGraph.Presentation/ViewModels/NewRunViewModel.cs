@@ -309,12 +309,12 @@ public sealed partial class NewRunViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Logs a failure by its class (never its message, which can carry a file name) and says its line like any other operation
-    /// does: after what another operation in flight has already said, and replacing a stale line only when the page is idle.
+    /// Says a failure's line like any other operation does (after what another operation in flight has already said, replacing a
+    /// stale line only when the page is idle), then logs its class, never its message, which can carry a file name. The line comes
+    /// first and the log is best effort: a log that throws must not hide the line or escape the command.
     /// </summary>
     private void ReportFailure(Exception exception, string messageKey)
     {
-        _log.Warning("new-run", null, ErrorClass(exception));
         BeginOperation();
         try
         {
@@ -323,6 +323,15 @@ public sealed partial class NewRunViewModel : ObservableObject
         finally
         {
             EndOperation();
+        }
+
+        try
+        {
+            _log.Warning("new-run", null, ErrorClass(exception));
+        }
+        catch (Exception)
+        {
+            // The log is advice for the diagnostics zip; the user has already been told what to do.
         }
     }
 
@@ -333,12 +342,11 @@ public sealed partial class NewRunViewModel : ObservableObject
     /// <summary>
     /// The line for a run that could not start, by what failed. What the runner interface can let out here: a file the app cannot
     /// read while keeping its own copy (local), a sign-in or Google Cloud call that failed (cloud), or anything else, such as the
-    /// app's own settings or history store. A settings failure is an <see cref="IOException"/> too, but not the user's file.
+    /// app's own settings or history store, including a plain <see cref="IOException"/> (a full disk under app data is not the user's file).
     /// </summary>
     private static string StartFailureKey(Exception exception) => exception switch
     {
-        SettingsUnavailableException or InstallationIdUnusableException => "NewRunStatusStartFailedOther",
-        IOException or UnauthorizedAccessException => "NewRunStatusStartFailedFile",
+        FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException => "NewRunStatusStartFailedFile",
         CloudOperationException or AccountAuthException => "NewRunStatusStartFailedCloud",
         _ => "NewRunStatusStartFailedOther",
     };

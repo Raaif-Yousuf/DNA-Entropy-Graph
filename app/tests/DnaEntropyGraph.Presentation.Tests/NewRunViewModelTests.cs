@@ -1096,6 +1096,40 @@ public sealed class NewRunViewModelTests : IDisposable
         _navigator.DidNotReceive().NavigateTo(Arg.Any<string>(), Arg.Any<string>());
     }
 
+    private sealed class ThrowingLog : IDiagnosticsLog
+    {
+        public void Warning(string source, string? jobId, string errorClass) => throw new InvalidOperationException("log broke");
+    }
+
+    [Fact]
+    public async Task A_log_that_throws_neither_hides_the_start_failure_line_nor_escapes_the_command()
+    {
+        _viewModel = new NewRunViewModel(
+            _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new InvalidOperationException("boom")));
+
+        await Should.NotThrowAsync(() => _viewModel.StartRunCommand.ExecuteAsync(null));
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusStartFailedOther");
+    }
+
+    [Fact]
+    public async Task A_log_that_throws_neither_hides_the_picker_failure_line_nor_escapes_the_command()
+    {
+        _viewModel = new NewRunViewModel(
+            _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("COM")));
+
+        await Should.NotThrowAsync(() => _viewModel.BrowseCommand.ExecuteAsync(null));
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusBrowseFailed");
+    }
+
     private sealed class RecordingLog : IDiagnosticsLog
     {
         public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
@@ -1109,7 +1143,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         { new FileNotFoundException("gone"), "NewRunStatusStartFailedFile", "FileNotFoundException" },
         { new DirectoryNotFoundException("gone"), "NewRunStatusStartFailedFile", "DirectoryNotFoundException" },
-        { new IOException("locked"), "NewRunStatusStartFailedFile", "IOException" },
+        { new IOException("disk full"), "NewRunStatusStartFailedOther", "IOException" },
         { new UnauthorizedAccessException("denied"), "NewRunStatusStartFailedFile", "UnauthorizedAccessException" },
         { new CloudOperationException(new CloudError("QUOTA_EXCEEDED", 403, "quota"), CloudErrorKind.Quota), "NewRunStatusStartFailedCloud", "CloudOperationException:Quota" },
         { new CloudOperationException(new CloudError(null, 403, "denied"), CloudErrorKind.Permission), "NewRunStatusStartFailedCloud", "CloudOperationException:Permission" },
