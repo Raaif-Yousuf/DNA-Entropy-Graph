@@ -167,6 +167,11 @@ public static class ServiceRegistration
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
         services.AddSingleton<IWorkerImageProvider, PinnedWorkerImageProvider>();
+        // Issue #98: the price list ships beside the app (Assets\pricing.json in the output folder) and the New run page's
+        // estimate reads it through this one service. A missing file is a named message on the page, not a crash.
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingSource>(_ => new DnaEntropyGraph.Core.Cost.FilePricingSource(
+            Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
         // LocalEngine.
         services.AddSingleton<LocalEngineManager>();

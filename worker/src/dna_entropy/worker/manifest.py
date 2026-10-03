@@ -520,6 +520,9 @@ class JobManifest:
             include_stats=_wanted("stats"),
             include_genbank=_wanted("genbank"),
             include_genes_gff3=include_genes_gff3,
+            # issue #127: opt-in only, even when `outputs` is unspecified ("everything")
+            include_probs="probs" in self.outputs,
+            include_probs_npy="probs_npy" in self.outputs,
             include_smoothed=_wanted("smoothed"),
             smoothing_windows=tuple(self.analysis.smoothing_windows),
             include_regions=_wanted("regions"),

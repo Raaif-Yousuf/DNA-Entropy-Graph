@@ -27,6 +27,25 @@ anyone connected with this app:
    a few cents a month at most for typical use, and automatically cleaned up after your
    chosen retention period (90 days by default).
 
+## Where the estimate on the New run page comes from
+
+The estimate line is worked out on your PC from a price list that ships inside the app
+(`Assets\pricing.json`, with the date the prices were gathered and where they came from).
+It adds the hourly price of the computer to the hourly share of its storage disk, then
+multiplies by minutes. When you have earlier finished runs of the same
+tier on this PC, the start-up time comes from them (the middle value of the last ten) and
+the analysis time for your file is added on top, so a long sequence costs more than a short
+one even with history; otherwise both come from a built-in model of about 5 minutes on a warm computer or 12 minutes on a fresh one, plus
+about 2 seconds of analysis for every thousand letters. Those built-in minutes are our
+design guess until the first real GPU runs have been measured. The app does not look up
+live prices yet, so the price list is only as fresh as the release you installed, and a
+Spot price it does not know is left out rather than guessed. Spot is off by default.
+Every figure is labelled an estimate because the app cannot see your real bill. If the price
+list has no price for a kind of computer yet (the H100 tier, for example), the page says
+there is no estimate for it instead of guessing, and you can still press Run. Under the
+estimate a second line gives what the disk costs per day if the computer is left stopped
+after the run, which is the default (see the next sections).
+
 ## Roughly what a run costs
 
 The default computer tier (called "L4," named after its graphics card) costs Google's
@@ -80,7 +99,7 @@ setting.
 When a run finishes, the rented computer is **stopped**, not deleted, by default. A
 stopped computer is not doing anything and is not being billed by the minute, but its
 storage disk still exists and Google still charges for it: **roughly $15 a month** for the
-default computer's disk (about $3 to $4 a week), or roughly double that for the largest,
+default computer's disk (about 50 cents a day, which is the figure the New run page shows under the estimate, or about $3 to $4 a week), or roughly double that for the largest,
 rarely-used model tier. The reason to keep it stopped instead of deleting it is speed:
 your *next* run on the same project reuses that disk and comes back to life in about 2
 minutes instead of needing the full 8-minute first-time setup again.

@@ -57,9 +57,16 @@ reasonable for most sequences.
 - **Where to run**: in the cloud (the normal choice) or on this computer, if you installed
   the local engine in [02-connect-google-cloud.md](02-connect-google-cloud.md)'s Step 8.
 
-Below the options, the app shows an estimated cost and time before you commit to
-anything. See [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for what those numbers
-actually mean and some worked examples.
+Under the file list, once the selected file has passed its check, the app shows one
+**Estimate** line before you commit to anything, for example "Estimate: about $0.13,
+about 9 minutes, based on your earlier runs." With no earlier runs on this PC it shows a
+range instead ("about $0.08 to $0.18, about 5 to 12 minutes"), because a computer that is
+already warm is much quicker than one that has to start from nothing. It is a guess, not
+a bill, and it never shows a number the app does not have: while a file is still being
+checked, or has a problem, there is no estimate line. If the line says the price list
+could not be read, reinstall the app; you can still press Run. See
+[06-costs-and-cleanup.md](06-costs-and-cleanup.md) for what those numbers actually mean
+and some worked examples.
 
 ## Advanced options (most people can skip this section)
 
