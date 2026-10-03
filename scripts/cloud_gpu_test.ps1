@@ -395,6 +395,7 @@ function Write-Plan {
 # ---------------------------------------------------------------------------
 
 function Find-CloudCli {
+    param([switch]$PathOnly)
     # Candidate publish locations for the not-yet-built CloudCli console
     # host (issue #60). None of these exist yet as of issue #317; this
     # function exists so the day CloudCli IS built, this script starts
@@ -403,8 +404,10 @@ function Find-CloudCli {
         (Join-Path $PSScriptRoot '..' 'app' 'artifacts' 'CloudCli' 'DnaEntropyGraph.CloudCli.exe'),
         (Join-Path $PSScriptRoot '..' 'app' 'tools' 'DnaEntropyGraph.CloudCli' 'bin' 'Release' 'net10.0' 'DnaEntropyGraph.CloudCli.exe')
     )
-    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
-    $onPath = Get-Command 'CloudCli' -ErrorAction SilentlyContinue
+    if (-not $PathOnly) {
+        foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+    }
+    $onPath = Get-Command 'DnaEntropyGraph.CloudCli' -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
     return $null
 }
@@ -534,7 +537,7 @@ function New-StubCli {
     # A throwaway CloudCli.cmd in its own temp folder. $Body is the .cmd text after '@echo off'. Returns the .cmd path.
     param([Parameter(Mandatory)][string]$Directory, [Parameter(Mandatory)][string[]]$Body)
     New-Item -ItemType Directory -Force -Path $Directory | Out-Null
-    $path = Join-Path $Directory 'CloudCli.cmd'
+    $path = Join-Path $Directory 'DnaEntropyGraph.CloudCli.cmd'
     Set-Content -Path $path -Value (@('@echo off') + $Body) -Encoding ascii
     return $path
 }
@@ -650,8 +653,8 @@ function Invoke-SelfTest {
     try {
         New-StubCli -Directory $applyDir -Body @('echo called> "%~dp0called.txt"', 'exit /b 0') | Out-Null
         $env:PATH = "$applyDir;$savedPath"
-        $stubSeen = (Get-Command 'CloudCli' -ErrorAction SilentlyContinue)
-        Check "self-test setup: the stub CloudCli is the one found on PATH" ($stubSeen -and $stubSeen.Source -eq (Join-Path $applyDir 'CloudCli.cmd'))
+        $stubFound = Find-CloudCli -PathOnly
+        Check "Find-CloudCli's PATH fallback finds DnaEntropyGraph.CloudCli (the real executable name)" ($stubFound -eq (Join-Path $applyDir 'DnaEntropyGraph.CloudCli.cmd'))
         $stubOut = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -Apply 2>&1 | Out-String
         $stubExit = $LASTEXITCODE
         Check "-Apply with a stub CloudCli present still exits 3" ($stubExit -eq 3)

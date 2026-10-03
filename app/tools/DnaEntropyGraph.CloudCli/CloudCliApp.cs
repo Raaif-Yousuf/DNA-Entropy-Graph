@@ -94,9 +94,14 @@ public sealed class CloudCliApp
         {
             return Fail(stderr, CloudCliExitCode.CloudError, $"Google Cloud refused or failed the call ({ex.Kind.ToString().ToLowerInvariant()}): {ex.Error.Message} {ActionFor(ex.Kind)}");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return Fail(stderr, CloudCliExitCode.CloudError, "Cancelled before it finished. Run it again, and check 'resources list' for anything half-made.");
+        }
+        catch (OperationCanceledException)
+        {
+            // HttpClient reports its own timeout as a TaskCanceledException while the caller's token is still live.
+            return Fail(stderr, CloudCliExitCode.CloudError, "A Google call timed out. Check the internet connection and try again, and check 'resources list' for anything half-made.");
         }
         catch (Exception ex)
         {
@@ -135,8 +140,9 @@ public sealed class CloudCliApp
         if (command.Kind != ResourceKind.Vm)
         {
             var buckets = await session.Storage.ListBucketsAsync(command.Project, cancellationToken).ConfigureAwait(false);
+            // Not filtered by --install: the results bucket is shared and adopted across installations, so it carries its creator's
+            // installation-id. The storage gateway already lists only buckets with the app label.
             rows.AddRange(buckets
-                .Where(b => command.Install is null || Label(b.Labels, "installation-id") == command.Install)
                 .OrderBy(b => b.Name, StringComparer.Ordinal)
                 .Select(b => new ResourceRow("bucket", b.Name, null, b.Location, null, Label(b.Labels, "installation-id"), null)));
         }
@@ -234,10 +240,12 @@ public sealed class CloudCliApp
         var vm = await session.Compute.GetVmAsync(command.Name, command.Zone, cancellationToken).ConfigureAwait(false);
         if (vm is null)
         {
-            stdout.WriteLine(command.Json
-                ? JsonSerializer.Serialize(new { name = command.Name, zone = command.Zone, deleted = false }, JsonOptions)
-                : $"OK: {Ascii(command.Name)} not found in {Ascii(command.Zone)}, nothing to delete");
-            return CloudCliExitCode.Ok;
+            // Not "already gone": a wrong zone looks identical, and the VM would keep billing. Look for the name elsewhere.
+            var elsewhere = (await session.Compute.ListAppVmsAsync(cancellationToken).ConfigureAwait(false))
+                .FirstOrDefault(v => string.Equals(v.Name, command.Name, StringComparison.Ordinal));
+            return Fail(stderr, CloudCliExitCode.NotFound, elsewhere is not null
+                ? $"{Ascii(command.Name)} is not in zone {Ascii(command.Zone)}; it is in zone {Ascii(elsewhere.Zone)}. Run this again with --zone {Ascii(elsewhere.Zone)}."
+                : $"{Ascii(command.Name)} was not found in zone {Ascii(command.Zone)} or any other zone. Check the zone: 'resources list --kind vm' shows where each VM is (nothing listed means it is already deleted).");
         }
 
         // Never assume a VM is ours: no labels read, or no app label, means leave it alone.

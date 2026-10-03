@@ -100,7 +100,7 @@ public class CloudCliEndToEndTests
     }
 
     [Fact]
-    public async Task Resources_list_with_install_filters_the_vm_query_by_that_installation_label()
+    public async Task Resources_list_with_install_filters_the_vm_query_but_keeps_the_shared_bucket()
     {
         var rig = new Rig();
         rig.Handler
@@ -110,7 +110,7 @@ public class CloudCliEndToEndTests
         var result = await rig.RunAsync("resources", "list", "--project", "my-lab", "--install", "inst-1", "--json");
 
         using var document = JsonDocument.Parse(result.Out);
-        document.RootElement.EnumerateArray().Select(e => e.GetProperty("name").GetString()).ShouldBe(["deg-job1"]);
+        document.RootElement.EnumerateArray().Select(e => e.GetProperty("name").GetString()).ShouldBe(["deg-job1", "deg-123-abcdef"]);
         Uri.UnescapeDataString(rig.Handler.To(Get, Aggregated).Single().Uri.Query).ShouldContain("labels.installation-id = \"inst-1\"");
     }
 

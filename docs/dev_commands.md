@@ -433,13 +433,14 @@ dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> 
   The results bucket is meant to outlive a run, so a leak scan uses `--kind vm` (that is what `scripts/cloud_gpu_test.ps1` runs).
 - `vm create` only builds a `VmSpec`, so the six labels, `maxRunDuration` (default 30m) and termination action DELETE are always set;
   there is no flag to weaken them. A missing `--job` generates one.
-- `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label; a VM that is
-  already gone is success.
+- `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label. A name not
+  found in the given zone is exit 5 (never "already gone"): the error names the zone it was found in, or says to check
+  `resources list --kind vm`. `resources list --install <id>` filters VMs only; the shared results bucket is always listed.
 - Output is ASCII: `OK:` lines on stdout, one `ERROR:` line on stderr naming an action.
 - Exit codes: `0` ok, `1` Google refused or could not be reached (or Ctrl+C), or any other unexpected failure (one `ERROR:` line naming
   the exception class and an action, never a stack trace), `2` bad command line or a value `VmSpec` rejects, `3` no account signed in
   ("Sign in with the app first") or the sign-in expired (only that: a network failure while refreshing the sign-in is `1`, and a missing
-  or invalid OAuth client file is `1` with its own message), `4` a safety guard refused, `5` the named bucket is not there.
+  or invalid OAuth client file is `1` with its own message), `4` a safety guard refused, `5` the named bucket, or the VM in that zone, is not there. A Google call that times out is `1` ("timed out"), not "Cancelled".
 - `--json` takes no value, or `--json=true` / `--json=false`; any other value is exit 2.
 - There is no GCP access from agent sessions: tests run the same code over a scripted HTTP handler
   (`app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/`); `docs/ToTest.md` carries the row that needs a real project.

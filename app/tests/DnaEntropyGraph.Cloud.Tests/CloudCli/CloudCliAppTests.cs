@@ -39,11 +39,13 @@ public class CloudCliAppTests
 
     private sealed record Outcome(int ExitCode, string Out, string Err);
 
-    private static async Task<Outcome> RunAsync(ICloudCliSessionFactory sessions, params string[] args)
+    private static Task<Outcome> RunAsync(ICloudCliSessionFactory sessions, params string[] args) => RunAsync(CancellationToken.None, sessions, args);
+
+    private static async Task<Outcome> RunAsync(CancellationToken cancellationToken, ICloudCliSessionFactory sessions, params string[] args)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        var code = await new CloudCliApp(sessions, TimeProvider.System, new Random(60)).RunAsync(args, stdout, stderr, CancellationToken.None);
+        var code = await new CloudCliApp(sessions, TimeProvider.System, new Random(60)).RunAsync(args, stdout, stderr, cancellationToken);
         return new Outcome(code, stdout.ToString(), stderr.ToString());
     }
 
@@ -98,13 +100,15 @@ public class CloudCliAppTests
     }
 
     [Fact]
-    public async Task Resources_list_with_a_foreign_install_drops_the_bucket_too()
+    public async Task Resources_list_with_a_foreign_install_keeps_the_shared_bucket_and_has_no_vms()
     {
         var (_, sessions) = await SeededAsync();
 
         var result = await RunAsync(sessions, "resources", "list", "--project", Project, "--install", "someone-else", "--json");
 
-        JsonDocument.Parse(result.Out).RootElement.GetArrayLength().ShouldBe(0);
+        var rows = JsonDocument.Parse(result.Out).RootElement.EnumerateArray().ToList();
+        rows.Select(r => r.GetProperty("kind").GetString()).ShouldBe(["bucket"]);
+        rows[0].GetProperty("name").GetString().ShouldBe(FakeGcp.BucketName(Project));
     }
 
     [Fact]
@@ -267,16 +271,35 @@ public class CloudCliAppTests
     }
 
     [Fact]
-    public async Task Vm_delete_of_a_vm_that_is_already_gone_succeeds_without_a_delete_call()
+    public async Task Vm_delete_of_a_vm_that_is_nowhere_is_exit_5_with_an_action_and_no_delete_call()
     {
         var compute = Substitute.For<IComputeGateway>();
         compute.GetVmAsync("deg-job1", "z", Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
+        compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([]));
 
         var result = await RunAsync(new FixedSessions(compute, Substitute.For<IStorageGateway>()), "vm", "delete", "--project", Project, "--zone", "z", "--name", "deg-job1");
 
-        result.ExitCode.ShouldBe(CloudCliExitCode.Ok);
-        result.Out.ShouldContain("not found");
+        result.ExitCode.ShouldBe(CloudCliExitCode.NotFound);
+        result.Out.ShouldBeEmpty();
+        result.Err.ShouldStartWith("ERROR:");
+        result.Err.ShouldContain("deg-job1");
+        result.Err.ShouldContain("resources list");
+        ShouldBeAscii(result.Err);
         await compute.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Vm_delete_in_the_wrong_zone_is_exit_5_names_the_right_zone_and_leaves_the_vm_running()
+    {
+        var (fake, sessions) = await SeededAsync();
+
+        var result = await RunAsync(sessions, "vm", "delete", "--project", Project, "--zone", "us-east1-b", "--name", "deg-job1");
+
+        result.ExitCode.ShouldBe(CloudCliExitCode.NotFound);
+        result.Out.ShouldBeEmpty();
+        result.Err.ShouldContain("us-central1-a");
+        result.Err.ShouldContain("--zone");
+        (await fake.GetVmAsync("deg-job1", "us-central1-a", CancellationToken.None)).ShouldNotBeNull();
     }
 
     [Fact]
@@ -376,12 +399,28 @@ public class CloudCliAppTests
     }
 
     [Fact]
-    public async Task A_cancellation_is_still_the_cancelled_message_not_an_unexpected_error()
+    public async Task A_cancellation_the_user_asked_for_is_the_cancelled_message_not_an_unexpected_error()
     {
-        var result = await RunAsync(new ThrowingSessions(new OperationCanceledException()), "resources", "list", "--project", Project);
+        using var cancel = new CancellationTokenSource();
+        await cancel.CancelAsync();
+
+        var result = await RunAsync(cancel.Token, new ThrowingSessions(new TaskCanceledException()), "resources", "list", "--project", Project);
 
         result.ExitCode.ShouldBe(CloudCliExitCode.CloudError);
         result.Err.ShouldContain("Cancelled");
+    }
+
+    [Fact]
+    public async Task An_http_timeout_with_the_token_not_cancelled_is_a_timed_out_error_not_cancelled()
+    {
+        var result = await RunAsync(new ThrowingSessions(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout")), "resources", "list", "--project", Project);
+
+        result.ExitCode.ShouldBe(CloudCliExitCode.CloudError);
+        result.Err.ShouldStartWith("ERROR:");
+        result.Err.ShouldContain("timed out");
+        result.Err.ShouldContain("try again");
+        result.Err.ShouldNotContain("Cancelled");
+        ShouldBeAscii(result.Err);
     }
 
     [Fact]
