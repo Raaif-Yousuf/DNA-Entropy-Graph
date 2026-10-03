@@ -52,6 +52,57 @@ public class JobReconcilerReattachBoundsTests
     }
 
     [Fact]
+    public async Task A_later_pass_does_not_start_a_second_driver_for_a_run_whose_cancel_is_still_running_after_the_settle_deadline()
+    {
+        // Issue #551 review r4 F1: after the settle deadline reported CancelInterrupted the cancel is still deleting the VM. TryStart used to ignore
+        // that, so a reconnect pass took the Resumed branch of a row still Running and RunAsync could provision a VM the cancel was deleting.
+        var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
+        await env.SeedAsync("job-leak", JobPhase.Running, vm: true);
+        var time = ClockAfterTheSeededRows();
+        var armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconciler = env.Reconciler(time);
+        reconciler.CancelSettleArmed = _ => armed.TrySetResult();
+        var reattach = reconciler.ReattachAsync(CancellationToken.None);
+        await WaitUntilAsync(() => env.Active.IsActive("job-leak"));
+        var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancel = env.Active.CancelAsync("job-leak", () => neverEnds.Task);
+        await armed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMinutes(6));
+        (await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Single().Action.ShouldBe(ReattachAction.CancelInterrupted);
+
+        var again = (await reconciler.ReattachAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Single();
+
+        again.Action.ShouldBe(ReattachAction.Skipped, "the cancel still owns the run");
+        env.Active.IsActive("job-leak").ShouldBeFalse("no second driver was started: with the worker that never ends, a started run would still be active");
+        neverEnds.SetResult();
+        await cancel;
+    }
+
+    [Fact]
+    public async Task A_shutdown_during_a_resumed_run_is_reported_for_that_run_and_does_not_hide_the_other_runs()
+    {
+        // Issue #551 review r4 F3: the app's shutdown cancelled the resumed run's RunAsync, the exception went through Task.WhenAll and every
+        // other run's outcome was lost. DECISION (#599, reversible): the run is reported as Resumed with the non-terminal phase its row has;
+        // the row stays as it is and the next launch resumes it.
+        var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
+        await env.SeedAsync("job-long", JobPhase.Running, vm: true);
+        env.Gcp.WithWorker(FakeWorkerMode.Done);
+        await env.SeedAsync("job-done", JobPhase.Running, vm: true);
+        using var shutdown = new CancellationTokenSource();
+        var reattach = env.Reconciler(ClockAfterTheSeededRows()).ReattachAsync(shutdown.Token);
+        await WaitUntilAsync(() => env.Active.IsActive("job-long") && env.Row("job-done").Phase == JobPhase.Completed);
+
+        await shutdown.CancelAsync();
+        var outcomes = await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        outcomes.Single(o => o.JobId == "job-done").FinalPhase.ShouldBe(JobPhase.Completed);
+        var long_ = outcomes.Single(o => o.JobId == "job-long");
+        long_.Action.ShouldBe(ReattachAction.Resumed);
+        long_.FinalPhase.ShouldNotBeNull();
+        JobStateMachine.IsTerminal(long_.FinalPhase.Value).ShouldBeFalse("the row is left for the next launch to resume");
+    }
+
+    [Fact]
     public async Task A_cancel_that_ends_inside_the_deadline_is_waited_for_and_reported_as_the_row_ends()
     {
         // REGRESSION GUARD: green before #551 too (the old wait was unbounded, so a cancel that ends in time was always waited for). It pins that the

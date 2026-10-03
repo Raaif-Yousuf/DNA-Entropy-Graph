@@ -171,6 +171,37 @@ public class ReattachOnStartupTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reconnect_pass_during_a_user_cancel_that_is_still_running_does_not_start_a_second_driver()
+    {
+        // Issue #551 review r4 F1, through the production container: the first reattach stopped waiting for the cancel (the shutdown cut it), the
+        // cancel is still running, and the observer's reconnect pass must not resume the run (a Never worker would make a started driver stay active).
+        using var provider = Build(connected: true, FakeWorkerMode.Never);
+        await SeedKilledRunAsync(provider, "job-twice", JobPhase.Running, vm: true);
+        var reconciler = provider.GetRequiredService<JobReconciler>();
+        var active = provider.GetRequiredService<ActiveRuns>();
+        using var shutdown = new CancellationTokenSource();
+        var reattach = reconciler.ReattachAsync(shutdown.Token);
+        for (var i = 0; i < 500 && !active.IsActive("job-twice"); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        active.IsActive("job-twice").ShouldBeTrue("precondition: the reattach is driving the run");
+        var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancel = active.CancelAsync("job-twice", () => neverEnds.Task);
+        await shutdown.CancelAsync();
+        (await reattach.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Single().Action.ShouldBe(ReattachAction.CancelInterrupted);
+
+        var observer = (ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>();
+        observer.OnConnectivityChanged(offline: false);
+        await observer.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        active.IsActive("job-twice").ShouldBeFalse("the cancel still owns the run: no second driver may resume it while the cancel deletes its VM");
+        neverEnds.SetResult();
+        await cancel;
+    }
+
+    [Fact]
     public async Task The_launch_entry_with_the_production_not_connected_cloud_does_not_throw_and_does_not_fail_a_run_it_cannot_judge()
     {
         using var provider = Build(connected: false);

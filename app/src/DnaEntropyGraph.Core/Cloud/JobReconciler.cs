@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// <summary>What the reconciler did with one run row.</summary>
 public enum ReattachAction
 {
-    /// <summary>The run was handed back to <see cref="CloudJobRunner"/>, which carried it to the phase in <see cref="ReattachOutcome.FinalPhase"/>.</summary>
+    /// <summary>The run was handed back to <see cref="CloudJobRunner"/>, which carried it to the phase in <see cref="ReattachOutcome.FinalPhase"/>; a non-terminal phase there means the app's shutdown cut it short and the next launch resumes it (DECISION #599).</summary>
     Resumed,
 
     /// <summary>The run was mid-cancel; the cancel was finished.</summary>
@@ -671,13 +671,14 @@ public sealed class JobReconciler
             await driver.ConfigureAwait(false);
             return outcome ?? await OutcomeOfCancelledAsync(row.JobId, underway.Action, cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && underway.Action == ReattachAction.CancelFinished)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // The app is shutting down while this reattach is finishing a cancel it found half done: say so (the row is read as it now is, and
-            // stays Cancelling when the terminal write did not land) instead of letting the shutdown hide the outcome. The next launch finishes it.
+            // The app is shutting down while this reattach is working on the run (finishing a cancel it found half done, or driving it): say so
+            // (the row is read as it now is) instead of letting the shutdown, rethrown through Task.WhenAll, hide every other run's outcome. The row
+            // stays non-terminal when the work did not land and the next launch picks it up again (issue #551, DECISION #599).
             _log.Warning("reconciler", row.JobId, nameof(OperationCanceledException));
             var after = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
-            return new ReattachOutcome(row.JobId, ActionAfterUserCancel(underway.Action, after?.Phase, after?.ErrorCode), after?.Phase, after?.ErrorCode);
+            return new ReattachOutcome(row.JobId, ActionAfterShutdown(underway.Action, after?.Phase, after?.ErrorCode), after?.Phase, after?.ErrorCode);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -826,6 +827,16 @@ public sealed class JobReconciler
     /// not terminal means the cancel did not end the run (it was cut short by the shutdown or the settle deadline, or it failed): the reattach
     /// is no longer driving the run, so it is never reported as resumed, only as <see cref="ReattachAction.CancelInterrupted"/>.
     /// </summary>
+    /// <summary>
+    /// The action for a reattach the app's shutdown cut short. One that was finishing a cancel is judged as a cancel a user cancel took over is
+    /// (<see cref="ActionAfterUserCancel"/>). Any other is <see cref="ReattachAction.Resumed"/> (a terminal row judged by <see cref="ActionForFinalPhase"/>): it
+    /// was handed back to the runner, and <see cref="ReattachOutcome.FinalPhase"/> says the row is still non-terminal for the next launch to resume.
+    /// </summary>
+    private static ReattachAction ActionAfterShutdown(ReattachAction underway, JobPhase? finalPhase, string? errorCode)
+        => underway == ReattachAction.CancelFinished
+            ? ActionAfterUserCancel(underway, finalPhase, errorCode)
+            : finalPhase is { } phase && JobStateMachine.IsTerminal(phase) ? ActionForFinalPhase(underway, phase, errorCode) : ReattachAction.Resumed;
+
     private static ReattachAction ActionAfterUserCancel(ReattachAction underway, JobPhase? finalPhase, string? errorCode)
         => finalPhase is { } phase && JobStateMachine.IsTerminal(phase) ? ActionForFinalPhase(underway, phase, errorCode) : ReattachAction.CancelInterrupted;
 

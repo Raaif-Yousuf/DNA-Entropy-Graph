@@ -14,15 +14,27 @@ public sealed class ActiveRuns
 
     /// <summary>
     /// Starts <paramref name="body"/> on a background task registered under <paramref name="jobId"/>, and returns a task that ends when the
-    /// body has ended and the entry is removed; null when the job already has a driver. The job is registered before the body runs, so a
+    /// body has ended and the entry is removed; null when the job already has a driver or a user cancel (<see cref="CancelAsync"/>) is running for it. The job is registered before the body runs, so a
     /// cancel can never miss it. A cancel the caller asked for ends the task quietly; any other exception is the body's to handle.
     /// </summary>
     public Task? TryStart(string jobId, Func<CancellationToken, Task> body)
     {
         var cts = new CancellationTokenSource();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_runs.TryAdd(jobId, new Entry(cts, done.Task)))
+        var entry = new Entry(cts, done.Task);
+        if (!_runs.TryAdd(jobId, entry))
         {
+            cts.Dispose();
+            return null;
+        }
+
+        // A user cancel owns the job until it ends, even after the reattach stopped waiting for it (its settle deadline): a second driver here
+        // could resume a run whose VM the cancel is deleting (issue #551). Checked AFTER the registration, and the cancel registers its marker
+        // BEFORE it stops the driver, so a cancel that begins after this check still finds and stops this entry, and one that began before refuses it.
+        if (_cancels.ContainsKey(jobId))
+        {
+            _runs.TryRemove(new KeyValuePair<string, Entry>(jobId, entry));
+            done.TrySetResult(); // a cancel that already found this entry is waiting on it
             cts.Dispose();
             return null;
         }
