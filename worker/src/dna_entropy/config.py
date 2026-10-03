@@ -168,6 +168,12 @@ class RunConfig:
     # default, like every other writer toggle here (issue #123's own "Done when": "Selectable
     # output, on by default").
     include_surprisal: bool = True
+    # issue #127: the per-base probability matrix, <name>.probs.tsv.gz and/or <name>.probs.npy.
+    # Both OFF by default (16 bytes per base before compression): an unspecified manifest
+    # `outputs` list, which otherwise means "everything", does NOT turn them on; only naming
+    # `probs` / `probs_npy` does.
+    include_probs: bool = False
+    include_probs_npy: bool = False
     # issue #126: rolling-mean copies of the entropy track, one file per window:
     # <name>.entropy.smooth<W>.bedgraph (or .wig). Each W is an odd number of bases
     # (analysis/smoothing.py validates); () means none. The raw track stays primary.

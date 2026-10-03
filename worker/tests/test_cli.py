@@ -264,6 +264,10 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--no-tsv",
         "--surprisal",
         "--no-surprisal",
+        "--probs",  # issue #127
+        "--no-probs",
+        "--probs-npy",
+        "--no-probs-npy",
         "--smoothed",  # issue #126
         "--no-smoothed",
         "--smoothing-window",

@@ -38,6 +38,7 @@ from .writers.genbank import GenBankWriter
 from .writers.gene_summary import GeneSummaryWriter
 from .writers.geneious import GeneiousWriter
 from .writers.gff import GffWriter
+from .writers.probs import ProbsWriter
 from .writers.provenance import ProvenanceWriter, build_run_provenance, contig_provenance
 from .writers.regions import RegionWriter
 from .writers.summary import SummaryWriter
@@ -237,6 +238,31 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
             else None
         ),
     )
+
+
+def _write_probs(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
+    """Write ``<name>.probs.tsv.gz`` and/or ``<name>.probs.npy`` (issue #127): the ``(L, 4)``
+    matrix each contig's entropy track was computed from, serialised as the contract guard
+    validated it (``DirectionResult.probs``, kept only because ``_keep_probs`` asked)."""
+    blocks = []
+    for c, dr in processed:
+        if dr.probs is None:  # unreachable: analyze_direction was told to keep it
+            raise PipelineError(
+                "internal error: the probability matrix was not kept for an output that needs it"
+            )
+        blocks.append((c.name, c.seq, dr.probs))
+    outputs: list[str] = []
+    if cfg.include_probs:
+        outputs.append(
+            ProbsWriter().write_tsv_gz(name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir)
+        )
+    if cfg.include_probs_npy:
+        outputs.append(ProbsWriter().write_npy(name=cfg.name, blocks=blocks, out_dir=cfg.out_dir))
+    return outputs
+
+
+def _keep_probs(cfg: RunConfig) -> bool:
+    return cfg.include_probs or cfg.include_probs_npy
 
 
 def _write_smoothed(
@@ -478,6 +504,8 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if _keep_probs(cfg):
+        outputs += _write_probs(cfg, processed)
     if cfg.include_smoothed:
         outputs += _write_smoothed(cfg, processed, track_writer)
     if cfg.include_regions:
@@ -589,6 +617,8 @@ def _write_standard_outputs(
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if _keep_probs(cfg):
+        outputs += _write_probs(cfg, processed)
     if cfg.include_smoothed:
         outputs += _write_smoothed(cfg, processed, track_writer)
     if cfg.include_regions:
@@ -728,6 +758,7 @@ def run(
                 direction=cfg.direction,
                 on_window=on_window,
                 circular=cfg.topology.resolve(contig.circular),
+                keep_probs=_keep_probs(cfg),
             )
             notices += dr.notices
             reduced_total += dr.reduced_context_count
