@@ -59,7 +59,9 @@ public static class ServiceRegistration
         services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
-        services.AddSingleton<IToastService, ToastService>();
+        // Issue #585: the shell message bar is the toast service; one instance behind both types.
+        services.AddSingleton<InAppMessageCenter>();
+        services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());
         services.AddSingleton<WindowHandleProvider>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
@@ -161,6 +163,12 @@ public static class ServiceRegistration
 
         // Issue #102: the Results page reads a run's own output folder and opens its files through Windows.
         services.AddSingleton<IRunOutputReader, RunOutputReader>();
+
+        // Issue #586: Open in IGV (its batch port, else launch) and Open in Geneious (launch).
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IIgvBatchClient, DnaEntropyGraph.Core.Viewers.TcpIgvBatchClient>();
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IViewerLocator, DnaEntropyGraph.Core.Viewers.ViewerLocator>();
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IViewerProcessLauncher, Services.ViewerProcessLauncher>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IExternalViewerOpener, DnaEntropyGraph.Presentation.Services.ExternalViewerOpener>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IShellLauncher, Services.ShellLauncher>();
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),
