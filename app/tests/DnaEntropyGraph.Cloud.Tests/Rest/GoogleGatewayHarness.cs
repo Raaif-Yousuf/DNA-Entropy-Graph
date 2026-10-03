@@ -38,7 +38,7 @@ internal sealed class StubTokenSource : IGcpAccessTokenSource, ICloudTokenRefres
 /// </summary>
 internal sealed class GoogleGatewayHarness
 {
-    public GoogleGatewayHarness(TimeSpan? operationDeadline = null, int retries = 3, string? installationId = "installation-1", int retentionDays = 30, string? selectedProjectId = "my-lab")
+    public GoogleGatewayHarness(TimeSpan? operationDeadline = null, int retries = 3, string? installationId = "installation-1", int retentionDays = 30, string? selectedProjectId = "my-lab", TimeProvider? time = null)
     {
         Tokens = new StubTokenSource();
         Handler = new ScriptedHttpHandler();
@@ -58,6 +58,7 @@ internal sealed class GoogleGatewayHarness
                     Delays.Add(span);
                     return Task.CompletedTask;
                 },
+                TimeProvider = time ?? TimeProvider.System,
                 OperationDeadline = operationDeadline ?? TimeSpan.FromMinutes(2),
                 InstallationId = installationId,
                 AppVersion = "0.1.0",

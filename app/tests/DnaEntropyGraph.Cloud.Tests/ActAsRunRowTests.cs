@@ -121,7 +121,8 @@ public class ActAsRunRowTests
         const string Base = "/compute/v1/projects/" + Project;
         const string Instances = Base + "/zones/" + Zone + "/instances";
         const string Aggregated = Base + "/aggregated/instances";
-        var rig = new GoogleGatewayHarness(selectedProjectId: Project);
+        // A clock that never moves: the operation poll's deadline cannot fire, and the poll's waits are the harness's instant ones.
+        var rig = new GoogleGatewayHarness(selectedProjectId: Project, time: new VirtualTimeProvider());
         var failed = "{\"kind\":\"compute#operation\",\"name\":\"operation-123\",\"operationType\":\"insert\",\"status\":\"DONE\",\"httpErrorStatusCode\":403,"
             + "\"error\":{\"errors\":[{\"code\":\"IAM_PERMISSION_DENIED\",\"message\":" + JsonSerializer.Serialize(ActAsMessage) + "}]}}";
         rig.Handler
@@ -215,6 +216,7 @@ public class ActAsRunRowTests
 
     [Theory]
     [InlineData("denied [vm-account=a@b.iam.gserviceaccount.com]", "a@b.iam.gserviceaccount.com")]
+    [InlineData("msg [vm-account=a@b] [vm-account=c@d]", "c@d")]
     [InlineData("no mark here", null)]
     [InlineData("[vm-account=not an email]", null)]
     [InlineData(null, null)]
