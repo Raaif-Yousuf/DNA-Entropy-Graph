@@ -51,6 +51,9 @@ installer; a lab PC with no .NET installed, or an old one, still works. `dotnet 
 win-x64 --self-contained -p:WindowsAppSDKSelfContained=true
 -p:WindowsPackageType=None`, then `vpk pack`.
 
+`WindowsAppSDKSelfContained` is also set in `DnaEntropyGraph.App.csproj` itself, conditioned on `_IsPublishing` (#475), so the flag on the command line is belt and braces and a publish that forgets it still carries the runtime.
+MEASURED 2026-10-03: `dotnet publish -r win-x64 --self-contained` without it produced 252 files and no `Microsoft.ui.xaml.dll`; with it, 441 files including `Microsoft.ui.xaml.dll`. `SelfContained` alone covers the .NET runtime only. It is publish-only because, set for every build, a self-contained Windows App SDK drops the bootstrap auto-initializer and the Guards.Tests host failed with `COMException: ClassFactory cannot supply requested class` in `DispatcherAdapter` (MEASURED 2026-10-03). `Guards.Tests/AppPublishPropertiesGuardTests` fails if the property goes missing.
+
 An unsigned build (7-day artifact retention) comes out of every `ci-app.yml` run for
 review; only a tagged push runs `release.yml`, which is the only path that signs and
 publishes.
