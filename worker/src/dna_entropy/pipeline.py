@@ -17,6 +17,8 @@ from typing import Any
 import numpy as np
 
 from .analysis.direction import DirectionResult, analyze_direction
+from .analysis.gene_summary import GeneRow, summarize_genes
+from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
 from .analysis.smoothing import rolling_mean, validate_smoothing_windows
 from .analysis.surprisal import summarize_surprisal
 from .analysis.windowing import validate_context
@@ -33,9 +35,11 @@ from .writers.base import Writer
 from .writers.bedgraph import BedGraphWriter
 from .writers.fasta import FastaWriter
 from .writers.genbank import GenBankWriter
+from .writers.gene_summary import GeneSummaryWriter
 from .writers.geneious import GeneiousWriter
 from .writers.gff import GffWriter
 from .writers.provenance import ProvenanceWriter, build_run_provenance, contig_provenance
+from .writers.regions import RegionWriter
 from .writers.summary import SummaryWriter
 from .writers.tsv import TsvWriter
 from .writers.wig import WigWriter
@@ -257,6 +261,61 @@ def _write_smoothed(
     return outputs
 
 
+def _write_regions(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
+    """Write ``<name>.regions.bed`` and ``.regions.gff3`` (issue #125): the low- and
+    high-entropy stretches of each contig's combined entropy track. Topology is resolved per
+    contig exactly as the analysis resolved it (issue #128), so a stretch across the origin of
+    a circular molecule is one region."""
+    blocks = []
+    for c, dr in processed:
+        circular = cfg.topology.resolve(c.circular)
+        found = [
+            *call_regions(
+                dr.values,
+                kind="low",
+                threshold=cfg.region_threshold,
+                min_length=cfg.region_min_length,
+                merge_gap=cfg.region_merge_gap,
+                circular=circular,
+            ),
+            *call_regions(
+                dr.values,
+                kind="high",
+                threshold=mirrored_threshold(cfg.region_threshold),
+                min_length=cfg.region_min_length,
+                merge_gap=cfg.region_merge_gap,
+                circular=circular,
+            ),
+        ]
+        blocks.append((c.name, len(c.seq), sorted(found, key=lambda r: (r.begin, r.kind))))
+    return RegionWriter().write_multi(name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir)
+
+
+def _write_gene_summary(
+    cfg: RunConfig,
+    processed: list[tuple[Contig, DirectionResult]],
+    genes_by_contig: list[list[GeneFeature]],
+) -> list[str]:
+    """Write ``<name>.genes.tsv`` and ``.genes.csv`` (issue #124): one row per gene/CDS with its
+    mean/min/max entropy, from the SAME ``dr.values`` track the other outputs carry. Empty when
+    no contig has a gene (there is nothing to tabulate, as for ``genes.gff3``). Topology is
+    resolved per contig exactly as the analysis resolved it, so an origin-wrapping gene on a
+    circular molecule (issue #128) is summarised over its real bases."""
+    if not any(genes_by_contig):
+        return []
+    rows: list[GeneRow] = []
+    for (c, dr), genes in zip(processed, genes_by_contig, strict=True):
+        rows += summarize_genes(
+            c.name,
+            genes,
+            dr.values,
+            circular=cfg.topology.resolve(c.circular),
+            start=cfg.start,
+            surprisal=dr.surprisal_values if cfg.include_surprisal else None,
+        )
+    return GeneSummaryWriter().write_multi(name=cfg.name, rows=rows, out_dir=cfg.out_dir)
+
+
 def _write_provenance(
     cfg: RunConfig,
     processed: list[tuple[Contig, DirectionResult]],
@@ -421,6 +480,8 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
 
     if cfg.include_smoothed:
         outputs += _write_smoothed(cfg, processed, track_writer)
+    if cfg.include_regions:
+        outputs += _write_regions(cfg, processed)
 
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # record, alongside the combined track above.
@@ -437,6 +498,8 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
             source="genbank",
         )
         outputs.append(genes_gff)
+    if cfg.include_gene_summary:
+        outputs += _write_gene_summary(cfg, processed, [c.features for c, _ in processed])
     return outputs
 
 
@@ -528,6 +591,8 @@ def _write_standard_outputs(
 
     if cfg.include_smoothed:
         outputs += _write_smoothed(cfg, processed, track_writer)
+    if cfg.include_regions:
+        outputs += _write_regions(cfg, processed)
 
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # contig, alongside the combined track already written above.
@@ -552,6 +617,9 @@ def _write_standard_outputs(
                     source="pyrodigal",
                 )
             )
+
+    if cfg.include_gene_summary and cfg.genes:
+        outputs += _write_gene_summary(cfg, processed, genes_by_contig)
 
     # Bonus GenBank "if possible": reuse --genes features per contig, else best-effort
     # Prodigal per contig. One .gb file holding every record, like the GenBank input path.
@@ -614,7 +682,11 @@ def run(
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
     try:
-        validate_smoothing_windows(cfg.smoothing_windows)
+        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
+            validate_smoothing_windows(cfg.smoothing_windows)
+        validate_region_options(
+            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
+        )
     except ValueError as exc:
         raise PipelineError(str(exc)) from exc
     loaded = load_input(cfg, raw)

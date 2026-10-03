@@ -12,4 +12,7 @@ public interface IRunInputStore
 {
     /// <summary>Copies <paramref name="sourcePath"/> into the run's own folder and returns where the copy lives. Throws <see cref="FileNotFoundException"/> or <see cref="IOException"/> when the source cannot be read.</summary>
     Task<StagedInput> StageAsync(string jobId, string sourcePath, CancellationToken cancellationToken);
+
+    /// <summary>Where the app's copy of this run's input lives, or null when there is none (issue #101: a re-run reuses it).</summary>
+    string? TryFindStagedInput(string jobId);
 }

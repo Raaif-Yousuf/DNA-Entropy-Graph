@@ -239,6 +239,15 @@ def test_a_bad_window_is_refused_before_anything_runs(tmp_path: Path) -> None:
     assert not list(tmp_path.iterdir())
 
 
+def test_a_bad_window_is_not_validated_when_smoothing_is_off(tmp_path: Path) -> None:
+    """Run-level validation guards the files that will be written; with smoothing off nothing
+    is written for the window, so it must not fail the run. (A bad window in a MANIFEST is
+    still rejected always, at parse time: that is a malformed request, not an unused option.)"""
+    cfg = RunConfig(name="s", out_dir=str(tmp_path), include_smoothed=False, smoothing_windows=(50,))
+    result = pipeline.run(cfg, raw=RAW)
+    assert not any("smooth" in Path(p).name for p in result.outputs)
+
+
 def test_genbank_input_gets_the_smoothed_track_too(tmp_path: Path) -> None:
     sample = str(Path(__file__).parent / "data" / "sample.gb")
     result = pipeline.run(RunConfig(name="toy", input_path=sample, out_dir=str(tmp_path)))

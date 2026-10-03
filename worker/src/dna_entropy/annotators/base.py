@@ -17,13 +17,20 @@ class AnnotatorError(RuntimeError):
 
 @dataclass
 class GeneFeature:
-    """A predicted gene/CDS. Coordinates are 1-based inclusive, sequence-relative."""
+    """A predicted gene/CDS. Coordinates are 1-based inclusive, sequence-relative.
+
+    ``begin``/``end`` are the OUTER span. ``segments`` (issue #124) carries the real parts of
+    a compound (spliced, or origin-wrapping on a circular molecule) GenBank location as
+    ``(begin, end)`` pairs in genomic order; it is empty for a plain single-span feature, so
+    the span ``begin..end`` is then the whole feature.
+    """
 
     begin: int
     end: int
     strand: str  # "+" or "-"
     partial: bool = False
     gene_id: str = ""
+    segments: tuple[tuple[int, int], ...] = ()
 
 
 @runtime_checkable

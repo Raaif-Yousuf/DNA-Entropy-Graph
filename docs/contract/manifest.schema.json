@@ -115,6 +115,15 @@
             "circular"
           ]
         },
+        "regionThreshold": {
+          "type": "number"
+        },
+        "regionMinLength": {
+          "type": "integer"
+        },
+        "regionMergeGap": {
+          "type": "integer"
+        },
         "smoothingWindows": {
           "type": "array",
           "items": {
