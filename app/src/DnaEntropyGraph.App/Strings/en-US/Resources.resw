@@ -480,6 +480,24 @@
   <data name="NewRunRunsSelectedOnly.Text" xml:space="preserve">
     <value>Run starts only the file selected in the list. Running several files together is coming.</value>
   </data>
+  <data name="NewRunEstimateHistory" xml:space="preserve">
+    <value>Estimate: about {0}, about {1}, based on your earlier runs. This is a guess, not a bill.</value>
+  </data>
+  <data name="NewRunEstimateRange" xml:space="preserve">
+    <value>Estimate: about {0} to {1}, about {2} to {3} minutes, because you have no earlier runs of this size on this PC yet. This is a guess, not a bill.</value>
+  </data>
+  <data name="NewRunEstimateMoney" xml:space="preserve">
+    <value>${0}</value>
+  </data>
+  <data name="NewRunEstimateMinutesOne" xml:space="preserve">
+    <value>1 minute</value>
+  </data>
+  <data name="NewRunEstimateMinutesMany" xml:space="preserve">
+    <value>{0} minutes</value>
+  </data>
+  <data name="NewRunEstimateUnavailable" xml:space="preserve">
+    <value>There is no cost estimate because the price list that comes with this app could not be read. Reinstall the app to bring it back. You can still press Run.</value>
+  </data>
   <data name="AuthError_SIGNIN_EXPIRED" xml:space="preserve">
     <value>Your sign-in expired. This happens on its own, roughly once a week, while the app's Google approval is still in its early testing phase. It also happens if you removed this app's access in your Google account settings. Choose Sign in again.</value>
   </data>

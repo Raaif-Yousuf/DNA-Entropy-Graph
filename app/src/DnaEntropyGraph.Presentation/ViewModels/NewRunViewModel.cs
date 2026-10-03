@@ -4,6 +4,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -21,6 +23,11 @@ public sealed partial class NewRunViewModel : ObservableObject
     // and a cost estimate first), so this is the one model the app offers, not a property nothing binds.
     private const string DefaultModelId = "evo2_7b";
 
+    // The tier and VM kind the page's Run uses (RunOptions defaults: the cheapest GPU, on-demand), so the estimate prices the
+    // machine a run on this page really starts. When a tier or Spot picker lands it must feed both StartRunAsync and the estimate.
+    private const GpuTier DefaultTier = GpuTier.CheapestAvailable;
+    private const bool DefaultSpot = false;
+
     // A count of this many characters or fewer is worked out on the spot; a bigger paste is counted off the UI thread.
     private const int InlineCountLimit = 20_000;
     private static readonly TimeSpan CountDebounce = TimeSpan.FromMilliseconds(150);
@@ -30,12 +37,14 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IStringResourceProvider _strings;
     private readonly IPastedInputStore _pastedStore;
+    private readonly ICostEstimateService _estimates;
     private readonly IInputFileSystem _files;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
 
     private InputPillItem? _selectedItem;
     private int _countVersion;
     private int _operationsInFlight;
+    private int _estimateVersion;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AddPastedCommand))]
@@ -49,6 +58,11 @@ public sealed partial class NewRunViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(OfferTreatAsRna))]
     private bool _isTreatingAsRna;
 
+    /// <summary>The line under the file list: what this run will cost and how long it will take, labelled an estimate. Empty when there is nothing to say (no valid file, size not known).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasEstimate))]
+    private string _estimateText = string.Empty;
+
     /// <summary>A line of help for the user (a path that does not exist, a folder with nothing to run); empty when there is none.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
@@ -60,6 +74,7 @@ public sealed partial class NewRunViewModel : ObservableObject
         INavigator navigator,
         IStringResourceProvider strings,
         IPastedInputStore pastedStore,
+        ICostEstimateService estimates,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null)
     {
@@ -68,6 +83,7 @@ public sealed partial class NewRunViewModel : ObservableObject
         _navigator = navigator;
         _strings = strings;
         _pastedStore = pastedStore;
+        _estimates = estimates;
         _files = files ?? new LocalInputFileSystem();
         _validate = validate ?? ((path, format, policy, rna) => InputFileValidator.Validate(path, format, policy, rna));
         _pasteCountText = CountText(0);
@@ -93,12 +109,15 @@ public sealed partial class NewRunViewModel : ObservableObject
             if (SetProperty(ref _selectedItem, value))
             {
                 StartRunCommand.NotifyCanExecuteChanged();
+                _ = RefreshEstimateAsync();
             }
         }
     }
 
     /// <summary>One pill per file or pasted sequence, in the order added.</summary>
     public ObservableCollection<InputPillItem> Items { get; } = [];
+
+    public bool HasEstimate => EstimateText.Length > 0;
 
     public bool HasStatusMessage => StatusMessage.Length > 0;
 
@@ -466,8 +485,73 @@ public sealed partial class NewRunViewModel : ObservableObject
 
         OnPropertyChanged(nameof(OfferTreatAsRna));
         StartRunCommand.NotifyCanExecuteChanged();
+        if (ReferenceEquals(pill, SelectedItem))
+        {
+            _ = RefreshEstimateAsync();
+        }
+
         return applied;
     }
+
+    /// <summary>
+    /// Works out the estimate line for the selected file. Not awaited by its callers (it must not hold up the checks or the
+    /// list), so it never throws: the estimate is advice, and a failure leaves the page without one. Only the newest call may
+    /// write the line.
+    /// </summary>
+    private async Task RefreshEstimateAsync()
+    {
+        var version = Interlocked.Increment(ref _estimateVersion);
+        if (SelectedItem is not { IsValid: true, TotalBases: { } bases })
+        {
+            EstimateText = string.Empty;
+            return;
+        }
+
+        string text;
+        try
+        {
+            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, CancellationToken.None);
+            text = EstimateLine(result);
+        }
+        catch (Exception)
+        {
+            text = string.Empty;
+        }
+
+        if (version == Volatile.Read(ref _estimateVersion))
+        {
+            EstimateText = text;
+        }
+    }
+
+    private string EstimateLine(CostEstimateResult result)
+    {
+        if (result.Estimate is not { } estimate)
+        {
+            return result.Reason == EstimateUnavailable.UnknownSize ? string.Empty : _strings.GetString("NewRunEstimateUnavailable");
+        }
+
+        var lowUsd = Money(estimate.MinUsd);
+        var lowMinutes = WholeMinutes(estimate.MinMinutes);
+        if (estimate.IsPoint || (lowUsd == Money(estimate.MaxUsd) && lowMinutes == WholeMinutes(estimate.MaxMinutes)))
+        {
+            return Format("NewRunEstimateHistory", Format("NewRunEstimateMoney", lowUsd), MinutesPhrase(lowMinutes));
+        }
+
+        return Format(
+            "NewRunEstimateRange",
+            Format("NewRunEstimateMoney", lowUsd),
+            Format("NewRunEstimateMoney", Money(estimate.MaxUsd)),
+            lowMinutes,
+            WholeMinutes(estimate.MaxMinutes));
+    }
+
+    /// <summary>Dollars to the cent, never shown as zero: a run is never free.</summary>
+    private static string Money(double usd) => Math.Max(0.01, Math.Round(usd, 2, MidpointRounding.AwayFromZero)).ToString("0.00", CultureInfo.InvariantCulture);
+
+    private static int WholeMinutes(double minutes) => Math.Max(1, (int)Math.Round(minutes, MidpointRounding.AwayFromZero));
+
+    private string MinutesPhrase(int minutes) => minutes == 1 ? _strings.GetString("NewRunEstimateMinutesOne") : Format("NewRunEstimateMinutesMany", minutes);
 
     private string Format(string key, params object[] args)
         => string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args);

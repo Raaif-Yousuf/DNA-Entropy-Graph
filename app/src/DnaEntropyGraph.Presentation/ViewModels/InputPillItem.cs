@@ -48,6 +48,9 @@ public sealed partial class InputPillItem : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsValid))]
     private bool _hasError;
 
+    /// <summary>Total bases in the file when the last check found it valid; null while checking or when there is a problem. The cost estimate (#98) is sized from it.</summary>
+    public long? TotalBases { get; private set; }
+
     /// <summary>True when the only thing wrong is a U: the page offers Treat as RNA instead of an error.</summary>
     public bool NeedsRnaChoice { get; private set; }
 
@@ -85,6 +88,7 @@ public sealed partial class InputPillItem : ObservableObject
         }
 
         Problem = null;
+        TotalBases = null;
         KindText = string.Empty;
         SummaryText = string.Empty;
         NoticesText = string.Empty;
@@ -114,6 +118,7 @@ public sealed partial class InputPillItem : ObservableObject
         SummaryText = result.IsValid ? Summary(result) : string.Empty;
         NoticesText = string.Join('\n', result.NoticeCodes.Select(NoticeText).OfType<string>());
         Problem = result.Problem;
+        TotalBases = result.IsValid ? result.TotalLength : null;
 
         var problem = result.Problem;
         NeedsRnaChoice = problem?.Code == InputProblemCode.RnaNotAllowed;
