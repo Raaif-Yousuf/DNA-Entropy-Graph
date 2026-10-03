@@ -62,8 +62,10 @@ public static partial class DiagnosticsBundleBuilder
         // options, and every key and string inside the parts of status and result files that are not copied (contig and
         // record names), so a log line naming any of them is scrubbed too.
         var scrub = new HashSet<string>(info.SensitiveValues, StringComparer.OrdinalIgnoreCase);
+        var ids = new JobIdWithholder(scrub);
         foreach (var run in runs)
         {
+            ids.Map(run.JobId);
             AddRunNames(run, scrub);
         }
 
@@ -71,6 +73,11 @@ public static partial class DiagnosticsBundleBuilder
         foreach (var path in source.ListFiles().OrderBy(p => p, StringComparer.Ordinal))
         {
             var kind = Classify(path);
+            if (kind is not null)
+            {
+                ids.MapPath(path);
+            }
+
             var file = kind is null ? null : source.TryRead(path, MaxFileBytes);
             if (kind is not null && file is not null)
             {
@@ -98,14 +105,14 @@ public static partial class DiagnosticsBundleBuilder
             },
             Indented);
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
-        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(ToHistoryRow), Indented);
+        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => ToHistoryRow(run, ids.Map(run.JobId))), Indented);
 
         // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
         // the original is written nowhere in the zip.
         var logCounters = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var file in loaded)
         {
-            entries[EntryName(file, logCounters)] = Copy(file, redactor) ?? OmittedUnreadable;
+            entries[EntryName(file, ids, logCounters)] = Copy(file, redactor) ?? OmittedUnreadable;
         }
 
         // The scan backstops the redactor on the user's own identifiers (the same list the redactor used, plus the profile
@@ -122,14 +129,15 @@ public static partial class DiagnosticsBundleBuilder
     // Fixed words only: the leak scan blanks exactly this shape (and "<omitted: file too large>") before it checks identifiers.
     private const string OmittedUnreadable = "<omitted: file is not valid json>";
 
-    private static string EntryName(Loaded file, Dictionary<string, int> logCounters)
+    private static string EntryName(Loaded file, JobIdWithholder ids, Dictionary<string, int> logCounters)
     {
+        var path = ids.MapPath(file.Path);
         if (file.Kind != FileKind.Log)
         {
-            return "files/" + file.Path;
+            return "files/" + path;
         }
 
-        var directory = file.Path[..file.Path.LastIndexOf('/')];
+        var directory = path[..path.LastIndexOf('/')];
         var number = logCounters.GetValueOrDefault(directory) + 1;
         logCounters[directory] = number;
         return $"files/{directory}/log-{number:00}.log";
@@ -162,9 +170,21 @@ public static partial class DiagnosticsBundleBuilder
     {
         foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix, run.Notes })
         {
-            if (!string.IsNullOrWhiteSpace(text) && !IsOnlyTheJobId(text, run.JobId))
+            if (string.IsNullOrWhiteSpace(text))
             {
-                scrub.Add(text.TrimEnd('\\', '/'));
+                continue;
+            }
+
+            var value = text.TrimEnd('\\', '/');
+            if (!JobId.MatchesConvention(run.JobId))
+            {
+                // Not an id the app made: it may hold user text, so it is never exempt and never shipped (see JobIdWithholder).
+                scrub.Add(value);
+            }
+            else if (!IsOnlyTheJobId(value, run.JobId))
+            {
+                // A path ending in the id: the id is shipped on purpose, so only the part before it is scrubbed.
+                scrub.Add(WithoutTrailingJobId(value, run.JobId));
             }
         }
 
@@ -188,15 +208,22 @@ public static partial class DiagnosticsBundleBuilder
     }
 
     // A run's name (or its bucket prefix, "jobs/<id>/") that is nothing but its own job id adds no information: the history
-    // copies the job id verbatim on purpose, so scrubbing it would make the final scan refuse the bundle for the very field
-    // it allows (MEASURED 2026-10-03, issue #626). Anything else in the value, or a different value, stays on the scrub list,
-    // and a job id that itself holds the user's name is still caught through that name's own entry.
-    // Exactly "<id>" or "jobs/<id>" (the bucket prefix shape): a longer path ending in the id (an output folder under the
-    // user's profile) is not exempt.
-    private static bool IsOnlyTheJobId(string text, string jobId) =>
-        text.Trim().Trim('\\', '/').Replace('\\', '/') is var value
-        && (string.Equals(value, jobId, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "jobs/" + jobId, StringComparison.OrdinalIgnoreCase));
+    // copies a standard job id verbatim on purpose, so scrubbing it would make the final scan refuse the bundle for the very
+    // field it allows (MEASURED 2026-10-03, issue #626). Only an id in the app's own shape is shipped; any other id is
+    // withheld by JobIdWithholder. Exactly "<id>" or "jobs/<id>" (the bucket prefix shape) is exempt: a longer path ending
+    // in the id (an output folder under the user's profile) is not, and its part before the id is scrubbed.
+    private static bool IsOnlyTheJobId(string value, string jobId)
+    {
+        value = value.Trim().Trim('\\', '/').Replace('\\', '/');
+        return string.Equals(value, jobId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "jobs/" + jobId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string WithoutTrailingJobId(string value, string jobId)
+    {
+        var normalized = value.Replace('\\', '/');
+        return normalized.EndsWith("/" + jobId, StringComparison.OrdinalIgnoreCase) ? value[..^(jobId.Length + 1)] : value;
+    }
 
     private static void HarvestNames(FileKind kind, string text, bool truncated, HashSet<string> scrub)
     {
@@ -269,9 +296,9 @@ public static partial class DiagnosticsBundleBuilder
 
     // The history as an allowlist of fields: identifiers, states, error codes, timings and hardware. Never the name,
     // the error detail (free text), the output folder, the project, bucket or VM names, notes or tags.
-    private static object ToHistoryRow(RunRecord run) => new
+    private static object ToHistoryRow(RunRecord run, string jobId) => new
     {
-        jobId = run.JobId,
+        jobId,
         phase = run.Phase.ToString(),
         target = run.Target,
         isBatch = run.IsBatch,
@@ -312,5 +339,45 @@ public static partial class DiagnosticsBundleBuilder
         }
 
         return buffer.ToArray();
+    }
+}
+
+/// <summary>
+/// A job id the app did not make (not the <c>yyyymmdd-hhmmss-xxxxxx</c> shape: an imported, hand-edited or older row) may hold
+/// user text, so it is never shipped. It becomes <c>withheldid&lt;n&gt;</c> (n by run row, then by unmatched folder name), the
+/// same word in the history and in entry names, and joins the scrub list so file text naming it is scrubbed too. A standard
+/// id is returned as it is. MEASURED 2026-10-03 (issue #626): the owner's real run has a non-standard id.
+/// </summary>
+internal sealed class JobIdWithholder(ISet<string> scrub)
+{
+    private readonly Dictionary<string, string> _placeholders = new(StringComparer.OrdinalIgnoreCase);
+
+    public string Map(string id)
+    {
+        if (JobId.MatchesConvention(id))
+        {
+            return id;
+        }
+
+        if (!_placeholders.TryGetValue(id, out var placeholder))
+        {
+            placeholder = $"withheldid{_placeholders.Count + 1}";
+            _placeholders[id] = placeholder;
+            scrub.Add(id);
+        }
+
+        return placeholder;
+    }
+
+    /// <summary>Replaces the job id segment of a <c>runs/&lt;id&gt;/...</c> path; any other path is returned unchanged.</summary>
+    public string MapPath(string path)
+    {
+        var parts = path.Split('/');
+        if (parts.Length >= 3 && parts[0] == "runs")
+        {
+            parts[1] = Map(parts[1]);
+        }
+
+        return string.Join('/', parts);
     }
 }
