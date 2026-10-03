@@ -792,7 +792,7 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   (`ProjectIdGenerator`), display name "DNA Entropy Graph", labels `app=dna-entropy-graph` and `installation-id`
   (the VM-only labels `job-id`, `model`, `app-version` and `lifecycle` do not apply to a project). The response is a
   long-running operation, polled with `OperationPoller` (1 s doubling to 10 s, 5 minute deadline); a timeout is
-  `OPERATION_POLL_TIMEOUT`, classed `network`.
+  `OPERATION_POLL_TIMEOUT`, classed `network`. The resilience pipeline never replays a spent poll deadline (`CloudCallPipeline.IsTransient`): a replay would POST the create or enable again (a duplicate create answers 409) and wait the whole deadline once per retry, so it surfaces after one deadline. A per-minute rate limit (ErrorInfo reason `RATE_LIMIT_EXCEEDED`, code `RATE_LIMIT_EXCEEDED`, kind `other`) is retried and is never `PROJECT_QUOTA`, even though it also carries a QuotaFailure; THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word "quota" without that reason.
 - **Replay safety.** The resilience pipeline replays a whole create after a dropped connection. A `409 ALREADY_EXISTS`
   is followed by a `projects.get`: a project of ours (it carries the app label) is returned, anyone else's is an
   error. One wizard click therefore never makes two projects.
@@ -830,11 +830,11 @@ creates the project's default network).
 
 - **Requests.** `POST /v1/projects/{id}/services:batchEnable` with `{"serviceIds": [...]}` returns an operation;
   `GET /v1/operations/{name}` is polled every 5 s (`OperationPoller` with its new `fixedInterval`, the doubling
-  backoff would be wrong for a documented cadence) until the 5 minute deadline; once the operation is done,
+  backoff would be wrong for a documented cadence); once the operation is done,
   `GET /v1/projects/{id}/services/{service}` is asked every 5 s until each reads `ENABLED`. A finished operation is not
-  a ready service, so the second poll is its own step with its own deadline. A timeout in either is
+  a ready service, so each service is checked after the operation, but both phases share ONE 5 minute deadline for the whole call (two separate polls could wait twice that). A timeout in either is
   `OPERATION_POLL_TIMEOUT`, classed `network`.
-- **Errors.** A 403, on the call or as `PERMISSION_DENIED` inside the operation, is `NOT_PROJECT_OWNER` (kind
+- **Errors.** The reason and kind decide first: a 403 that says Service Usage is off is `api_disabled`, billing off is `billing`, an organization policy is `org_policy`. A remaining plain permission 403, on the call or as `PERMISSION_DENIED` inside the operation, is `NOT_PROJECT_OWNER` (kind
   `permission`; action: create a project of your own). Enabling Compute on a project with no billing keeps the billing
   kind (Google answers a precondition failure that names billing), so the wizard sends the user back to step 4 rather
   than to "ask the owner". A Service Usage API that is itself off reads as `api_disabled`.

@@ -155,6 +155,82 @@ public class GoogleServiceUsageGatewayTests
         ex.Error.Code.ShouldBe("FAILED_PRECONDITION");
     }
 
+    private static string RpcErrorWithReason(int http, string status, string message, string reason)
+        => "{\"error\":{\"code\":" + http + ",\"message\":" + JsonSerializer.Serialize(message) + ",\"status\":\"" + status
+            + "\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"" + reason + "\",\"domain\":\"googleapis.com\"}]}}";
+
+    [Fact]
+    public async Task A_403_because_Service_Usage_itself_is_off_is_api_disabled_not_NOT_PROJECT_OWNER()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Post, BatchEnable, 403, RpcErrorWithReason(403, "PERMISSION_DENIED", "Service Usage API has not been used in project 123 before or it is disabled.", "SERVICE_DISABLED"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.NotProjectOwner);
+    }
+
+    [Fact]
+    public async Task A_403_that_says_billing_is_off_is_billing_not_NOT_PROJECT_OWNER()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Post, BatchEnable, 403, RpcErrorWithReason(403, "PERMISSION_DENIED", "This API method requires billing to be enabled.", "BILLING_DISABLED"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Billing);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.NotProjectOwner);
+    }
+
+    [Fact]
+    public async Task A_403_from_an_organization_policy_is_org_policy_not_NOT_PROJECT_OWNER()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Post, BatchEnable, 403, RpcError(403, "PERMISSION_DENIED", "Operation denied by org policy: [constraints/serviceuser.services] violated."));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.NotProjectOwner);
+    }
+
+    [Fact]
+    public async Task A_service_that_never_reaches_ENABLED_posts_batchEnable_once_even_with_the_default_retries()
+    {
+        var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromSeconds(10), retries: 3);
+        rig.Handler.Returns(Post, BatchEnable, 200, OperationDone);
+        for (var i = 0; i < 40; i++)
+        {
+            rig.Handler.Returns(Get, Compute, 200, Service("compute.googleapis.com", "ENABLING"));
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
+        rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
+        rig.Log.Retries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_whole_enable_call_waits_at_most_one_deadline_not_one_per_phase()
+    {
+        var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromSeconds(20), retries: 0);
+        rig.Handler.Returns(Post, BatchEnable, 200, OperationPending);
+
+        // The operation finishes after 10 virtual seconds; the services then never read ENABLED.
+        rig.Handler.Returns(Get, OperationPath, 200, OperationPending).Returns(Get, OperationPath, 200, OperationDone);
+        for (var i = 0; i < 40; i++)
+        {
+            rig.Handler.Returns(Get, Compute, 200, Service("compute.googleapis.com", "ENABLING"));
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(20);
+    }
+
     [Theory]
     [InlineData("ENABLED", true)]
     [InlineData("DISABLED", false)]

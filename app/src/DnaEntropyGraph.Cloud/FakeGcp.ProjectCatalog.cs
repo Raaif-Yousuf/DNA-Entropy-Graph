@@ -185,7 +185,7 @@ public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway, I
     // ----------------------------------------------------------------
 
     private readonly HashSet<(string Project, string Service)> _disabledServices = [];
-    private readonly Dictionary<(string Project, string Service), int> _enablingPollsLeft = [];
+    private int _enablementPollsWaited;
     private readonly HashSet<string> _notOwnerProjects = new(StringComparer.Ordinal);
     private int _enablementDelayPolls;
 
@@ -208,14 +208,26 @@ public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway, I
     }
 
     /// <summary>
-    /// After <see cref="EnableServicesAsync"/> returns, a service reads off for the next <paramref name="polls"/>
-    /// <see cref="IsServiceEnabledAsync"/> checks: the gap a real operation leaves between "done" and "ENABLED".
-    /// The real gateway waits that gap out; this is for a caller that checks by itself.
+    /// The gap a real operation leaves between "done" and "ENABLED": <see cref="EnableServicesAsync"/> waits out
+    /// <paramref name="polls"/> checks per service it turned on (no real time passes, the count is in
+    /// <see cref="ServiceEnablementPollsWaited"/>) and returns only once the service is on, as the interface promises.
     /// </summary>
     public FakeGcp WithServiceEnablementDelay(int polls)
     {
         _enablementDelayPolls = polls;
         return this;
+    }
+
+    /// <summary>How many "still ENABLING" checks <see cref="EnableServicesAsync"/> waited out, in total (see <see cref="WithServiceEnablementDelay"/>).</summary>
+    public int ServiceEnablementPollsWaited
+    {
+        get
+        {
+            lock (_catalogGate)
+            {
+                return _enablementPollsWaited;
+            }
+        }
     }
 
     /// <summary>The user is a member of the project but not its Owner: enabling throws <see cref="SetupErrorCodes.NotProjectOwner"/>.</summary>
@@ -231,12 +243,6 @@ public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway, I
         ThrowIfCatalogNotConnected();
         lock (_catalogGate)
         {
-            if (_enablingPollsLeft.TryGetValue((projectId, serviceId), out var left) && left > 0)
-            {
-                _enablingPollsLeft[(projectId, serviceId)] = left - 1;
-                return Task.FromResult(false);
-            }
-
             var off = serviceId == RequiredServices.Compute ? _apiDisabledProjects.Contains(projectId) : _disabledServices.Contains((projectId, serviceId));
             return Task.FromResult(!off);
         }
@@ -256,9 +262,9 @@ public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway, I
             foreach (var serviceId in serviceIds)
             {
                 var wasOff = serviceId == RequiredServices.Compute ? _apiDisabledProjects.Remove(projectId) : _disabledServices.Remove((projectId, serviceId));
-                if (wasOff && _enablementDelayPolls > 0)
+                if (wasOff)
                 {
-                    _enablingPollsLeft[(projectId, serviceId)] = _enablementDelayPolls;
+                    _enablementPollsWaited += _enablementDelayPolls;
                 }
             }
         }

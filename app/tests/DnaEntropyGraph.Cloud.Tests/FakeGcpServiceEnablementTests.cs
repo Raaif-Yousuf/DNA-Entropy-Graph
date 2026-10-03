@@ -36,15 +36,25 @@ public class FakeGcpServiceEnablementTests
     }
 
     [Fact]
-    public async Task An_enablement_delay_keeps_the_service_reading_off_for_that_many_checks_after_the_call_returns()
+    public async Task An_enablement_delay_is_waited_out_inside_the_call_so_the_service_is_on_when_it_returns()
     {
+        // IServiceEnablementGateway: EnableServicesAsync returns only once every service is ENABLED.
         var gcp = new FakeGcp().WithServiceDisabled(Project, RequiredServices.Compute).WithServiceEnablementDelay(polls: 2);
 
         await gcp.EnableServicesAsync(Project, [RequiredServices.Compute], CancellationToken.None);
 
-        (await gcp.IsServiceEnabledAsync(Project, RequiredServices.Compute, CancellationToken.None)).ShouldBeFalse();
-        (await gcp.IsServiceEnabledAsync(Project, RequiredServices.Compute, CancellationToken.None)).ShouldBeFalse();
         (await gcp.IsServiceEnabledAsync(Project, RequiredServices.Compute, CancellationToken.None)).ShouldBeTrue();
+        gcp.ServiceEnablementPollsWaited.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Enabling_a_service_that_is_already_on_waits_for_nothing()
+    {
+        var gcp = new FakeGcp().WithServiceEnablementDelay(polls: 2);
+
+        await gcp.EnableServicesAsync(Project, [RequiredServices.Compute], CancellationToken.None);
+
+        gcp.ServiceEnablementPollsWaited.ShouldBe(0);
     }
 
     [Fact]
