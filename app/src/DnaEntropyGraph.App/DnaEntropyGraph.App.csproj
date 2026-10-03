@@ -18,6 +18,18 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
     <SelfContained>true</SelfContained>
+    <!--
+      #475. SelfContained covers the .NET runtime only. MEASURED 2026-10-03: publishing without this property gave 252 files and no
+      Microsoft.ui.xaml.dll (the app then needs the Windows App SDK runtime installed on the PC); with it, 441 files including
+      Microsoft.ui.xaml.dll. Set here, not only as a CLI flag, so `dotnet publish` carries it without one (it sets _IsPublishing; `msbuild -t:Publish` and VS publish profiles do not, and must pass -p:WindowsAppSDKSelfContained=true themselves); pinned by
+      Guards.Tests/AppPublishPropertiesGuardTests.
+
+      Publish only (_IsPublishing is set by `dotnet publish`). MEASURED 2026-10-03: set for every build, Guards.Tests'
+      DiResolutionTests died with COMException "ClassFactory cannot supply requested class" in DispatcherAdapter, because a
+      self-contained Windows App SDK drops the bootstrap auto-initializer and a test host (not this exe) has no manifest
+      to activate WinUI types from. A plain build keeps the installed-runtime path the tests and `dotnet run` rely on.
+    -->
+    <WindowsAppSDKSelfContained Condition="'$(_IsPublishing)' == 'true'">true</WindowsAppSDKSelfContained>
     <OutputType>WinExe</OutputType>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>

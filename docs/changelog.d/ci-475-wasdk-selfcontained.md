@@ -1,0 +1,1 @@
+- The App project now sets WindowsAppSDKSelfContained on publish (#475), so the published app carries the Windows App SDK runtime (441 files incl. Microsoft.ui.xaml.dll, up from 252 without it) instead of needing it installed on the PC; Guards.Tests/AppPublishPropertiesGuardTests pins it.
