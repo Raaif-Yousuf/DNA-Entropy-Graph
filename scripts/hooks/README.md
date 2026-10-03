@@ -89,6 +89,35 @@ decision; it is read-only.
 their decision space is a single boolean (deny/allow) with no third "could not
 tell" state to distinguish, so there is nothing an `--explain` mode would add.
 
+## The moved-cwd trap and the identity signal (#618)
+
+MEASURED 2026-10-03 (twice, lane orchestrators): an orchestrator launched in the primary
+checkout dispatches a Sonnet with `isolation: "worktree"`; when it completes, the harness
+moves the orchestrator's session cwd into that Sonnet's worktree
+(`.claude/worktrees/agent-<sonnetAgentId>`, id identical to the Sonnet's agent id). A hook
+that only asked "is cwd a linked worktree" then denied every further `Agent` call. A
+`Set-Location` or `cd` does not change the cwd the hook sees; it cleared by itself minutes
+later.
+
+`block_agent_dispatch_in_worktree.py` therefore decides on WHO is calling, not only where:
+deny when cwd is a linked worktree AND the caller is the worktree's owner, the unknown, or
+the worktree is not `agent-<id>` named; allow when the caller's id is known and differs from
+the owner's. Caller id = payload `agent_id`, else the `agent-<id>.jsonl` basename of
+`transcript_path` (a main-session transcript names no agent, so it stays denied).
+
+- MEASURED 2026-10-03: the Claude Code hooks reference lists `agent_id` and `agent_type` as
+  common input fields "present only inside subagents", next to `session_id`,
+  `transcript_path`, `cwd`. The session transcript's `hook_success` records keep the hook's
+  stdout only, never its stdin, so no real payload could be recovered from disk.
+- THEORY (unverified): an orchestrator that is itself a subagent receives its own
+  `agent_id` (different from the Sonnet's). Verify with the shape log below; if the
+  orchestrator's hook payload carries no agent field, it falls through to "unknown" and
+  stays denied (today's behaviour, no regression).
+
+Shape log: set `DEG_HOOK_PAYLOAD_SHAPE_LOG=<file under %TEMP%>` in the environment that
+launches Claude Code and the hook appends one JSON line per Agent call: payload key names,
+`agent_id`, `agent_type`, `transcript_path` basename, cwd basename. Never `tool_input`.
+
 ## Probing `block_unlabelled_vm_create.py`
 
 ```

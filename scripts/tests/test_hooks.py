@@ -17,6 +17,7 @@ the decision function.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -289,6 +290,108 @@ def test_agent_dispatch_end_to_end_allows_from_primary(git_repo_with_worktree):
     )
     assert code == 0
     assert decision is None
+
+
+# Issue #618: the harness moves an orchestrator's cwd into the linked worktree of a
+# Sonnet it dispatched (`.claude/worktrees/agent-<sonnetId>`). The hook must tell
+# "the agent that OWNS this worktree" (deny) from "a different agent whose cwd was
+# moved here" (allow) by comparing the caller's agent id with the worktree's name.
+
+SONNET_ID = "aad46a8ca24cbf6a1"
+ORCHESTRATOR_ID = "a1111111111111111"
+
+
+@pytest.fixture()
+def agent_worktree(git_repo_with_worktree):
+    primary, _unused = git_repo_with_worktree
+    worktree = primary.parent / "primary-wt" / f"agent-{SONNET_ID}"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "agent-branch", str(worktree)],
+        cwd=primary,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return worktree
+
+
+def _dispatch(cwd, **extra):
+    return _run_hook(
+        HOOKS_DIR / "block_agent_dispatch_in_worktree.py",
+        {"tool_name": "Agent", "tool_input": {}, "cwd": str(cwd), **extra},
+    )
+
+
+def test_agent_dispatch_allows_orchestrator_whose_cwd_moved_into_a_sonnets_worktree(agent_worktree):
+    code, decision = _dispatch(agent_worktree, agent_id=ORCHESTRATOR_ID, agent_type="claude")
+    assert code == 0
+    assert decision is None
+
+
+def test_agent_dispatch_allows_when_identity_comes_from_transcript_path(agent_worktree):
+    transcript = f"C:/x/session/subagents/agent-{ORCHESTRATOR_ID}.jsonl"
+    code, decision = _dispatch(agent_worktree, transcript_path=transcript)
+    assert code == 0
+    assert decision is None
+
+
+def test_agent_dispatch_denies_the_sonnet_in_its_own_worktree(agent_worktree):
+    code, decision = _dispatch(agent_worktree, agent_id=SONNET_ID, agent_type="claude")
+    assert code == 0
+    assert _denied(decision)
+
+
+def test_agent_dispatch_denies_own_worktree_identified_by_transcript_path(agent_worktree):
+    code, decision = _dispatch(agent_worktree, transcript_path=f"/s/subagents/agent-{SONNET_ID}.jsonl")
+    assert code == 0
+    assert _denied(decision)
+
+
+def test_agent_dispatch_denies_unknown_identity_in_a_linked_worktree(agent_worktree):
+    # No agent_id, and a transcript_path that is the main session's (no agent- name).
+    code, decision = _dispatch(agent_worktree, transcript_path="/s/1b3eab10.jsonl")
+    assert code == 0
+    assert _denied(decision)
+
+
+def test_agent_dispatch_denies_a_known_caller_in_a_worktree_not_named_after_an_agent(git_repo_with_worktree):
+    _primary, worktree = git_repo_with_worktree  # worktree dir is "branch-a"
+    code, decision = _dispatch(worktree, agent_id=ORCHESTRATOR_ID)
+    assert code == 0
+    assert _denied(decision)
+
+
+def test_agent_dispatch_allows_primary_even_with_an_agent_id(git_repo_with_worktree):
+    primary, _worktree = git_repo_with_worktree
+    code, decision = _dispatch(primary, agent_id=SONNET_ID)
+    assert code == 0
+    assert decision is None
+
+
+def test_agent_dispatch_shape_log_records_keys_but_never_tool_input(agent_worktree, tmp_path):
+    log = tmp_path / "shape.log"
+    env = {**os.environ, "DEG_HOOK_PAYLOAD_SHAPE_LOG": str(log)}
+    proc = subprocess.run(
+        [sys.executable, str(HOOKS_DIR / "block_agent_dispatch_in_worktree.py")],
+        input=json.dumps(
+            {
+                "tool_name": "Agent",
+                "tool_input": {"prompt": "SECRET-PROMPT-TEXT"},
+                "cwd": str(agent_worktree),
+                "agent_id": ORCHESTRATOR_ID,
+                "transcript_path": "/s/subagents/agent-a1111111111111111.jsonl",
+            }
+        ),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
+    assert proc.returncode == 0
+    text = log.read_text(encoding="utf-8")
+    assert "agent_id" in text and "transcript_path" in text
+    assert "agent-a1111111111111111.jsonl" in text
+    assert "SECRET-PROMPT-TEXT" not in text
 
 
 # ---------------------------------------------------------------------------

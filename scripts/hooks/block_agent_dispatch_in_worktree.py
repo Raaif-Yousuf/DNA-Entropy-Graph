@@ -63,6 +63,15 @@ regardless of `subagent_type` or `isolation`. A dispatched agent that needs
 more hands says so plainly in its report; only the orchestrator, from the
 primary checkout, dispatches.
 
+WHO IS CALLING (issue #618)
+---------------------------
+The harness can move an orchestrator's cwd into the `agent-<id>` worktree of a
+Sonnet it dispatched. Inside such a worktree the hook allows a caller whose
+agent id (payload `agent_id`, else the `agent-<id>.jsonl` transcript basename)
+is known and differs from the worktree's owner; it still denies the owner, an
+unknown caller and a worktree not named `agent-<id>`. See
+`scripts/hooks/README.md`.
+
 WHAT IT DOES NOT BLOCK
 -----------------------
 An `Agent` call made from the PRIMARY checkout is untouched: the orchestrator
@@ -169,7 +178,10 @@ def classify(cwd: str, timeout: float = 10.0) -> str:
     again; the hook's own PreToolUse decision (`verdict`/`is_linked_worktree`)
     is unchanged.
     """
-    paths = _git_paths(cwd, timeout)
+    return _classify_paths(_git_paths(cwd, timeout))
+
+
+def _classify_paths(paths: tuple[str, str] | None) -> str:
     if paths is None:
         return "unknown"
     git_dir, git_common_dir = paths
@@ -223,11 +235,42 @@ def explain(cwd: str) -> str:
     )
 
 
-def verdict(cwd: str) -> str | None:
-    """Return the reason to deny, or None to stay silent."""
-    if is_linked_worktree(cwd):
-        return MESSAGE
+def caller_agent_id(payload: dict) -> str | None:
+    """The calling agent's id, or None when it cannot be determined.
+
+    `agent_id` is documented as present only when the hook fires inside a subagent
+    (code.claude.com/docs/en/hooks, "Fields Present Only Inside Subagents").
+    Fallback: a `transcript_path` whose basename is `agent-<id>.jsonl` (subagent
+    transcripts live at `<session>/subagents/agent-<id>.jsonl`). A main-session
+    transcript (`<session-uuid>.jsonl`) names no agent, so it yields None.
+    """
+    raw = payload.get("agent_id")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().removeprefix("agent-")
+    tp = payload.get("transcript_path")
+    if isinstance(tp, str):
+        name = tp.replace("\\", "/").rsplit("/", 1)[-1]
+        if name.startswith("agent-") and name.endswith(".jsonl"):
+            return name[len("agent-") : -len(".jsonl")] or None
     return None
+
+
+def verdict(cwd: str, caller_id: str | None = None) -> str | None:
+    """Return the reason to deny, or None to stay silent.
+
+    Issue #618: the harness can move an ORCHESTRATOR's cwd into the linked
+    worktree of a Sonnet it dispatched, which is named `agent-<sonnetId>`. Allow
+    only a caller that is provably someone else: the caller's id is known and
+    differs from the worktree's `agent-<id>` owner. Deny when it equals the owner,
+    when it is unknown, or when the worktree is not `agent-<id>` named.
+    """
+    paths = _git_paths(cwd)
+    if _classify_paths(paths) != "linked_worktree":
+        return None
+    owner = os.path.basename(os.path.normpath(paths[0]))  # .git/worktrees/<name>
+    if caller_id and owner.startswith("agent-") and owner != f"agent-{caller_id}":
+        return None
+    return MESSAGE
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +380,24 @@ def self_test() -> int:
             code, decision = _run_end_to_end({"tool_name": "Agent", "tool_input": {}, "cwd": str(primary)})
             check("end-to-end: the same payload from the primary checkout is silent (allowed)",
                   code == 0 and decision is None)
+
+            # Issue #618: identity decides inside an `agent-<id>` worktree.
+            agent_wt = pathlib.Path(tmp) / "primary-wt" / "agent-aaa111"
+            subprocess.run(["git", "worktree", "add", "-q", "-b", "agent-b", str(agent_wt)],
+                           cwd=primary, check=True, capture_output=True, text=True)
+            base = {"tool_name": "Agent", "tool_input": {}, "cwd": str(agent_wt)}
+            code, decision = _run_end_to_end({**base, "agent_id": "bbb222"})
+            check("#618: an orchestrator moved into another agent's worktree is allowed",
+                  code == 0 and decision is None)
+            code, decision = _run_end_to_end({**base, "agent_id": "aaa111"})
+            check("#618: the agent running in its own worktree is denied",
+                  code == 0 and _is_deny(decision))
+            code, decision = _run_end_to_end(base)
+            check("#618: unknown identity in a linked worktree is denied",
+                  code == 0 and _is_deny(decision))
+            code, decision = _run_end_to_end({**base, "transcript_path": "/s/subagents/agent-bbb222.jsonl"})
+            check("#618: identity from the transcript_path basename is honoured",
+                  code == 0 and decision is None)
     except Exception as exc:
         check(f"building the throwaway git repo/worktree did not raise ({exc!r})", False)
 
@@ -355,6 +416,28 @@ def self_test() -> int:
         return 1
     print("\nPASS: block_agent_dispatch_in_worktree self-test")
     return 0
+
+
+def _log_payload_shape(payload: dict) -> None:
+    """Optional measurement aid (issue #618): when DEG_HOOK_PAYLOAD_SHAPE_LOG names a
+    file, append one line with the payload's key names, agent fields and the
+    transcript_path basename. Never tool_input content. Best effort, never raises."""
+    path = os.environ.get("DEG_HOOK_PAYLOAD_SHAPE_LOG")
+    if not path:
+        return
+    try:
+        tp = payload.get("transcript_path")
+        line = {
+            "keys": sorted(payload),
+            "agent_id": payload.get("agent_id"),
+            "agent_type": payload.get("agent_type"),
+            "transcript_basename": os.path.basename(str(tp).replace("\\", "/")) if tp else None,
+            "cwd_basename": os.path.basename(str(payload.get("cwd", "")).replace("\\", "/")),
+        }
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(line) + "\n")
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -376,8 +459,9 @@ def main() -> int:
         return 0
 
     try:
+        _log_payload_shape(payload)
         cwd = payload.get("cwd") or os.getcwd()
-        reason = verdict(cwd)
+        reason = verdict(cwd, caller_agent_id(payload))
         if reason is None:
             return 0
         json.dump(
