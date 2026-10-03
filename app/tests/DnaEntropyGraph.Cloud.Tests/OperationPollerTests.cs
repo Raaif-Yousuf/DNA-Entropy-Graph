@@ -134,4 +134,39 @@ public class OperationPollerTests
             cts.Token,
             RecordingInstantDelay([])));
     }
+
+    [Fact]
+    public async Task A_poll_that_hangs_ends_at_the_wall_clock_deadline_as_the_timeout_code()
+    {
+        var outcome = await OperationPoller.PollAsync<string>(
+            async token =>
+            {
+                await Task.Delay(Timeout.Infinite, token);
+                return new OperationPoll<string>(true, "never", null);
+            },
+            deadline: TimeSpan.FromMilliseconds(200),
+            CancellationToken.None,
+            RecordingInstantDelay([]));
+
+        outcome.Success.ShouldBeFalse();
+        outcome.Error!.Code.ShouldBe(OperationPoller.TimeoutCode);
+    }
+
+    [Fact]
+    public async Task The_callers_cancel_during_a_hung_poll_is_a_cancel_not_a_timeout()
+    {
+        using var cts = new CancellationTokenSource();
+        var poll = OperationPoller.PollAsync<string>(
+            async token =>
+            {
+                await cts.CancelAsync();
+                await Task.Delay(Timeout.Infinite, token);
+                return new OperationPoll<string>(true, "never", null);
+            },
+            deadline: TimeSpan.FromMinutes(5),
+            cts.Token,
+            RecordingInstantDelay([]));
+
+        await Should.ThrowAsync<OperationCanceledException>(() => poll);
+    }
 }

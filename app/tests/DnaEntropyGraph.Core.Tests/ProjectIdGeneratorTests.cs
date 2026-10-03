@@ -44,4 +44,29 @@ public class ProjectIdGeneratorTests
         ProjectIdGenerator.DisplayName.ShouldBe("DNA Entropy Graph");
         ProjectIdGenerator.DisplayName.Length.ShouldBeInRange(4, 30);
     }
+
+    [Theory]
+    [InlineData("dna-entropy-abcd1234", true)]
+    [InlineData("my-lab", true)]
+    [InlineData("a/b", false)]
+    [InlineData("a/bcdef", false)]
+    [InlineData("../projects", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    [InlineData("Capital1", false)]
+    [InlineData("short", false)]
+    [InlineData("ends-with-", false)]
+    [InlineData("1abcdef", false)]
+    [InlineData("abcdefghijklmnopqrstuvwxyz12345", false)]
+    [InlineData("abcdefghijklmnopqrstuvwxyz1234", true)]
+    public void IsValid_follows_googles_project_id_grammar(string? id, bool expected)
+    {
+        ProjectIdGenerator.IsValid(id).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Every_generated_id_is_valid()
+    {
+        Enumerable.Range(0, 500).ShouldAllBe(_ => ProjectIdGenerator.IsValid(ProjectIdGenerator.Generate()));
+    }
 }

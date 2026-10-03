@@ -23,6 +23,8 @@ public static class GoogleCloudGateways
 
         var resourceManager = new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options));
         return new GoogleCloudGatewaySet(
-            new ResilientProjectCatalogGateway(new GoogleProjectCatalogGateway(resourceManager, options), pipeline));
+            // Not wrapped in ResilientProjectCatalogGateway: the gateway routes each of its own HTTP calls through the
+            // pipeline, so a poll read that fails is retried alone and never re-posts the create.
+            new GoogleProjectCatalogGateway(resourceManager, pipeline, options));
     }
 }

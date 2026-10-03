@@ -76,12 +76,22 @@ internal static class GoogleApiErrors
         return new CloudOperationException(new CloudError(code, status.HttpStatus, status.Message), kind);
     }
 
+    // Wording of a per-minute request rate limit, as Google words it ("Quota exceeded for quota metric 'Requests' and
+    // limit 'Requests per minute' ..."). A project-count limit never says per minute, per second or "requests".
+    private static readonly string[] RateLimitWording =
+    [
+        "per minute", "per second", "per 100 seconds", "requests per", "rate limit", "too many requests", "ratelimit",
+    ];
+
     /// <summary>
-    /// A per-minute rate limit (ErrorInfo reason <c>RATE_LIMIT_EXCEEDED</c>) also arrives as RESOURCE_EXHAUSTED with a
-    /// QuotaFailure, but it clears in a minute: it is retried, never "you reached your project limit".
+    /// A per-minute rate limit clears in a minute: it is retried, never "you reached your project limit". Google marks
+    /// one with the ErrorInfo reason <c>RATE_LIMIT_EXCEEDED</c>, but the reason is not always sent: a 429
+    /// RESOURCE_EXHAUSTED whose message names a per-minute or per-second request limit is one too, QuotaFailure or not.
     /// </summary>
     private static bool IsRateLimit(RpcStatus status)
-        => status.Reasons.Any(r => string.Equals(r, CloudErrorClassifier.RateLimitCode, StringComparison.OrdinalIgnoreCase));
+        => status.Reasons.Any(r => string.Equals(r, CloudErrorClassifier.RateLimitCode, StringComparison.OrdinalIgnoreCase))
+            || (status.Status == "RESOURCE_EXHAUSTED"
+                && RateLimitWording.Any(w => status.Message.Contains(w, StringComparison.OrdinalIgnoreCase)));
 
     public static CloudErrorKind KindOf(RpcStatus status)
     {
@@ -108,10 +118,15 @@ internal static class GoogleApiErrors
             return CloudErrorKind.Quota;
         }
 
+        // A plain PERMISSION_DENIED 403 can quote a "constraints/..." id without being an organization-policy refusal
+        // (it only says the caller may not see something), so the wording counts only when the error is not that.
+        var plainDenial = status.HttpStatus == 403 && status.Status == "PERMISSION_DENIED";
         if (status.Reasons.Any(r => r.Contains("ORG_POLICY", StringComparison.OrdinalIgnoreCase))
-            || lower.Contains("constraints/", StringComparison.Ordinal)
-            || lower.Contains("org policy", StringComparison.Ordinal)
-            || lower.Contains("organization policy", StringComparison.Ordinal))
+            || status.HttpStatus == 412
+            || (!plainDenial
+                && (lower.Contains("constraints/", StringComparison.Ordinal)
+                    || lower.Contains("org policy", StringComparison.Ordinal)
+                    || lower.Contains("organization policy", StringComparison.Ordinal))))
         {
             return CloudErrorKind.OrgPolicy;
         }

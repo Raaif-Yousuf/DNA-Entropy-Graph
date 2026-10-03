@@ -793,13 +793,30 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   (the VM-only labels `job-id`, `model`, `app-version` and `lifecycle` do not apply to a project). The response is a
   long-running operation, polled with `OperationPoller` (1 s doubling to 10 s, 5 minute deadline); a timeout is
   `OPERATION_POLL_TIMEOUT`, classed `network`.
-- **Replay safety.** The resilience pipeline replays a whole create after a dropped connection. A `409 ALREADY_EXISTS`
+- **One retry per HTTP call, never per composite.** `GoogleProjectCatalogGateway` is not wrapped in
+  `ResilientProjectCatalogGateway`: it sends every call through `CloudCallPipeline` itself. The mutating
+  `POST /v3/projects` is retried alone; each `operations.get` is its own retried idempotent read. A 429 or 5xx on a
+  poll read therefore re-reads and never re-POSTs. The poll deadline is wall-clock (`GoogleCloudOptions.TimeProvider`)
+  and covers the time inside each read: `OperationPoller` hands every read a token that ends at the deadline, so a hung
+  GET (the HTTP client would wait about 100 s) ends at the deadline as `OPERATION_POLL_TIMEOUT`, not at the client's
+  timeout. The caller's own cancel still surfaces as a cancel. `CloudCallPipeline.IsTransient` also never replays a
+  spent poll deadline. A finished operation with no error and no project in its response is read back with
+  `projects.get` for the requested id; if that finds nothing the error is `OPERATION_NO_RESULT`, never a success with
+  an empty id.
+- **Replay safety.** The POST is replayed after a dropped connection. A `409 ALREADY_EXISTS`
   is followed by a `projects.get`: a project of ours (it carries the app label) is returned, anyone else's is an
   error. One wizard click therefore never makes two projects.
 - **Errors.** A project-limit refusal is `PROJECT_QUOTA` (kind `quota`, never retried; action: pick an existing
   project); an organization-policy refusal is `ORG_POLICY_BLOCK` (kind `org_policy`; action: copy the message for IT).
-  A 403 on create stays `PERMISSION_DENIED` (kind `permission`). A 429 with no quota marker is a rate limit and is
-  retried.
+  A permanent create failure carries a setup code whose button fits (never the Try again catch-all): `PERMISSION`
+  (kind `permission`; Copy request for the project owner), `API_DISABLED` (Turn it on), `NO_BILLING` (Link billing).
+  A per-minute rate limit is retried and never `PROJECT_QUOTA`, whether it carries the ErrorInfo reason
+  `RATE_LIMIT_EXCEEDED` or only says so in a RESOURCE_EXHAUSTED message ("Quota exceeded for quota metric 'Requests' ...
+  Requests per minute", no details); THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word
+  "quota" without per-minute or per-second wording. A PERMISSION_DENIED 403 that merely quotes a `constraints/` id is a
+  permission error, not an organization-policy one, so `GetProjectAsync` still answers "not visible"; only an
+  ORG_POLICY reason, a 412, or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
+  null, with no request, for an id outside Google's project-id grammar.
 - **Not proven without a real account:** `docs/ToTest.md`.
 ## Related
 

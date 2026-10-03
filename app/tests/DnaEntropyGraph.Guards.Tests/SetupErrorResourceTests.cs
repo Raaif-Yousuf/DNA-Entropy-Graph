@@ -52,6 +52,20 @@ public class SetupErrorResourceTests
         SetupErrorCodes.ResourceKey(SetupErrorCodes.ProjectQuota).ShouldBe("SetupError_PROJECT_QUOTA");
     }
 
+    [Theory]
+    [InlineData(SetupErrorCodes.Permission, "SetupError_PERMISSION", "SetupAction_CopyRequestForOwner")]
+    [InlineData(SetupErrorCodes.ApiDisabled, "SetupError_API_DISABLED", "SetupAction_TurnItOn")]
+    [InlineData(SetupErrorCodes.NoBilling, "SetupError_NO_BILLING", "SetupAction_LinkBilling")]
+    public void A_permanent_failure_never_shows_the_try_again_catch_all(string code, string messageKey, string actionKey)
+    {
+        // Retrying a permission, switched-off service or missing billing error can never work, so none may fall to the
+        // catch-all whose action is Try again.
+        SetupErrorCodes.All.ShouldContain(code);
+        SetupErrorCodes.ResourceKey(code).ShouldBe(messageKey);
+        SetupErrorCodes.ActionResourceKey(code).ShouldBe(actionKey);
+        SetupErrorCodes.ActionResourceKey(code).ShouldNotBe(SetupErrorCodes.ActionResourceKey(null));
+    }
+
     [Fact]
     public void Every_setup_error_code_is_in_the_copy_catalog_and_the_triage_roster()
     {

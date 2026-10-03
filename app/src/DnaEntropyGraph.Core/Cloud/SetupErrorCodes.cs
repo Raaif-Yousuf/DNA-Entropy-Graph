@@ -15,14 +15,26 @@ public static class SetupErrorCodes
     /// <summary>An organization policy refused the request. Action: copy the message for the IT administrator.</summary>
     public const string OrgPolicyBlock = "ORG_POLICY_BLOCK";
 
+    /// <summary>The account is not allowed to do this in the project. Action: copy a request for the project owner.</summary>
+    public const string Permission = "PERMISSION";
+
+    /// <summary>A Google service the step needs is switched off in the project. Action: turn it on.</summary>
+    public const string ApiDisabled = "API_DISABLED";
+
+    /// <summary>The project has no billing account, so Google refuses the step. Action: link billing.</summary>
+    public const string NoBilling = "NO_BILLING";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
     {
         ProjectQuota => "SetupError_PROJECT_QUOTA",
         OrgPolicyBlock => "SetupError_ORG_POLICY_BLOCK",
+        Permission => "SetupError_PERMISSION",
+        ApiDisabled => "SetupError_API_DISABLED",
+        NoBilling => "SetupError_NO_BILLING",
         _ => "SetupError_OTHER",
     };
 
@@ -31,6 +43,9 @@ public static class SetupErrorCodes
     {
         ProjectQuota => "SetupAction_PickExistingProject",
         OrgPolicyBlock => "SetupAction_CopyMessageForIt",
+        Permission => "SetupAction_CopyRequestForOwner",
+        ApiDisabled => "SetupAction_TurnItOn",
+        NoBilling => "SetupAction_LinkBilling",
         _ => "SetupAction_TryAgain",
     };
 }
