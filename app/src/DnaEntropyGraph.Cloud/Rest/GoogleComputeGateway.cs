@@ -1,0 +1,396 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+using DnaEntropyGraph.Core.Cloud;
+using Google;
+using Google.Apis.Compute.v1;
+using ComputeData = Google.Apis.Compute.v1.Data;
+
+namespace DnaEntropyGraph.Cloud.Rest;
+
+/// <summary>
+/// The real <see cref="IComputeGateway"/> over Compute Engine v1 REST (issue #56). Compute is operation-based: <c>insert</c>,
+/// <c>stop</c> and <c>delete</c> return a zone operation, polled with <see cref="OperationPoller"/> (1 s doubling to 10 s,
+/// one <see cref="GoogleCloudOptions.OperationDeadline"/> for the polling) until it reports <c>DONE</c>, and the real error
+/// (stockout, quota, a missing permission) lives in <c>operation.error</c>, mapped to a <see cref="CloudOperationException"/>
+/// through <see cref="CloudErrorClassifier"/> and nothing else: this class invents no classification rule. An HTTP error
+/// (billing off and the Compute API off arrive here, as a 403) goes through <see cref="GoogleApiErrors"/>, which
+/// delegates to the same classifier.
+/// Every HTTP request goes through <see cref="CloudCallPipeline"/> on its own (as the project and service gateways do), so a
+/// transient error on one poll retries THAT poll and never replays the insert. Production therefore must NOT wrap this gateway in
+/// <see cref="ResilientComputeGateway"/> (a second layer would replay the whole create while the original operation may still be
+/// pending). Each <c>CreateVmAsync</c> call fixes ONE random <c>requestId</c> at its start and every replay of that insert POST
+/// carries it, so Compute Engine answers a replay with the same operation. A NEW call gets a new id, never one derived from the VM
+/// name: Compute replays the ORIGINAL operation for a repeated id within its idempotency window, which would hand a retry after a
+/// stockout the old failure, or a re-create of the same <c>deg-&lt;job&gt;</c> after a delete the old DONE operation with no VM made.
+/// Instance names are unique per zone, so a NEW call after a lost response is answered 409 <c>alreadyExists</c>
+/// (<see cref="CloudErrorKind.AlreadyExists"/>), which the runner adopts. THEORY (unverified): an abandoned create (the provisioner
+/// gave up) can still be finishing in Compute, so a later retry may adopt an instance whose original operation then fails.
+/// The interface has no project parameter on the calls other than create (which has <see cref="VmSpec.ProjectId"/>), so the
+/// project comes from <c>selectedProjectId</c>; none selected is an <see cref="InvalidOperationException"/>, never a guess.
+/// </summary>
+internal sealed class GoogleComputeGateway : IComputeGateway
+{
+    /// <summary>The only values a label can hold (the same rule <see cref="VmSpec"/> enforces), so a filter value built from one cannot carry filter syntax.</summary>
+    private static readonly Regex LabelValuePattern = new(@"\A[a-z0-9_-]{1,63}\z", RegexOptions.Compiled);
+
+    /// <summary>Which kind wins when one operation reports several errors: the ones a user or the zone ladder can act on first.</summary>
+    private static readonly CloudErrorKind[] KindPreference =
+    [
+        CloudErrorKind.Stockout, CloudErrorKind.Quota, CloudErrorKind.Permission, CloudErrorKind.Billing, CloudErrorKind.ApiDisabled,
+        CloudErrorKind.OrgPolicy, CloudErrorKind.AlreadyExists, CloudErrorKind.Network, CloudErrorKind.Other,
+    ];
+
+    private readonly ComputeService _service;
+    private readonly CloudCallPipeline _pipeline;
+    private readonly GoogleCloudOptions _options;
+    private readonly Func<string?> _selectedProjectId;
+
+    public GoogleComputeGateway(ComputeService service, CloudCallPipeline pipeline, GoogleCloudOptions options, Func<string?> selectedProjectId)
+    {
+        _service = service;
+        _pipeline = pipeline;
+        _options = options;
+        _selectedProjectId = selectedProjectId;
+    }
+
+    public async Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+
+        // Hard Rule 10: a spec missing a label or a lifetime limit throws here, before any request exists.
+        var labels = spec.ToLabels();
+
+        // Create is the one call that carries its own project (spec.ProjectId); the rest use the selected one. They must agree, or a
+        // later find, stop or delete would look in a different project from the one that holds the VM.
+        if (_selectedProjectId() is not { Length: > 0 } selected || !string.Equals(selected, spec.ProjectId, StringComparison.Ordinal))
+        {
+            throw new CloudOperationException(
+                new CloudError("PROJECT_MISMATCH", null, "The VM spec names a different Google Cloud project from the selected one, so no VM was created."),
+                CloudErrorKind.Other);
+        }
+
+        // The worker identity comes from the spec (issue #54, filled by the run path, #606/#609); guessing a name nothing creates
+        // would boot a VM that cannot reach its bucket.
+        if (string.IsNullOrWhiteSpace(spec.ServiceAccountEmail))
+        {
+            throw new CloudOperationException(
+                new CloudError("WORKER_SERVICE_ACCOUNT_MISSING", null, "The VM spec names no worker service account, so no VM was created."),
+                CloudErrorKind.Other);
+        }
+
+        var instance = ComputeVmShape.Build(spec, zone, labels, spec.ServiceAccountEmail);
+
+        // One id for this call: every replay of the insert POST by the pipeline carries it (see the class remarks).
+        var requestId = Guid.NewGuid().ToString();
+        var operation = await CallAsync(
+            "compute.instances.insert",
+            token =>
+            {
+                var insert = _service.Instances.Insert(instance, spec.ProjectId, zone);
+                insert.RequestId = requestId;
+                return insert.ExecuteAsync(token);
+            },
+            cancellationToken).ConfigureAwait(false);
+        await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+
+        // A 404 here means the outcome is unknown, not that nothing was made (the operation said DONE): Network class, so it is
+        // retryable, and a retry lands on 409 alreadyExists if the VM exists. The runner lists by label before trying another zone.
+        return await GetAsync(spec.ProjectId, spec.VmName, zone, cancellationToken).ConfigureAwait(false)
+            ?? throw new CloudOperationException(
+                new CloudError("CREATE_OUTCOME_UNKNOWN", null, $"Compute Engine reported the create of '{spec.VmName}' done, but the VM cannot be found."),
+                CloudErrorKind.Network);
+    }
+
+    public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        => GetAsync(RequireProject(), vmName, zone, cancellationToken);
+
+    public async Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        ComputeData.Operation operation;
+        try
+        {
+            operation = await CallAsync("compute.instances.stop", token => _service.Instances.Stop(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return; // Already gone: nothing left to stop.
+        }
+
+        await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        ComputeData.Operation operation;
+        try
+        {
+            operation = await CallAsync("compute.instances.delete", token => _service.Instances.Delete(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return; // Already gone is what a delete wants.
+        }
+
+        await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+        => ListByLabelAsync("job-id", jobId, cancellationToken);
+
+    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
+        => ListByLabelAsync("installation-id", installationId, cancellationToken);
+
+    private async Task<IReadOnlyList<VmDescriptor>> ListByLabelAsync(string labelKey, string labelValue, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+
+        // A value no label can hold matches no VM, and it must never reach a filter expression.
+        if (!LabelValuePattern.IsMatch(labelValue ?? string.Empty))
+        {
+            return [];
+        }
+
+        var filter = $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.{labelKey} = \"{labelValue}\")";
+        var found = new List<VmDescriptor>();
+        string? pageToken = null;
+        do
+        {
+            var requestedToken = pageToken;
+            var page = await CallAsync(
+                "compute.instances.aggregatedList",
+                token =>
+                {
+                    var request = _service.Instances.AggregatedList(project);
+                    request.Filter = filter;
+                    request.PageToken = requestedToken;
+                    // Without this Compute fails the whole list when one zone is down and never fills `unreachables`. Google.Apis.Compute.v1
+                    // has no typed property for it on this call, so it is added to the query by hand.
+                    request.ModifyRequest += message =>
+                        message.RequestUri = new Uri(message.RequestUri + (string.IsNullOrEmpty(message.RequestUri!.Query) ? "?" : "&") + "returnPartialSuccess=true");
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            // A zone Compute could not reach is NOT an empty zone: returning the rest would let VmTerminator read "no VM" and the runner
+            // create a duplicate (or leak one). Fail the whole listing with a retryable (Network-class) error instead.
+            if (page.Unreachables is { Count: > 0 } unreachable)
+            {
+                throw new CloudOperationException(
+                    new CloudError("ZONES_UNREACHABLE", null, $"Compute Engine could not list these places: {string.Join(", ", unreachable.Select(u => ZoneName(u) ?? u))}."),
+                    CloudErrorKind.Network);
+            }
+
+            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.InstancesScopedList>())
+            {
+                foreach (var instance in scoped?.Instances ?? [])
+                {
+                    // The server filter is the query; this is the guard that a VM of another job, installation or app can never be returned.
+                    if (instance.Labels is { } labels
+                        && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
+                        && labels.TryGetValue(labelKey, out var value) && value == labelValue)
+                    {
+                        found.Add(ToDescriptor(instance, ZoneName(scope) ?? string.Empty));
+                    }
+                }
+            }
+
+            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            if (next is not null && next == pageToken)
+            {
+                throw new CloudOperationException(
+                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the VM list may be incomplete."),
+                    CloudErrorKind.Network);
+            }
+
+            pageToken = next;
+        }
+        while (pageToken is not null);
+
+        return found;
+    }
+
+    private async Task<VmDescriptor?> GetAsync(string project, string vmName, string zone, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var instance = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            return ToDescriptor(instance, zone);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Polls the zone operation until <c>DONE</c> and throws its error. <paramref name="goneIsDone"/>: a stop or delete whose operation says the VM is not found has nothing left to do.</summary>
+    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken)
+    {
+        if (!IsDone(operation))
+        {
+            var name = operation.Name;
+            var latest = operation;
+            var outcome = await OperationPoller.PollAsync(
+                async token =>
+                {
+                    latest = await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
+                    return new OperationPoll<bool>(IsDone(latest), true, null);
+                },
+                _options.OperationDeadline,
+                cancellationToken,
+                _options.Delay,
+                _options.TimeProvider).ConfigureAwait(false);
+            if (!outcome.Success)
+            {
+                throw new CloudOperationException(outcome.Error!, CloudErrorClassifier.Classify(outcome.Error!));
+            }
+
+            operation = latest;
+        }
+
+        if (operation.Error?.Errors is { Count: > 0 } errors)
+        {
+            var first = errors[0];
+            if (goneIsDone && (operation.HttpErrorStatusCode == 404 || first.Code == "RESOURCE_NOT_FOUND"))
+            {
+                return;
+            }
+
+            // Every entry is classified and the most specific wins (a generic first entry must not hide a stockout behind it).
+            CloudError? chosen = null;
+            var chosenKind = CloudErrorKind.Other;
+            var chosenRank = int.MaxValue;
+            foreach (var entry in errors)
+            {
+                var candidate = new CloudError(entry.Code, operation.HttpErrorStatusCode, entry.Message ?? operation.HttpErrorMessage ?? string.Empty);
+                var kind = CloudErrorClassifier.Classify(candidate);
+                var rank = Array.IndexOf(KindPreference, kind);
+                if (chosen is null || rank < chosenRank)
+                {
+                    (chosen, chosenKind, chosenRank) = (candidate, kind, rank);
+                }
+            }
+
+            throw new CloudOperationException(chosen!, chosenKind);
+        }
+    }
+
+    private static bool IsDone(ComputeData.Operation operation) => string.Equals(operation.Status, "DONE", StringComparison.Ordinal);
+
+    /// <summary>Runs ONE HTTP request through the resilience pipeline (retry, token refresh, breaker), turning a Google HTTP error into the one exception the app understands.</summary>
+    private Task<T> CallAsync<T>(string operation, Func<CancellationToken, Task<T>> request, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync(
+            operation,
+            async token =>
+            {
+                try
+                {
+                    return await request(token).ConfigureAwait(false);
+                }
+                catch (GoogleApiException ex)
+                {
+                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                }
+            },
+            cancellationToken);
+
+    private string RequireProject()
+        => _selectedProjectId() is { Length: > 0 } project
+            ? project
+            : throw new InvalidOperationException("No Google Cloud project is selected, so there is no project to ask Compute Engine about.");
+
+    private static VmDescriptor ToDescriptor(ComputeData.Instance instance, string zone)
+        => new(
+            instance.Name,
+            ZoneName(instance.Zone) ?? zone,
+            instance.Status ?? string.Empty,
+            instance.StatusMessage,
+            ParseTime(instance.CreationTimestamp),
+            instance.Labels is null ? null : new Dictionary<string, string>(instance.Labels),
+            ParseTime(instance.LastStopTimestamp));
+
+    /// <summary>The zone name from a zone URL (<c>.../zones/us-central1-a</c>) or an aggregated-list key (<c>zones/us-central1-a</c>).</summary>
+    private static string? ZoneName(string? url)
+        => string.IsNullOrEmpty(url) ? null : url[(url.LastIndexOf('/') + 1)..];
+
+    private static DateTimeOffset? ParseTime(string? value)
+        => DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed : null;
+}
+
+/// <summary>
+/// The shape of the VM a <see cref="VmSpec"/> becomes: the parts <see cref="VmSpec"/> does not carry (boot image, disk, network)
+/// are fixed here, in one place. ONE image family for every machine type: <c>worker/vm/startup.sh</c> needs docker, python3,
+/// curl and a writable root, which the deep learning VM image ships and Container-Optimized OS does not (DECISION, agent-made,
+/// reversible: see the issue linked from docs/cloud_design.md). THEORY (unverified, no live project): that
+/// <c>scheduling.maxRunDuration</c> is accepted on a standard-provisioning VM with <c>onHostMaintenance=TERMINATE</c> and
+/// <c>automaticRestart=false</c>, and that this image family boots and runs docker on a machine with no GPU.
+/// docs/ToTest.md carries the row that proves them on a real VM.
+/// </summary>
+internal static class ComputeVmShape
+{
+    public const string Image = "projects/deeplearning-platform-release/global/images/family/pytorch-2-9-cu129-ubuntu-2404-nvidia-580";
+
+    public const int BootDiskGb = 150;
+
+    public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
+    {
+        var items = new List<ComputeData.Metadata.ItemsData>();
+        foreach (var (key, value) in spec.Metadata ?? new Dictionary<string, string>())
+        {
+            items.Add(new ComputeData.Metadata.ItemsData { Key = key, Value = value });
+        }
+
+        // docs/cloud_design.md section 9: the bucket is the transport, nobody logs in, so no project-wide SSH key may reach the VM.
+        if (items.All(i => i.Key != "block-project-ssh-keys"))
+        {
+            items.Add(new ComputeData.Metadata.ItemsData { Key = "block-project-ssh-keys", Value = "true" });
+        }
+
+        return new ComputeData.Instance
+        {
+            Name = spec.VmName,
+            MachineType = $"zones/{zone}/machineTypes/{spec.MachineType}",
+            Labels = labels.ToDictionary(p => p.Key, p => p.Value),
+            Metadata = new ComputeData.Metadata { Items = items },
+            Scheduling = new ComputeData.Scheduling
+            {
+                MaxRunDuration = new ComputeData.Duration { Seconds = (long)Math.Ceiling(spec.MaxRunDuration.TotalSeconds) },
+                InstanceTerminationAction = spec.TerminationAction,
+                OnHostMaintenance = "TERMINATE",
+                AutomaticRestart = false,
+            },
+            Disks =
+            [
+                new ComputeData.AttachedDisk
+                {
+                    Boot = true,
+                    AutoDelete = true,
+                    InitializeParams = new ComputeData.AttachedDiskInitializeParams
+                    {
+                        SourceImage = Image,
+                        DiskSizeGb = BootDiskGb,
+                        DiskType = $"zones/{zone}/diskTypes/pd-balanced",
+                        Labels = labels.ToDictionary(p => p.Key, p => p.Value),
+                    },
+                },
+            ],
+            NetworkInterfaces =
+            [
+                new ComputeData.NetworkInterface
+                {
+                    Network = "global/networks/default",
+                    AccessConfigs = [new ComputeData.AccessConfig { Name = "External NAT", Type = "ONE_TO_ONE_NAT" }],
+                },
+            ],
+            ServiceAccounts =
+            [
+                new ComputeData.ServiceAccount
+                {
+                    Email = serviceAccountEmail,
+                    Scopes = ["https://www.googleapis.com/auth/cloud-platform"],
+                },
+            ],
+        };
+    }
+}

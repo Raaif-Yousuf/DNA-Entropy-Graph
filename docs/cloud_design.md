@@ -7,8 +7,7 @@ reference - `CloudJobRunner` is this table's first production caller: it runs th
 continue rule in section 5 for real, over `FakeGcp`. Still not built: the escalating-
 parallelism zone ladder (`GpuPlanner`, issue #86 - `CloudJobRunner`'s own zone list is a
 plain sequential walk, not that ladder), the setup health checks (issue #204), and a real
-(non-fake) gateway implementation against `Google.Cloud.Compute.V1` -
-`DnaEntropyGraph.Cloud` today holds only `FakeGcp`. Authoritative detail lives in
+(non-fake) gateway implementation (`Google.Apis.Compute.v1`, section 16; `FakeGcp` is still what production resolves until #609). Authoritative detail lives in
 [Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this doc is the
 "what a developer needs while implementing" summary with the tables filled in, not a
 shorter copy of the whole appendix.
@@ -566,7 +565,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
     leaving the row in `Cancelling`. A row that is already terminal (a second cancel racing the first) is left alone and
     nothing throws. `RunAsync` on a row in `Cancelling` finishes the cancel (it used to attempt `Cancelling -> Validating`).
   - *The result wait is measured from the VM's creation.* `VmDescriptor.CreatedAt` is the instance's `creationTimestamp`;
-    the real Compute gateway MUST fill it (there is no real gateway yet, so this is a contract for it). The default deadline
+    the real Compute gateway fills it (`GoogleComputeGateway`, issue #56, from `creationTimestamp`). The default deadline
     is `maxRunDuration - 3 min` from that instant, so an 8 minute boot or a resume no longer lets the platform delete the VM
     before the runner gives up (it read as `vm_unhealthy`). A gateway that leaves it null falls back to "from Running".
     An explicit `ResultTimeout` still measures from Running. `FakeGcp.WithMaxRunDurationEnforced()` makes the fake delete a
@@ -1012,6 +1011,7 @@ creates the project's default network).
   and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
 - **Proven only by a real project:** `docs/ToTest.md`.
+
 ### The results bucket (issue #53, wizard step 5)
 
 `IStorageGateway` (`EnsureBucketAsync`, `UploadAsync`, `DownloadAsync`, `TryDownloadAsync`); the real one is
@@ -1073,6 +1073,57 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
 - **Retention is validated.** `ResultsRetentionDays` outside 1 to 3650 throws `ArgumentOutOfRangeException` before any request
   (0 would delete job results at once). The default is `ResultsBucket.DefaultRetentionDays`, which `RunOptions.CloudResultsRetentionDays` reuses.
 - **Proven only by a real project:** `docs/ToTest.md`.
+
+### Compute gateway (issue #56)
+
+`Rest/GoogleComputeGateway` implements `IComputeGateway` over `Google.Apis.Compute.v1` (Apache-2.0; the same REST-over-gRPC
+choice as above, DECISION #535) and `GoogleCloudGateways.Create(...).Compute` is it, NOT wrapped in `ResilientComputeGateway`:
+every HTTP request goes through `CloudCallPipeline` on its own (like the project and service gateways), so a transient error
+on one poll retries that poll and never replays the insert. A second wrapping layer would replay the whole create, so
+production DI must not add one (#609). **Production DI still resolves `IComputeGateway` to `FakeGcp` until #609**; nothing in
+the running app calls this class yet.
+
+- **Project.** Create carries `VmSpec.ProjectId`; get, stop, delete, find and list take the optional `selectedProjectId`
+  argument of `Create` (production will pass `IGcpAccount.SelectedProjectId`, #609); none selected throws
+  `InvalidOperationException` and sends nothing. A create whose `VmSpec.ProjectId` differs from the selected project (or with none
+  selected) is refused as `PROJECT_MISMATCH` before any request, so a VM can never be made where the later lookups do not look.
+- **Create.** `VmSpec.ToLabels()` runs first (Hard Rule 10; `VmSpec` also rejects any `TerminationAction` other than `DELETE`), then a spec with no
+  `ServiceAccountEmail` is refused by name (`WORKER_SERVICE_ACCOUNT_MISSING`, kind `other`) before any request: the run path fills it from the worker
+  identity (#54) via #606/#609, and nothing guesses `deg-worker@<project>`. Then `instances.insert` is built with: the six standard labels,
+  `scheduling.maxRunDuration` (seconds), `instanceTerminationAction` DELETE, `onHostMaintenance=TERMINATE`, `automaticRestart=false`, every
+  `VmSpec.Metadata` item (the startup script and `deg-*` keys) plus `block-project-ssh-keys=true` (section 9), a `pd-balanced` 150 GB boot disk with
+  `autoDelete` and the VM's labels on the disk (Hard Rule 10), the default network with an external address (the VM pulls its image), and the spec's service account with the `cloud-platform` scope.
+  `VmSpec` does not carry image or disk, so they are fixed in `ComputeVmShape`: the DLVM family for EVERY machine type, CPU included, because
+  `startup.sh` needs docker, python3 and a writable root (Container-Optimized OS has none of them; DECISION #615), and `startup.sh` passes `--gpus all` only
+  when `deg-expect-gpu` is true. Each `CreateVmAsync` call fixes ONE random `requestId` at its start and every pipeline replay of that insert POST carries it
+  (Compute answers a replay with the same operation); a NEW call gets a new id, never one derived from the VM name: Compute replays the
+  ORIGINAL operation for a repeated id within its idempotency window, so a derived id would return an old stockout to a retry, or an old DONE operation
+  (no VM made) to a re-create of the same `deg-<job>` after a delete. Instance names are unique per zone, so a new call after a lost response is answered 409
+  (`already_exists`), which the runner adopts. THEORY (unverified): an abandoned create (the provisioner gave up) can still be finishing in Compute,
+  so a later retry may adopt an instance whose original operation then fails; the run then ends `vm_unhealthy` rather than trying the next zone.
+- **Operations.** insert, stop and delete return a zone operation, polled with `OperationPoller` (1 s doubling to 10 s,
+  `OperationDeadline`) until `DONE`. `operation.error` becomes a `CloudOperationException` classified by
+  `CloudErrorClassifier` alone (code, `httpErrorStatusCode`, message), across EVERY entry of `errors` (the most specific kind wins: stockout, quota,
+  permission, billing, api_disabled, org_policy, already_exists, then generic), so `ZONE_RESOURCE_POOL_EXHAUSTED` is `stockout`
+  and `QUOTA_EXCEEDED` is `quota`. A refused HTTP call (billing off and API off arrive as a 403 on the insert) goes
+  through `GoogleApiErrors`, which uses the same classifier. A spent deadline is `OPERATION_POLL_TIMEOUT` (`network`), and a create whose operation said DONE but whose VM then reads 404 is
+  `CREATE_OUTCOME_UNKNOWN` (`network`): in both the VM MAY exist, so the error is retryable (a retry lands on 409 `already_exists` if it does) and **the runner
+  must list by label (`FindByJobIdAsync`) before trying another zone**.
+- **Get, stop, delete.** A 404 on get is `null`; a 404 on stop or delete, or an operation that reports not found, is
+  "already gone", not an error. A 404 on stop or delete means "not in that zone" (the caller may have the wrong zone), not "the VM does not exist anywhere":
+  `VmTerminator`'s label re-check (`FindByJobIdAsync`, sound because of the next point) is the authority on whether it is really gone.
+- **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
+  (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
+  (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
+  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
+  without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
+  the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
+  the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
+  `Labels` and `StoppedAt` (`lastStopTimestamp`) are filled, `CreatedAt` from `creationTimestamp`.
+- **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
+  scheduling settings; that the `labels.job-id = "x"` filter syntax matches; that the DLVM image family boots and runs docker on a machine with no GPU;
+  the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row.
+
 ### The worker identity (issue #54)
 
 `GoogleIamGateway` (IAM v1, Resource Manager v3 and Cloud Storage v1; `Google.Apis.Iam.v1` 1.77.0.4285, Apache-2.0, the

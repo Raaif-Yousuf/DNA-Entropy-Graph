@@ -40,6 +40,20 @@ public class VmSpecTests
         ex.Message.ShouldContain(expectedFieldNameInMessage);
     }
 
+    [Theory]
+    [InlineData("STOP")]
+    [InlineData("delete")]
+    [InlineData("SUSPEND")]
+    public void A_termination_action_other_than_DELETE_is_rejected_because_Hard_Rule_10_requires_DELETE(string action)
+    {
+        var spec = ValidSpec() with { TerminationAction = action };
+
+        var ex = Should.Throw<InvalidOperationException>(() => spec.EnsurePreconditions());
+
+        ex.Message.ShouldContain("instanceTerminationAction");
+        ex.Message.ShouldContain("DELETE");
+    }
+
     [Fact]
     public void A_zero_maxRunDuration_throws()
     {
