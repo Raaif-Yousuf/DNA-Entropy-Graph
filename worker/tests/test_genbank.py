@@ -400,6 +400,7 @@ def test_pipeline_genbank_input(tmp_path: Path) -> None:
         "tl.gb",
         "tl.fasta",
         "tl.entropy.bedgraph",
+        "tl.entropy.smooth51.bedgraph",  # issue #126
         "tl.entropy.geneious.gff3",
         "tl.entropy.tsv",
         "tl.genes.gff3",
@@ -475,6 +476,7 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
         "mt.gb",
         "mt.fasta",
         "mt.entropy.bedgraph",
+        "mt.entropy.smooth51.bedgraph",  # issue #126
         "mt.entropy.geneious.gff3",
         "mt.entropy.tsv",
         "mt.genes.gff3",

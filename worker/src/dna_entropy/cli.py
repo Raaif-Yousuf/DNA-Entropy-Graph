@@ -12,6 +12,7 @@ from pathlib import Path
 import typer
 
 from . import __version__, pipeline
+from .analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS
 from .analysis.windowing import WindowingError
 from .annotators.base import AnnotatorError
 from .config import (
@@ -159,6 +160,18 @@ def run(
         "written to the bedgraph/wig/geneious tracks, an extra TSV column, and stats.txt "
         "(docs/science_and_formats.md; issue #123). Zero extra GPU cost.",
     ),
+    smoothed: bool = typer.Option(
+        True,
+        "--smoothed/--no-smoothed",
+        help="Also write <name>.entropy.smooth<W>.bedgraph (or .wig): a rolling mean of the entropy "
+        "track per --smoothing-window. The raw track is always written too (issue #126).",
+    ),
+    smoothing_window: list[int] | None = typer.Option(
+        None,
+        "--smoothing-window",
+        help="Smoothing window in bases, an odd number; repeat for several "
+        f"(default {', '.join(map(str, DEFAULT_SMOOTHING_WINDOWS))}).",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -195,6 +208,10 @@ def run(
             genes=genes,
             include_tsv=tsv,
             include_surprisal=surprisal,
+            include_smoothed=smoothed,
+            smoothing_windows=(
+                tuple(smoothing_window) if smoothing_window is not None else DEFAULT_SMOOTHING_WINDOWS
+            ),
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value

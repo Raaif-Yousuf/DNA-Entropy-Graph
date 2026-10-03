@@ -264,6 +264,9 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--no-tsv",
         "--surprisal",
         "--no-surprisal",
+        "--smoothed",  # issue #126
+        "--no-smoothed",
+        "--smoothing-window",
         "--seed",
     }
     assert _declared_option_names("run") == expected

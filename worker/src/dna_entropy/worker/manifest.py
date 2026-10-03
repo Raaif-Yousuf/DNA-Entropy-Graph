@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from ..analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS, validate_smoothing_windows
 from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, Topology, TrackFormat
 from ..predictors.hardware import MODEL_REQUIREMENTS, model_requirement
 from .batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
@@ -198,6 +199,11 @@ class AnalysisSpec:
     # issue #128: "auto" (the GenBank LOCUS line decides) | "linear" | "circular".
     topology: Topology = Topology.AUTO
 
+    # issue #126: window sizes (odd numbers of bases) of the smoothed entropy tracks; [] = none.
+    smoothing_windows: list[int] = field(
+        default_factory=lambda: list(DEFAULT_SMOOTHING_WINDOWS), metadata={"json_name": "smoothingWindows"}
+    )
+
     @staticmethod
     def from_dict(d: dict) -> AnalysisSpec:
         raw_direction = str(d.get("direction", Direction.BOTH_COMBINED.value))
@@ -218,6 +224,16 @@ class AnalysisSpec:
             raise ManifestError(
                 f"manifest.json analysis.topology {raw_topology!r} is not one of {valid}"
             ) from None
+        raw_windows = d.get("smoothingWindows", list(DEFAULT_SMOOTHING_WINDOWS))
+        if not isinstance(raw_windows, list):
+            raise ManifestError(
+                f"manifest.json analysis.smoothingWindows {raw_windows!r} must be a list of odd whole "
+                "numbers (smoothing windows, in bases), for example [51]"
+            )
+        try:
+            smoothing_windows = list(validate_smoothing_windows(raw_windows))
+        except ValueError as exc:
+            raise ManifestError(f"manifest.json analysis.smoothingWindows: {exc}") from exc
         context_length = int(d.get("contextLength", 4096))
         window = int(d.get("window", 8192))
         stride = int(d.get("stride", 4096))
@@ -248,6 +264,7 @@ class AnalysisSpec:
             direction=direction,
             track_format=track_format,
             topology=topology,
+            smoothing_windows=smoothing_windows,
         )
 
 
@@ -468,4 +485,6 @@ class JobManifest:
             include_stats=_wanted("stats"),
             include_genbank=_wanted("genbank"),
             include_genes_gff3=include_genes_gff3,
+            include_smoothed=_wanted("smoothed"),
+            smoothing_windows=tuple(self.analysis.smoothing_windows),
         )

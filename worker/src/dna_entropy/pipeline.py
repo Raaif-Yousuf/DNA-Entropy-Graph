@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from .analysis.direction import DirectionResult, analyze_direction
+from .analysis.smoothing import rolling_mean, validate_smoothing_windows
 from .analysis.surprisal import summarize_surprisal
 from .analysis.windowing import validate_context
 from .annotators.base import GeneFeature
@@ -234,6 +235,28 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
     )
 
 
+def _write_smoothed(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: Writer
+) -> list[str]:
+    """Write ``<name>.entropy.smooth<W>.<bedgraph|wig>`` per configured window (issue #126):
+    the centred rolling mean of each contig's combined entropy track, in the SAME track format
+    and coordinate frame as the raw track (which is always written separately and stays
+    primary). Each contig is smoothed on its own, wrapping the origin only when that contig
+    is circular (issue #128). The window is the file's ``variant``."""
+    outputs: list[str] = []
+    for window in cfg.smoothing_windows:
+        blocks = [
+            (c.name, rolling_mean(dr.values, window, circular=cfg.topology.resolve(c.circular)))
+            for c, dr in processed
+        ]
+        outputs.append(
+            track_writer.write_multi(
+                name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir, variant=f"smooth{window}"
+            )
+        )
+    return outputs
+
+
 def _write_provenance(
     cfg: RunConfig,
     processed: list[tuple[Contig, DirectionResult]],
@@ -396,6 +419,9 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if cfg.include_smoothed:
+        outputs += _write_smoothed(cfg, processed, track_writer)
+
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # record, alongside the combined track above.
     outputs += _write_separate_tracks(cfg, processed, track_writer)
@@ -500,6 +526,9 @@ def _write_standard_outputs(
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if cfg.include_smoothed:
+        outputs += _write_smoothed(cfg, processed, track_writer)
+
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # contig, alongside the combined track already written above.
     outputs += _write_separate_tracks(cfg, processed, track_writer)
@@ -584,6 +613,10 @@ def run(
     """
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
+    try:
+        validate_smoothing_windows(cfg.smoothing_windows)
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
     loaded = load_input(cfg, raw)
     # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
     # "all records" default — readers/input.py has no opinion on it (and must not: Lane A

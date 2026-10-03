@@ -114,6 +114,12 @@
             "linear",
             "circular"
           ]
+        },
+        "smoothingWindows": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
         }
       }
     },

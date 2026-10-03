@@ -168,3 +168,8 @@ class RunConfig:
     # default, like every other writer toggle here (issue #123's own "Done when": "Selectable
     # output, on by default").
     include_surprisal: bool = True
+    # issue #126: rolling-mean copies of the entropy track, one file per window:
+    # <name>.entropy.smooth<W>.bedgraph (or .wig). Each W is an odd number of bases
+    # (analysis/smoothing.py validates); () means none. The raw track stays primary.
+    include_smoothed: bool = True
+    smoothing_windows: tuple[int, ...] = (51,)
