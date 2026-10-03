@@ -41,14 +41,9 @@ public static class SequenceSniffer
             return InputKind.Paste;
         }
 
-        var ext = Path.GetExtension(path);
-        if (GenBankExtensions.Contains(ext))
+        if (DetectKindByExtension(path) is { } byExtension)
         {
-            return InputKind.GenBank;
-        }
-        if (FastaExtensions.Contains(ext))
-        {
-            return InputKind.Fasta;
+            return byExtension;
         }
 
         string head;
@@ -68,6 +63,17 @@ public static class SequenceSniffer
         return DetectKindFromContent(head);
     }
 
+    /// <summary>The kind a known extension names, or null when the extension is unknown (content must decide). Reads nothing.</summary>
+    public static InputKind? DetectKindByExtension(string path)
+    {
+        var ext = Path.GetExtension(path);
+        if (GenBankExtensions.Contains(ext))
+        {
+            return InputKind.GenBank;
+        }
+        return FastaExtensions.Contains(ext) ? InputKind.Fasta : null;
+    }
+
     /// <summary>
     /// Sniff a kind directly from already-read text, for a caller that has the bytes in
     /// hand (a dropped file already staged, or a paste box's raw text) and does not want a
@@ -75,9 +81,10 @@ public static class SequenceSniffer
     /// </summary>
     public static InputKind DetectKindFromContent(string text)
     {
-        foreach (var rawLine in text.Split('\n'))
+        // Python str.splitlines() and str.strip(), as detect.py does (see PythonText).
+        foreach (var rawLine in PythonText.SplitLines(text))
         {
-            var s = rawLine.Trim('\r', ' ', '\t').Trim();
+            var s = PythonText.Trim(rawLine);
             if (s.Length == 0)
             {
                 continue;
