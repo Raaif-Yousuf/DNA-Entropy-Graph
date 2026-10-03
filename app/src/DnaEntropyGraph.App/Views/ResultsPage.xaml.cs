@@ -20,4 +20,7 @@ public sealed partial class ResultsPage : Page
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e) => _ = ViewModel.LoadAsync(e.Parameter as string);
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e) => ViewModel.CancelViewerOpen();
 }
+
