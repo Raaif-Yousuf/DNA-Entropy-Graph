@@ -95,4 +95,20 @@ public class ResultsBucketTests
     {
         new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }.CloudResultsRetentionDays.ShouldBe(ResultsBucket.DefaultRetentionDays);
     }
+
+    [Theory]
+    [InlineData("Has Spaces")]
+    [InlineData("UPPER")]
+    [InlineData("a.b")]
+    [InlineData("")]
+    public void Labels_refuse_an_installation_id_that_is_not_a_label_value(string id)
+    {
+        Should.Throw<ArgumentException>(() => ResultsBucket.Labels(id, "0.1.0"));
+    }
+
+    [Fact]
+    public void Labels_accept_the_generated_installation_id_shape()
+    {
+        Should.NotThrow(() => ResultsBucket.Labels(Guid.NewGuid().ToString("n"), "0.1.0"));
+    }
 }

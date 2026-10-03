@@ -400,9 +400,12 @@ def test_pipeline_genbank_input(tmp_path: Path) -> None:
         "tl.gb",
         "tl.fasta",
         "tl.entropy.bedgraph",
+        "tl.entropy.smooth51.bedgraph",  # issue #126
         "tl.entropy.geneious.gff3",
         "tl.entropy.tsv",
         "tl.genes.gff3",
+        "tl.regions.bed",  # issue #125
+        "tl.regions.gff3",
         "tl.genes.tsv",  # issue #124
         "tl.genes.csv",
         "tl.surprisal.bedgraph",
@@ -477,9 +480,12 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
         "mt.gb",
         "mt.fasta",
         "mt.entropy.bedgraph",
+        "mt.entropy.smooth51.bedgraph",  # issue #126
         "mt.entropy.geneious.gff3",
         "mt.entropy.tsv",
         "mt.genes.gff3",
+        "mt.regions.bed",  # issue #125
+        "mt.regions.gff3",
         "mt.genes.tsv",  # issue #124
         "mt.genes.csv",
         "mt.surprisal.bedgraph",

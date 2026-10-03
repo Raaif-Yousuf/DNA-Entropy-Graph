@@ -2,6 +2,7 @@ using System.Text;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
@@ -23,6 +24,7 @@ public sealed class NewRunViewModelTests : IDisposable
     private readonly IJobEngine _jobEngine = Substitute.For<IJobEngine>();
     private readonly INavigator _navigator = Substitute.For<INavigator>();
     private readonly FakeStrings _strings = new();
+    private readonly ICostEstimateService _estimates = Substitute.For<ICostEstimateService>();
     private NewRunViewModel _viewModel;
 
     public NewRunViewModelTests()
@@ -30,6 +32,8 @@ public sealed class NewRunViewModelTests : IDisposable
         Directory.CreateDirectory(_dir);
         _appData = Path.Combine(_dir, "appdata");
         _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult("job-1"));
+        _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(CostEstimateResult.Unavailable(EstimateUnavailable.UnknownSize)));
         _viewModel = NewViewModel();
     }
 
@@ -51,6 +55,7 @@ public sealed class NewRunViewModelTests : IDisposable
         _navigator,
         _strings,
         store ?? new LocalPastedInputStore(_appData),
+        _estimates,
         validate,
         files);
 
@@ -895,6 +900,183 @@ public sealed class NewRunViewModelTests : IDisposable
         File.Exists(pasted.Path).ShouldBeFalse();
     }
 
+    // ---- Issue #98: the pre-run estimate ----
+
+    private static CostEstimateResult Point(double minutes, double usd) => CostEstimateResult.Of(new CostEstimate(minutes, minutes, usd, usd, EstimateBasis.History, StoppedDiskUsdPerDay: 0.49));
+
+    private void EstimateReturns(CostEstimateResult result)
+        => _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(result));
+
+    /// <summary>The refresh runs without being awaited by the page, so a test waits for the text instead of racing it.</summary>
+    private async Task<string> EstimateTextWhen(Func<string, bool> done)
+    {
+        for (var i = 0; i < 200 && !done(_viewModel.EstimateText); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        return _viewModel.EstimateText;
+    }
+
+    [Fact]
+    public async Task A_valid_file_shows_the_point_estimate_asked_for_the_l4_machine_and_the_files_own_base_count()
+    {
+        EstimateReturns(Point(9, 0.13));
+
+        await AddOne(Write("e.fasta", ">a\n" + Dna + "\n"));
+
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.13, about 9 minutes");
+        _viewModel.HasEstimate.ShouldBeTrue();
+        await _estimates.Received().EstimateAsync("g2-standard-8", false, Dna.Length, 150, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_model_estimate_shows_a_range_in_dollars_and_minutes()
+    {
+        EstimateReturns(CostEstimateResult.Of(new CostEstimate(5.17, 12.17, 0.0751, 0.1766, EstimateBasis.Model, StoppedDiskUsdPerDay: 0.49)));
+
+        await AddOne(Write("r.fasta", ">a\n" + Dna + "\n"));
+
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.08 to $0.18, about 5 to 12 minutes");
+    }
+
+    [Fact]
+    public async Task One_minute_is_singular_and_a_tiny_cost_never_reads_as_zero()
+    {
+        EstimateReturns(Point(0.4, 0.001));
+
+        await AddOne(Write("t.fasta", ">a\n" + Dna + "\n"));
+
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.01, about 1 minute");
+    }
+
+    [Fact]
+    public async Task A_file_with_a_problem_has_no_estimate_and_the_service_is_not_asked()
+    {
+        EstimateReturns(Point(9, 0.13));
+
+        await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        _viewModel.EstimateText.ShouldBeEmpty();
+        _viewModel.HasEstimate.ShouldBeFalse();
+        await _estimates.DidNotReceive().EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(EstimateUnavailable.PriceListUnreadable, "No estimate: reinstall the app")]
+    [InlineData(EstimateUnavailable.NoPriceForMachine, "No estimate: no price for this machine yet")]
+    [InlineData(EstimateUnavailable.NoSpotPrice, "No estimate: no Spot price for this machine yet")]
+    public async Task Every_reason_there_is_no_estimate_says_what_is_true_and_only_an_unreadable_list_says_reinstall(EstimateUnavailable reason, string expected)
+    {
+        EstimateReturns(CostEstimateResult.Unavailable(reason));
+
+        await AddOne(Write("u.fasta", ">a\n" + Dna + "\n"));
+
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe(expected);
+        _viewModel.EstimateDiskText.ShouldBeEmpty("no estimate means no stopped-disk line either");
+    }
+
+    [Fact]
+    public async Task A_model_range_that_collapses_after_rounding_is_not_called_based_on_earlier_runs()
+    {
+        EstimateReturns(CostEstimateResult.Of(new CostEstimate(5.0, 5.001, 0.0750, 0.0751, EstimateBasis.Model, StoppedDiskUsdPerDay: 0.49)));
+
+        await AddOne(Write("m.fasta", ">a\n" + Dna + "\n"));
+
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.08, about 5 minutes, no earlier runs");
+    }
+
+    [Fact]
+    public async Task The_estimate_names_the_stopped_disk_cost_per_day_and_asks_for_the_runs_own_disk_size()
+    {
+        EstimateReturns(Point(9, 0.13));
+
+        await AddOne(Write("d.fasta", ">a\n" + Dna + "\n"));
+        await EstimateTextWhen(t => t.Length > 0);
+
+        _viewModel.EstimateDiskText.ShouldBe("Stopped disk: about $0.49 a day");
+        await _estimates.Received().EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }.BootDiskGb, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_new_check_clears_the_old_estimate_so_a_checking_file_never_shows_it()
+    {
+        var blockable = new BlockableValidator();
+        _viewModel = NewViewModel(validate: blockable.Validate);
+        EstimateReturns(Point(9, 0.13));
+        await AddOne(Write("stale.fasta", ">a\n" + Dna + "\n"));
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldNotBeEmpty();
+        _viewModel.EstimateDiskText.ShouldNotBeEmpty();
+        blockable.BlockSuffix = "stale.fasta";
+
+        var treating = _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+        blockable.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+
+        _viewModel.SelectedItem!.IsChecking.ShouldBeTrue();
+        _viewModel.EstimateText.ShouldBeEmpty();
+        _viewModel.EstimateDiskText.ShouldBeEmpty();
+        _viewModel.HasEstimate.ShouldBeFalse();
+
+        blockable.Release();
+        await treating;
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.13, about 9 minutes");
+    }
+
+    [Fact]
+    public async Task An_unknown_size_says_nothing_instead_of_a_guess()
+    {
+        EstimateReturns(CostEstimateResult.Unavailable(EstimateUnavailable.UnknownSize));
+
+        await AddOne(Write("n.fasta", ">a\n" + Dna + "\n"));
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        _viewModel.EstimateText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Removing_the_last_file_clears_the_estimate()
+    {
+        EstimateReturns(Point(9, 0.13));
+        var pill = await AddOne(Write("c.fasta", ">a\n" + Dna + "\n"));
+        await EstimateTextWhen(t => t.Length > 0);
+
+        await _viewModel.RemoveItemCommand.ExecuteAsync(pill);
+
+        (await EstimateTextWhen(t => t.Length == 0)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_service_that_throws_leaves_the_page_working_with_no_estimate()
+    {
+        _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<Task<CostEstimateResult>>(_ => throw new InvalidOperationException("boom"));
+
+        var pill = await AddOne(Write("x.fasta", ">a\n" + Dna + "\n"));
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        pill.IsValid.ShouldBeTrue();
+        _viewModel.EstimateText.ShouldBeEmpty();
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Only_the_newest_estimate_may_show_when_an_older_one_finishes_last()
+    {
+        var slow = new TaskCompletionSource<CostEstimateResult>();
+        _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(slow.Task, Task.FromResult(Point(9, 0.13)));
+
+        await AddOne(Write("s1.fasta", ">a\n" + Dna + "\n"));
+        await _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.13, about 9 minutes");
+
+        slow.SetResult(Point(99, 9.99));
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        _viewModel.EstimateText.ShouldBe("Estimate: about $0.13, about 9 minutes");
+    }
+
     // ---- Round 3 of #63 ----
 
     [Fact]
@@ -1097,6 +1279,16 @@ public sealed class NewRunViewModelTests : IDisposable
             ["NewRunStatusFolderEmpty"] = "NewRunStatusFolderEmpty:{0}",
             ["NewRunNotice_RnaConverted"] = "NewRunNotice_RnaConverted:{0}",
             ["NewRunNotice_RepeatedIds"] = "NewRunNotice_RepeatedIds:{0}",
+            ["NewRunEstimateHistory"] = "Estimate: about {0}, about {1}",
+            ["NewRunEstimateRange"] = "Estimate: about {0} to {1}, about {2} to {3} minutes",
+            ["NewRunEstimateMoney"] = "${0}",
+            ["NewRunEstimateMinutesOne"] = "1 minute",
+            ["NewRunEstimateMinutesMany"] = "{0} minutes",
+            ["NewRunEstimateUnavailable"] = "No estimate: reinstall the app",
+            ["NewRunEstimateNoPrice"] = "No estimate: no price for this machine yet",
+            ["NewRunEstimateNoSpotPrice"] = "No estimate: no Spot price for this machine yet",
+            ["NewRunEstimateModelPoint"] = "Estimate: about {0}, about {1}, no earlier runs",
+            ["NewRunEstimateStoppedDisk"] = "Stopped disk: about {0} a day",
         };
 
         public string GetString(string key) => Templates.GetValueOrDefault(key, key);

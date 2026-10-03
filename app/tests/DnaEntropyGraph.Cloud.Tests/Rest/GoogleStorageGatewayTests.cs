@@ -43,6 +43,10 @@ public class GoogleStorageGatewayTests
     private static string RpcError(int http, string status, string message)
         => "{\"error\":{\"code\":" + http + ",\"message\":" + JsonSerializer.Serialize(message) + ",\"status\":\"" + status + "\"}}";
 
+    /// <summary>Cloud Storage's own error shape (not google.rpc): the machine-readable reason is in <c>errors[].reason</c>.</summary>
+    private static string StorageError(int http, string reason, string message)
+        => "{\"error\":{\"code\":" + http + ",\"message\":" + JsonSerializer.Serialize(message) + ",\"errors\":[{\"message\":" + JsonSerializer.Serialize(message) + ",\"domain\":\"global\",\"reason\":\"" + reason + "\"}]}}";
+
     /// <summary>A bucket resource as Google returns it. Pass null to leave a piece out (what a bucket that never got the setting looks like).</summary>
     private static string BucketJson(
         string name,
@@ -112,7 +116,7 @@ public class GoogleStorageGatewayTests
 
     /// <summary>The conditional config write (ifGenerationMatch=0) of a bucket whose app-config.json already exists: Google answers 412 and that file stands.</summary>
     private static void ScriptConfigAlreadyThere(ScriptedHttpHandler handler, string bucket)
-        => handler.Returns(Post, UploadPath(bucket), 412, RpcError(412, "FAILED_PRECONDITION", "At least one of the pre-conditions you specified did not hold."));
+        => handler.Returns(Post, UploadPath(bucket), 412, StorageError(412, "conditionNotMet", "At least one of the pre-conditions you specified did not hold."));
 
     /// <summary>The listing the call makes right after its own insert (to notice a rival that created one too): just the bucket it made.</summary>
     private static void ScriptCreatedListing(ScriptedHttpHandler handler, string created)
@@ -320,7 +324,7 @@ public class GoogleStorageGatewayTests
     {
         var rig = NewRig(retentionDays: 30);
         var existing = "deg-" + Number + "-abcdef";
-        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90)));
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 7)));
         rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
         rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30));
         ScriptConfigAlreadyThere(rig.Handler, existing);
@@ -337,9 +341,9 @@ public class GoogleStorageGatewayTests
     {
         var rig = NewRig(retentionDays: 30);
         var existing = "deg-" + Number + "-abcdef";
-        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90)));
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 7)));
         rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
-        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 90));
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 7));
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
 
@@ -540,6 +544,8 @@ public class GoogleStorageGatewayTests
         ScriptUpload(rig.Handler, older);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(older);
+
+        rig.Handler.To(HttpMethod.Delete, BucketPath(mine)).Count.ShouldBe(1, "the losing bucket is deleted once, not retried and not skipped");
     }
 
     [Theory]
@@ -562,7 +568,7 @@ public class GoogleStorageGatewayTests
         var existing = "deg-" + Number + "-abcdef";
         const string scratch = "{\"action\":{\"type\":\"Delete\"},\"condition\":{\"age\":7,\"matchesPrefix\":[\"scratch/\"]}}";
         const string nearline = "{\"action\":{\"type\":\"SetStorageClass\",\"storageClass\":\"NEARLINE\"},\"condition\":{\"age\":10,\"matchesPrefix\":[\"jobs/\"]}}";
-        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90, extraRules: scratch + "," + nearline)));
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 7, extraRules: scratch + "," + nearline)));
         rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
         rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30, extraRules: scratch + "," + nearline));
         ScriptConfigAlreadyThere(rig.Handler, existing);
@@ -576,6 +582,344 @@ public class GoogleStorageGatewayTests
         rules.ShouldContain(r => r.GetProperty("action").GetProperty("type").GetString() == "SetStorageClass");
         rules.Count(r => r.GetProperty("action").GetProperty("type").GetString() == "Delete" && r.GetProperty("condition").GetProperty("matchesPrefix")[0].GetString() == "jobs/").ShouldBe(1);
         RuleAge(body.RootElement, "jobs/").ShouldBe(30);
+    }
+    // ------------------------------------------------------------------ round 3
+
+    [Fact]
+    public async Task A_shorter_retention_never_shortens_a_longer_one_already_on_the_bucket()
+    {
+        var rig = NewRig(retentionDays: 7);
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90)));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(existing);
+
+        rig.Handler.To(Patch, BucketPath(existing)).ShouldBeEmpty("a 90 day bucket is not drifted for a caller that asked for 7: patching it would delete the other installation''s results early");
+    }
+
+    [Fact]
+    public async Task A_longer_retention_lengthens_the_bucket_and_repeated_calls_then_send_no_patch()
+    {
+        var rig = NewRig(retentionDays: 120);
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 120));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        RuleAge(body.RootElement, "jobs/").ShouldBe(120);
+
+        // The same caller again, and then a caller at 7: the bucket now says 120, neither patches.
+        for (var i = 0; i < 2; i++)
+        {
+            rig.Handler.Returns(Get, Project, 200, ProjectBody());
+            rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 120)));
+            ScriptConfigAlreadyThere(rig.Handler, existing);
+            await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+        }
+
+        rig.Handler.To(Patch, BucketPath(existing)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_patch_for_another_reason_keeps_the_longer_jobs_age_it_found()
+    {
+        var rig = NewRig(retentionDays: 7);
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90, ubla: false)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 90));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        RuleAge(body.RootElement, "jobs/").ShouldBe(90);
+    }
+
+    [Fact]
+    public async Task Two_different_installations_that_both_created_a_bucket_converge_on_the_older_one_whichever_it_belongs_to()
+    {
+        var rig = NewRig(installationId: "installation-2");
+        var mine = Name(0);
+        var older = "deg-" + Number + "-aaaaaa";
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(mine), 200, BucketJson(mine, installation: "installation-2", created: "2026-10-03T10:00:00.000Z"));
+        rig.Handler.Returns(Get, Buckets, 200, List(
+            BucketJson(mine, installation: "installation-2", created: "2026-10-03T10:00:00.000Z"),
+            BucketJson(older, installation: "installation-1", created: "2026-10-01T10:00:00.000Z")));
+        rig.Handler.Returns(HttpMethod.Delete, BucketPath(mine), 204, string.Empty);
+        ScriptUpload(rig.Handler, older);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(older);
+
+        rig.Handler.To(HttpMethod.Delete, BucketPath(mine)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_precondition_failure_on_the_config_write_means_the_file_is_there_and_is_swallowed()
+    {
+        var rig = NewRig();
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing)));
+        rig.Handler.Returns(Post, UploadPath(existing), 412, StorageError(412, "conditionNotMet", "At least one of the pre-conditions you specified did not hold."));
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(existing);
+    }
+
+    [Fact]
+    public async Task A_412_that_is_an_organization_policy_refusal_surfaces_instead_of_reading_as_the_file_being_there()
+    {
+        var rig = NewRig();
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing)));
+        rig.Handler.Returns(Post, UploadPath(existing), 412, RpcError(412, "FAILED_PRECONDITION", "Request violates constraint constraints/storage.retentionPolicySeconds."));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+    }
+
+    [Fact]
+    public async Task An_upload_retried_after_a_503_replays_the_exact_bytes_from_the_start()
+    {
+        var rig = NewRig();
+        rig.Handler.Returns(Post, UploadPath("deg-b"), 503, RpcError(503, "UNAVAILABLE", "try later"));
+        ScriptUpload(rig.Handler, "deg-b");
+
+        await rig.Gateways.Storage.UploadAsync("deg-b", "jobs/j1/manifest.json", new MemoryStream(Encoding.UTF8.GetBytes("0123456789")), CancellationToken.None);
+
+        rig.Handler.To(Post, UploadPath("deg-b")).Count.ShouldBe(2);
+        rig.Handler.To(Put, UploadPath("deg-b")).Single().Body.ShouldBe("0123456789");
+    }
+
+    [Fact]
+    public async Task An_upload_that_fails_part_way_through_the_stream_is_retried_with_every_byte_from_position_zero()
+    {
+        var rig = NewRig();
+        rig.Handler.FailsMidBody(Put, UploadPath("deg-b"), bytesRead: 4)
+            .FailsMidBody(Put, UploadPath("deg-b"), bytesRead: 4)
+            .FailsMidBody(Put, UploadPath("deg-b"), bytesRead: 4);
+        // The data PUT dies after 4 bytes and so do the Google client's own resume queries, so the failure reaches the pipeline,
+        // which must start the whole upload again from the first byte (the stream now stands at 4 or later).
+        ScriptUpload(rig.Handler, "deg-b");
+        ScriptUpload(rig.Handler, "deg-b");
+        var content = new MemoryStream(Encoding.UTF8.GetBytes("0123456789"));
+
+        await rig.Gateways.Storage.UploadAsync("deg-b", "jobs/j1/manifest.json", content, CancellationToken.None);
+
+        rig.Handler.To(Post, UploadPath("deg-b")).Count.ShouldBe(2);
+        var puts = rig.Handler.To(Put, UploadPath("deg-b"));
+        puts[0].Body.ShouldBe("0123");
+        puts[^1].Body.ShouldBe("0123456789");
+    }
+
+    [Fact]
+    public async Task A_longer_cache_age_on_the_bucket_is_not_drift_and_is_not_patched()
+    {
+        var rig = NewRig(retentionDays: 30);
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 30, cacheAge: 400)));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(existing);
+
+        rig.Handler.To(Patch, BucketPath(existing)).ShouldBeEmpty("a cache/ rule at 400 days is another installation's choice; shortening it to 365 would delete its cache early");
+    }
+
+    [Fact]
+    public async Task A_patch_for_another_reason_keeps_the_longer_cache_age_it_found()
+    {
+        var rig = NewRig(retentionDays: 30);
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 7, cacheAge: 400)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30, cacheAge: 400));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        RuleAge(body.RootElement, "jobs/").ShouldBe(30);
+        RuleAge(body.RootElement, "cache/").ShouldBe(400);
+    }
+
+    [Fact]
+    public async Task A_jobs_rule_with_extra_conditions_is_the_users_own_so_it_is_neither_counted_toward_our_age_nor_replaced()
+    {
+        var rig = NewRig(retentionDays: 30);
+        var existing = "deg-" + Number + "-abcdef";
+        const string users = "{\"action\":{\"type\":\"Delete\"},\"condition\":{\"age\":90,\"matchesPrefix\":[\"jobs/\"],\"matchesStorageClass\":[\"NEARLINE\"]}}";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: null, extraRules: users)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30, extraRules: users));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        var jobsDeletes = body.RootElement.GetProperty("lifecycle").GetProperty("rule").EnumerateArray()
+            .Where(r => r.GetProperty("action").GetProperty("type").GetString() == "Delete" && r.GetProperty("condition").GetProperty("matchesPrefix")[0].GetString() == "jobs/")
+            .ToList();
+        jobsDeletes.Count.ShouldBe(2, "ours is added and the user's stays");
+        jobsDeletes.Any(r => r.GetProperty("condition").TryGetProperty("matchesStorageClass", out var _) && r.GetProperty("condition").GetProperty("age").GetInt32() == 90).ShouldBeTrue();
+        jobsDeletes.Any(r => !r.GetProperty("condition").TryGetProperty("matchesStorageClass", out var _) && r.GetProperty("condition").GetProperty("age").GetInt32() == 30).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_upload_of_a_stream_that_cannot_seek_gets_exactly_one_attempt()
+    {
+        var rig = NewRig();
+        for (var i = 0; i < 3; i++)
+        {
+            rig.Handler.Returns(Post, UploadPath("deg-b"), 503, RpcError(503, "UNAVAILABLE", "try later"));
+        }
+
+        await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.UploadAsync("deg-b", "jobs/j1/manifest.json", new NonSeekableStream(Encoding.UTF8.GetBytes("abc")), CancellationToken.None));
+
+        rig.Handler.To(Post, UploadPath("deg-b")).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_upload_from_a_stream_positioned_part_way_sends_only_the_remaining_bytes_with_a_matching_range()
+    {
+        var rig = NewRig();
+        ScriptUpload(rig.Handler, "deg-b");
+        var content = new MemoryStream(Encoding.UTF8.GetBytes("0123456789")) { Position = 5 };
+
+        await rig.Gateways.Storage.UploadAsync("deg-b", "jobs/j1/manifest.json", content, CancellationToken.None);
+
+        var put = rig.Handler.To(Put, UploadPath("deg-b")).Single();
+        put.Body.ShouldBe("56789");
+        put.ContentRange.ShouldBe("bytes 0-4/5");
+    }
+
+    [Fact]
+    public async Task A_bucket_on_the_second_page_of_the_listing_is_found_and_no_second_bucket_is_made()
+    {
+        var rig = NewRig();
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, "{\"kind\":\"storage#buckets\",\"items\":[" + BucketJson("deg-" + Number + "-zzzzzz", labelled: false) + "],\"nextPageToken\":\"page-2\"}");
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing)));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(existing);
+
+        rig.Handler.To(Post, Buckets).ShouldBeEmpty();
+        rig.Handler.To(Get, Buckets).Last().Uri.Query.ShouldContain("pageToken=page-2");
+    }
+
+    [Theory]
+    [InlineData("ubla")]
+    [InlineData("pap")]
+    public async Task An_adopted_bucket_with_drifted_access_settings_is_patched_with_the_iam_configuration(string drift)
+    {
+        var rig = NewRig();
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(drift == "ubla" ? BucketJson(existing, ubla: false) : BucketJson(existing, pap: "inherited")));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        var iam = body.RootElement.GetProperty("iamConfiguration");
+        iam.GetProperty("uniformBucketLevelAccess").GetProperty("enabled").GetBoolean().ShouldBeTrue();
+        iam.GetProperty("publicAccessPrevention").GetString().ShouldBe("enforced");
+    }
+
+    [Fact]
+    public async Task A_409_replay_whose_bucket_reads_back_drifted_is_repaired_in_the_same_call()
+    {
+        var rig = NewRig();
+        var first = Name(0);
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 409, RpcError(409, "ALREADY_EXISTS", "You already own this bucket."));
+        rig.Handler.Returns(Get, BucketPath(first), 200, BucketJson(first, ubla: false));
+        rig.Handler.Returns(Patch, BucketPath(first), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(first), 200, BucketJson(first));
+        ScriptCreatedListing(rig.Handler, first);
+        ScriptUpload(rig.Handler, first);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(first);
+
+        rig.Handler.To(Patch, BucketPath(first)).Count.ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("Has Spaces")]
+    [InlineData("UPPER")]
+    [InlineData("a\"b")]
+    public async Task An_installation_id_that_is_not_a_valid_label_value_fails_before_any_request(string installationId)
+    {
+        var rig = NewRig(installationId: installationId);
+
+        await Should.ThrowAsync<ArgumentException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
+
+        rig.Handler.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_domain_scoped_project_id_is_looked_up_not_refused_without_a_request()
+    {
+        var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler.Returns(Get, "/v3/projects/example.com%3Aproj", 200, ProjectBody());
+        var name = Name(0);
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
+        ScriptCreatedListing(rig.Handler, name);
+        ScriptUpload(rig.Handler, name);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("example.com:proj", CancellationToken.None)).ShouldBe(name);
+    }
+
+    [Fact]
+    public async Task A_project_id_with_a_slash_cannot_name_a_project_and_is_refused_without_a_request()
+    {
+        var rig = NewRig();
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("a/b", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        rig.Handler.Requests.ShouldBeEmpty();
+    }
+
+    private sealed class NonSeekableStream(byte[] bytes) : Stream
+    {
+        private readonly MemoryStream _inner = new(bytes);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
     [Fact]
     public async Task Upload_sends_the_object_bytes_to_the_bucket_through_a_resumable_session()

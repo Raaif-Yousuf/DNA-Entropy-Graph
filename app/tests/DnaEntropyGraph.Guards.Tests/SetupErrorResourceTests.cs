@@ -118,4 +118,16 @@ public class SetupErrorResourceTests
         SetupErrorCodes.WorkerDefaultAccount.ShouldBe("WORKER_DEFAULT_ACCOUNT");
         SetupErrorCodes.PermissionActAs.ShouldBe("PERMISSION_ACTAS");
     }
+
+    [Theory]
+    [InlineData(SetupErrorCodes.BucketConfigNotApplied)]
+    [InlineData(SetupErrorCodes.BucketNameTaken)]
+    public void The_copy_catalog_body_of_a_bucket_code_is_the_resw_text_exactly(string code)
+    {
+        var repo = Path.GetFullPath(Path.Combine(RepoPaths.AppRoot, ".."));
+        var catalog = File.ReadAllText(Path.Combine(repo, "docs", "copy_catalog.md"));
+        var row = catalog.Split('\n').Single(l => l.StartsWith($"| `{code}` |", StringComparison.Ordinal));
+
+        row.ShouldContain(ReswValues()[SetupErrorCodes.ResourceKey(code)]);
+    }
 }

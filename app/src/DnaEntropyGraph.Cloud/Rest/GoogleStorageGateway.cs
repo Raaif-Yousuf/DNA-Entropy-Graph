@@ -31,6 +31,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     private const string DeleteAction = "Delete";
     private const string PublicAccessEnforced = "enforced";
 
+    /// <summary>The code of a 412 that is a failed precondition (<c>ifGenerationMatch</c>), not an organization-policy refusal.</summary>
+    private const string PreconditionFailedCode = "PRECONDITION_FAILED";
+
     private readonly StorageService _service;
     private readonly GoogleProjectCatalogGateway _projects;
     private readonly CloudCallPipeline _pipeline;
@@ -55,7 +58,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         var labels = ResultsBucket.Labels(_options.InstallationId, _options.AppVersion);
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
-        var existing = await FindOursAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var existing = await FindOursAsync(projectId, preferOwnInstallation: true, cancellationToken).ConfigureAwait(false);
         return existing is not null
             ? await ConvergeAsync(existing, cancellationToken).ConfigureAwait(false)
             : await CreateAsync(projectId, projectNumber, labels, cancellationToken).ConfigureAwait(false);
@@ -65,18 +68,21 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     {
         ArgumentNullException.ThrowIfNull(content);
 
-        // A retry re-reads the stream, so rewind it first; a stream that cannot seek cannot be replayed and gets one attempt.
-        var start = content.CanSeek ? content.Position : 0;
+        // The Google client sends a seekable stream from offset 0 whatever its Position, so a stream positioned part way is
+        // wrapped to start where it stands. A retry rewinds to that start; a stream that cannot seek cannot be replayed and gets one attempt.
+        // MEASURED 2026-10-03: with the rewind below removed every upload test stayed green, including one that drops the connection part way
+        // through the body, so the Google client already seeks a seekable stream to its start on each session; the rewind is defense in depth.
+        Stream source = content.CanSeek ? new RemainderStream(content) : content;
         await _pipeline.ExecuteAsync(
             "Storage.Upload",
             async ct =>
             {
-                if (content.CanSeek)
+                if (source.CanSeek)
                 {
-                    content.Position = start;
+                    source.Position = 0;
                 }
 
-                await UploadObjectAsync(bucket, objectKey, content, "application/octet-stream", onlyIfAbsent: false, ct).ConfigureAwait(false);
+                await UploadObjectAsync(bucket, objectKey, source, "application/octet-stream", onlyIfAbsent: false, ct).ConfigureAwait(false);
                 return true;
             },
             cancellationToken,
@@ -96,7 +102,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     /// The bucket of ours in this project: carrying the app label, preferring this installation's, then the oldest (so two
     /// PCs that raced to create one converge on the same one), then by name.
     /// </summary>
-    private async Task<StorageData.Bucket?> FindOursAsync(string projectId, CancellationToken cancellationToken)
+    private async Task<StorageData.Bucket?> FindOursAsync(string projectId, bool preferOwnInstallation, CancellationToken cancellationToken)
     {
         var ours = new List<StorageData.Bucket>();
         string? pageToken = null;
@@ -127,7 +133,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         while (!string.IsNullOrEmpty(pageToken));
 
         return ours
-            .OrderByDescending(b => string.Equals(InstallationOf(b), _options.InstallationId, StringComparison.Ordinal))
+            .OrderByDescending(b => preferOwnInstallation && string.Equals(InstallationOf(b), _options.InstallationId, StringComparison.Ordinal))
             .ThenBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
             .ThenBy(b => b.Name, StringComparer.Ordinal)
             .FirstOrDefault();
@@ -156,6 +162,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             };
 
             StorageData.Bucket? created;
+            var replayed = false;
             try
             {
                 await _pipeline.ExecuteAsync(
@@ -183,13 +190,25 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                 {
                     continue;
                 }
+
+                replayed = true;
             }
 
-            ThrowIfNotApplied(created);
+            if (replayed)
+            {
+                // A replayed insert may have been the one that half-applied: repair it now (patch, read back) instead of failing.
+                await RepairAsync(created, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                ThrowIfNotApplied(created);
+            }
+
 
             // Two PCs can both list nothing and both insert. Look again before the config is written: if the preferred bucket is
             // somebody else's, adopt it and throw this one away (it is empty, and a bucket this call did not create is never touched).
-            var preferred = await FindOursAsync(projectId, cancellationToken).ConfigureAwait(false);
+            // Decided without regard to installation, so two different installations that raced agree on the same winner (oldest, then name).
+            var preferred = await FindOursAsync(projectId, preferOwnInstallation: false, cancellationToken).ConfigureAwait(false);
             if (preferred is not null && !string.Equals(preferred.Name, name, StringComparison.Ordinal))
             {
                 await DeleteOwnEmptyBucketAsync(name, cancellationToken).ConfigureAwait(false);
@@ -282,9 +301,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                 },
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
+        catch (CloudOperationException ex) when (ex.Error.Code == PreconditionFailedCode)
         {
-            // Another PC wrote it first (the write is "only if absent"): its file stands.
+            // Another PC wrote it first (the write is "only if absent"): its file stands. An organization-policy 412 is not this and surfaces.
         }
     }
 
@@ -294,10 +313,16 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     {
         // The config file is written whenever it is absent, also on an adopted bucket: the call that created the bucket may have
         // died before its write landed (conditional, so a file that is already there stands).
+        await RepairAsync(bucket, cancellationToken).ConfigureAwait(false);
+        await WriteConfigAsync(bucket.Name, cancellationToken).ConfigureAwait(false);
+        return bucket.Name;
+    }
+
+    private async Task RepairAsync(StorageData.Bucket bucket, CancellationToken cancellationToken)
+    {
         if (Problems(bucket).Count == 0)
         {
-            await WriteConfigAsync(bucket.Name, cancellationToken).ConfigureAwait(false);
-            return bucket.Name;
+            return;
         }
 
         // Drifted (a changed retention, or a rule or setting that never applied): patch, then read back and compare. The
@@ -319,8 +344,6 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             cancellationToken).ConfigureAwait(false);
 
         ThrowIfNotApplied(await GetAsync(bucket.Name, cancellationToken).ConfigureAwait(false));
-        await WriteConfigAsync(bucket.Name, cancellationToken).ConfigureAwait(false);
-        return bucket.Name;
     }
 
     private static StorageData.Bucket.IamConfigurationData DesiredIamConfiguration() => new()
@@ -335,16 +358,28 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         Rule =
         [
             .. (existing ?? []).Where(r => !IsOurRule(r)),
-            DeleteRule(ResultsBucket.JobsPrefix, _options.ResultsRetentionDays),
-            DeleteRule(ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays),
+            DeleteRule(ResultsBucket.JobsPrefix, Math.Max(_options.ResultsRetentionDays, LongestOwnAge(existing, ResultsBucket.JobsPrefix))),
+            DeleteRule(ResultsBucket.CachePrefix, Math.Max(ResultsBucket.CacheRetentionDays, LongestOwnAge(existing, ResultsBucket.CachePrefix))),
         ],
     };
 
-    /// <summary>A Delete rule whose only prefix is <c>jobs/</c> or <c>cache/</c>: the two the app owns.</summary>
+    /// <summary>The longest age among the bucket's own Delete rules for <paramref name="prefix"/> (0 when none): a patch never shortens it.</summary>
+    private static int LongestOwnAge(IEnumerable<StorageData.Bucket.LifecycleData.RuleData>? existing, string prefix)
+        => (existing ?? []).Where(r => IsOurRule(r) && r.Condition!.MatchesPrefix![0] == prefix).Select(r => r.Condition!.Age ?? 0).DefaultIfEmpty(0).Max();
+
+    /// <summary>
+    /// A Delete rule whose condition is exactly an age and the one prefix <c>jobs/</c> or <c>cache/</c>: the two the app owns.
+    /// A user's rule on the same prefix with any extra condition (storage class, live state, noncurrent time, a suffix...) is
+    /// theirs: it is neither counted toward our age nor replaced.
+    /// </summary>
     private static bool IsOurRule(StorageData.Bucket.LifecycleData.RuleData rule)
         => string.Equals(rule.Action?.Type, DeleteAction, StringComparison.Ordinal)
-            && rule.Condition?.MatchesPrefix is { Count: 1 } prefixes
-            && (prefixes[0] == ResultsBucket.JobsPrefix || prefixes[0] == ResultsBucket.CachePrefix);
+            && rule.Condition is { MatchesPrefix: { Count: 1 } prefixes } c
+            && (prefixes[0] == ResultsBucket.JobsPrefix || prefixes[0] == ResultsBucket.CachePrefix)
+            && c.Age is not null
+            && c.CreatedBefore is null && c.CustomTimeBefore is null && c.NoncurrentTimeBefore is null
+            && c.DaysSinceCustomTime is null && c.DaysSinceNoncurrentTime is null && c.IsLive is null && c.NumNewerVersions is null
+            && c.MatchesPattern is null && c.MatchesStorageClass is null && c.MatchesSuffix is null;
 
     private static StorageData.Bucket.LifecycleData.RuleData DeleteRule(string prefix, int ageDays) => new()
     {
@@ -382,24 +417,26 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             problems.Add("public access prevention is not enforced");
         }
 
-        if (!HasDeleteRule(bucket, ResultsBucket.JobsPrefix, _options.ResultsRetentionDays))
+        // A jobs/ or cache/ age LONGER than asked for is not drift: the bucket is shared, and shortening it would delete another
+        // installation's files early (Hard Rule 14, #597). Only a missing rule or a shorter age is repaired.
+        if (!HasDeleteRule(bucket, ResultsBucket.JobsPrefix, _options.ResultsRetentionDays, orLonger: true))
         {
-            problems.Add($"no rule deletes {ResultsBucket.JobsPrefix} objects after {_options.ResultsRetentionDays} days");
+            problems.Add($"no rule deletes {ResultsBucket.JobsPrefix} objects after {_options.ResultsRetentionDays} days or more");
         }
 
-        if (!HasDeleteRule(bucket, ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays))
+        if (!HasDeleteRule(bucket, ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays, orLonger: true))
         {
-            problems.Add($"no rule deletes {ResultsBucket.CachePrefix} objects after {ResultsBucket.CacheRetentionDays} days");
+            problems.Add($"no rule deletes {ResultsBucket.CachePrefix} objects after {ResultsBucket.CacheRetentionDays} days or more");
         }
 
         return problems;
     }
 
-    private static bool HasDeleteRule(StorageData.Bucket bucket, string prefix, int ageDays)
+    private static bool HasDeleteRule(StorageData.Bucket bucket, string prefix, int ageDays, bool orLonger = false)
         => bucket.Lifecycle?.Rule?.Any(r =>
-            string.Equals(r.Action?.Type, DeleteAction, StringComparison.Ordinal)
-            && r.Condition?.Age == ageDays
-            && r.Condition.MatchesPrefix?.Contains(prefix) == true) == true;
+            IsOurRule(r)
+            && r.Condition!.MatchesPrefix![0] == prefix
+            && (orLonger ? r.Condition.Age >= ageDays : r.Condition.Age == ageDays)) == true;
 
     // ------------------------------------------------------------------ objects
 
@@ -442,11 +479,83 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             },
             cancellationToken);
 
+    /// <summary>
+    /// A 412 is a failed precondition unless it names an organization-policy constraint. THEORY (unverified): Cloud Storage
+    /// answers an org-policy violation with 412 as well and may give both the same <c>errors[].reason</c>, so the reason
+    /// cannot discriminate; the message naming a <c>constraints/</c> id (as <see cref="CloudErrorClassifier"/> reads org policy) does.
+    /// </summary>
+    private static CloudOperationException TranslateApi(GoogleApiException api)
+    {
+        var status = GoogleApiErrors.FromApiException(api);
+        if (status.HttpStatus == 412 && GoogleApiErrors.KindOf(status with { HttpStatus = null }) != CloudErrorKind.OrgPolicy)
+        {
+            return new CloudOperationException(new CloudError(PreconditionFailedCode, 412, status.Message), CloudErrorKind.Other);
+        }
+
+        return GoogleApiErrors.ToException(status);
+    }
+
     /// <summary>A Google error becomes the app's exception; anything else (a dropped connection) is rethrown as it was so the pipeline classifies it as network.</summary>
     private static Exception Translate(Exception? failure) => failure switch
     {
-        GoogleApiException api => GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(api)),
+        GoogleApiException api => TranslateApi(api),
         null => new InvalidOperationException("A Cloud Storage transfer failed without saying why."),
         _ => failure,
     };
+}
+
+/// <summary>A seekable stream seen from the position it had when wrapped: offset 0 is that position, the length is what remains.</summary>
+internal sealed class RemainderStream : Stream
+{
+    private readonly Stream _inner;
+    private readonly long _start;
+
+    public RemainderStream(Stream inner)
+    {
+        _inner = inner;
+        _start = inner.Position;
+    }
+
+    public override bool CanRead => _inner.CanRead;
+
+    public override bool CanSeek => true;
+
+    public override bool CanWrite => false;
+
+    public override long Length => _inner.Length - _start;
+
+    public override long Position
+    {
+        get => _inner.Position - _start;
+        set => _inner.Position = _start + value;
+    }
+
+    public override void Flush()
+    {
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+
+    public override int Read(Span<byte> buffer) => _inner.Read(buffer);
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        => _inner.ReadAsync(buffer, offset, count, cancellationToken);
+
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        => _inner.ReadAsync(buffer, cancellationToken);
+
+    public override long Seek(long offset, SeekOrigin origin)
+    {
+        Position = origin switch
+        {
+            SeekOrigin.Begin => offset,
+            SeekOrigin.Current => Position + offset,
+            _ => Length + offset,
+        };
+        return Position;
+    }
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

@@ -83,6 +83,11 @@ public static class ResultsBucket
             throw new ArgumentException("The installation id label is required (Hard Rule 10).", nameof(installationId));
         }
 
+        if (!InstallationId.IsValidLabelValue(installationId))
+        {
+            throw new ArgumentException("The installation id is not a legal Google label value (lowercase letters, digits, - and _, up to 63).", nameof(installationId));
+        }
+
         var version = Regex.Replace((appVersion ?? string.Empty).Trim().ToLowerInvariant(), "[^a-z0-9_-]", "-");
         return new Dictionary<string, string>
         {
