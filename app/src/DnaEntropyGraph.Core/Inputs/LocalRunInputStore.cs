@@ -48,4 +48,14 @@ public sealed class LocalRunInputStore : IRunInputStore
 
         return new StagedInput(destination, fileName);
     }
-}
+
+    public string? TryFindStagedInput(string jobId)
+    {
+        if (string.IsNullOrWhiteSpace(jobId) || jobId.IndexOfAny(NotInAJobId) >= 0 || jobId.Contains("..", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var directory = Path.Combine(_root, "runs", jobId, "input");
+        return Directory.Exists(directory) ? Directory.EnumerateFiles(directory).Order(StringComparer.Ordinal).FirstOrDefault() : null;
+    }}

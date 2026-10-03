@@ -4,6 +4,7 @@ using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
@@ -58,7 +59,8 @@ public static class ServiceRegistration
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
         services.AddSingleton<IToastService, ToastService>();
         services.AddSingleton<IFilePicker, FilePickerService>();
-        services.AddSingleton<IDialogService, DialogService>();
+        services.AddSingleton<DialogService>();
+        services.AddSingleton<IDialogService>(sp => sp.GetRequiredService<DialogService>());
         services.AddSingleton<IStringResourceProvider, ReswStringResourceProvider>();
         services.AddSingleton<WindowPlacementService>();
         services.AddSingleton<ILogTailReader, FileLogTailReader>();
@@ -103,6 +105,22 @@ public static class ServiceRegistration
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
         services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(Path.GetDirectoryName(settingsPath)!));
+
+        // Issue #101: the Runs page's services. Output folders are only ever deleted from under the run's own
+        // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
+        services.AddSingleton<TimeProvider>(TimeProvider.System);
+        services.AddSingleton<IRunHistoryRemover>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
+        services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
+            sp.GetRequiredService<IRunInputStore>(),
+            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
+            [Path.GetDirectoryName(settingsPath)!]));
+        services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
+        services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
+            sp.GetRequiredService<IStorageGateway>(),
+            sp.GetRequiredService<IJobObjectDeleter>(),
+            sp.GetRequiredService<IRunRepository>(),
+            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
+            sp.GetRequiredService<TimeProvider>()));
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());

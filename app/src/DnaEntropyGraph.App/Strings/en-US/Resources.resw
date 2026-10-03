@@ -318,4 +318,205 @@
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
   </data>
+  <data name="Runs_Empty_None" xml:space="preserve">
+    <value>No runs yet. Choose New run to start your first one.</value>
+  </data>
+  <data name="Runs_Empty_NoMatch" xml:space="preserve">
+    <value>No runs match. Clear the search box or choose All runs.</value>
+  </data>
+  <data name="Runs_Group_Today" xml:space="preserve">
+    <value>Today</value>
+  </data>
+  <data name="Runs_Group_Yesterday" xml:space="preserve">
+    <value>Yesterday</value>
+  </data>
+  <data name="Runs_Status_Active" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="Runs_Status_Completed" xml:space="preserve">
+    <value>Completed</value>
+  </data>
+  <data name="Runs_Status_Partial" xml:space="preserve">
+    <value>Partly completed</value>
+  </data>
+  <data name="Runs_Status_Failed" xml:space="preserve">
+    <value>Failed</value>
+  </data>
+  <data name="Runs_Status_Cancelled" xml:space="preserve">
+    <value>Cancelled</value>
+  </data>
+  <data name="Runs_Filter_All" xml:space="preserve">
+    <value>All runs</value>
+  </data>
+  <data name="Runs_Filter_Active" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="Runs_Filter_Completed" xml:space="preserve">
+    <value>Completed</value>
+  </data>
+  <data name="Runs_Filter_Failed" xml:space="preserve">
+    <value>Failed</value>
+  </data>
+  <data name="Runs_Filter_Cancelled" xml:space="preserve">
+    <value>Cancelled</value>
+  </data>
+  <data name="Runs_Open_Missing_Title" xml:space="preserve">
+    <value>Files are not on this PC</value>
+  </data>
+  <data name="Runs_Open_Missing_Body" xml:space="preserve">
+    <value>This run's folder is gone from this PC. Choose Download again to restore it from your Google Cloud storage.</value>
+  </data>
+  <data name="Runs_Rerun_NoOptions_Title" xml:space="preserve">
+    <value>Cannot repeat this run</value>
+  </data>
+  <data name="Runs_Rerun_NoOptions_Body" xml:space="preserve">
+    <value>The settings of this run were not saved. Choose New run and set it up again.</value>
+  </data>
+  <data name="Runs_Rerun_NoInput_Title" xml:space="preserve">
+    <value>The input file is gone</value>
+  </data>
+  <data name="Runs_Rerun_NoInput_Body" xml:space="preserve">
+    <value>Neither the app's copy nor the original file can be found. Choose New run and pick the file again.</value>
+  </data>
+  <data name="Runs_Redownload_Done_Title" xml:space="preserve">
+    <value>Files restored</value>
+  </data>
+  <data name="Runs_Redownload_Done_Body" xml:space="preserve">
+    <value>The results are back in this run's folder.</value>
+  </data>
+  <data name="Runs_Redownload_Expired_Title" xml:space="preserve">
+    <value>The cloud copy has expired</value>
+  </data>
+  <data name="Runs_Redownload_Expired_Body" xml:space="preserve">
+    <value>Google Cloud storage no longer keeps this run's results. Choose Run again to compute them again.</value>
+  </data>
+  <data name="Runs_Redownload_NoCloudCopy_Title" xml:space="preserve">
+    <value>No cloud copy</value>
+  </data>
+  <data name="Runs_Redownload_NoCloudCopy_Body" xml:space="preserve">
+    <value>This run has no results in Google Cloud storage. Choose Run again to compute them again.</value>
+  </data>
+  <data name="Runs_Redownload_ResultNotFound_Title" xml:space="preserve">
+    <value>Results not found</value>
+  </data>
+  <data name="Runs_Redownload_ResultNotFound_Body" xml:space="preserve">
+    <value>Your storage has no finished results for this run. Choose Run again to compute them again.</value>
+  </data>
+  <data name="Runs_Redownload_Refused_Title" xml:space="preserve">
+    <value>Folder not allowed</value>
+  </data>
+  <data name="Runs_Redownload_Refused_Body" xml:space="preserve">
+    <value>This run's folder is outside its output folder, so nothing was written. Choose Run again to save the results to a new folder.</value>
+  </data>
+  <data name="Runs_Redownload_Failed_Title" xml:space="preserve">
+    <value>Download failed</value>
+  </data>
+  <data name="Runs_Redownload_Failed_Body" xml:space="preserve">
+    <value>The files could not be downloaded. Check your internet connection, then choose Download again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Confirm_Title" xml:space="preserve">
+    <value>Delete the cloud copy?</value>
+  </data>
+  <data name="Runs_DeleteCloud_Confirm_Body" xml:space="preserve">
+    <value>This permanently deletes this run's results from your Google Cloud storage. Files on this PC are not touched. Choose Continue to go ahead.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Done_Title" xml:space="preserve">
+    <value>Cloud copy deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Done_Body" xml:space="preserve">
+    <value>This run's results are gone from Google Cloud storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_NoCloudCopy_Title" xml:space="preserve">
+    <value>Nothing to delete</value>
+  </data>
+  <data name="Runs_DeleteCloud_NoCloudCopy_Body" xml:space="preserve">
+    <value>This run has no cloud copy.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Refused_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Refused_Body" xml:space="preserve">
+    <value>This run's storage location is not recognised, so nothing was deleted. Open the Cloud page to review your storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Failed_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_Failed_Body" xml:space="preserve">
+    <value>The cloud copy was not deleted. Check your internet connection, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Confirm_Title" xml:space="preserve">
+    <value>Delete the files on this PC?</value>
+  </data>
+  <data name="Runs_DeleteLocal_Confirm_Body" xml:space="preserve">
+    <value>This deletes the folder {0} and everything in it. Your original input file is not touched. Choose Continue to go ahead.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Done_Title" xml:space="preserve">
+    <value>Files deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Done_Body" xml:space="preserve">
+    <value>This run's folder was deleted from this PC. Choose Download again to restore it.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Nothing_Title" xml:space="preserve">
+    <value>Nothing to delete</value>
+  </data>
+  <data name="Runs_DeleteLocal_Nothing_Body" xml:space="preserve">
+    <value>This run has no folder on this PC.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Refused_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Refused_Body" xml:space="preserve">
+    <value>This run's folder is outside its output folder, so it was left alone. Delete it yourself in File Explorer if you want it gone.</value>
+  </data>
+  <data name="Runs_Remove_Confirm_Title" xml:space="preserve">
+    <value>Remove from the list?</value>
+  </data>
+  <data name="Runs_Remove_Confirm_Body" xml:space="preserve">
+    <value>This removes the run from this list only. Its files and cloud copy are not deleted. Choose Continue to go ahead.</value>
+  </data>
+  <data name="RunsPageTitle.Text" xml:space="preserve">
+    <value>Runs</value>
+  </data>
+  <data name="RunsSearchBox.PlaceholderText" xml:space="preserve">
+    <value>Search by name, file or id</value>
+  </data>
+  <data name="RunsSearchBox.AutomationProperties.Name" xml:space="preserve">
+    <value>Search runs</value>
+  </data>
+  <data name="RunsStatusFilter.AutomationProperties.Name" xml:space="preserve">
+    <value>Filter by status</value>
+  </data>
+  <data name="RunsRefreshButton.Content" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="RunsOpenButton.Content" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="RunsRerunButton.Content" xml:space="preserve">
+    <value>Run again</value>
+  </data>
+  <data name="RunsRedownloadButton.Content" xml:space="preserve">
+    <value>Download again</value>
+  </data>
+  <data name="RunsDeleteCloudButton.Content" xml:space="preserve">
+    <value>Delete cloud copy</value>
+  </data>
+  <data name="RunsDeleteLocalButton.Content" xml:space="preserve">
+    <value>Delete files on this PC</value>
+  </data>
+  <data name="RunsRemoveButton.Content" xml:space="preserve">
+    <value>Remove from list</value>
+  </data>
+  <data name="Dialog_Confirm_Primary" xml:space="preserve">
+    <value>Continue</value>
+  </data>
+  <data name="Dialog_Confirm_Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConnected_Title" xml:space="preserve">
+    <value>Cloud storage is not connected</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConnected_Body" xml:space="preserve">
+    <value>Deleting a cloud copy needs a connection to your Google Cloud project. Open Settings to connect, then try again.</value>
+  </data>
 </root>
