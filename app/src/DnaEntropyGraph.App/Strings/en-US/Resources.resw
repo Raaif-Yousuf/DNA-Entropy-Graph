@@ -837,6 +837,9 @@
   <data name="AuthError_ACCOUNTS_FILE_UNREADABLE" xml:space="preserve">
     <value>The app could not read its saved list of accounts, so it kept the damaged file as accounts.json.bad in the folder %LOCALAPPDATA%\DNAEntropyGraph and started a new list. Choose Sign in again to add your account back.</value>
   </data>
+  <data name="AuthError_ACCOUNTS_FILE_LOCKED" xml:space="preserve">
+    <value>The app could not open its saved list of accounts because another program or another copy of the app is using it. Nothing was changed. Close other copies of the app, then choose Try again.</value>
+  </data>
   <data name="SettingsPageTitle.Text" xml:space="preserve">
     <value>Settings</value>
   </data>

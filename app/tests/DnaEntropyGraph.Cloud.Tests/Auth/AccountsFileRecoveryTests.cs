@@ -45,6 +45,33 @@ public class AccountsFileRecoveryTests
     }
 
     [Fact]
+    public async Task A_locked_accounts_file_is_not_overwritten_and_the_next_call_after_the_lock_clears_reads_the_real_accounts()
+    {
+        using var harness = new AuthHarness();
+        var first = await harness.SignedInAsync("1001", "first@example.test");
+        var path = Path.Combine(harness.AuthDirectory, "accounts.json");
+        var original = File.ReadAllBytes(path);
+        var service = harness.NewService();
+        harness.Google.NextIdentity = new FakeIdentity("2002", "second@example.test");
+
+        AccountAuthException failure;
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            failure = await Should.ThrowAsync<AccountAuthException>(() => service.SignInAsync(CancellationToken.None));
+            File.Exists(path + ".bad").ShouldBeFalse();
+        }
+
+        failure.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
+        AuthErrorCodes.ActionResourceKey(failure.Code).ShouldBe("AuthAction_TryAgain");
+        File.ReadAllBytes(path).ShouldBe(original);
+
+        await service.SignInAsync(CancellationToken.None);
+
+        service.Accounts.Select(a => a.Email).ShouldBe(["first@example.test", "second@example.test"], ignoreOrder: true);
+        first.CurrentAccount.ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task Choosing_a_project_over_a_damaged_file_also_keeps_it()
     {
         using var harness = new AuthHarness();

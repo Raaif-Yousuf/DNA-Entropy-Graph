@@ -49,11 +49,14 @@ public static class AuthErrorCodes
     /// <summary>The saved account list (<c>accounts.json</c>) could not be read, so the app kept the damaged file as <c>accounts.json.bad</c> and started with an empty list (issue #616). Nothing was overwritten. Action: Sign in again.</summary>
     public const string AccountsFileUnreadable = "ACCOUNTS_FILE_UNREADABLE";
 
+    /// <summary>The saved account list exists but could not be opened because another program or another copy of the app holds it (issue #616). Nothing was changed; the next try reads it again. Action: Try again.</summary>
+    public const string AccountsFileLocked = "ACCOUNTS_FILE_LOCKED";
+
     /// <summary>Every code a sign-in can fail under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         SigninExpired, SigninCancelled, SigninTimeout, SigninFailed, NetworkUnavailable,
-        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable,
+        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable, AccountsFileLocked,
     ];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (plain, non-dotted, literal so the orphan-resource scan sees it).</summary>
@@ -73,6 +76,7 @@ public static class AuthErrorCodes
         ProjectInvalid => "AuthError_PROJECT_INVALID",
         ProjectSaveFailed => "AuthError_PROJECT_SAVE_FAILED",
         AccountsFileUnreadable => "AuthError_ACCOUNTS_FILE_UNREADABLE",
+        AccountsFileLocked => "AuthError_ACCOUNTS_FILE_LOCKED",
         _ => "AuthError_SIGNIN_FAILED",
     };
 
@@ -83,7 +87,7 @@ public static class AuthErrorCodes
     public static string? ActionResourceKey(string? code) => code switch
     {
         SigninExpired or SigninCancelled or SigninTimeout or SigninFailed or AccountNotFound or BrowserUnavailable or LoopbackUnavailable or StorageFailed or AccountsFileUnreadable => "AuthAction_SignInAgain",
-        NetworkUnavailable or ProjectSaveFailed => "AuthAction_TryAgain",
+        NetworkUnavailable or ProjectSaveFailed or AccountsFileLocked => "AuthAction_TryAgain",
         _ => null,
     };
 }

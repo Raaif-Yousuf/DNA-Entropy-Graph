@@ -30,6 +30,8 @@ public sealed class AccountRegistry
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, NewLine = "\n" };
 
+    private const int ReadAttempts = 5;
+    private const int ReadBackoffMs = 50;
     private static readonly TimeSpan LockWait = TimeSpan.FromSeconds(10);
 
     private readonly string _path;
@@ -50,43 +52,85 @@ public sealed class AccountRegistry
     public AccountsFile Load()
     {
         QuarantinedTo = null;
+        Unreadable = false;
+        var result = AccountsFile.Empty;
+        try
+        {
+            // Under the same lock as Save, so a read never races another process's replace, and the move aside never races a Save.
+            WithLock(() => result = ReadLocked());
+        }
+        catch (TokenStorageException)
+        {
+            // The lock was never granted or the file could not be moved aside: the file is untouched and Save refuses until a Load succeeds.
+            Unreadable = true;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// True when the last <see cref="Load"/> found the file but could not read it (another program or copy of the app holds it) after retrying.
+    /// The list is then empty only because it is unread, so <see cref="Save"/> refuses to replace the file until a later <see cref="Load"/> succeeds.
+    /// </summary>
+    public bool Unreadable { get; private set; }
+
+    private AccountsFile ReadLocked()
+    {
         if (!File.Exists(_path))
         {
             return AccountsFile.Empty;
         }
 
-        string text;
-        try
+        string? text = null;
+        for (var attempt = 1; attempt <= ReadAttempts && text is null; attempt++)
         {
-            text = File.ReadAllText(_path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return AccountsFile.Empty;
+            try
+            {
+                text = File.ReadAllText(_path);
+            }
+            catch (FileNotFoundException)
+            {
+                return AccountsFile.Empty;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == ReadAttempts)
+                {
+                    Unreadable = true;
+                    return AccountsFile.Empty;
+                }
+
+                Thread.Sleep(ReadBackoffMs * attempt);
+            }
         }
 
-        if (TryParse(text) is { } file)
+        if (TryParse(text!) is { } file)
         {
             return file;
         }
 
-        // Under the same lock as Save: a parse failure is real only if no writer was mid-replace (the replace is atomic, so it is), and the move must not race a Save.
         try
         {
-            WithLock(() => QuarantinedTo = MoveAside());
+            QuarantinedTo = MoveAside();
         }
-        catch (TokenStorageException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Could not move it aside: leave it. Nothing here writes, and a later Save is the caller's to refuse.
+            // Could not move it aside: the damaged file stays where it is and Save refuses.
+            Unreadable = true;
         }
 
         return AccountsFile.Empty;
     }
 
-    /// <summary>Replaces the file atomically under a machine-wide named mutex, so two processes (or two instances) saving at once serialise instead of colliding on one temp file.</summary>
+    /// <summary>Replaces the file atomically under a machine-wide named mutex, so two processes (or two instances) saving at once serialise instead of colliding on one temp file. Refuses while <see cref="Unreadable"/>.</summary>
     public void Save(AccountsFile file)
         => WithLock(() =>
         {
+            if (Unreadable)
+            {
+                throw new IOException("the accounts file exists but could not be read, so it is not replaced");
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var temp = _path + "." + Guid.NewGuid().ToString("n") + ".tmp";
             try

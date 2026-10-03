@@ -40,6 +40,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     private readonly object _loadLock = new();
     private AccountsFile? _state;
     private bool _accountsFileSetAside;
+    private bool _accountsFileLocked;
 
     public GoogleAccountService(GoogleAccountOptions options)
     {
@@ -69,14 +70,21 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             lock (_loadLock)
             {
-                if (_state is null)
+                if (_state is not null)
                 {
-                    var loaded = _registry.Load();
-                    _accountsFileSetAside = _registry.QuarantinedTo is not null;
-                    _state = Reconcile(loaded);
+                    return _state;
                 }
 
-                return _state;
+                var loaded = Reconcile(_registry.Load());
+                _accountsFileSetAside = _registry.QuarantinedTo is not null;
+                // An unreadable file (locked) gives an empty list that is not the truth: do not keep it, so the next call reads the file again.
+                _accountsFileLocked = _registry.Unreadable;
+                if (!_accountsFileLocked)
+                {
+                    _state = loaded;
+                }
+
+                return loaded;
             }
         }
     }
@@ -91,6 +99,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         _ = State;
         lock (_loadLock)
         {
+            if (_accountsFileLocked)
+            {
+                // Not cleared: the next call reads the file again, and succeeds once whatever holds it lets go.
+                throw new AccountAuthException(AuthErrorCodes.AccountsFileLocked, "accounts.json exists but could not be read (held open elsewhere)");
+            }
+
             if (!_accountsFileSetAside)
             {
                 return;

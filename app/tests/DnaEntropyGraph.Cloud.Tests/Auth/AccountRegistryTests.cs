@@ -81,6 +81,50 @@ public class AccountRegistryTests : IDisposable
     }
 
     [Fact]
+    public void A_file_that_exists_but_cannot_be_read_is_not_empty_not_set_aside_and_not_overwritten()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":\"1001\",\"accounts\":[{\"sub\":\"1001\",\"email\":\"a@example.test\",\"needsSignIn\":false}]}");
+        var original = File.ReadAllBytes(FilePath);
+        var registry = new AccountRegistry(_dir);
+
+        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            registry.Load().ShouldBe(AccountsFile.Empty);
+            registry.Unreadable.ShouldBeTrue();
+            registry.QuarantinedTo.ShouldBeNull("a locked file is not a damaged one");
+            Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
+        }
+
+        File.ReadAllBytes(FilePath).ShouldBe(original);
+        File.Exists(FilePath + ".bad").ShouldBeFalse();
+        registry.Load().ActiveSub.ShouldBe("1001", "after the lock clears the real file is read");
+        registry.Unreadable.ShouldBeFalse();
+        registry.Save(One("2002"));
+    }
+
+    [Fact]
+    public void A_read_that_fails_once_and_then_clears_is_retried_and_succeeds()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":\"1001\",\"accounts\":[]}");
+        var registry = new AccountRegistry(_dir);
+        var hold = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = new Thread(() =>
+        {
+            Thread.Sleep(120);
+            hold.Dispose();
+        });
+        release.Start();
+
+        var loaded = registry.Load();
+        release.Join();
+
+        loaded.ActiveSub.ShouldBe("1001");
+        registry.Unreadable.ShouldBeFalse();
+    }
+
+    [Fact]
     public void Two_registries_saving_at_once_never_corrupt_the_file_or_throw()
     {
         // Two instances on one path in two threads share nothing but the named, machine-wide mutex, so this exercises the same lock a second process would take.
