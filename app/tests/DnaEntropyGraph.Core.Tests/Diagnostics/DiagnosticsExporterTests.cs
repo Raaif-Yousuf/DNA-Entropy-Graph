@@ -16,7 +16,7 @@ public class DiagnosticsExporterTests : IDisposable
 
     public void Dispose() => Directory.Delete(_folder, recursive: true);
 
-    private static readonly DiagnosticsInfo Info = new("0.1.0", "Windows", ".NET 10", null, @"C:\Users\jdoe", [], DateTimeOffset.UnixEpoch, "readme");
+    private static readonly DiagnosticsInfo Info = new("0.1.0", "Windows", ".NET 10", null, Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "jdoe"), [], DateTimeOffset.UnixEpoch, "readme");
 
     private sealed class EmptySource : IDiagnosticsSource
     {

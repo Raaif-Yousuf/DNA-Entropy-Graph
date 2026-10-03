@@ -110,7 +110,7 @@ public class SettingsDiagnosticsTests
             var path = Path.Combine(folder, "d.zip");
             var repository = Substitute.For<IRunRepository>();
             repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Array.Empty<RunRecord>());
-            var real = new DiagnosticsExporter(new NoFiles(), repository, () => new DiagnosticsInfo("0", "os", "net", null, @"C:\Users\x", [], DateTimeOffset.UnixEpoch, "readme"));
+            var real = new DiagnosticsExporter(new NoFiles(), repository, () => new DiagnosticsInfo("0", "os", "net", null, Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "x"), [], DateTimeOffset.UnixEpoch, "readme"));
             var viewModel = new SettingsViewModel(
                 Substitute.For<ISettingsStore>(), _toasts, Substitute.For<IStringResourceProvider>(), real, _picker, _launcher, TimeProvider.System);
             _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>

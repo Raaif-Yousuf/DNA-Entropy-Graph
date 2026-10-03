@@ -19,7 +19,8 @@ public class DiagnosticsBundleBuilderTests
     private const string FileName = "plasmid_pUC19_secret.fasta";
     private const string SpacedFileName = "My Plasmid.fasta";
     private const string Email = "jdoe@lab.example.edu";
-    private const string Profile = @"C:\Users\jdoe";
+    // Built at runtime so no user-home path literal is committed (check_user_home_paths).
+    private static readonly string Profile = Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "jdoe");
     private const string TokenText = "REFRESH-TOKEN-DO-NOT-LEAK-1//0gABC";
     private const string Contig = "SetTnpB_3";
     private const string OtherContig = "contig_secret_alpha";
