@@ -28,7 +28,7 @@ internal sealed class CloudRunSettings
     /// </summary>
     public TimeSpan FirstHeartbeatTimeout { get; set; } = TimeSpan.FromMinutes(25);
 
-    /// <summary>How long a heartbeat may stay unchanged before the worker is called wedged. Null means 20 times <c>limits.heartbeatSeconds</c> (600 s, docs/job_contract.md section 5).</summary>
+    /// <summary>How long a heartbeat may stay unchanged before the worker process is called dead or frozen (a hung main thread under the free-running heartbeat thread is not caught, #522). Null means 20 times <c>limits.heartbeatSeconds</c> (600 s, docs/job_contract.md section 5).</summary>
     public TimeSpan? HeartbeatStaleTimeout { get; set; }
 
     public TimeSpan CallTimeout { get; set; } = TimeSpan.FromSeconds(60);

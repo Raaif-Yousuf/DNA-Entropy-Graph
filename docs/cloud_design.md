@@ -409,7 +409,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   "older than 600 s regardless of instance state") records `worker_heartbeat_stale`; and a first progress line
   (`worker starting; GPU: ...`) that says `no GPU detected` on a GPU machine type records `gpu_not_visible` and DELETES the VM
   (as `startup.sh` does for a box whose GPU never came up). A last look for `result.json` precedes each verdict, because a
-  worker writes it before it stops heartbeating. A transient failure reading `status.json` never ends the run. Not done
+  worker writes it before it stops heartbeating. A transient failure reading `status.json` never ends the run. **Scope: a dead or frozen worker PROCESS only.** The real worker's heartbeat is a free-running daemon thread (`status.py` `StatusWriter._loop`), so a hung main thread under a still-ticking heartbeat is NOT caught (issue #522). The first-heartbeat deadline also cannot tell a slow CUDA image pull from a never-started worker, because `startup.sh`'s installing-stage progress is not read (recorded on #90). Not done
   here (issue #90 remains): per-stage deadlines other than the first heartbeat, the 180 s "not RUNNING" death rule, the
   cancel-ack 60 s rule, and showing the heartbeat in the UI. `FakeGcp` scripts `NoHeartbeat`, `HeartbeatStopsAfterRunning`,
   `NoGpuFirstLine` and a healthy `HeartbeatingThenDone` worker.

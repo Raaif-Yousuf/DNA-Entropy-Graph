@@ -142,7 +142,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 }
 
                 // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
-                // heartbeat in status.json is the health signal; a wedged worker ends the run here, not at the result limit.
+                // heartbeat in status.json is the health signal; a dead or frozen worker process ends the run here, not at the result limit.
                 var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
                 var verdict = watch.Observe(statusText, progressText, clock.Elapsed);
@@ -155,7 +155,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                         return text;
                     }
 
-                    // A box with no GPU is deleted whatever the user chose (as startup.sh does); a wedged worker's VM is ended per the user's choice.
+                    // A box with no GPU is deleted whatever the user chose (as startup.sh does); a frozen worker's VM is ended per the user's choice.
                     var heartbeatNote = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: verdict.DeleteVm).ConfigureAwait(false);
                     throw VmEndNotes.Apply(new RunFailureException(CloudErrorKind.Other, verdict.Code, verdict.Message), heartbeatNote);
                 }

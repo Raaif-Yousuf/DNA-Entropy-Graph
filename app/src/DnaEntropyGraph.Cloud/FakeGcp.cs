@@ -994,9 +994,10 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     /// LAST (docs/job_contract.md section 7). Does nothing when no manifest is in the bucket, since a
     /// worker with no manifest has nothing to run.
     /// </summary>
-    private void RunSimulatedWorker(VmSpec spec, string zone)
+    private void RunSimulatedWorker(VmSpec spec, string zone, FakeWorkerMode? modeOverride = null)
     {
-        if (_workerMode is FakeWorkerMode.Never or FakeWorkerMode.NoHeartbeat)
+        var workerMode = modeOverride ?? _workerMode;
+        if (workerMode is FakeWorkerMode.Never or FakeWorkerMode.NoHeartbeat)
         {
             return;
         }
@@ -1011,32 +1012,20 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         var vmKey = (spec.VmName, zone);
         var resultKey = (bucket, prefix + "result.json");
 
-        if (_workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone)
+        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone)
         {
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
             _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1));
-            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(WorkerFirstProgressLine(_workerMode != FakeWorkerMode.NoGpuFirstLine));
-            if (_workerMode == FakeWorkerMode.HeartbeatingThenDone)
+            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
+            if (workerMode == FakeWorkerMode.HeartbeatingThenDone)
             {
-                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () =>
-                {
-                    var before = _workerMode;
-                    _workerMode = FakeWorkerMode.Done;
-                    try
-                    {
-                        RunSimulatedWorker(spec, zone);
-                    }
-                    finally
-                    {
-                        _workerMode = before;
-                    }
-                });
+                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done));
             }
 
             return;
         }
 
-        if (BootFailureCode(_workerMode) is { } bootCode)
+        if (BootFailureCode(workerMode) is { } bootCode)
         {
             // worker/vm/startup.sh: write status.json with the error, never result.json, then end the VM
             // (a box whose GPU never came up is deleted; the other failures apply the lifecycle, stop here).
@@ -1054,7 +1043,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
             return;
         }
 
-        if (_workerMode == FakeWorkerMode.GarbageResult)
+        if (workerMode == FakeWorkerMode.GarbageResult)
         {
             _objects[resultKey] = Encoding.UTF8.GetBytes("this is not json");
             return;
@@ -1073,8 +1062,8 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         for (var i = 0; i < names.Count; i++)
         {
             var name = names[i];
-            var failed = _workerMode == FakeWorkerMode.AllInputsFailed || (_workerMode == FakeWorkerMode.SecondInputFailed && i > 0);
-            if (_workerMode == FakeWorkerMode.DoneWithNoFiles)
+            var failed = workerMode == FakeWorkerMode.AllInputsFailed || (workerMode == FakeWorkerMode.SecondInputFailed && i > 0);
+            if (workerMode == FakeWorkerMode.DoneWithNoFiles)
             {
                 results.Add(new JsonObject { ["id"] = $"in{i + 1}", ["status"] = "done", ["outputs"] = new JsonArray(), ["files"] = new JsonArray(), ["notices"] = new JsonArray(), ["stats"] = null, ["error"] = null });
                 continue;
@@ -1098,10 +1087,10 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
             }
             else
             {
-                var path = _workerMode == FakeWorkerMode.UnsafePath ? "output/../evil.txt" : $"output/{name}/{name}.bedgraph";
+                var path = workerMode == FakeWorkerMode.UnsafePath ? "output/../evil.txt" : $"output/{name}/{name}.bedgraph";
                 var bytes = TrackBytes(name);
                 _objects[(bucket, prefix + path)] = bytes;
-                var sha = _workerMode == FakeWorkerMode.ChecksumMismatch
+                var sha = workerMode == FakeWorkerMode.ChecksumMismatch
                     ? new string('0', 64)
                     : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
                 entry["outputs"] = new JsonArray(path);
@@ -1112,7 +1101,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
             results.Add(entry);
         }
 
-        var wholeFailure = _workerMode == FakeWorkerMode.WholeJobFailed;
+        var wholeFailure = workerMode == FakeWorkerMode.WholeJobFailed;
         var result = new JsonObject
         {
             ["schema"] = 1,

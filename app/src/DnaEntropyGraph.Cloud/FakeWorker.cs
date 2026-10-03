@@ -50,7 +50,7 @@ public enum FakeWorkerMode
     /// <summary>The worker never writes anything, not even a heartbeat (a container that never started). Issue #498.</summary>
     NoHeartbeat,
 
-    /// <summary>The worker writes one heartbeat (<c>status.json</c>, GPU named in its first progress line) and then goes silent: a wedged worker on a RUNNING VM. No result.json. Issue #498.</summary>
+    /// <summary>The worker writes one heartbeat (<c>status.json</c>, GPU named in its first progress line) and then goes silent: a dead or frozen worker PROCESS on a RUNNING VM (not a hung main thread under a ticking heartbeat thread, #522). No result.json. Issue #498.</summary>
     HeartbeatStopsAfterRunning,
 
     /// <summary>The worker heartbeats, but its first progress line says "no GPU detected". No result.json. Issue #498.</summary>

@@ -54,7 +54,7 @@ public class CloudJobRunnerHeartbeatTests
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         result.FailureCode.ShouldBe(RunErrorCodes.WorkerHeartbeatStale, "the 20 s result limit would have recorded result_timeout instead");
         LastRow(repo, "job-stale").ErrorCode.ShouldBe(RunErrorCodes.WorkerHeartbeatStale);
-        (await VmStatusAsync(gcp, "job-stale")).ShouldBe("STOPPED", "a wedged worker's VM must not keep billing (Hard Rule 11)");
+        (await VmStatusAsync(gcp, "job-stale")).ShouldBe("STOPPED", "a frozen worker's VM must not keep billing (Hard Rule 11)");
     }
 
     [Fact]
