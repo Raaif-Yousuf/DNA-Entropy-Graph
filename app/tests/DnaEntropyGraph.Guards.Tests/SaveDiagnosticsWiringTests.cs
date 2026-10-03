@@ -32,6 +32,17 @@ public class SaveDiagnosticsWiringTests
     }
 
     [Fact]
+    public void The_picker_label_and_the_default_file_name_prefix_come_from_resw_not_from_code()
+    {
+        var resw = Resw();
+
+        resw["DiagnosticsFileNamePrefix"].ShouldBe("dna-entropy-diagnostics");
+        resw["DiagnosticsFileTypeLabel"].Trim().ShouldNotBeEmpty();
+        Read("DnaEntropyGraph.App", "Services", "FilePickerService.cs").ShouldContain("GetString(\"DiagnosticsFileTypeLabel\")");
+        Read("DnaEntropyGraph.Presentation", "ViewModels", "SettingsViewModel.cs").ShouldContain("GetString(\"DiagnosticsFileNamePrefix\")");
+    }
+
+    [Fact]
     public void The_Settings_page_binds_the_command_under_that_label_and_the_Settings_route_reaches_it()
     {
         var page = Read("DnaEntropyGraph.App", "Views", "SettingsPage.xaml");

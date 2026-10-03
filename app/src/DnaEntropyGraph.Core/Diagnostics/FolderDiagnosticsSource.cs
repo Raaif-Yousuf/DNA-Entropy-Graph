@@ -39,7 +39,7 @@ public sealed class FolderDiagnosticsSource(string root) : IDiagnosticsSource
         return files;
     }
 
-    public byte[]? TryRead(string relativePath)
+    public DiagnosticsFile? TryRead(string relativePath, long maxBytes)
     {
         var full = Path.GetFullPath(Path.Combine(root, relativePath));
         if (!full.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
@@ -51,9 +51,17 @@ public sealed class FolderDiagnosticsSource(string root) : IDiagnosticsSource
         {
             // ReadWrite sharing: a log the app is still appending to must not make the whole bundle fail.
             using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
-            return buffer.ToArray();
+            var length = stream.Length;
+            var truncated = length > maxBytes;
+            var count = (int)Math.Min(length, maxBytes);
+            if (truncated)
+            {
+                stream.Seek(length - count, SeekOrigin.Begin);
+            }
+
+            var buffer = new byte[count];
+            stream.ReadExactly(buffer);
+            return new DiagnosticsFile(buffer, truncated);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -28,6 +28,7 @@ public class SettingsDiagnosticsTests
     {
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>() + "|{0}");
+        strings.GetString("DiagnosticsFileNamePrefix").Returns("prefix-from-resw");
         _viewModel = new SettingsViewModel(
             Substitute.For<ISettingsStore>(), _toasts, strings, _exporter, _picker, _launcher,
             new FixedClock(new DateTimeOffset(2026, 10, 3, 9, 0, 0, TimeSpan.Zero)));
@@ -40,7 +41,7 @@ public class SettingsDiagnosticsTests
 
         await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
 
-        await _picker.Received(1).PickSaveZipAsync("dna-entropy-diagnostics-2026-10-03.zip", Arg.Any<CancellationToken>());
+        await _picker.Received(1).PickSaveZipAsync("prefix-from-resw-2026-10-03.zip", Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -84,6 +85,7 @@ public class SettingsDiagnosticsTests
         _viewModel.DiagnosticsStatus.ShouldContain(@"C:\Out\d.zip");
         _viewModel.OpenDiagnosticsFolderCommand.CanExecute(null).ShouldBeTrue();
 
+        _launcher.RevealFile(Arg.Any<string>()).Returns(true);
         _viewModel.OpenDiagnosticsFolderCommand.Execute(null);
         _launcher.Received(1).RevealFile(@"C:\Out\d.zip");
     }
@@ -111,6 +113,53 @@ public class SettingsDiagnosticsTests
 
         _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Write|{0}");
         _viewModel.SaveDiagnosticsCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_failing_history_read_is_caught_and_shows_the_other_failure_copy_and_the_command_can_run_again()
+    {
+        _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(@"C:\Out\d.zip");
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromException(new InvalidOperationException("db is corrupt")));
+
+        await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Other|{0}");
+        _viewModel.DiagnosticsStatus.ShouldBe("DiagnosticsSaveFailed_Other|{0}");
+        _viewModel.IsSavingDiagnostics.ShouldBeFalse();
+        _viewModel.SaveDiagnosticsCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_picker_that_throws_is_caught_too_and_nothing_is_built()
+    {
+        _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<string?>(new InvalidOperationException("no window")));
+
+        await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Other|{0}");
+        await _exporter.DidNotReceiveWithAnyArgs().ExportAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Open_folder_never_throws_and_names_one_action_when_explorer_cannot_open(bool launcherThrows)
+    {
+        _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(@"C:\Out\d.zip");
+        await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+        _toasts.ClearReceivedCalls();
+        if (launcherThrows)
+        {
+            _launcher.RevealFile(Arg.Any<string>()).Returns(_ => throw new System.ComponentModel.Win32Exception("no explorer"));
+        }
+        else
+        {
+            _launcher.RevealFile(Arg.Any<string>()).Returns(false);
+        }
+
+        _viewModel.OpenDiagnosticsFolderCommand.Execute(null);
+
+        _toasts.Received(1).ShowToast("DiagnosticsOpenFailed_Title|{0}", Arg.Is<string>(b => b.StartsWith("DiagnosticsOpenFailed_Body", StringComparison.Ordinal)));
     }
 
     [Fact]

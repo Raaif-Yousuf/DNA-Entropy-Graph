@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
@@ -22,10 +23,23 @@ public static partial class DiagnosticsBundleBuilder
     /// <summary>Settings keys whose values are safe to send. Every other key is listed by name with its value omitted.</summary>
     private static readonly HashSet<string> SafeSettingKeys = new(StringComparer.Ordinal) { "Theme", InstallationId.SettingsKey };
 
-    // A log is cut to its last 2 MB of text: the end is what explains a failure.
-    private const int MaxLogChars = 2_000_000;
+    // No file is read past this: a longer log is cut to its last 2 MB (the end is what explains a failure), and a longer
+    // JSON file, which cannot be cut and stay valid, is left out with a note.
+    private const int MaxFileBytes = 2_000_000;
+
+    private const int MaxSettingsBytes = 256_000;
 
     private static readonly JsonSerializerOptions Indented = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+    private enum FileKind
+    {
+        Status,
+        Result,
+        Progress,
+        Log,
+    }
+
+    private sealed record Loaded(string Path, FileKind Kind, string Text, bool Truncated);
 
     [GeneratedRegex(@"^runs/[A-Za-z0-9_-]{1,64}/(?:status\.json|result\.json)$")]
     private static partial Regex RunJson();
@@ -36,17 +50,38 @@ public static partial class DiagnosticsBundleBuilder
     [GeneratedRegex(@"^(?:logs/[A-Za-z0-9_.-]{1,100}|runs/[A-Za-z0-9_-]{1,64}/logs/[A-Za-z0-9_.-]{1,100})\.(?:log|txt)$")]
     private static partial Regex LogFile();
 
-    /// <exception cref="DiagnosticsLeakException">Sequence-like text survived redaction; no zip is produced.</exception>
+    /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction; no zip is produced.</exception>
     public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(info);
 
-        // The file names the history knows are redacted wherever they turn up in a log or a status file.
-        var sensitive = info.SensitiveValues.Concat(runs.SelectMany(SensitiveFrom)).ToList();
-        var redactor = new DiagnosticsRedactor(info.UserProfilePath, sensitive);
+        // Phase 1: read every allowed file and collect the names the bundle must not carry. The scrub list is the
+        // caller's own strings, every identifying field of the run history, the input names in each run's manifest and
+        // options, and every key and string inside the parts of status and result files that are not copied (contig and
+        // record names), so a log line naming any of them is scrubbed too.
+        var scrub = new HashSet<string>(info.SensitiveValues, StringComparer.OrdinalIgnoreCase);
+        foreach (var run in runs)
+        {
+            AddRunNames(run, scrub);
+        }
 
+        var loaded = new List<Loaded>();
+        foreach (var path in source.ListFiles().OrderBy(p => p, StringComparer.Ordinal))
+        {
+            var kind = Classify(path);
+            var file = kind is null ? null : source.TryRead(path, MaxFileBytes);
+            if (kind is not null && file is not null)
+            {
+                var text = Encoding.UTF8.GetString(file.Bytes);
+                loaded.Add(new Loaded(path, kind.Value, text, file.Truncated));
+                HarvestNames(kind.Value, text, file.Truncated, scrub);
+            }
+        }
+
+        // Phase 2: redact and assemble.
+        var redactor = new DiagnosticsRedactor(info.UserProfilePath, scrub);
         var entries = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var settings = RedactSettings(source, redactor);
 
@@ -65,12 +100,12 @@ public static partial class DiagnosticsBundleBuilder
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
         entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(ToHistoryRow), Indented);
 
-        foreach (var path in source.ListFiles().OrderBy(p => p, StringComparer.Ordinal))
+        foreach (var file in loaded)
         {
-            var copy = CopyAllowedFile(source, redactor, path);
+            var copy = Copy(file, redactor);
             if (copy is not null)
             {
-                entries["files/" + path] = copy;
+                entries["files/" + file.Path] = copy;
             }
         }
 
@@ -83,40 +118,98 @@ public static partial class DiagnosticsBundleBuilder
         return Zip(entries, info.CreatedUtc);
     }
 
-    private static string? CopyAllowedFile(IDiagnosticsSource source, DiagnosticsRedactor redactor, string path)
+    private static FileKind? Classify(string path)
     {
-        var isJson = RunJson().IsMatch(path);
-        var isJsonLines = RunJsonLines().IsMatch(path);
-        if (!isJson && !isJsonLines && !LogFile().IsMatch(path))
+        if (RunJson().IsMatch(path))
         {
-            return null;
+            return path.EndsWith("/status.json", StringComparison.Ordinal) ? FileKind.Status : FileKind.Result;
         }
 
-        var bytes = source.TryRead(path);
-        if (bytes is null)
+        if (RunJsonLines().IsMatch(path))
         {
-            return null;
+            return FileKind.Progress;
         }
 
-        var text = Encoding.UTF8.GetString(bytes);
-        if (text.Length > MaxLogChars)
+        return LogFile().IsMatch(path) ? FileKind.Log : null;
+    }
+
+    private static KeySpec? SpecFor(FileKind kind) => kind switch
+    {
+        FileKind.Status => KeySpec.Status,
+        FileKind.Result => KeySpec.Result,
+        FileKind.Progress => KeySpec.Progress,
+        _ => null,
+    };
+
+    private static void AddRunNames(RunRecord run, HashSet<string> scrub)
+    {
+        foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix, run.Notes })
         {
-            text = text[^MaxLogChars..];
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                scrub.Add(text.TrimEnd('\\', '/'));
+            }
         }
 
-        if (isJson)
+        // The manifest and options name every input (name, path, stem); neither is copied.
+        foreach (var json in new[] { run.ManifestJson, run.OptionsJson })
         {
-            return redactor.RedactJson(text);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                continue;
+            }
+
+            try
+            {
+                DiagnosticsRedactor.Harvest(JsonNode.Parse(json), null, scrub);
+            }
+            catch (JsonException)
+            {
+                // Not JSON: nothing to harvest.
+            }
+        }
+    }
+
+    private static void HarvestNames(FileKind kind, string text, bool truncated, HashSet<string> scrub)
+    {
+        var spec = SpecFor(kind);
+        if (spec is null || truncated)
+        {
+            return;
         }
 
-        return isJsonLines ? redactor.RedactJsonLines(text) : redactor.RedactText(text).Replace("\r\n", "\n", StringComparison.Ordinal);
+        foreach (var line in kind == FileKind.Progress ? text.Split('\n') : [text])
+        {
+            try
+            {
+                DiagnosticsRedactor.Harvest(JsonNode.Parse(line), spec, scrub);
+            }
+            catch (JsonException)
+            {
+                // A line that is not JSON is dropped by the redactor; nothing to harvest.
+            }
+        }
+    }
+
+    private static string? Copy(Loaded file, DiagnosticsRedactor redactor)
+    {
+        var spec = SpecFor(file.Kind);
+        if (file.Kind is FileKind.Status or FileKind.Result)
+        {
+            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!);
+        }
+
+        // A cut file starts mid-line: drop that partial line and say so.
+        var text = file.Truncated ? file.Text[(file.Text.IndexOf('\n', StringComparison.Ordinal) + 1)..] : file.Text;
+        var body = file.Kind == FileKind.Progress ? redactor.RedactJsonLines(text, spec!) : redactor.RedactText(text);
+        return file.Truncated ? $"[truncated: only the last {MaxFileBytes} bytes were read]\n{body}" : body;
     }
 
     private static (string? InstallationId, SortedDictionary<string, string> Values) RedactSettings(IDiagnosticsSource source, DiagnosticsRedactor redactor)
     {
         var values = new SortedDictionary<string, string>(StringComparer.Ordinal);
         string? installationId = null;
-        var bytes = source.TryRead("settings.json");
+        var bytes = source.TryRead("settings.json", MaxSettingsBytes)?.Bytes;
         if (bytes is null)
         {
             return (null, values);
@@ -144,18 +237,6 @@ public static partial class DiagnosticsBundleBuilder
         }
 
         return (installationId, values);
-    }
-
-    private static IEnumerable<string> SensitiveFrom(RunRecord run)
-    {
-        foreach (var text in new[] { run.Name, run.OutputDir is null ? null : Path.GetFileName(run.OutputDir.TrimEnd('\\', '/')) })
-        {
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                yield return text;
-                yield return Path.GetFileNameWithoutExtension(text);
-            }
-        }
     }
 
     // The history as an allowlist of fields: identifiers, states, error codes, timings and hardware. Never the name,
@@ -208,9 +289,9 @@ public static partial class DiagnosticsBundleBuilder
     private const string Readme =
         "DNA Entropy Graph diagnostics\n" +
         "\n" +
-        "Included: app and worker logs, run history (ids, states, error codes, times), the status, progress and\n" +
+        "Included: worker and run logs, run history (ids, states, error codes, times), the status, progress and\n" +
         "result files the app keeps for each run, settings with private values left out, version numbers and the\n" +
-        "installation id.\n" +
+        "installation id. Logs written by the app itself are included once the app writes them.\n" +
         "\n" +
         "Never included: sequences, input file names, output files, your email, sign-in tokens. Paths inside your\n" +
         "Windows profile are shown as <user>.\n";

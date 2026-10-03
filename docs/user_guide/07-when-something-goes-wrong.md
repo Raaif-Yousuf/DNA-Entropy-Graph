@@ -16,12 +16,13 @@ Open **Settings**, find **Diagnostics**, and choose **Save diagnostics**. Pick w
 the zip (it starts in Downloads, named `dna-entropy-diagnostics-<date>.zip`), then choose
 **Open folder** to find it and attach it to your issue or email.
 
-The file includes the app's logs, your run history (run ids, states, error codes and times),
-the status and result files the app keeps for each run, version numbers and this
-installation's id. It never includes your sequences, your input file names, your results, your
-email address or your sign-in. Paths inside your Windows profile appear as `<user>`. If the
-app finds anything in the file that looks like sequence data it refuses to save and tells you
-so; describe the problem in the issue without a file instead.
+The file includes the logs from your runs, your run history (run ids, states, error codes and times),
+the status and result files the app keeps for each run (with names and paths removed), settings that
+are safe to share, version numbers and this installation's id. It never includes your sequences, your
+input file names, your results, your email address or your sign-in. Any path on your computer appears
+as `<user>` or `<path>`. If the app finds anything in the file that looks like sequence data or a
+sign-in code it refuses to save and tells you so; describe the problem in the issue without a file
+instead. The app does not write its own log file yet; when it does, the same button will include it.
 
 ## Signing in
 

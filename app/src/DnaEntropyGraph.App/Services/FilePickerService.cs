@@ -1,6 +1,7 @@
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Presentation.Services;
 using Windows.Storage.Pickers;
 
 namespace DnaEntropyGraph.App.Services;
@@ -10,7 +11,7 @@ namespace DnaEntropyGraph.App.Services;
 /// (a desktop app's picker throws without an owner window handle). The output-folder picker
 /// is still a placeholder (a follow-up issue).
 /// </summary>
-public sealed class FilePickerService(WindowHandleProvider window) : IFilePicker
+public sealed class FilePickerService(WindowHandleProvider window, IStringResourceProvider strings) : IFilePicker
 {
     public async Task<IReadOnlyList<string>> PickInputFilesAsync(CancellationToken cancellationToken)
     {
@@ -34,7 +35,7 @@ public sealed class FilePickerService(WindowHandleProvider window) : IFilePicker
             SuggestedFileName = Path.GetFileNameWithoutExtension(suggestedFileName),
         };
         WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
-        picker.FileTypeChoices.Add("Zip", [".zip"]);
+        picker.FileTypeChoices.Add(strings.GetString("DiagnosticsFileTypeLabel"), [".zip"]);
 
         var file = await picker.PickSaveFileAsync();
         return string.IsNullOrEmpty(file?.Path) ? null : file.Path;

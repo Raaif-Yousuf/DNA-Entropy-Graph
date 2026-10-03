@@ -796,7 +796,7 @@
     <value>Diagnostics</value>
   </data>
   <data name="SettingsDiagnosticsExplainer.Text" xml:space="preserve">
-    <value>Saves one file you can send to support. It includes the app's logs, your run history (ids, states and error codes), version numbers and this installation's id. It never includes your sequences, file names, results, email address or sign-in.</value>
+    <value>Saves one file you can send to support. It includes the logs from your runs, your run history (ids, states and error codes), settings that are safe to share, version numbers and this installation's id. It never includes your sequences, file names, results, email address or sign-in.</value>
   </data>
   <data name="SaveDiagnosticsButton.Content" xml:space="preserve">
     <value>Save diagnostics</value>
@@ -818,5 +818,20 @@
   </data>
   <data name="DiagnosticsSaveFailed_Refused" xml:space="preserve">
     <value>The file was not saved because the app could not make it safe to send. Choose Save diagnostics again, and if it stops again, describe the problem in a bug report without a file.</value>
+  </data>
+  <data name="DiagnosticsSaveFailed_Other" xml:space="preserve">
+    <value>Something went wrong while saving the file. Choose Save diagnostics again, and if it stops again, describe the problem in a bug report without a file.</value>
+  </data>
+  <data name="DiagnosticsOpenFailed_Title" xml:space="preserve">
+    <value>Folder not opened</value>
+  </data>
+  <data name="DiagnosticsOpenFailed_Body" xml:space="preserve">
+    <value>Windows could not open the folder. Open File Explorer yourself and look for the file at {0}.</value>
+  </data>
+  <data name="DiagnosticsFileNamePrefix" xml:space="preserve">
+    <value>dna-entropy-diagnostics</value>
+  </data>
+  <data name="DiagnosticsFileTypeLabel" xml:space="preserve">
+    <value>Zip file</value>
   </data>
 </root>

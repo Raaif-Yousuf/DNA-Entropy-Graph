@@ -10,6 +10,14 @@ public interface IDiagnosticsSource
     /// <summary>Every file under the folder, as a path relative to it using '/' separators.</summary>
     IReadOnlyList<string> ListFiles();
 
-    /// <summary>The file's bytes, or null if it vanished or cannot be read (a log the app still holds open, say).</summary>
-    byte[]? TryRead(string relativePath);
+    /// <summary>
+    /// The file's bytes, or null if it vanished or cannot be read (a log the app still holds open, say). A file longer than
+    /// <paramref name="maxBytes"/> is never read whole: only its last <paramref name="maxBytes"/> bytes come back, marked truncated.
+    /// </summary>
+    DiagnosticsFile? TryRead(string relativePath, long maxBytes);
 }
+
+/// <summary>What <see cref="IDiagnosticsSource.TryRead"/> returns.</summary>
+/// <param name="Bytes">The file, or its tail.</param>
+/// <param name="Truncated">True when only the tail of a longer file is here (the first line may be partial).</param>
+public sealed record DiagnosticsFile(byte[] Bytes, bool Truncated);

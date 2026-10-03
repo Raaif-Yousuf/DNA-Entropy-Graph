@@ -71,16 +71,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanSaveDiagnostics))]
     private async Task SaveDiagnosticsAsync(CancellationToken cancellationToken)
     {
-        var suggested = $"dna-entropy-diagnostics-{_time.GetLocalNow():yyyy-MM-dd}.zip";
-        var path = await _filePicker.PickSaveZipAsync(suggested, cancellationToken);
-        if (path is null)
-        {
-            return;
-        }
-
         IsSavingDiagnostics = true;
         try
         {
+            var suggested = $"{_strings.GetString("DiagnosticsFileNamePrefix")}-{_time.GetLocalNow():yyyy-MM-dd}.zip";
+            var path = await _filePicker.PickSaveZipAsync(suggested, cancellationToken);
+            if (path is null)
+            {
+                return;
+            }
+
             // The build reads every log and run file: never on the UI thread.
             await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken), cancellationToken);
             _lastDiagnosticsPath = path;
@@ -99,6 +99,13 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Write"));
         }
+        catch (Exception ex)
+        {
+            // The picker, the history database or anything else: a command must never throw into the UI. Only the class
+            // is traced (a message can carry a path or a name).
+            System.Diagnostics.Trace.TraceError($"Save diagnostics failed: {ex.GetType().Name}");
+            Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Other"));
+        }
         finally
         {
             IsSavingDiagnostics = false;
@@ -108,7 +115,23 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool CanSaveDiagnostics() => !IsSavingDiagnostics;
 
     [RelayCommand(CanExecute = nameof(HasSavedDiagnostics))]
-    private void OpenDiagnosticsFolder() => _folderLauncher.RevealFile(_lastDiagnosticsPath!);
+    private void OpenDiagnosticsFolder()
+    {
+        var opened = false;
+        try
+        {
+            opened = _folderLauncher.RevealFile(_lastDiagnosticsPath!);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"Open diagnostics folder failed: {ex.GetType().Name}");
+        }
+
+        if (!opened)
+        {
+            Report("DiagnosticsOpenFailed_Title", string.Format(_strings.GetString("DiagnosticsOpenFailed_Body"), _lastDiagnosticsPath));
+        }
+    }
 
     private bool HasSavedDiagnostics() => _lastDiagnosticsPath is not null;
 

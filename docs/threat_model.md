@@ -141,23 +141,41 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
 - **Allowlist of paths.** Only `settings.json`, `logs/*.log`, and under `runs/<job id>/` the `status.json`,
   `result.json`, `progress*.jsonl` and `logs/*.log` files are read. `auth/` (the DPAPI token files), `inputs/` and
   `pasted/` (copies of the user's sequences), the SQLite file and every output file are never listed, let alone read.
+  A file is never read whole past 2 MB: a log is cut to its last 2 MB and marked truncated, a longer JSON file is left out
+  with a note.
 - **Allowlist of fields.** The run history is projected to ids, phase, target, error code, timings, hardware, costs and
   versions; the run name, the free-text error detail, the output folder, the project, bucket and VM names, notes and
   tags are never copied. `settings.json` keeps only `Theme` and `installation_id`; every other key is listed with its
-  value omitted. In status, result and progress JSON a key that describes data or identity (name, file, path, input,
-  sequence, email, message, ...) is dropped, a string value survives only if it is short and made of identifier
-  characters, and numbers and booleans always survive.
-- **Text redaction** (every kept string, every log line): the user profile path becomes `<user>`; the signed-in emails, the
-  Windows user name, and every run name and output folder name known to the history are replaced; email-shaped text,
-  sequence-file names and any run of 20 or more A, C, G, T or N characters are replaced.
-- **Final scan.** Before any zip exists, every entry is scanned for a run of 20 or more A, C, G, T, N. A hit throws
-  `DiagnosticsLeakException` naming the entry, and nothing is written. The zip is written to a temp file and moved into
-  place, so a refused or failed save leaves no partial file.
+  value omitted. Each of `status.json`, `result.json` and `progress.jsonl` has its own list of keys (`KeySpec`): a key
+  not on the list is dropped with everything under it, and a kept string value must be short and made of plain
+  characters. Free-text fields (`message`, `data`, `detail.input`, `detail.contig`, output paths, contig lists) are not on
+  any list. The cost: a progress line's message is not in the bundle.
+- **Scrub list.** Everything the bundle does not copy is also removed from the logs. The list is built from the user's
+  email and Windows account name, each run's name, output folder, project, bucket, VM name and notes, every name and
+  path in the run's manifest and options, and every key that looks like a name plus every string inside the dropped parts
+  of status and result files (contig and record names). Each is scrubbed as written, as a file name and as a stem.
+  Weakness: a data-named key with no digit, underscore, dot, hyphen or space (for example a bare `patient`) is not
+  added to the list from a dropped subtree; it is still never copied from that file.
+- **Text redaction** (every log line and kept string): any Windows path (drive letter or UNC, spaces allowed) becomes `<path>`,
+  and one under the user profile becomes `<user>`; sequence-file names (every extension in `SequenceFileTypes` plus
+  `.fsa .ape .gp .sbd` and others, up to three words long) become `<file>`; email-shaped text becomes `<email>`;
+  credentials (`ya29.` access tokens, `1//` refresh tokens, JWTs, `Bearer` headers, `GOCSPX-` client secrets and
+  `access_token`, `refresh_token`, `id_token`, `client_secret` pairs) become `<token>`.
+- **Sequence in any layout.** Letters A C G T U N and the other IUPAC codes, plus `-` and `*`, in either case. A run of 20 or
+  more is replaced inline; a line that is, ignoring digits and spaces, at least 80% sequence characters is a sequence line,
+  and a block of consecutive sequence lines holding 20 or more characters in total (GenBank `ORIGIN`, 10-mers, 60-column
+  wraps, a sequence split over two lines) is replaced whole.
+- **Final scan.** `DiagnosticsLeakScan` is a separate implementation, deliberately stricter than the redactor. It joins each
+  entry, ignores whitespace and digits, so a wrapped, numbered or spaced sequence is still one run of 20 or more, reads the
+  entry names as well as the text, and refuses on any credential shape. A hit throws `DiagnosticsLeakException` naming the
+  entry, and nothing is written. A 32-character-or-longer hex digest is exempt. The zip is written to a temp file and moved
+  into place; if the build is refused or fails, the empty file the save picker created is deleted, and a destination that
+  already held content is left alone.
 - **Deliberately included:** the installation id (it is a label on every cloud resource and is needed to find them),
   the app, OS, .NET and WebView2 versions.
-- **Not guaranteed:** the redaction is pattern-based. A free-text value an unknown future field puts under an innocuous key
-  could survive, which is why new fields are added to the allowlists, never to a blocklist. The app has no
-  Serilog file log yet (issue #164), so the bundle holds the worker logs and per-run files only.
+- **Not guaranteed:** the redaction is pattern-based. A new field is added to a key list, never to a blocklist. The app has no
+  Serilog file log yet (issue #164, which will drop its `logs/` folder into the bundle with no change here), so today the
+  bundle holds the worker and run logs and per-run files only.
 
 ## 6. Residual risk this document does not pretend to solve
 

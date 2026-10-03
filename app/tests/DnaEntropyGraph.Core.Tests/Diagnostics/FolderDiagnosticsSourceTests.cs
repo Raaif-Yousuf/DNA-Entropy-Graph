@@ -50,8 +50,21 @@ public class FolderDiagnosticsSourceTests : IDisposable
 
         using var writer = new FileStream(Path.Combine(_root, "logs/app.log"), FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
 
-        Encoding.UTF8.GetString(source.TryRead("logs/app.log")!).ShouldBe("line one");
-        source.TryRead("../outside.txt").ShouldBeNull();
-        source.TryRead("logs/missing.log").ShouldBeNull();
+        var read = source.TryRead("logs/app.log", 1000)!;
+        Encoding.UTF8.GetString(read.Bytes).ShouldBe("line one");
+        read.Truncated.ShouldBeFalse();
+        source.TryRead("../outside.txt", 1000).ShouldBeNull();
+        source.TryRead("logs/missing.log", 1000).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_file_longer_than_the_cap_returns_only_its_last_bytes_marked_truncated()
+    {
+        Seed("logs/big.log", "0123456789ABCDEFGHIJ");
+
+        var read = new FolderDiagnosticsSource(_root).TryRead("logs/big.log", 5)!;
+
+        Encoding.UTF8.GetString(read.Bytes).ShouldBe("FGHIJ");
+        read.Truncated.ShouldBeTrue();
     }
 }
