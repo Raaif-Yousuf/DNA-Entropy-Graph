@@ -830,7 +830,7 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   Google omits `billingEnabled` when it is false, so an absent value reads as off. Billing is "enabled" only when an
   account is linked and `billingEnabled` is true.
 - **Policy.** On: nothing is linked. Off with one open account: linked for the user, then the status is read back
-  (a link Google accepted that did not turn billing on is `LinkedButStillOff`, code `BILLING_STILL_OFF`, action Pick another billing account; never `NO_BILLING`, which would loop the user back to Link). Several: `ChooseAccount`,
+  (a link Google accepted that did not turn billing on is `LinkedButStillOff`, code `BILLING_STILL_OFF`, action Pick another billing account, with exactly the other open accounts in `Accounts`; never `NO_BILLING`, which would loop the user back to Link). When there is no other open account to pick the outcome is `FixLinkedAccount`, code `BILLING_ACCOUNT_OFF`, action Fix billing account (`BillingLinks.ForProject`), never "pick another" with nothing to pick. A project that already has an account linked while billing is off is never linked over unasked: `EnsureAsync` answers `ChooseAccount` (the other open accounts) or `FixLinkedAccount`, so a re-check cannot loop on `LinkProjectAsync`. Several: `ChooseAccount`,
   and `LinkAsync` links the one the user picked. None: `NeedsAccount` with `BillingLinks.ForProject(projectId)`, the
   console page for that project; calling `EnsureAsync` again after the user adds a payment method is the re-check.
   The wizard action for the code `NO_BILLING` is that link (`SetupAction_LinkBilling`).

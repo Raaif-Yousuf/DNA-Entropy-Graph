@@ -414,6 +414,12 @@
   <data name="SetupAction_PickAnotherBillingAccount" xml:space="preserve">
     <value>Pick another billing account</value>
   </data>
+  <data name="SetupError_BILLING_ACCOUNT_OFF" xml:space="preserve">
+    <value>The billing account linked to this project is not working, and you have no other billing account to use. It may be suspended or may have no working payment method. Choose Fix billing account to open Google's billing page for this project, fix the account or add a new one there, then check again.</value>
+  </data>
+  <data name="SetupAction_FixBillingAccount" xml:space="preserve">
+    <value>Fix billing account</value>
+  </data>
   <data name="SetupAction_CopyBillingRequest" xml:space="preserve">
     <value>Copy request for the billing admin</value>
   </data>

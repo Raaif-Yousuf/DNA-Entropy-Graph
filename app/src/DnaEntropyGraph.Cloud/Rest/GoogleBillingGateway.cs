@@ -87,7 +87,10 @@ internal sealed partial class GoogleBillingGateway : IBillingGateway
             // permission (for example resourcemanager.projects.createBillingAssignment) is about the project.
             var status = GoogleApiErrors.FromApiException(ex);
             var exception = GoogleApiErrors.ToException(status);
-            throw status.HttpStatus == 403 && exception.Kind == CloudErrorKind.Permission && !NamesNonBillingPermission(status.Message)
+            // USER_PROJECT_DENIED says the caller may not use the project (a serviceusage permission), which no billing
+            // admin can fix; its message names the permission after "use", so the regex below cannot see it.
+            var projectDenied = status.Reasons.Any(r => string.Equals(r, "USER_PROJECT_DENIED", StringComparison.OrdinalIgnoreCase));
+            throw status.HttpStatus == 403 && exception.Kind == CloudErrorKind.Permission && !projectDenied && !NamesNonBillingPermission(status.Message)
                 ? new CloudOperationException(new CloudError(SetupErrorCodes.BillingNoPermission, 403, status.Message), CloudErrorKind.Permission)
                 : exception;
         }

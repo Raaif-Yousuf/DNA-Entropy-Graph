@@ -174,6 +174,18 @@ public class GoogleBillingGatewayTests
     }
 
     [Fact]
+    public async Task Linking_with_USER_PROJECT_DENIED_is_a_plain_permission_error_not_a_request_for_the_billing_admin()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Put, "/v1/projects/my-lab/billingInfo", 403, RpcErrorWithReason(403, "PERMISSION_DENIED", "Caller does not have required permission to use project 123. Grant the caller the roles/serviceusage.serviceUsageConsumer role, or a custom role with the serviceusage.services.use permission, by visiting the console.", "USER_PROJECT_DENIED"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Billing.LinkProjectAsync("my-lab", "billingAccounts/AAA", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.BillingNoPermission);
+    }
+
+    [Fact]
     public async Task Linking_with_a_billing_quota_403_is_quota_not_a_request_for_the_billing_admin()
     {
         var rig = new GoogleGatewayHarness();
