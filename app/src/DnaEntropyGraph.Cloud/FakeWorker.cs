@@ -46,6 +46,18 @@ public enum FakeWorkerMode
 
     /// <summary>The startup script hit an uncaught error: status.json reports <c>WORKER_CRASH</c>, no result.json.</summary>
     WorkerCrash,
+
+    /// <summary>The worker never writes anything, not even a heartbeat (a container that never started). Issue #498.</summary>
+    NoHeartbeat,
+
+    /// <summary>The worker writes one heartbeat (<c>status.json</c>, GPU named in its first progress line) and then goes silent: a dead or frozen worker PROCESS on a RUNNING VM (not a hung main thread under a ticking heartbeat thread, #522). No result.json. Issue #498.</summary>
+    HeartbeatStopsAfterRunning,
+
+    /// <summary>The worker heartbeats, but its first progress line says "no GPU detected". No result.json. Issue #498.</summary>
+    NoGpuFirstLine,
+
+    /// <summary>A healthy worker: every look at <c>status.json</c> finds a newer heartbeat, and after many looks result.json lands as in <see cref="Done"/>. Issue #498.</summary>
+    HeartbeatingThenDone,
 }
 
 /// <summary>Whether the simulated worker ends its own VM after writing result.json (worker exit codes 10 and 11 in <c>worker/vm/startup.sh</c>).</summary>

@@ -117,7 +117,7 @@ private state. They share one `CloudRunSettings` object (the runner's `init` pro
 | `PreflightChecks` | Preflight steps 1-4 (project active, billing, Compute API, GPU quota). |
 | `RunTransfer` | Input upload and manifest, output download with checksum and the `SafeRelativeOutputPath` rule, the run's output folder (Hard Rule 14). |
 | `VmProvisioner` | The zone ladder, adoption of an existing VM, and the **only** in-flight create state (`_inflightCreates`, `SettleInflightCreatesAsync`). |
-| `ResultWaiter` | Boot wait, `result.json` poll, VM-lost detection and the worker's `status.json` error code. |
+| `ResultWaiter` | Boot wait, `result.json` poll with the worker-heartbeat watch (`HeartbeatWatch`, issue #498), VM-lost detection and the worker's `status.json` error code. |
 | `VmTerminator` | Stop/delete/verify of a VM (`EnsureVmEndedAsync`, by label, `DeleteOwnedVmsAndVerifyAsync`), the run page's Stop/Delete. |
 | `VmCanceller` | The cancel path: asks `VmProvisioner` to settle, deletes via `VmTerminator`, records exactly one terminal state. |
 | `RunOutcomeRecorder` | `FailAsync` and `FinishAsync`: how a run ends in a recorded terminal state. |

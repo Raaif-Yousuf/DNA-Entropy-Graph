@@ -12,7 +12,7 @@ internal enum BootOutcome
 }
 
 /// <summary>
-/// Waiting on the VM and the worker: the boot wait, the <c>result.json</c> poll, and the judgement of a VM that is lost
+/// Waiting on the VM and the worker: the boot wait, the <c>result.json</c> poll (with the heartbeat watch, #498), and the judgement of a VM that is lost
 /// (including the worker's own error code from <c>status.json</c>). Every way out but success ends the run through
 /// <see cref="RunFailureException"/>, with the VM ended first and the outcome of that recorded (Hard Rule 11).
 /// </summary>
@@ -20,6 +20,9 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 {
     /// <summary>How long before the VM's own <c>maxRunDuration</c> the default result timeout ends.</summary>
     private static readonly TimeSpan ResultMargin = TimeSpan.FromMinutes(3);
+
+    /// <summary>A heartbeat unchanged for this many times <c>limits.heartbeatSeconds</c> is dead: 600 s at the 30 s default (docs/job_contract.md section 5, "older than 600 s regardless of instance state").</summary>
+    private const int HeartbeatStaleFactor = 20;
 
     /// <summary>
     /// The default wait for result.json, measured from Running, for a VM with this <c>maxRunDuration</c>:
@@ -97,6 +100,12 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         // age at the first look that reports a creation time (a gateway that reports none leaves it at "from Running").
         var elapsedBeforeClock = TimeSpan.Zero;
         var ageKnown = settings.ResultTimeout is not null;
+        var statusKey = WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json";
+        var progressKey = WorkerManifestBuilder.JobPrefix(request.JobId) + "progress.jsonl";
+        var watch = new HeartbeatWatch(
+            VmProvisioner.ExpectsGpu(request.Spec.MachineType),
+            settings.FirstHeartbeatTimeout,
+            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor));
 
         while (true)
         {
@@ -130,6 +139,25 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                     }
 
                     throw await VmLostAsync(request, bucket, zone, reason, cancellationToken).ConfigureAwait(false);
+                }
+
+                // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
+                // heartbeat in status.json is the health signal; a dead or frozen worker process ends the run here, not at the result limit.
+                var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
+                var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
+                var verdict = watch.Observe(statusText, progressText, clock.Elapsed);
+                if (verdict is not null)
+                {
+                    // A worker writes result.json BEFORE it stops its heartbeat: one last look before calling it dead.
+                    text = await calls.TryReadTextAsync(bucket, key, cancellationToken).ConfigureAwait(false);
+                    if (text is not null)
+                    {
+                        return text;
+                    }
+
+                    // A box with no GPU is deleted whatever the user chose (as startup.sh does); a frozen worker's VM is ended per the user's choice.
+                    var heartbeatNote = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: verdict.DeleteVm).ConfigureAwait(false);
+                    throw VmEndNotes.Apply(new RunFailureException(CloudErrorKind.Other, verdict.Code, verdict.Message), heartbeatNote);
                 }
             }
             catch (CloudOperationException ex) when (VmFacts.IsProjectWide(ex.Kind))
