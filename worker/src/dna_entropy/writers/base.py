@@ -27,7 +27,6 @@ class Writer(Protocol):
         out_dir: str,
     ) -> str:
         """Write the artifact for ``name`` into ``out_dir``; return the file path."""
-        ...
 
 
 def write_text_lf(path: Path, text: str) -> str:

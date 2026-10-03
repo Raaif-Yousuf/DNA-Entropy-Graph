@@ -59,7 +59,6 @@ class Predictor(Protocol):
             ``[A, C, G, T]`` (see :data:`NUCLEOTIDES`), with each row summing to ``1.0``.
             Row ``i`` is the model's predicted distribution for base ``i``.
         """
-        ...
 
 
 def _format_row_preview(rows: np.ndarray, max_preview: int = 10) -> str:

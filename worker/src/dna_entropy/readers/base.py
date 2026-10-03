@@ -16,4 +16,3 @@ class Reader(Protocol):
 
     def read(self) -> str:
         """Return the raw text (may contain whitespace, headers, line numbers, etc.)."""
-        ...

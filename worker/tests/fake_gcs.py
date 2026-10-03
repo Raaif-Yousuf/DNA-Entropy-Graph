@@ -35,9 +35,9 @@ class FakeGcs:
 
     def __call__(self, req):
         url = req.full_url
-        if url.startswith("http://metadata.google.internal"):
-            return _Resp(json.dumps({"access_token": "t", "expires_in": 3600}).encode())
         parsed = urllib.parse.urlparse(url)
+        if parsed.hostname == "metadata.google.internal":
+            return _Resp(json.dumps({"access_token": "t", "expires_in": 3600}).encode())
         qs = urllib.parse.parse_qs(parsed.query)
         if parsed.path.startswith("/upload/storage/v1/b/"):
             name = qs["name"][0]

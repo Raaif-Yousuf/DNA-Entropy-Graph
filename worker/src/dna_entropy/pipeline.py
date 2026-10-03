@@ -8,6 +8,7 @@ Each stage is swappable; this module is the only place that knows the order.
 from __future__ import annotations
 
 import re
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -638,8 +639,14 @@ def run(
                 else:
                     _write_standard_outputs(cfg, processed)
                 _write_provenance(cfg, processed, t0, provenance_extra)
-            except Exception:
-                pass
+            except Exception as write_exc:
+                # Best-effort salvage: never mask the original exception (re-raised below).
+                # One ASCII line, class name only (no path or message), so losing the
+                # partial results is not silent.
+                print(
+                    f"ERROR: could not write partial outputs ({type(write_exc).__name__})",
+                    file=sys.stderr,
+                )
         raise
 
     if loaded.source_kind == detect.GENBANK:

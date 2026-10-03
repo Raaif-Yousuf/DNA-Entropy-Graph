@@ -695,6 +695,7 @@ def get_issue_thread(root: Path, n: int, e: Evidence) -> str:
             thread = str(data.get("body") or "") + "\n"
             thread += "\n".join(str(c.get("body") or "") for c in data.get("comments") or [])
         except json.JSONDecodeError:
+            # gh printed non-JSON: treat the thread as empty rather than abort the whole precheck.
             pass
     e.thread_text = thread
     return thread
@@ -790,9 +791,11 @@ def fill_related_issues_one(root: Path, n: int, e: Evidence, ev: dict[int, Evide
     raw = _run(
         [
             "gh", "api", f"repos/{REPO}/issues/{n}/timeline", "--paginate",
-            "-q", '.[] | select(.event=="cross-referenced") | '
-                  '[(.source.issue.number|tostring), .source.issue.state, '
-                  '.source.issue.title] | join(":::")',
+            "-q", (
+                '.[] | select(.event=="cross-referenced") | '
+                '[(.source.issue.number|tostring), .source.issue.state, '
+                '.source.issue.title] | join(":::")'
+            ),
         ],
         root,
     )
@@ -830,6 +833,7 @@ def fill_related_issues_one(root: Path, n: int, e: Evidence, ev: dict[int, Evide
                         other_state = str(data.get("state", "")).lower()
                         other_title = data.get("title", "")
                     except json.JSONDecodeError:
+                        # Unparseable lookup: keep the "unknown" state set above.
                         pass
         e.related.append((m, other_state, other_title, direction))
 

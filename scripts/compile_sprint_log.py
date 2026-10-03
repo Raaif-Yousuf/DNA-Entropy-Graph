@@ -112,6 +112,7 @@ def _sort_key(path: Path, root: Path, bulk_times: dict[str, float] | None = None
         if out:
             return float(out)
     except (OSError, subprocess.SubprocessError, ValueError):
+        # git missing, timed out or printed junk: fall back to the file mtime below.
         pass
     return path.stat().st_mtime
 

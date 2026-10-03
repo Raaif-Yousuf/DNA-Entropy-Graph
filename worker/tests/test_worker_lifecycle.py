@@ -7,6 +7,7 @@ exercised against real GCP tonight.
 from __future__ import annotations
 
 import json
+import urllib.parse
 
 import pytest
 
@@ -98,8 +99,9 @@ def test_apply_lifecycle_stop_posts_to_the_compute_api() -> None:
     apply_lifecycle("stop", opener=opener)
     last = opener.requests[-1]
     assert last.get_method() == "POST"
-    assert "compute.googleapis.com" in last.full_url
-    assert "/projects/proj/zones/us-central1-a/instances/deg-job1/stop" in last.full_url
+    last_url = urllib.parse.urlparse(last.full_url)
+    assert last_url.hostname == "compute.googleapis.com"
+    assert "/projects/proj/zones/us-central1-a/instances/deg-job1/stop" in last_url.path
     assert last.headers.get("Authorization") == "Bearer fake-token"
 
 

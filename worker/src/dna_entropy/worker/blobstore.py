@@ -42,34 +42,28 @@ class Blobstore(Protocol):
     def read_text(self, path: str) -> str:
         """Return the UTF-8 text content of ``path``. Raises :class:`BlobstoreError` if
         it does not exist."""
-        ...
 
     def write_text(self, path: str, text: str) -> None:
         """Write ``text`` to ``path``, atomically from a reader's perspective — a
         concurrent reader never observes a partial write (job_contract.md §4: "overwritten
         atomically"). Creates any missing parent directories/prefixes."""
-        ...
 
     def exists(self, path: str) -> bool:
         """Return whether ``path`` exists. Used for ``control/cancel`` (job_contract.md
         §6: "presence of the object is the entire signal")."""
-        ...
 
     def list_prefix(self, prefix: str) -> list[str]:
         """Return every path under ``prefix`` (relative to the job prefix, not to
         ``prefix`` itself), in no particular order."""
-        ...
 
     def download_file(self, path: str, local_dest: Path) -> None:
         """Copy ``path`` from the store to a local file at ``local_dest`` (creating parent
         directories). Used to stage an input file where ``pipeline.run()`` — which only
         knows how to read a local path — can read it."""
-        ...
 
     def upload_file(self, local_src: Path, path: str) -> None:
         """Copy a local file at ``local_src`` up to ``path`` in the store. Used to publish
         an output file ``pipeline.run()`` already wrote locally."""
-        ...
 
 
 def _checked_relative(path: str, *, allow_empty: bool = False) -> str:

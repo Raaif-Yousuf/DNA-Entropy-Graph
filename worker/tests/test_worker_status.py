@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 
+import dna_entropy.worker.status as status_module
 from dna_entropy.worker.blobstore import BlobstoreError, LocalBlobstore
 from dna_entropy.worker.status import GpuInfo, StatusWriter, WorkerInfo
 
@@ -297,7 +298,6 @@ def test_persistent_outage_crosses_threshold_and_writes_a_local_fallback(tmp_pat
     """A store that NEVER recovers must be treated differently from a blip: once
     consecutive failures cross PERSISTENT_OUTAGE_THRESHOLD, the worker writes a
     local-disk snapshot independent of the (broken) configured store."""
-    import dna_entropy.worker.status as status_module
 
     fallback_dir = tmp_path / "fallback"
     monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", fallback_dir)
@@ -319,7 +319,6 @@ def test_persistent_outage_crosses_threshold_and_writes_a_local_fallback(tmp_pat
 def test_persistent_outage_prints_an_escalated_line_distinguishable_from_a_blip(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    import dna_entropy.worker.status as status_module
 
     monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", tmp_path / "fallback")
     real_store = LocalBlobstore(tmp_path / "store")
@@ -335,7 +334,6 @@ def test_persistent_outage_prints_an_escalated_line_distinguishable_from_a_blip(
 
 
 def test_a_blip_under_the_threshold_never_escalates(tmp_path: Path, monkeypatch) -> None:
-    import dna_entropy.worker.status as status_module
 
     fallback_dir = tmp_path / "fallback"
     monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", fallback_dir)
@@ -357,7 +355,6 @@ def test_a_blip_under_the_threshold_never_escalates(tmp_path: Path, monkeypatch)
 
 
 def test_write_local_fallback_writes_utf8_with_lf(tmp_path, monkeypatch) -> None:
-    import dna_entropy.worker.status as status_module
 
     monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", tmp_path / "fallback")
     path = status_module.write_local_fallback("job-x", "result", {"status": "done"})

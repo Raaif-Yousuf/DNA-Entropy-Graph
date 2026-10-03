@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -214,9 +215,9 @@ def test_gcs_write_text_fetches_a_token_then_puts_the_object() -> None:
 
     assert len(opener.requests) == 2
     token_req, upload_req = opener.requests
-    assert "metadata.google.internal" in token_req.full_url
+    assert urllib.parse.urlparse(token_req.full_url).hostname == "metadata.google.internal"
     assert token_req.headers.get("Metadata-flavor") == "Google"
-    assert "storage.googleapis.com" in upload_req.full_url
+    assert urllib.parse.urlparse(upload_req.full_url).hostname == "storage.googleapis.com"
     assert "my-bucket" in upload_req.full_url
     assert "jobs%2Fabc%2Fstatus.json" in upload_req.full_url or "jobs/abc/status.json" in upload_req.full_url
     assert upload_req.headers.get("Authorization") == "Bearer fake-token"
