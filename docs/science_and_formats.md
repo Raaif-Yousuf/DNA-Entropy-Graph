@@ -379,6 +379,8 @@ index, never by id. The app's `GenBankLite` already refuses the same characters 
 position, so this closes the worker-versus-app divergence for GenBank (FASTA and paste were
 already correct).
 
+**The app refuses a bad GenBank feature table too (issue #548, MEASURED 2026-10-03):** the worker's Biopython scanner raises on a feature-table line that ends exactly at the qualifier column (column 21, an `IndexError`), on a continuation line with no leading `/` (a qualifier line missing its slash), and on a feature location or quoted qualifier that never closes. `GenBankFeatureTable` (`Core/Inputs`) ports exactly those `parse_features` / `parse_feature` refusals, so `InputFileValidator` refuses such a file before a VM is booted; a line shorter than column 21, which Biopython only warns about, still reads. The feature table is never parsed into data in the app. MEASURED 2026-10-03: a seeded 1500-file mutation sweep of the three sample GenBanks showed no file the worker reads that the port refuses, and 13 files the worker still refuses that the app accepts (a stray `)` line and an early `//`, from Biopython's consumer-level checks), tracked separately.
+
 **Contig names are hardened against real filename hazards (issue #350, MEASURED
 2026-09-19):** `_safe_contig_name` (`readers/input.py`) disambiguates a name that
 sanitizes to a Windows-reserved device name (`CON`, `NUL`, `PRN`, `COM1`..`9`,

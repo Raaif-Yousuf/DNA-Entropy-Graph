@@ -59,6 +59,9 @@ public sealed class InputFileValidatorWorkerParityTests
         // Python refuses these for Biopython-specific reasons (a parse error); the C# reader finds
         // no ORIGIN block and also refuses. Same verdict, different reason text.
         ["malformed/genbank_missing_origin.gb"] = new(false, InputProblemCode.NoRecords),
+        // Feature-table refusals (#548): Biopython's own scanner raises on these two shapes.
+        ["malformed/genbank_qualifier_missing_slash.gb"] = new(false, InputProblemCode.NoRecords),
+        ["malformed/genbank_feature_line_shorter_than_qualifier_indent.gb"] = new(false, InputProblemCode.NoRecords),
         ["malformed/genbank_truncated_mid_feature_table.gb"] = new(false, InputProblemCode.NoRecords),
 
         // refused: a bad base, same code and same 1-based position as Python's message
@@ -77,13 +80,7 @@ public sealed class InputFileValidatorWorkerParityTests
     /// VM). These files are NOT in <see cref="Table" />; <c>Known_false_accepts_are_still_accepted_here</c>
     /// asserts the C# side so it goes red the day someone closes the gap.
     /// </summary>
-    private static readonly Dictionary<string, string> FalseAccepts = new()
-    {
-        ["malformed/genbank_qualifier_missing_slash.gb"] =
-            "Biopython rejects a feature qualifier without its leading slash; GenBankLite does not parse the feature table.",
-        ["malformed/genbank_feature_line_shorter_than_qualifier_indent.gb"] =
-            "The worker refuses a feature-table line shorter than the GenBank qualifier indent (#536); GenBankLite does not parse the feature table.",
-    };
+    private static readonly Dictionary<string, string> FalseAccepts = new();
 
     private static string WorkerData(string relative) =>
         Path.Combine(ContractFixtures.RepoRoot, "worker", "tests", "data", relative.Replace('/', Path.DirectorySeparatorChar));
@@ -109,7 +106,6 @@ public sealed class InputFileValidatorWorkerParityTests
     [Fact]
     public void Known_false_accepts_are_still_accepted_here_and_each_has_a_reason()
     {
-        FalseAccepts.Keys.ShouldNotBeEmpty();
         foreach (var (relative, reason) in FalseAccepts)
         {
             reason.Length.ShouldBeGreaterThan(20);
