@@ -4,15 +4,13 @@
 
 
   "CODE-ONLY-COMMAND:ShellViewModel.NavigateToCommand": "#62, done: NavigationView.SelectionChanged is an event, not a bindable Command= property in WinUI 3 - MainWindow.xaml.cs's handler is the only way to wire a NavigationView selection to a RelayCommand, so this stays C#-only by construction, not by omission.",
+  "CODE-ONLY-COMMAND:NewRunViewModel.AddDroppedCommand": "#63, done: Drop is an event, not a bindable Command= property, so NewRunPage.xaml.cs forwards the dropped items to this command (the same shape as NavigateToCommand). Stays C#-only by construction.",
 
   "TEST-ONLY-COMMAND:WizardViewModel.SignInCommand": "#99 builds the first-run wizard pages. No wizard page or any other XAML binds a sign-in button yet, so nothing in the shipped UI can start a sign-in; it was UNBOUND-COMMAND until #48 added tests that drive it, which changed the guard's classification, not the fact.",
   "TEST-ONLY-OBSERVABLE:WizardViewModel.SignInErrorText": "#99 builds the first-run wizard pages; #48 added the property, no XAML shows it yet",
   "TEST-ONLY-OBSERVABLE:WizardViewModel.SignInActionText": "#99 builds the first-run wizard pages; #48 added the property, no XAML shows it yet",
   "CODE-ONLY-OBSERVABLE:WizardViewModel.IsSignedIn": "#99 builds the first-run wizard pages; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.IsSignedIn, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.IsSignedIn in Cloud.Tests.",
 
-  "TEST-ONLY-COMMAND:NewRunViewModel.BrowseCommand": "#63 builds the New run page; today only NewRunViewModelTests drives it",
-  "TEST-ONLY-OBSERVABLE:NewRunViewModel.SelectedInputPath": "#63 builds the New run page; today only NewRunViewModelTests reads it",
-  "TEST-ONLY-OBSERVABLE:NewRunViewModel.ModelId": "#63 builds the New run page's model picker",
 
   "CODE-ONLY-OBSERVABLE:RunProgressViewModel.JobId": "#66; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CanCancel": "#66, done: CanCancel only ever drives CancelCommand's CanExecute via [NotifyCanExecuteChangedFor]; WinUI's Button.Command already syncs IsEnabled from ICommand.CanExecuteChanged, so no view ever needs to read the bool property itself.",
@@ -21,10 +19,6 @@
 
   "UNBOUND-COMMAND:ResultsViewModel.LoadCommand": "#102 builds the Results page",
   "CODE-ONLY-OBSERVABLE:ResultsViewModel.JobId": "#102; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",
-
-  "UNBOUND-COMMAND:HistoryViewModel.RefreshCommand": "#101 builds the Runs page",
-  "UNBOUND-COMMAND:HistoryViewModel.OpenRunCommand": "#101 builds the Runs page",
-
   "UNBOUND-COMMAND:CloudResourcesViewModel.ConfirmDeleteCommand": "#105 builds the Cloud page",
   "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests.",
 

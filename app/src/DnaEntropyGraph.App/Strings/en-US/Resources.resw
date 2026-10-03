@@ -324,6 +324,426 @@
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
   </data>
+  <data name="NewRunPastedName" xml:space="preserve">
+    <value>Pasted sequence</value>
+  </data>
+  <data name="NewRunPillKind_Fasta" xml:space="preserve">
+    <value>FASTA</value>
+  </data>
+  <data name="NewRunPillKind_GenBank" xml:space="preserve">
+    <value>GenBank</value>
+  </data>
+  <data name="NewRunPillKind_Paste" xml:space="preserve">
+    <value>Plain sequence</value>
+  </data>
+  <data name="NewRunPillRecordsOne" xml:space="preserve">
+    <value>1 record</value>
+  </data>
+  <data name="NewRunPillRecordsMany" xml:space="preserve">
+    <value>{0} records</value>
+  </data>
+  <data name="NewRunPillBases" xml:space="preserve">
+    <value>{0} bases</value>
+  </data>
+  <data name="NewRunPillGenesOne" xml:space="preserve">
+    <value>1 gene</value>
+  </data>
+  <data name="NewRunPillGenesMany" xml:space="preserve">
+    <value>{0} genes</value>
+  </data>
+  <data name="NewRunPillWhereRecordBase" xml:space="preserve">
+    <value>(record {0}, base {1})</value>
+  </data>
+  <data name="NewRunPillWhereRecord" xml:space="preserve">
+    <value>(record {0})</value>
+  </data>
+  <data name="NewRunPillRnaNotice" xml:space="preserve">
+    <value>This file has the letter U, which means it is RNA. Choose Treat as RNA below to read each U as T and run it.</value>
+  </data>
+  <data name="NewRunPasteCount" xml:space="preserve">
+    <value>{0} bases</value>
+  </data>
+  <data name="NewRunStatusPathNotFound" xml:space="preserve">
+    <value>We could not find the file {0}. Check the path, or drop the file onto this page instead.</value>
+  </data>
+  <data name="NewRunStatusFolderEmpty" xml:space="preserve">
+    <value>There are no FASTA or GenBank files directly inside {0}. Drop the files themselves, or a folder that holds them.</value>
+  </data>
+  <data name="NewRunPillChecking.Text" xml:space="preserve">
+    <value>Checking this file...</value>
+  </data>
+  <data name="NewRunDropTitle.Text" xml:space="preserve">
+    <value>Drop FASTA or GenBank files, or a folder of them, here</value>
+  </data>
+  <data name="NewRunDropHint.Text" xml:space="preserve">
+    <value>Each file is checked on this PC before anything is rented from Google Cloud.</value>
+  </data>
+  <data name="NewRunAddFiles.Content" xml:space="preserve">
+    <value>Add files</value>
+  </data>
+  <data name="NewRunAddFiles.ToolTipService.ToolTip" xml:space="preserve">
+    <value>Add files (Ctrl+O)</value>
+  </data>
+  <data name="NewRunPasteExpander.Header" xml:space="preserve">
+    <value>Paste a sequence</value>
+  </data>
+  <data name="NewRunPasteBox.PlaceholderText" xml:space="preserve">
+    <value>Paste bases here, or a FASTA record, or the path of a file</value>
+  </data>
+  <data name="NewRunPasteAdd.Content" xml:space="preserve">
+    <value>Add sequence</value>
+  </data>
+  <data name="NewRunRemoveItem.Content" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="NewRunTreatAsRna.Content" xml:space="preserve">
+    <value>Treat as RNA</value>
+  </data>
+  <data name="NewRunStopTreatAsRna.Content" xml:space="preserve">
+    <value>Stop treating as RNA</value>
+  </data>
+  <data name="NewRunRnaTreatedNote.Text" xml:space="preserve">
+    <value>Treating the input as RNA: each U is read as T.</value>
+  </data>
+  <data name="NewRunRun.Content" xml:space="preserve">
+    <value>Run</value>
+  </data>
+  <data name="NewRunNotice_RecordSkippedNoSequence" xml:space="preserve">
+    <value>Record {0} has a name but no sequence, so it was left out.</value>
+  </data>
+  <data name="NewRunNotice_EmptyHeaders" xml:space="preserve">
+    <value>{0} records have no name after the &gt; sign. They still run.</value>
+  </data>
+  <data name="NewRunNotice_EmptyHeaders_One" xml:space="preserve">
+    <value>1 record has no name after the &gt; sign. It still runs.</value>
+  </data>
+  <data name="NewRunNotice_RepeatedIds" xml:space="preserve">
+    <value>{0} record names appear more than once. Every record still runs and is numbered separately.</value>
+  </data>
+  <data name="NewRunNotice_RepeatedIds_One" xml:space="preserve">
+    <value>1 record name appears more than once. Every record still runs and is numbered separately.</value>
+  </data>
+  <data name="NewRunNotice_GenBankRecordSkippedNoSequence" xml:space="preserve">
+    <value>Record {0} has no sequence, so it was left out.</value>
+  </data>
+  <data name="NewRunNotice_RnaConverted" xml:space="preserve">
+    <value>Read {0} U letters as T, because this input is treated as RNA.</value>
+  </data>
+  <data name="NewRunNotice_RnaConverted_One" xml:space="preserve">
+    <value>Read 1 U letter as T, because this input is treated as RNA.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityMasked" xml:space="preserve">
+    <value>{0} letters that stand for more than one base (such as N or R) were replaced with N. The entropy there reflects the model&apos;s guess for N.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityMasked_One" xml:space="preserve">
+    <value>1 letter that stands for more than one base (such as N or R) was replaced with N. The entropy there reflects the model&apos;s guess for N.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityKept" xml:space="preserve">
+    <value>{0} letters stand for more than one base (such as N or R). They are kept, and the entropy there reflects the model&apos;s guess for that letter.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityKept_One" xml:space="preserve">
+    <value>1 letter stands for more than one base (such as N or R). It is kept, and the entropy there reflects the model&apos;s guess for that letter.</value>
+  </data>
+  <data name="NewRunNotice_ShortSequence" xml:space="preserve">
+    <value>This sequence is only {0} bases long, so the entropy near its start mostly reflects the model&apos;s prior. Add more sequence if you can.</value>
+  </data>
+  <data name="NewRunNotice_ShortSequence_One" xml:space="preserve">
+    <value>This sequence is only 1 base long, so the entropy near its start mostly reflects the model&apos;s prior. Add more sequence if you can.</value>
+  </data>
+  <data name="NewRunNotice_LeadingHeaderIgnored" xml:space="preserve">
+    <value>The first line starts with &gt; so it was treated as a name and ignored.</value>
+  </data>
+  <data name="NewRunNotice_DigitsRemoved" xml:space="preserve">
+    <value>Removed {0} digits (such as line numbers) from the sequence.</value>
+  </data>
+  <data name="NewRunNotice_DigitsRemoved_One" xml:space="preserve">
+    <value>Removed 1 digit (such as a line number) from the sequence.</value>
+  </data>
+  <data name="NewRunPillCheckStopped" xml:space="preserve">
+    <value>The check of this file was stopped. Remove it and add it again.</value>
+  </data>
+  <data name="NewRunStatusDropFailed" xml:space="preserve">
+    <value>We could not read what you dropped. Drop the files again, or use Add files.</value>
+  </data>
+  <data name="NewRunStatusDropVirtual" xml:space="preserve">
+    <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
+  </data>
+  <data name="NewRunStatusStartFailed" xml:space="preserve">
+    <value>We could not start the run. Check your Google Cloud connection on the Cloud page, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusBrowseFailed" xml:space="preserve">
+    <value>The file chooser could not open. Drag your files onto the drop area instead, or choose Add files again.</value>
+  </data>
+  <data name="NewRunStatusPasteFailed" xml:space="preserve">
+    <value>We could not save the pasted sequence. Check that your disk has free space, then choose Add sequence again.</value>
+  </data>
+  <data name="NewRunRunsSelectedOnly.Text" xml:space="preserve">
+    <value>Run starts only the file selected in the list. Running several files together is coming.</value>
+  </data>
+  <data name="Runs_Empty_None" xml:space="preserve">
+    <value>No runs yet. Choose New run to start your first one.</value>
+  </data>
+  <data name="Runs_Empty_NoMatch" xml:space="preserve">
+    <value>No runs match. Clear the search box or choose All runs.</value>
+  </data>
+  <data name="Runs_Group_Today" xml:space="preserve">
+    <value>Today</value>
+  </data>
+  <data name="Runs_Group_Yesterday" xml:space="preserve">
+    <value>Yesterday</value>
+  </data>
+  <data name="Runs_Status_Active" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="Runs_Status_Completed" xml:space="preserve">
+    <value>Completed</value>
+  </data>
+  <data name="Runs_Status_Partial" xml:space="preserve">
+    <value>Partly completed</value>
+  </data>
+  <data name="Runs_Status_Failed" xml:space="preserve">
+    <value>Failed</value>
+  </data>
+  <data name="Runs_Status_Cancelled" xml:space="preserve">
+    <value>Cancelled</value>
+  </data>
+  <data name="Runs_Filter_All" xml:space="preserve">
+    <value>All runs</value>
+  </data>
+  <data name="Runs_Filter_Active" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="Runs_Filter_Completed" xml:space="preserve">
+    <value>Completed</value>
+  </data>
+  <data name="Runs_Filter_Failed" xml:space="preserve">
+    <value>Failed</value>
+  </data>
+  <data name="Runs_Filter_Cancelled" xml:space="preserve">
+    <value>Cancelled</value>
+  </data>
+  <data name="Runs_Open_Missing_Title" xml:space="preserve">
+    <value>Files are not on this PC</value>
+  </data>
+  <data name="Runs_Open_Missing_Body" xml:space="preserve">
+    <value>This run's folder is gone from this PC. Choose Download again to restore it from your Google Cloud storage.</value>
+  </data>
+  <data name="Runs_Rerun_NoOptions_Title" xml:space="preserve">
+    <value>Cannot repeat this run</value>
+  </data>
+  <data name="Runs_Rerun_NoOptions_Body" xml:space="preserve">
+    <value>The settings of this run were not saved. Choose New run and set it up again.</value>
+  </data>
+  <data name="Runs_Rerun_NoInput_Title" xml:space="preserve">
+    <value>The input file is gone</value>
+  </data>
+  <data name="Runs_Rerun_NoInput_Body" xml:space="preserve">
+    <value>Neither the app's copy nor the original file can be found. Choose New run and pick the file again.</value>
+  </data>
+  <data name="Runs_Redownload_Done_Title" xml:space="preserve">
+    <value>Files restored</value>
+  </data>
+  <data name="Runs_Redownload_Done_Body" xml:space="preserve">
+    <value>The results are back in this run's folder.</value>
+  </data>
+  <data name="Runs_Redownload_Expired_Title" xml:space="preserve">
+    <value>The cloud copy has expired</value>
+  </data>
+  <data name="Runs_Redownload_Expired_Body" xml:space="preserve">
+    <value>Google Cloud storage no longer keeps this run's results. Choose Run again to compute them again.</value>
+  </data>
+  <data name="Runs_Redownload_NoCloudCopy_Title" xml:space="preserve">
+    <value>No cloud copy</value>
+  </data>
+  <data name="Runs_Redownload_NoCloudCopy_Body" xml:space="preserve">
+    <value>This run has no results in Google Cloud storage. Choose Run again to compute them again.</value>
+  </data>
+  <data name="Runs_Redownload_ResultNotFound_Title" xml:space="preserve">
+    <value>Results not found</value>
+  </data>
+  <data name="Runs_Redownload_ResultNotFound_Body" xml:space="preserve">
+    <value>Your storage has no finished results for this run. Choose Run again to compute them again.</value>
+  </data>
+  <data name="Runs_Redownload_Refused_Title" xml:space="preserve">
+    <value>Folder not allowed</value>
+  </data>
+  <data name="Runs_Redownload_Refused_Body" xml:space="preserve">
+    <value>This run's folder is outside its output folder, so nothing was written. Choose Run again to save the results to a new folder.</value>
+  </data>
+  <data name="Runs_Redownload_Failed_Title" xml:space="preserve">
+    <value>Download failed</value>
+  </data>
+  <data name="Runs_Redownload_Failed_Body" xml:space="preserve">
+    <value>The files could not be downloaded. Check your internet connection, then choose Download again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Confirm_Title" xml:space="preserve">
+    <value>Delete the cloud copy?</value>
+  </data>
+  <data name="Runs_DeleteCloud_Confirm_Body" xml:space="preserve">
+    <value>This permanently deletes this run's results from your Google Cloud storage. Files on this PC are not touched. Choose Continue to go ahead.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Done_Title" xml:space="preserve">
+    <value>Cloud copy deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Done_Body" xml:space="preserve">
+    <value>This run's results are gone from Google Cloud storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_NoCloudCopy_Title" xml:space="preserve">
+    <value>Nothing to delete</value>
+  </data>
+  <data name="Runs_DeleteCloud_NoCloudCopy_Body" xml:space="preserve">
+    <value>This run has no cloud copy.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Refused_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Refused_Body" xml:space="preserve">
+    <value>This run's storage location is not recognised, so nothing was deleted. Open the Cloud page to review your storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Failed_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_Failed_Body" xml:space="preserve">
+    <value>The cloud copy was not deleted. Check your internet connection, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Confirm_Title" xml:space="preserve">
+    <value>Delete the files on this PC?</value>
+  </data>
+  <data name="Runs_DeleteLocal_Confirm_Body" xml:space="preserve">
+    <value>This deletes the folder {0} and everything in it. Your original input file is not touched. Choose Continue to go ahead.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Done_Title" xml:space="preserve">
+    <value>Files deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Done_Body" xml:space="preserve">
+    <value>This run's folder was deleted from this PC. Choose Download again to restore it.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Nothing_Title" xml:space="preserve">
+    <value>Nothing to delete</value>
+  </data>
+  <data name="Runs_DeleteLocal_Nothing_Body" xml:space="preserve">
+    <value>This run has no folder on this PC.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Refused_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Refused_Body" xml:space="preserve">
+    <value>This run's folder is outside its output folder, so it was left alone. Delete it yourself in File Explorer if you want it gone.</value>
+  </data>
+  <data name="Runs_Remove_Confirm_Title" xml:space="preserve">
+    <value>Remove from the list?</value>
+  </data>
+  <data name="Runs_Remove_Confirm_Body" xml:space="preserve">
+    <value>This removes the run from this list only. Its files and cloud copy are not deleted. Choose Continue to go ahead.</value>
+  </data>
+  <data name="RunsSearchBox.PlaceholderText" xml:space="preserve">
+    <value>Search by name, file or id</value>
+  </data>
+  <data name="RunsSearchBox.AutomationProperties.Name" xml:space="preserve">
+    <value>Search runs</value>
+  </data>
+  <data name="RunsStatusFilter.AutomationProperties.Name" xml:space="preserve">
+    <value>Filter by status</value>
+  </data>
+  <data name="RunsRefreshButton.Content" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="RunsOpenButton.Content" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="RunsRerunButton.Content" xml:space="preserve">
+    <value>Run again</value>
+  </data>
+  <data name="RunsRedownloadButton.Content" xml:space="preserve">
+    <value>Download again</value>
+  </data>
+  <data name="RunsDeleteCloudButton.Content" xml:space="preserve">
+    <value>Delete cloud copy</value>
+  </data>
+  <data name="RunsDeleteLocalButton.Content" xml:space="preserve">
+    <value>Delete files on this PC</value>
+  </data>
+  <data name="RunsRemoveButton.Content" xml:space="preserve">
+    <value>Remove from list</value>
+  </data>
+  <data name="Dialog_Confirm_Primary" xml:space="preserve">
+    <value>Continue</value>
+  </data>
+  <data name="Dialog_Confirm_Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConnected_Title" xml:space="preserve">
+    <value>Cloud copy not deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConnected_Body" xml:space="preserve">
+    <value>Deleting a cloud copy from this page comes in a later version, so nothing was deleted. The copy is removed on its own when its storage time ends; to remove it sooner, delete this run's folder in your Google Cloud storage from the Google Cloud console.</value>
+  </data>
+  <data name="Runs_Redownload_Changed_Title" xml:space="preserve">
+    <value>Changed files kept</value>
+  </data>
+  <data name="Runs_Redownload_Changed_Body" xml:space="preserve">
+    <value>{0} files in this folder differed from your cloud copy. Each was kept in the same folder, renamed to its old name followed by "(changed", the date and the time in brackets, for example "report (changed 2026-10-03 120000).txt". The original of each was restored. Open the folder to compare them, and delete the ones you do not need.</value>
+  </data>
+  <data name="Runs_Redownload_Changed_Body_One" xml:space="preserve">
+    <value>1 file in this folder differed from your cloud copy. It was kept in the same folder, renamed to its old name followed by "(changed", the date and the time in brackets, for example "report (changed 2026-10-03 120000).txt". The original was restored. Open the folder to compare the two, and delete the one you do not need.</value>
+  </data>
+  <data name="Runs_Redownload_Partial_Title" xml:space="preserve">
+    <value>Some files restored</value>
+  </data>
+  <data name="Runs_Redownload_Partial_Body" xml:space="preserve">
+    <value>This run did not finish, so its results may be incomplete. The files that exist were restored. Choose Run again for a complete result.</value>
+  </data>
+  <data name="Runs_DeleteLocal_InUse_Title" xml:space="preserve">
+    <value>Could not delete the files</value>
+  </data>
+  <data name="Runs_DeleteLocal_InUse_Body" xml:space="preserve">
+    <value>A file in the folder is open in another program. Close that program, then choose Delete files on this PC again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_AccessDenied_Title" xml:space="preserve">
+    <value>Windows would not allow the delete</value>
+  </data>
+  <data name="Runs_DeleteLocal_AccessDenied_Body" xml:space="preserve">
+    <value>Windows denied access to the folder or to a read-only file in it. Open the folder in File Explorer and delete it there, or choose Delete files on this PC again after changing its permissions.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Partial_Title" xml:space="preserve">
+    <value>Some files were deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Partial_Body" xml:space="preserve">
+    <value>Files deleted: {0}. Files that could not be deleted: {1}, because they are open in another program or Windows denied access. Close any program using the folder, then choose Delete files on this PC again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Link_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Link_Body" xml:space="preserve">
+    <value>This run's folder, or a folder above it, is a shortcut (a junction or symbolic link) to somewhere else, so nothing was deleted. Open the folder in File Explorer to see where it leads, and delete it there if you want it gone.</value>
+  </data>
+  <data name="Runs_Rerun_Failed_Title" xml:space="preserve">
+    <value>Could not start the run</value>
+  </data>
+  <data name="Runs_Rerun_Failed_Body" xml:space="preserve">
+    <value>The run could not be started. Choose Run again to try once more, or choose New run.</value>
+  </data>
+  <data name="Runs_Remove_Failed_Title" xml:space="preserve">
+    <value>Could not remove the run</value>
+  </data>
+  <data name="Runs_Remove_Failed_Body" xml:space="preserve">
+    <value>The run could not be removed from the list. Choose Remove from list again.</value>
+  </data>
+  <data name="Runs_Refresh_Failed_Title" xml:space="preserve">
+    <value>Could not load the list</value>
+  </data>
+  <data name="Runs_Refresh_Failed_Body" xml:space="preserve">
+    <value>The list of runs could not be read. Choose Refresh to try again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Running" xml:space="preserve">
+    <value>This run is still going. Wait for it to finish, then choose Delete cloud copy.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_NoCopy" xml:space="preserve">
+    <value>This run has no cloud copy left to delete. Choose Run again if you need its results.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_NotConnected" xml:space="preserve">
+    <value>Deleting a cloud copy from this page comes in a later version. The copy is removed on its own when its storage time ends; to remove it sooner, delete this run's folder in your Google Cloud storage from the Google Cloud console.</value>
+  </data>
   <data name="AuthError_SIGNIN_EXPIRED" xml:space="preserve">
     <value>Your sign-in expired. This happens on its own, roughly once a week, while the app's Google approval is still in its early testing phase. It also happens if you removed this app's access in your Google account settings. Choose Sign in again.</value>
   </data>

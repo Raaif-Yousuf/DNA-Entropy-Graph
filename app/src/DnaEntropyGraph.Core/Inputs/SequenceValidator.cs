@@ -40,6 +40,9 @@ public enum SequenceFailure
 /// <summary>A clean, model-ready sequence plus any non-fatal notices for the user.</summary>
 public sealed record ValidatedSequence(string Seq, IReadOnlyList<string> Notices)
 {
+    /// <summary>The same notices as <see cref="Notices"/>, as machine codes with their numbers (built side by side).</summary>
+    public IReadOnlyList<InputNotice> NoticeCodes { get; init; } = [];
+
     public int Length => Seq.Length;
 }
 
@@ -104,11 +107,17 @@ public static class SequenceValidator
         ArgumentNullException.ThrowIfNull(raw);
 
         var notices = new List<string>();
+        var coded = new List<InputNotice>();
 
         var (text, headerNotices) = StripLeadingHeader(raw);
         notices.AddRange(headerNotices);
-        var (seq, normalizeNotices) = Normalize(text);
+        coded.AddRange(headerNotices.Select(_ => new InputNotice(InputNoticeCode.LeadingHeaderIgnored)));
+        var (seq, normalizeNotices, nDigits) = Normalize(text);
         notices.AddRange(normalizeNotices);
+        if (nDigits > 0)
+        {
+            coded.Add(new InputNotice(InputNoticeCode.DigitsRemoved, nDigits));
+        }
 
         // RNA handling must come before the strict A/C/G/T check, since U is not in ACGT.
         if (seq.Contains('U'))
@@ -118,6 +127,7 @@ public static class SequenceValidator
                 var count = seq.Count(c => c == 'U');
                 seq = seq.Replace('U', 'T');
                 notices.Add($"Converted {count} U->T (RNA input).");
+                coded.Add(new InputNotice(InputNoticeCode.RnaConverted, count));
             }
             else
             {
@@ -203,6 +213,7 @@ public static class SequenceValidator
                             $"Masked {bad.Count} ambiguity code(s) ({codesJoined}) to 'N'; entropy "
                             + "at those positions reflects the model's prediction for 'N', not the "
                             + "original code (docs/science_and_formats.md).");
+                        coded.Add(new InputNotice(InputNoticeCode.AmbiguityMasked, bad.Count));
                         break;
                     }
                 default: // AmbiguityPolicy.Keep
@@ -210,6 +221,7 @@ public static class SequenceValidator
                         $"Kept {bad.Count} ambiguity code(s) ({codesJoined}); entropy at those "
                         + "positions reflects the model's prediction for that exact code, not a "
                         + "definite base (docs/science_and_formats.md).");
+                    coded.Add(new InputNotice(InputNoticeCode.AmbiguityKept, bad.Count));
                     break;
             }
         }
@@ -228,9 +240,10 @@ public static class SequenceValidator
             notices.Add(
                 $"Warning: sequence is short ({seq.Length} nt); entropy near the start is "
                 + "dominated by the model's prior.");
+            coded.Add(new InputNotice(InputNoticeCode.ShortSequence, seq.Length));
         }
 
-        return new ValidatedSequence(seq, notices);
+        return new ValidatedSequence(seq, notices) { NoticeCodes = coded };
     }
 
     /// <summary>Drop a single leading FASTA-style header line (<c>&gt;...</c>) if present.</summary>
@@ -258,7 +271,7 @@ public static class SequenceValidator
     }
 
     /// <summary>Remove whitespace and digits (e.g. line numbers); uppercase. No U-&gt;T here.</summary>
-    private static (string Seq, List<string> Notices) Normalize(string text)
+    private static (string Seq, List<string> Notices, int Digits) Normalize(string text)
     {
         var notices = new List<string>();
         // One pass over code points, mirroring Python: remove str whitespace, count isdigit()
@@ -295,7 +308,7 @@ public static class SequenceValidator
         {
             notices.Add($"Removed {nDigits} digit character(s) (e.g. line numbers).");
         }
-        return (sb.ToString(), notices);
+        return (sb.ToString(), notices, nDigits);
     }
 
     private static bool IsSecondOfPair(string s, int k) => char.IsLowSurrogate(s[k]) && k > 0 && char.IsHighSurrogate(s[k - 1]);

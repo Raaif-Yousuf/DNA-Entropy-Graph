@@ -103,6 +103,85 @@ def test_a_fully_wired_tree_has_no_findings(tmp_path):
     assert _codes(_wired(tmp_path / "w")) == set()
 
 
+def _typed(root: Path, item_cs: str, template_body: str, quote: str = '"') -> Path:
+    page = root / "src/Demo.App/Views/ThingPage.xaml"
+    page.write_text(
+        page.read_text(encoding="utf-8").replace(
+            "</Page>", f"<DataTemplate x:DataType={quote}vm:Item{quote}>{template_body}</DataTemplate></Page>"
+        ),
+        encoding="utf-8",
+    )
+    (root / "src/Demo.Presentation/Item.cs").write_text(item_cs, encoding="utf-8")
+    return root
+
+
+POSITIONAL_RECORD = "public sealed record Item(string Header, IReadOnlyList<string> Items, int Count = 0);\n"
+
+
+def test_a_typed_template_binding_a_positional_record_parameter_is_clean(tmp_path):
+    root = _typed(_wired(tmp_path / "w"), POSITIONAL_RECORD, '<TextBlock Text="{x:Bind Header}" /><ListView ItemsSource="{x:Bind Items}" />')
+    assert "DANGLING-BINDING" not in _codes(root)
+
+
+def test_a_positional_record_default_value_parameter_is_still_a_member(tmp_path):
+    root = _typed(_wired(tmp_path / "w"), POSITIONAL_RECORD, '<TextBlock Text="{x:Bind Count}" />')
+    assert "DANGLING-BINDING" not in _codes(root)
+
+
+def test_a_typed_template_binding_a_name_the_positional_record_lacks_is_caught(tmp_path):
+    root = _typed(_wired(tmp_path / "w"), POSITIONAL_RECORD, '<TextBlock Text="{x:Bind Heder}" />')
+    assert "DANGLING-BINDING" in _codes(root)
+
+
+def test_the_primary_constructor_parameters_of_a_plain_class_are_not_members(tmp_path):
+    cs = "public sealed class Item(string Header) { public string Own { get; } = Header; }\n"
+    root = _typed(_wired(tmp_path / "w"), cs, '<TextBlock Text="{x:Bind Header}" />')
+    assert "DANGLING-BINDING" in _codes(root)
+
+
+def test_a_member_of_another_type_in_the_same_file_is_not_a_member(tmp_path):
+    cs = (
+        'public sealed class Item { public string Own { get; } = ""; }\n'
+        'public sealed class Other { public string OnlyOnOther { get; } = ""; }\n'
+    )
+    bad = _typed(_wired(tmp_path / "bad"), cs, '<TextBlock Text="{x:Bind OnlyOnOther}" />')
+    good = _typed(_wired(tmp_path / "good"), cs, '<TextBlock Text="{x:Bind Own}" />')
+    assert "DANGLING-BINDING" in _codes(bad)
+    assert "DANGLING-BINDING" not in _codes(good)
+
+
+def test_a_member_declared_before_the_class_in_the_same_file_does_not_leak_in(tmp_path):
+    cs = (
+        'public sealed class Before { public string Early { get; } = ""; }\n'
+        'public sealed class Item { public string Own { get; } = ""; }\n'
+    )
+    assert "DANGLING-BINDING" in _codes(_typed(_wired(tmp_path / "w"), cs, '<TextBlock Text="{x:Bind Early}" />'))
+
+
+def test_a_single_quoted_data_type_is_read_both_ways(tmp_path):
+    cs = 'public sealed class Item { public string Own { get; } = ""; }\n'
+    bad = _typed(_wired(tmp_path / "bad"), cs, '<TextBlock Text="{x:Bind Nope}" />', quote="'")
+    good = _typed(_wired(tmp_path / "good"), cs, '<TextBlock Text="{x:Bind Own}" />', quote="'")
+    assert "DANGLING-BINDING" in _codes(bad)
+    assert "DANGLING-BINDING" not in _codes(good)
+
+
+def test_a_binding_in_a_nested_typed_template_is_held_to_the_inner_type(tmp_path):
+    cs = 'public sealed record Group(string Header);\npublic sealed class Row { public string Title { get; } = ""; }\n'
+    inner = '<TextBlock Text="{x:Bind Header}" /><DataTemplate x:DataType="vm:Row"><TextBlock Text="{x:Bind %s}" /></DataTemplate>'
+    page = tmp_path / "w"
+    root = _wired(page)
+    pg = root / "src/Demo.App/Views/ThingPage.xaml"
+    pg.write_text(
+        pg.read_text(encoding="utf-8").replace("</Page>", '<DataTemplate x:DataType="vm:Group">' + inner % "Title" + "</DataTemplate></Page>"),
+        encoding="utf-8",
+    )
+    (root / "src/Demo.Presentation/Item.cs").write_text(cs, encoding="utf-8")
+    assert "DANGLING-BINDING" not in _codes(root)
+    pg.write_text(pg.read_text(encoding="utf-8").replace("{x:Bind Title}", "{x:Bind Titel}"), encoding="utf-8")
+    assert "DANGLING-BINDING" in _codes(root)
+
+
 def test_a_command_no_xaml_binds_is_unbound(tmp_path):
     root = _wired(tmp_path / "w")
     page = root / "src/Demo.App/Views/ThingPage.xaml"
