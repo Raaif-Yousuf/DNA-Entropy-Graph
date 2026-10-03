@@ -222,8 +222,11 @@ def test_pipeline_single_record_fasta_produces_exactly_this_output_set(
     assert names == {
         "single.fasta",
         "single.entropy.bedgraph",
+        "single.entropy.smooth51.bedgraph",  # issue #126
         "single.entropy.geneious.gff3",
         "single.summary.txt",
+        "single.regions.bed",  # issue #125
+        "single.regions.gff3",
         "single.gb",
         "single.entropy.tsv",
         "single.surprisal.bedgraph",

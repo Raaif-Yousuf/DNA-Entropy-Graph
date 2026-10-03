@@ -33,5 +33,9 @@ public static class RunOptionsJson
         {
             return null;
         }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
     }
 }
