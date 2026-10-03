@@ -93,6 +93,19 @@ internal static class GoogleApiErrors
             || (status.Status == "RESOURCE_EXHAUSTED"
                 && RateLimitWording.Any(w => status.Message.Contains(w, StringComparison.OrdinalIgnoreCase)));
 
+    /// <summary>
+    /// A 403 that says a quota was exceeded (Cloud Billing answers "Cloud billing quota exceeded" this way). A 403 that
+    /// only mentions the word quota while denying permission ("use another project to pass your quota and billing")
+    /// is a permission error, so the wording must say "exceeded" and must not read as a permission denial.
+    /// </summary>
+    private static bool IsQuotaExceeded403(RpcStatus status, string lower)
+        => status.HttpStatus == 403
+            && lower.Contains("quota", StringComparison.Ordinal)
+            && lower.Contains("exceeded", StringComparison.Ordinal)
+            && !lower.Contains("permission", StringComparison.Ordinal)
+            && !lower.Contains("does not have", StringComparison.Ordinal)
+            && !lower.Contains("denied", StringComparison.Ordinal);
+
     public static CloudErrorKind KindOf(RpcStatus status)
     {
         var lower = status.Message.ToLowerInvariant();
@@ -113,7 +126,16 @@ internal static class GoogleApiErrors
             return CloudErrorKind.Billing;
         }
 
-        if (status.HasQuotaFailure || ((status.Status == "RESOURCE_EXHAUSTED" || status.HttpStatus == 403) && lower.Contains("quota", StringComparison.Ordinal)))
+        // USER_PROJECT_DENIED is a permission error whose text says "pass your quota and billing": the structured reason
+        // decides before any quota wording does.
+        if (status.Reasons.Any(r => string.Equals(r, "USER_PROJECT_DENIED", StringComparison.OrdinalIgnoreCase)))
+        {
+            return CloudErrorKind.Permission;
+        }
+
+        if (status.HasQuotaFailure
+            || (status.Status == "RESOURCE_EXHAUSTED" && lower.Contains("quota", StringComparison.Ordinal))
+            || IsQuotaExceeded403(status, lower))
         {
             return CloudErrorKind.Quota;
         }

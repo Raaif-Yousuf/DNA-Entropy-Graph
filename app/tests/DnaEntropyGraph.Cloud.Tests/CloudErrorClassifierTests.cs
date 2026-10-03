@@ -140,6 +140,18 @@ public class CloudErrorClassifierTests
         stockout.ShouldBe(CloudErrorKind.Stockout);
     }
 
+    // Issue #539 (round 3): the permission-denial rule is for a 403 (or an error with no status). A 412 or a 409 that
+    // happens to say "does not have permission" keeps its own structured meaning.
+    [Theory]
+    [InlineData(412, "The request does not have permission to proceed: blocked by constraints/gcp.restrictServiceUsage", CloudErrorKind.OrgPolicy)]
+    [InlineData(409, "Resource already exists; the caller does not have permission to overwrite it", CloudErrorKind.AlreadyExists)]
+    [InlineData(403, "The caller does not have permission", CloudErrorKind.Permission)]
+    [InlineData(null, "The caller does not have permission", CloudErrorKind.Permission)]
+    public void A_permission_denial_wording_only_decides_a_403_or_an_unknown_status(int? status, string message, CloudErrorKind expected)
+    {
+        CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
+    }
+
     [Fact]
     public void Org_policy_has_no_substring_fallback_unlike_the_other_eight_buckets()
     {
