@@ -1,0 +1,1 @@
+- The repo safety hooks now run from the primary checkout's `scripts/hooks/`, found through `git rev-parse --git-common-dir`, instead of from the current worktree's tree. Before this, a worktree whose branch predated a new hook could not run that hook script, so every shell call in it was refused. MEASURED 2026-10-03 right after #542 landed.
