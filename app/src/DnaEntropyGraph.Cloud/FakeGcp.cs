@@ -517,6 +517,13 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         return this;
     }
 
+    /// <summary>Undoes <see cref="WithCloudNotConnected"/>: the connection "comes back" (what a reconnect test needs).</summary>
+    public FakeGcp WithCloudConnected()
+    {
+        _notConnected = false;
+        return this;
+    }
+
     /// <summary>The error code <see cref="WithCloudNotConnected"/> throws under; the runner maps it to <c>cloud_not_connected</c>.</summary>
     public const string NotConnectedErrorCode = RunErrorCodes.NotConnectedGatewayCode;
 
@@ -780,7 +787,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow());
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels());
         _vms[key] = vm;
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)
@@ -885,12 +892,12 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
         if (_stoppingPolls > 0)
         {
-            _vms[key] = vm with { Status = "STOPPING", StatusReason = null };
+            _vms[key] = vm with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() };
             _stoppingPollsLeft[key] = _stoppingPolls;
         }
         else
         {
-            _vms[key] = vm with { Status = _stoppedStatus, StatusReason = null };
+            _vms[key] = vm with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() };
         }
     }
 
@@ -947,6 +954,40 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         ExpireOverdueVms();
         var name = $"deg-{jobId}";
         IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
+        return Task.FromResult(matches);
+    }
+
+    /// <summary>
+    /// Every VM this fake holds whose labels carry the app label and <paramref name="installationId"/> (a VM seeded without labels, such
+    /// as <see cref="WithAlreadyExists"/>'s, is never listed: like the real API, no label means no match). Same scripted-failure
+    /// behaviour as <see cref="FindByJobIdAsync"/>.
+    /// </summary>
+    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
+    {
+        if (ConsumeHang())
+        {
+            return HangAsync<IReadOnlyList<VmDescriptor>>(cancellationToken);
+        }
+
+        ThrowIfScriptedTransient();
+        if (_notConnected)
+        {
+            // Nothing can be listed without a connection (issue #59: the reconciler must see this as "no answer", not as "no VM").
+            throw Build(CloudErrorKind.Other, NotConnectedErrorCode, null, "No Google Cloud connection is built into this version.");
+        }
+
+        if (_findFailuresRemaining > 0 && _findError is not null)
+        {
+            _findFailuresRemaining--;
+            throw new CloudOperationException(_findError, CloudErrorClassifier.Classify(_findError));
+        }
+
+        ExpireOverdueVms();
+        IReadOnlyList<VmDescriptor> matches = _vms.Values
+            .Where(v => v.Labels is not null
+                && v.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
+                && v.Labels.TryGetValue("installation-id", out var owner) && owner == installationId)
+            .ToList();
         return Task.FromResult(matches);
     }
 

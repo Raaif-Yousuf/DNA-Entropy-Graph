@@ -105,7 +105,12 @@ public static class ServiceRegistration
         // CloudRetryOptions after calling this method (the last one wins).
         services.AddSingleton<CloudRetryOptions>(_ => new CloudRetryOptions());
         services.AddSingleton<CloudRetryLog>();
-        services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<CloudRetryLog>());
+        // Issue #530: the pipeline reports to this wrapper, which forwards to the log (the offline banner) and runs the reconciler again when the
+        // connection comes back. The reconciler is resolved lazily, on the first reconnect: it needs the gateways, which need this observer.
+        services.AddSingleton<ReconcileOnReconnect>(sp => new ReconcileOnReconnect(
+            sp.GetRequiredService<CloudRetryLog>(),
+            () => sp.GetRequiredService<JobReconciler>()));
+        services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<ReconcileOnReconnect>());
         // SWITCH POINT (#56): while every gateway is FakeGcp the refresher is FakeGcp too, because a 401 from a fake
         // must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked
         // about). When the first real gateway is wrapped, register GoogleAccountService here instead.
@@ -175,6 +180,7 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunInputStore>(),
                 sp.GetRequiredService<IWorkerImageProvider>(),
                 sp.GetRequiredService<ActiveRuns>(),
+                sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
                 Services.KnownFolders.Downloads);
         });

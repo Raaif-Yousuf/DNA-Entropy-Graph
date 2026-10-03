@@ -267,6 +267,8 @@ public class CloudJobRunnerOutageTests
         }
 
         public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
     }
 
     // ---- Finding 3: a hung call, and a deadline the VM's own limit does not pre-empt ----

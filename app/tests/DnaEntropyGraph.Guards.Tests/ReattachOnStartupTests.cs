@@ -37,20 +37,20 @@ public class ReattachOnStartupTests : IDisposable
         }
     }
 
-    private ServiceProvider Build(bool connected)
+    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root);
         if (connected)
         {
             // The last registration wins: the same fake, but connected, behind every resilient wrapper the app resolves.
-            services.AddSingleton<FakeGcp>(_ => new FakeGcp());
+            services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithWorker(worker));
         }
 
         return services.BuildServiceProvider();
     }
 
-    private async Task<string> SeedKilledRunAsync(ServiceProvider provider, string jobId, JobPhase phase, bool vm)
+    private async Task<string> SeedKilledRunAsync(ServiceProvider provider, string jobId, JobPhase phase, bool vm, AfterTaskAction after = AfterTaskAction.Stop)
     {
         // Runs.ProjectId references Projects: the setup wizard writes that row before any run exists.
         using (var connection = provider.GetRequiredService<DnaEntropyGraph.Persistence.SqliteDatabase>().OpenConnection())
@@ -67,7 +67,7 @@ public class ReattachOnStartupTests : IDisposable
         File.WriteAllText(original, "LOCUS       seq\nORIGIN\n        1 acgtacgtac\n//\n");
         var copy = await inputs.StageAsync(jobId, original, CancellationToken.None);
         var output = Path.Combine(_root, "out");
-        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = original, OutputFolder = output };
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = after, InputPath = original, OutputFolder = output };
         var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", null, [copy], output);
         if (vm)
         {
@@ -86,7 +86,8 @@ public class ReattachOnStartupTests : IDisposable
                 ProjectId: Project,
                 VmName: request.Spec.VmName,
                 AppVersion: "0.1.0",
-                InstallationId: "install-1"),
+                InstallationId: "install-1",
+                FinishedAt: JobStateMachine.IsTerminal(phase) ? DateTimeOffset.UtcNow.AddMinutes(-10) : null),
             CancellationToken.None);
         return jobId;
     }
@@ -128,6 +129,44 @@ public class ReattachOnStartupTests : IDisposable
         var row = await RowAsync(provider, "job-offline");
         row.Phase.ShouldBe(JobPhase.Running);
         row.ErrorCode.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_launch_entry_deletes_the_VM_of_a_Completed_run_labelled_delete_that_was_only_stopped()
+    {
+        using var provider = Build(connected: true, FakeWorkerMode.Never);
+        provider.GetRequiredService<ISettingsStore>().SetString(InstallationId.SettingsKey, "install-1");
+        await SeedKilledRunAsync(provider, "job-lifecycle", JobPhase.Completed, vm: true, AfterTaskAction.Delete);
+        var gcp = provider.GetRequiredService<FakeGcp>();
+        var vm = (await gcp.FindByJobIdAsync("job-lifecycle", CancellationToken.None)).Single();
+        await gcp.StopVmAsync(vm.Name, vm.Zone, CancellationToken.None);
+        (await gcp.FindByJobIdAsync("job-lifecycle", CancellationToken.None)).Single().Status.ShouldBe("STOPPED", "precondition: the VM is only stopped");
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        (await gcp.FindByJobIdAsync("job-lifecycle", CancellationToken.None)).ShouldBeEmpty("a run labelled delete must not leave a stopped VM billing its disk");
+    }
+
+    [Fact]
+    public async Task The_production_observer_judges_a_deferred_run_when_the_connection_comes_back()
+    {
+        using var provider = Build(connected: true);
+        await SeedKilledRunAsync(provider, "job-reconnect", JobPhase.Running, vm: true);
+        var gcp = provider.GetRequiredService<FakeGcp>().WithCloudNotConnected();
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+        (await RowAsync(provider, "job-reconnect")).Phase.ShouldBe(JobPhase.Running, "precondition: offline at launch, the row is deferred");
+
+        gcp.WithCloudConnected();
+        // The observer the resilience pipeline itself reports to (ServiceRegistration wires CloudCallPipeline to this registration).
+        var observer = provider.GetRequiredService<ICloudCallObserver>();
+        observer.ShouldBeOfType<ReconcileOnReconnect>();
+        observer.OnConnectivityChanged(offline: true);
+        observer.OnConnectivityChanged(offline: false);
+        await ((ReconcileOnReconnect)observer).WhenIdleAsync();
+
+        var row = await RowAsync(provider, "job-reconnect");
+        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+        provider.GetRequiredService<CloudRetryLog>().IsOffline.ShouldBeFalse("the offline banner's source still hears every change");
     }
 
     [Fact]

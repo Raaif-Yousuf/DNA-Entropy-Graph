@@ -26,7 +26,7 @@ public class JobReconcilerTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private sealed class Env
+    internal sealed class Env
     {
         public Env(FakeGcp? gcp = null, WorkerImageResolution? image = null)
         {
@@ -52,6 +52,8 @@ public class JobReconcilerTests
 
         public ActiveRuns Active { get; } = new();
 
+        public MemorySettingsStore Settings { get; } = new() { Values = { [InstallationId.SettingsKey] = "install-1" } };
+
         public CloudJobRunner Runner => new(Gcp, Gcp, Gcp, Gcp, Repo, (id, phase) => Notified.Add((id, phase)))
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
@@ -61,7 +63,7 @@ public class JobReconcilerTests
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         };
 
-        public JobReconciler Reconciler() => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null) => new(
             Runner,
             Gcp,
             Gcp,
@@ -69,9 +71,10 @@ public class JobReconcilerTests
             Inputs,
             Images,
             Active,
+            Settings,
             (id, phase) => Notified.Add((id, phase)),
             () => Path.Combine(AppData, "downloads"),
-            new FixedClock(Launch));
+            clock ?? new FixedClock(Launch));
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
@@ -86,7 +89,9 @@ public class JobReconcilerTests
             bool vm = false,
             bool keepOriginal = true,
             AfterTaskAction after = AfterTaskAction.Stop,
-            Func<RunRecord, RunRecord>? tweak = null)
+            Func<RunRecord, RunRecord>? tweak = null,
+            AfterKeepAliveAction afterKeepAlive = AfterKeepAliveAction.Stop,
+            int keepAliveMinutes = 30)
         {
             var original = TestInputs.Stage(jobId);
             var copy = await Inputs.StageAsync(jobId, original.LocalPath, CancellationToken.None);
@@ -100,6 +105,8 @@ public class JobReconcilerTests
                 ModelId = "evo2_7b",
                 RunTarget = "Cloud",
                 AfterTask = after,
+                AfterKeepAlive = afterKeepAlive,
+                KeepAliveMinutes = keepAliveMinutes,
                 InputPath = original.LocalPath,
                 OutputFolder = TestInputs.OutputParent(jobId),
             };
