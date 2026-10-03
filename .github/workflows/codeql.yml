@@ -1,11 +1,29 @@
 name: codeql
 
-# On demand only, unlike the other three workflows in this directory. The csharp lane
-# does a full Windows dotnet restore+build on top of the Python and Actions lanes, and
-# that is not worth paying for on every PR - it stays a manual gate (`gh workflow run
-# codeql.yml`) until there is a reason to want it on a schedule or a push instead.
+# Triggers (#484). Before this the workflow was dispatch-only and the csharp lane had never
+# produced an analysis, so app/ (OAuth, token store, cloud calls) was unscanned.
+#   pull_request  scans a change before merge (path filtered: docs-only PRs skip the Windows build).
+#   push to main  keeps the DEFAULT-BRANCH analysis fresh: code-scanning alerts open and close
+#                 based on default-branch analyses, and a PR analysis never closes a main alert.
+#   schedule      weekly, so new CodeQL queries reach unchanged code.
+#   workflow_dispatch  kept for a manual run (`gh workflow run codeql.yml`).
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+  pull_request:
+    paths:
+      - "app/**"
+      - "worker/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "worker/**"
+      - "scripts/**"
+      - ".github/workflows/**"
 
 permissions:
   contents: read
@@ -30,20 +48,21 @@ jobs:
         # and every lane's dotnet build already runs against it for real.
         language: [python, actions, csharp]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # csharp only: CodeQL's autobuild heuristic is not reliable for an unpackaged,
       # x64-platform, central-package-managed WinUI 3 solution (Directory.Build.props,
       # global.json's pinned SDK) - an explicit restore+build mirrors ci-app.yml's own
       # working build step instead of hoping autobuild guesses the same invocation.
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: matrix.language == 'csharp'
         with:
           global-json-file: app/global.json
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
         with:
           languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
           queries: security-and-quality
 
       - name: build (csharp)
@@ -53,11 +72,37 @@ jobs:
           dotnet restore
           dotnet build -c Release -p:Platform=x64 --no-restore
 
-      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/autobuild@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
         if: matrix.language != 'csharp'
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+        if: matrix.language != 'csharp'
         with:
+          category: "/language:${{ matrix.language }}"
+
+      # csharp: paths-ignore in the config file is not applied to a built compiled language, so about
+      # 110 of the first 182 alerts were in generated obj/**/*.g.cs. Analyse without uploading, drop
+      # results under obj/ and bin/, then upload the filtered SARIF under the same category.
+      - uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+        if: matrix.language == 'csharp'
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: failure-only
+          output: sarif-results
+
+      - uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
+        if: matrix.language == 'csharp'
+        with:
+          patterns: |
+            -**/obj/**
+            -**/bin/**
+          input: sarif-results/csharp.sarif
+          output: sarif-results/csharp.sarif
+
+      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+        if: matrix.language == 'csharp'
+        with:
+          sarif_file: sarif-results/csharp.sarif
           category: "/language:${{ matrix.language }}"
 
   dependency-review:
@@ -65,23 +110,26 @@ jobs:
     runs-on: ubuntu-latest
     # Two reasons this does not run today, both deliberate and both recorded.
     #
-    # 1. The action needs a pull-request context, and this workflow is dispatch-only, so
-    #    the condition below is never true. It skips rather than failing.
+    # 1. The action needs a pull-request context, which only the pull_request trigger gives.
     # 2. Even on a real PR it errors before it starts, because Dependency graph is not
     #    enabled on this repository. That is an owner action, filed as #325, and it is
     #    not a version problem: v4 and v5 fail identically. Observed on PR #305, where
     #    this was the only red check while every substantive job passed.
     #
-    # Restoring the pull-request trigger without doing #325 first re-creates a check that
+    # The workflow has a pull_request trigger now (#484), so reason 2 is what keeps this job
+    # skipped: it runs only once the owner sets the repository variable
+    # DEPENDENCY_GRAPH_ENABLED=true after enabling Dependency graph (#325).
+    #
+    # Removing the variable condition without doing #325 first re-creates a check that
     # is always red, which is how people learn to merge past red checks.
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && vars.DEPENDENCY_GRAPH_ENABLED == 'true'
     timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/dependency-review-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
           # The project ships MIT-licensed software and vendors igv.js (MIT).

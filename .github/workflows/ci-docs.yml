@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The private-donor and AGENTS.md-stub rules live in scripts/check_repo_hygiene.py, run by the
       # glob loop in the `checks` job and self-tested by scripts/tests (#449). They were inline shell
@@ -35,7 +35,7 @@ jobs:
       # A user-home path in a tracked file leaks a real person's account name and
       # breaks the file for everyone else. The guard lives in scripts/ so it can be
       # run locally with the same code CI runs, and it self-tests both arms.
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -58,10 +58,10 @@ jobs:
       # every ToTest row is a commit this repo actually has, and the default shallow
       # clone (depth 1) does not have it, so every row failed with "not a commit this
       # repo has". The check is right; the clone was wrong.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -120,10 +120,10 @@ jobs:
     timeout-minutes: 10
     steps:
       # Full history: some of these tests exercise git-aware code paths.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           enable-cache: true
       # Lint first (#430): scripts/ruff.toml is the config; the guards are the last place to be unmaintained.
@@ -137,9 +137,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: lychee
-        uses: lycheeverse/lychee-action@v2
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           # Offline: local file links only. External links change under us and would
           # make an unrelated PR red.
