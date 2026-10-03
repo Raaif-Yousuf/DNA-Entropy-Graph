@@ -118,6 +118,7 @@ public class JobReconcilerTests
                 Target: "cloud",
                 OptionsJson: RunOptionsJson.Serialize(options),
                 ProjectId: Project,
+                Bucket: uploaded ? FakeGcp.BucketName(Project) : null,
                 VmName: request.Spec.VmName,
                 AppVersion: "0.1.0",
                 InstallationId: "install-1");
@@ -393,5 +394,35 @@ public class JobReconcilerTests
 
         outcome.Action.ShouldBe(ReattachAction.Deferred);
         env.Repo.AllRecordedInOrder.Count.ShouldBe(before);
+    }
+
+    // ---- cold review: a failed look is not evidence, and a look never creates anything ----
+
+    [Fact]
+    public async Task A_Provisioning_row_whose_first_look_is_refused_still_needs_its_worker_image_and_creates_no_VM()
+    {
+        var env = new Env(image: new WorkerImageResolution(WorkerImageStatus.NoneShipped, null));
+        await env.SeedAsync("job-e", JobPhase.Provisioning, uploaded: true, vm: false);
+        env.Gcp.WithFindByJobIdFailure(new CloudError("PERMISSION_DENIED", 403, "permission denied"), 1);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-e");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedUnrecoverable);
+        env.Row("job-e").ErrorCode.ShouldBe(RunErrorCodes.WorkerImageUnavailable);
+        env.Gcp.CreateAttempts.ShouldBe(0, "a VM created with no startup script would bill until maxRunDuration");
+        (await env.Gcp.FindByJobIdAsync("job-e", CancellationToken.None)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_row_with_no_recorded_bucket_is_judged_without_creating_a_bucket()
+    {
+        var env = new Env();
+        await env.SeedAsync("job-b", JobPhase.Running, uploaded: false, vm: false);
+        env.Row("job-b").Bucket.ShouldBeNull("precondition");
+
+        var outcome = await OneAsync(env.Reconciler(), "job-b");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedVmMissing);
+        env.Gcp.EnsureBucketCalls.ShouldBe(0, "a read-only look must not create a bucket");
     }
 }

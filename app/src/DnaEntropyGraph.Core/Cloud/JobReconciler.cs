@@ -61,6 +61,7 @@ public sealed class JobReconciler
     private readonly IWorkerImageProvider _images;
     private readonly RunRowStore _rows;
     private readonly Func<string?> _downloadsFolder;
+    private readonly ActiveRuns _active;
     private readonly DateTimeOffset _startedAt;
 
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
@@ -74,8 +75,10 @@ public sealed class JobReconciler
         IWorkerImageProvider images,
         Action<string, JobPhase>? onPhaseChanged = null,
         Func<string?>? downloadsFolder = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ActiveRuns? activeRuns = null)
     {
+        _active = activeRuns ?? new ActiveRuns();
         _runner = runner;
         _compute = compute;
         _storage = storage;
@@ -138,7 +141,7 @@ public sealed class JobReconciler
         }
 
         var vmMayExist = row.Phase == JobPhase.Provisioning || JobStateMachine.HasAlreadyPassed(row.Phase, JobPhase.Provisioning);
-        var imageRequired = true;
+        var imageRequired = true; // every phase before Provisioning provisions
         if (vmMayExist)
         {
             Evidence evidence;
@@ -160,9 +163,11 @@ public sealed class JobReconciler
                 return await FailAsync(row, ReattachAction.FailedVmMissing, RunErrorCodes.VmUnhealthy, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
             }
 
-            // A VM or a result is already there: the run is not provisioned again, so the worker image (which only a new
+            // Only a VM or a result actually SEEN means the run is not provisioned again, so the worker image (which only a new
             // VM's startup script needs) is not required, and an app update that dropped the old image must not strand it.
-            imageRequired = evidence == Evidence.Nothing;
+            // A look that failed is not evidence: a run that could still provision needs its image, or it would create a VM
+            // with no startup script that bills until maxRunDuration.
+            imageRequired = evidence != Evidence.Found && row.Phase == JobPhase.Provisioning;
         }
 
         var staged = await FindInputAsync(row, options, cancellationToken).ConfigureAwait(false);
@@ -188,8 +193,24 @@ public sealed class JobReconciler
             image.Status == WorkerImageStatus.Available ? image.Reference : null,
             [staged ?? new StagedInput(options.InputPath ?? string.Empty, Path.GetFileName(options.InputPath) is { Length: > 0 } name ? name : "input")],
             OutputParent(row, options));
-        var result = await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
-        return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
+
+        // Driven through the registry the engine's Cancel looks in, so cancelling a reattached run stops and awaits it first.
+        CloudJobResult? result = null;
+        var driver = _active.TryStart(row.JobId, async token => result = await _runner.RunAsync(request, token).ConfigureAwait(false));
+        if (driver is null)
+        {
+            return new ReattachOutcome(row.JobId, ReattachAction.Skipped);
+        }
+
+        await driver.ConfigureAwait(false);
+        if (result is not null)
+        {
+            return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
+        }
+
+        // The user cancelled it while it was being driven: the row says how that ended.
+        var settled = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
+        return new ReattachOutcome(row.JobId, ReattachAction.Resumed, settled?.Phase, settled?.ErrorCode);
     }
 
     private enum Evidence
@@ -199,13 +220,17 @@ public sealed class JobReconciler
 
         /// <summary>A VM carries the job's label, or result.json exists (the run has something to adopt or download).</summary>
         Found,
+
+        /// <summary>The look was refused (billing, permission, org policy): neither a VM nor a result was seen. The runner judges it.</summary>
+        Unknown,
     }
 
     /// <summary>
     /// Looks at the cloud once: a VM by job-id label, then (only when none) <c>result.json</c>. Throws a
     /// <see cref="CloudOperationException"/> the caller classifies, or <see cref="TimeoutException"/>. An error that is not "no answer"
-    /// (billing, permission) is reported as <see cref="Evidence.Found"/> so the runner, which knows how to end a VM and name the
-    /// failure, judges the run instead of this class guessing.
+    /// (billing, permission) is reported as <see cref="Evidence.Unknown"/> so the runner, which knows how to end a VM and name the
+    /// failure, judges the run instead of this class guessing. A row with no recorded bucket never uploaded, so it has no result:
+    /// nothing is created to look.
     /// </summary>
     private async Task<Evidence> LookAsync(RunRecord row, CancellationToken cancellationToken)
     {
@@ -217,7 +242,12 @@ public sealed class JobReconciler
                 return Evidence.Found;
             }
 
-            var bucket = row.Bucket ?? await WithDeadline(token => _storage.EnsureBucketAsync(row.ProjectId!, token), cancellationToken).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(row.Bucket))
+            {
+                return Evidence.Nothing;
+            }
+
+            var bucket = row.Bucket;
             var stream = await WithDeadline(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "result.json", token), cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
@@ -229,7 +259,7 @@ public sealed class JobReconciler
         }
         catch (CloudOperationException ex) when (!IsNoAnswer(ex))
         {
-            return Evidence.Found;
+            return Evidence.Unknown;
         }
     }
 

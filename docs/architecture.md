@@ -250,7 +250,9 @@ regardless:
  - A row that cannot be rebuilt into a request (no project, unreadable options) is `Failed` with a code, never left
  non-terminal. A local-engine row is skipped (no `LocalJobRunner` yet, #174).
 
- The entry is `AppStartup.BeginAsync` (App/Startup), called once from `App.OnLaunched` and not awaited. Guards.Tests
+ A reattached run is driven through ActiveRuns (Core/Cloud), the same registry the engine registers its own runs in, so Cancel stops and awaits whichever task drives a job before it writes its own phase (one writer). A lookup the cloud refused (billing, permission) is not evidence of a VM or a result: a run that could still provision then still needs its worker image, and a row with no recorded bucket is judged without creating one.
+
+The entry is `AppStartup.BeginAsync` (App/Startup), called once from `App.OnLaunched` and not awaited. Guards.Tests
  `ReattachOnStartupTests` drives it on the production container with a real SQLite file.
 4. The reconciler is also meant to **enforce** the after-task lifecycle policy retroactively - a VM
  that should have been deleted but was only stopped (because the app died before

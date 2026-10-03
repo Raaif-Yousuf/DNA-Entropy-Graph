@@ -134,6 +134,8 @@ public static class ServiceRegistration
         });
         // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
         // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.
+        // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
+        services.AddSingleton<ActiveRuns>();
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
@@ -145,7 +147,8 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunInputStore>(),
                 sp.GetRequiredService<IWorkerImageProvider>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
-                Services.KnownFolders.Downloads);
+                Services.KnownFolders.Downloads,
+                activeRuns: sp.GetRequiredService<ActiveRuns>());
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());

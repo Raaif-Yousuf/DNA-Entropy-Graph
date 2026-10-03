@@ -909,6 +909,11 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     /// <summary>The bucket <see cref="EnsureBucketAsync"/> hands out for <paramref name="projectId"/>.</summary>
     public static string BucketName(string projectId) => $"deg-{projectId}-fake";
 
+    private int _ensureBucketCalls;
+
+    /// <summary>How many times <see cref="EnsureBucketAsync"/> ran (it creates the bucket when missing, so a read-only look must leave this at zero).</summary>
+    public int EnsureBucketCalls => Volatile.Read(ref _ensureBucketCalls);
+
     public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
     {
         if (ConsumeHang())
@@ -917,6 +922,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         }
 
         ThrowIfScriptedTransient();
+        Interlocked.Increment(ref _ensureBucketCalls);
         return Task.FromResult(BucketName(projectId));
     }
 
