@@ -579,14 +579,8 @@ public class JobReconcilerLifecycleTests
         await rig.Env.SeedAsync("job-long", JobPhase.Running, vm: true);
         var reconciler = rig.Reconciler();
         var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
-        using var cts = new CancellationTokenSource();
 
-        // Pass 1 (the "first reconnect") reattaches job-long, whose worker never finishes: it is still running when the pass ends.
-        var first = await reconciler.BeginReconcileAsync(cts.Token);
-        first.IsCompleted.ShouldBeFalse("the reattached run is still being driven");
-        rig.Env.Active.IsActive("job-long").ShouldBeTrue();
-
-        // Work that appears while that run is still running: a stopped delete-labelled VM and an idle stopped VM.
+        // Work for the first pass besides the run itself: a stopped delete-labelled VM and an idle stopped VM.
         await rig.SeedFinishedAsync("job-del-late", AfterTaskAction.Delete);
         await rig.StopAsync("job-del-late");
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Stop };
@@ -595,8 +589,10 @@ public class JobReconcilerLifecycleTests
         await rig.Gcp.StopVmAsync(orphan.Spec.VmName, Zone, CancellationToken.None);
         rig.Clock.Advance(TimeSpan.FromDays(10));
 
-        // The observer's pass: it must return (so the next reconnect is not coalesced behind it) while job-long still runs.
+        // The observer's FIRST pass (nothing else has touched job-long): it reattaches the run, whose worker never finishes, and must still
+        // return (so the next reconnect is not coalesced behind it) while that run goes on.
         observer.OnConnectivityChanged(offline: false);
+        await WaitUntilAsync(() => Task.FromResult(rig.Env.Active.IsActive("job-long")));
         await WaitUntilAsync(async () => (await rig.VmsAsync("job-del-late")).Count == 0 && (await rig.VmsAsync("job-orphan-late")).Count == 0);
         rig.Env.Active.IsActive("job-long").ShouldBeTrue("the long run is still going while the lifecycle and the sweep already ran");
 
@@ -607,14 +603,8 @@ public class JobReconcilerLifecycleTests
         await WaitUntilAsync(async () => (await rig.VmsAsync("job-del-later")).Count == 0);
         rig.Env.Active.IsActive("job-long").ShouldBeTrue();
 
-        cts.Cancel();
-        try
-        {
-            await first;
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        // Stop the long run's driver so nothing outlives the test.
+        await rig.Env.Active.CancelAsync("job-long", () => Task.CompletedTask);
     }
 
     [Fact]
