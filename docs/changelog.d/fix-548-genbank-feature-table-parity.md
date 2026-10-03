@@ -1,0 +1,1 @@
+- The app now refuses a GenBank file whose feature table the worker would refuse (a feature line cut off at the qualifier column, a qualifier line missing its leading slash, an unclosed location or quoted value), before any cloud resource is created (#548).

@@ -55,6 +55,7 @@ public static class GenBankLite
         var inOrigin = false;
         var seq = new System.Text.StringBuilder();
         var recordIndex = 0;
+        var tableChecked = false; // Biopython reads the feature table once per record, in its header
 
         void FlushRecord()
         {
@@ -79,11 +80,13 @@ public static class GenBankLite
             geneCount = 0;
             cdsCount = 0;
             inOrigin = false;
+            tableChecked = false;
             seq.Clear();
         }
 
-        foreach (var rawLine in lines)
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
+            var rawLine = lines[lineIndex];
             // Inside ORIGIN Biopython only ends a record at "//" (or refuses at CONTIG), so a LOCUS
             // line there is sequence data, not a new record (MEASURED 2026-10-02: the worker's
             // genbank_two_locus_no_separator fixture is refused as "Invalid character 'E'").
@@ -141,6 +144,18 @@ public static class GenBankLite
                     }
                 }
                 continue;
+            }
+            if (!tableChecked)
+            {
+                if (GenBankFeatureTable.IsStartMarker(rawLine))
+                {
+                    GenBankFeatureTable.Validate(lines, lineIndex, recordIndex + 1); // the worker's parser refuses a bad feature table (#548)
+                    tableChecked = true;
+                }
+                else if (GenBankFeatureTable.IsSequenceHeader(rawLine))
+                {
+                    tableChecked = true; // no feature table in this record
+                }
             }
             if (rawLine.StartsWith("//", StringComparison.Ordinal))
             {
