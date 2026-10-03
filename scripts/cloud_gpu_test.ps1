@@ -420,13 +420,27 @@ function Invoke-LeakCheck {
         return $true
     }
     # --kind vm: the results bucket is meant to outlive a run (lifecycle=results), so only a VM left behind is a leak.
-    $out = & $CloudCliPath 'resources' 'list' '--project' $ProjectId '--install' $InstallationId '--kind' 'vm' '--json' 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-UsageError "leak check: 'CloudCli resources list' failed: $out"
+    # stdout alone is parsed (stderr is left to the console): merging them would put a warning line into the JSON.
+    $stdout = & $CloudCliPath 'resources' 'list' '--project' $ProjectId '--install' $InstallationId '--kind' 'vm' '--json'
+    $exitCode = $LASTEXITCODE
+    $couldNotVerify = "leak check: could not verify that nothing is left running. List the VMs for installation-id=$InstallationId in the Google Cloud console and delete any deg- VM by hand."
+    if ($exitCode -ne 0) {
+        Write-UsageError "leak check: 'CloudCli resources list' exited $exitCode."
+        Write-UsageError $couldNotVerify
         return $false
     }
+    # Only a JSON array is a list: empty output, 'null' or a bare scalar must not read as "nothing left".
+    $text = ($stdout | Out-String).Trim()
     $resources = @()
-    try { $resources = $out | ConvertFrom-Json } catch { $resources = @() }
+    $parsed = $false
+    if ($text.StartsWith('[')) {
+        try { $resources = @($text | ConvertFrom-Json -ErrorAction Stop); $parsed = $true } catch { $parsed = $false }
+    }
+    if (-not $parsed) {
+        Write-UsageError "leak check: 'CloudCli resources list' did not print a JSON list."
+        Write-UsageError $couldNotVerify
+        return $false
+    }
     if (@($resources).Count -eq 0) {
         Write-Host 'leak check: resource list is empty. Nothing left running.'
         return $true
@@ -444,6 +458,9 @@ function Invoke-LeakCheck {
 # "WHY -Apply DOES NOT WORK YET, ON PURPOSE" section.
 # ---------------------------------------------------------------------------
 
+# The issue that must land before -Apply may run (see the gate in Invoke-Apply). $null opens the gate; only #619 may do that.
+$Script:ApplyBlockedByIssue = 619
+
 function Invoke-Apply {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$ProjectId,
@@ -460,6 +477,14 @@ function Invoke-Apply {
     if (-not $ProjectId) {
         Write-UsageError "-Apply requires -ProjectId (working-on-gcp skill: no default project is set; blocked on #24)."
         exit 2
+    }
+    # GATE (#619): the 'vm create' arguments built below are not the flags CloudCliParser accepts (no positional name, no --labels,
+    # --accelerator-type, --disk-size-gb), so a real create would be refused by the CLI. Refuse before the CLI is even looked for,
+    # so a built CloudCli on PATH can never be handed this argument list. #619 rewrites the argument list and removes this gate.
+    if ($Script:ApplyBlockedByIssue) {
+        Write-UsageError "-Apply is blocked: its 'vm create' arguments do not match CloudCli's flags (issue #$($Script:ApplyBlockedByIssue)). Nothing was created."
+        Write-UsageError "This script deliberately does not fall back to a raw 'gcloud' call either. Wait for #$($Script:ApplyBlockedByIssue) to land, then run it again."
+        exit 3
     }
     $cloudCli = Find-CloudCli
     if (-not $cloudCli) {
@@ -504,6 +529,24 @@ function Invoke-Apply {
 # ---------------------------------------------------------------------------
 # Self-test.
 # ---------------------------------------------------------------------------
+
+function New-StubCli {
+    # A throwaway CloudCli.cmd in its own temp folder. $Body is the .cmd text after '@echo off'. Returns the .cmd path.
+    param([Parameter(Mandatory)][string]$Directory, [Parameter(Mandatory)][string[]]$Body)
+    New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+    $path = Join-Path $Directory 'CloudCli.cmd'
+    Set-Content -Path $path -Value (@('@echo off') + $Body) -Encoding ascii
+    return $path
+}
+
+function Remove-StubCli {
+    # Files first, then the (now empty) folder: no recursive delete.
+    param([Parameter(Mandatory)][string]$Directory)
+    if (Test-Path $Directory) {
+        Get-ChildItem -Path $Directory -File | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+        Remove-Item -LiteralPath $Directory -Force
+    }
+}
 
 function Invoke-SelfTest {
     # $Script:SelfTestFailures (not a bare local $failures): a nested
@@ -596,9 +639,50 @@ function Invoke-SelfTest {
     # NOT and cannot prove -Apply's real creation logic, because nothing
     # this session can reach has a built CloudCli to call.
     $applyOut = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -Apply 2>&1 | Out-String
-    Check "-Apply with a project but no CloudCli exits 3" ($LASTEXITCODE -eq 3)
-    Check "-Apply's failure names the blocking issues (#60/#61)" ($applyOut -match '#60' -and $applyOut -match '#61')
+    Check "-Apply with a project exits 3 (blocked until #619, whether or not a CloudCli is built)" ($LASTEXITCODE -eq 3)
+    Check "-Apply's refusal names the blocking issue (#619)" ($applyOut -match '#619')
     Check "-Apply's failure explicitly refuses the gcloud fallback" ($applyOut -match 'does not fall back to a raw')
+
+    # -Apply with a CloudCli stub on PATH: the gate must refuse BEFORE invoking it. The stub drops a marker file when called, so a
+    # create attempt is visible; the Get-Command check proves the stub really is what the child would find (not a vacuous pass).
+    $applyDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-apply-" + [guid]::NewGuid().ToString('N'))
+    $savedPath = $env:PATH
+    try {
+        New-StubCli -Directory $applyDir -Body @('echo called> "%~dp0called.txt"', 'exit /b 0') | Out-Null
+        $env:PATH = "$applyDir;$savedPath"
+        $stubSeen = (Get-Command 'CloudCli' -ErrorAction SilentlyContinue)
+        Check "self-test setup: the stub CloudCli is the one found on PATH" ($stubSeen -and $stubSeen.Source -eq (Join-Path $applyDir 'CloudCli.cmd'))
+        $stubOut = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -Apply 2>&1 | Out-String
+        $stubExit = $LASTEXITCODE
+        Check "-Apply with a stub CloudCli present still exits 3" ($stubExit -eq 3)
+        Check "-Apply with a stub CloudCli present never invokes it (no create attempted)" (-not (Test-Path (Join-Path $applyDir 'called.txt')))
+        Check "-Apply with a stub CloudCli present still names #619" ($stubOut -match '#619')
+    } finally {
+        $env:PATH = $savedPath
+        Remove-StubCli -Directory $applyDir
+    }
+
+    # Leak check: a stub CloudCli stands in for the real one. Only a parsed, empty list on exit 0 is "clean"; anything unverifiable fails.
+    $leakDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-leak-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $leakCases = @(
+            @{ Name = 'an empty JSON list on exit 0'; Body = @('echo []', 'exit /b 0'); Clean = $true },
+            @{ Name = 'an empty list with noise on stderr (stdout is parsed alone)'; Body = @('echo warning 1>&2', 'echo []', 'exit /b 0'); Clean = $true },
+            @{ Name = 'garbage on stdout with exit 0'; Body = @('echo this is not json', 'exit /b 0'); Clean = $false },
+            @{ Name = 'no output at all with exit 0'; Body = @('exit /b 0'); Clean = $false },
+            @{ Name = 'JSON null with exit 0'; Body = @('echo null', 'exit /b 0'); Clean = $false },
+            @{ Name = 'a valid empty list but a non-zero exit'; Body = @('echo []', 'exit /b 1'); Clean = $false },
+            @{ Name = 'one leftover VM'; Body = @('echo [{"name":"deg-x","zone":"us-central1-a"}]', 'exit /b 0'); Clean = $false }
+        )
+        foreach ($case in $leakCases) {
+            $cli = New-StubCli -Directory $leakDir -Body $case.Body
+            $result = Invoke-LeakCheck -InstallationId 'inst123' -ProjectId 'fake-test-project' -CloudCliPath $cli 2>$null
+            Check "leak check: $($case.Name) -> $(if ($case.Clean) { 'clean' } else { 'NOT clean' })" ($result -eq $case.Clean)
+        }
+        Check "leak check: vacuity guard, the case table has both outcomes" (($leakCases | Where-Object { $_.Clean }).Count -ge 1 -and ($leakCases | Where-Object { -not $_.Clean }).Count -ge 3)
+    } finally {
+        Remove-StubCli -Directory $leakDir
+    }
 
     if ($Script:SelfTestFailures -eq 0) {
         Write-Host "`nPASS: cloud_gpu_test self-test"
@@ -635,7 +719,7 @@ Write-Plan -ProjectId $ProjectId -ZoneChoice $zoneChoice -MachineType $MachineTy
 if (-not $Apply) {
     Write-Host ''
     Write-Host 'DRY RUN: nothing created. Pass -Apply to create a real, billable resource.'
-    Write-Host '(As of issue #317, -Apply is UNVERIFIED and fails without a built CloudCli -- see -Help.)'
+    Write-Host '(-Apply is UNVERIFIED and blocked until issue #619 aligns its CloudCli arguments -- see -Help.)'
     exit 0
 }
 

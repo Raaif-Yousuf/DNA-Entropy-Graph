@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DnaEntropyGraph.CloudCli;
+using System.Security.Cryptography;
 using DnaEntropyGraph.Core.Cloud;
 using NSubstitute;
 using Shouldly;
@@ -29,6 +30,11 @@ public class CloudCliAppTests
     private sealed class SignedOutSessions : ICloudCliSessionFactory
     {
         public CloudCliSession Open(string projectId, string? installationId) => throw new CloudCliNotSignedInException();
+    }
+
+    private sealed class ThrowingSessions(Exception failure) : ICloudCliSessionFactory
+    {
+        public CloudCliSession Open(string projectId, string? installationId) => throw failure;
     }
 
     private sealed record Outcome(int ExitCode, string Out, string Err);
@@ -311,6 +317,71 @@ public class CloudCliAppTests
         result.Err.ShouldContain("--project");
         result.Out.ShouldBeEmpty();
         sessions.OpenedProject.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(AuthErrorCodes.SigninExpired, CloudCliExitCode.NotSignedIn, "has expired")]
+    [InlineData(AuthErrorCodes.AccountNotFound, CloudCliExitCode.NotSignedIn, "has expired")]
+    [InlineData(AuthErrorCodes.NetworkUnavailable, CloudCliExitCode.CloudError, "could not be reached")]
+    [InlineData(AuthErrorCodes.OAuthClientMissing, CloudCliExitCode.CloudError, "oauth_client.local.json")]
+    [InlineData(AuthErrorCodes.OAuthClientInvalid, CloudCliExitCode.CloudError, "Desktop-app client")]
+    public async Task A_sign_in_failure_is_mapped_by_its_code_not_reported_as_an_expired_sign_in(string code, int exitCode, string messagePart)
+    {
+        var result = await RunAsync(new ThrowingSessions(new AccountAuthException(code, "detail that must not be printed")), "resources", "list", "--project", Project);
+
+        result.ExitCode.ShouldBe(exitCode);
+        result.Err.ShouldStartWith("ERROR:");
+        result.Err.ShouldContain(messagePart);
+        result.Err.ShouldNotContain("detail that must not be printed");
+        result.Out.ShouldBeEmpty();
+        ShouldBeAscii(result.Err);
+    }
+
+    [Fact]
+    public async Task A_network_sign_in_failure_does_not_tell_the_user_to_sign_in_again()
+    {
+        var result = await RunAsync(new ThrowingSessions(new AccountAuthException(AuthErrorCodes.NetworkUnavailable)), "resources", "list", "--project", Project);
+
+        result.Err.ShouldNotContain("expired");
+        result.Err.ShouldContain("internet connection");
+    }
+
+    [Fact]
+    public async Task Any_other_exception_is_one_ascii_error_line_with_an_action_and_exit_1_and_no_stack_trace()
+    {
+        Exception[] failures =
+        [
+            new HttpRequestException("connection reset by peer: secret-host"),
+            new IOException("disk said no: C:\\secret\\path"),
+            new CryptographicException("DPAPI said no"),
+            new NullReferenceException("oops"),
+        ];
+
+        foreach (var failure in failures)
+        {
+            var result = await RunAsync(new ThrowingSessions(failure), "resources", "list", "--project", Project);
+
+            result.ExitCode.ShouldBe(CloudCliExitCode.CloudError);
+            result.Out.ShouldBeEmpty();
+            result.Err.Trim().Split('\n').Length.ShouldBe(1);
+            result.Err.ShouldStartWith("ERROR:");
+            result.Err.ShouldContain(failure.GetType().Name);
+            result.Err.ShouldContain("run this again");
+            result.Err.ShouldNotContain(" at ");
+            result.Err.ShouldNotContain("secret");
+            ShouldBeAscii(result.Err);
+        }
+
+        failures.Length.ShouldBeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task A_cancellation_is_still_the_cancelled_message_not_an_unexpected_error()
+    {
+        var result = await RunAsync(new ThrowingSessions(new OperationCanceledException()), "resources", "list", "--project", Project);
+
+        result.ExitCode.ShouldBe(CloudCliExitCode.CloudError);
+        result.Err.ShouldContain("Cancelled");
     }
 
     [Fact]

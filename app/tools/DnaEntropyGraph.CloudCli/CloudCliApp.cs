@@ -86,9 +86,9 @@ public sealed class CloudCliApp
         {
             return Fail(stderr, CloudCliExitCode.NotSignedIn, NotSignedInMessage);
         }
-        catch (AccountAuthException)
+        catch (AccountAuthException ex)
         {
-            return Fail(stderr, CloudCliExitCode.NotSignedIn, "The app's Google sign-in has expired. Sign in with the app again, then run this again.");
+            return FailAuth(stderr, ex.Code);
         }
         catch (CloudOperationException ex)
         {
@@ -98,7 +98,28 @@ public sealed class CloudCliApp
         {
             return Fail(stderr, CloudCliExitCode.CloudError, "Cancelled before it finished. Run it again, and check 'resources list' for anything half-made.");
         }
+        catch (Exception ex)
+        {
+            // Any other failure (a dropped connection, an unreadable token store, a bug) must not escape Main as a stack trace with
+            // a runtime exit code a script cannot tell from a crash. Only the exception class is printed: the message can carry a
+            // host name or a path.
+            return Fail(stderr, CloudCliExitCode.CloudError, $"CloudCli stopped on an unexpected problem ({ex.GetType().Name}). Check the internet connection and that the app is signed in, then run this again.");
+        }
     }
+
+    /// <summary>Maps a sign-in failure by its code: only an expired or missing sign-in is "sign in with the app" (exit 3).</summary>
+    private static int FailAuth(TextWriter stderr, string code) => code switch
+    {
+        AuthErrorCodes.SigninExpired or AuthErrorCodes.AccountNotFound or AuthErrorCodes.SigninFailed
+            => Fail(stderr, CloudCliExitCode.NotSignedIn, "The app's Google sign-in has expired. Sign in with the app again, then run this again."),
+        AuthErrorCodes.NetworkUnavailable
+            => Fail(stderr, CloudCliExitCode.CloudError, "Google could not be reached to refresh the app's sign-in. Check the internet connection, then run this again."),
+        AuthErrorCodes.OAuthClientMissing
+            => Fail(stderr, CloudCliExitCode.CloudError, "This build has no Google sign-in client file (oauth_client.local.json). Put it in app/secrets, then run this again."),
+        AuthErrorCodes.OAuthClientInvalid
+            => Fail(stderr, CloudCliExitCode.CloudError, "The Google sign-in client file is not a Desktop-app client download. Download it again from the Google Cloud console, then run this again."),
+        _ => Fail(stderr, CloudCliExitCode.CloudError, "The app's Google sign-in failed. Open the app, sign in again, then run this again."),
+    };
 
     private static async Task<int> ListAsync(CloudCliSession session, ResourcesListCommand command, TextWriter stdout, CancellationToken cancellationToken)
     {

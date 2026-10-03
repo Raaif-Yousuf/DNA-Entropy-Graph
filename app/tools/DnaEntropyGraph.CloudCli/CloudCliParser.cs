@@ -223,9 +223,21 @@ public static class CloudCliParser
                 (body, inline) = (body[..equals], body[(equals + 1)..]);
             }
 
-            if (body == "json" && inline is null)
+            if (body == "json")
             {
-                json = true;
+                if (inline is null || inline.Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    json = true;
+                }
+                else if (inline.Equals("false", StringComparison.OrdinalIgnoreCase))
+                {
+                    json = false;
+                }
+                else
+                {
+                    return (flags, json, $"--json takes true or false (or no value), not '{inline}'.");
+                }
+
                 continue;
             }
 

@@ -436,8 +436,11 @@ dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> 
 - `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label; a VM that is
   already gone is success.
 - Output is ASCII: `OK:` lines on stdout, one `ERROR:` line on stderr naming an action.
-- Exit codes: `0` ok, `1` Google refused or could not be reached (or Ctrl+C), `2` bad command line or a value `VmSpec` rejects, `3` no
-  account signed in ("Sign in with the app first") or the sign-in expired, `4` a safety guard refused, `5` the named bucket is not there.
+- Exit codes: `0` ok, `1` Google refused or could not be reached (or Ctrl+C), or any other unexpected failure (one `ERROR:` line naming
+  the exception class and an action, never a stack trace), `2` bad command line or a value `VmSpec` rejects, `3` no account signed in
+  ("Sign in with the app first") or the sign-in expired (only that: a network failure while refreshing the sign-in is `1`, and a missing
+  or invalid OAuth client file is `1` with its own message), `4` a safety guard refused, `5` the named bucket is not there.
+- `--json` takes no value, or `--json=true` / `--json=false`; any other value is exit 2.
 - There is no GCP access from agent sessions: tests run the same code over a scripted HTTP handler
   (`app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/`); `docs/ToTest.md` carries the row that needs a real project.
 
@@ -461,8 +464,10 @@ is provable today with zero cloud spend and is exercised by `-SelfTest`.
 naming #60/#61/#24, if the executable is not built, rather than silently
 falling back to a raw `gcloud` call: Appendix C's permission design denies
 `gcloud` to an agent on purpose. The `vm create` arguments the script builds
-do not yet match the CLI's real flags (tracked as a sub-issue of #60), so do
-not run `-Apply` until that is fixed. `docs/ToTest.md` carries the row for
+do not yet match the CLI's real flags (#619), so `-Apply` refuses (exit 3, naming
+#619) before it invokes the CLI, even when a built CloudCli exists; #619 removes
+that gate. The leak check treats unparsable output or a non-zero exit as a failed
+check, never as "nothing left running". `docs/ToTest.md` carries the row for
 exercising it for real. Once it works: launches a labelled VM in the
 owner's GCP project (blocked on `OWNER_TODO.md` item 2 / issue #24 until a
 project and GPU quota exist), runs `pytest -m gpu` on it, and tears the VM

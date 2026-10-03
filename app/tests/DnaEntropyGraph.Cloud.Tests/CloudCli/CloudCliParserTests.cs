@@ -35,6 +35,27 @@ public class CloudCliParserTests
         command.Json.ShouldBeFalse();
     }
 
+    [Theory]
+    [InlineData("--json=true", true)]
+    [InlineData("--json=false", false)]
+    [InlineData("--json=TRUE", true)]
+    public void Json_accepts_an_explicit_true_or_false(string flag, bool expected)
+    {
+        var command = Ok("resources", "list", "--project", "my-lab", flag).ShouldBeOfType<ResourcesListCommand>();
+
+        command.Json.ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Json_with_any_other_value_is_a_clear_usage_error()
+    {
+        var result = CloudCliParser.Parse(["resources", "list", "--project", "my-lab", "--json=maybe"]);
+
+        result.Command.ShouldBeNull();
+        result.Error.ShouldNotBeNull().ShouldContain("--json");
+        result.Error.ShouldContain("true or false");
+    }
+
     [Fact]
     public void Flags_accept_the_equals_form()
     {
