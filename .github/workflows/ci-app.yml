@@ -1,36 +1,34 @@
 name: ci-app
 
-# On demand only, for now:
+# Runs on every pull request that touches app/ (or this file), plus on demand:
 #
 #     gh workflow run ci-app.yml
 #     gh run watch
 #
-# or the "Run workflow" button on the Actions tab. No push trigger and no schedule.
+# This workflow was kept off pull requests for a while because its `test` step hung on
+# windows-latest. MEASURED 2026-09-20: three runs, all cancelled by hand after the step had
+# been running for between six and twenty-five minutes (35528323292 and 35529823866
+# solution-wide, 35530219025 five library projects), while the same commands take about 25
+# seconds locally. MEASURED 2026-10-03 from those logs: in run 35530219025 the first four
+# assemblies each passed in 1 to 2 seconds and the fifth, DnaEntropyGraph.Guards.Tests,
+# printed "Running tests from ..." and then nothing for 5m 23s until the cancel; the
+# orphan-process list at cleanup names DnaEntropyGraph.Guards.Tests in runs 35529823866 and
+# 35530219025 (and App.UiTests in 35529823866 only). So the hang is inside Guards.Tests,
+# not "the test step in general". The same assembly passed in 2.4 s on run 35528077325
+# (headSha 1f1a0f0); the commits between that and the first hung run added
+# StringResourceKeyGuardTests, and nothing in them reads as a blocking call, so the exact
+# test is THEORY (unverified) and the logs cannot name it: MTP prints nothing per test.
 #
-# This workflow is the one that is NOT yet on pull requests, unlike ci-worker and
-# ci-docs, and the reason is measured rather than a preference. MEASURED 2026-09-20:
-# its `test` step hangs on windows-latest. Three runs, all cancelled by hand after the
-# step had been running for between six and twenty-five minutes:
-#
-#   35528323292  solution-wide `dotnet test`                     hung
-#   35529823866  solution-wide `dotnet test`                     hung
-#   35530219025  five library projects, no WinUI-hosted assembly hung
-#
-# The same commands finish in about 25 seconds locally on Windows 11, and the same
-# step took nine seconds on run 35528077325 earlier the same day, so this is not
-# slowness. Dropping DnaEntropyGraph.App.UiTests, the only WinUI-app-hosted test
-# assembly, did not fix it, which rules out the obvious first suspect. Turning this on
-# for pull requests before that is understood would put a check that never finishes in
-# front of every PR, which is worse than running it by hand. Restore the block below
-# once a run of it completes:
-#
-#   on:
-#     pull_request:
-#       paths:
-#         - "app/**"
-#         - ".github/workflows/ci-app.yml"
-#     workflow_dispatch:
+# What this file now guarantees instead of a diagnosis (#438): every assembly is run on its
+# own with a Microsoft.Testing.Extensions.HangDump timeout of 4 minutes, so a hang ends in
+# exit code 7 with a .dmp and a .log naming the process, never a silent wait; a TRX is
+# written per assembly; the whole step has timeout-minutes 20; and the results folder is
+# uploaded as an artifact on failure or cancel. If this hangs again, open the artifact.
 on:
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/ci-app.yml"
   workflow_dispatch:
 
 permissions:
@@ -59,6 +57,26 @@ jobs:
         with:
           global-json-file: app/global.json
 
+      # #438. MEASURED 2026-10-03 (minidump of PR #529's run): the hung test was blocked in the Windows App SDK
+      # bootstrap (MddBootstrapInitialize2) because windows-latest has no Windows App Runtime, and the default
+      # bootstrap option opens a dialog nobody can answer. DnaEntropyGraph.App.csproj now sets option None (a missing
+      # runtime exits with an HRESULT instead of hanging). MEASURED 2026-10-03 on a laptop: the bootstrap cannot be
+      # disabled for the tests either (COMException 0x80040154 in Guards DiResolutionTests), so this step installs the
+      # runtime and the next one asserts it is there, so a silent --quiet no-op fails here and not as a test error.
+      # MEASURED 2026-10-03 (run 37093397967 of PR #529): the redistributable installs silently on windows-latest, the assert passed and the test step passed with no hang.
+      - name: install Windows App Runtime
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe -OutFile "$env:RUNNER_TEMP/windowsappruntimeinstall.exe"
+          $p = Start-Process -FilePath "$env:RUNNER_TEMP/windowsappruntimeinstall.exe" -ArgumentList '--quiet' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Windows App Runtime install exited $($p.ExitCode)" }
+
+      - name: assert Windows App Runtime 1.8 is installed
+        shell: pwsh
+        run: |
+          $pkgs = Get-AppxPackage -AllUsers 'Microsoft.WindowsAppRuntime.1.8*'
+          if (-not $pkgs) { throw 'Windows App Runtime 1.8 is not installed after the install step (a silent --quiet no-op).' }
+          $pkgs | ForEach-Object { Write-Host "installed: $($_.Name) $($_.Version)" }
       - name: restore
         working-directory: app
         run: dotnet restore
@@ -80,30 +98,46 @@ jobs:
       # the right reason, but it had never run a single test, and an exit code
       # of 0 there would have been a permanently green job testing nothing.
       #
-      # TRX and coverage need the Microsoft.Testing.Extensions.* packages
-      # referenced first -- see the follow-up issue; passing the flags without
-      # them reproduces the same "Zero tests ran" failure.
+      # TRX comes from Microsoft.Testing.Extensions.TrxReport and the hang dump from
+      # ...HangDump, both referenced by every test project (#438); coverage is not wired.
       #
-      # MEASURED 2026-09-20: a solution-wide `dotnet test` hung at this step on
-      # windows-latest, twice in a row (runs 35528323292 and 35529823866, both
-      # cancelled by hand after the step had been running for over twenty
-      # minutes; the step takes nine seconds when it works, and twenty-five
-      # seconds locally). Every test assembly here is a plain library except
-      # DnaEntropyGraph.App.UiTests, which is WinUI-app-hosted, so the runner
-      # starts a real desktop app inside a session that has no interactive
-      # desktop. Every test in it is `[Fact(Skip=...)]` today, so naming the
-      # five library projects explicitly loses no coverage at all and removes
-      # the only thing in the run that opens a window. Put UiTests back the day
-      # it has a test that does something, together with whatever makes it
-      # terminate on a runner.
+      # The 2026-09-20 theory that App.UiTests (WinUI-hosted) caused the hang is DISPROVED:
+      # run 35530219025 excluded it and still hung, inside Guards.Tests (see the header).
+      # UiTests stays out of the list anyway because every test in it is a skip today.
+      # #438. Per-assembly so the log says which assembly stalled, and `--hangdump` (MIT,
+      # Microsoft.Testing.Extensions.HangDump, referenced by every test project) so a stall
+      # is killed with a minidump after 4 minutes instead of waiting for the job timeout.
+      # Every project runs even if an earlier one fails, then the step fails once at the end.
       - name: test
         working-directory: app
+        timeout-minutes: 20
+        shell: pwsh
         run: |
-          dotnet test tests/DnaEntropyGraph.Core.Tests/DnaEntropyGraph.Core.Tests.csproj -c Release -p:Platform=x64 --no-build
-          dotnet test tests/DnaEntropyGraph.Cloud.Tests/DnaEntropyGraph.Cloud.Tests.csproj -c Release -p:Platform=x64 --no-build
-          dotnet test tests/DnaEntropyGraph.Persistence.Tests/DnaEntropyGraph.Persistence.Tests.csproj -c Release -p:Platform=x64 --no-build
-          dotnet test tests/DnaEntropyGraph.Presentation.Tests/DnaEntropyGraph.Presentation.Tests.csproj -c Release -p:Platform=x64 --no-build
-          dotnet test tests/DnaEntropyGraph.Guards.Tests/DnaEntropyGraph.Guards.Tests.csproj -c Release -p:Platform=x64 --no-build
+          $failed = @()
+          foreach ($p in 'Core', 'Cloud', 'Persistence', 'Presentation', 'Guards') {
+            $proj = "tests/DnaEntropyGraph.$p.Tests/DnaEntropyGraph.$p.Tests.csproj"
+            Write-Host "::group::$p.Tests"
+            dotnet test $proj -c Release -p:Platform=x64 --no-build -- `
+              --hangdump --hangdump-timeout 4m --hangdump-type Mini `
+              --report-trx --results-directory "$PWD/TestResults/$p"
+            if ($LASTEXITCODE -ne 0) { $failed += "$p (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+          }
+          $trx = @(Get-ChildItem TestResults -Recurse -Filter *.trx -ErrorAction SilentlyContinue)
+          if ($trx.Count -lt 5) { $failed += "expected 5 .trx files, found $($trx.Count) (a dropped --report-trx flag)" }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error title=app tests failed::$($failed -join ', '). Exit 7 means the hang dump fired; download the test-results artifact."
+            exit 1
+          }
+
+      - name: upload test results (TRX, hang dumps)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results
+          path: app/TestResults/**
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: publish self-contained
         working-directory: app
@@ -125,7 +159,7 @@ jobs:
         working-directory: app
         run: |
           dotnet tool install -g vpk
-          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --outputDir releases
+          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
