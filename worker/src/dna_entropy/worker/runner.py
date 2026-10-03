@@ -30,7 +30,7 @@ from pathlib import Path
 from .. import __version__ as WORKER_VERSION
 from .. import pipeline
 from ..analysis.windowing import WindowingError
-from ..config import RunConfig
+from ..config import PredictorKind, RunConfig
 from ..predictors.base import Predictor, PredictorError
 from ..readers.input import load_input
 from ..validation.validators import ValidationError
@@ -48,6 +48,14 @@ from .status import (
     StatusWriter,
     WorkerInfo,
     write_local_fallback,
+)
+from .weights import (
+    cache_store_for,
+    hf_hub_dir,
+    is_cached,
+    restore_from_cache,
+    save_to_cache,
+    snapshot_tree,
 )
 
 RESULT_PATH = "result.json"
@@ -107,8 +115,18 @@ class _SharedPredictor:
     multi-minute model load N times.
     """
 
-    def __init__(self, factory: Callable[[RunConfig], Predictor]) -> None:
+    def __init__(
+        self,
+        factory: Callable[[RunConfig], Predictor],
+        *,
+        cache_store: Blobstore | None = None,
+        hf_dir: Path | None = None,
+        cancel: CancelWatcher | None = None,
+    ) -> None:
+        self._cancel = cancel
         self._factory = factory
+        self._cache_store = cache_store
+        self._hf_dir = hf_dir
         self._predictor: Predictor | None = None
         self._error: Exception | None = None
 
@@ -116,13 +134,86 @@ class _SharedPredictor:
         if self._error is not None:
             raise self._error
         if self._predictor is None:
+            use_cache = (
+                cfg.predictor == PredictorKind.EVO
+                and self._cache_store is not None
+                and self._hf_dir is not None
+            )
+            restored = False
+            was_empty = False
+            if use_cache:
+                restored = self._restore_weights(cfg.model, status)
+                try:
+                    was_empty = not snapshot_tree(self._hf_dir)  # type: ignore[arg-type]
+                except OSError:
+                    was_empty = False
             status.update(stage="model-loading")
             try:
                 self._predictor = self._factory(cfg)
             except Exception as exc:
                 self._error = exc
                 raise
+            if use_cache and not restored:
+                self._mirror_weights(cfg.model, was_empty, status)
         return self._predictor
+
+    def _restore_weights(self, model_id: str, status: StatusWriter) -> bool:
+        """Issue #75: restore ``cache/models/<id>/`` into the HF cache before the loader runs.
+        Best effort: any failure is a notice and the loader downloads from Hugging Face."""
+        store, hf_dir = self._cache_store, self._hf_dir
+        assert store is not None and hf_dir is not None
+        status.update(stage="restoring-cache")
+        try:
+            if not is_cached(store, model_id):
+                status.notice(
+                    f"model weights for {model_id} are not in the bucket cache; "
+                    "the model loader will download them from Hugging Face"
+                )
+                return False
+            count = restore_from_cache(store, model_id, hf_dir)
+        except Exception as exc:  # never fail the job over the cache
+            status.notice(
+                f"model weights for {model_id} could not be restored from the cache ({exc}); "
+                "downloading from Hugging Face instead"
+            )
+            return False
+        status.notice(f"model weights for {model_id} restored from the cache ({count} files)")
+        return True
+
+    def _mirror_weights(self, model_id: str, was_empty: bool, status: StatusWriter) -> None:
+        """Issue #75: after a load that downloaded, mirror the HF cache to the bucket.
+
+        Only when the HF cache was EMPTY before the load: the completion marker claims the
+        whole set, so mirroring from a directory holding anything else (a warm VM, another
+        model, a half-restored set) could publish an incomplete set as complete. Best
+        effort: any failure (including the directory scan) is a ``notice``, never a failed
+        job. Stage stays ``model-loading`` (the stage list is a contract); the notice says
+        what is happening, and a cancel seen between files ends the mirror with no marker."""
+        store, hf_dir = self._cache_store, self._hf_dir
+        assert store is not None and hf_dir is not None
+        try:
+            if not was_empty:
+                status.notice(
+                    f"model weights for {model_id} not mirrored: the local cache was not empty "
+                    "before the load, so the whole set cannot be vouched for"
+                )
+                return
+            if not snapshot_tree(hf_dir):
+                return  # nothing was downloaded
+            status.notice(f"mirroring model weights for {model_id} to the bucket cache")
+            count = save_to_cache(
+                store, model_id, hf_dir, should_stop=self._cancel.poll if self._cancel else None
+            )
+        except Exception as exc:
+            status.notice(
+                f"model weights for {model_id} could not be mirrored to the bucket cache ({exc}); "
+                "the next job will download them again"
+            )
+            return
+        if count:
+            status.notice(f"model weights for {model_id} mirrored to the bucket cache ({count} files)")
+        elif self._cancel is not None and self._cancel.is_cancelled:
+            status.notice(f"mirror stopped for {model_id}: the job was cancelled; nothing was cached")
 
 
 def _check_store_matches_manifest(store: Blobstore, spec: StoreSpec) -> None:
@@ -328,11 +419,19 @@ def run_job(
     *,
     worker_version: str = WORKER_VERSION,
     predictor_factory: Callable[[RunConfig], Predictor] | None = None,
+    cache_store: Blobstore | None = None,
+    hf_cache_dir: Path | None = None,
 ) -> JobResult:
     """Run the full job described by ``manifest.json`` in ``store`` and return the
     :class:`JobResult` that was also written to ``result.json``. See :func:`run_job_outcome`
     for the variant that also reports whether the VM lifecycle was applied."""
-    return run_job_outcome(store, worker_version=worker_version, predictor_factory=predictor_factory).result
+    return run_job_outcome(
+        store,
+        worker_version=worker_version,
+        predictor_factory=predictor_factory,
+        cache_store=cache_store,
+        hf_cache_dir=hf_cache_dir,
+    ).result
 
 
 def run_job_outcome(
@@ -340,6 +439,8 @@ def run_job_outcome(
     *,
     worker_version: str = WORKER_VERSION,
     predictor_factory: Callable[[RunConfig], Predictor] | None = None,
+    cache_store: Blobstore | None = None,
+    hf_cache_dir: Path | None = None,
 ) -> RunOutcome:
     """Run the full job described by ``manifest.json`` in ``store``. Returns a
     :class:`RunOutcome` whose ``result`` is the :class:`JobResult` that was also written
@@ -389,7 +490,14 @@ def run_job_outcome(
     # CancelWatcher applies to its own store round-trips (see cancel.py's docstring).
     cancel = CancelWatcher(store, poll_interval_seconds=float(manifest.limits.cancel_poll_seconds))
     # Issue #41: ONE predictor for the whole batch, built lazily from the first input's config.
-    shared_predictor = _SharedPredictor(predictor_factory or pipeline.build_predictor)
+    # Issue #75: the weights cache lives at the BUCKET ROOT (cache/models/<id>/), not under
+    # this job's prefix; a local store has none. The HF cache dir is where evo2's loader writes.
+    shared_predictor = _SharedPredictor(
+        predictor_factory or pipeline.build_predictor,
+        cache_store=cache_store if cache_store is not None else cache_store_for(store),
+        hf_dir=hf_cache_dir if hf_cache_dir is not None else hf_hub_dir(),
+        cancel=cancel,
+    )
     started_at = _utc_now_iso()
 
     input_results: list[InputResult] = []
