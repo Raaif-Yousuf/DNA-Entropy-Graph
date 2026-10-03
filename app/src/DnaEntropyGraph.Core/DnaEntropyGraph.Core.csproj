@@ -19,4 +19,8 @@
     <EmbeddedResource Include="../../../worker/vm/startup.sh" LogicalName="startup.sh" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="DnaEntropyGraph.Cloud.Tests" />
+  </ItemGroup>
+
 </Project>
