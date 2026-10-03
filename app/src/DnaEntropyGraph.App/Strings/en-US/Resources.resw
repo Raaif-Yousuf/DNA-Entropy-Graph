@@ -846,14 +846,17 @@
   <data name="SetupAction_CopyMessageForIt" xml:space="preserve">
     <value>Copy message for IT</value>
   </data>
+  <data name="SetupError_NO_BILLING" xml:space="preserve">
+    <value>This project has no billing account, so Google will not start any computer. Choose Link billing to open Google's billing page and add a payment method.</value>
+  </data>
+  <data name="SetupError_BILLING_NO_PERMISSION" xml:space="preserve">
+    <value>You can use this billing account but you are not allowed to link projects to it. Choose Copy request for the billing admin and send it to the person who manages billing.</value>
+  </data>
   <data name="SetupError_PERMISSION" xml:space="preserve">
     <value>Your Google account is not allowed to do this in the project. Choose Copy request for the project owner and send it to the person who owns the project.</value>
   </data>
   <data name="SetupError_API_DISABLED" xml:space="preserve">
     <value>A Google service this step needs is switched off in your project. Choose Turn it on, then try the step again.</value>
-  </data>
-  <data name="SetupError_NO_BILLING" xml:space="preserve">
-    <value>Your Google Cloud project has no billing account, so Google will not do this. Choose Link billing and pick a billing account.</value>
   </data>
   <data name="SetupAction_CopyRequestForOwner" xml:space="preserve">
     <value>Copy request for the project owner</value>
@@ -864,5 +867,24 @@
   <data name="SetupAction_LinkBilling" xml:space="preserve">
     <value>Link billing</value>
   </data>
+  <data name="SetupError_BILLING_STILL_OFF" xml:space="preserve">
+    <value>Google accepted that billing account, but this project still has billing off. The account may be suspended or may have no working payment method. Choose Pick another billing account and select a different one.</value>
+  </data>
+  <data name="SetupAction_PickAnotherBillingAccount" xml:space="preserve">
+    <value>Pick another billing account</value>
+  </data>
+  <data name="SetupError_BILLING_ACCOUNT_OFF" xml:space="preserve">
+    <value>The billing account linked to this project is not working, and you have no other billing account to use. It may be suspended or may have no working payment method. Choose Fix billing account to open Google's billing page for this project, fix the account or add a new one there, then check again.</value>
+  </data>
+  <data name="SetupAction_FixBillingAccount" xml:space="preserve">
+    <value>Fix billing account</value>
+  </data>
+  <data name="SetupAction_CopyBillingRequest" xml:space="preserve">
+    <value>Copy request for the billing admin</value>
+  </data>
+  <data name="SetupBillingRequestText" xml:space="preserve">
+    <value>Hello, I use DNA Entropy Graph, which runs analyses on a Google Cloud project. Please link the project {project} to the billing account {account}, or give me the Billing Account User role on it. Thank you.</value>
+  </data>
 </root>
+
 

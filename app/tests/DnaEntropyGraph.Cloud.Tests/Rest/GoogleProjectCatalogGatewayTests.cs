@@ -292,6 +292,51 @@ public class GoogleProjectCatalogGatewayTests
         rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
     }
 
+    private const string UserProjectDenied = "Caller does not have required permission to use project 123. Grant the caller the roles/serviceusage.serviceUsageConsumer role, or a custom role with the serviceusage.services.use permission, by visiting https://console.developers.google.com/iam-admin/iam/project?project=123 and then retry (propagation of new permission may take a few minutes), or use another project to pass your quota and billing.";
+
+    [Fact]
+    public async Task A_USER_PROJECT_DENIED_403_when_listing_is_a_permission_error_not_quota()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, "/v3/projects:search", 403, RpcError(403, "PERMISSION_DENIED", UserProjectDenied, """[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"USER_PROJECT_DENIED","domain":"googleapis.com"}]"""));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.ProjectCatalog.ListActiveProjectsAsync(CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_USER_PROJECT_DENIED_403_on_create_is_PERMISSION_not_PROJECT_QUOTA(bool withReason)
+    {
+        // Google's standard shape for "you may not use this project to pass quota": its text says quota and billing.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(
+            Post,
+            "/v3/projects",
+            403,
+            RpcError(403, "PERMISSION_DENIED", UserProjectDenied, withReason ? """[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"USER_PROJECT_DENIED","domain":"googleapis.com"}]""" : null));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        ex.Error.Code.ShouldBe(SetupErrorCodes.Permission);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.ProjectQuota);
+    }
+
+    [Fact]
+    public async Task A_403_that_really_says_a_quota_was_exceeded_is_still_quota()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, "/v3/projects:search", 403, RpcError(403, "PERMISSION_DENIED", "Cloud billing quota exceeded: https://support.google.com/code/contact/billing_quota_increase"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.ProjectCatalog.ListActiveProjectsAsync(CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Quota);
+    }
+
     // The mutating POST is retried alone; every poll read is its own idempotent, retried call.
 
     [Fact]

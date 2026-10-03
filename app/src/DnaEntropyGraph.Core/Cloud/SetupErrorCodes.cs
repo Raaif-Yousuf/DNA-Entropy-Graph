@@ -21,11 +21,20 @@ public static class SetupErrorCodes
     /// <summary>A Google service the step needs is switched off in the project. Action: turn it on.</summary>
     public const string ApiDisabled = "API_DISABLED";
 
-    /// <summary>The project has no billing account, so Google refuses the step. Action: link billing.</summary>
+    /// <summary>The project has no billing account and the user has none to link (<see cref="BillingOutcomeKind.NeedsAccount"/>). Action: open Google's billing page (a link).</summary>
     public const string NoBilling = "NO_BILLING";
 
+    /// <summary>The user can use a billing account but is not allowed to link projects to it. Action: copy the request for the billing admin.</summary>
+    public const string BillingNoPermission = "BILLING_NO_PERMISSION";
+
+    /// <summary>Google accepted the billing account but the project still has billing off (a suspended account, no valid payment method). Action: pick another billing account.</summary>
+    public const string BillingStillOff = "BILLING_STILL_OFF";
+
+    /// <summary>The billing account the project is linked to is not working and no other open account exists to pick (<see cref="BillingOutcomeKind.FixLinkedAccount"/>). Action: open the project's billing page on Google and fix or replace the account.</summary>
+    public const string BillingAccountOff = "BILLING_ACCOUNT_OFF";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, BillingAccountOff];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -35,6 +44,9 @@ public static class SetupErrorCodes
         Permission => "SetupError_PERMISSION",
         ApiDisabled => "SetupError_API_DISABLED",
         NoBilling => "SetupError_NO_BILLING",
+        BillingNoPermission => "SetupError_BILLING_NO_PERMISSION",
+        BillingStillOff => "SetupError_BILLING_STILL_OFF",
+        BillingAccountOff => "SetupError_BILLING_ACCOUNT_OFF",
         _ => "SetupError_OTHER",
     };
 
@@ -46,6 +58,9 @@ public static class SetupErrorCodes
         Permission => "SetupAction_CopyRequestForOwner",
         ApiDisabled => "SetupAction_TurnItOn",
         NoBilling => "SetupAction_LinkBilling",
+        BillingNoPermission => "SetupAction_CopyBillingRequest",
+        BillingStillOff => "SetupAction_PickAnotherBillingAccount",
+        BillingAccountOff => "SetupAction_FixBillingAccount",
         _ => "SetupAction_TryAgain",
     };
 }

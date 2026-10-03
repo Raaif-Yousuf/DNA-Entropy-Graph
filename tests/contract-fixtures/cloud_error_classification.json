@@ -141,6 +141,20 @@
       "note": "Supplementary: exercises the 'forbidden'/'iam' branches."
     },
     {
+      "id": "permission-billing-permission-denied-539",
+      "stderr": "Permission 'billing.resourceAssociations.create' denied on resource '//cloudbilling.googleapis.com/billingAccounts/AAA-BBB-CCC' (or it may not exist) on billing account",
+      "expected_bucket": "permission",
+      "from_prototype_test": null,
+      "note": "Issue #539, supplementary: a missing billing role mentions 'billing' and 'account' but is a permission error, not billing-off. THEORY (unverified against a real project): Cloud Billing words a missing-role refusal this way."
+    },
+    {
+      "id": "permission-iam-permission-denied-billing-539",
+      "stderr": "IAM_PERMISSION_DENIED: the caller lacks permission billing.resourceAssociations.get on this billing account",
+      "expected_bucket": "permission",
+      "from_prototype_test": null,
+      "note": "Issue #539, supplementary: the IAM_PERMISSION_DENIED reason wins over the word 'billing'."
+    },
+    {
       "id": "network-network-unreachable-supplementary",
       "stderr": "dial tcp: network is unreachable",
       "expected_bucket": "network",

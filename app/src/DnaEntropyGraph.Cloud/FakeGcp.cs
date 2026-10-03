@@ -201,10 +201,23 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // Scripting API - one line per scenario, as issue #49 asks for.
     // ----------------------------------------------------------------
 
+    // One lock for the whole billing-off set: the catalogue and billing fakes (FakeGcp.ProjectCatalog.cs) share it with the runner fake.
+    private bool IsBillingOff(string projectId)
+    {
+        lock (_catalogGate)
+        {
+            return _billingOffProjects.Contains(projectId);
+        }
+    }
+
     /// <summary>The project's billing account is off. Every <see cref="CreateVmAsync"/> for it throws <see cref="CloudErrorKind.Billing"/>; preflight's <see cref="IsBillingEnabledAsync"/> reports it too.</summary>
     public FakeGcp WithBillingOff(string projectId)
     {
-        _billingOffProjects.Add(projectId);
+        lock (_catalogGate)
+        {
+            _billingOffProjects.Add(projectId);
+        }
+
         return this;
     }
 
@@ -1248,7 +1261,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public Task<bool> IsBillingEnabledAsync(string projectId, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        return Task.FromResult(!_billingOffProjects.Contains(projectId));
+        return Task.FromResult(!IsBillingOff(projectId));
     }
 
     public Task<bool> IsComputeApiEnabledAsync(string projectId, CancellationToken cancellationToken)
@@ -1292,7 +1305,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // (billing before API before permission/org policy) so a project
         // scripted with more than one project-wide failure still reports
         // the one a real preflight run would surface first.
-        if (_billingOffProjects.Contains(projectId))
+        if (IsBillingOff(projectId))
         {
             throw Build(CloudErrorKind.Billing, "BILLING_DISABLED", 403, $"The billing account for the owning project '{projectId}' is disabled.");
         }

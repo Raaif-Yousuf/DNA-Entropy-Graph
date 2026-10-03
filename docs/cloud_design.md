@@ -869,6 +869,26 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   ORG_POLICY reason, a 412, or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
   null, with no request, for an id outside Google's project-id grammar.
 - **Not proven without a real account:** `docs/ToTest.md`.
+### Billing check and link (issue #51, wizard step 4)
+
+`IBillingGateway`: `GetBillingStatusAsync`, `ListOpenBillingAccountsAsync`, `LinkProjectAsync`; `BillingSetup` (Core) is the policy over it.
+
+- **Requests.** `GET /v1/projects/{id}/billingInfo`; `GET /v1/billingAccounts?filter=open=true` (paged; a closed account is
+  also dropped client-side); `PUT /v1/projects/{id}/billingInfo` with `{"billingAccountName": "billingAccounts/..."}`.
+  Google omits `billingEnabled` when it is false, so an absent value reads as off. Billing is "enabled" only when an
+  account is linked and `billingEnabled` is true.
+- **Policy.** On: nothing is linked. Off with one open account: linked for the user, then the status is read back
+  (a link Google accepted that did not turn billing on is `LinkedButStillOff`, code `BILLING_STILL_OFF`, action Pick another billing account, with exactly the other open accounts in `Accounts`; never `NO_BILLING`, which would loop the user back to Link). When there is no other open account to pick the outcome is `FixLinkedAccount`, code `BILLING_ACCOUNT_OFF`, action Fix billing account (`BillingLinks.ForProject`), never "pick another" with nothing to pick. A project that already has an account linked while billing is off is never linked over unasked: `EnsureAsync` answers `ChooseAccount` (the other open accounts) or `FixLinkedAccount`, so a re-check cannot loop on `LinkProjectAsync`. Several: `ChooseAccount`,
+  and `LinkAsync` links the one the user picked. None: `NeedsAccount` with `BillingLinks.ForProject(projectId)`, the
+  console page for that project; calling `EnsureAsync` again after the user adds a payment method is the re-check.
+  The wizard action for the code `NO_BILLING` is that link (`SetupAction_LinkBilling`).
+- **No permission.** The error reason and kind decide first (a Billing API that is off is `api_disabled`, a billing quota 403 is `quota`, billing off is `billing`, a 403 naming a non-billing permission such as `resourcemanager.projects.createBillingAssignment` is a plain `permission`); only a remaining permission 403 on the link is `BILLING_NO_PERMISSION` (kind `permission`). The classifier (issue #539) no longer reads the word "billing" in a permission denial as billing-off, only reads a permission-denial wording on a 403 or an error with no status (a 412 or 409 that happens to say "does not have permission" keeps its org-policy or already-exists meaning), and a 403 counts as quota only when it says a quota was *exceeded* and does not read as a permission denial: Google's standard USER_PROJECT_DENIED 403 ("Caller does not have required permission to use project ... or use another project to pass your quota and billing") is `permission`, never quota, and on a create never `PROJECT_QUOTA`. The action is a copyable request:
+  `SetupBillingRequestText` (with `{project}` and `{account}`) filled by `BillingRequestText.Fill`.
+- **Not here yet.** The wizard page (#99) and the health row that must go green on its own after a link: nothing in
+  the shipped UI calls this until then. `ResilientProjectSetupGateway.IsBillingEnabledAsync` (the preflight step) is
+  still backed by the fake; the composite real `IProjectSetupGateway` that delegates it to `GetBillingStatusAsync`
+  lands with #52.
+- **Proven only by a real account:** `docs/ToTest.md`.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

@@ -56,6 +56,7 @@ public class SetupErrorResourceTests
     [InlineData(SetupErrorCodes.Permission, "SetupError_PERMISSION", "SetupAction_CopyRequestForOwner")]
     [InlineData(SetupErrorCodes.ApiDisabled, "SetupError_API_DISABLED", "SetupAction_TurnItOn")]
     [InlineData(SetupErrorCodes.NoBilling, "SetupError_NO_BILLING", "SetupAction_LinkBilling")]
+    [InlineData(SetupErrorCodes.BillingAccountOff, "SetupError_BILLING_ACCOUNT_OFF", "SetupAction_FixBillingAccount")]
     public void A_permanent_failure_never_shows_the_try_again_catch_all(string code, string messageKey, string actionKey)
     {
         // Retrying a permission, switched-off service or missing billing error can never work, so none may fall to the
@@ -82,5 +83,15 @@ public class SetupErrorResourceTests
             catalog.ShouldContain($"| `{code}` |", customMessage: $"docs/copy_catalog.md has no row for setup error code {code}");
             triage.ShouldContain($"\"{code}\"", customMessage: $"scripts/triage_diagnostics.py KNOWN_CLOUD_ERROR_CODES lacks {code}");
         }
+    }
+
+    [Fact]
+    public void The_billing_request_text_template_exists_and_carries_both_placeholders()
+    {
+        var text = ReswValues()["SetupBillingRequestText"];
+
+        text.ShouldContain("{project}");
+        text.ShouldContain("{account}");
+        text.ShouldNotContain("\u2014");
     }
 }

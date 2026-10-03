@@ -231,6 +231,7 @@ public class ResilientGatewayTests
             (typeof(IProjectSetupGateway), (g, p) => new ResilientProjectSetupGateway(g, p)),
             (typeof(IQuotaGateway), (g, p) => new ResilientQuotaGateway(g, p)),
             (typeof(IProjectCatalogGateway), (g, p) => new ResilientProjectCatalogGateway(g, p)),
+            (typeof(IBillingGateway), (g, p) => new ResilientBillingGateway(g, p)),
         };
 
         var methodCount = 0;
