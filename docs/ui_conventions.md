@@ -126,6 +126,17 @@ and FASTA extensions, registered as *additional* "Open with" entries, never as t
 default handler, so a user's existing Geneious or SnapGene file association is never
 silently overwritten.
 
+### In-app messages (issue #585)
+
+Every `IToastService.ShowToast(title, body, severity)` call becomes a message bar (an `InfoBar` at the bottom of
+`MainWindow`), not a Windows notification. The service is `InAppMessageCenter` (Presentation, singleton, no WinUI types);
+`ShellViewModel.Messages` exposes the same instance and the InfoBar binds to it. One message at a time, a new one replaces
+the old. Severity decides lifetime: `Info` and `Success` close after 6 seconds (a `TimeProvider` timer, so tests never
+sleep), `Warning` and `Error` stay until the user closes the bar. Any thread may call it; the state change goes through
+`IDispatcher`. A ViewModel picks the severity per message (the Runs copy carries it in `RunsMessage`): a failed or refused
+delete is `Error`, a finished one `Success`. The Windows toast with a deep link for a finished run while the app is in the
+background (#107) is a separate channel and a second implementation behind the same seam; this section does not build it.
+`Guards.Tests/ToastServiceWiringTests` resolves the real registration and fails if a message does not reach the shell.
 ## 7. The `JobPhase`-to-UI table
 
 Reading this table alongside `architecture.md` section 4 (the `JobPhase` state machine

@@ -59,7 +59,9 @@ public static class ServiceRegistration
         services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
-        services.AddSingleton<IToastService, ToastService>();
+        // Issue #585: the shell message bar is the toast service; one instance behind both types.
+        services.AddSingleton<InAppMessageCenter>();
+        services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());
         services.AddSingleton<WindowThemeApplier>();
         services.AddSingleton<IThemeApplier>(sp => sp.GetRequiredService<WindowThemeApplier>());
         services.AddSingleton<WindowHandleProvider>();

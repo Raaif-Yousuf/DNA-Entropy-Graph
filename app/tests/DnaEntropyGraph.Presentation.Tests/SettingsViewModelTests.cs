@@ -57,8 +57,8 @@ public class SettingsViewModelTests
         viewModel.ThemeIndex = Dark;
 
         viewModel.ThemeIndex.ShouldBe(Dark);
-        toastService.Received(1).ShowToast("ThemeNotSaved_Title", "ThemeNotSaved_Body");
-        toastService.DidNotReceive().ShowToast("ThemeUpdated_Title", Arg.Any<string>());
+        toastService.Received(1).ShowToast("ThemeNotSaved_Title", "ThemeNotSaved_Body", ToastSeverity.Warning);
+        toastService.DidNotReceive().ShowToast("ThemeUpdated_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class SettingsViewModelTests
 
         viewModel.ThemeIndex = Dark;
 
-        toastService.Received(1).ShowToast("Theme updated (from resw)", "Dark");
+        toastService.Received(1).ShowToast("Theme updated (from resw)", Arg.Any<string>(), ToastSeverity.Info);
     }
 
     [Fact]
@@ -192,6 +192,6 @@ public class SettingsViewModelTests
 
         viewModel.ThemeIndex = index;
 
-        toastService.Received(1).ShowToast("Theme updated", label);
+        toastService.Received(1).ShowToast("Theme updated", label, ToastSeverity.Info);
     }
 }
