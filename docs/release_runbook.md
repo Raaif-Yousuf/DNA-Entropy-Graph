@@ -53,7 +53,9 @@ compatibility between minor versions). This exact string must appear, identicall
 This is the version lockstep rule from `packaging_design.md` section 5. A release where
 these four strings disagree is the specific failure mode that rule exists to prevent;
 check all four by hand before tagging if `release.yml` does not yet assert it
-automatically.
+automatically. The first two plus the tag are checked by
+`python scripts\check_version_lockstep.py --tag vX.Y.Z` (run it before tagging; `ci-docs` already runs the
+no-tag form on every PR).
 
 ## 3. Pre-flight gates (commands and their real outputs)
 

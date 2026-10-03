@@ -6,8 +6,8 @@
 
 `--tag vX.Y.Z` is the release mode (#33): the tag, `worker/pyproject.toml` and `app/Directory.Build.props` must all
 carry X.Y.Z (a prerelease suffix such as `v0.1.0-rc.1` is compared whole). A release needs both halves, so with
-`--tag` a missing `app/Directory.Build.props` is a failure, not the pre-#61 notice. The future release.yml (#178)
-calls it before building: `python scripts/check_version_lockstep.py --tag "${GITHUB_REF_NAME}"`.
+`--tag` the tag must match too. The future release.yml (#178) calls it before building:
+`python scripts/check_version_lockstep.py --tag "${GITHUB_REF_NAME}"`.
 
 The worker image and the app that drives it are versioned together
 (`docs/superpowers/specs/2026-09-18-appendix-c-repo-conventions.md`'s
@@ -15,18 +15,13 @@ The worker image and the app that drives it are versioned together
 script reads `worker/pyproject.toml`'s `[project].version` and
 `app/Directory.Build.props`'s `<Version>` and fails when they differ.
 
-`app/` does not exist yet -- issue #61 (app: solution skeleton) is still
-open. Until it lands, there is nothing to be in lockstep WITH, so this
-script prints a notice naming #61 and passes rather than failing a check
-against a tree nobody has built yet. The day `app/Directory.Build.props`
-exists, the same run starts enforcing automatically -- no flag, no second
-migration step, because the check is "does the file exist", not "has
-someone remembered to turn this on".
+Until #61 landed the app skeleton this script printed a notice and passed when
+`app/Directory.Build.props` did not exist. That made it a guard that cannot fail
+(delete or rename the file and CI stays green), so since #33 a missing file is a
+failure like any other; the notice branch is gone.
 
-Exit codes: 0 clean (including the pre-#61 notice-and-pass state), 1 the
-two versions differ (once app/ exists) or a version string could not be
-read from a file that DOES exist, 2 bad usage (worker/pyproject.toml
-itself missing, which is a broken checkout, not a pending-issue state).
+Exit codes: 0 clean, 1 the two versions differ, a version string could not be read,
+or `app/Directory.Build.props` does not exist, 2 bad usage (not a checkout of this repo).
 """
 
 from __future__ import annotations
@@ -39,7 +34,6 @@ from xml.etree import ElementTree as ET
 
 WORKER_PYPROJECT_RELATIVE = "worker/pyproject.toml"
 APP_DIRECTORY_BUILD_PROPS_RELATIVE = "app/Directory.Build.props"
-APP_SKELETON_ISSUE = 61
 
 _VERSION_LINE_RE = re.compile(r'^\s*version\s*=\s*["\']([^"\']+)["\']\s*$', re.MULTILINE)
 
@@ -80,9 +74,9 @@ _TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$")
 
 
 def check(root: Path, tag: str | None = None) -> tuple[list[str], list[str]]:
-    """Return (problems, notices). `notices` are informational
-    (printed but never fail the check); `problems` do. With `tag` (release mode) the tag's version must also
-    equal both files' versions, and a missing app/Directory.Build.props is a problem."""
+    """Return (problems, notices). `notices` are informational (printed but never fail the check; none are
+    produced today, the slot is kept for the CLI's printing); `problems` do. With `tag` (release mode) the
+    tag's version must also equal both files' versions."""
     tag_version: str | None = None
     if tag is not None:
         m = _TAG_RE.match(tag)
@@ -101,15 +95,9 @@ def check(root: Path, tag: str | None = None) -> tuple[list[str], list[str]]:
         return ([f"{WORKER_PYPROJECT_RELATIVE} has no readable [project].version"], [])
 
     if not app_path.is_file():
-        if tag is not None:
-            return ([f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} does not exist, but tag {tag!r} is a release: "
-                     "a release needs both halves"], [])
-        return ([], [
-            f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} does not exist yet (issue #{APP_SKELETON_ISSUE}: "
-            "app: solution skeleton) -- nothing to check lockstep against; "
-            f"{WORKER_PYPROJECT_RELATIVE}'s version is {worker_version!r}. "
-            "This will start enforcing automatically once that file exists."
-        ])
+        return ([f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} does not exist, so there is nothing to compare "
+                 f"{WORKER_PYPROJECT_RELATIVE}'s version {worker_version!r} against "
+                 "(a guard that skips a missing file can never fail)"], [])
 
     app_version = read_app_version(app_path)
     if app_version is None:
@@ -156,13 +144,12 @@ def self_test() -> bool:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         make_worker_pyproject(root, "1.2.3")
-        problems, notices = check(root)
-        if problems or not any(f"#{APP_SKELETON_ISSUE}" in n for n in notices):
-            print(f"FAIL: expected a clean pass with an issue #{APP_SKELETON_ISSUE} notice, "
-                  f"got problems={problems} notices={notices}")
+        problems, _notices = check(root)
+        if not any(APP_DIRECTORY_BUILD_PROPS_RELATIVE in p for p in problems):
+            print(f"FAIL: a missing {APP_DIRECTORY_BUILD_PROPS_RELATIVE} must be a problem naming it, got {problems}")
             ok = False
         else:
-            print(f"ok    passes with a notice naming #{APP_SKELETON_ISSUE} when app/ does not exist")
+            print(f"ok    a missing {APP_DIRECTORY_BUILD_PROPS_RELATIVE} fails (a guard that skips it can never fail)")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -173,7 +160,7 @@ def self_test() -> bool:
             print(f"FAIL: matching versions should be clean, got {problems}")
             ok = False
         else:
-            print("ok    matching worker/app versions pass once app/ exists")
+            print("ok    matching worker/app versions pass")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -184,7 +171,7 @@ def self_test() -> bool:
             print(f"FAIL: mismatched versions should fail, got {problems}")
             ok = False
         else:
-            print("ok    a real version mismatch is caught once app/ exists")
+            print("ok    a real version mismatch is caught")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
