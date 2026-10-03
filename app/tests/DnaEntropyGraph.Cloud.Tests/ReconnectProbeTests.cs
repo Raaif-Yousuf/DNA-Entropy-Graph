@@ -82,9 +82,11 @@ public class ReconnectProbeTests
         rig.Observer.StartProbeIfDeferred();
         var gaps = new List<TimeSpan>();
 
-        // Each gap is the shortest advance that produces the next pass, found by whole seconds (virtual, so free).
+        // Each gap is the shortest advance that produces the next pass, found by whole seconds (virtual, so free). After every pass the test
+        // waits until the probe's next timer is armed: the re-arm runs on a continuation, so stepping before it would measure nothing.
         for (var pass = 1; pass <= 6; pass++)
         {
+            await WaitForPendingTimersAsync(rig.Time, 1);
             var waited = TimeSpan.Zero;
             while (rig.Passes < pass)
             {
@@ -143,6 +145,49 @@ public class ReconnectProbeTests
         await rig.AdvanceAsync(TimeSpan.FromDays(1));
 
         rig.Passes.ShouldBe(0);
+    }
+
+    private static async Task WaitForPendingTimersAsync(VirtualTimeProvider time, int expected)
+    {
+        for (var i = 0; i < 500 && time.PendingTimers != expected; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        time.PendingTimers.ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task A_deferred_check_that_throws_while_re_arming_does_not_stop_the_probe()
+    {
+        // Issue #559 review r4 F4: a throwing hasDeferred ended the probe for good; it re-arms on the current delay instead.
+        var time = new VirtualTimeProvider();
+        var broken = false;
+        var passes = 0;
+        using var observer = new ReconcileOnReconnect(
+            Substitute.For<ICloudCallObserver>(),
+            _ =>
+            {
+                passes++;
+                return Task.FromResult<Task>(Task.CompletedTask);
+            },
+            () => broken ? throw new InvalidOperationException("boom") : true,
+            time: time,
+            probeInitialDelay: Initial,
+            probeMaxDelay: Cap);
+        observer.StartProbeIfDeferred();
+
+        broken = true;
+        time.Advance(Initial);
+        await observer.WhenIdleAsync();
+        await WaitForPendingTimersAsync(time, 1);
+        broken = false;
+        passes.ShouldBe(1);
+
+        time.Advance(Initial);
+        await observer.WhenIdleAsync();
+
+        passes.ShouldBe(2, "the probe re-armed on the same delay after the check threw");
     }
 
     [Fact]

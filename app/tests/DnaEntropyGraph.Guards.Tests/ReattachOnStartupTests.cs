@@ -222,6 +222,29 @@ public class ReattachOnStartupTests : IDisposable
         time.PendingTimers.ShouldBe(1, "the probe is armed even though the launch pass threw");
     }
 
+    [Fact]
+    public async Task A_launch_whose_first_run_table_read_alone_times_out_still_starts_the_probe()
+    {
+        // Issue #559 review r4 F1: only the reattach's own listing fails (the lifecycle read after it succeeds), so (connected, so the idle sweep defers nothing) the only thing that can
+        // arm the probe is the reattach-level deferral; the test above throws on every read and proves the lifecycle path alone.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: true, time: time, configure: services => services.AddSingleton<IRunRepository>(_ => new FirstReadTimesOutRepository()));
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        time.PendingTimers.ShouldBe(1, "the probe is armed: the reattach could not read the run table");
+    }
+
+    private sealed class FirstReadTimesOutRepository : IRunRepository
+    {
+        private int _reads;
+
+        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
+            => Interlocked.Increment(ref _reads) == 1 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
+
+        public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     private static async Task WaitForPendingTimersAsync(VirtualTimeProvider time, int expected)
     {
         for (var i = 0; i < 500 && time.PendingTimers != expected; i++)

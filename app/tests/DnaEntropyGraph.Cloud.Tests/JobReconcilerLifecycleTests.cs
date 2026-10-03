@@ -550,7 +550,7 @@ public class JobReconcilerLifecycleTests
         await (await reconciler.BeginReconcileAsync(CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         reconciler.HasDeferred.ShouldBeFalse("precondition: the newer pass found nothing deferred");
         release.SetResult();
-        await Record.ExceptionAsync(() => older); // ends in the TimeoutException, or (once a lifecycle failure is logged, not thrown, #575) normally
+        await (await older); // the lifecycle failure is logged, not thrown (#575): the pass and the runs it reattached both end normally
 
         reconciler.HasDeferred.ShouldBeFalse("the older pass ended last but only the latest-started pass may write the flag");
     }
@@ -584,7 +584,83 @@ public class JobReconcilerLifecycleTests
 
         second.IsCompleted.ShouldBeTrue("the next pass skips the run something already drives and ends");
         await shutdown.CancelAsync();
-        await Record.ExceptionAsync(() => inner.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        var ended = await Record.ExceptionAsync(() => inner.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        ended.ShouldBeAssignableTo<OperationCanceledException>("a shutdown ends the stuck cancel finish; it is neither a timeout nor a hang");
+        reconciler.HasDeferred.ShouldBeFalse("a shutdown is not a missing connection: it must not arm the probe");
+    }
+
+    [Fact]
+    public async Task A_network_failure_reading_the_run_table_for_the_reattach_alone_is_deferred()
+    {
+        // Issue #559 review r4 F1: only the reattach's own listing read times out (the lifecycle read succeeds), so neither a per-run nor a
+        // lifecycle flag exists; the probe would never arm.
+        var rig = new Rig();
+        rig.Env.Repo.BeforeGetAll = (call, _) =>
+        {
+            if (call == 1)
+            {
+                throw new TimeoutException();
+            }
+
+            return Task.CompletedTask;
+        };
+        var reconciler = rig.Reconciler();
+
+        await Should.ThrowAsync<TimeoutException>(async () => await reconciler.BeginReconcileAsync(CancellationToken.None));
+
+        reconciler.HasDeferred.ShouldBeTrue("the reattach could not read the run table");
+
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None));
+        reconciler.HasDeferred.ShouldBeFalse("a later pass read it");
+    }
+
+    [Fact]
+    public async Task A_run_whose_cancel_finish_ends_deferred_stays_deferred_while_a_newer_pass_skips_it()
+    {
+        // Issue #559 review r4 F2: the newer pass is Skipped (the older pass drives the run); it must not clear the mark, and the older
+        // pass's late Deferred must not be rejected for being older.
+        var rig = new Rig();
+        await rig.Env.SeedAsync("job-ow", JobPhase.Cancelling, vm: true);
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var shutdown = new CancellationTokenSource();
+        var shutdownToken = shutdown.Token;
+        rig.Env.Repo.BeforeGetAll = async (_, token) =>
+        {
+            if (token != shutdownToken && token.CanBeCanceled)
+            {
+                parked.TrySetResult();
+                await release.Task;
+                throw new TimeoutException();
+            }
+        };
+        var reconciler = rig.Reconciler();
+        var older = await reconciler.BeginReconcileAsync(shutdown.Token).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var newer = await reconciler.BeginReconcileAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await newer.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        release.SetResult();
+        await older.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        reconciler.HasDeferred.ShouldBeTrue("the run that drove the cancel finish ended Deferred; the pass that skipped it changes nothing");
+    }
+
+    [Fact]
+    public async Task A_lifecycle_read_that_throws_does_not_orphan_the_runs_the_reattach_started()
+    {
+        // Issue #559 review r4 F3: the lifecycle step throws; the run the reattach already handed to a driver must still be tracked and waited for.
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-orph", JobPhase.Running, vm: true);
+        rig.Env.Repo.BeforeGetAll = (call, _) => call == 2 ? throw new InvalidOperationException("database is busy") : Task.CompletedTask;
+        var reconciler = rig.Reconciler();
+        using var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
+
+        observer.OnConnectivityChanged(offline: false);
+        await observer.WhenIdleAsync();
+
+        var row = rig.Env.Row("job-orph");
+        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
     }
 
     [Fact]
