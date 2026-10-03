@@ -57,8 +57,8 @@ finished run later with **Open** on its row of the Runs page. The Results page s
   the page says so instead of showing blanks, and **Open folder** shows you what the run
   did write.
 - **Files.** Every file in the run's results folder, with its size. For each one,
-  **Open** opens it in the program Windows uses for that kind of file (a program or
-  script is never opened from here), **Show in folder** selects it in File Explorer, and
+  **Open** opens it in the program Windows uses for that kind of file (only the kinds of
+  file this app writes are opened from here; use Show in folder for anything else), **Show in folder** selects it in File Explorer, and
   **Copy path** puts its full path on the clipboard.
 - **Open folder** opens the whole results folder, and **Open in viewer** takes you to the
   genome viewer for this run.

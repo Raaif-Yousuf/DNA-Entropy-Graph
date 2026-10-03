@@ -53,7 +53,7 @@ public sealed class ResultsViewModelTests : IDisposable
         }
     }
 
-    private static string SummaryText(string name, string meanAll, string meanContig)
+    private static string SummaryText(string name, string meanAll, string meanContig, string direction = "both-combined")
         => "DNA-Entropy summary\n"
            + $"name:               {name}\n"
            + "records:            1\n"
@@ -68,7 +68,7 @@ public sealed class ResultsViewModelTests : IDisposable
            + $"  entropy mean:     {meanContig} bits\n"
            + "  entropy min:      0.5000 bits (position 3)\n"
            + "  entropy max:      1.9000 bits (position 9)\n"
-           + "  direction:          both-combined\n"
+           + $"  direction:          {direction}\n"
            + "  seam:               n/a\n";
 
     private string MakeRunFolder(string name, string? summary, params string[] otherFiles)
@@ -117,8 +117,40 @@ public sealed class ResultsViewModelTests : IDisposable
         contig.MeanText.ShouldBe("1.889 bits");
         contig.MinText.ShouldBe("0.500 bits");
         contig.MaxText.ShouldBe("1.900 bits");
-        contig.DirectionText.ShouldBe("both-combined");
-        vm.Groups.SelectMany(g => g.Headline.Split(' ')).ShouldNotContain("1.111");
+        contig.DirectionText.ShouldBe(ResultsCopy.DirectionKey("both-combined"));
+
+        // Positive control: run A's own number is "mean 1.111" when A is the run opened, so its absence above means something.
+        var other = await Loaded("job-a");
+        other.Groups.ShouldHaveSingleItem().Headline.ShouldStartWith("mean 1.111");
+        group.Headline.ShouldNotContain("1.111");
+    }
+
+    [Theory]
+    [InlineData("both-combined", ResultsCopy.DirectionBothCombined)]
+    [InlineData("both-averaged", ResultsCopy.DirectionBothAveraged)]
+    [InlineData("both-separate", ResultsCopy.DirectionBothSeparate)]
+    [InlineData("forward-only", ResultsCopy.DirectionForwardOnly)]
+    [InlineData("reverse-only", ResultsCopy.DirectionReverseOnly)]
+    public async Task The_direction_shown_is_resw_copy_never_the_workers_raw_token(string token, string expectedKey)
+    {
+        var folder = MakeRunFolder("alpha", SummaryText("alpha", "1.1111", "1.2222", token));
+        _rows = [Row("job-a", folder)];
+
+        var vm = await Loaded("job-a");
+
+        var shown = vm.Groups.Single().Contigs.Single().DirectionText;
+        shown.ShouldBe(expectedKey);
+        shown.ShouldNotBe(token);
+    }
+
+    [Fact]
+    public async Task A_direction_the_app_does_not_know_is_still_shown_with_its_text_in_the_unknown_copy()
+    {
+        _strings.GetString(ResultsCopy.DirectionUnknown).Returns("unknown direction {0}");
+        var folder = MakeRunFolder("alpha", SummaryText("alpha", "1.1111", "1.2222", "sideways"));
+        _rows = [Row("job-a", folder)];
+
+        (await Loaded("job-a")).Groups.Single().Contigs.Single().DirectionText.ShouldBe("unknown direction sideways");
     }
 
     [Fact]

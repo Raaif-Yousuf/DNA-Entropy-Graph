@@ -837,6 +837,24 @@
   <data name="Results_CopyFailed" xml:space="preserve">
     <value>The path could not be copied because Windows would not let the app use the clipboard. Close other programs that copy text, then choose Copy path again.</value>
   </data>
+  <data name="Results_Direction_BothCombined" xml:space="preserve">
+    <value>Both directions, combined</value>
+  </data>
+  <data name="Results_Direction_BothAveraged" xml:space="preserve">
+    <value>Both directions, averaged</value>
+  </data>
+  <data name="Results_Direction_BothSeparate" xml:space="preserve">
+    <value>Both directions, kept separate</value>
+  </data>
+  <data name="Results_Direction_ForwardOnly" xml:space="preserve">
+    <value>Forward only</value>
+  </data>
+  <data name="Results_Direction_ReverseOnly" xml:space="preserve">
+    <value>Reverse only</value>
+  </data>
+  <data name="Results_Direction_Unknown" xml:space="preserve">
+    <value>Other ({0})</value>
+  </data>
   <data name="Results_Headline" xml:space="preserve">
     <value>Mean entropy {0:F3} bits (lowest {1:F3}, highest {2:F3}). Total length {3:N0} bases. Sequences: {4}.</value>
   </data>

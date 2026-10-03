@@ -185,7 +185,18 @@ public sealed partial class ResultsViewModel : ObservableObject
                 Format(ResultsCopy.Bits, c.Mean),
                 Format(ResultsCopy.Bits, c.Min),
                 Format(ResultsCopy.Bits, c.Max),
-                c.Direction ?? string.Empty))]);
+                DirectionText(c.Direction)))]);
+
+    private string DirectionText(string? token)
+    {
+        if (string.IsNullOrEmpty(token))
+        {
+            return string.Empty;
+        }
+
+        var key = ResultsCopy.DirectionKey(token);
+        return key == ResultsCopy.DirectionUnknown ? Format(key, token) : _strings.GetString(key);
+    }
 
     private string SizeText(long bytes) => bytes switch
     {

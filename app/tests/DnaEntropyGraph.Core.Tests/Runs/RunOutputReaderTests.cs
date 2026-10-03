@@ -89,6 +89,74 @@ public sealed class RunOutputReaderTests : IDisposable
         new RunOutputReader().Read(_folder)!.Summaries.ShouldBeEmpty();
     }
 
+    // A OneDrive "online-only" file is a reparse point whose bytes are in the cloud: still the user's own result file.
+    private const FileAttributes Placeholder = FileAttributes.Archive | FileAttributes.ReparsePoint | FileAttributes.Offline | RunOutputReader.RecallOnDataAccess;
+
+    private RunOutputReader WithAttributes(Func<string, FileAttributes> attributesOf, Func<string, string?>? linkTarget = null)
+        => new(attributesOf, linkTarget ?? (_ => null));
+
+    [Theory]
+    [InlineData(FileAttributes.ReparsePoint | FileAttributes.Offline)]
+    [InlineData(FileAttributes.ReparsePoint | RunOutputReader.RecallOnDataAccess)]
+    [InlineData(FileAttributes.ReparsePoint | RunOutputReader.RecallOnOpen)]
+    [InlineData(Placeholder)]
+    public void A_cloud_placeholder_file_is_listed_not_skipped(FileAttributes attributes)
+    {
+        Put("two/two.gb", "LOCUS");
+        var target = Path.Combine(_folder, "two", "two.gb");
+        var reader = WithAttributes(p => p == target ? attributes : File.GetAttributes(p));
+
+        reader.Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe(["two/two.gb"]);
+    }
+
+    [Fact]
+    public void A_link_to_a_file_outside_the_run_folder_is_refused()
+    {
+        Put("two/two.gb", "LOCUS");
+        var link = Path.Combine(_folder, "two", "two.gb");
+        var outside = Path.Combine(Path.GetTempPath(), "somewhere-else.txt");
+        var reader = WithAttributes(p => p == link ? FileAttributes.ReparsePoint : File.GetAttributes(p), p => p == link ? outside : null);
+
+        reader.Read(_folder)!.Files.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_link_to_a_file_inside_the_run_folder_is_listed()
+    {
+        Put("two/two.gb", "LOCUS");
+        Put("two/real.gb", "LOCUS");
+        var link = Path.Combine(_folder, "two", "two.gb");
+        var inside = Path.Combine(_folder, "two", "real.gb");
+        var reader = WithAttributes(p => p == link ? FileAttributes.ReparsePoint : File.GetAttributes(p), p => p == link ? inside : null);
+
+        reader.Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe(["two/real.gb", "two/two.gb"]);
+    }
+
+    [Fact]
+    public void A_link_whose_target_cannot_be_resolved_is_refused()
+    {
+        Put("two/two.gb", "LOCUS");
+        var link = Path.Combine(_folder, "two", "two.gb");
+        var reader = WithAttributes(p => p == link ? FileAttributes.ReparsePoint : File.GetAttributes(p));
+
+        reader.Read(_folder)!.Files.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_linked_folder_is_not_entered_but_a_placeholder_folder_is()
+    {
+        Put("linked/a.gb", "LOCUS");
+        Put("cloud/b.gb", "LOCUS");
+        var linked = Path.Combine(_folder, "linked");
+        var cloud = Path.Combine(_folder, "cloud");
+        var reader = WithAttributes(p =>
+            p == linked ? FileAttributes.Directory | FileAttributes.ReparsePoint
+            : p == cloud ? FileAttributes.Directory | FileAttributes.ReparsePoint | RunOutputReader.RecallOnDataAccess
+            : File.GetAttributes(p));
+
+        reader.Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe(["cloud/b.gb"]);
+    }
+
     [Fact]
     public void Never_writes_anything_into_the_folder()
     {

@@ -22,6 +22,19 @@ public static class RunSummaryReader
     public static RunSummary Parse(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
+        try
+        {
+            return ParseCore(text);
+        }
+        catch (OverflowException ex)
+        {
+            // A count too large for its type: still "not a summary we understand", never an unhandled overflow.
+            throw new InvalidDataException("The summary has a number too large to be real.", ex);
+        }
+    }
+
+    private static RunSummary ParseCore(string text)
+    {
         var lines = text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
         if (lines.Count == 0 || lines[0] != Header)
         {

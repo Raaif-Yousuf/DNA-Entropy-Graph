@@ -4,18 +4,30 @@ namespace DnaEntropyGraph.Core.Runs;
 
 /// <summary>
 /// Reads a finished run's own output folder for the Results page (issue #102). Read-only (Hard Rule 14): it lists and reads,
-/// never writes, never follows a link out of the folder.
+/// never writes. A symlink or junction that leads outside the folder is never listed or entered; a OneDrive "online-only"
+/// placeholder (a reparse point carrying the offline or recall attributes) is the user's own file and is listed.
 /// </summary>
 public sealed class RunOutputReader : IRunOutputReader
 {
-    private static readonly EnumerationOptions Recursive = new()
-    {
-        RecurseSubdirectories = true,
-        IgnoreInaccessible = true,
+    // Win32 FILE_ATTRIBUTE_RECALL_ON_OPEN and FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: .NET has no enum members for them.
+    public const FileAttributes RecallOnOpen = (FileAttributes)0x00040000;
+    public const FileAttributes RecallOnDataAccess = (FileAttributes)0x00400000;
+    private const FileAttributes CloudPlaceholder = FileAttributes.Offline | RecallOnDataAccess | RecallOnOpen;
 
-        // A link could lead outside the run's folder; the page lists only what is really inside it.
-        AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System,
-    };
+    private readonly Func<string, FileAttributes> _attributesOf;
+    private readonly Func<string, string?> _linkTarget;
+
+    public RunOutputReader()
+        : this(File.GetAttributes, ResolveLinkTarget)
+    {
+    }
+
+    /// <summary>The two disk questions about links, injectable because a real cloud placeholder cannot be made in a test.</summary>
+    public RunOutputReader(Func<string, FileAttributes> attributesOf, Func<string, string?> linkTarget)
+    {
+        _attributesOf = attributesOf;
+        _linkTarget = linkTarget;
+    }
 
     public RunOutputSnapshot? Read(string folder)
     {
@@ -25,13 +37,83 @@ public sealed class RunOutputReader : IRunOutputReader
         }
 
         var root = Path.GetFullPath(folder);
-        var files = Directory.EnumerateFiles(root, "*", Recursive)
-            .Select(full => new RunOutputFile(Path.GetRelativePath(root, full).Replace('\\', '/'), full, new FileInfo(full).Length))
-            .OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var files = new List<RunOutputFile>();
+        Walk(root, root, files);
+        files.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.RelativePath, b.RelativePath));
 
         var summaries = files.Where(f => IsSummary(f.RelativePath)).Select(ReadSummary).ToList();
         return new RunOutputSnapshot(files, summaries);
+    }
+
+    private void Walk(string root, string directory, List<RunOutputFile> files)
+    {
+        IEnumerable<string> entries;
+        try
+        {
+            entries = Directory.EnumerateFileSystemEntries(directory).ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        foreach (var entry in entries)
+        {
+            FileAttributes attributes;
+            try
+            {
+                attributes = _attributesOf(entry);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            var isLink = attributes.HasFlag(FileAttributes.ReparsePoint) && (attributes & CloudPlaceholder) == 0;
+            if (attributes.HasFlag(FileAttributes.Directory))
+            {
+                // A linked folder could lead anywhere; a cloud placeholder folder is a real folder of this run.
+                if (!isLink)
+                {
+                    Walk(root, entry, files);
+                }
+
+                continue;
+            }
+
+            if (isLink && !IsInside(_linkTarget(entry), root))
+            {
+                continue;
+            }
+
+            files.Add(new RunOutputFile(Path.GetRelativePath(root, entry).Replace('\\', '/'), entry, SizeOf(entry)));
+        }
+    }
+
+    private static bool IsInside(string? target, string root) => target is not null && RunOutputRoot.IsStrictlyInside(target, root);
+
+    private static long SizeOf(string path)
+    {
+        try
+        {
+            return new FileInfo(path).Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+
+    private static string? ResolveLinkTarget(string path)
+    {
+        try
+        {
+            return new FileInfo(path).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private static bool IsSummary(string relativePath)

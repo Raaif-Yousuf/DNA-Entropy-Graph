@@ -76,6 +76,17 @@ public sealed class RunSummaryReaderTests
         Should.Throw<InvalidDataException>(() => RunSummaryReader.Parse(broken));
     }
 
+    [Theory]
+    [InlineData("records:            2", "records:            99999999999")]
+    [InlineData("total length:       64 nt", "total length:       99999999999999999999 nt")]
+    public void Parse_treats_a_count_too_large_for_its_type_as_a_malformed_summary_not_an_overflow(string original, string replacement)
+    {
+        Fixture().ShouldContain(original);
+        var broken = Fixture().Replace(original, replacement, StringComparison.Ordinal);
+
+        Should.Throw<InvalidDataException>(() => RunSummaryReader.Parse(broken));
+    }
+
     [Fact]
     public void The_fixture_is_not_vacuous()
     {
