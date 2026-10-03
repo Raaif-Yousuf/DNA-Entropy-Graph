@@ -95,19 +95,24 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await _store.StoreAsync(identity.Sub, token).ConfigureAwait(false);
-                var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false);
-                var current = State;
-                Commit(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record]));
+                try
+                {
+                    await _store.StoreAsync(identity.Sub, token).ConfigureAwait(false);
+                    var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false);
+                    var current = State;
+                    Commit(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record]));
+                }
+                catch (TokenStorageException ex)
+                {
+                    // The account list could not be saved: do not leave a token file nothing lists.
+                    TryDeleteToken(identity.Sub);
+                    throw StorageFailure(ex);
+                }
             }
             finally
             {
                 _gate.Release();
             }
-        }
-        catch (Exception ex) when (IsLocalStorageFailure(ex))
-        {
-            throw StorageFailure(ex);
         }
         finally
         {
@@ -116,6 +121,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
         RaiseChanged();
     }
+
     public async Task<bool> SignOutAsync(CancellationToken cancellationToken)
     {
         bool revoked;
@@ -136,7 +142,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             var next = remaining.FirstOrDefault(a => !a.NeedsSignIn) ?? remaining.FirstOrDefault();
             Commit(new AccountsFile(next?.Sub, remaining));
         }
-        catch (Exception ex) when (IsLocalStorageFailure(ex))
+        catch (TokenStorageException ex)
         {
             throw StorageFailure(ex);
         }
@@ -162,7 +168,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
             Commit(current with { ActiveSub = sub });
         }
-        catch (Exception ex) when (IsLocalStorageFailure(ex))
+        catch (TokenStorageException ex)
         {
             throw StorageFailure(ex);
         }
@@ -222,7 +228,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             {
                 throw new AccountAuthException(AuthErrorCodes.SigninFailed, $"token endpoint answered {ex.Error?.Error}", ex);
             }
-            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+            catch (Exception ex) when (ex is HttpRequestException || IsRefreshManagerGiveUp(ex) || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
                 // A request timeout reaches us as a TaskCanceledException the caller did not ask for, or, after
                 // Google's refresh manager has retried it three times, as an InvalidOperationException
@@ -230,7 +236,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.NetworkUnavailable, "the token endpoint could not be reached", ex);
             }
         }
-        catch (Exception ex) when (IsLocalStorageFailure(ex))
+        catch (TokenStorageException ex)
         {
             throw StorageFailure(ex);
         }
@@ -335,10 +341,23 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             Accounts = [.. file.Accounts.Select(a => !a.NeedsSignIn && DpapiTokenStore.IsSafeKey(a.Sub) && File.Exists(_store.PathFor(a.Sub)) ? a : a with { NeedsSignIn = true })],
         };
 
-    private static bool IsLocalStorageFailure(Exception ex) => ex is IOException or UnauthorizedAccessException or CryptographicException;
+    /// <summary>Google's TokenRefreshManager gives up after three transient failures with this exact message; any other InvalidOperationException is a bug and must surface.</summary>
+    private static bool IsRefreshManagerGiveUp(Exception ex) => ex is InvalidOperationException && ex.Message.Contains("could not be refreshed", StringComparison.Ordinal);
+
+    private void TryDeleteToken(string sub)
+    {
+        try
+        {
+            File.Delete(_store.PathFor(sub));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: the original failure is the one the user needs to hear about.
+        }
+    }
 
     /// <summary>Only the exception type is kept: its message can carry a path with the user's name in it.</summary>
-    private static AccountAuthException StorageFailure(Exception ex) => new(AuthErrorCodes.StorageFailed, ex.GetType().Name, ex);
+    private static AccountAuthException StorageFailure(TokenStorageException ex) => new(AuthErrorCodes.StorageFailed, ex.Message, ex);
 
     private static AccountInfo ToInfo(AccountRecord record) => new(record.Sub, record.Email, record.NeedsSignIn);
 

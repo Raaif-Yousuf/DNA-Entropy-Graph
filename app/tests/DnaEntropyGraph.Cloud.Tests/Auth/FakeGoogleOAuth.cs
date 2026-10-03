@@ -44,6 +44,9 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
     /// <summary>When true every token request times out (HttpClient surfaces that as a TaskCanceledException the caller did not ask for).</summary>
     public bool TokenRequestsTimeOut { get; set; }
 
+    /// <summary>When true every token request throws an unrelated InvalidOperationException, standing in for a bug of ours or a library's.</summary>
+    public bool TokenRequestsThrowABug { get; set; }
+
     /// <summary>When false the token response has no <c>id_token</c>.</summary>
     public bool ReturnIdToken { get; set; } = true;
 
@@ -132,6 +135,11 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
             if (NetworkDown)
             {
                 throw new HttpRequestException("fake: no network");
+            }
+
+            if (TokenRequestsThrowABug)
+            {
+                throw new InvalidOperationException("bug");
             }
 
             if (TokenRequestsTimeOut)

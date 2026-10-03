@@ -354,6 +354,38 @@ public class GoogleAccountServiceTests
     }
 
     [Fact]
+    public async Task An_unrelated_InvalidOperationException_during_a_refresh_surfaces_and_is_not_called_a_network_problem()
+    {
+        using var harness = new AuthHarness();
+        harness.Google.ExpiresInSeconds = 30;
+        await harness.SignedInAsync("1001", "first@example.test");
+        var service = harness.NewService();
+        harness.Google.TokenRequestsThrowABug = true;
+
+        await Should.ThrowAsync<InvalidOperationException>(() => service.GetAccessTokenAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task An_account_list_that_cannot_be_saved_is_SIGNIN_STORAGE_and_leaves_no_orphan_token_file()
+    {
+        using var harness = new AuthHarness();
+        Directory.CreateDirectory(Path.Combine(harness.AuthDirectory, "accounts.json")); // a folder where the file should be
+
+        var failure = await FailureOf(() => harness.NewService().SignInAsync(CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.StorageFailed);
+        Directory.GetFiles(harness.AuthDirectory, "*.tok").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_IO_failure_in_the_browser_step_is_not_reported_as_a_failure_to_save()
+    {
+        using var harness = new AuthHarness { BrowserOverride = new ThrowingBrowser(new IOException("socket broke")) };
+
+        await Should.ThrowAsync<IOException>(() => harness.NewService().SignInAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task The_production_HTTP_path_with_no_injected_handler_runs_the_flow_up_to_the_users_choice()
     {
         // No handler means Google's own HttpClient stack and the real Google URLs. The user declining needs no
@@ -371,6 +403,7 @@ public class GoogleAccountServiceTests
     {
         public Task LaunchAsync(Uri url, CancellationToken cancellationToken) => throw failure;
     }
+
     [Fact]
     public async Task A_page_never_completed_is_SIGNIN_TIMEOUT_and_cancelling_is_a_cancellation()
     {

@@ -207,10 +207,11 @@ public class DiResolutionTests
 
             var run = (await provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IRunRepository>().GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
             run.ErrorCode.ShouldNotBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.NoProject);
-            // MEASURED 2026-10-03: today the shipped image list pins no digest, so the image check, which follows the
-            // project check, answers first (no_worker_image); once an image is pinned the next stop is the not-connected
-            // gateways (cloud_not_connected). Both are honest "not ready yet" messages; no_project is the false one.
-            run.ErrorCode.ShouldBeOneOf(DnaEntropyGraph.Core.Cloud.RunErrorCodes.WorkerImageUnavailable, DnaEntropyGraph.Core.Cloud.RunErrorCodes.CloudNotConnected);
+            // MEASURED 2026-10-02: the shipped image list pins no digest, so the image check, which follows the
+            // project check, answers first. When an image is pinned the next stop is the not-connected gateways
+            // (cloud_not_connected): change this assertion deliberately then. no_project is the false answer.
+            // StartRunAsync awaits the repository write before it returns, so reading here is not a race.
+            run.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.WorkerImageUnavailable);
         }
         finally
         {

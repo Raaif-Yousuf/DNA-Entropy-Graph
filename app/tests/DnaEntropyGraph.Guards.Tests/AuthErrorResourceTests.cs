@@ -49,7 +49,10 @@ public class AuthErrorResourceTests
     {
         var repo = Path.GetFullPath(Path.Combine(RepoPaths.AppRoot, ".."));
         var catalog = File.ReadAllText(Path.Combine(repo, "docs", "copy_catalog.md"));
-        var triage = File.ReadAllText(Path.Combine(repo, "scripts", "triage_diagnostics.py"));
+        var triageText = File.ReadAllText(Path.Combine(repo, "scripts", "triage_diagnostics.py"));
+        var start = triageText.IndexOf("KNOWN_CLOUD_ERROR_CODES: frozenset", StringComparison.Ordinal);
+        start.ShouldBeGreaterThanOrEqualTo(0, "the KNOWN_CLOUD_ERROR_CODES frozenset moved or was renamed");
+        var triage = triageText[start..triageText.IndexOf("))", start, StringComparison.Ordinal)];
 
         AuthErrorCodes.All.Count.ShouldBeGreaterThanOrEqualTo(11);
         foreach (var code in AuthErrorCodes.All)

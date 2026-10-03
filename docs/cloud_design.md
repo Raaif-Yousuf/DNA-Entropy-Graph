@@ -698,7 +698,7 @@ GCS blobstore reads each shard fully into memory.
 ## 15. Sign-in, the token store and account switching (issue #48)
 
 `GoogleAccountService` (`DnaEntropyGraph.Cloud/Auth/`) is the one implementation of Core's `IGcpAccount`,
-`IGcpAccessTokenSource` and `ICloudTokenRefresher`. Production DI registers it as all three. The gateways are
+`IGcpAccessTokenSource` and `ICloudTokenRefresher`. Production DI registers it as `IGcpAccount` and `IGcpAccessTokenSource`; `ICloudTokenRefresher` stays `FakeGcp` until #56 (below). The gateways are
 still `FakeGcp` until the real ones land, so who is signed in is real while what the gateways do is not.
 Two seams are deliberately still the fake, with the switch point recorded in `ServiceRegistration.cs`: `ICloudTokenRefresher`
 (a fake 401 must not call Google's token endpoint; switch to `GoogleAccountService` when the first real gateway is

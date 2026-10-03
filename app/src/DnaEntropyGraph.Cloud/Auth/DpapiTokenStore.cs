@@ -33,22 +33,37 @@ public sealed partial class DpapiTokenStore : IDataStore
     public Task StoreAsync<T>(string key, T value)
     {
         var path = PathFor(key);
-        System.IO.Directory.CreateDirectory(_directory);
-        var protectedBytes = _protector.Protect(Encoding.UTF8.GetBytes(NewtonsoftJsonSerializer.Instance.Serialize(value)));
+        try
+        {
+            System.IO.Directory.CreateDirectory(_directory);
+            var protectedBytes = _protector.Protect(Encoding.UTF8.GetBytes(NewtonsoftJsonSerializer.Instance.Serialize(value)));
 
-        // Write beside, then replace: a crash mid-write must never leave a half-written token where a good one was.
-        var temp = path + ".tmp";
-        File.WriteAllBytes(temp, protectedBytes);
-        File.Move(temp, path, overwrite: true);
+            // Write beside, then replace: a crash mid-write must never leave a half-written token where a good one was.
+            var temp = path + ".tmp";
+            File.WriteAllBytes(temp, protectedBytes);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            throw new TokenStorageException(ex);
+        }
+
         return Task.CompletedTask;
     }
 
     public Task DeleteAsync<T>(string key)
     {
         var path = PathFor(key);
-        if (File.Exists(path))
+        try
         {
-            File.Delete(path);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new TokenStorageException(ex);
         }
 
         return Task.CompletedTask;
