@@ -580,3 +580,64 @@ def test_a_truncated_multi_record_genbank_names_the_record_that_failed(tmp_path:
 def test_a_malformed_first_record_is_named_record_1() -> None:
     with pytest.raises(GenBankReadError, match="record 1"):
         read_genbank(MALFORMED_DIR / "genbank_qualifier_missing_slash.gb")
+
+
+# --- issue #536: a truncated file (a LOCUS length, no ORIGIN sequence) is the reader's own error ---
+
+
+def _truncated_after_origin() -> str:
+    text = Path(SAMPLE_GB).read_text(encoding="utf-8")
+    return text[: text.index("ORIGIN\n") + len("ORIGIN\n ")]  # the exact shape the fuzz test found
+
+
+def test_truncated_after_origin_raises_the_readers_own_error_naming_an_action(tmp_path: Path) -> None:
+    path = tmp_path / "truncated.gb"
+    path.write_text(_truncated_after_origin(), encoding="utf-8", newline="\n")
+    with pytest.raises(GenBankReadError) as exc:
+        read_genbank(str(path))
+    assert "Re-export" in str(exc.value)
+    assert isinstance(exc.value, ValidationError)  # INPUT_INVALID at the worker boundary
+
+
+def test_truncated_after_origin_is_a_validation_error_through_load_input(tmp_path: Path) -> None:
+    path = tmp_path / "truncated.gb"
+    path.write_text(_truncated_after_origin(), encoding="utf-8", newline="\n")
+    with pytest.raises(ValidationError):
+        load_input(RunConfig(name="t", input_path=str(path), informat="genbank", out_dir=str(tmp_path)))
+
+
+def test_a_truncated_record_among_good_ones_is_skipped_with_a_notice(tmp_path: Path) -> None:
+    good = Path(SAMPLE_GB).read_text(encoding="utf-8")
+    path = tmp_path / "mixed.gb"
+    path.write_text(good + _truncated_after_origin() + "\n//\n", encoding="utf-8", newline="\n")
+    records, notices = read_genbank(str(path))
+    assert len(records) == 1
+    assert any("Skipped GenBank record 2" in n and "no nucleotide sequence" in n for n in notices)
+
+
+def test_every_prefix_of_a_valid_genbank_file_reads_or_raises_the_readers_own_error(tmp_path: Path) -> None:
+    """A deterministic sweep of the truncation shape the random fuzz test found once."""
+    data = Path(SAMPLE_GB).read_bytes()
+    path = tmp_path / "prefix.gb"
+    outcomes = {"read": 0, "refused": 0}
+    for cut in range(0, len(data) + 1, 3):
+        path.write_bytes(data[:cut])
+        try:
+            read_genbank(str(path))
+            outcomes["read"] += 1
+        except GenBankReadError:
+            outcomes["refused"] += 1
+    assert outcomes["read"] > 0 and outcomes["refused"] > 0, "the sweep must see both outcomes"
+
+
+# --- issue #536 audit: every other exception type Biopython's scanner can raise ---
+
+
+def test_a_feature_line_shorter_than_the_qualifier_indent_is_the_readers_own_error() -> None:
+    """MEASURED 2026-10-03 (a seeded mutation sweep of sample.gb, 18000 files): a feature
+    line shorter than Biopython's qualifier column raised a raw ``IndexError`` out of
+    ``Bio.GenBank.Scanner.parse_features``, which the parse try-block did not catch."""
+    with pytest.raises(GenBankReadError, match="record 1") as exc:
+        read_genbank(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb")
+    assert "Check" in str(exc.value)  # names the action
+    assert "string index out of range" not in str(exc.value)  # a Python-internal phrase, not a fact

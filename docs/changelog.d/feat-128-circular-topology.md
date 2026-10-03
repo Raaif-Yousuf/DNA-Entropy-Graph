@@ -1,0 +1,1 @@
+- Worker: circular sequence mode for plasmids (#128). `--topology auto|linear|circular` (manifest `analysis.topology`) wraps a circular molecule by K bases each side before windowing and trims after, so the first bases get full context and combined mode has no seam; `auto` reads the GenBank LOCUS line. Provenance records the topology.
