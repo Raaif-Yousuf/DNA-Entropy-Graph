@@ -46,10 +46,21 @@ public class FakeGcpProjectCatalogTests
     }
 
     [Fact]
-    public async Task Creating_the_same_id_twice_is_already_exists()
+    public async Task Replaying_a_create_for_the_apps_own_project_returns_that_project()
     {
         var gcp = new FakeGcp();
-        await gcp.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+        var first = await gcp.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+
+        var replay = await gcp.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+
+        replay.ShouldBe(first);
+        (await gcp.ListActiveProjectsAsync(CancellationToken.None)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Creating_an_id_that_belongs_to_someone_elses_project_is_already_exists()
+    {
+        var gcp = new FakeGcp().WithExistingProject("dna-entropy-abcd1234", "Not ours");
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => gcp.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
 

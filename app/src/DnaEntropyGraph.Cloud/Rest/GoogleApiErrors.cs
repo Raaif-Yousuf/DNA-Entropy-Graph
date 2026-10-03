@@ -72,15 +72,38 @@ internal static class GoogleApiErrors
         ArgumentNullException.ThrowIfNull(status);
 
         var kind = KindOf(status);
-        var code = codeFor?.Invoke(kind) ?? status.Status;
+        var code = IsRateLimit(status) ? CloudErrorClassifier.RateLimitCode : codeFor?.Invoke(kind) ?? status.Status;
         return new CloudOperationException(new CloudError(code, status.HttpStatus, status.Message), kind);
     }
+
+    /// <summary>
+    /// A per-minute rate limit (ErrorInfo reason <c>RATE_LIMIT_EXCEEDED</c>) also arrives as RESOURCE_EXHAUSTED with a
+    /// QuotaFailure, but it clears in a minute: it is retried, never "you reached your project limit".
+    /// </summary>
+    private static bool IsRateLimit(RpcStatus status)
+        => status.Reasons.Any(r => string.Equals(r, CloudErrorClassifier.RateLimitCode, StringComparison.OrdinalIgnoreCase));
 
     public static CloudErrorKind KindOf(RpcStatus status)
     {
         var lower = status.Message.ToLowerInvariant();
 
-        if (status.HasQuotaFailure || (status.Status == "RESOURCE_EXHAUSTED" && lower.Contains("quota", StringComparison.Ordinal)))
+        if (IsRateLimit(status))
+        {
+            return CloudErrorKind.Other;
+        }
+
+        // The structured reason says what is wrong even when the message is worded differently.
+        if (status.Reasons.Any(r => string.Equals(r, "SERVICE_DISABLED", StringComparison.OrdinalIgnoreCase)))
+        {
+            return CloudErrorKind.ApiDisabled;
+        }
+
+        if (status.Reasons.Any(r => string.Equals(r, "BILLING_DISABLED", StringComparison.OrdinalIgnoreCase)))
+        {
+            return CloudErrorKind.Billing;
+        }
+
+        if (status.HasQuotaFailure || ((status.Status == "RESOURCE_EXHAUSTED" || status.HttpStatus == 403) && lower.Contains("quota", StringComparison.Ordinal)))
         {
             return CloudErrorKind.Quota;
         }

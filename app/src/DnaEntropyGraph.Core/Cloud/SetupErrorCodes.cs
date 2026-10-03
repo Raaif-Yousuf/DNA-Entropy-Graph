@@ -24,8 +24,11 @@ public static class SetupErrorCodes
     /// <summary>The user is a member of the project but not its Owner, so Google refused to switch a service on (HTTP 403). Action: create a project of their own.</summary>
     public const string NotProjectOwner = "NOT_PROJECT_OWNER";
 
+    /// <summary>Google accepted the billing account but the project still has billing off (a suspended account, no valid payment method). Action: pick another billing account.</summary>
+    public const string BillingStillOff = "BILLING_STILL_OFF";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, NoBilling, BillingNoPermission, NotProjectOwner];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -35,17 +38,19 @@ public static class SetupErrorCodes
         NoBilling => "SetupError_NO_BILLING",
         BillingNoPermission => "SetupError_BILLING_NO_PERMISSION",
         NotProjectOwner => "SetupError_NOT_PROJECT_OWNER",
+        BillingStillOff => "SetupError_BILLING_STILL_OFF",
         _ => "SetupError_OTHER",
     };
 
-    /// <summary>The <c>Resources.resw</c> key for the button that carries the one action, or null when the message itself says it.</summary>
-    public static string? ActionResourceKey(string? code) => code switch
+    /// <summary>The <c>Resources.resw</c> key for the button that carries the one action. Every message names one, the catch-all included.</summary>
+    public static string ActionResourceKey(string? code) => code switch
     {
         ProjectQuota => "SetupAction_PickExistingProject",
         OrgPolicyBlock => "SetupAction_CopyMessageForIt",
         NoBilling => "SetupAction_LinkBilling",
         BillingNoPermission => "SetupAction_CopyBillingRequest",
         NotProjectOwner => "SetupAction_CreateProject",
-        _ => null,
+        BillingStillOff => "SetupAction_PickAnotherBillingAccount",
+        _ => "SetupAction_TryAgain",
     };
 }

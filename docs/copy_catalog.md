@@ -181,7 +181,7 @@ in it.
 because the sign-in message is one sentence group on the wizard, not a card. `AuthErrorCodes.All` in Core is the
 roster; `Guards.Tests/AuthErrorResourceTests` fails when a code in it has no row below or no `.resw` entry.
 
-**Project-setup codes (issues #50 to #52) as built:** the app holds the body as one string, `SetupError_<CODE>` (for example `SetupError_PROJECT_QUOTA`), and the button label as `SetupAction_*`, same as the sign-in codes above. `SetupErrorCodes.All` in Core is the roster (`PROJECT_QUOTA`, `ORG_POLICY_BLOCK`, `NO_BILLING`, `BILLING_NO_PERMISSION`, `NOT_PROJECT_OWNER` so far; the request text for the last is `SetupBillingRequestText`); `Guards.Tests/SetupErrorResourceTests` fails when a code in it has no row below, no triage entry or no `.resw` entry. `SetupError_OTHER` is the fallback for a setup failure with no code of its own.
+**Project-setup codes (issues #50 to #52) as built:** the app holds the body as one string, `SetupError_<CODE>` (for example `SetupError_PROJECT_QUOTA`), and the button label as `SetupAction_*`, same as the sign-in codes above. `SetupErrorCodes.All` in Core is the roster (`PROJECT_QUOTA`, `ORG_POLICY_BLOCK`, `NO_BILLING`, `BILLING_NO_PERMISSION`, `BILLING_STILL_OFF`, `NOT_PROJECT_OWNER` so far; the request text for the last is `SetupBillingRequestText`); `Guards.Tests/SetupErrorResourceTests` fails when a code in it has no row below, no triage entry or no `.resw` entry. `SetupError_OTHER` is the fallback for a setup failure with no code of its own, and its button is `SetupAction_TryAgain` (the guard checks every button exists and that each message names its button).
 
 | Code | Key | Title | Body | Actions |
 |---|---|---|---|---|
@@ -202,6 +202,7 @@ roster; `Guards.Tests/AuthErrorResourceTests` fails when a code in it has no row
 | `ORG_POLICY_BLOCK` | `OrgPolicyBlock` | Your organization blocks this | Your organization's Google Cloud settings block this action. | [Copy message for IT] |
 | `NO_BILLING` | `NoBilling` | No payment method on file | This project has no billing account, so Google won't start any computer. | [Link billing] / [Create billing account] |
 | `BILLING_NO_PERMISSION` | `BillingNoPermission` | Can't link this billing account | You can use this billing account but you're not allowed to link projects to it. | [Copy request for the billing admin] |
+| `BILLING_STILL_OFF` | `BillingStillOff` | Billing is still off | Google accepted that billing account, but this project still has billing off. The account may be suspended or may have no working payment method. | [Pick another billing account] |
 | `FREE_TRIAL_NO_GPU` | `FreeTrialNoGpu` | Free Trial can't use graphics cards | Free Trial accounts can't rent a graphics-card computer at all. Activate the full account; your free credit carries over. | [Open billing] |
 | `API_DISABLED` | `ApiDisabled` | A Google service isn't switched on | Compute Engine isn't switched on in this project yet. | [Turn it on] |
 | `PERMISSION` | `Permission` | Not allowed to create computers | Your account isn't allowed to create computers in this project. | [Copy request for the project owner] |

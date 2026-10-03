@@ -28,17 +28,24 @@ public class SetupErrorResourceTests
         var resw = ReswValues();
 
         SetupErrorCodes.All.Count.ShouldBeGreaterThanOrEqualTo(2);
-        foreach (var code in SetupErrorCodes.All)
+
+        // null is the catch-all: any code not in All (Google's own status name) shows SetupError_OTHER, so it is checked too.
+        foreach (var code in SetupErrorCodes.All.Cast<string?>().Append(null))
         {
             var key = SetupErrorCodes.ResourceKey(code);
             resw.ShouldContainKey(key, $"setup error code '{code}' maps to '{key}', which Resources.resw does not define");
             resw[key].Trim().ShouldNotBeEmpty();
             resw[key].ShouldNotContain("—", customMessage: "Hard Rule 13: no em dashes in user-visible text");
-            if (SetupErrorCodes.ActionResourceKey(code) is { } actionKey)
-            {
-                resw.ShouldContainKey(actionKey);
-                resw[actionKey].Trim().ShouldNotBeEmpty();
-            }
+            resw[key].ShouldNotContain("–", customMessage: "Hard Rule 13: no en dashes in user-visible text");
+
+            // A message that says "choose X" must be backed by an action key that exists (the catch-all included).
+            var actionKey = SetupErrorCodes.ActionResourceKey(code);
+            actionKey.ShouldNotBeNull($"setup error '{key}' names an action, so it needs a SetupAction_ key");
+            resw.ShouldContainKey(actionKey);
+            resw[actionKey].Trim().ShouldNotBeEmpty();
+            resw[actionKey].ShouldNotContain("—");
+            resw[actionKey].ShouldNotContain("–");
+            resw[key].ShouldContain(resw[actionKey], customMessage: $"'{key}' must name its button '{resw[actionKey]}' by its label");
         }
 
         SetupErrorCodes.All.Select(SetupErrorCodes.ResourceKey).Distinct().Count().ShouldBe(SetupErrorCodes.All.Count);

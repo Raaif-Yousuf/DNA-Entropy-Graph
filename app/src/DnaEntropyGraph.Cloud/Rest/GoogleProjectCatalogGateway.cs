@@ -62,14 +62,22 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
         {
             return Summarize(await _service.Projects.Get("projects/" + projectId).ExecuteAsync(cancellationToken).ConfigureAwait(false));
         }
-        catch (GoogleApiException ex) when (ex.HttpStatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Forbidden)
+        catch (GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            // Google answers 403 for a project that does not exist as well as for one the account may not see: either way, pick another.
             return null;
         }
         catch (GoogleApiException ex)
         {
-            throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+            var exception = GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+
+            // Google answers 403 for a project that does not exist as well as for one the account may not see: either
+            // way, pick another. A 403 that says the API is off or billing is off is a different problem and must show.
+            if (ex.HttpStatusCode == System.Net.HttpStatusCode.Forbidden && exception.Kind == CloudErrorKind.Permission)
+            {
+                return null;
+            }
+
+            throw exception;
         }
     }
 
@@ -115,7 +123,7 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
         {
             // A replay after a dropped connection: the first attempt already made it. Adopt our own project, never somebody else's.
             var existing = await GetProjectAsync(projectId, cancellationToken).ConfigureAwait(false);
-            if (existing is { IsAppProject: true })
+            if (existing is { IsAppProject: true, State: ProjectLifecycleState.Active })
             {
                 return existing;
             }

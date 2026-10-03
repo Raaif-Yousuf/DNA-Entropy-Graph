@@ -28,8 +28,11 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// it is reachable only through the structured HTTP 412 /
 /// <c>CONDITION_NOT_MET</c> signal.
 /// </summary>
-public static class CloudErrorClassifier
+public static partial class CloudErrorClassifier
 {
+    /// <summary>A per-minute rate limit: it clears by itself, so it is a plain transient error, never quota (even though the message says quota).</summary>
+    public const string RateLimitCode = "RATE_LIMIT_EXCEEDED";
+
     public static CloudErrorKind Classify(CloudError error)
     {
         ArgumentNullException.ThrowIfNull(error);
@@ -40,6 +43,11 @@ public static class CloudErrorClassifier
         var lower = message.ToLowerInvariant();
 
         // --- 1. Structured signals (docs/cloud_design.md section 5) ---
+
+        if (code == RateLimitCode)
+        {
+            return CloudErrorKind.Other;
+        }
 
         // A capacity-shaped structured code. RESOURCE_NOT_FOUND and
         // UNSUPPORTED_OPERATION are ambiguous on their own (they cover far
@@ -71,7 +79,19 @@ public static class CloudErrorClassifier
             return CloudErrorKind.ApiDisabled;
         }
 
-        if (status == 403 && lower.Contains("billing", StringComparison.Ordinal))
+        // Issue #539: a refusal that names a missing permission is a missing role even when the permission is
+        // "billing.*" and the text mentions a billing account; only a message that says billing is OFF is Billing.
+        if (IsPermissionDenial(code, lower))
+        {
+            return CloudErrorKind.Permission;
+        }
+
+        if (status == 403 && lower.Contains("billing", StringComparison.Ordinal)
+            && (lower.Contains("enable", StringComparison.Ordinal)
+                || lower.Contains("disabled", StringComparison.Ordinal)
+                || lower.Contains("not active", StringComparison.Ordinal)
+                || lower.Contains("not found", StringComparison.Ordinal)
+                || lower.Contains("closed", StringComparison.Ordinal)))
         {
             return CloudErrorKind.Billing;
         }
@@ -94,6 +114,20 @@ public static class CloudErrorClassifier
         // --- 2. Substring fallback, prototype's fixed evaluation order ---
         return ClassifyBySubstring(lower);
     }
+
+    /// <summary>
+    /// The shapes Google uses for "you lack this role": the <c>IAM_PERMISSION_DENIED</c> reason, <c>Permission 'x.y.z'
+    /// denied</c>, and "does not have permission". THEORY (unverified against a real project): Cloud Billing words a
+    /// missing billing role this way.
+    /// </summary>
+    private static bool IsPermissionDenial(string code, string lower)
+        => code == "IAM_PERMISSION_DENIED"
+            || lower.Contains("iam_permission_denied", StringComparison.Ordinal)
+            || lower.Contains("does not have permission", StringComparison.Ordinal)
+            || PermissionNamedDenied().IsMatch(lower);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"permission\s+'[a-z0-9_.]+'\s+denied")]
+    private static partial System.Text.RegularExpressions.Regex PermissionNamedDenied();
 
     private static CloudErrorKind ClassifyBySubstring(string s)
     {
