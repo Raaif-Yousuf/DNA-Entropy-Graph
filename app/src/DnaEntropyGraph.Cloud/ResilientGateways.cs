@@ -35,6 +35,9 @@ public sealed class ResilientComputeGateway : IComputeGateway
 
     public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.FindByJobId", token => _inner.FindByJobIdAsync(jobId, token), cancellationToken, bypassBreaker: true);
+
+    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.ListByInstallation", token => _inner.ListByInstallationAsync(installationId, token), cancellationToken, bypassBreaker: true);
 }
 
 public sealed class ResilientStorageGateway : IStorageGateway

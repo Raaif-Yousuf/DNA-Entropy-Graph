@@ -5,11 +5,10 @@ namespace DnaEntropyGraph.App.Startup;
 
 /// <summary>
 /// Every page key -> Page type mapping <see cref="NavigationService"/>
-/// needs. "NewRun" (#63), "RunProgress" (#66), "Runs" (#101) and the viewer (#72/#73) are registered:
-/// "Cloud" and "Settings" are sibling issues' own Views (#105,
-/// #104 per <c>scripts/app_wiring_allowlist.json</c>) and are not
-/// registered yet; until each lands, its NavigationView item resolves to the
-/// fallback <see cref="PlaceholderPage"/> (issue #490), never an empty frame.
+/// needs. "NewRun" (#63), "RunProgress" (#66), "Runs" (#101), "Settings" (#106, Diagnostics group; #104 extends it)
+/// and the viewer (#72/#73) are registered: "Cloud" is a sibling issue's own View (#105 per
+/// <c>scripts/app_wiring_allowlist.json</c>) and is not registered yet; until it lands, its NavigationView item
+/// resolves to the fallback <see cref="PlaceholderPage"/> (issue #490), never an empty frame.
 /// </summary>
 public static class NavigationRoutes
 {
@@ -28,6 +27,9 @@ public static class NavigationRoutes
 
         // Issue #102: a finished run's numbers and files. Navigate with the run's job id (a string) as the parameter.
         navigationService.RegisterPage(DnaEntropyGraph.Presentation.ViewModels.ResultsViewModel.PageKey, typeof(ResultsPage));
+        // Issue #106: the Settings page, so far only its Diagnostics group (Save diagnostics). #104 adds the rest of the
+        // groups to this same page. The nav item's Tag is "Settings".
+        navigationService.RegisterPage("Settings", typeof(SettingsPage));
 
         // Issue #490: every destination without a page of its own lands on one
         // generic "not built yet" page rather than an empty frame.

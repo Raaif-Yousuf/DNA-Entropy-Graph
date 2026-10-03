@@ -109,6 +109,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private readonly ConcurrentDictionary<(string Name, string Zone), TimeSpan> _maxRunByVm = new();
     private bool _partialFilesOnFailedInputs;
     private TimeSpan _createDelay = TimeSpan.Zero;
+    private long _firstDeleteDelayTicks;
     private bool _stopRejectedUnlessRunning;
     private int _findFailuresRemaining;
     private CloudError? _findError;
@@ -355,6 +356,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
 
     /// <summary>
+    /// The first <see cref="DeleteVmAsync"/> takes <paramref name="delay"/> (honouring its token: a caller that gives up first leaves the VM
+    /// in place), like a real delete operation that is still running. Later deletes are immediate.
+    /// </summary>
+    public FakeGcp WithFirstDeleteDelay(TimeSpan delay)
+    {
+        Interlocked.Exchange(ref _firstDeleteDelayTicks, delay.Ticks);
+        return this;
+    }
+
+    /// <summary>
     /// Every <see cref="CreateVmAsync"/> answers only after <paramref name="delay"/>, ignoring its token, and the VM exists from
     /// then on: an insert the API accepted whose answer was slow (the caller may have given up by the time it lands).
     /// </summary>
@@ -531,6 +542,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public FakeGcp WithCloudNotConnected()
     {
         _notConnected = true;
+        return this;
+    }
+
+    /// <summary>Undoes <see cref="WithCloudNotConnected"/>: the connection "comes back" (what a reconnect test needs).</summary>
+    public FakeGcp WithCloudConnected()
+    {
+        _notConnected = false;
         return this;
     }
 
@@ -797,7 +815,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow());
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels());
         _vms[key] = vm;
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)
@@ -902,18 +920,24 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         if (_stoppingPolls > 0)
         {
-            _vms[key] = vm with { Status = "STOPPING", StatusReason = null };
+            _vms[key] = vm with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() };
             _stoppingPollsLeft[key] = _stoppingPolls;
         }
         else
         {
-            _vms[key] = vm with { Status = _stoppedStatus, StatusReason = null };
+            _vms[key] = vm with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() };
         }
     }
 
-    public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    public async Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
+        var delay = TimeSpan.FromTicks(Interlocked.Exchange(ref _firstDeleteDelayTicks, 0));
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        }
+
         var existed = _vms.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
@@ -925,8 +949,6 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         {
             throw Build(CloudErrorKind.Other, "NOT_FOUND", 404, $"The resource 'projects/fake/zones/{zone}/instances/{vmName}' was not found");
         }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -964,6 +986,40 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         ExpireOverdueVms();
         var name = $"deg-{jobId}";
         IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
+        return Task.FromResult(matches);
+    }
+
+    /// <summary>
+    /// Every VM this fake holds whose labels carry the app label and <paramref name="installationId"/> (a VM seeded without labels, such
+    /// as <see cref="WithAlreadyExists"/>'s, is never listed: like the real API, no label means no match). Same scripted-failure
+    /// behaviour as <see cref="FindByJobIdAsync"/>.
+    /// </summary>
+    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
+    {
+        if (ConsumeHang())
+        {
+            return HangAsync<IReadOnlyList<VmDescriptor>>(cancellationToken);
+        }
+
+        ThrowIfScriptedTransient();
+        if (_notConnected)
+        {
+            // Nothing can be listed without a connection (issue #59: the reconciler must see this as "no answer", not as "no VM").
+            throw Build(CloudErrorKind.Other, NotConnectedErrorCode, null, "No Google Cloud connection is built into this version.");
+        }
+
+        if (_findFailuresRemaining > 0 && _findError is not null)
+        {
+            _findFailuresRemaining--;
+            throw new CloudOperationException(_findError, CloudErrorClassifier.Classify(_findError));
+        }
+
+        ExpireOverdueVms();
+        IReadOnlyList<VmDescriptor> matches = _vms.Values
+            .Where(v => v.Labels is not null
+                && v.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
+                && v.Labels.TryGetValue("installation-id", out var owner) && owner == installationId)
+            .ToList();
         return Task.FromResult(matches);
     }
 

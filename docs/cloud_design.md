@@ -616,6 +616,17 @@ non-terminal. It reads the VM by label and `result.json`, decides (architecture.
 `FindByJobIdAsync` throw `CLOUD_NOT_CONNECTED`, because a listing cannot succeed with no connection: the reconciler reads that, and a network
 error, as "no answer" and leaves the row alone instead of calling the run lost.
 
+**Lifecycle enforcement and idle VMs (issue #530)**: the same `JobReconciler` pass also revisits runs that already ended. A finished run's VM
+found by job-id label in a state its `lifecycle` label forbids is deleted (`delete`), stopped when still running (`stop`), or ended per
+`afterKeepAlive` once its keep-alive expiry has passed (Hard Rule 11); the expiry mirrors `startup.sh` `keep_hold`: only a run the worker finished with exit 0 (Completed, PartiallyCompleted) is held for its window, Failed (exit 2) and Cancelled (exit 3) end at once. Lookups have a 30 s deadline, delete and stop their own 5 minute one (they are operations), and a Deferred, refused or throwing row or VM never ends the pass: the rest are still handled. Separately, `IComputeGateway.ListByInstallationAsync` (real gateway:
+`instances.aggregatedList` filtered on `labels.app` and `labels.installation-id`) feeds an idle sweep: a stopped VM of this installation older
+than `idle_stopped_vm_hours` is deleted (default 72, range 1 to 720, no off switch: 0, a negative or an unreadable value is 72, above 720 is clamped to 720; DECISION #555). `VmDescriptor` now carries `Labels` and `StoppedAt` (the instance's
+`lastStopTimestamp`; a gateway that cannot fill it makes the sweep skip the VM, never delete it). Only VMs with our app label AND this
+installation's id are touched (two users may share one account). The pass runs at launch and again when the pipeline reports the
+connection is back (`ReconcileOnReconnect`, single-flight: reconnects while a pass runs coalesce into at most one follow-up pass, and a pass ends once the lifecycle and the sweep have run and the reattached runs are handed to their own drivers, not when those runs end (`JobReconciler.BeginReconcileAsync`; launch still awaits them through `ReconcileAsync`); the observer
+is rarely invoked today because reconciler calls bypass the breaker, #559). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
+and its label filter matches as `FakeGcp` models it; nothing here has touched a real project (docs/ToTest.md).
+
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a
@@ -920,9 +931,70 @@ creates the project's default network).
   already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
   already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
-  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute and
-  storage gateways and the token refresher do not, so production still resolves everything to `FakeGcp` (#56, #520).
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute gateway
+  and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
+- **Proven only by a real project:** `docs/ToTest.md`.
+### The results bucket (issue #53, wizard step 5)
+
+`IStorageGateway` (`EnsureBucketAsync`, `UploadAsync`, `DownloadAsync`, `TryDownloadAsync`); the real one is
+`GoogleStorageGateway` over `Google.Apis.Storage.v1` (Apache-2.0), returned as `GoogleCloudGatewaySet.Storage`. Production
+still resolves the fake until #56 switches DI. It is never wrapped in `ResilientStorageGateway` (the ordinary decorator for a
+single-call gateway): `EnsureBucketAsync` is a list, a create, a read-back and possibly a patch, and a whole-method retry would
+replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, as the project and service gateways do.
+
+- **Name and place.** `deg-<projectNumber>-<rand6>` (6 lowercase base32 characters), in the region-group multi-region
+  (`GoogleCloudOptions.BucketLocation`, default `US`; data residency #149 changes it). The project NUMBER comes from
+  `projects.get` (`name: projects/<number>`), via `GoogleProjectCatalogGateway.GetProjectNumberAsync`; a project the account
+  cannot see is a `permission` error and nothing is sent to Storage.
+- **Settings asked for.** Uniform bucket-level access on, `publicAccessPrevention=enforced`, and two lifecycle rules:
+  Delete when age >= the retention (`GoogleCloudOptions.ResultsRetentionDays`, the user's "Cloud results retention",
+  `RunOptions.CloudResultsRetentionDays`, default 90) for objects matching prefix `jobs/`, and Delete at age 365 for `cache/`.
+- **Labels.** `app=dna-entropy-graph`, `installation-id`, `app-version` (sanitized), `lifecycle=results`. `job-id` and `model`
+  are left off: a bucket serves every run and every model, the same exemption a project has. DECISION (agent-made,
+  reversible): see #582; the carve-out is recorded under Rules 9 and 10 in `hard_rules.md`. A missing installation id fails before any request (Hard Rule 10).
+- **Applied is not present.** After an insert, and after a patch, the bucket is read back and compared: UBLA, PAP, and both
+  rules with the configured ages. A difference fails with `BUCKET_CONFIG_NOT_APPLIED` (kind `other`) naming what differs; the
+  name is not returned and no `app-config.json` is written. The next call finds the labelled bucket, sees it drifted, and patches it.
+- **Discovery by label, adoption.** `buckets.list` with prefix `deg-` for the project, keep the ones labelled
+  `app=dna-entropy-graph`, prefer this installation's, then the oldest, then by name. A second PC of the same installation, or
+  another installation in the same project, adopts it: no insert. An adopted bucket that reads back drifted (for instance the
+  user changed the retention on the other PC) is patched and read back; one that reads back right is left alone. The patch
+  keeps every lifecycle rule that is not ours (see the next point for what counts as ours) and
+  replaces only ours. Two installations with different retention settings never shorten each other: see the next point.
+- **Never shorten the `jobs/` or `cache/` age.** DECISION (agent-made, reversible; issue #597): an adopting installation may LENGTHEN the shared
+  bucket's `jobs/` and `cache/` ages, never shorten them, because shortening makes Cloud Storage delete other installations' files
+  (results, the weights cache) early (Hard Rule 14). A Delete rule at or above the configured age (`jobs/`: the retention; `cache/`: 365) is not
+  drift (no patch); a shorter one is lengthened to the configured age; a patch made for any other reason keeps the longest own age it found for
+  each prefix. So the bucket holds the longest age any installation asked for. A rule counts as ours only if its condition is exactly an age and
+  the one prefix with a Delete action; a user's `jobs/` rule with any extra condition (storage class, live state, noncurrent time, suffix...)
+  is neither counted toward our age nor replaced.
+  Consequence: lowering retention in Settings against a longer bucket is silently ignored today. #598 owns the fix: an explicit, user-confirmed
+  shortening, and the user seeing that the bucket keeps the longer age (copy names the action).
+- **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference
+  order); if the preferred bucket is not the one it just made, it deletes its own (still empty: the config is written after this
+  check) and adopts the preferred one. A delete Google refuses (not empty, because the other PC adopted it meanwhile) is
+  swallowed and the bucket stays labelled. A bucket this call did not create is never deleted. Two installations in one project
+  each prefer their own bucket, so they may keep one each; that is the same accepted behaviour as before.
+- **409 on insert.** Our own insert replayed after a dropped connection also answers 409: if the named bucket reads back as
+  ours it is kept (its read is the read-back); otherwise (403 or not ours) a new suffix is drawn. Five names at most, then
+  `BUCKET_NAME_TAKEN` (kind `already_exists`).
+- **`app-config.json`** at the bucket root: schema, installation id, app version, both retentions, creation time (built with
+  `System.Text.Json`, so ids are escaped). Written on create and again on every adopt or repair, always with
+  `ifGenerationMatch=0` ("only if absent"): a 412 means the file is already there and stands, so a first write that failed is
+  made good by the next call. THEORY (unverified): Cloud Storage answers a failed precondition (`ifGenerationMatch`, `ifMetagenerationMatch`)
+  with 412, and an organization-policy denial is also a 412 whose message carries `constraints/`, so only a 412 without `constraints/`
+  is swallowed and the other surfaces as `org_policy`; the documented shapes are not captured from a real project (a ToTest row covers it). It is not
+  rewritten when a retention changes (the lifecycle rule on the bucket is the truth; a `retention change patches the rule` flow is #114).
+- **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
+  tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (results and manifests are
+  small; the multi-GB weights cache is the worker's, #496). `TryDownloadAsync` answers null for a 404 only; every other failure
+  throws, so a transport error never reads as "the worker has not finished".
+- **Error roster.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are `SetupErrorCodes.BucketConfigNotApplied` and
+  `BucketNameTaken` (in `SetupErrorCodes.All`, `Resources.resw`, `copy_catalog.md` and `triage_diagnostics.py`); both name Try
+  again. A project the account cannot see is `PERMISSION`, whose message names Copy request for owner.
+- **Retention is validated.** `ResultsRetentionDays` outside 1 to 3650 throws `ArgumentOutOfRangeException` before any request
+  (0 would delete job results at once). The default is `ResultsBucket.DefaultRetentionDays`, which `RunOptions.CloudResultsRetentionDays` reuses.
 - **Proven only by a real project:** `docs/ToTest.md`.
 ## Related
 
