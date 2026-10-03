@@ -43,6 +43,21 @@ public class SaveDiagnosticsWiringTests
     }
 
     [Fact]
+    public void The_README_inside_the_zip_is_a_resw_string_read_by_the_app_and_not_an_inline_literal_in_Core()
+    {
+        var readme = Resw()["DiagnosticsReadme"];
+
+        readme.Trim().ShouldNotBeEmpty();
+        readme.ShouldContain("Never included");
+        readme.ShouldNotContain('—');
+        readme.ShouldNotContain('–');
+        Read("DnaEntropyGraph.App", "Services", "DiagnosticsInfoProvider.cs").ShouldContain("GetString(\"DiagnosticsReadme\")");
+        var builder = Read("DnaEntropyGraph.Core", "Diagnostics", "DiagnosticsBundleBuilder.cs");
+        builder.ShouldNotContain("Never included");
+        builder.ShouldContain("info.ReadmeText");
+    }
+
+    [Fact]
     public void The_Settings_page_binds_the_command_under_that_label_and_the_Settings_route_reaches_it()
     {
         var page = Read("DnaEntropyGraph.App", "Views", "SettingsPage.xaml");

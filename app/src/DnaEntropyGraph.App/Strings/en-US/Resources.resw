@@ -828,6 +828,14 @@
   <data name="SettingsDiagnosticsExplainer.Text" xml:space="preserve">
     <value>Saves one file you can send to support. It includes the logs from your runs, your run history (ids, states and error codes), settings that are safe to share, version numbers and this installation's id. It never includes your sequences, file names, results, email address or sign-in.</value>
   </data>
+  <data name="DiagnosticsReadme" xml:space="preserve">
+    <value>DNA Entropy Graph diagnostics
+
+Included: worker and run logs, run history (ids, states, error codes, times), the status, progress and result files the app keeps for each run, settings with private values left out, version numbers and the installation id. Logs are renamed log-01.log, log-02.log and so on, so a file name never reveals who or what a run was about. Logs written by the app itself are included once the app writes them.
+
+Never included: sequences, input file names, output files, your email, sign-in tokens, your Windows user name. Paths inside your Windows profile are shown as &lt;user&gt;, any other path as &lt;path&gt;.
+</value>
+  </data>
   <data name="SaveDiagnosticsButton.Content" xml:space="preserve">
     <value>Save diagnostics</value>
   </data>

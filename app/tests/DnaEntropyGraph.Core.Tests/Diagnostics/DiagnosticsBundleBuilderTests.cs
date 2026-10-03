@@ -39,8 +39,10 @@ public class DiagnosticsBundleBuilderTests
         "GOCSPX-abcdefghijklmnop12",
     ];
 
+    private const string ReadmeText = "Support bundle for the app.\r\nNever included: sequences and file names.";
+
     private static readonly DiagnosticsInfo Info = new(
-        "0.1.0", "Windows 11 10.0.26300", ".NET 10.0.0", "130.0.1", Profile, [Email, "jdoe"], new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero));
+        "0.1.0", "Windows 11 10.0.26300", ".NET 10.0.0", "130.0.1", Profile, [Email, "jdoe"], new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero), ReadmeText);
 
     private sealed class MemorySource(Dictionary<string, string> files, int? cap = null) : IDiagnosticsSource
     {
@@ -191,13 +193,13 @@ public class DiagnosticsBundleBuilderTests
             }
         }
 
-        DiagnosticsLeakScan.FindLeak(entries).ShouldBeNull();
+        DiagnosticsLeakScan.FindLeak(entries, []).ShouldBeNull();
     }
 
     [Fact]
     public void The_reviewers_line_loses_its_path_its_spaced_file_name_and_its_contig_but_keeps_its_shape()
     {
-        var log = BuildSeeded()["files/logs/app-20261003.log"];
+        var log = BuildSeeded()["files/logs/log-01.log"];
 
         var line = log.Split('\n').Single(l => l.StartsWith("12:03", StringComparison.Ordinal));
         line.ShouldBe("12:03 contig <redacted> from <path>");
@@ -206,7 +208,7 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void Any_windows_path_becomes_path_and_a_profile_path_becomes_user()
     {
-        var log = BuildSeeded()["files/logs/app-20261003.log"];
+        var log = BuildSeeded()["files/logs/log-01.log"];
 
         log.Split('\n').Single(l => l.StartsWith("12:06", StringComparison.Ordinal)).ShouldBe("12:06 share <path> read");
         log.Split('\n').Single(l => l.StartsWith("12:00", StringComparison.Ordinal)).ShouldBe("12:00 opened <user> for <redacted>");
@@ -215,7 +217,7 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void Credentials_are_replaced_wherever_they_appear_in_a_log()
     {
-        var log = BuildSeeded()["files/logs/app-20261003.log"];
+        var log = BuildSeeded()["files/logs/log-01.log"];
 
         log.ShouldContain("12:07 access token <token> and refresh <token>");
         log.ShouldContain("12:09 Authorization: <token>");
@@ -232,11 +234,11 @@ public class DiagnosticsBundleBuilderTests
         names.ShouldNotContain(n => n.Contains("app.db", StringComparison.Ordinal));
         names.ShouldNotContain(n => n.Contains("bedgraph", StringComparison.Ordinal));
         names.ShouldNotContain(n => n.Contains("..", StringComparison.Ordinal) || n.Contains("escape", StringComparison.Ordinal));
-        names.ShouldContain("files/logs/app-20261003.log");
+        names.ShouldContain("files/logs/log-01.log");
         names.ShouldContain("files/runs/job-1/status.json");
         names.ShouldContain("files/runs/job-1/progress.jsonl");
         names.ShouldContain("files/runs/job-1/result.json");
-        names.ShouldContain("files/runs/job-1/logs/worker.log");
+        names.ShouldContain("files/runs/job-1/logs/log-01.log");
     }
 
     [Fact]
@@ -284,7 +286,7 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void Log_lines_keep_their_meaning()
     {
-        var log = BuildSeeded()["files/logs/app-20261003.log"];
+        var log = BuildSeeded()["files/logs/log-01.log"];
 
         log.ShouldContain("12:02 job-1 ended");
         log.ShouldContain("12:16 done");
@@ -348,7 +350,7 @@ public class DiagnosticsBundleBuilderTests
 
         var entries = Unzip(DiagnosticsBundleBuilder.Build(vanishing, [], Info));
 
-        entries.Keys.ShouldNotContain("files/logs/gone.log");
+        entries.Keys.ShouldNotContain("files/logs/log-01.log");
     }
 
     private sealed class VanishingSource(IDiagnosticsSource inner) : IDiagnosticsSource
@@ -369,9 +371,9 @@ public class DiagnosticsBundleBuilderTests
 
         var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 20), [], Info));
 
-        entries["files/logs/big.log"].ShouldStartWith("[truncated:");
-        entries["files/logs/big.log"].ShouldContain("line three");
-        entries["files/logs/big.log"].ShouldNotContain("partial first line");
+        entries["files/logs/log-01.log"].ShouldStartWith("[truncated:");
+        entries["files/logs/log-01.log"].ShouldContain("line three");
+        entries["files/logs/log-01.log"].ShouldNotContain("partial first line");
         entries["files/runs/job-1/status.json"].ShouldBe("<omitted: file too large>");
     }
 
@@ -411,7 +413,7 @@ public class DiagnosticsBundleBuilderTests
         {
             ["a.json"] = "{\"image\": \"sha256:9f2bacacdbcdacbdbcaaddc2c1e4a5acdbdbcaabcdbcdacdbacdbacd09\", \"at\": \"2026-10-03T12:00:00Z\"}",
             ["b.txt"] = "--------------------\nDone: 3 jobs\n",
-        }).ShouldBeNull();
+        }, []).ShouldBeNull();
     }
 
     [Fact]
@@ -425,5 +427,151 @@ public class DiagnosticsBundleBuilderTests
 
             ex.EntryName.ShouldBe("run-history.json");
         }
+    }
+
+    // ---- Round 3 (issue #106 cold review) ----
+
+    private static Dictionary<string, string> BuildWith(Dictionary<string, string> folder, DiagnosticsInfo info, params RunRecord[] runs) =>
+        Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), runs, info));
+
+    private static string Entries(Dictionary<string, string> entries) => string.Join('\n', entries.Select(e => e.Key + "\n" + e.Value));
+
+    [Fact]
+    public void The_scan_alone_refuses_the_users_own_identifiers_case_insensitively_in_text_and_in_entry_names()
+    {
+        string[] sensitive = ["jsmith", "Patient 42"];
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "opened by JSmith today" }, sensitive).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "run for patient 42 done" }, sensitive).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["files/logs/jsmith-x.log"] = "clean" }, sensitive).ShouldBe("files/logs/jsmith-x.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "nothing here" }, sensitive).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_one_or_two_character_identifier_is_refused_as_a_whole_word_and_not_inside_other_words()
+    {
+        // "jo" must not trip on job, json or enjoy, or every bundle would be refused; as a word on its own it is the user.
+        string[] sensitive = ["jo"];
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "job-1 wrote json, enjoy" }, sensitive).ShouldBeNull();
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "opened by jo today" }, sensitive).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = @"x\jo\y" }, sensitive).ShouldBe("a.log");
+        // A single character and an all-digit value are not enforced: they would match ordinary text and numbers.
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "a 42 b" }, ["a", "42"]).ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_scan_alone_refuses_an_email_and_a_drive_or_unc_path_with_no_identifiers_given()
+    {
+        const string Line = @"bob@x.org in D:\Lab\Patient 42\run";
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = Line }, []).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "mail bob@x.org" }, []).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = @"in D:\Lab\run" }, []).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = @"in D:/Lab/run" }, []).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = @"share \\labserver\data" }, []).ShouldBe("a.log");
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.log"] = "{\"p\":\"D:\\\\Lab\\\\x\"}" }, []).ShouldBe("a.log");
+    }
+
+    [Fact]
+    public void The_scan_does_not_trip_on_placeholders_urls_times_or_the_readme_wording()
+    {
+        DiagnosticsLeakScan.FindLeak(new Dictionary<string, string>
+        {
+            ["a.log"] = "12:03 contig <redacted> from <path> by <email> at <user> token <token> <sequence> <file> https://example.com/x sha256:abc",
+            ["b.txt"] = ReadmeText,
+        }, ["redact", "user", "path"]).ShouldBeNull();
+    }
+
+    [Fact]
+    public void Build_hands_the_identifiers_to_the_scan_so_a_field_the_redactor_never_sees_refuses_the_zip()
+    {
+        // Run history is copied as it is: a job id carrying the Windows user name is a miss only the scan can catch.
+        var info = Info with { SensitiveValues = ["jsmith"] };
+
+        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [Run with { JobId = "jsmith-1" }], info));
+
+        ex.EntryName.ShouldBe("run-history.json");
+    }
+
+    [Fact]
+    public void Build_hands_harvested_names_to_the_scan_too()
+    {
+        var run = Run with { JobId = "pUC19secret-9", ManifestJson = JsonSerializer.Serialize(new { inputs = new[] { new { name = "pUC19secret-9" } } }) };
+
+        Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info))
+            .EntryName.ShouldBe("run-history.json");
+    }
+
+    [Fact]
+    public void A_short_user_name_is_redacted_from_logs_as_a_whole_word_and_the_bundle_is_still_built()
+    {
+        var info = Info with { SensitiveValues = ["jo"] };
+        var folder = new Dictionary<string, string> { ["logs/a.log"] = "job-1 opened by jo and Jo\\x ended json" };
+
+        var log = BuildWith(folder, info)["files/logs/log-01.log"];
+
+        log.ShouldNotContain("jo ", Case.Insensitive);
+        log.ShouldContain("job-1");
+        log.ShouldContain("json");
+    }
+
+    [Fact]
+    public void Copied_log_entries_get_neutral_names_so_a_log_named_after_the_user_never_reaches_the_zip()
+    {
+        var info = Info with { SensitiveValues = ["jsmith"] };
+        var folder = new Dictionary<string, string>
+        {
+            ["logs/jsmith-Patient42.log"] = "one",
+            ["logs/zeta.log"] = "two",
+            ["runs/job-1/logs/jsmith-Patient42.log"] = "three",
+        };
+
+        var entries = BuildWith(folder, info);
+
+        entries.Keys.ShouldContain("files/logs/log-01.log");
+        entries.Keys.ShouldContain("files/logs/log-02.log");
+        entries.Keys.ShouldContain("files/runs/job-1/logs/log-01.log");
+        Entries(entries).ShouldNotContain("jsmith", Case.Insensitive);
+        Entries(entries).ShouldNotContain("Patient42", Case.Insensitive);
+        entries["files/logs/log-01.log"].ShouldBe("one");
+        entries["files/logs/log-02.log"].ShouldBe("two");
+    }
+
+    [Fact]
+    public void A_directory_path_with_spaces_and_no_extension_is_redacted_whole()
+    {
+        var folder = new Dictionary<string, string> { ["logs/a.log"] = @"see C:\Lab\Patient 42\out now" + "\n" + @"read \\srv\my share\Patient 42\out2 end" };
+
+        var log = BuildWith(folder, Info)["files/logs/log-01.log"];
+
+        log.ShouldBe("see <path> now\nread <path> end");
+    }
+
+    [Fact]
+    public void A_json_file_that_does_not_parse_is_left_out_with_a_note_and_never_blocks_the_export()
+    {
+        // Duplicate keys throw ArgumentException, not JsonException, from JsonNode.Parse.
+        var run = Run with { ManifestJson = "{\"inputs\":[{\"name\":\"a\",\"name\":\"b\"}]}", OptionsJson = "{\"x\":1,\"x\":2}" };
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/job-1/status.json"] = "{\"stage\":\"running\",\"stage\":\"failed\"}",
+            ["runs/job-1/result.json"] = "{\"status\":\"ok\",\"status\":\"bad\"}",
+            ["runs/job-1/progress.jsonl"] = "{\"seq\":1,\"seq\":2}\n{\"seq\":3}\n",
+            ["logs/a.log"] = "still here",
+        };
+
+        var entries = BuildWith(folder, Info, run);
+
+        entries["files/runs/job-1/status.json"].ShouldStartWith("<omitted");
+        entries["files/runs/job-1/result.json"].ShouldStartWith("<omitted");
+        entries["files/runs/job-1/progress.jsonl"].ShouldContain("<unparseable line omitted>");
+        entries["files/runs/job-1/progress.jsonl"].ShouldContain("\"seq\":3");
+        entries["files/logs/log-01.log"].ShouldBe("still here");
+    }
+
+    [Fact]
+    public void The_readme_text_comes_from_the_caller_with_lf_line_endings()
+    {
+        var readme = BuildSeeded()["README.txt"];
+
+        readme.ShouldBe(ReadmeText.Replace("\r\n", "\n", StringComparison.Ordinal));
     }
 }

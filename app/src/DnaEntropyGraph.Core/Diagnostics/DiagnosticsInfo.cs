@@ -8,6 +8,7 @@ namespace DnaEntropyGraph.Core.Diagnostics;
 /// <param name="UserProfilePath">The user's profile folder (<c>C:\Users\name</c>); every path under it becomes <c>&lt;user&gt;</c>.</param>
 /// <param name="SensitiveValues">Literal strings that must never appear (the user's email, their account name).</param>
 /// <param name="CreatedUtc">When the bundle was made.</param>
+/// <param name="ReadmeText">The text of the zip's <c>README.txt</c>. User-visible, so the caller reads it from the resw file (Hard Rule 13); Core holds no copy.</param>
 public sealed record DiagnosticsInfo(
     string AppVersion,
     string OsDescription,
@@ -15,11 +16,12 @@ public sealed record DiagnosticsInfo(
     string? WebView2Version,
     string UserProfilePath,
     IReadOnlyList<string> SensitiveValues,
-    DateTimeOffset CreatedUtc);
+    DateTimeOffset CreatedUtc,
+    string ReadmeText);
 
-/// <summary>The bundle refused to be written because something that looks like sequence data survived redaction.</summary>
+/// <summary>The bundle refused to be written because sequence, a credential, an email, a path or one of the user's own identifiers survived redaction.</summary>
 public sealed class DiagnosticsLeakException(string entryName)
-    : Exception($"Sequence-like text was found in '{entryName}', so no diagnostics file was written.")
+    : Exception($"Identifying or sequence-like text was found in '{entryName}', so no diagnostics file was written.")
 {
     /// <summary>The bundle entry that tripped the final scan.</summary>
     public string EntryName { get; } = entryName;

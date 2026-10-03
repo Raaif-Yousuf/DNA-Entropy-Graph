@@ -85,7 +85,7 @@ public static partial class DiagnosticsBundleBuilder
         var entries = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var settings = RedactSettings(source, redactor);
 
-        entries["README.txt"] = Readme;
+        entries["README.txt"] = info.ReadmeText.Replace("\r\n", "\n", StringComparison.Ordinal);
         entries["versions.json"] = JsonSerializer.Serialize(
             new
             {
@@ -100,22 +100,39 @@ public static partial class DiagnosticsBundleBuilder
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
         entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(ToHistoryRow), Indented);
 
+        // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
+        // the original is written nowhere in the zip.
+        var logCounters = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var file in loaded)
         {
-            var copy = Copy(file, redactor);
-            if (copy is not null)
-            {
-                entries["files/" + file.Path] = copy;
-            }
+            entries[EntryName(file, logCounters)] = Copy(file, redactor) ?? OmittedUnreadable;
         }
 
-        var leak = DiagnosticsLeakScan.FindLeak(entries);
+        // The scan backstops the redactor on the user's own identifiers (the same list the redactor used, plus the profile
+        // path, so the Windows user name is covered even when the caller left it out of SensitiveValues).
+        var leak = DiagnosticsLeakScan.FindLeak(entries, [.. scrub, info.UserProfilePath]);
         if (leak is not null)
         {
             throw new DiagnosticsLeakException(leak);
         }
 
         return Zip(entries, info.CreatedUtc);
+    }
+
+    // Fixed words only: the leak scan blanks exactly this shape (and "<omitted: file too large>") before it checks identifiers.
+    private const string OmittedUnreadable = "<omitted: file is not valid json>";
+
+    private static string EntryName(Loaded file, Dictionary<string, int> logCounters)
+    {
+        if (file.Kind != FileKind.Log)
+        {
+            return "files/" + file.Path;
+        }
+
+        var directory = file.Path[..file.Path.LastIndexOf('/')];
+        var number = logCounters.GetValueOrDefault(directory) + 1;
+        logCounters[directory] = number;
+        return $"files/{directory}/log-{number:00}.log";
     }
 
     private static FileKind? Classify(string path)
@@ -163,7 +180,7 @@ public static partial class DiagnosticsBundleBuilder
             {
                 DiagnosticsRedactor.Harvest(JsonNode.Parse(json), null, scrub);
             }
-            catch (JsonException)
+            catch (Exception ex) when (DiagnosticsRedactor.IsUnreadableJson(ex))
             {
                 // Not JSON: nothing to harvest.
             }
@@ -184,7 +201,7 @@ public static partial class DiagnosticsBundleBuilder
             {
                 DiagnosticsRedactor.Harvest(JsonNode.Parse(line), spec, scrub);
             }
-            catch (JsonException)
+            catch (Exception ex) when (DiagnosticsRedactor.IsUnreadableJson(ex))
             {
                 // A line that is not JSON is dropped by the redactor; nothing to harvest.
             }
@@ -220,7 +237,7 @@ public static partial class DiagnosticsBundleBuilder
         {
             raw = JsonSerializer.Deserialize<Dictionary<string, string>>(Encoding.UTF8.GetString(bytes));
         }
-        catch (JsonException)
+        catch (Exception ex) when (DiagnosticsRedactor.IsUnreadableJson(ex))
         {
             return (null, values);
         }
@@ -285,14 +302,4 @@ public static partial class DiagnosticsBundleBuilder
 
         return buffer.ToArray();
     }
-
-    private const string Readme =
-        "DNA Entropy Graph diagnostics\n" +
-        "\n" +
-        "Included: worker and run logs, run history (ids, states, error codes, times), the status, progress and\n" +
-        "result files the app keeps for each run, settings with private values left out, version numbers and the\n" +
-        "installation id. Logs written by the app itself are included once the app writes them.\n" +
-        "\n" +
-        "Never included: sequences, input file names, output files, your email, sign-in tokens. Paths inside your\n" +
-        "Windows profile are shown as <user>.\n";
 }

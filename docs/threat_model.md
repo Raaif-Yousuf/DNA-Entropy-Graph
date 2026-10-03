@@ -156,7 +156,7 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
   of status and result files (contig and record names). Each is scrubbed as written, as a file name and as a stem.
   Weakness: a data-named key with no digit, underscore, dot, hyphen or space (for example a bare `patient`) is not
   added to the list from a dropped subtree; it is still never copied from that file.
-- **Text redaction** (every log line and kept string): any Windows path (drive letter or UNC, spaces allowed) becomes `<path>`,
+- **Text redaction** (every log line and kept string): any Windows path (drive letter or UNC, spaces allowed, including a folder path with spaces and no file extension) becomes `<path>`,
   and one under the user profile becomes `<user>`; sequence-file names (every extension in `SequenceFileTypes` plus
   `.fsa .ape .gp .sbd` and others, up to three words long) become `<file>`; email-shaped text becomes `<email>`;
   credentials (`ya29.` access tokens, `1//` refresh tokens, JWTs, `Bearer` headers, `GOCSPX-` client secrets and
@@ -167,11 +167,24 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
   wraps, a sequence split over two lines) is replaced whole.
 - **Final scan.** `DiagnosticsLeakScan` is a separate implementation, deliberately stricter than the redactor. It joins each
   entry, ignores whitespace and digits, so a wrapped, numbered or spaced sequence is still one run of 20 or more, reads the
-  entry names as well as the text, and refuses on any credential shape. A hit throws `DiagnosticsLeakException` naming the
-  entry, and nothing is written. A 32-character-or-longer hex digest is exempt. The zip is written to a temp file and moved
-  into place; if the build is refused or fails, the empty file the save picker created is deleted, and a destination that
-  already held content is left alone.
-- **Deliberately included:** the installation id (it is a label on every cloud resource and is needed to find them),
+  entry names as well as the text, and refuses on any credential shape. It also backstops the user's own identifiers: the
+  scrub list (Windows user name, email, every harvested input, stem, contig, project, bucket and VM name) and the profile
+  path are passed into it, and a case-insensitive hit refuses the zip. A value of 3 or more characters hits as a substring;
+  a 2-character value (a user called "jo") only as a whole word, so "job" and "json" do not trip it and the redactor scrubs
+  it the same way; a 1-character or all-digit value is not checked at all (it would match ordinary text and numbers). A leaf
+  or stem derived from a path also matches as a whole word only (an output folder "out" must not refuse a bundle that says
+  "timeout"). Independently of any list, it refuses on any email-shaped string (none is allowlisted yet) and on any drive
+  letter or UNC path, since a path never survives redaction. The fixed placeholders (`<redacted>`, `<user>`, `<path>` and the
+  like) are blanked first. A hit throws `DiagnosticsLeakException` naming the entry, and nothing is written. A 32-character-
+  or-longer hex digest is exempt. Known cost: a free-text run note that equals a word the bundle itself uses ("failed")
+  refuses the zip; refusal is the safe failure and the user is told to report the problem without a file. The zip is
+  written to a temp file and moved into place; if the export is refused, cancelled (even before it started) or fails, the
+  empty file the save picker created is deleted, and a destination that already held content is left alone.
+- **Neutral entry names.** Every copied log is stored as `files/logs/log-NN.log` or `files/runs/<job id>/logs/log-NN.log`
+  (numbered in the order of the original names); the original name is written nowhere in the zip. The job id is the app's
+  own. `README.txt` is text from `Resources.resw`, passed in by the app.
+- **Unreadable JSON.** A status, result or progress file (or a manifest) that cannot be parsed for any reason, duplicate
+  keys included, is left out with a note (`<omitted: file is not valid json>`) and never blocks the export.- **Deliberately included:** the installation id (it is a label on every cloud resource and is needed to find them),
   the app, OS, .NET and WebView2 versions.
 - **Not guaranteed:** the redaction is pattern-based. A new field is added to a key list, never to a blocklist. The app has no
   Serilog file log yet (issue #164, which will drop its `logs/` folder into the bundle with no change here), so today the

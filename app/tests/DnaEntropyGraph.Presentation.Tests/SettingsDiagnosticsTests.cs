@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Presentation.Services;
@@ -88,6 +89,45 @@ public class SettingsDiagnosticsTests
         _launcher.RevealFile(Arg.Any<string>()).Returns(true);
         _viewModel.OpenDiagnosticsFolderCommand.Execute(null);
         _launcher.Received(1).RevealFile(@"C:\Out\d.zip");
+    }
+
+    private sealed class NoFiles : IDiagnosticsSource
+    {
+        public IReadOnlyList<string> ListFiles() => [];
+
+        public DiagnosticsFile? TryRead(string relativePath, long maxBytes) => null;
+    }
+
+    [Fact]
+    public async Task Cancelling_after_the_picker_returned_a_path_still_removes_the_empty_file_the_picker_made()
+    {
+        // The picker creates a 0-byte file, then the user cancels (the command's token is cancelled) before Task.Run starts
+        // the export. The export must still run its cleanup: a Task.Run bound to the cancelled token would skip it.
+        var folder = Path.Combine(Path.GetTempPath(), "deg-vm-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var path = Path.Combine(folder, "d.zip");
+            var repository = Substitute.For<IRunRepository>();
+            repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Array.Empty<RunRecord>());
+            var real = new DiagnosticsExporter(new NoFiles(), repository, () => new DiagnosticsInfo("0", "os", "net", null, @"C:\Users\x", [], DateTimeOffset.UnixEpoch, "readme"));
+            var viewModel = new SettingsViewModel(
+                Substitute.For<ISettingsStore>(), _toasts, Substitute.For<IStringResourceProvider>(), real, _picker, _launcher, TimeProvider.System);
+            _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
+            {
+                File.WriteAllBytes(path, []);
+                viewModel.SaveDiagnosticsCommand.Cancel();
+                return Task.FromResult<string?>(path);
+            });
+
+            await viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+            File.Exists(path).ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
     }
 
     [Fact]

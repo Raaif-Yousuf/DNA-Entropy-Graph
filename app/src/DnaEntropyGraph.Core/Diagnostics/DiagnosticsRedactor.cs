@@ -68,8 +68,10 @@ internal sealed partial class DiagnosticsRedactor
     private static partial Regex Email();
 
     // Any Windows path: a drive letter or a UNC share. The first form ends at a file extension, so a name with spaces
-    // ("D:\Lab\Patient42\My Plasmid.fasta") is taken whole; the second takes a folder path up to the next space.
-    [GeneratedRegex(@"(?:[A-Za-z]:|\\\\[^\\/\s""'<>|]+)[\\/](?:[^\\/:*?""<>|\r\n]+[\\/])*[^\\/:*?""<>|\r\n]*?\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])|(?:[A-Za-z]:|\\\\[^\\/\s""'<>|]+)[\\/][^\s""'<>|]*")]
+    // ("D:\Lab\Patient42\My Plasmid.fasta") is taken whole. The second is a folder path with no extension: a segment with
+    // spaces is part of the path while a backslash follows it ("C:\Lab\Patient 42\out"), at most 80 characters per
+    // segment, and the last segment ends at the next space. It over-redacts rather than leaving a folder name behind.
+    [GeneratedRegex(@"(?:[A-Za-z]:|\\\\[^\\/\s""'<>|]+)[\\/](?:[^\\/:*?""<>|\r\n]+[\\/])*[^\\/:*?""<>|\r\n]*?\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])|(?:[A-Za-z]:|\\\\[^\\/\s""'<>|]+)[\\/](?:[^\\/:*?""<>|\r\n]{1,80}\\|[^\s\\/:*?""<>|]+/)*[^\s""'<>|]*")]
     private static partial Regex WindowsPath();
 
     // Credentials, in every shape the app or Google could print one.
@@ -93,39 +95,12 @@ internal sealed partial class DiagnosticsRedactor
     }
 
     private readonly string _profilePath;
-    private readonly IReadOnlyList<string> _sensitive;
+    private readonly IReadOnlyList<SensitiveValue> _sensitive;
 
     public DiagnosticsRedactor(string userProfilePath, IEnumerable<string> sensitiveValues)
     {
         _profilePath = userProfilePath.TrimEnd('\\', '/');
-        // Longest first, so "My Plasmid.fasta" is replaced whole before its stem "My Plasmid" is.
-        _sensitive = sensitiveValues
-            .SelectMany(Variants)
-            .Select(value => value.Trim())
-            .Where(value => value.Length >= 3 && !value.All(char.IsDigit))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(value => value.Length)
-            .ToList();
-    }
-
-    // A path scrubs as itself, as its file name and as that file name's stem.
-    private static IEnumerable<string> Variants(string value)
-    {
-        yield return value;
-        var leaf = value.Split('\\', '/').LastOrDefault(part => part.Length > 0);
-        if (leaf is not null && leaf != value)
-        {
-            yield return leaf;
-        }
-
-        if (leaf is not null)
-        {
-            var stem = Path.GetFileNameWithoutExtension(leaf);
-            if (stem.Length > 0 && stem != leaf)
-            {
-                yield return stem;
-            }
-        }
+        _sensitive = SensitiveValue.Normalize(sensitiveValues);
     }
 
     /// <summary>Text redaction for a whole log or file. Output uses LF line endings.</summary>
@@ -171,7 +146,7 @@ internal sealed partial class DiagnosticsRedactor
 
         foreach (var value in _sensitive)
         {
-            line = line.Replace(value, RedactedValue, StringComparison.OrdinalIgnoreCase);
+            line = value.Replace(line, RedactedValue);
         }
 
         line = Email().Replace(line, "<email>");
@@ -182,14 +157,20 @@ internal sealed partial class DiagnosticsRedactor
     private bool IsUnderProfile(string path) =>
         _profilePath.Length > 0 && path.StartsWith(_profilePath, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>A parsed JSON document cut down to <paramref name="spec"/>; null when the text is not JSON.</summary>
+    /// <summary>
+    /// True for any reason a piece of JSON could not be read: bad syntax (<see cref="JsonException"/>), a duplicate key
+    /// (<see cref="ArgumentException"/>), or anything else the parser raises. Such a file is left out, never a failed export.
+    /// </summary>
+    public static bool IsUnreadableJson(Exception ex) => ex is not OutOfMemoryException;
+
+    /// <summary>A parsed JSON document cut down to <paramref name="spec"/>; null when the text cannot be parsed.</summary>
     public string? RedactJson(string json, KeySpec spec)
     {
         try
         {
             return Sanitize(JsonNode.Parse(json), spec)?.ToJsonString(JsonOptions);
         }
-        catch (JsonException)
+        catch (Exception ex) when (IsUnreadableJson(ex))
         {
             return null;
         }
@@ -207,7 +188,7 @@ internal sealed partial class DiagnosticsRedactor
                 {
                     return Sanitize(JsonNode.Parse(line), spec)?.ToJsonString(CompactOptions) ?? "null";
                 }
-                catch (JsonException)
+                catch (Exception ex) when (IsUnreadableJson(ex))
                 {
                     return "\"<unparseable line omitted>\"";
                 }
@@ -306,6 +287,79 @@ internal sealed partial class DiagnosticsRedactor
         key.Length >= 3 && key.Any(c => char.IsDigit(c) || c is '_' or '.' or '-' or ' ');
 }
 
+/// <summary>
+/// One string the bundle must not carry (the user's name or email, an input name, a project). A value of 3 or more
+/// characters is found as a substring; a 2-character one only as a whole word, so a user named "jo" is scrubbed without
+/// mangling "job" or "json". A 1-character or all-digit value is dropped: it would match ordinary text and numbers.
+/// </summary>
+internal sealed class SensitiveValue
+{
+    private const int SubstringLength = 3;
+
+    private readonly Regex _word;
+
+    private SensitiveValue(string text, bool isFull)
+    {
+        Text = text;
+        IsFull = isFull;
+        _word = new Regex(@"(?<![\p{L}\p{N}])" + Regex.Escape(text) + @"(?![\p{L}\p{N}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    public string Text { get; }
+
+    /// <summary>True for a value as given; false for the file name or stem derived from it.</summary>
+    public bool IsFull { get; }
+
+    /// <summary>Each value as given, then its leaf and the leaf's stem, longest first (so "My Plasmid.fasta" goes before "My Plasmid").</summary>
+    public static IReadOnlyList<SensitiveValue> Normalize(IEnumerable<string?> values)
+    {
+        var found = new Dictionary<string, SensitiveValue>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in values.Where(v => !string.IsNullOrWhiteSpace(v)))
+        {
+            foreach (var (text, isFull) in Variants(value!.Trim()))
+            {
+                var trimmed = text.Trim();
+                var usable = trimmed.Length >= 2 && !trimmed.All(char.IsDigit) && trimmed.Any(char.IsLetterOrDigit);
+                if (usable && !(found.TryGetValue(trimmed, out var earlier) && (earlier.IsFull || !isFull)))
+                {
+                    found[trimmed] = new SensitiveValue(trimmed, isFull);
+                }
+            }
+        }
+
+        return found.Values.OrderByDescending(v => v.Text.Length).ToList();
+    }
+
+    private static IEnumerable<(string Text, bool IsFull)> Variants(string value)
+    {
+        yield return (value, true);
+        var leaf = value.Split('\\', '/').LastOrDefault(part => part.Length > 0);
+        if (leaf is null)
+        {
+            yield break;
+        }
+
+        if (leaf != value)
+        {
+            yield return (leaf, false);
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(leaf);
+        if (stem.Length > 0 && stem != leaf)
+        {
+            yield return (stem, false);
+        }
+    }
+
+    /// <summary>The redactor's rule: substring for 3 or more characters, whole word for 2.</summary>
+    public string Replace(string line, string replacement) =>
+        Text.Length < SubstringLength ? _word.Replace(line, replacement) : line.Replace(Text, replacement, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The scan's rule: substring only for a full value of 3 or more characters; whole word otherwise.</summary>
+    public bool IsIn(string text) =>
+        Text.Length >= SubstringLength && IsFull ? text.Contains(Text, StringComparison.OrdinalIgnoreCase) : _word.IsMatch(text);
+}
+
 /// <summary>Sequence in any layout: IUPAC letters plus U, gaps and stops, case-insensitive, with digits and spaces ignored.</summary>
 internal static class SequenceShape
 {
@@ -371,12 +425,36 @@ public static partial class DiagnosticsLeakScan
     // Its own copy of the alphabet, so a mistake in the redactor's list cannot also blind the scan.
     private const string Bases = "ACGTUNRYSWKMBDHV-*";
 
-    /// <summary>The name of the first entry (by name or by text) holding sequence-like or credential-like content, or null when the set is clean.</summary>
-    public static string? FindLeak(IReadOnlyDictionary<string, string> entries)
+    // Its own email shape (not the redactor's), and its own drive or UNC test. A path never survives redaction, so one in
+    // the finished entries is a miss: "X:\" or "X:/" not glued to a longer word ("https://" is not a drive), or "\\host\".
+    [GeneratedRegex(@"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}")]
+    private static partial Regex EmailShape();
+
+    [GeneratedRegex(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\[\w.$\-]+[\\/]")]
+    private static partial Regex DriveOrUncPath();
+
+    // The fixed words the redactor and builder write in place of removed text; they carry no user data, so they are blanked
+    // before the identifier check (a user named "user" must not make every bundle fail on "<user>").
+    [GeneratedRegex(@"<(?:redacted|user|path|token|email|sequence|file)>|<omitted: [a-z ]{3,40}>|<unparseable line omitted>")]
+    private static partial Regex Placeholder();
+
+    /// <summary>Support addresses that may appear in a bundle. None yet; an address added here needs a test.</summary>
+    private static readonly HashSet<string> AllowedEmails = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The name of the first entry (by name or by text) holding sequence-like or credential-like content, an email address,
+    /// a drive or UNC path, or one of <paramref name="sensitiveValues"/>; null when the set is clean. An identifier is
+    /// matched case-insensitively. A value of 3 or more characters hits as a substring, a 2-character value only as a
+    /// whole word (so "jo" does not trip on "job" or "json"), and a 1-character or all-digit value is not checked at all (it
+    /// would match ordinary text and numbers). A file name or path given as an identifier also matches by its leaf and
+    /// stem, and those match as whole words only, so the folder "out" does not refuse a bundle that says "timeout".
+    /// </summary>
+    public static string? FindLeak(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null)
     {
+        var sensitive = SensitiveValue.Normalize(sensitiveValues ?? []);
         foreach (var (name, text) in entries)
         {
-            if (LooksLeaky(name) || LooksLeaky(text))
+            if (LooksLeaky(name, sensitive) || LooksLeaky(text, sensitive))
             {
                 return name;
             }
@@ -385,9 +463,20 @@ public static partial class DiagnosticsLeakScan
         return null;
     }
 
-    private static bool LooksLeaky(string text)
+    private static bool LooksLeaky(string text, IReadOnlyList<SensitiveValue> sensitive)
     {
-        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text))
+        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text) || DriveOrUncPath().IsMatch(text))
+        {
+            return true;
+        }
+
+        if (EmailShape().Matches(text).Any(match => !AllowedEmails.Contains(match.Value)))
+        {
+            return true;
+        }
+
+        var plain = Placeholder().Replace(text, " ");
+        if (sensitive.Any(value => value.IsIn(plain)))
         {
             return true;
         }

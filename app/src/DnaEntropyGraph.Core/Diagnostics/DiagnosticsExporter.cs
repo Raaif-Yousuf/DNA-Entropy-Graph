@@ -7,8 +7,9 @@ public interface IDiagnosticsExporter
 {
     /// <summary>
     /// Builds the bundle and saves it at <paramref name="destinationPath"/>. Blocking disk work: callers run it off the
-    /// UI thread. If the build is refused, cancelled or fails, a destination that is an empty file (the save picker
-    /// creates one) is deleted, and a destination that already holds content is left exactly as it was.
+    /// UI thread. Whenever this is called, even with a token that is already cancelled, a refused, cancelled or failed export
+    /// removes a destination that is an empty file (the save picker creates one); a destination that already holds content is
+    /// left exactly as it was.
     /// </summary>
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction.</exception>
     Task ExportAsync(string destinationPath, CancellationToken cancellationToken);
@@ -25,6 +26,8 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
         var temp = destinationPath + ".tmp-" + Guid.NewGuid().ToString("n");
         try
         {
+            // Inside the try, so a token cancelled before the first await still reaches the cleanup below.
+            cancellationToken.ThrowIfCancellationRequested();
             var history = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
             var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory());
             await File.WriteAllBytesAsync(temp, zip, cancellationToken).ConfigureAwait(false);

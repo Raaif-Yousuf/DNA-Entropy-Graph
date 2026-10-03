@@ -16,7 +16,7 @@ public class DiagnosticsExporterTests : IDisposable
 
     public void Dispose() => Directory.Delete(_folder, recursive: true);
 
-    private static readonly DiagnosticsInfo Info = new("0.1.0", "Windows", ".NET 10", null, @"C:\Users\jdoe", [], DateTimeOffset.UnixEpoch);
+    private static readonly DiagnosticsInfo Info = new("0.1.0", "Windows", ".NET 10", null, @"C:\Users\jdoe", [], DateTimeOffset.UnixEpoch, "readme");
 
     private sealed class EmptySource : IDiagnosticsSource
     {
@@ -83,6 +83,21 @@ public class DiagnosticsExporterTests : IDisposable
             () => new DiagnosticsExporter(new EmptySource(), repository, () => Info).ExportAsync(path, CancellationToken.None));
 
         File.Exists(path).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_token_cancelled_before_the_export_starts_still_removes_the_empty_file_the_picker_made()
+    {
+        var path = Path.Combine(_folder, "out.zip");
+        await File.WriteAllBytesAsync(path, [], TestContext.Current.CancellationToken);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => new DiagnosticsExporter(new EmptySource(), History(), () => Info).ExportAsync(path, cancelled.Token));
+
+        File.Exists(path).ShouldBeFalse();
+        Directory.GetFiles(_folder).ShouldBeEmpty();
     }
 
     [Fact]

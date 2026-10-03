@@ -81,8 +81,10 @@ public sealed partial class SettingsViewModel : ObservableObject
                 return;
             }
 
-            // The build reads every log and run file: never on the UI thread.
-            await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken), cancellationToken);
+            // The build reads every log and run file: never on the UI thread. Task.Run gets no token on purpose: a Task.Run
+            // bound to an already-cancelled token never starts the delegate, and the exporter's cleanup of the picker's empty
+            // file would be skipped. The exporter observes the token itself and throws OperationCanceledException.
+            await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken), CancellationToken.None);
             _lastDiagnosticsPath = path;
             OpenDiagnosticsFolderCommand.NotifyCanExecuteChanged();
             Report("DiagnosticsSaved_Title", string.Format(_strings.GetString("DiagnosticsSaved_Body"), path));

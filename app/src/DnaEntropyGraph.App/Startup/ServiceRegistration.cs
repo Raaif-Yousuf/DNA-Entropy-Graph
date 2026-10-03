@@ -162,7 +162,7 @@ public static class ServiceRegistration
         services.AddSingleton<IDiagnosticsExporter>(sp => new DiagnosticsExporter(
             new FolderDiagnosticsSource(Path.GetDirectoryName(settingsPath)!),
             sp.GetRequiredService<IRunRepository>(),
-            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>())));
+            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>())));
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
