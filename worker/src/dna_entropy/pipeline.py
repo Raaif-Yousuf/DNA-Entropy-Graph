@@ -607,6 +607,7 @@ def run(
             context_length=cfg.context_length,
             ceiling=cfg.max_len,
             seq_len=len(contig.seq),
+            circular=cfg.topology.resolve(contig.circular),
         )
     # Built only AFTER every refusal above: loading a real model is the expensive step, and a
     # refused run must never pay for it.

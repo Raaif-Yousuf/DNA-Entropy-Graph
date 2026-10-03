@@ -292,7 +292,9 @@ there is **no seam and no reduced context**: `provenance.json` records `seam: nu
 each pass. `auto` resolves per contig: a GenBank `LOCUS` line saying `circular` is circular,
 everything else (`linear`, FASTA, pasted text) is linear; `linear`/`circular` override the
 input. `provenance.json` records the requested option (`run.topology`) and what each contig
-actually ran with (`contigs[].topology`: `linear | circular`). The mock predictor seeds on
+actually ran with (`contigs[].topology`: `linear | circular`). A circular molecule shorter than `K` is
+allowed (it wraps several times) and gets a notice saying so instead of the linear "no base
+reaches full context" one. The mock predictor seeds on
 window content, so rotation invariance (rotating a circular input rotates the output) is
 tested with a pure-local-context stub (`worker/tests/test_circular.py`), not the mock. The
 output GenBank keeps writing a linear `LOCUS` (not changed here).

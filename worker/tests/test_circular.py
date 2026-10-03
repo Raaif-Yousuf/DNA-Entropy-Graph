@@ -143,20 +143,6 @@ def test_a_circular_input_shorter_than_k_still_gets_full_context(direction: Dire
     assert np.allclose(_run(rotated, direction, circular=True).values, np.roll(result.values, -5), atol=1e-6)
 
 
-# --- cost: still one forward pass per window, padded by exactly K each side -------------
-
-
-def test_circular_runs_windows_over_the_k_padded_sequence_never_per_base() -> None:
-    stub = _Local()
-    _run(SEQ, Direction.FORWARD_ONLY, circular=True, predictor=stub)
-    assert all(w <= CEILING for w in stub.windows)
-    covered_lengths = len(SEQ) + 2 * K
-    assert 1 < len(stub.windows) < covered_lengths // 4
-    linear = _Local()
-    _run(SEQ, Direction.FORWARD_ONLY, circular=False, predictor=linear)
-    assert len(stub.windows) > len(linear.windows)
-
-
 # --- topology resolution through the real pipeline entry point --------------------------
 
 _PLASMID = (
@@ -268,3 +254,42 @@ def test_a_circular_run_says_so_in_the_notices(tmp_path: Path) -> None:
     )
     result = pipeline.run(cfg, raw=SEQ, predictor=_Local())
     assert any("circular" in n.lower() for n in result.notices)
+
+
+def test_a_circular_run_shorter_than_k_through_the_pipeline_gets_only_the_wrapped_notice(
+    tmp_path: Path,
+) -> None:
+    cfg = RunConfig(
+        name="tiny", out_dir=str(tmp_path), context_length=4096, topology=Topology.CIRCULAR, seed=1
+    )
+    result = pipeline.run(cfg, raw=SEQ, predictor=_Local())  # L=200 < K=4096
+    assert not any("no base reaches full context" in n for n in result.notices)
+    assert sum("wrapped around" in n and "shorter than the context length" in n for n in result.notices) == 1
+    assert len(result.values) == len(SEQ)
+
+
+def test_circular_windows_are_exactly_the_k_padded_length_tiled_by_the_plan() -> None:
+    from dna_entropy.analysis.windowing import plan_windows
+
+    stub = _Local()
+    _run(SEQ, Direction.FORWARD_ONLY, circular=True, predictor=stub)
+    plan = plan_windows(len(SEQ) + 2 * K, K, CEILING)
+    assert plan.num_windows == 14  # ceil((232 - 32) / 16) + 1
+    assert stub.windows == [plan.window] * plan.num_windows
+    linear = _Local()
+    _run(SEQ, Direction.FORWARD_ONLY, circular=False, predictor=linear)
+    assert linear.windows == [plan.window] * plan_windows(len(SEQ), K, CEILING).num_windows
+    assert len(linear.windows) == 12
+
+
+def test_the_first_circular_window_starts_with_the_molecules_own_tail() -> None:
+    seen: list[str] = []
+
+    class _Spy(_Local):
+        def predict(self, window: str) -> np.ndarray:
+            seen.append(window)
+            return super().predict(window)
+
+    _run(SEQ, Direction.FORWARD_ONLY, circular=True, predictor=_Spy())
+    assert seen[0] == (SEQ[-K:] + SEQ)[:32]
+    assert seen[-1] == (SEQ + SEQ[:K])[-32:]
