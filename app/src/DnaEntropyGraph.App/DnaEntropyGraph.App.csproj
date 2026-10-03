@@ -68,6 +68,8 @@
   <!-- Issues #72/#73: the vendored igv.js viewer, served to WebView2 as https://viewer.deg/ from <output>\Assets\viewer. -->
   <ItemGroup>
     <Content Include="Assets\viewer\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Issue #98: the price list the cost estimate reads at runtime from <output>\Assets\pricing.json (publish keeps it). -->
+    <Content Include="Assets\pricing.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!--

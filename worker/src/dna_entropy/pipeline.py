@@ -18,6 +18,8 @@ import numpy as np
 
 from .analysis.direction import DirectionResult, analyze_direction
 from .analysis.gene_summary import GeneRow, summarize_genes
+from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
+from .analysis.smoothing import rolling_mean, validate_smoothing_windows
 from .analysis.surprisal import summarize_surprisal
 from .analysis.windowing import validate_context
 from .annotators.base import GeneFeature
@@ -36,7 +38,9 @@ from .writers.genbank import GenBankWriter
 from .writers.gene_summary import GeneSummaryWriter
 from .writers.geneious import GeneiousWriter
 from .writers.gff import GffWriter
+from .writers.probs import ProbsWriter
 from .writers.provenance import ProvenanceWriter, build_run_provenance, contig_provenance
+from .writers.regions import RegionWriter
 from .writers.summary import SummaryWriter
 from .writers.tsv import TsvWriter
 from .writers.wig import WigWriter
@@ -236,6 +240,83 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
     )
 
 
+def _write_probs(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
+    """Write ``<name>.probs.tsv.gz`` and/or ``<name>.probs.npy`` (issue #127): the ``(L, 4)``
+    matrix each contig's entropy track was computed from, serialised as the contract guard
+    validated it (``DirectionResult.probs``, kept only because ``_keep_probs`` asked)."""
+    blocks = []
+    for c, dr in processed:
+        if dr.probs is None:  # unreachable: analyze_direction was told to keep it
+            raise PipelineError(
+                "internal error: the probability matrix was not kept for an output that needs it"
+            )
+        blocks.append((c.name, c.seq, dr.probs))
+    outputs: list[str] = []
+    if cfg.include_probs:
+        outputs.append(
+            ProbsWriter().write_tsv_gz(name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir)
+        )
+    if cfg.include_probs_npy:
+        outputs.append(ProbsWriter().write_npy(name=cfg.name, blocks=blocks, out_dir=cfg.out_dir))
+    return outputs
+
+
+def _keep_probs(cfg: RunConfig) -> bool:
+    return cfg.include_probs or cfg.include_probs_npy
+
+
+def _write_smoothed(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: Writer
+) -> list[str]:
+    """Write ``<name>.entropy.smooth<W>.<bedgraph|wig>`` per configured window (issue #126):
+    the centred rolling mean of each contig's combined entropy track, in the SAME track format
+    and coordinate frame as the raw track (which is always written separately and stays
+    primary). Each contig is smoothed on its own, wrapping the origin only when that contig
+    is circular (issue #128). The window is the file's ``variant``."""
+    outputs: list[str] = []
+    for window in cfg.smoothing_windows:
+        blocks = [
+            (c.name, rolling_mean(dr.values, window, circular=cfg.topology.resolve(c.circular)))
+            for c, dr in processed
+        ]
+        outputs.append(
+            track_writer.write_multi(
+                name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir, variant=f"smooth{window}"
+            )
+        )
+    return outputs
+
+
+def _write_regions(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
+    """Write ``<name>.regions.bed`` and ``.regions.gff3`` (issue #125): the low- and
+    high-entropy stretches of each contig's combined entropy track. Topology is resolved per
+    contig exactly as the analysis resolved it (issue #128), so a stretch across the origin of
+    a circular molecule is one region."""
+    blocks = []
+    for c, dr in processed:
+        circular = cfg.topology.resolve(c.circular)
+        found = [
+            *call_regions(
+                dr.values,
+                kind="low",
+                threshold=cfg.region_threshold,
+                min_length=cfg.region_min_length,
+                merge_gap=cfg.region_merge_gap,
+                circular=circular,
+            ),
+            *call_regions(
+                dr.values,
+                kind="high",
+                threshold=mirrored_threshold(cfg.region_threshold),
+                min_length=cfg.region_min_length,
+                merge_gap=cfg.region_merge_gap,
+                circular=circular,
+            ),
+        ]
+        blocks.append((c.name, len(c.seq), sorted(found, key=lambda r: (r.begin, r.kind))))
+    return RegionWriter().write_multi(name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir)
+
+
 def _write_gene_summary(
     cfg: RunConfig,
     processed: list[tuple[Contig, DirectionResult]],
@@ -423,6 +504,13 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if _keep_probs(cfg):
+        outputs += _write_probs(cfg, processed)
+    if cfg.include_smoothed:
+        outputs += _write_smoothed(cfg, processed, track_writer)
+    if cfg.include_regions:
+        outputs += _write_regions(cfg, processed)
+
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # record, alongside the combined track above.
     outputs += _write_separate_tracks(cfg, processed, track_writer)
@@ -529,6 +617,13 @@ def _write_standard_outputs(
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if _keep_probs(cfg):
+        outputs += _write_probs(cfg, processed)
+    if cfg.include_smoothed:
+        outputs += _write_smoothed(cfg, processed, track_writer)
+    if cfg.include_regions:
+        outputs += _write_regions(cfg, processed)
+
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # contig, alongside the combined track already written above.
     outputs += _write_separate_tracks(cfg, processed, track_writer)
@@ -616,6 +711,14 @@ def run(
     """
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
+    try:
+        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
+            validate_smoothing_windows(cfg.smoothing_windows)
+        validate_region_options(
+            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
+        )
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
     loaded = load_input(cfg, raw)
     # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
     # "all records" default — readers/input.py has no opinion on it (and must not: Lane A
@@ -655,6 +758,7 @@ def run(
                 direction=cfg.direction,
                 on_window=on_window,
                 circular=cfg.topology.resolve(contig.circular),
+                keep_probs=_keep_probs(cfg),
             )
             notices += dr.notices
             reduced_total += dr.reduced_context_count

@@ -231,15 +231,34 @@ regardless:
  if the crash happened between inserting the row and anything else being recorded.
 2. Every phase change and every consumed progress event is committed to SQLite before the
  UI is told about it - the UI is a read of committed state, never a cause of it.
-3. On launch, `JobReconciler.ReattachAsync()` walks every run with a non-terminal phase:
- `result.json` exists -> go to `Downloading`; else `status.json` has a heartbeat under 5
- minutes old -> resume polling; else check `instances.get` directly and classify by
- instance state and heartbeat age (`HEARTBEAT_LOST`, `SPOT_PREEMPTED` / `VM_DIED`,
- `VM_MISSING`, or still `Provisioning`); a local run whose worker process is gone with no
- `result.json` -> `Failed(WORKER_CRASH)`.
-4. The reconciler also **enforces** the after-task lifecycle policy retroactively - a VM
+3. On launch, `JobReconciler.ReattachAsync()` (`Core/Cloud/JobReconciler.cs`, issue #59) walks every cloud run
+ whose latest row is non-terminal and was created before the app started (a run the user starts after launch belongs
+ to the engine). It only *decides*; the walking is `CloudJobRunner.RunAsync`, which already resumes from the phase in
+ `IRunRepository`, so there is one resume path. The VM is found by job-id label (Hard Rule 9), then:
+ - `Cancelling`: finish the cancel.
+ - `Draft`/`Validating`/`Uploading`: no VM can exist yet; restart from the app's own copy of the input
+ (`IRunInputStore.FindAsync`), with the worker image resolved for the row's app version. No copy and no original is
+ `Failed(input_missing)`; no pinned image is `Failed(no_worker_image)`.
+ - `Provisioning`, no VM, no `result.json`: the create may never have been sent; provision now.
+ - `Preparing` to `Downloading`: `result.json` present or any VM found (running, booting, stopped, terminated) goes to
+ the runner, which downloads, keeps polling, or fails a stopped VM that left no result (`vm_unhealthy`, VM ended per
+ the run's lifecycle choice). No VM and no result is `Failed(vm_unhealthy)` without provisioning again: a lost VM is
+ never silently replaced. The prototype's "stopped means start it" does not carry over: a stopped VM with no result is a dead job.
+ - No answer from the cloud (no connection built in, or the network is down): the row is left untouched
+ (`Deferred`), never failed; the next launch looks again. A run killed before provisioning goes to the runner,
+ which records the same `cloud_not_connected` a live run gets.
+ - A row that cannot be rebuilt into a request (no project, unreadable options) is `Failed` with a code, never left
+ non-terminal. A local-engine row is skipped (no `LocalJobRunner` yet, #174).
+
+ A reattached run is driven through ActiveRuns (Core/Cloud), the same registry the engine registers its own runs in, so Cancel stops and awaits whichever task drives a job before it writes its own phase (one writer). The cancel signals when it has ended (ActiveRuns.CancelAsync / WhenCancelSettledAsync), success or failure, so the reattach reports the run as the row then is without polling, and ends with the app's shutdown; a cancel that failed leaves the row non-terminal for the next launch. A lookup the cloud refused (billing, permission) is not evidence of a VM or a result: a run that could still provision then still needs its worker image, and a row with no recorded bucket is judged without creating one.
+
+The entry is `AppStartup.BeginAsync` (App/Startup), called once from `App.OnLaunched` and not awaited. Guards.Tests
+ `ReattachOnStartupTests` drives it on the production container with a real SQLite file.
+4. The reconciler is also meant to **enforce** the after-task lifecycle policy retroactively - a VM
  that should have been deleted but was only stopped (because the app died before
- verifying) gets deleted now, not silently left as a stopped-disk cost leak.
+ verifying) gets deleted now, not silently left as a stopped-disk cost leak - to delete idle stopped VMs past a
+ setting, enforce keep-alive expiry, and to run again on network reconnect. **Not built yet** (the follow-up to #59): until then a
+ run that already ended its VM is not revisited, and the reconciler runs at launch only.
 
 ## The embedded viewer (igv.js in WebView2), issues #72 and #73
 
