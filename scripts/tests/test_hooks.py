@@ -297,6 +297,11 @@ def test_agent_dispatch_end_to_end_allows_from_primary(git_repo_with_worktree):
 # "the agent that OWNS this worktree" (deny) from "a different agent whose cwd was
 # moved here" (allow) by comparing the caller's agent id with the worktree's name.
 
+@pytest.fixture(autouse=True)
+def _isolate_shape_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEG_HOOK_PAYLOAD_SHAPE_LOG", str(tmp_path / "isolated-shapes.jsonl"))
+
+
 SONNET_ID = "aad46a8ca24cbf6a1"
 ORCHESTRATOR_ID = "a1111111111111111"
 
@@ -354,9 +359,55 @@ def test_agent_dispatch_denies_unknown_identity_in_a_linked_worktree(agent_workt
     assert _denied(decision)
 
 
-def test_agent_dispatch_denies_a_known_caller_in_a_worktree_not_named_after_an_agent(git_repo_with_worktree):
+def test_agent_dispatch_allows_a_caller_owning_no_agent_worktree_in_any_linked_worktree(git_repo_with_worktree):
     _primary, worktree = git_repo_with_worktree  # worktree dir is "branch-a"
     code, decision = _dispatch(worktree, agent_id=ORCHESTRATOR_ID)
+    assert code == 0
+    assert decision is None
+
+
+def test_agent_dispatch_denies_the_sonnet_even_when_its_cwd_is_another_worktree(
+    agent_worktree, git_repo_with_worktree
+):
+    _primary, other = git_repo_with_worktree  # "branch-a"; the Sonnet owns agent_worktree
+    code, decision = _dispatch(other, agent_id=SONNET_ID)
+    assert code == 0
+    assert _denied(decision)
+
+
+def _add_worktree(primary, name, branch):
+    path = primary.parent / "primary-wt" / name
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", branch, str(path)],
+        cwd=primary,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    ("admin_name", "caller"),
+    [
+        (f"agent-{SONNET_ID[:8]}", SONNET_ID),  # truncated admin name
+        (f"agent-{SONNET_ID}1", SONNET_ID),  # git's collision suffix
+        (f"agent-{SONNET_ID.upper()}", SONNET_ID),  # case drift in the directory
+        (f"agent-{SONNET_ID}", SONNET_ID.upper()),  # case drift in the payload id
+    ],
+)
+def test_agent_dispatch_denies_the_owner_despite_naming_drift(git_repo_with_worktree, admin_name, caller):
+    primary, _unused = git_repo_with_worktree
+    wt = _add_worktree(primary, admin_name, "drift-branch")
+    code, decision = _dispatch(wt, agent_id=caller)
+    assert code == 0
+    assert _denied(decision)
+
+
+def test_agent_dispatch_denies_the_only_route_to_a_cwd_sharing_fork(agent_worktree):
+    # A fork sharing a Sonnet's cwd has its own id and would own no worktree, but it can
+    # only exist if the Sonnet dispatched, and the Sonnet's own dispatch is denied.
+    code, decision = _dispatch(agent_worktree, agent_id=SONNET_ID, agent_type="fork")
     assert code == 0
     assert _denied(decision)
 
@@ -368,30 +419,62 @@ def test_agent_dispatch_allows_primary_even_with_an_agent_id(git_repo_with_workt
     assert decision is None
 
 
-def test_agent_dispatch_shape_log_records_keys_but_never_tool_input(agent_worktree, tmp_path):
-    log = tmp_path / "shape.log"
+def _shape_log_run(payload, log, cap=None):
     env = {**os.environ, "DEG_HOOK_PAYLOAD_SHAPE_LOG": str(log)}
+    if cap is not None:
+        env["DEG_HOOK_PAYLOAD_SHAPE_LOG_CAP"] = str(cap)
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "block_agent_dispatch_in_worktree.py")],
-        input=json.dumps(
-            {
-                "tool_name": "Agent",
-                "tool_input": {"prompt": "SECRET-PROMPT-TEXT"},
-                "cwd": str(agent_worktree),
-                "agent_id": ORCHESTRATOR_ID,
-                "transcript_path": "/s/subagents/agent-a1111111111111111.jsonl",
-            }
-        ),
+        input=json.dumps(payload),
         capture_output=True,
         text=True,
         env=env,
-        timeout=15,
+        timeout=30,
     )
     assert proc.returncode == 0
+    return proc
+
+
+def test_agent_dispatch_shape_log_records_keys_and_verdict_but_never_tool_input(agent_worktree, tmp_path):
+    log = tmp_path / "shape.jsonl"
+    _shape_log_run(
+        {
+            "tool_name": "Agent",
+            "tool_input": {"prompt": "SECRET-PROMPT-TEXT"},
+            "cwd": str(agent_worktree),
+            "agent_id": ORCHESTRATOR_ID,
+            "transcript_path": "/s/subagents/agent-a1111111111111111.jsonl",
+        },
+        log,
+    )
     text = log.read_text(encoding="utf-8")
     assert "agent_id" in text and "transcript_path" in text
     assert "agent-a1111111111111111.jsonl" in text
     assert "SECRET-PROMPT-TEXT" not in text
+    assert json.loads(text.splitlines()[-1])["verdict"] == "allow"
+
+
+def test_agent_dispatch_shape_log_is_on_by_default_at_a_fixed_temp_path(monkeypatch):
+    monkeypatch.delenv("DEG_HOOK_PAYLOAD_SHAPE_LOG", raising=False)
+    assert agent_hook.shape_log_path().endswith(os.path.join("deg-hooks", "agent_dispatch_payload_shapes.jsonl"))
+
+
+def test_agent_dispatch_shape_log_is_size_capped(agent_worktree, tmp_path):
+    log = tmp_path / "shape.jsonl"
+    payload = {"tool_name": "Agent", "tool_input": {}, "cwd": str(agent_worktree), "agent_id": SONNET_ID}
+    for _ in range(6):
+        _shape_log_run(payload, log, cap=600)
+    assert log.stat().st_size <= 600 + 1024
+    assert json.loads(log.read_text(encoding="utf-8").splitlines()[-1])["verdict"] == "deny"
+
+
+def test_agent_dispatch_unwritable_shape_log_never_fails_the_hook(agent_worktree, tmp_path):
+    # A directory where the file should be: every write fails, the decision must survive.
+    proc = _shape_log_run(
+        {"tool_name": "Agent", "tool_input": {}, "cwd": str(agent_worktree), "agent_id": SONNET_ID},
+        tmp_path,
+    )
+    assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 # ---------------------------------------------------------------------------

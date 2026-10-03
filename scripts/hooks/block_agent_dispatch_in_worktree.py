@@ -66,10 +66,15 @@ primary checkout, dispatches.
 WHO IS CALLING (issue #618)
 ---------------------------
 The harness can move an orchestrator's cwd into the `agent-<id>` worktree of a
-Sonnet it dispatched. Inside such a worktree the hook allows a caller whose
-agent id (payload `agent_id`, else the `agent-<id>.jsonl` transcript basename)
-is known and differs from the worktree's owner; it still denies the owner, an
-unknown caller and a worktree not named `agent-<id>`. See
+Sonnet it dispatched. Inside a linked worktree the hook allows a caller only on
+positive proof: its agent id (payload `agent_id`, else the `agent-<id>.jsonl`
+transcript basename) is known AND it owns no `agent-<id>` worktree in this repo
+(directory listing of `<git-common-dir>/worktrees`, tolerant of truncated,
+suffixed and re-cased names). A Sonnet always owns its own, so it is denied
+wherever its cwd is. An unknown caller is denied. A fork sharing a Sonnet's cwd
+has its own id and would be allowed, but it can only exist if the Sonnet
+dispatched, which is denied, so that route is closed at its source. Every
+decision is appended (key names only) to `<temp dir>/deg-hooks/agent_dispatch_payload_shapes.jsonl`, capped at 256 KB. See
 `scripts/hooks/README.md`.
 
 WHAT IT DOES NOT BLOCK
@@ -103,6 +108,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 MESSAGE = """`Agent` dispatch is blocked from inside a worktree.
 
@@ -255,20 +261,46 @@ def caller_agent_id(payload: dict) -> str | None:
     return None
 
 
+# One short, explicit git timeout: run_hook.py gives the whole guard an 8 s budget.
+GIT_TIMEOUT = 4.0
+
+
+def _owns_agent_worktree(caller_id: str, common_dir: str) -> bool:
+    """True when `<common_dir>/worktrees/` holds an admin entry that belongs to
+    `caller_id`: the name minus `agent-` equals, starts with, or is a prefix of the id,
+    case-insensitively. Tolerates naming drift (truncation, git's collision suffix,
+    case). A directory listing only, no git call. An unreadable listing counts as
+    "owns one" (fail closed)."""
+    cid = caller_id.lower().removeprefix("agent-")
+    try:
+        names = os.listdir(os.path.join(common_dir, "worktrees"))
+    except OSError:
+        return True
+    for name in names:
+        n = name.lower().removeprefix("agent-")
+        if n and cid and (n == cid or n.startswith(cid) or cid.startswith(n)):
+            return True
+    return False
+
+
 def verdict(cwd: str, caller_id: str | None = None) -> str | None:
     """Return the reason to deny, or None to stay silent.
 
-    Issue #618: the harness can move an ORCHESTRATOR's cwd into the linked
-    worktree of a Sonnet it dispatched, which is named `agent-<sonnetId>`. Allow
-    only a caller that is provably someone else: the caller's id is known and
-    differs from the worktree's `agent-<id>` owner. Deny when it equals the owner,
-    when it is unknown, or when the worktree is not `agent-<id>` named.
+    Issue #618: the harness can move an ORCHESTRATOR's cwd into the linked worktree of
+    a Sonnet it dispatched. In a linked worktree, allow ONLY on positive proof that the
+    caller is not a worktree agent: its id is known AND it owns no `agent-<id>` worktree
+    anywhere in this repo. A Sonnet always owns `agent-<its id>`, so it is denied
+    whichever worktree its cwd is in, even if the admin name drifted. Unknown identity
+    is denied (fail closed).
+
+    A fork or subagent sharing a Sonnet's cwd has its own id and owns no worktree, so
+    it would be allowed; it can only exist if the Sonnet dispatched, which is denied
+    here, so that route is closed at its source.
     """
-    paths = _git_paths(cwd)
+    paths = _git_paths(cwd, GIT_TIMEOUT)
     if _classify_paths(paths) != "linked_worktree":
         return None
-    owner = os.path.basename(os.path.normpath(paths[0]))  # .git/worktrees/<name>
-    if caller_id and owner.startswith("agent-") and owner != f"agent-{caller_id}":
+    if caller_id and not _owns_agent_worktree(caller_id, paths[1]):
         return None
     return MESSAGE
 
@@ -344,6 +376,7 @@ def self_test() -> int:
     import tempfile
 
     failures = 0
+    os.environ["DEG_HOOK_PAYLOAD_SHAPE_LOG"] = os.path.join(tempfile.gettempdir(), "deg-selftest-shapes.jsonl")
 
     def check(label: str, condition: bool) -> None:
         nonlocal failures
@@ -418,14 +451,27 @@ def self_test() -> int:
     return 0
 
 
-def _log_payload_shape(payload: dict) -> None:
-    """Optional measurement aid (issue #618): when DEG_HOOK_PAYLOAD_SHAPE_LOG names a
-    file, append one line with the payload's key names, agent fields and the
-    transcript_path basename. Never tool_input content. Best effort, never raises."""
-    path = os.environ.get("DEG_HOOK_PAYLOAD_SHAPE_LOG")
-    if not path:
-        return
+SHAPE_LOG_CAP = 256 * 1024
+
+
+def shape_log_path() -> str:
+    """Fixed, always-on path (issue #618 measurement); the env var only redirects tests."""
+    override = os.environ.get("DEG_HOOK_PAYLOAD_SHAPE_LOG")
+    if override:
+        return override
+    return os.path.join(tempfile.gettempdir(), "deg-hooks", "agent_dispatch_payload_shapes.jsonl")
+
+
+def _log_payload_shape(payload: dict, verdict_name: str) -> None:
+    """Append one JSON line: payload key names, agent fields, transcript_path basename,
+    cwd basename and the verdict. Never tool_input. Past the cap the file is rotated
+    to `<name>.1` (one generation). Best effort: never raises, never fails the hook."""
     try:
+        path = shape_log_path()
+        cap = int(os.environ.get("DEG_HOOK_PAYLOAD_SHAPE_LOG_CAP", SHAPE_LOG_CAP))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.isfile(path) and os.path.getsize(path) > cap:
+            os.replace(path, path + ".1")
         tp = payload.get("transcript_path")
         line = {
             "keys": sorted(payload),
@@ -433,6 +479,7 @@ def _log_payload_shape(payload: dict) -> None:
             "agent_type": payload.get("agent_type"),
             "transcript_basename": os.path.basename(str(tp).replace("\\", "/")) if tp else None,
             "cwd_basename": os.path.basename(str(payload.get("cwd", "")).replace("\\", "/")),
+            "verdict": verdict_name,
         }
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(line) + "\n")
@@ -459,9 +506,9 @@ def main() -> int:
         return 0
 
     try:
-        _log_payload_shape(payload)
         cwd = payload.get("cwd") or os.getcwd()
         reason = verdict(cwd, caller_agent_id(payload))
+        _log_payload_shape(payload, "allow" if reason is None else "deny")
         if reason is None:
             return 0
         json.dump(
