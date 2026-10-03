@@ -1,0 +1,1 @@
+- scripts/check_version_lockstep.py now fails when app/Directory.Build.props is missing instead of printing a notice and passing (#33): a guard that skips a missing file can never fail. Observed failing on a planted 0.0.1 vs 0.0.2 pair; the --tag call in release.yml stays with #178.
