@@ -628,3 +628,16 @@ def test_every_prefix_of_a_valid_genbank_file_reads_or_raises_the_readers_own_er
         except GenBankReadError:
             outcomes["refused"] += 1
     assert outcomes["read"] > 0 and outcomes["refused"] > 0, "the sweep must see both outcomes"
+
+
+# --- issue #536 audit: every other exception type Biopython's scanner can raise ---
+
+
+def test_a_feature_line_shorter_than_the_qualifier_indent_is_the_readers_own_error() -> None:
+    """MEASURED 2026-10-03 (a seeded mutation sweep of sample.gb, 18000 files): a feature
+    line shorter than Biopython's qualifier column raised a raw ``IndexError`` out of
+    ``Bio.GenBank.Scanner.parse_features``, which the parse try-block did not catch."""
+    with pytest.raises(GenBankReadError, match="record 1") as exc:
+        read_genbank(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb")
+    assert "Check" in str(exc.value)  # names the action
+    assert "string index out of range" not in str(exc.value)  # a Python-internal phrase, not a fact

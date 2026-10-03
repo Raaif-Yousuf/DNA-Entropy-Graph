@@ -237,7 +237,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         # id (issue #253: a record id is user free text).
         for parsed_record in SeqIO.parse(io.StringIO(text), "genbank"):
             parsed.append(parsed_record)
-    except (ValueError, AssertionError) as exc:
+    except (ValueError, AssertionError, IndexError) as exc:
         # readers/fasta.py never has this failure class at all (it is hand-rolled, no
         # third-party parser to escape from) -- this is GenBank agreeing with FASTA's
         # blanket guarantee that a malformed file never reaches the caller as a raw
@@ -246,7 +246,17 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         # message reading "Could not parse the GenBank file: . Check..." -- a fact-free
         # gap. _describe_bare_assertion recovers a true, non-empty reason in that case;
         # a ValueError already carries real text from Biopython, so it passes through.
-        if isinstance(exc, AssertionError) and not str(exc):
+        # Issue #536, MEASURED 2026-10-03 (a seeded mutation sweep of sample.gb: three
+        # seeds x 6000 files, the ONLY non-reader exception type seen was IndexError): a
+        # feature line shorter than the scanner's qualifier column indexes past its end in
+        # Scanner.parse_features. Its text ("string index out of range") is a Python
+        # internal, not a fact about the file, so it is replaced with one the user can check.
+        if isinstance(exc, IndexError):
+            reason = (
+                "a feature-table line is shorter than the GenBank layout allows "
+                "(a misaligned feature key or location)"
+            )
+        elif isinstance(exc, AssertionError) and not str(exc):
             reason = _describe_bare_assertion(exc)
         else:
             reason = str(exc)

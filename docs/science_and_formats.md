@@ -355,6 +355,17 @@ the text reaches Biopython's scanner, the same way `read_fasta`'s `text.splitlin
 already handles them for free — a lone `\r` (classic Mac, and what some sequencing
 instruments still emit) now parses successfully rather than merely failing cleanly.
 
+**Biopython's escape types are `ValueError`, `AssertionError` and `IndexError`, and an
+undefined sequence is a skipped record (issues #403, #536, MEASURED 2026-10-03):** the
+parse `try` catches all three. `IndexError` comes from a feature line shorter than the
+scanner's qualifier column (fixture `malformed/genbank_feature_line_shorter_than_qualifier_indent.gb`;
+three seeds of a 6000-file mutation sweep of `sample.gb` found no other type). A truncated
+file (a `LOCUS` length and an `ORIGIN` header, no sequence lines) parses into a record whose
+sequence is undefined, and reading its bases raises Biopython's `UndefinedSequenceError`
+(a `ValueError`) *after* the parse block; `_record_sequence` turns it into "no sequence", so
+the record is skipped with a notice, and a file with no readable record is refused with
+`GenBankReadError` (`INPUT_INVALID`), the same skip-then-refuse as the app's `GenBankLite`.
+
 **Contig names are hardened against real filename hazards (issue #350, MEASURED
 2026-09-19):** `_safe_contig_name` (`readers/input.py`) disambiguates a name that
 sanitizes to a Windows-reserved device name (`CON`, `NUL`, `PRN`, `COM1`..`9`,
