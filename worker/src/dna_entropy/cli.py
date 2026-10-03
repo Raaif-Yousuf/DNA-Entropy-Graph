@@ -180,6 +180,12 @@ def run(
         "--region-merge-gap",
         help="Region caller: merge regions at most this many bases apart.",
     ),
+    gene_summary: bool = typer.Option(
+        True,
+        "--gene-summary/--no-gene-summary",
+        help="Also write <name>.genes.tsv and <name>.genes.csv: one row per gene with its mean, "
+        "min and max entropy (needs genes: a GenBank input, or --genes; issue #124).",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -220,6 +226,7 @@ def run(
             region_threshold=region_threshold,
             region_min_length=region_min_length,
             region_merge_gap=region_merge_gap,
+            include_gene_summary=gene_summary,
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value

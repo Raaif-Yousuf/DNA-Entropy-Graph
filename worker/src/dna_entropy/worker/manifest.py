@@ -193,6 +193,16 @@ class PredictorSpec:
         )
 
 
+def _region_number(d: dict, key: str, default: float, *, whole: bool) -> float:
+    """Read a region option from the raw JSON WITHOUT coercing it: a bool, a string, or (for a
+    whole-number option) a fractional number is refused rather than turned into 20 or 1."""
+    raw = d.get(key, default)
+    if isinstance(raw, bool) or not isinstance(raw, int | float) or (whole and not isinstance(raw, int)):
+        kind = "a whole number" if whole else "a number"
+        raise ManifestError(f"manifest.json analysis region options: {key} must be {kind}, got {raw!r}")
+    return raw
+
+
 @dataclass
 class AnalysisSpec:
     context_length: int = field(default=4096, metadata={"json_name": "contextLength"})
@@ -229,14 +239,14 @@ class AnalysisSpec:
             raise ManifestError(
                 f"manifest.json analysis.topology {raw_topology!r} is not one of {valid}"
             ) from None
+        region_threshold = _region_number(d, "regionThreshold", DEFAULT_THRESHOLD_BITS, whole=False)
+        region_min_length = _region_number(d, "regionMinLength", DEFAULT_MIN_LENGTH, whole=True)
+        region_merge_gap = _region_number(d, "regionMergeGap", DEFAULT_MERGE_GAP, whole=True)
         try:
-            region_threshold = float(d.get("regionThreshold", DEFAULT_THRESHOLD_BITS))
-            region_min_length = int(d.get("regionMinLength", DEFAULT_MIN_LENGTH))
-            region_merge_gap = int(d.get("regionMergeGap", DEFAULT_MERGE_GAP))
             validate_region_options(
-                threshold=region_threshold, min_length=region_min_length, merge_gap=region_merge_gap
+                threshold=float(region_threshold), min_length=int(region_min_length), merge_gap=int(region_merge_gap)
             )
-        except (TypeError, ValueError) as exc:
+        except ValueError as exc:
             raise ManifestError(f"manifest.json analysis region options: {exc}") from exc
         context_length = int(d.get("contextLength", 4096))
         window = int(d.get("window", 8192))
@@ -495,4 +505,5 @@ class JobManifest:
             region_threshold=self.analysis.region_threshold,
             region_min_length=self.analysis.region_min_length,
             region_merge_gap=self.analysis.region_merge_gap,
+            include_gene_summary=_wanted("gene_summary"),
         )

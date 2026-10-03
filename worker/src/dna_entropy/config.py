@@ -177,3 +177,7 @@ class RunConfig:
     region_threshold: float = 0.5
     region_min_length: int = 20
     region_merge_gap: int = 5
+    # issue #124: <name>.genes.tsv + <name>.genes.csv, one row per gene/CDS (GenBank features,
+    # or Prodigal's calls when `genes` is set) with mean/min/max entropy over the gene's bases.
+    # Only written when the run actually has genes; on by default like every other writer.
+    include_gene_summary: bool = True

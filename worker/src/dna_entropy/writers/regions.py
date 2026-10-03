@@ -21,6 +21,11 @@ from ..analysis.regions import Region
 from .base import write_text_lf
 
 SOURCE = "dna-entropy"
+# GFF3 column 3 must be a Sequence Ontology term (misc_feature is a GenBank key, not an SO term).
+# `region` (SO:0000001) is the generic fit for both kinds: SO has `low_complexity_region`
+# (SO:0001004) but that means repeat-like sequence, which is not what a low-entropy call asserts,
+# and nothing for high entropy. The `kind` attribute carries low_entropy / high_entropy.
+FEATURE_TYPE = "region"
 
 
 class RegionWriter:
@@ -61,7 +66,7 @@ class RegionWriter:
                             [
                                 chrom,
                                 SOURCE,
-                                "misc_feature",
+                                FEATURE_TYPE,
                                 str(begin + 1 + offset),
                                 str(end + offset),
                                 ".",

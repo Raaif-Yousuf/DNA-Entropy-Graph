@@ -295,7 +295,7 @@ def test_gff3_is_one_based_inclusive_with_attributes(tmp_path: Path) -> None:
     assert lines[0] == "##gff-version 3"
     assert lines[1] == "##sequence-region chr1 1 200"
     cols = lines[2].split("\t")
-    assert cols[:8] == ["chr1", "dna-entropy", "misc_feature", "11", "30", ".", ".", "."]
+    assert cols[:8] == ["chr1", "dna-entropy", "region", "11", "30", ".", ".", "."]
     assert cols[8] == "ID=low_entropy_1;Name=low_entropy_1;kind=low_entropy;length=20;mean_entropy=0.2500"
 
 
@@ -484,6 +484,31 @@ def test_manifest_without_region_options_uses_the_defaults() -> None:
 def test_manifest_refuses_bad_region_options_at_parse_time(analysis: dict) -> None:
     with pytest.raises(ManifestError, match="region"):
         _manifest(analysis)
+
+
+@pytest.mark.parametrize(
+    "analysis",
+    [
+        {"regionMinLength": 20.9},
+        {"regionMinLength": True},
+        {"regionMinLength": "20"},
+        {"regionMergeGap": 5.5},
+        {"regionMergeGap": False},
+        {"regionMergeGap": "5"},
+        {"regionThreshold": True},
+        {"regionThreshold": "0.5"},
+        {"regionThreshold": None},
+    ],
+)
+def test_manifest_refuses_wrongly_typed_region_options_without_coercing(analysis: dict) -> None:
+    """A float, bool or string is refused, never silently truncated (20.9 -> 20, true -> 1)."""
+    with pytest.raises(ManifestError, match="region"):
+        _manifest(analysis)
+
+
+def test_manifest_accepts_an_integer_valued_float_threshold_and_int_threshold() -> None:
+    assert _cfg(_manifest({"regionThreshold": 1})).region_threshold == 1.0
+    assert _cfg(_manifest({"regionThreshold": 0.25})).region_threshold == 0.25
 
 
 def test_manifest_outputs_name_regions() -> None:

@@ -3,6 +3,7 @@
 from .base import Writer, write_text_lf
 from .bedgraph import BedGraphWriter
 from .fasta import FastaWriter
+from .gene_summary import GeneSummaryWriter
 from .geneious import GeneiousWriter
 from .gff import GffWriter
 from .provenance import ProvenanceWriter, build_run_provenance, contig_provenance
@@ -16,6 +17,7 @@ __all__ = [
     "write_text_lf",
     "BedGraphWriter",
     "FastaWriter",
+    "GeneSummaryWriter",
     "GeneiousWriter",
     "GffWriter",
     "ProvenanceWriter",
