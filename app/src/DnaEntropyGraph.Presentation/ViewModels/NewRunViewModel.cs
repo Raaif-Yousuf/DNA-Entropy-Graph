@@ -36,7 +36,16 @@ public sealed partial class NewRunViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStartRun))]
     private async Task StartRunAsync(CancellationToken cancellationToken)
     {
-        _settingsStore.SetString("LastModelId", ModelId);
+        try
+        {
+            _settingsStore.SetString("LastModelId", ModelId);
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            // A remembered convenience only (#558): never block starting the run over it.
+            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while saving last model: {ex.GetType().Name}");
+        }
+
         var options = new RunOptions { ModelId = ModelId, RunTarget = "Cloud", InputPath = SelectedInputPath };
         var jobId = await _jobEngine.StartRunAsync(options, cancellationToken).ConfigureAwait(false);
         _navigator.NavigateTo("RunProgress", jobId);

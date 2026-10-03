@@ -90,6 +90,19 @@ public class WindowPlacementServiceTests
     }
 
     [Fact]
+    public void A_locked_settings_file_never_throws_from_Load_or_from_Save_on_close()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.GetString(Arg.Any<string>()).Returns(_ => throw new SettingsUnavailableException("locked"));
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
+        var service = new WindowPlacementService(settingsStore);
+
+        service.TryLoad().ShouldBeNull();
+        service.Load().ShouldBe(WindowPlacement.Default);
+        Should.NotThrow(() => service.Save(new WindowPlacement(10, 10, 800, 600)));
+    }
+
+    [Fact]
     public void Save_refuses_a_minimized_placement_and_keeps_the_last_good_one()
     {
         var settingsStore = new FakeSettingsStore();

@@ -28,6 +28,20 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public void A_locked_settings_file_neither_crashes_opening_settings_nor_changing_the_theme()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.GetString("Theme").Returns(_ => throw new SettingsUnavailableException("locked"));
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
+
+        var viewModel = CreateViewModel(settingsStore, out _);
+        viewModel.Theme.ShouldBe("System");
+
+        Should.NotThrow(() => viewModel.SetThemeCommand.Execute("Dark"));
+        viewModel.Theme.ShouldBe("Dark");
+    }
+
+    [Fact]
     public void Setting_the_theme_writes_it_back_to_the_settings_store()
     {
         var settingsStore = Substitute.For<ISettingsStore>();

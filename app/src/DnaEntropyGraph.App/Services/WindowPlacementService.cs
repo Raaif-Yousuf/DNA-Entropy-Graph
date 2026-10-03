@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DnaEntropyGraph.Core.Abstractions;
 
 namespace DnaEntropyGraph.App.Services;
@@ -109,14 +110,36 @@ public sealed class WindowPlacementService
     public WindowPlacement Load() => TryLoad() ?? WindowPlacement.Default;
 
     /// <summary>The saved placement, or null on a fresh profile or when the saved value is unusable (so the caller can DPI-scale the default).</summary>
-    public WindowPlacement? TryLoad() => WindowPlacement.Parse(_settingsStore.GetString(PlacementKey));
+    public WindowPlacement? TryLoad()
+    {
+        try
+        {
+            return WindowPlacement.Parse(_settingsStore.GetString(PlacementKey));
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            // #558: a locked settings file must not stop the window from opening; use the default.
+            Trace.TraceWarning($"settings_unavailable while loading window placement: {ex.GetType().Name}");
+            return null;
+        }
+    }
 
     /// <summary>Refuses an implausible (minimized or degenerate) placement so the last good one survives.</summary>
     public void Save(WindowPlacement placement)
     {
-        if (placement.IsPlausible)
+        if (!placement.IsPlausible)
+        {
+            return;
+        }
+
+        try
         {
             _settingsStore.SetString(PlacementKey, placement.Serialize());
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            // Runs on close (#558): losing one window position is fine, an exception on close is not.
+            Trace.TraceWarning($"settings_unavailable while saving window placement: {ex.GetType().Name}");
         }
     }
 }
