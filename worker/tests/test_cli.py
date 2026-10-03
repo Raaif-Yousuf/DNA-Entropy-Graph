@@ -268,6 +268,16 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--no-probs",
         "--probs-npy",
         "--no-probs-npy",
+        "--smoothed",  # issue #126
+        "--no-smoothed",
+        "--smoothing-window",
+        "--regions",  # issue #125
+        "--no-regions",
+        "--region-threshold",
+        "--region-min-length",
+        "--region-merge-gap",
+        "--gene-summary",  # issue #124
+        "--no-gene-summary",
         "--seed",
     }
     assert _declared_option_names("run") == expected

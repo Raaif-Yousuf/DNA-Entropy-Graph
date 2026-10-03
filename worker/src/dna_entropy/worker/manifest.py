@@ -28,6 +28,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from ..analysis.regions import (
+    DEFAULT_MERGE_GAP,
+    DEFAULT_MIN_LENGTH,
+    DEFAULT_THRESHOLD_BITS,
+    validate_region_options,
+)
+from ..analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS, validate_smoothing_windows
 from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, Topology, TrackFormat
 from ..predictors.hardware import MODEL_REQUIREMENTS, model_requirement
 from .batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
@@ -187,6 +194,16 @@ class PredictorSpec:
         )
 
 
+def _region_number(d: dict, key: str, default: float, *, whole: bool) -> float:
+    """Read a region option from the raw JSON WITHOUT coercing it: a bool, a string, or (for a
+    whole-number option) a fractional number is refused rather than turned into 20 or 1."""
+    raw = d.get(key, default)
+    if isinstance(raw, bool) or not isinstance(raw, int | float) or (whole and not isinstance(raw, int)):
+        kind = "a whole number" if whole else "a number"
+        raise ManifestError(f"manifest.json analysis region options: {key} must be {kind}, got {raw!r}")
+    return raw
+
+
 @dataclass
 class AnalysisSpec:
     context_length: int = field(default=4096, metadata={"json_name": "contextLength"})
@@ -197,6 +214,16 @@ class AnalysisSpec:
     track_format: TrackFormat = field(default=TrackFormat.BEDGRAPH, metadata={"json_name": "format"})
     # issue #128: "auto" (the GenBank LOCUS line decides) | "linear" | "circular".
     topology: Topology = Topology.AUTO
+    # issue #125: the region caller's options (analysis/regions.py). Wire names are the
+    # camelCase ones; absent means the defaults.
+    region_threshold: float = field(default=DEFAULT_THRESHOLD_BITS, metadata={"json_name": "regionThreshold"})
+    region_min_length: int = field(default=DEFAULT_MIN_LENGTH, metadata={"json_name": "regionMinLength"})
+    region_merge_gap: int = field(default=DEFAULT_MERGE_GAP, metadata={"json_name": "regionMergeGap"})
+
+    # issue #126: window sizes (odd numbers of bases) of the smoothed entropy tracks; [] = none.
+    smoothing_windows: list[int] = field(
+        default_factory=lambda: list(DEFAULT_SMOOTHING_WINDOWS), metadata={"json_name": "smoothingWindows"}
+    )
 
     @staticmethod
     def from_dict(d: dict) -> AnalysisSpec:
@@ -218,6 +245,27 @@ class AnalysisSpec:
             raise ManifestError(
                 f"manifest.json analysis.topology {raw_topology!r} is not one of {valid}"
             ) from None
+        raw_windows = d.get("smoothingWindows", list(DEFAULT_SMOOTHING_WINDOWS))
+        if not isinstance(raw_windows, list):
+            raise ManifestError(
+                f"manifest.json analysis.smoothingWindows {raw_windows!r} must be a list of odd whole "
+                "numbers (smoothing windows, in bases), for example [51]"
+            )
+        try:
+            smoothing_windows = list(validate_smoothing_windows(raw_windows))
+        except ValueError as exc:
+            raise ManifestError(f"manifest.json analysis.smoothingWindows: {exc}") from exc
+        region_threshold = _region_number(d, "regionThreshold", DEFAULT_THRESHOLD_BITS, whole=False)
+        region_min_length = _region_number(d, "regionMinLength", DEFAULT_MIN_LENGTH, whole=True)
+        region_merge_gap = _region_number(d, "regionMergeGap", DEFAULT_MERGE_GAP, whole=True)
+        try:
+            validate_region_options(
+                threshold=float(region_threshold),
+                min_length=int(region_min_length),
+                merge_gap=int(region_merge_gap),
+            )
+        except ValueError as exc:
+            raise ManifestError(f"manifest.json analysis region options: {exc}") from exc
         context_length = int(d.get("contextLength", 4096))
         window = int(d.get("window", 8192))
         stride = int(d.get("stride", 4096))
@@ -248,6 +296,10 @@ class AnalysisSpec:
             direction=direction,
             track_format=track_format,
             topology=topology,
+            smoothing_windows=smoothing_windows,
+            region_threshold=region_threshold,
+            region_min_length=region_min_length,
+            region_merge_gap=region_merge_gap,
         )
 
 
@@ -471,4 +523,11 @@ class JobManifest:
             # issue #127: opt-in only, even when `outputs` is unspecified ("everything")
             include_probs="probs" in self.outputs,
             include_probs_npy="probs_npy" in self.outputs,
+            include_smoothed=_wanted("smoothed"),
+            smoothing_windows=tuple(self.analysis.smoothing_windows),
+            include_regions=_wanted("regions"),
+            region_threshold=self.analysis.region_threshold,
+            region_min_length=self.analysis.region_min_length,
+            region_merge_gap=self.analysis.region_merge_gap,
+            include_gene_summary=_wanted("gene_summary"),
         )

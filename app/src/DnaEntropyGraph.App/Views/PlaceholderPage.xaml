@@ -5,7 +5,7 @@
 
     <!--
         Issue #490: the one generic page for every destination whose own page is
-        not built yet (New run #63, Runs #101, Cloud #105, Settings #104). It
+        not built yet (New run #63, Cloud #105, Settings #104). It
         replaces an empty frame. Delete a destination's reliance on it by
         registering that destination's page in Startup/NavigationRoutes.cs.
     -->
