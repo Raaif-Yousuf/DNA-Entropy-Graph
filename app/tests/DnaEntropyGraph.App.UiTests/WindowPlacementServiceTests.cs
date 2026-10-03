@@ -102,6 +102,19 @@ public class WindowPlacementServiceTests
         Should.NotThrow(() => service.Save(new WindowPlacement(10, 10, 800, 600)));
     }
 
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(UnauthorizedAccessException))]
+    public void Save_on_close_is_best_effort_whatever_IO_failure_the_store_raises(Type failure)
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw (Exception)Activator.CreateInstance(failure, "denied")!);
+        var service = new WindowPlacementService(settingsStore);
+
+        Should.NotThrow(() => service.Save(new WindowPlacement(10, 10, 800, 600)));
+        settingsStore.ReceivedWithAnyArgs(1).SetString(default!, default!);
+    }
+
     [Fact]
     public void Save_refuses_a_minimized_placement_and_keeps_the_last_good_one()
     {

@@ -325,7 +325,7 @@ public class JobEngineTests
 
         (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
         var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
-        row.ErrorCode.ShouldBe(RunErrorCodes.Other);
+        row.ErrorCode.ShouldBe(failure == typeof(SettingsUnavailableException) ? RunErrorCodes.Other : RunErrorCodes.InstallationIdUnusable);
         row.ErrorDetail.ShouldBe(failure.Name, "an error class only, never the message");
         h.Gcp.CreatedSpecs.ShouldBeEmpty();
         h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();

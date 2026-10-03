@@ -49,8 +49,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
         catch (SettingsUnavailableException ex)
         {
-            // The theme still applies for this session; it just is not remembered (#558).
+            // The theme still applies for this session; it just is not remembered (#558), so say so.
             System.Diagnostics.Trace.TraceWarning($"settings_unavailable while saving theme: {ex.GetType().Name}");
+            _toastService.ShowToast(_strings.GetString("ThemeNotSaved_Title"), _strings.GetString("ThemeNotSaved_Body"));
+            return;
         }
 
         // Plain (non-dotted) resw key: see ShellViewModel.BuildStatusPillText's comment.

@@ -42,6 +42,20 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public void A_failed_theme_save_shows_the_failure_toast_not_theme_updated()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
+        var viewModel = CreateViewModel(settingsStore, out var toastService);
+
+        viewModel.SetThemeCommand.Execute("Dark");
+
+        viewModel.Theme.ShouldBe("Dark");
+        toastService.Received(1).ShowToast("ThemeNotSaved_Title", "ThemeNotSaved_Body");
+        toastService.DidNotReceive().ShowToast("ThemeUpdated_Title", Arg.Any<string>());
+    }
+
+    [Fact]
     public void Setting_the_theme_writes_it_back_to_the_settings_store()
     {
         var settingsStore = Substitute.For<ISettingsStore>();

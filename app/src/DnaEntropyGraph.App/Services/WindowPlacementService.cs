@@ -136,9 +136,10 @@ public sealed class WindowPlacementService
         {
             _settingsStore.SetString(PlacementKey, placement.Serialize());
         }
-        catch (SettingsUnavailableException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Runs on close (#558): losing one window position is fine, an exception on close is not.
+            // The store bounds its own wait (about 300 ms), so a locked file cannot hang the close either.
             Trace.TraceWarning($"settings_unavailable while saving window placement: {ex.GetType().Name}");
         }
     }

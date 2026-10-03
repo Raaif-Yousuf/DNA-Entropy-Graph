@@ -116,7 +116,13 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         {
             installationId = InstallationId.GetOrCreate(_settings);
         }
-        catch (IOException ex) when (ex is SettingsUnavailableException or InstallationIdUnusableException)
+        catch (InstallationIdUnusableException ex)
+        {
+            // Names a true action (restore the set-aside copy or contact support); full recovery UX is DECISION #404.
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.InstallationIdUnusable, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
+            return jobId;
+        }
+        catch (SettingsUnavailableException ex)
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.Other, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
             return jobId;

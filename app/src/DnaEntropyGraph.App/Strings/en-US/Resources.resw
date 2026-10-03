@@ -33,6 +33,12 @@
   <data name="ThemeUpdated_Title" xml:space="preserve">
     <value>Theme updated</value>
   </data>
+  <data name="ThemeNotSaved_Title" xml:space="preserve">
+    <value>Theme not saved</value>
+  </data>
+  <data name="ThemeNotSaved_Body" xml:space="preserve">
+    <value>The theme changed for now but could not be remembered. Close other copies of the app, then choose the theme again.</value>
+  </data>
   <data name="NavNewRun.Content" xml:space="preserve">
     <value>New run</value>
   </data>
@@ -248,6 +254,9 @@
   </data>
   <data name="RunError_input_too_long" xml:space="preserve">
     <value>Your sequence file is longer than one run can analyze. Split it into smaller files, choose one of them, then start the run again.</value>
+  </data>
+  <data name="RunError_installation_id_unusable" xml:space="preserve">
+    <value>The file that identifies this installation could not be used, so the run did not start. A copy was set aside in the DNAEntropyGraph folder under Local AppData, named installation_id.invalid- or settings.json.unreadable- followed by a date. Restore the id from that copy, or send the copy to support.</value>
   </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>

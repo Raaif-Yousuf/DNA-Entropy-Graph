@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Security;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 
@@ -32,27 +34,34 @@ namespace DnaEntropyGraph.Persistence;
 ///    corruption, and is sticky for the life of the instance: it is the hook
 ///    for the recovery UX (DECISION #404), which owns clearing it.
 /// 3. The installation id is NOT in settings.json. It is a write-once file
-///    <c>installation_id</c> (CreateNew + Flush(true)), so a settings.json
-///    failure can never change it (a new id orphans every labelled cloud
-///    resource, Hard Rules 9 and 10). Absent file: migrate a complete valid
-///    string id from settings.json (parse or salvage), else the caller mints.
-///    Two first-run processes converge: CreateNew has one winner and the loser
-///    reads the winner's file. A non-empty file with an invalid id is kept
-///    aside (<c>installation_id.invalid-&lt;stamp&gt;</c>) and
-///    <see cref="InstallationIdUnusableException"/> is raised; it is never
-///    overwritten and never replaced. An EMPTY file is a crashed first write
-///    (the id is only handed out after the write returns, so nothing can carry
-///    it) and counts as absent.
-/// 4. A persistent lock or access error is retried 5 x 50 ms, then raises
-///    <see cref="SettingsUnavailableException"/> with nothing changed and the
-///    recovered flag untouched. A missing file (even right after an exists
-///    check) is simply absent.
+///    <c>installation_id</c>, published by a flushed temp file moved into place with
+///    no overwrite (never torn; the loser of a race reads the winner's file), so a
+///    settings.json failure can never change it (a new id orphans every labelled
+///    cloud resource, Hard Rules 9 and 10). Absent, empty, whitespace-only or
+///    BOM-only file: migrate a complete valid string id from settings.json (parse,
+///    salvage, or a lenient scan of the raw text for a complete valid
+///    <c>"installation_id"</c> pair after the corruption point), replacing a blank
+///    file by an overwrite move under the mutex. If the raw text mentions the id
+///    and none is recoverable, the text is kept aside and
+///    <see cref="InstallationIdUnusableException"/> is raised; the caller mints only
+///    when the text genuinely has no id. A non-empty file with an invalid id is kept
+///    aside (<c>installation_id.invalid-&lt;stamp&gt;</c>) with the same exception;
+///    it is never overwritten and never replaced. The format is not checked more
+///    strictly than the label rule: legacy ids migrate, and atomic publish makes a
+///    torn minted id impossible.
+/// 4. Every IO, ACL or lock failure (temp file, folder, keep-aside copy, mutex,
+///    move) surfaces as <see cref="SettingsUnavailableException"/> with the cause
+///    kept, nothing changed and the recovered flag untouched. A missing file (even
+///    right after an exists check) is simply absent.
 /// 5. Writes go to a temp file via FileStream + Flush(true), then
 ///    File.Move(overwrite): a crash leaves the old file or the new one,
 ///    durably, never a half-written one.
 /// 6. Every read-modify-write holds a named Mutex (<c>Local\</c>, hash of the
 ///    full path), so two instances or two processes never drop each other's
 ///    keys. Reads take no mutex: they only ever see a complete file.
+/// 7. The callers are on the UI thread, so one public call spends at most
+///    <see cref="WaitBudget"/> (about 300 ms) across the lock wait and the retries
+///    (5 attempts, 40 ms apart), then gives up with the typed exception.
 ///
 /// No logger in Persistence: the event is the flag, the kept files and the
 /// typed exceptions, never file content.
@@ -61,13 +70,16 @@ public sealed class SettingsStore : ISettingsStore
 {
     internal const int ReadAttemptLimit = 5;
 
-    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
-    private static readonly TimeSpan MutexTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(40);
+
+    // A complete "installation_id": "<value>" pair anywhere in the raw text (lenient scan for a corrupt settings.json).
+    private static readonly Regex IdMention = new("\"installation_id\"\\s*:\\s*\"(?<id>[^\"\\\\\r\n]*)\"", RegexOptions.Compiled);
 
     private readonly string _filePath;
     private readonly string _idPath;
     private readonly string _mutexName;
     private readonly object _gate = new();
+    private DateTime _deadlineUtc;
 
     // Deliberately does nothing to disk - see SqliteDatabase's constructor
     // doc comment for why: a DI-graph guard test that constructs every
@@ -95,17 +107,29 @@ public sealed class SettingsStore : ISettingsStore
     /// <summary>Attempts the most recent file read took (test hook for the bounded retry).</summary>
     internal int LastReadAttempts { get; private set; }
 
+    /// <summary>Test seam: called with an operation name just before each file-system or lock step, so a test can inject an IO or ACL fault.</summary>
+    internal Action<string>? FaultHook { get; set; }
+
+    /// <summary>The named mutex this instance locks on (test hook for the bounded wait).</summary>
+    internal string MutexName => _mutexName;
+
+    /// <summary>Total wait one public call may spend on locks and retries (see class remarks, rule 7).</summary>
+    internal TimeSpan WaitBudget { get; set; } = TimeSpan.FromMilliseconds(300);
+
     public string? GetString(string key)
     {
         lock (_gate)
         {
-            if (key == InstallationId.SettingsKey)
+            return Guarded(() =>
             {
-                return GetInstallationIdNoLock();
-            }
+                if (key == InstallationId.SettingsKey)
+                {
+                    return GetInstallationIdNoLock();
+                }
 
-            var state = ReadSettingsNoLock();
-            return state.Values.TryGetPropertyValue(key, out var node) ? ToText(node) : null;
+                var state = ReadSettingsNoLock();
+                return state.Values.TryGetPropertyValue(key, out var node) ? ToText(node) : null;
+            });
         }
     }
 
@@ -113,25 +137,59 @@ public sealed class SettingsStore : ISettingsStore
     {
         lock (_gate)
         {
-            if (key == InstallationId.SettingsKey)
+            Guarded<object?>(() =>
             {
-                SetInstallationIdNoLock(value);
-                return;
-            }
-
-            using (AcquireMutex())
-            {
-                var state = ReadSettingsNoLock();
-                if (state.ParseFailed)
+                if (key == InstallationId.SettingsKey)
                 {
-                    KeepUnreadableCopyNoLock();
+                    SetInstallationIdNoLock(value);
+                    return null;
                 }
 
-                state.Values[key] = JsonValue.Create(value);
-                WriteSettingsNoLock(state.Values);
-            }
+                using (AcquireMutex())
+                {
+                    var state = ReadSettingsNoLock();
+                    if (state.ParseFailed)
+                    {
+                        KeepUnreadableCopyNoLock(state.Raw);
+                    }
+
+                    state.Values[key] = JsonValue.Create(value);
+                    WriteSettingsNoLock(state.Values);
+                }
+
+                return null;
+            });
         }
     }
+
+    /// <summary>
+    /// Starts this call's wait budget and turns every IO, ACL or lock failure into the one typed
+    /// exception callers catch (inner exception kept). The two typed exceptions pass through.
+    /// </summary>
+    private T Guarded<T>(Func<T> action)
+    {
+        _deadlineUtc = DateTime.UtcNow + WaitBudget;
+        try
+        {
+            return action();
+        }
+        catch (Exception ex) when (ex is not (SettingsUnavailableException or InstallationIdUnusableException)
+            && ex is IOException or UnauthorizedAccessException or SecurityException or WaitHandleCannotBeOpenedException or NotSupportedException)
+        {
+            throw new SettingsUnavailableException("The settings could not be read or saved; nothing was changed.", ex);
+        }
+    }
+
+    private TimeSpan Remaining
+    {
+        get
+        {
+            var left = _deadlineUtc - DateTime.UtcNow;
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+    }
+
+    private void Fault(string operation) => FaultHook?.Invoke(operation);
 
     private static string? ToText(JsonNode? node) => node switch
     {
@@ -159,11 +217,35 @@ public sealed class SettingsStore : ISettingsStore
                 return id;
             }
 
-            var legacy = ReadSettingsNoLock().Values.TryGetPropertyValue(InstallationId.SettingsKey, out var node) ? node : null;
+            var state = ReadSettingsNoLock();
+            var legacy = state.Values.TryGetPropertyValue(InstallationId.SettingsKey, out var node) ? node : null;
             if (legacy is JsonValue v && v.TryGetValue<string>(out var text) && InstallationId.IsValid(text))
             {
                 WriteIdFileIfAbsent(text);
                 return ReadIdFile() ?? text;
+            }
+
+            if (state.ParseFailed && state.Raw is { } raw)
+            {
+                // The id may sit after the corruption point, where the structured salvage never reaches.
+                foreach (Match m in IdMention.Matches(raw))
+                {
+                    var candidate = m.Groups["id"].Value;
+                    if (InstallationId.IsValid(candidate))
+                    {
+                        WriteIdFileIfAbsent(candidate);
+                        return ReadIdFile() ?? candidate;
+                    }
+                }
+
+                if (raw.Contains(InstallationId.SettingsKey, StringComparison.Ordinal))
+                {
+                    // An id was there and cannot be recovered: minting would orphan every labelled
+                    // cloud resource (Hard Rules 9 and 10). Keep the file aside and surface it (#404).
+                    KeepUnreadableCopyNoLock(raw);
+                    throw new InstallationIdUnusableException(
+                        "settings.json mentions an installation id that could not be recovered. A copy was kept beside it.");
+                }
             }
 
             return null;
@@ -195,7 +277,7 @@ public sealed class SettingsStore : ISettingsStore
     private string? ReadIdFile()
     {
         var raw = ReadTextWithRetry(_idPath);
-        var trimmed = raw?.Trim();
+        var trimmed = raw?.Replace("\uFEFF", string.Empty, StringComparison.Ordinal).Trim();
         if (string.IsNullOrEmpty(trimmed))
         {
             return null;
@@ -222,27 +304,63 @@ public sealed class SettingsStore : ISettingsStore
             }
         }
 
+        Fault("copy");
         File.Copy(_idPath, UniqueSibling(_idPath, ".invalid-"), overwrite: false);
     }
 
-    /// <summary>Internal so a test can drive the CreateNew arm directly: under the mutex the callers never reach it with a file present.</summary>
+    /// <summary>
+    /// Publishes the id by writing a flushed temp file and moving it into place with no overwrite, so a
+    /// reader never sees a torn prefix and the loser of a race keeps the winner's file. The one overwrite
+    /// is over an existing file that holds only whitespace or a BOM (a crashed or hand-touched file, never
+    /// an id), decided under the mutex. Internal so a test can drive the loser arm directly.
+    /// </summary>
     internal void WriteIdFileIfAbsent(string id)
     {
         EnsureDirectory(_idPath);
-        var bytes = new UTF8Encoding(false).GetBytes(id);
-
-        // An empty file is a crashed first write: take it over. Anything else
-        // that exists makes CreateNew fail and the existing file wins.
-        var mode = File.Exists(_idPath) && new FileInfo(_idPath).Length == 0 ? FileMode.Truncate : FileMode.CreateNew;
+        var tempPath = $"{_idPath}.tmp-{Guid.NewGuid():N}";
         try
         {
-            using var stream = new FileStream(_idPath, mode, FileAccess.Write, FileShare.None);
-            stream.Write(bytes);
-            stream.Flush(flushToDisk: true);
+            WriteDurable(tempPath, id);
+            Fault("id-before-move");
+            var overwrite = ExistingIdFileIsBlank();
+            try
+            {
+                File.Move(tempPath, _idPath, overwrite);
+            }
+            catch (IOException) when (File.Exists(_idPath))
+            {
+                // Lost the race (or still locked by the winner): the winner's file stands.
+            }
         }
-        catch (IOException) when (File.Exists(_idPath))
+        finally
         {
-            // Lost the race (or still locked by the winner): the winner's file stands.
+            DeleteQuietly(tempPath);
+        }
+    }
+
+    private bool ExistingIdFileIsBlank()
+    {
+        var raw = ReadTextWithRetry(_idPath);
+        return raw is not null && string.IsNullOrWhiteSpace(raw.Replace("\uFEFF", string.Empty, StringComparison.Ordinal));
+    }
+
+    private void WriteDurable(string tempPath, string text)
+    {
+        Fault("temp-create");
+        using var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        stream.Write(new UTF8Encoding(false).GetBytes(text));
+        stream.Flush(flushToDisk: true);
+    }
+
+    private static void DeleteQuietly(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+        {
+            // Best effort; never mask the original exception.
         }
     }
 
@@ -253,14 +371,14 @@ public sealed class SettingsStore : ISettingsStore
         var json = ReadTextWithRetry(_filePath);
         if (json is null)
         {
-            return new ReadState(new JsonObject(), ParseFailed: false);
+            return new ReadState(new JsonObject(), ParseFailed: false, Raw: null);
         }
 
         try
         {
             if (JsonNode.Parse(json) is JsonObject parsed)
             {
-                return new ReadState(parsed, ParseFailed: false);
+                return new ReadState(parsed, ParseFailed: false, Raw: null);
             }
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
@@ -269,7 +387,7 @@ public sealed class SettingsStore : ISettingsStore
         }
 
         RecoveredFromUnreadableFile = true;
-        return new ReadState(Salvage(json), ParseFailed: true);
+        return new ReadState(Salvage(json), ParseFailed: true, Raw: json);
     }
 
     /// <summary>
@@ -342,7 +460,21 @@ public sealed class SettingsStore : ISettingsStore
         return result;
     }
 
-    private void KeepUnreadableCopyNoLock() => File.Copy(_filePath, UniqueSibling(_filePath, ".unreadable-"), overwrite: false);
+    /// <summary>Copies the unreadable file aside unless an identical copy is already there (a repeated read must not litter).</summary>
+    private void KeepUnreadableCopyNoLock(string? raw)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(_filePath)) ?? string.Empty;
+        foreach (var existing in Directory.GetFiles(dir, Path.GetFileName(_filePath) + ".unreadable-*"))
+        {
+            if (raw is not null && ReadTextWithRetry(existing) == raw)
+            {
+                return;
+            }
+        }
+
+        Fault("copy");
+        File.Copy(_filePath, UniqueSibling(_filePath, ".unreadable-"), overwrite: false);
+    }
 
     private static string UniqueSibling(string path, string infix)
     {
@@ -362,36 +494,26 @@ public sealed class SettingsStore : ISettingsStore
         var tempPath = $"{_filePath}.tmp-{Guid.NewGuid():N}";
         try
         {
-            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-                stream.Write(new UTF8Encoding(false).GetBytes(values.ToJsonString()));
-                stream.Flush(flushToDisk: true);
-            }
+            WriteDurable(tempPath, values.ToJsonString());
 
             // Atomic on the same NTFS volume: the old file or the new one.
             Retry(() =>
             {
+                Fault("move");
                 File.Move(tempPath, _filePath, overwrite: true);
                 return 0;
             });
         }
         catch
         {
-            try
-            {
-                File.Delete(tempPath);
-            }
-            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
-            {
-                // Best effort; never mask the original exception.
-            }
-
+            DeleteQuietly(tempPath);
             throw;
         }
     }
 
-    private static void EnsureDirectory(string filePath)
+    private void EnsureDirectory(string filePath)
     {
+        Fault("mkdir");
         var directory = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(directory))
         {
@@ -428,7 +550,7 @@ public sealed class SettingsStore : ISettingsStore
         }
     }
 
-    private static T Retry<T>(Func<T> action)
+    private T Retry<T>(Func<T> action)
     {
         for (var attempt = 1; ; attempt++)
         {
@@ -438,7 +560,7 @@ public sealed class SettingsStore : ISettingsStore
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (attempt >= ReadAttemptLimit)
+                if (attempt >= ReadAttemptLimit || Remaining == TimeSpan.Zero)
                 {
                     throw new SettingsUnavailableException(
                         "The settings file is in use or not accessible; nothing was changed.", ex);
@@ -451,10 +573,11 @@ public sealed class SettingsStore : ISettingsStore
 
     private MutexLease AcquireMutex()
     {
+        Fault("mutex");
         var mutex = new Mutex(initiallyOwned: false, _mutexName);
         try
         {
-            if (!mutex.WaitOne(MutexTimeout))
+            if (!mutex.WaitOne(Remaining))
             {
                 mutex.Dispose();
                 throw new SettingsUnavailableException("The settings file is busy in another window; nothing was changed.");
@@ -478,5 +601,5 @@ public sealed class SettingsStore : ISettingsStore
         }
     }
 
-    private sealed record ReadState(JsonObject Values, bool ParseFailed);
+    private sealed record ReadState(JsonObject Values, bool ParseFailed, string? Raw);
 }
