@@ -175,6 +175,11 @@ class DirectionResult:
     # run always populates it, unconditionally -- cfg.include_surprisal (config.py) gates
     # only whether a WRITER emits it, never whether it is computed.
     surprisal_values: np.ndarray | None = None
+    # issue #127: the (L, 4) probability matrix behind `values`, in the ORIGINAL strand's
+    # coordinates and base order (a reverse-complement pass is flipped back and complemented),
+    # combined by the SAME rule as `values`. Only populated when analyze_direction() was asked
+    # to keep it (`keep_probs`): 16 bytes per base is not free, and nothing needs it by default.
+    probs: np.ndarray | None = None
     # NOT a forward_surprisal/reverse_surprisal pair here (unlike forward_values/
     # reverse_values above): the TSV's BOTH_SEPARATE 5-column shape does not yet grow
     # surprisal columns (docs/science_and_formats.md section 2b's "known scope limit"),
@@ -240,8 +245,9 @@ def _combine(
     the other direction alone — with no error, no notice, just a quietly worse track.
     Each side must be judged against the K it ACTUALLY ran with.
     """
-    length = fwd_entropy.shape[0]
-    values = np.empty(length, dtype=np.float32)
+    # Generic over the per-position axis: a 1-D track (entropy, surprisal) or an (L, 4) matrix
+    # (issue #127), where every boolean mask below selects whole rows.
+    values = np.empty_like(fwd_entropy, dtype=np.float32)
 
     fwd_ok = fwd_context >= fwd_context_length
     rev_ok = rev_context >= rev_context_length
@@ -290,8 +296,12 @@ def analyze_direction(
     direction: Direction,
     on_window: Callable[[], None] | None = None,
     circular: bool = False,
+    keep_probs: bool = False,
 ) -> DirectionResult:
     """Run the windowed forward and/or reverse-complement passes and combine them.
+
+    ``keep_probs`` (issue #127) additionally keeps the combined ``(L, 4)`` probability matrix
+    on the result (``DirectionResult.probs``); entropy and surprisal are computed either way.
 
     ``circular`` (issue #128, a plasmid): ``seq`` is padded with ``K`` wrap-around bases on
     both sides BEFORE the tiled passes and the outputs are trimmed back to ``len(seq)``
@@ -309,6 +319,7 @@ def analyze_direction(
             ceiling=ceiling,
             direction=direction,
             on_window=on_window,
+            keep_probs=keep_probs,
         )
     pad = context_length
     length = len(seq)
@@ -319,6 +330,7 @@ def analyze_direction(
         ceiling=ceiling,
         direction=direction,
         on_window=on_window,
+        keep_probs=keep_probs,
     )
 
     def keep(a: np.ndarray | None) -> np.ndarray | None:
@@ -330,6 +342,7 @@ def analyze_direction(
         forward_values=keep(padded.forward_values),
         reverse_values=keep(padded.reverse_values),
         surprisal_values=keep(padded.surprisal_values),
+        probs=keep(padded.probs),
         seam=None,
         reduced_context_count=0,
         reduced_context_range=None,
@@ -350,6 +363,7 @@ def _analyze_linear(
     ceiling: int,
     direction: Direction,
     on_window: Callable[[], None] | None = None,
+    keep_probs: bool = False,
 ) -> DirectionResult:
     """The linear-molecule body of :func:`analyze_direction`.
 
@@ -363,6 +377,7 @@ def _analyze_linear(
     fwd_entropy = fwd_context = None
     rev_entropy = rev_context = None
     fwd_surprisal = rev_surprisal = None
+    fwd_probs = rev_probs = None
 
     if direction in _NEEDS_FORWARD:
         fwd = run_windowed(
@@ -376,6 +391,7 @@ def _analyze_linear(
         # issue #123: surprisal from the SAME fwd.probs entropy was just computed from --
         # zero extra predictor calls, per analysis/surprisal.py's own module docstring.
         fwd_surprisal = compute_surprisal(fwd.probs, seq)
+        fwd_probs = fwd.probs if keep_probs else None  # the guarded matrix itself, not a recomputation
         fwd_context = fwd.context
         window, stride = fwd.window, fwd.stride
         notices += fwd.notices
@@ -397,6 +413,10 @@ def _analyze_linear(
         # THEN flipped back -- same coordinate-flip discipline as rev_entropy above (Hard
         # Rule "reverse means reverse complement": rc[j] is base L-1-j of seq).
         rev_surprisal = compute_surprisal(rev.probs, rc)[::-1].copy()
+        # issue #127: back to the ORIGINAL strand -- flip the rows like every other reverse
+        # array above, and complement the columns (A,C,G,T -> T,G,C,A is a column reversal):
+        # the rc base b with probability p is the original base comp(b) with probability p.
+        rev_probs = rev.probs[::-1, ::-1].copy() if keep_probs else None
         if window is None:
             window, stride = rev.window, rev.stride
         notices += rev.notices
@@ -406,12 +426,15 @@ def _analyze_linear(
     reduced = 0
     reduced_range: tuple[int, int] | None = None
 
+    probs = None
     if direction is Direction.FORWARD_ONLY:
         values = fwd_entropy
         surprisal_values = fwd_surprisal
+        probs = fwd_probs
     elif direction is Direction.REVERSE_ONLY:
         values = rev_entropy
         surprisal_values = rev_surprisal
+        probs = rev_probs
     else:
         # issue #407, MEASURED 2026-09-19: each direction's OWN actually-used K, not the
         # shared nominal `context_length` -- an OOM-halving retry (issue #313) can shrink
@@ -444,6 +467,26 @@ def _analyze_linear(
             rev_k_used,
             averaged=(direction is Direction.BOTH_AVERAGED),
         )
+        if keep_probs:
+            # issue #127: the matrix by the IDENTICAL rule (same masks), so each row is the
+            # distribution the entropy at that position was computed from.
+            probs, _, _ = _combine(
+                fwd_probs,
+                fwd_context,
+                rev_probs,
+                rev_context,
+                fwd_k_used,
+                rev_k_used,
+                averaged=(direction is Direction.BOTH_AVERAGED),
+            )
+            if direction is Direction.BOTH_AVERAGED:
+                notices.append(
+                    "Probability matrix under both-averaged: where both directions have full context "
+                    "each row is the MEAN of the forward and reverse probabilities. The entropy of "
+                    "that mean is at least the averaged entropy track (entropy is concave), so "
+                    "entropy recomputed from this matrix will not reproduce the track exactly at "
+                    "those positions; use another direction if you need that."
+                )
         # issue #456, MEASURED 2026-10-02: the seam is where the combiner switches from the
         # reverse to the forward pass, i.e. the K the FORWARD pass actually ran with
         # (`fwd_k_used`), and a clean seam exists only when both passes' actual Ks fit the
@@ -480,4 +523,5 @@ def _analyze_linear(
         reverse_values=rev_entropy if direction is Direction.BOTH_SEPARATE else None,
         notices=notices,
         surprisal_values=surprisal_values,
+        probs=probs,
     )
