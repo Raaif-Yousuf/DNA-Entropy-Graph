@@ -28,6 +28,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from ..analysis.regions import (
+    DEFAULT_MERGE_GAP,
+    DEFAULT_MIN_LENGTH,
+    DEFAULT_THRESHOLD_BITS,
+    validate_region_options,
+)
 from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, Topology, TrackFormat
 from ..predictors.hardware import MODEL_REQUIREMENTS, model_requirement
 from .batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
@@ -197,6 +203,11 @@ class AnalysisSpec:
     track_format: TrackFormat = field(default=TrackFormat.BEDGRAPH, metadata={"json_name": "format"})
     # issue #128: "auto" (the GenBank LOCUS line decides) | "linear" | "circular".
     topology: Topology = Topology.AUTO
+    # issue #125: the region caller's options (analysis/regions.py). Wire names are the
+    # camelCase ones; absent means the defaults.
+    region_threshold: float = field(default=DEFAULT_THRESHOLD_BITS, metadata={"json_name": "regionThreshold"})
+    region_min_length: int = field(default=DEFAULT_MIN_LENGTH, metadata={"json_name": "regionMinLength"})
+    region_merge_gap: int = field(default=DEFAULT_MERGE_GAP, metadata={"json_name": "regionMergeGap"})
 
     @staticmethod
     def from_dict(d: dict) -> AnalysisSpec:
@@ -218,6 +229,15 @@ class AnalysisSpec:
             raise ManifestError(
                 f"manifest.json analysis.topology {raw_topology!r} is not one of {valid}"
             ) from None
+        try:
+            region_threshold = float(d.get("regionThreshold", DEFAULT_THRESHOLD_BITS))
+            region_min_length = int(d.get("regionMinLength", DEFAULT_MIN_LENGTH))
+            region_merge_gap = int(d.get("regionMergeGap", DEFAULT_MERGE_GAP))
+            validate_region_options(
+                threshold=region_threshold, min_length=region_min_length, merge_gap=region_merge_gap
+            )
+        except (TypeError, ValueError) as exc:
+            raise ManifestError(f"manifest.json analysis region options: {exc}") from exc
         context_length = int(d.get("contextLength", 4096))
         window = int(d.get("window", 8192))
         stride = int(d.get("stride", 4096))
@@ -248,6 +268,9 @@ class AnalysisSpec:
             direction=direction,
             track_format=track_format,
             topology=topology,
+            region_threshold=region_threshold,
+            region_min_length=region_min_length,
+            region_merge_gap=region_merge_gap,
         )
 
 
@@ -468,4 +491,8 @@ class JobManifest:
             include_stats=_wanted("stats"),
             include_genbank=_wanted("genbank"),
             include_genes_gff3=include_genes_gff3,
+            include_regions=_wanted("regions"),
+            region_threshold=self.analysis.region_threshold,
+            region_min_length=self.analysis.region_min_length,
+            region_merge_gap=self.analysis.region_merge_gap,
         )

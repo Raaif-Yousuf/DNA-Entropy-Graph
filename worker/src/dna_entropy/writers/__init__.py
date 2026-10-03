@@ -6,6 +6,7 @@ from .fasta import FastaWriter
 from .geneious import GeneiousWriter
 from .gff import GffWriter
 from .provenance import ProvenanceWriter, build_run_provenance, contig_provenance
+from .regions import RegionWriter
 from .summary import SummaryWriter
 from .tsv import TsvWriter
 from .wig import WigWriter
@@ -20,6 +21,7 @@ __all__ = [
     "ProvenanceWriter",
     "build_run_provenance",
     "contig_provenance",
+    "RegionWriter",
     "SummaryWriter",
     "TsvWriter",
     "WigWriter",

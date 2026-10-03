@@ -264,6 +264,11 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--no-tsv",
         "--surprisal",
         "--no-surprisal",
+        "--regions",  # issue #125
+        "--no-regions",
+        "--region-threshold",
+        "--region-min-length",
+        "--region-merge-gap",
         "--seed",
     }
     assert _declared_option_names("run") == expected

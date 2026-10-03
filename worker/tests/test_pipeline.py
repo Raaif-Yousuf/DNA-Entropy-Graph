@@ -47,6 +47,8 @@ def test_run_writes_all_outputs(tmp_path: Path) -> None:
         "demo.summary.txt",
         "demo.gb",
         "demo.entropy.tsv",
+        "demo.regions.bed",  # issue #125
+        "demo.regions.gff3",
         "provenance.json",
     }
     written = {Path(p).name for p in result.outputs}
@@ -589,6 +591,7 @@ def test_include_flags_all_off_writes_nothing_but_tsv(tmp_path: Path) -> None:
         # include_* flags above (it is its own toggle); off here so this test's "exactly
         # one file" claim still holds -- the TSV-column case is covered separately.
         include_surprisal=False,
+        include_regions=False,  # issue #125
     )
     result = pipeline.run(cfg, raw="ATGCATGCATGC")
     on_disk = {p.name for p in tmp_path.iterdir()}

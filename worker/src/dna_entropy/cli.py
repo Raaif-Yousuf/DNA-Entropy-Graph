@@ -12,6 +12,7 @@ from pathlib import Path
 import typer
 
 from . import __version__, pipeline
+from .analysis.regions import DEFAULT_MERGE_GAP, DEFAULT_MIN_LENGTH, DEFAULT_THRESHOLD_BITS
 from .analysis.windowing import WindowingError
 from .annotators.base import AnnotatorError
 from .config import (
@@ -159,6 +160,26 @@ def run(
         "written to the bedgraph/wig/geneious tracks, an extra TSV column, and stats.txt "
         "(docs/science_and_formats.md; issue #123). Zero extra GPU cost.",
     ),
+    regions: bool = typer.Option(
+        True,
+        "--regions/--no-regions",
+        help="Also write <name>.regions.bed and <name>.regions.gff3: stretches of low and high "
+        "entropy as a feature track (issue #125).",
+    ),
+    region_threshold: float = typer.Option(
+        DEFAULT_THRESHOLD_BITS,
+        "--region-threshold",
+        help="Region caller: bases below this many bits are low-entropy (and above 2 minus this, "
+        "high-entropy). Above 0, at most 1.",
+    ),
+    region_min_length: int = typer.Option(
+        DEFAULT_MIN_LENGTH, "--region-min-length", help="Region caller: shortest region to report (bases)."
+    ),
+    region_merge_gap: int = typer.Option(
+        DEFAULT_MERGE_GAP,
+        "--region-merge-gap",
+        help="Region caller: merge regions at most this many bases apart.",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -195,6 +216,10 @@ def run(
             genes=genes,
             include_tsv=tsv,
             include_surprisal=surprisal,
+            include_regions=regions,
+            region_threshold=region_threshold,
+            region_min_length=region_min_length,
+            region_merge_gap=region_merge_gap,
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value

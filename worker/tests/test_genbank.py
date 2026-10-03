@@ -403,6 +403,8 @@ def test_pipeline_genbank_input(tmp_path: Path) -> None:
         "tl.entropy.geneious.gff3",
         "tl.entropy.tsv",
         "tl.genes.gff3",
+        "tl.regions.bed",  # issue #125
+        "tl.regions.gff3",
         "tl.surprisal.bedgraph",
         "tl.surprisal.geneious.gff3",
         "provenance.json",
@@ -478,6 +480,8 @@ def test_pipeline_multi_record_genbank(tmp_path: Path) -> None:
         "mt.entropy.geneious.gff3",
         "mt.entropy.tsv",
         "mt.genes.gff3",
+        "mt.regions.bed",  # issue #125
+        "mt.regions.gff3",
         "mt.surprisal.bedgraph",
         "mt.surprisal.geneious.gff3",
         "provenance.json",
