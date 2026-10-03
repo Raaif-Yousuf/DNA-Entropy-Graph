@@ -174,5 +174,15 @@ public sealed record VmSpec(
 /// <c>creationTimestamp</c> of the real instance resource, which a real gateway MUST fill): the VM's own
 /// <c>maxRunDuration</c> clock starts there, so the runner measures its result deadline from it. Null means the gateway
 /// did not say, and the runner falls back to measuring from the moment the run reached Running.
+/// <paramref name="Labels"/> are the instance's labels (Hard Rule 10) when the gateway read them; null means it did not say, and nothing
+/// may be inferred from that. <paramref name="StoppedAt"/> is when the instance last stopped (the real instance's <c>lastStopTimestamp</c>);
+/// null means unknown, which the idle-VM sweep treats as "not provably idle", never as "idle".
 /// </summary>
-public sealed record VmDescriptor(string Name, string Zone, string Status, string? StatusReason = null, DateTimeOffset? CreatedAt = null);
+public sealed record VmDescriptor(
+    string Name,
+    string Zone,
+    string Status,
+    string? StatusReason = null,
+    DateTimeOffset? CreatedAt = null,
+    IReadOnlyDictionary<string, string>? Labels = null,
+    DateTimeOffset? StoppedAt = null);

@@ -287,11 +287,24 @@ regardless:
 
 The entry is `AppStartup.BeginAsync` (App/Startup), called once from `App.OnLaunched` and not awaited. Guards.Tests
  `ReattachOnStartupTests` drives it on the production container with a real SQLite file.
-4. The reconciler is also meant to **enforce** the after-task lifecycle policy retroactively - a VM
- that should have been deleted but was only stopped (because the app died before
- verifying) gets deleted now, not silently left as a stopped-disk cost leak - to delete idle stopped VMs past a
- setting, enforce keep-alive expiry, and to run again on network reconnect. **Not built yet** (the follow-up to #59): until then a
- run that already ended its VM is not revisited, and the reconciler runs at launch only.
+4. The reconciler also **enforces** the after-task lifecycle policy retroactively (issue #530, `JobReconciler.EnforceLifecycleAsync`),
+ in the same pass as the reattach (`ReconcileAsync`, which `AppStartup.BeginAsync` calls):
+ - A finished (terminal) cloud run of this installation, finished in the last 14 days, has its VM looked up **by job-id label**
+ (`FindByJobIdAsync`, Hard Rule 9). Lifecycle `delete` with the VM still there (stopped or running) deletes it; `stop` with the VM
+ still RUNNING stops it; `keep` past its expiry (the run's finish plus `keepAliveMinutes`; at once for a run that did not complete,
+ as `startup.sh` does) ends per `afterKeepAlive` (Hard Rule 11). A VM whose labels were read must carry our app label and this
+ installation's id, or it is left alone.
+ - **Idle stopped VMs**: `IComputeGateway.ListByInstallationAsync` lists this installation's VMs (app label AND installation-id label);
+ one stopped longer than the `idle_stopped_vm_hours` setting (`CloudHousekeepingSettings`, default 72, 0 turns it off) is deleted, after a
+ fresh `GetVm` confirms it is still stopped. A VM with no recorded stop time is never called idle; a VM whose run row is not terminal is
+ left to that run; one with no history row is deleted. Older leaks than the 14-day lookup are caught here.
+ - **Reconnect**: `ReconcileOnReconnect` wraps the observer the resilience pipeline reports to (it forwards to `CloudRetryLog`, the
+ offline banner's source) and runs `ReconcileAsync` again on `OnConnectivityChanged(offline: false)`, so a row deferred while offline is
+ judged when the connection returns. Every job a pass touches is registered in `ActiveRuns` first, so a run the engine or an earlier
+ pass owns is skipped, never driven twice (Guards.Tests `ReattachOnStartupTests` drives both on the production container).
+ - No answer from the cloud ends the pass as `Deferred`; a refusal (permission, org policy) is that VM's `Failed` outcome. Nothing is
+ written to the run row: the VM is the thing fixed, the row already says how the run ended. The Settings page control for the idle
+ limit is #556.
 
 ## The embedded viewer (igv.js in WebView2), issues #72 and #73
 
