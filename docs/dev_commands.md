@@ -360,12 +360,13 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_git_stash.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_recursive_delete.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py
+worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py
 ```
 
 Each reads the tool-call payload from stdin per `scripts/hooks/README.md`, so running one
 with no input will simply wait.
 
-All five, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
+All six, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
 and exercises both the allow and the deny arm:
 
 ```powershell
@@ -374,6 +375,7 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_git_stash.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_recursive_delete.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py --self-test
+worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py --self-test
 ```
 
 That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing
@@ -415,6 +417,36 @@ gh run list
 gh run view <id>
 ```
 
+## CloudCli: the console host for cloud resources (#60)
+
+`app/tools/DnaEntropyGraph.CloudCli` is the app's own cloud layer from a console (gcloud is denied in this repo). It uses the real
+gateways and **the account the app signed in** (DPAPI token files under `%LOCALAPPDATA%\DNAEntropyGraph\auth`, so run it as the same
+Windows user); it never reads a key file and never signs in itself. Run from `app/`:
+
+```powershell
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- resources list --project <id> [--install <id>] [--kind vm|bucket|all] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- bucket describe --project <id> [--name <bucket>] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm create --project <id> --zone <zone> --install <id> --service-account <email> [--job <id>] [--model <m>] [--machine-type <t>] [--lifecycle <l>] [--app-version <v>] [--max-run-duration 90|90s|30m|2h] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> --zone <zone> --name deg-<job id> [--json]
+```
+
+- `resources list` prints every VM labelled `app=dna-entropy-graph` (or only `--install`'s) and every labelled `deg-` bucket as a plain
+  table ending in `OK: <n> resource(s)`; `--json` prints an array of `{kind,name,zone,location,status,installation,job}` and nothing else.
+  The results bucket is meant to outlive a run, so a leak scan uses `--kind vm` (that is what `scripts/cloud_gpu_test.ps1` runs).
+- `vm create` only builds a `VmSpec`, so the six labels, `maxRunDuration` (default 30m) and termination action DELETE are always set;
+  there is no flag to weaken them. A missing `--job` generates one.
+- `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label. A name not
+  found in the given zone is exit 5 (never "already gone"): the error names the zone it was found in, or says to check
+  `resources list --kind vm`. `resources list --install <id>` filters VMs only; the shared results bucket is always listed.
+- Output is ASCII: `OK:` lines on stdout, one `ERROR:` line on stderr naming an action.
+- Exit codes: `0` ok, `1` Google refused or could not be reached (or Ctrl+C), or any other unexpected failure (one `ERROR:` line naming
+  the exception class and an action, never a stack trace), `2` bad command line or a value `VmSpec` rejects, `3` no account signed in
+  ("Sign in with the app first") or the sign-in expired (only that: a network failure while refreshing the sign-in is `1`, and a missing
+  or invalid OAuth client file is `1` with its own message), `4` a safety guard refused, `5` the named bucket, or the VM in that zone, is not there. A Google call that times out is `1` ("timed out"), not "Cancelled".
+- `--json` takes no value, or `--json=true` / `--json=false`; any other value is exit 2.
+- There is no GCP access from agent sessions: tests run the same code over a scripted HTTP handler
+  (`app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/`); `docs/ToTest.md` carries the row that needs a real project.
+
 ## GPU test recipe
 
 **Never on the laptop.** `pytest -m "not gpu"` is the standing local command;
@@ -427,20 +459,23 @@ scripts\cloud_gpu_test.ps1 -Apply            # NOT functional yet — see below
 scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
-**Updated 2026-09-19: the script exists (issue #317), dry-run is real,
-`-Apply` deliberately is not yet.** The dry-run path (labels, cost/duration
-math, the leak-check and interrupt-safety contract) is provable today with
-zero cloud spend and is exercised by `-SelfTest`. `-Apply` looks for a built
-`CloudCli` (issue #60, itself built from `app/`, issue #61) and fails
-clearly, naming #60/#61/#24, rather than silently falling back to a raw
-`gcloud` call — Appendix C's permission design denies `gcloud` to an agent
-on purpose, and a script that quietly substitutes it under the hood would
-defeat that. `docs/ToTest.md` carries the row for exercising `-Apply` for
-real once `CloudCli` exists. Once it works: launches a labelled VM in the
+**Updated 2026-10-03: the script exists (issue #317), dry-run is real,
+`CloudCli` exists (issue #60), and `-Apply` is still UNVERIFIED.** The dry-run
+path (labels, cost/duration math, the leak-check and interrupt-safety contract)
+is provable today with zero cloud spend and is exercised by `-SelfTest`.
+`-Apply` calls the built `CloudCli` (see "CloudCli" above) and fails clearly,
+naming #60/#61/#24, if the executable is not built, rather than silently
+falling back to a raw `gcloud` call: Appendix C's permission design denies
+`gcloud` to an agent on purpose. The `vm create` arguments the script builds
+do not yet match the CLI's real flags (#619), so `-Apply` refuses (exit 3, naming
+#619) before it invokes the CLI, even when a built CloudCli exists; #619 removes
+that gate. The leak check treats unparsable output or a non-zero exit as a failed
+check, never as "nothing left running". `docs/ToTest.md` carries the row for
+exercising it for real. Once it works: launches a labelled VM in the
 owner's GCP project (blocked on `OWNER_TODO.md` item 2 / issue #24 until a
 project and GPU quota exist), runs `pytest -m gpu` on it, and tears the VM
-down. Read `working-on-gcp` before running it for real even once `-Apply`
-works — it creates real, billed cloud resources. Launch detached and poll
+down. Read `working-on-gcp` before running it for real: it creates real,
+billed cloud resources. Launch detached and poll
 rather than blocking a single tool call on it (a real run is 6-20 minutes;
 see the `a-tool-call-caps-at-600s` memory seed).
 
