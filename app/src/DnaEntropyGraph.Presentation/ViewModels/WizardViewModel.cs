@@ -81,4 +81,5 @@ public sealed partial class WizardViewModel : ObservableObject
         }
 
         _dispatcher.Enqueue(action);
-    }}
+    }
+}
