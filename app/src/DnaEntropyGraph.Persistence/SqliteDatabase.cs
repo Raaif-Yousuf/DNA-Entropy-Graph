@@ -41,12 +41,6 @@ public sealed class SqliteDatabase : IDisposable
 
     public SqliteDatabase(string databasePath) => _databasePath = databasePath;
 
-    /// <summary>The default per-user location, per docs/architecture.md section 6.</summary>
-    public static string DefaultPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DNAEntropyGraph",
-        "app.db");
-
     /// <summary>
     /// Set the moment a corrupt <c>app.db</c> was quarantined and replaced.
     /// Null on every ordinary launch. See the DECISION note above this class.

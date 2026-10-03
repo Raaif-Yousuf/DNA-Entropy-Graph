@@ -202,7 +202,12 @@ Any non-terminal phase can move to **Cancelling -> Cancelled** at the user's req
 ## 6. Where state lives, and the crash-safe resumption rule
 
 `%LOCALAPPDATA%\DNAEntropyGraph\` (per Windows user by construction - no cross-user
-sharing is possible or attempted):
+sharing is possible or attempted). The folder is one resolved value, `Core/AppDataRoot`: the
+`--profile <dir>` switch, else the `DEG_DATA_DIR` environment variable, else this default
+(#638; the command line wins, a relative path resolves against the current directory, a missing
+folder is created, an unusable one stops the launch). Every path below is derived from it and
+injected, and nothing else in `app/src` asks Windows for the local-data folder. A non-default
+root is shown as a banner in the title bar:
 
 ```
 app.db  app.db-wal            SQLite (run history, cloud resource inventory, settings mirror)

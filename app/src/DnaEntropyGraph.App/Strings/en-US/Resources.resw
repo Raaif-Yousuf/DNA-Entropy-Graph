@@ -1070,6 +1070,23 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="SetupAction_CreateProject" xml:space="preserve">
     <value>Create project</value>
   </data>
+  <data name="ProfileBanner_Text" xml:space="preserve">
+    <value>Sandbox profile: {0}</value>
+    <comment>Title bar banner shown when the app runs on a data folder given by --profile or DEG_DATA_DIR. {0} is the folder.</comment>
+  </data>
+  <data name="ProfileTitleSuffix" xml:space="preserve">
+    <value>sandbox profile</value>
+    <comment>Added to the window title after the app name when a sandbox data folder is in use.</comment>
+  </data>
+  <data name="DataFolderUnusable_NotAFolder" xml:space="preserve">
+    <value>The data folder you chose is a file, not a folder: {0}. Start the app again with a folder path, or without the --profile option.</value>
+  </data>
+  <data name="DataFolderUnusable_MissingValue" xml:space="preserve">
+    <value>The --profile option needs a folder after it. Start the app again with --profile followed by a folder path, or without the option.</value>
+  </data>
+  <data name="DataFolderUnusable_CannotCreate" xml:space="preserve">
+    <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
+  </data>
 </root>
 
 
