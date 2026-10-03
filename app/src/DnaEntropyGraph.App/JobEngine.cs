@@ -1,13 +1,12 @@
 using System.Collections.Concurrent;
 using System.Reflection;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
@@ -27,7 +26,6 @@ namespace DnaEntropyGraph.App;
 /// </summary>
 public sealed class JobEngine : IJobEngine, IRunVmActions
 {
-    private static readonly JsonSerializerOptions OptionsJson = new() { Converters = { new JsonStringEnumConverter() } };
 
     private readonly ConcurrentDictionary<string, ActiveRun> _activeRuns = new();
     private readonly IMessenger _messenger;
@@ -135,7 +133,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 DateTimeOffset.UtcNow,
                 Target: "cloud",
                 StartedAt: DateTimeOffset.UtcNow,
-                OptionsJson: JsonSerializer.Serialize(options, OptionsJson),
+                OptionsJson: RunOptionsJson.Serialize(options),
                 ProjectId: projectId,
                 VmName: request.Spec.VmName,
                 MachineType: request.Spec.MachineType,
@@ -237,7 +235,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 ErrorDetail: errorDetail,
                 StartedAt: now,
                 FinishedAt: now,
-                OptionsJson: JsonSerializer.Serialize(options, OptionsJson)),
+                OptionsJson: RunOptionsJson.Serialize(options)),
             cancellationToken).ConfigureAwait(false);
         _messenger.Send(new RunPhaseChangedMessage(jobId, JobPhase.Failed));
     }

@@ -24,6 +24,37 @@ what it runs, and where CI runs the same thing.
 | Markdown links | `ci-docs.yml` `links` job; `premerge.py` when `lychee` is installed | `lychee --offline ...` | Live; the gate is SKIPPED, and says so, without lychee |
 | `cloud-canary.yml` (nightly CPU smoke against the real `CloudJobRunner`) | Owner's GCP project, ~$0.02/run | n/a | Pending, not yet built |
 
+## CI checks on a pull request (#31)
+
+An **empty** pull request (touching nothing the tests read: not `app/`, `worker/`, `tests/`, `docs/contract/`, say a one-line README edit)
+must show these checks, all passing or Skipped:
+
+| Workflow | Check names (these are the names branch protection lists) | On an empty PR |
+| --- | --- | --- |
+| `ci-docs.yml` | `repo guards`, `docs consistency checks`, `scripts tests`, `markdown links` | Run and pass (no path filter) |
+| `ci-app.yml` | `changes (app)`, `build and test` | `changes (app)` passes; `build and test` is **Skipped** |
+| `ci-worker.yml` | `changes (worker)`, `pytest (not gpu)`, `sdist and wheel`, `manifest schema and startup script` | `changes (worker)` passes; the other three are **Skipped** |
+
+Why the `changes` job instead of a `paths:` filter on the trigger: a workflow that a path filter
+stops from starting produces *no* check, and a required check that never reports sits at "Expected,
+waiting for status" and blocks the merge button forever. A job skipped by its own `if:` reports
+Skipped, which branch protection treats as passing. So `ci-app.yml` and `ci-worker.yml` always start,
+and a tiny `changes` job runs `scripts/ci_changes_gate.py`, which gates the real jobs. The gate is **fail-closed**: it skips
+only when `git diff --name-only --no-renames <base> HEAD` succeeded AND every changed path is on a short known-irrelevant
+list (`docs/**` except `docs/contract/` and `docs/copy_catalog.md`, root `*.md` except `THIRD-PARTY-NOTICES.md`, `.claude/**` and
+the other agent-tool folders, `LICENSE`, and other workflows' own files). Everything else runs the jobs, including
+`.editorconfig`, `global.json`, `scripts/**` and any unknown path; a git error, a missing base or a non-PR event also runs them.
+So a docs-only PR skips the Windows build, while a PR touching `worker/` runs ci-app too (app tests read worker files) and
+ci-worker runs on app-only PRs (cheap, and not provably irrelevant).
+**Fail-closed at job level too.** A job whose `needs` did not succeed is Skipped unless its `if:` has a status function, and a Skipped required check reads as green. So every job gated on `changes` uses `!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true')`: a failed or broken gate RUNS the real jobs instead of skipping them, and a cancelled run stays cancelled. The test parses the workflow files and evaluates that expression for gate failed, run true and run false. Path matching in the script is case-insensitive.
+`scripts/tests/test_ci_changes_gate.py` fails when a path an app or worker test reads, or a workflow step reads (including the
+implicit `.editorconfig` and `app/global.json`), would be classified irrelevant; matching is exact per path, not prefix-of-a-directory.
+
+Requiring them on `main` is an owner action in the repository settings (branch protection, MEASURED
+2026-10-03: `main` is not protected). Require the job names above, **not** `changes (...)`.
+`ci-notices.yml` and `codeql.yml` still use workflow-level path filters, so they must NOT be made
+required until they get the same treatment.
+
 ## The `gpu` marker
 
 Defined in `worker/pyproject.toml`:
