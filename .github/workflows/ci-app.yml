@@ -63,7 +63,7 @@ jobs:
       # runtime exits with an HRESULT instead of hanging). MEASURED 2026-10-03 on a laptop: the bootstrap cannot be
       # disabled for the tests either (COMException 0x80040154 in Guards DiResolutionTests), so this step installs the
       # runtime and the next one asserts it is there, so a silent --quiet no-op fails here and not as a test error.
-      # THEORY (unverified) until a run shows it: that the redistributable installs silently on windows-latest; see docs/ToTest.md.
+      # MEASURED 2026-10-03 (run 37093397967 of PR #529): the redistributable installs silently on windows-latest, the assert passed and the test step passed with no hang.
       - name: install Windows App Runtime
         shell: pwsh
         run: |
@@ -159,7 +159,7 @@ jobs:
         working-directory: app
         run: |
           dotnet tool install -g vpk
-          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --outputDir releases
+          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
