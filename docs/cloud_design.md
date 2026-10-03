@@ -261,10 +261,29 @@ three-way answer:
 `GetGpuQuotaAsync` keeps its `int` answer (the smaller remainder) and **throws the classified `CloudOperationException`** when the state is
 `Unknown`, so a preflight can never read an unreadable quota as "no quota". The accelerator type maps to its regional metric in
 `QuotaMetrics.ForAccelerator` (`gpu` and `nvidia-l4` are `NVIDIA_L4_GPUS`); an unmapped type throws rather than guessing.
-`FakeGcp.ReadQuotaAsync` answers the same table from `WithGpuQuota`, `WithAllRegionsGpuCap` and `WithQuotaReadFailing(kind)`.
+A metric line the reply carries without a `limit` is `Unknown` for that metric (`QuotaMetric.Limit` and `Remaining` are null), never zero and never dropped
+from the table; only a definite zero elsewhere (a global cap of 0) still wins. `FakeGcp` answers both `ReadQuotaAsync` and `GetGpuQuotaAsync` from ONE table
+built from `WithGpuQuota`, `WithAllRegionsGpuCap` and `WithQuotaReadFailing(kind)`, so they agree: a scripted read failure makes `GetGpuQuotaAsync` throw the
+classified `CloudOperationException` (code `QUOTA_READ_FAILED`) as the real gateway does, and a region or accelerator nobody scripted is the always-succeeds
+default of 1 through either.
 THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGIONS` for a project that never raised it (when absent it is a
 failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Not yet switched on in production (#609). The request flow
 (`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
+
+### 6.2 What preflight does with a quota it cannot read (issue #88)
+
+DECISION (agent-made, reversible): an unreadable quota is UNKNOWN, and unknown is not "none". `PreflightChecks` calls `GetGpuQuotaAsync` and:
+
+| The read | The run |
+| --- | --- |
+| Returns a number of 0 or less | Fails with `quota`, as before. |
+| Fails with a project-wide kind (`permission`, `billing`, `api_disabled`, `org_policy`) | Fails at once with that classified error (its own run error code), before any bucket, upload or VM: the create would fail the same way. |
+| Fails any other way (`network`, a 5xx, the read's own budget running out, `other`) | UNKNOWN: preflight passes and provisioning goes on. The prototype tried every zone when quota was unknown; quota is pre-filterable, not a stop sign, and a real shortage still surfaces as a classified `quota` error on the create, which the zone ladder handles. |
+
+The whole read has its own budget, `CloudRunSettings.QuotaReadTimeout` (5 minutes; `CloudJobRunner.QuotaReadTimeout`), because it is several sequential
+requests (`regions.list` pages, `projects.get`) in one gateway method and the 60 s `CallTimeout` is sized for one. THEORY (unverified, sized from the
+pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
+`FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
 
 ## 7. Least-privilege IAM for the worker service account
 

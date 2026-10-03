@@ -28,4 +28,49 @@ public class FakeGcpQuotaReadTests
         result.GpuState("us-central1", QuotaMetrics.NvidiaL4Gpus).ShouldBe(QuotaState.Unknown);
         result.Failures.ShouldHaveSingleItem().Kind.ShouldBe(CloudErrorKind.Permission);
     }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission)]
+    [InlineData(CloudErrorKind.Network)]
+    public async Task A_scripted_read_failure_makes_GetGpuQuota_throw_the_classified_error_like_the_real_gateway_never_return_a_number(CloudErrorKind kind)
+    {
+        var gcp = new FakeGcp().WithQuotaReadFailing(kind);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => gcp.GetGpuQuotaAsync("p", "us-central1", "nvidia-l4", CancellationToken.None));
+
+        ex.Kind.ShouldBe(kind);
+        ex.Error.Code.ShouldBe("QUOTA_READ_FAILED");
+    }
+
+    [Theory]
+    [InlineData("us-central1", "nvidia-l4", null, null)]
+    [InlineData("us-east1", "gpu", null, null)]
+    [InlineData("europe-west4", "nvidia-l4", 3, null)]
+    [InlineData("us-central1", "nvidia-l4", 4, 0)]
+    [InlineData("us-central1", "nvidia-tesla-a100", null, null)]
+    public async Task The_two_quota_methods_agree_on_a_default_a_scripted_and_a_capped_region(string region, string accelerator, int? scripted, int? cap)
+    {
+        var gcp = new FakeGcp();
+        if (scripted is { } available)
+        {
+            gcp.WithGpuQuota(region, accelerator, available);
+        }
+
+        if (cap is { } ceiling)
+        {
+            gcp.WithAllRegionsGpuCap(ceiling);
+        }
+
+        var metric = QuotaMetrics.ForAccelerator(accelerator)!;
+        var table = await gcp.ReadQuotaAsync("p", CancellationToken.None);
+
+        var viaGet = await gcp.GetGpuQuotaAsync("p", region, accelerator, CancellationToken.None);
+
+        table.GpuRemaining(region, metric).ShouldBe(viaGet, "ReadQuotaAsync and GetGpuQuotaAsync disagree");
+        viaGet.ShouldBe(cap ?? scripted ?? 1);
+    }
+
+    [Fact]
+    public async Task A_region_nobody_scripted_is_the_default_of_one_through_GetGpuQuota()
+        => (await new FakeGcp().GetGpuQuotaAsync("p", "asia-south1", "nvidia-l4", CancellationToken.None)).ShouldBe(1);
 }

@@ -128,8 +128,8 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
 
     private static List<QuotaMetric> ToMetrics(IList<ComputeData.Quota>? quotas)
         => (quotas ?? [])
-            .Where(q => !string.IsNullOrEmpty(q.Metric) && q.Limit is not null)
-            .Select(q => new QuotaMetric(q.Metric, q.Limit!.Value, q.Usage ?? 0))
+            .Where(q => !string.IsNullOrEmpty(q.Metric))
+            .Select(q => new QuotaMetric(q.Metric, q.Limit, q.Usage ?? 0))
             .ToList();
 
     private Task<T> CallAsync<T>(string operation, Func<CancellationToken, Task<T>> request, CancellationToken cancellationToken)

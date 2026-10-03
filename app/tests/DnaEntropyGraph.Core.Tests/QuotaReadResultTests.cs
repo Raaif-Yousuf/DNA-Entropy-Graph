@@ -81,6 +81,21 @@ public class QuotaReadResultTests
     }
 
     [Fact]
+    public void A_metric_line_with_no_limit_is_unknown_not_zero_and_a_known_zero_elsewhere_still_wins()
+    {
+        var noLimit = new QuotaMetric(L4, null, 0);
+        noLimit.Remaining.ShouldBeNull();
+
+        QuotaReadResult WithRegional(QuotaMetric line, double cap) => new(
+            new Dictionary<string, IReadOnlyList<QuotaMetric>> { ["us-central1"] = [line] },
+            new QuotaMetric(QuotaMetrics.GpusAllRegions, cap, 0),
+            []);
+
+        WithRegional(noLimit, 4).GpuState("us-central1", L4).ShouldBe(QuotaState.Unknown);
+        WithRegional(noLimit, 0).GpuState("us-central1", L4).ShouldBe(QuotaState.None);
+    }
+
+    [Fact]
     public void Failed_builds_a_result_that_is_unknown_everywhere()
     {
         var failed = QuotaReadResult.Failed(Denied);

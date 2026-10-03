@@ -30,10 +30,13 @@ public static class QuotaMetrics
         };
 }
 
-/// <summary>One quota line: the limit and what is already used (Compute reports both as numbers).</summary>
-public sealed record QuotaMetric(string Metric, double Limit, double Usage)
+/// <summary>
+/// One quota line: the limit and what is already used (Compute reports both as numbers). A line whose limit the reply did not
+/// carry has a null <see cref="Limit"/> and so a null <see cref="Remaining"/>: UNKNOWN for that metric, never zero and never absent.
+/// </summary>
+public sealed record QuotaMetric(string Metric, double? Limit, double Usage)
 {
-    public double Remaining => Math.Max(0, Limit - Usage);
+    public double? Remaining => Limit is { } limit ? Math.Max(0, limit - Usage) : null;
 }
 
 /// <summary>One of the two reads (<c>regions.list</c>, <c>projects.get</c>) that failed, classified, so a caller can name an action.</summary>
@@ -64,7 +67,7 @@ public sealed record QuotaReadResult(
     /// GPUs this project could still create in <paramref name="region"/>: the smaller of the regional remainder and the
     /// GPUS_ALL_REGIONS remainder. Null (unknown) when a needed read is missing, except that one known value below a whole GPU
     /// is a definite zero whatever the other read says (a regional 0 binds without the cap, and a cap of 0 binds without the region).
-    /// A region present without the metric offers none of it; a region the read did not return is unknown.
+    /// A region present without the metric offers none of it; a region the read did not return, or a metric line with no limit, is unknown.
     /// </summary>
     public double? GpuRemaining(string region, string regionalMetric)
     {
@@ -74,7 +77,10 @@ public sealed record QuotaReadResult(
             var match = Regions.FirstOrDefault(r => string.Equals(r.Key, region, StringComparison.OrdinalIgnoreCase));
             if (match.Value is not null)
             {
-                regional = match.Value.FirstOrDefault(m => string.Equals(m.Metric, regionalMetric, StringComparison.Ordinal))?.Remaining ?? 0;
+                var line = match.Value.FirstOrDefault(m => string.Equals(m.Metric, regionalMetric, StringComparison.Ordinal));
+
+                // No line at all is a region that offers none of it (0); a line without a limit is unknown (null).
+                regional = line is null ? 0 : line.Remaining;
             }
         }
 

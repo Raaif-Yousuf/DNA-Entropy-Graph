@@ -1404,39 +1404,75 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        var regional = _regionalQuota.TryGetValue((region.ToLowerInvariant(), acceleratorType.ToLowerInvariant()), out var configured)
-            ? configured
-            : DefaultRegionalQuota;
+        var metric = MetricOf(acceleratorType);
 
-        // CLAUDE.md: "GPUS_ALL_REGIONS=0 overrides a regional 1" - the
-        // project-wide cap is a ceiling under every region's own number.
-        var effective = _allRegionsGpuCap.HasValue ? Math.Min(regional, _allRegionsGpuCap.Value) : regional;
-        return Task.FromResult(effective);
+        // The same table ReadQuotaAsync answers, so the two agree: a scripted read failure throws the classified error here (the real
+        // gateway does the same, never a zero), and a region or accelerator nobody scripted is the always-succeeds default of 1.
+        var table = BuildQuotaTable(extraRegion: region, extraMetric: metric);
+        if (table.Failures.Count > 0)
+        {
+            throw new CloudOperationException(table.Failures[0].Error, table.Failures[0].Kind);
+        }
+
+        // CLAUDE.md: "GPUS_ALL_REGIONS=0 overrides a regional 1" - the project-wide cap is a ceiling under every region's own number.
+        var remaining = table.GpuRemaining(region, metric) ?? DefaultRegionalQuota;
+        return Task.FromResult((int)Math.Floor(remaining));
     }
 
     public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
+        return Task.FromResult(BuildQuotaTable(extraRegion: null, extraMetric: null));
+    }
+
+    private static readonly string[] DefaultQuotaRegions = ["us-central1", "us-east1", "us-west1", "europe-west4"];
+
+    private static readonly string[] GpuQuotaMetricNames = [QuotaMetrics.NvidiaL4Gpus, QuotaMetrics.NvidiaA100Gpus, QuotaMetrics.NvidiaA100Gpus80Gb, QuotaMetrics.NvidiaH100Gpus];
+
+    private static string MetricOf(string acceleratorType) => QuotaMetrics.ForAccelerator(acceleratorType) ?? acceleratorType.ToUpperInvariant();
+
+    /// <summary>
+    /// The one quota table both quota methods answer from. Every GPU metric of every scripted region and of the default regions
+    /// (<see cref="DefaultQuotaRegions"/>) is <see cref="DefaultRegionalQuota"/> unless <see cref="WithGpuQuota"/> says otherwise, so a
+    /// region nobody scripted reads the same through either method. A <see cref="WithQuotaReadFailing"/> read is a failed read: UNKNOWN, never zero.
+    /// </summary>
+    private QuotaReadResult BuildQuotaTable(string? extraRegion, string? extraMetric)
+    {
         if (_quotaReadFailure is { } kind)
         {
-            return Task.FromResult(QuotaReadResult.Failed(new QuotaReadFailure("regions.list", new CloudError("QUOTA_READ_FAILED", null, "The quota could not be read."), kind)));
+            return QuotaReadResult.Failed(new QuotaReadFailure("regions.list", new CloudError("QUOTA_READ_FAILED", null, "The quota could not be read."), kind));
         }
 
-        // Only the regions a test configured appear; the always-succeeds default of 1 for an unconfigured region has no table row.
-        var regions = new Dictionary<string, List<QuotaMetric>>(StringComparer.OrdinalIgnoreCase);
+        var scripted = new Dictionary<(string Region, string Metric), int>();
         foreach (var ((region, accelerator), available) in _regionalQuota)
         {
-            if (!regions.TryGetValue(region, out var metrics))
+            scripted[(region, MetricOf(accelerator))] = available;
+        }
+
+        var regionNames = new HashSet<string>(DefaultQuotaRegions, StringComparer.OrdinalIgnoreCase);
+        regionNames.UnionWith(_regionalQuota.Keys.Select(k => k.Region));
+        if (extraRegion is not null)
+        {
+            regionNames.Add(extraRegion.ToLowerInvariant());
+        }
+
+        var table = new Dictionary<string, IReadOnlyList<QuotaMetric>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var region in regionNames)
+        {
+            var metricNames = new HashSet<string>(GpuQuotaMetricNames, StringComparer.Ordinal);
+            metricNames.UnionWith(scripted.Keys.Where(k => string.Equals(k.Region, region, StringComparison.OrdinalIgnoreCase)).Select(k => k.Metric));
+            if (extraMetric is not null)
             {
-                regions[region] = metrics = [];
+                metricNames.Add(extraMetric);
             }
 
-            metrics.Add(new QuotaMetric(QuotaMetrics.ForAccelerator(accelerator) ?? accelerator.ToUpperInvariant(), available, 0));
+            table[region] = metricNames
+                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, 0))
+                .ToList();
         }
 
         // No cap configured is a project that never hits one: a ceiling far above any regional number.
-        var table = regions.ToDictionary(r => r.Key, r => (IReadOnlyList<QuotaMetric>)r.Value, StringComparer.OrdinalIgnoreCase);
-        return Task.FromResult(new QuotaReadResult(table, new QuotaMetric(QuotaMetrics.GpusAllRegions, _allRegionsGpuCap ?? 1000, 0), []));
+        return new QuotaReadResult(table, new QuotaMetric(QuotaMetrics.GpusAllRegions, _allRegionsGpuCap ?? 1000, 0), []);
     }
 
     // ----------------------------------------------------------------

@@ -119,6 +119,9 @@ public sealed class CloudJobRunner
     /// <summary>The budget for the whole worker-identity step (#606), which is many calls in one gateway method; see <see cref="CloudRunSettings.WorkerIdentityTimeout"/>.</summary>
     public TimeSpan WorkerIdentityTimeout { get => _settings.WorkerIdentityTimeout; init => _settings.WorkerIdentityTimeout = value; }
 
+    /// <summary>The budget for the whole quota read (#88), which is several requests in one gateway method; see <see cref="CloudRunSettings.QuotaReadTimeout"/>.</summary>
+    public TimeSpan QuotaReadTimeout { get => _settings.QuotaReadTimeout; init => _settings.QuotaReadTimeout = value; }
+
     /// <summary>How long to wait between looks at a VM that is stopping or being deleted.</summary>
     public TimeSpan LifecyclePollInterval { get => _settings.LifecyclePollInterval; init => _settings.LifecyclePollInterval = value; }
 
@@ -156,7 +159,7 @@ public sealed class CloudJobRunner
         _storage = storageGateway;
         _rows = new RunRowStore(runRepository, onPhaseChanged);
         _calls = new GatewayCalls(_settings, storageGateway);
-        _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls);
+        _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls, _settings);
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
         _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator);

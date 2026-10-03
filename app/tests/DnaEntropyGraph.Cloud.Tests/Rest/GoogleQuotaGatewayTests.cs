@@ -14,6 +14,8 @@ public class GoogleQuotaGatewayTests
     private const string Regions = "/compute/v1/projects/my-lab/regions";
     private const string Project = "/compute/v1/projects/my-lab";
 
+    private const CloudErrorKind ExpectedKindOf500 = CloudErrorKind.Network;
+
     private static string Quota(string metric, double limit, double usage = 0)
         => "{\"metric\":\"" + metric + "\",\"limit\":" + limit + ",\"usage\":" + usage + "}";
 
@@ -114,6 +116,35 @@ public class GoogleQuotaGatewayTests
 
         result.Regions.ShouldBeNull();
         result.GpuState("us-central1", QuotaMetrics.NvidiaL4Gpus).ShouldBe(QuotaState.Unknown);
+        var failure = result.Failures.ShouldHaveSingleItem();
+        failure.Call.ShouldBe("regions.list");
+        failure.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
+        failure.Kind.ShouldBe(CloudErrorKind.Network);
+    }
+
+    [Fact]
+    public async Task A_quota_line_with_no_limit_is_unknown_for_that_metric_not_zero_and_not_absent()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(
+            HttpMethod.Get,
+            Regions,
+            200,
+            "{\"items\":[" + Region("us-central1", "{\"metric\":\"NVIDIA_L4_GPUS\",\"usage\":0}") + "," + Region("europe-west4", "{\"metric\":\"NVIDIA_L4_GPUS\",\"usage\":0}") + "]}");
+        rig.Handler.Returns(HttpMethod.Get, Project, 200, ProjectBody(Quota("GPUS_ALL_REGIONS", 1)));
+        var other = Scripted(allRegions: 0);
+
+        var result = await rig.Gateways.Quota.ReadQuotaAsync("my-lab", CancellationToken.None);
+
+        var line = result.Regions!["us-central1"].ShouldHaveSingleItem();
+        line.Metric.ShouldBe(QuotaMetrics.NvidiaL4Gpus, "the metric must stay in the table, not vanish as if the region offered none");
+        line.Limit.ShouldBeNull();
+        line.Remaining.ShouldBeNull();
+        result.GpuState("us-central1", QuotaMetrics.NvidiaL4Gpus).ShouldBe(QuotaState.Unknown);
+        await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Quota.GetGpuQuotaAsync("my-lab", "us-central1", "nvidia-l4", CancellationToken.None));
+
+        // A definite zero elsewhere still wins: a global cap of 0 binds whatever the unreadable regional line says.
+        (await other.Gateways.Quota.ReadQuotaAsync("my-lab", CancellationToken.None)).GpuState("us-central1", QuotaMetrics.NvidiaL4Gpus).ShouldBe(QuotaState.None);
     }
 
     [Theory]
@@ -132,10 +163,7 @@ public class GoogleQuotaGatewayTests
         var failure = result.Failures.ShouldHaveSingleItem();
         failure.Call.ShouldBe("regions.list");
         failure.Error.HttpStatus.ShouldBe(status);
-        if (status == 403)
-        {
-            failure.Kind.ShouldBe(CloudErrorKind.Permission);
-        }
+        failure.Kind.ShouldBe(status == 403 ? CloudErrorKind.Permission : ExpectedKindOf500);
     }
 
     [Fact]
@@ -187,6 +215,12 @@ public class GoogleQuotaGatewayTests
     }
 
     [Fact]
-    public void The_quota_gateway_is_the_real_one_and_is_not_wrapped_in_a_resilient_decorator()
-        => Scripted(allRegions: 1).Gateways.Quota.ShouldNotBeOfType<ResilientQuotaGateway>();
+    public async Task The_quota_gateway_is_the_real_one_and_is_not_wrapped_in_a_resilient_decorator_and_answers_through_the_scripted_http()
+    {
+        var rig = Scripted(allRegions: 1);
+
+        rig.Gateways.Quota.ShouldNotBeOfType<ResilientQuotaGateway>();
+        (await rig.Gateways.Quota.GetGpuQuotaAsync("my-lab", "us-central1", "nvidia-l4", CancellationToken.None)).ShouldBe(1);
+        rig.Handler.To(HttpMethod.Get, Regions).ShouldNotBeEmpty("the call never reached the scripted HTTP handler, so it did not go through the real gateway");
+    }
 }
