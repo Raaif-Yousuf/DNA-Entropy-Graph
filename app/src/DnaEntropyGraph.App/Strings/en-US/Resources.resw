@@ -399,19 +399,52 @@
   <data name="NewRunRnaTreatedNote.Text" xml:space="preserve">
     <value>Treating the input as RNA: each U is read as T.</value>
   </data>
-  <data name="NewRunNameTemplate.Header" xml:space="preserve">
-    <value>Run name</value>
-  </data>
-  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
-    <value>{file}</value>
-  </data>
-  <data name="NewRunNameHelp.Text" xml:space="preserve">
-    <value>You can use {file}, {date}, {time}, {model} and {n} in the name.</value>
-  </data>
-  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
-    <value>This run will be named</value>
-  </data>
   <data name="NewRunRun.Content" xml:space="preserve">
     <value>Run</value>
+  </data>
+  <data name="NewRunNotice_RecordSkippedNoSequence" xml:space="preserve">
+    <value>Record {0} has a name but no sequence, so it was left out.</value>
+  </data>
+  <data name="NewRunNotice_EmptyHeaders" xml:space="preserve">
+    <value>{0} records have no name after the &gt; sign. They still run.</value>
+  </data>
+  <data name="NewRunNotice_RepeatedIds" xml:space="preserve">
+    <value>{0} record names appear more than once. Every record still runs and is numbered separately.</value>
+  </data>
+  <data name="NewRunNotice_GenBankRecordSkippedNoSequence" xml:space="preserve">
+    <value>Record {0} has no sequence, so it was left out.</value>
+  </data>
+  <data name="NewRunNotice_RnaConverted" xml:space="preserve">
+    <value>Read {0} U letters as T, because this input is treated as RNA.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityMasked" xml:space="preserve">
+    <value>{0} letters that stand for more than one base (such as N or R) were replaced with N. The entropy there reflects the model&apos;s guess for N.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityKept" xml:space="preserve">
+    <value>{0} letters stand for more than one base (such as N or R). They are kept, and the entropy there reflects the model&apos;s guess for that letter.</value>
+  </data>
+  <data name="NewRunNotice_ShortSequence" xml:space="preserve">
+    <value>This sequence is only {0} bases long, so the entropy near its start mostly reflects the model&apos;s prior. Add more sequence if you can.</value>
+  </data>
+  <data name="NewRunNotice_LeadingHeaderIgnored" xml:space="preserve">
+    <value>The first line starts with &gt; so it was treated as a name and ignored.</value>
+  </data>
+  <data name="NewRunNotice_DigitsRemoved" xml:space="preserve">
+    <value>Removed {0} digits (such as line numbers) from the sequence.</value>
+  </data>
+  <data name="NewRunPillCheckStopped" xml:space="preserve">
+    <value>The check of this file was stopped. Remove it and add it again.</value>
+  </data>
+  <data name="NewRunStatusDropFailed" xml:space="preserve">
+    <value>We could not read what you dropped. Drop the files again, or use Add files.</value>
+  </data>
+  <data name="NewRunStatusDropVirtual" xml:space="preserve">
+    <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
+  </data>
+  <data name="NewRunStatusPasteFailed" xml:space="preserve">
+    <value>We could not save the pasted sequence. Check that your disk has free space, then choose Add sequence again.</value>
+  </data>
+  <data name="NewRunRunsSelectedOnly.Text" xml:space="preserve">
+    <value>Run starts only the file selected in the list. Running several files together is coming.</value>
   </data>
 </root>

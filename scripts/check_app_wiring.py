@@ -1165,6 +1165,20 @@ def self_test() -> int:
             "an x:Bind inside a typed DataTemplate is not a dangling binding on the page ViewModel",
             "DANGLING-BINDING" not in _codes(typed_root),
         )
+        # The loosening is pinned both ways: a plain {Binding} in the same place is not compile-checked
+        # against the x:DataType (it is resolved at run time), so it is still held to the page ViewModel.
+        untyped_root = Path(tempfile.mkdtemp(prefix="wiring-untyped-"))
+        _write_wired(untyped_root)
+        _patch(
+            untyped_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="Item"><TextBlock Text="{Binding ItemOnlyMember}" /></DataTemplate>',
+        )
+        check(
+            "a plain {Binding} inside a typed DataTemplate is still a dangling binding",
+            "DANGLING-BINDING" in _codes(untyped_root),
+        )
 
     print()
     if failures:

@@ -1,5 +1,6 @@
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Inputs;
 using Windows.Storage.Pickers;
 
 namespace DnaEntropyGraph.App.Services;
@@ -11,20 +12,18 @@ namespace DnaEntropyGraph.App.Services;
 /// </summary>
 public sealed class FilePickerService(WindowHandleProvider window) : IFilePicker
 {
-    private static readonly string[] SequenceExtensions =
-        [".fa", ".fasta", ".fna", ".ffn", ".gb", ".gbk", ".genbank", ".gbff", ".txt"];
-
     public async Task<IReadOnlyList<string>> PickInputFilesAsync(CancellationToken cancellationToken)
     {
         var picker = new FileOpenPicker();
         WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
-        foreach (var extension in SequenceExtensions)
+        foreach (var extension in SequenceFileTypes.Extensions)
         {
             picker.FileTypeFilter.Add(extension);
         }
 
         var files = await picker.PickMultipleFilesAsync();
-        return files.Select(file => file.Path).ToList();
+        // A file with no local path (a cloud-only placeholder) cannot be read, so it is not offered on.
+        return files.Select(file => file.Path).Where(path => !string.IsNullOrEmpty(path)).ToList();
     }
 
     public Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);

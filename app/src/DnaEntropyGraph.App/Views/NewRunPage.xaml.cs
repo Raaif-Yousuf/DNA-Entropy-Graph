@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.App.Views;
 /// <summary>
 /// Hard Rule 8: constructor DI and nothing that branches. The two drag handlers are single calls:
 /// <see cref="DropPaths"/> decides whether a drag is acceptable and reads the dropped paths, and the
-/// paths go straight to <see cref="NewRunViewModel.AddPathsCommand"/>.
+/// drop goes straight to <see cref="NewRunViewModel.AddDroppedCommand"/> (<c>Execute</c>, not <c>ExecuteAsync</c>: a failure there must not escape an async void handler).
 /// </summary>
 public sealed partial class NewRunPage : Page
 {
@@ -19,6 +19,6 @@ public sealed partial class NewRunPage : Page
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<NewRunViewModel>();
         InitializeComponent();
         DropZone.DragOver += (_, e) => DropPaths.AcceptFiles(e);
-        DropZone.Drop += async (_, e) => await ViewModel.AddPathsCommand.ExecuteAsync(await DropPaths.ReadAsync(e));
+        DropZone.Drop += async (_, e) => ViewModel.AddDroppedCommand.Execute(await DropPaths.ReadAsync(e));
     }
 }

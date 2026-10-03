@@ -1,0 +1,27 @@
+using DnaEntropyGraph.Core.Inputs;
+
+namespace DnaEntropyGraph.Presentation.ViewModels;
+
+/// <summary>Which <c>Resources.resw</c> string tells the user about a validation notice (Hard Rule 13). A Guards test checks every code.</summary>
+public static class InputNoticeCopy
+{
+    /// <summary>The resource key for <paramref name="code"/>, or null when the pill already says it (the record and gene counts).</summary>
+    public static string? KeyFor(InputNoticeCode code) => code switch
+    {
+        InputNoticeCode.RecordsRead or InputNoticeCode.GenBankRead => null,
+        InputNoticeCode.RecordSkippedNoSequence => "NewRunNotice_RecordSkippedNoSequence",
+        InputNoticeCode.EmptyHeaders => "NewRunNotice_EmptyHeaders",
+        InputNoticeCode.RepeatedIds => "NewRunNotice_RepeatedIds",
+        InputNoticeCode.GenBankRecordSkippedNoSequence => "NewRunNotice_GenBankRecordSkippedNoSequence",
+        InputNoticeCode.RnaConverted => "NewRunNotice_RnaConverted",
+        InputNoticeCode.AmbiguityMasked => "NewRunNotice_AmbiguityMasked",
+        InputNoticeCode.AmbiguityKept => "NewRunNotice_AmbiguityKept",
+        InputNoticeCode.ShortSequence => "NewRunNotice_ShortSequence",
+        InputNoticeCode.LeadingHeaderIgnored => "NewRunNotice_LeadingHeaderIgnored",
+        InputNoticeCode.DigitsRemoved => "NewRunNotice_DigitsRemoved",
+        _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unmapped InputNoticeCode: add it to InputNoticeCopy and Resources.resw."),
+    };
+}
+
+/// <summary>What a drop onto the New run page carried: the real paths, how many items had no path (a file inside a zip, an e-mail attachment), and whether reading the drop failed.</summary>
+public sealed record DroppedItems(IReadOnlyList<string> Paths, int SkippedVirtual, bool Failed);

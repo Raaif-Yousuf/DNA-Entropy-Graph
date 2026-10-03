@@ -72,6 +72,9 @@ public sealed record InputValidationResult(
     long TotalLength,
     IReadOnlyList<string> Notices)
 {
+    /// <summary>The same notices as <see cref="Notices"/>, as machine codes with their numbers; what the UI shows (as Resources.resw copy).</summary>
+    public IReadOnlyList<InputNotice> NoticeCodes { get; init; } = [];
+
     public bool IsValid => Problem is null;
 
     /// <summary>Gene features a GenBank file already carries (a pill shows them); 0 for FASTA and plain text.</summary>
@@ -135,6 +138,7 @@ public static class InputFileValidator
             return Fail(InputKind.Paste, InputProblemCode.FileUnreadable, null, null, "The input file could not be read.");
         }
         var notices = new List<string>();
+        var noticeCodes = new List<InputNotice>();
         List<(string Seq, int Index)> records;
         var geneCount = 0;
         try
@@ -144,12 +148,14 @@ public static class InputFileValidator
                 case InputKind.GenBank:
                     var gb = GenBankLite.Read(text);
                     notices.AddRange(gb.Notices);
+                    noticeCodes.AddRange(gb.NoticeCodes);
                     geneCount = gb.Records.Sum(r => r.GeneCount);
                     records = gb.Records.Select(r => (r.Seq, r.SourceIndex)).ToList();
                     break;
                 case InputKind.Fasta:
                     var fa = FastaLite.Read(text);
                     notices.AddRange(fa.Notices);
+                    noticeCodes.AddRange(fa.NoticeCodes);
                     records = fa.Records.Select(r => (r.Seq, r.SourceIndex)).ToList();
                     break;
                 default:
@@ -159,7 +165,7 @@ public static class InputFileValidator
         }
         catch (Exception ex) when (ex is FastaReadException or GenBankReadException)
         {
-            return Fail(kind, InputProblemCode.NoRecords, null, null, ex.Message, notices);
+            return Fail(kind, InputProblemCode.NoRecords, null, null, ex.Message, notices, noticeCodes: noticeCodes);
         }
 
         var maxLen = (int)Math.Min(limits.MaxTotalLen, int.MaxValue);
@@ -173,10 +179,11 @@ public static class InputFileValidator
             }
             catch (SequenceValidationException ex)
             {
-                return Fail(kind, Map(ex.Reason), index, ex.Position, ex.Message, notices, records.Count, total);
+                return Fail(kind, Map(ex.Reason), index, ex.Position, ex.Message, notices, records.Count, total, noticeCodes);
             }
 
             notices.AddRange(validated.Notices);
+            noticeCodes.AddRange(validated.NoticeCodes);
             total += validated.Length;
             if (total > limits.MaxTotalLen)
             {
@@ -188,7 +195,7 @@ public static class InputFileValidator
                     $"Combined input length {total} nt exceeds the whole-input cap of {limits.MaxTotalLen} nt.",
                     notices,
                     records.Count,
-                    total);
+                    total, noticeCodes);
             }
         }
 
@@ -202,10 +209,10 @@ public static class InputFileValidator
                 $"{total} nt exceeds the batch budget of {limits.MaxBatchNt} nt.",
                 notices,
                 records.Count,
-                total);
+                total, noticeCodes);
         }
 
-        return new InputValidationResult(null, kind, records.Count, total, notices) { GeneCount = geneCount };
+        return new InputValidationResult(null, kind, records.Count, total, notices) { GeneCount = geneCount, NoticeCodes = noticeCodes };
     }
 
     private static InputProblemCode Map(SequenceFailure reason) => reason switch
@@ -227,6 +234,7 @@ public static class InputFileValidator
         string detail,
         IReadOnlyList<string>? notices = null,
         int recordCount = 0,
-        long total = 0) =>
-        new(new InputProblem(code, recordIndex, position, detail), kind, recordCount, total, notices ?? []);
+        long total = 0,
+        IReadOnlyList<InputNotice>? noticeCodes = null) =>
+        new(new InputProblem(code, recordIndex, position, detail), kind, recordCount, total, notices ?? []) { NoticeCodes = noticeCodes ?? [] };
 }

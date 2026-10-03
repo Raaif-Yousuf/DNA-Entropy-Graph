@@ -115,17 +115,11 @@
                     Command="{x:Bind ViewModel.StopTreatingAsRnaCommand}" />
             </StackPanel>
 
-            <TextBox
-                x:Uid="NewRunNameTemplate"
-                Text="{x:Bind ViewModel.NameTemplate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
             <TextBlock
-                x:Uid="NewRunNameHelp"
-                Style="{StaticResource CaptionTextBlockStyle}"
+                x:Uid="NewRunRunsSelectedOnly"
+                Visibility="{x:Bind ViewModel.HasSeveralItems, Mode=OneWay}"
+                TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock x:Uid="NewRunNamePreviewLabel" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <TextBlock Text="{x:Bind ViewModel.RunNamePreview, Mode=OneWay}" FontWeight="SemiBold" />
-            </StackPanel>
 
             <Button
                 x:Uid="NewRunRun"

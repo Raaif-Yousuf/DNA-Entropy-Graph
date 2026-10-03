@@ -24,7 +24,7 @@ public sealed class NewRunViewModelTests : IDisposable
     private readonly INavigator _navigator = Substitute.For<INavigator>();
     private readonly ISettingsStore _settings = Substitute.For<ISettingsStore>();
     private readonly FakeStrings _strings = new();
-    private readonly NewRunViewModel _viewModel;
+    private NewRunViewModel _viewModel;
 
     public NewRunViewModelTests()
     {
@@ -46,14 +46,15 @@ public sealed class NewRunViewModelTests : IDisposable
         }
     }
 
-    private NewRunViewModel NewViewModel() => new(
+    private NewRunViewModel NewViewModel(IPastedInputStore? store = null, Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null) => new(
         _picker,
         _settings,
         _jobEngine,
         _navigator,
         _strings,
-        new LocalPastedInputStore(_appData),
-        new FixedTimeProvider(new DateTimeOffset(2026, 10, 3, 14, 7, 0, TimeSpan.Zero)));
+        store ?? new LocalPastedInputStore(_appData),
+        new FixedTimeProvider(new DateTimeOffset(2026, 10, 3, 14, 7, 0, TimeSpan.Zero)),
+        validate);
 
     private string Write(string name, string content)
     {
@@ -159,12 +160,12 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task The_notices_of_the_validator_are_shown_verbatim()
+    public async Task A_notice_about_repeated_ids_is_shown_as_copy_with_its_number()
     {
-        var pill = await AddOne(Write("two.fasta", ">a\n" + Dna + "\n>b\n" + Dna + "\n"));
+        var pill = await AddOne(Write("dup.fasta", ">a\n" + Dna + "\n>a\n" + Dna + "\n"));
 
         pill.HasNotices.ShouldBeTrue();
-        pill.NoticesText.ShouldContain("Read 2 record(s) from the FASTA (all processed).");
+        pill.NoticesText.ShouldBe("NewRunNotice_RepeatedIds:1");
     }
 
     [Fact]
@@ -280,7 +281,7 @@ public sealed class NewRunViewModelTests : IDisposable
         await _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
 
         pill.IsValid.ShouldBeTrue();
-        pill.NoticesText.ShouldContain("Converted 4 U->T (RNA input).");
+        pill.NoticesText.ShouldBe("NewRunNotice_RnaConverted:4");
         _viewModel.OfferTreatAsRna.ShouldBeFalse();
         _viewModel.IsTreatingAsRna.ShouldBeTrue();
         _viewModel.StartRunCommand.CanExecute(null).ShouldBeTrue();
@@ -408,6 +409,245 @@ public sealed class NewRunViewModelTests : IDisposable
     public void With_nothing_selected_the_preview_is_empty()
         => _viewModel.RunNamePreview.ShouldBe(string.Empty);
 
+
+    // ---- Review of #63 ----
+
+    /// <summary>A validator whose first call waits at a gate, so a later call can finish before it.</summary>
+    private sealed class GatedValidator
+    {
+        private readonly ManualResetEventSlim _gate = new(false);
+        private int _calls;
+
+        public ManualResetEventSlim Entered { get; } = new(false);
+
+        public void Release() => _gate.Set();
+
+        public InputValidationResult Validate(string path, InputFormat format, AmbiguityPolicy policy, bool treatAsRna)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                Entered.Set();
+                _gate.Wait(TimeSpan.FromSeconds(20));
+            }
+
+            return InputFileValidator.Validate(path, format, policy, treatAsRna);
+        }
+    }
+
+    [Fact]
+    public async Task An_older_validation_that_finishes_last_does_not_overwrite_a_newer_one()
+    {
+        var gated = new GatedValidator();
+        _viewModel = NewViewModel(validate: gated.Validate);
+        var path = Write("rna.fasta", ">r\n" + Rna + "\n");
+
+        var adding = _viewModel.AddPathsCommand.ExecuteAsync(new[] { path });
+        gated.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        await _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+        var pill = _viewModel.Items.Single();
+        pill.IsValid.ShouldBeTrue();
+
+        gated.Release();
+        await adding;
+
+        pill.IsValid.ShouldBeTrue();
+        pill.NeedsRnaChoice.ShouldBeFalse();
+        _viewModel.OfferTreatAsRna.ShouldBeFalse();
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_check_that_is_cancelled_leaves_the_checking_state_with_one_action()
+    {
+        _viewModel = NewViewModel(validate: (_, _, _, _) => throw new OperationCanceledException());
+
+        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { Write("a.fasta", ">a\n" + Dna + "\n") });
+
+        var pill = _viewModel.Items.Single();
+        pill.IsChecking.ShouldBeFalse();
+        pill.IsValid.ShouldBeFalse();
+        pill.ErrorText.ShouldBe("NewRunPillCheckStopped");
+    }
+
+    [Fact]
+    public async Task A_second_drop_while_the_first_is_still_being_checked_is_not_lost()
+    {
+        var gated = new GatedValidator();
+        _viewModel = NewViewModel(validate: gated.Validate);
+        var first = Write("first.fasta", ">a\n" + Dna + "\n");
+        var second = Write("second.fasta", ">b\n" + Dna + "\n");
+        var third = Write("third.fasta", ">c\n" + Dna + "\n");
+
+        // A command that disallows concurrent runs cancels the running one when a second drop arrives, which
+        // would stop the checks still queued behind the first file of the first drop.
+        _viewModel.AddDroppedCommand.Execute(new DroppedItems([first, second], 0, false));
+        var firstDrop = _viewModel.AddDroppedCommand.ExecutionTask!;
+        gated.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        _viewModel.AddDroppedCommand.Execute(new DroppedItems([third], 0, false));
+        var secondDrop = _viewModel.AddDroppedCommand.ExecutionTask!;
+        gated.Release();
+        await firstDrop;
+        await secondDrop;
+
+        _viewModel.Items.Select(i => i.DisplayName).ShouldBe(["first.fasta", "second.fasta", "third.fasta"], ignoreOrder: true);
+        _viewModel.Items.ShouldAllBe(i => i.IsValid);
+    }
+
+    [Fact]
+    public async Task A_drop_with_virtual_items_adds_the_real_files_and_tells_the_user_one_action()
+    {
+        var path = Write("a.fasta", ">a\n" + Dna + "\n");
+
+        await _viewModel.AddDroppedCommand.ExecuteAsync(new DroppedItems([path], SkippedVirtual: 2, Failed: false));
+
+        _viewModel.Items.Single().Path.ShouldBe(path);
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusDropVirtual");
+    }
+
+    [Fact]
+    public async Task A_drop_that_could_not_be_read_says_so_and_adds_nothing()
+    {
+        await _viewModel.AddDroppedCommand.ExecuteAsync(new DroppedItems([], SkippedVirtual: 0, Failed: true));
+
+        _viewModel.Items.ShouldBeEmpty();
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusDropFailed");
+    }
+
+    [Fact]
+    public async Task A_clean_drop_clears_the_status_line()
+    {
+        await _viewModel.AddDroppedCommand.ExecuteAsync(new DroppedItems([], SkippedVirtual: 1, Failed: false));
+        await _viewModel.AddDroppedCommand.ExecuteAsync(new DroppedItems([Write("a.fasta", ">a\n" + Dna + "\n")], 0, false));
+
+        _viewModel.StatusMessage.ShouldBe(string.Empty);
+    }
+
+    [Fact]
+    public async Task The_page_says_run_runs_only_the_selected_file_once_there_are_several()
+    {
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _viewModel.HasSeveralItems.ShouldBeFalse();
+
+        await AddOne(Write("b.fasta", ">b\n" + Dna + "\n"));
+        _viewModel.HasSeveralItems.ShouldBeTrue();
+
+        _viewModel.RemoveItemCommand.Execute(_viewModel.Items[0]);
+        _viewModel.HasSeveralItems.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_missing_file_shows_the_kind_its_extension_implies_or_none()
+    {
+        (await AddOne(Path.Combine(_dir, "gone.fasta"))).KindText.ShouldBe("FASTA");
+        (await AddOne(Path.Combine(_dir, "gone.gb"))).KindText.ShouldBe("GenBank");
+        (await AddOne(Path.Combine(_dir, "gone.xyz"))).KindText.ShouldBe(string.Empty);
+    }
+
+    private sealed class ThreadRecordingStore(string root) : IPastedInputStore
+    {
+        public int SaveThread { get; private set; }
+
+        public string Save(string text)
+        {
+            SaveThread = Environment.CurrentManagedThreadId;
+            return new LocalPastedInputStore(root).Save(text);
+        }
+    }
+
+    [Fact]
+    public void Saving_a_paste_does_not_run_on_the_thread_that_called_the_command()
+    {
+        var store = new ThreadRecordingStore(_appData);
+        _viewModel = NewViewModel(store);
+        _viewModel.PasteText = Dna;
+        var callerThread = 0;
+
+        var caller = new Thread(() =>
+        {
+            callerThread = Environment.CurrentManagedThreadId;
+            _viewModel.AddPastedCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+        });
+        caller.Start();
+        caller.Join();
+
+        store.SaveThread.ShouldNotBe(0);
+        store.SaveThread.ShouldNotBe(callerThread);
+    }
+
+    [Fact]
+    public async Task A_paste_that_fails_validation_keeps_the_text_leaves_no_pill_and_names_the_problem()
+    {
+        _viewModel.PasteText = "ACGTXACGTACGTAC";
+
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+
+        _viewModel.PasteText.ShouldBe("ACGTXACGTACGTAC");
+        _viewModel.Items.ShouldBeEmpty();
+        _viewModel.StatusMessage.ShouldStartWith(RunErrorCodes.ResourceKey(RunErrorCodes.InputInvalidCharacter));
+        Directory.GetFiles(Path.Combine(_appData, "pasted")).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_paste_with_a_U_clears_the_box_and_keeps_its_pill_for_the_RNA_offer()
+    {
+        _viewModel.PasteText = Rna;
+
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+
+        _viewModel.PasteText.ShouldBe(string.Empty);
+        _viewModel.Items.Single().NeedsRnaChoice.ShouldBeTrue();
+    }
+
+    private sealed class FailingStore : IPastedInputStore
+    {
+        public string Save(string text) => throw new IOException("disk full");
+    }
+
+    [Fact]
+    public async Task A_paste_that_cannot_be_saved_keeps_the_text_and_says_so()
+    {
+        _viewModel = NewViewModel(new FailingStore());
+        _viewModel.PasteText = Dna;
+
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+
+        _viewModel.PasteText.ShouldBe(Dna);
+        _viewModel.Items.ShouldBeEmpty();
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusPasteFailed");
+    }
+
+    [Fact]
+    public async Task Removing_a_pasted_pill_deletes_its_saved_file_but_never_a_users_file()
+    {
+        _viewModel.PasteText = Dna;
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        var pasted = _viewModel.Items.Single();
+        var users = await AddOne(Write("mine.fasta", ">a\n" + Dna + "\n"));
+
+        _viewModel.RemoveItemCommand.Execute(pasted);
+        _viewModel.RemoveItemCommand.Execute(users);
+
+        File.Exists(pasted.Path).ShouldBeFalse();
+        File.Exists(users.Path).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Notices_are_resw_copy_chosen_by_code_not_the_validators_english()
+    {
+        var pill = await AddOne(Write("rna.fasta", ">r\n" + Rna + "\n"));
+        await _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+
+        pill.NoticesText.ShouldBe("NewRunNotice_RnaConverted:4");
+        pill.NoticesText.ShouldNotContain("U->T");
+    }
+
+    [Fact]
+    public async Task The_notices_the_pill_summary_already_covers_are_not_repeated()
+    {
+        var pill = await AddOne(Write("two.fasta", ">a\n" + Dna + "\n>b\n" + Dna + "\n"));
+
+        pill.HasNotices.ShouldBeFalse();
+    }
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
@@ -432,6 +672,8 @@ public sealed class NewRunViewModelTests : IDisposable
             ["NewRunPasteCount"] = "NewRunPasteCount:{0}",
             ["NewRunStatusPathNotFound"] = "NewRunStatusPathNotFound:{0}",
             ["NewRunStatusFolderEmpty"] = "NewRunStatusFolderEmpty:{0}",
+            ["NewRunNotice_RnaConverted"] = "NewRunNotice_RnaConverted:{0}",
+            ["NewRunNotice_RepeatedIds"] = "NewRunNotice_RepeatedIds:{0}",
         };
 
         public string GetString(string key) => Templates.GetValueOrDefault(key, key);

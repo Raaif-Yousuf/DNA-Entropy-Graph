@@ -58,14 +58,50 @@ public sealed partial class InputPillItem : ObservableObject
 
     partial void OnNoticesTextChanged(string value) => OnPropertyChanged(nameof(HasNotices));
 
-    /// <summary>Marks the pill as being checked again (the options changed).</summary>
-    public void BeginChecking() => IsChecking = true;
+    private int _generation;
 
-    /// <summary>Shows what the validator found. Notices are the validator's own text; a problem is copy from <c>Resources.resw</c>.</summary>
-    public void Apply(InputValidationResult result)
+    /// <summary>The problem the last finished check found, kept so the page can offer a fix; null when valid or unchecked.</summary>
+    public InputProblem? Problem { get; private set; }
+
+    /// <summary>
+    /// Marks the pill as being checked (again) and returns this check's number. Only the check holding the latest
+    /// number may report (<see cref="Apply"/>, <see cref="Abandon"/>), so an older, slower check never overwrites a newer one.
+    /// </summary>
+    public int BeginChecking()
+    {
+        IsChecking = true;
+        return ++_generation;
+    }
+
+    /// <summary>Ends a check that was cancelled: the pill leaves the checking state with one action for the user. Ignored when a newer check has started.</summary>
+    public void Abandon(int generation)
+    {
+        if (generation != _generation)
+        {
+            return;
+        }
+
+        Problem = null;
+        KindText = string.Empty;
+        SummaryText = string.Empty;
+        NoticesText = string.Empty;
+        NeedsRnaChoice = false;
+        ErrorText = _strings.GetString("NewRunPillCheckStopped");
+        HasError = true;
+        IsChecking = false;
+    }
+
+    /// <summary>Shows what the validator found; ignored (false) when a newer check has started. Notices are <c>Resources.resw</c> copy chosen by code; a problem is too.</summary>
+    public bool Apply(InputValidationResult result, int generation)
     {
         ArgumentNullException.ThrowIfNull(result);
-        KindText = _strings.GetString(result.Kind switch
+        if (generation != _generation)
+        {
+            return false;
+        }
+
+        var kind = KindFor(result);
+        KindText = kind is null ? string.Empty : _strings.GetString(kind switch
         {
             InputKind.GenBank => "NewRunPillKind_GenBank",
             InputKind.Fasta => "NewRunPillKind_Fasta",
@@ -73,13 +109,32 @@ public sealed partial class InputPillItem : ObservableObject
         });
         // A failed file stops at its first problem, so its counts would be partial: show none.
         SummaryText = result.IsValid ? Summary(result) : string.Empty;
-        NoticesText = string.Join('\n', result.Notices);
+        NoticesText = string.Join('\n', result.NoticeCodes.Select(NoticeText).OfType<string>());
+        Problem = result.Problem;
 
         var problem = result.Problem;
         NeedsRnaChoice = problem?.Code == InputProblemCode.RnaNotAllowed;
         HasError = problem is not null;
         ErrorText = problem is null ? string.Empty : NeedsRnaChoice ? _strings.GetString("NewRunPillRnaNotice") : ProblemText(problem);
         IsChecking = false;
+        return true;
+    }
+
+    /// <summary>The kind to show. A file that could not be read has no sniffed kind, so its extension decides, or nothing is shown.</summary>
+    private InputKind? KindFor(InputValidationResult result)
+    {
+        if (result.IsValid || result.Kind != InputKind.Paste)
+        {
+            return result.Kind;
+        }
+
+        return IsPasted ? InputKind.Paste : SequenceSniffer.DetectKindByExtension(Path);
+    }
+
+    private string? NoticeText(InputNotice notice)
+    {
+        var key = InputNoticeCopy.KeyFor(notice.Code);
+        return key is null ? null : Format(key, notice.Count, notice.Other);
     }
 
     private string Summary(InputValidationResult result)

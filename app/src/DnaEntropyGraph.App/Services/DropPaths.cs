@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Presentation.ViewModels;
 using Microsoft.UI.Xaml;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -10,15 +11,33 @@ internal static class DropPaths
     public static void AcceptFiles(DragEventArgs e)
         => e.AcceptedOperation = e.DataView.Contains(StandardDataFormats.StorageItems) ? DataPackageOperation.Copy : DataPackageOperation.None;
 
-    /// <summary>The paths of every file and folder dropped; empty when the drop carried none.</summary>
-    public static async Task<IReadOnlyList<string>> ReadAsync(DragEventArgs e)
+    /// <summary>
+    /// The paths of every file and folder dropped. Never throws (the page calls this from an <c>async void</c> event
+    /// handler, where an exception ends the app): a drop that cannot be read comes back as <c>Failed</c>, and an
+    /// item with no path (a file inside a zip, an e-mail attachment) is counted, not turned into a blank pill.
+    /// </summary>
+    public static async Task<DroppedItems> ReadAsync(DragEventArgs e)
     {
-        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        var deferral = e.GetDeferral();
+        try
         {
-            return [];
-        }
+            if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+            {
+                return new DroppedItems([], 0, false);
+            }
 
-        var items = await e.DataView.GetStorageItemsAsync();
-        return items.Select(item => item.Path).ToList();
+            var items = await e.DataView.GetStorageItemsAsync();
+            var paths = items.Select(item => item.Path).Where(path => !string.IsNullOrEmpty(path)).ToList();
+            return new DroppedItems(paths, items.Count - paths.Count, false);
+        }
+        catch (Exception)
+        {
+            // Any failure of the shell's drag data (a revoked drop, a COM error) means "could not read this drop".
+            return new DroppedItems([], 0, true);
+        }
+        finally
+        {
+            deferral.Complete();
+        }
     }
 }

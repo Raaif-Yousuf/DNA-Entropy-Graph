@@ -32,14 +32,14 @@ public sealed class InputFolderScannerTests : IDisposable
     }
 
     [Fact]
-    public void Only_files_with_a_sequence_extension_are_returned_in_name_order()
+    public void Only_files_the_Add_files_picker_offers_are_returned_in_name_order()
     {
         var b = Touch("b.fasta");
         var a = Touch("a.GB");
+        var c = Touch("plain.txt");
         Touch("notes.docx");
-        Touch("readme.txt");
 
-        InputFolderScanner.SequenceFiles(_dir).ShouldBe([a, b]);
+        InputFolderScanner.SequenceFiles(_dir).ShouldBe([a, b, c]);
     }
 
     [Fact]
