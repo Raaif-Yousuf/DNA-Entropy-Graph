@@ -94,7 +94,8 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
     /// </summary>
     public async Task<string> GetProjectNumberAsync(string projectId, CancellationToken cancellationToken)
     {
-        var project = ProjectIdGenerator.IsValid(projectId) ? await FetchAsync(projectId, cancellationToken).ConfigureAwait(false) : null;
+        // Permissive on purpose: legacy and domain-scoped ids ("example.com:proj") are real projects the strict grammar rejects.
+        var project = !string.IsNullOrWhiteSpace(projectId) && !projectId.Contains('/') && !projectId.Any(char.IsWhiteSpace) ? await FetchAsync(projectId, cancellationToken).ConfigureAwait(false) : null;
         var name = project?.Name;
         if (name is null || !name.StartsWith("projects/", StringComparison.Ordinal) || name.Length == "projects/".Length)
         {

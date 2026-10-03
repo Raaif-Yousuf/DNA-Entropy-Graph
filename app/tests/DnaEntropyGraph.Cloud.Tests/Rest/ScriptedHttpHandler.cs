@@ -4,7 +4,7 @@ using System.Text;
 namespace DnaEntropyGraph.Cloud.Tests.Rest;
 
 /// <summary>One request the real gateway sent: what a wired-to-nothing gateway would get wrong.</summary>
-internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Authorization, string Body);
+internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Authorization, string Body, string? ContentRange = null);
 
 /// <summary>
 /// The HTTP-level fake for the real Google gateways (no GCP access: nothing here ever leaves the process). A route is a
@@ -50,7 +50,7 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body));
+        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString()));
 
         if (_routes.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var queue) && queue.Count > 0)
         {

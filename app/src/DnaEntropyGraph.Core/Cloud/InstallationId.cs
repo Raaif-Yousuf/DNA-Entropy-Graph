@@ -20,6 +20,9 @@ public static class InstallationId
     // installation ids (Hard Rule 9 discovers resources by this label).
     private static readonly object Gate = new();
 
+    /// <summary>True when <paramref name="value"/> is a legal Google label value (lowercase letters, digits, <c>_</c>, <c>-</c>; 1 to 63).</summary>
+    public static bool IsValidLabelValue(string? value) => value is not null && LabelValue.IsMatch(value);
+
     public static string GetOrCreate(ISettingsStore settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
