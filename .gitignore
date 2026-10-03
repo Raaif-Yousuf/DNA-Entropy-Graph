@@ -27,6 +27,8 @@ app/secrets/*.local.json
 # Outputs
 out/
 runs/
+# The app has source folders named Runs (Core/Runs, tests); the case-insensitive match above must not hide them.
+!app/**/Runs/
 
 # OS
 Thumbs.db
