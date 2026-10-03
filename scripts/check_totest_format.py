@@ -186,6 +186,25 @@ def is_stale(age_days: int, max_age_days: int) -> bool:
     return age_days > max_age_days
 
 
+def find_duplicate_rows(rows: list[Row]) -> list[str]:
+    """One problem per row repeating an earlier row's issue number and "Do this"
+    text (whitespace-normalised, case-insensitive). One issue may legitimately
+    have several rows, so only the issue + "Do this" pair counts as a duplicate."""
+    seen: dict[tuple[str, str], int] = {}
+    problems: list[str] = []
+    for row in rows:
+        if len(row.cells) < 4:
+            continue  # malformed shape is reported by validate_row_shape
+        key = (row.cells[0].strip().lower(), " ".join(row.cells[3].split()).lower())
+        if key in seen:
+            problems.append(
+                f"L{row.line_no}: duplicate of L{seen[key]} (same issue {row.cells[0].strip()} and same 'Do this') "
+                "-- delete one"
+            )
+        else:
+            seen[key] = row.line_no
+    return problems
+
 def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(UTC)
     path = root / TOTEST_RELATIVE
@@ -195,7 +214,7 @@ def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[st
     text = path.read_text(encoding="utf-8", errors="replace")
     rows = parse_rows(text)
 
-    problems: list[str] = []
+    problems: list[str] = find_duplicate_rows(rows)
     for row in rows:
         shape_problems = validate_row_shape(row)
         problems.extend(shape_problems)
