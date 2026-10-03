@@ -46,7 +46,7 @@ DNA-Entropy-Graph/
 │   ├── ISSUE_TEMPLATE/ feature.yml  bug.yml  decision.yml  config.yml
 │   ├── PULL_REQUEST_TEMPLATE.md  labels.yml  dependabot.yml
 └── scripts/
-    ├── hooks/ block_recursive_delete.py  block_git_stash.py  block_unlabelled_vm_create.py  block_agent_dispatch_in_worktree.py  README.md
+    ├── hooks/ block_recursive_delete.py  block_git_stash.py  block_unlabelled_vm_create.py  block_agent_dispatch_in_worktree.py  block_primary_checkout_git.py  README.md
     ├── compile_sprint_log.py  issue_precheck.py  sync_memory.py  triage_diagnostics.py
     └── check_*.py  gen_*.py  sync_labels.ps1  new_issue.ps1  dev_app.ps1  dev_worker.ps1  gcp_burn.ps1  cloud_gpu_test.ps1  (pending)
 ```
@@ -98,7 +98,7 @@ DNA-Entropy-Graph/
 │   ├── ISSUE_TEMPLATE/  PULL_REQUEST_TEMPLATE.md  labels.yml  dependabot.yml   live
 │
 ├── scripts/
-│   ├── hooks/ block_recursive_delete.py  block_git_stash.py  block_unlabelled_vm_create.py  block_agent_dispatch_in_worktree.py  README.md   live
+│   ├── hooks/ block_recursive_delete.py  block_git_stash.py  block_unlabelled_vm_create.py  block_agent_dispatch_in_worktree.py  block_primary_checkout_git.py  README.md   live
 │   ├── compile_sprint_log.py  issue_precheck.py  sync_memory.py  triage_diagnostics.py   live
 │   ├── tests/  test_compile_sprint_log.py  test_issue_precheck.py  test_sync_memory.py  test_hooks.py   live
 │   └── check_*.py  gen_*.py  *.ps1                                          DOES NOT EXIST YET
