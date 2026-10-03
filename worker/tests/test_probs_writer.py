@@ -394,7 +394,7 @@ def test_a_job_that_names_probs_lists_both_files_in_result_json_with_hashes(tmp_
     assert (tmp_path / probs["path"]).read_bytes()[:2] == b"\x1f\x8b"  # the uploaded object is the gzip
 
 
-def test_a_job_that_does_not_name_probs_never_uploads_them_even_with_outputs_unspecified(
+def test_a_job_that_does_not_name_probs_never_uploads_them_even_if_outputs_is_empty(
     tmp_path: Path,
 ) -> None:
     for sub, outputs in (("none", []), ("some", ["bedgraph", "tsv"])):
