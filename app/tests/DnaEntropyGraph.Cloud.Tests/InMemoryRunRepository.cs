@@ -18,8 +18,30 @@ internal sealed class InMemoryRunRepository : IRunRepository
 
     public IReadOnlyList<RunRecord> AllRecordedInOrder => _runs.ToList();
 
-    public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
-        => Task.FromResult<IReadOnlyList<RunRecord>>(_runs.ToList());
+    /// <summary>Runs before each read with the 1-based number of the read since it was set: a test parks the Nth reader here (honouring its token). Null: reads pass straight through.</summary>
+    public Func<int, CancellationToken, Task>? BeforeGetAll
+    {
+        get => _beforeGetAll;
+        set
+        {
+            _getAllCalls = 0;
+            _beforeGetAll = value;
+        }
+    }
+
+    private Func<int, CancellationToken, Task>? _beforeGetAll;
+    private int _getAllCalls;
+
+    public async Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
+    {
+        var call = Interlocked.Increment(ref _getAllCalls);
+        if (BeforeGetAll is { } hook)
+        {
+            await hook(call, cancellationToken).ConfigureAwait(false);
+        }
+
+        return _runs.ToList();
+    }
 
     public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {

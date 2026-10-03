@@ -121,7 +121,7 @@ public class JobEngineTests
                 ResultPollInterval = TimeSpan.FromMilliseconds(1),
                 ResultTimeout = TimeSpan.FromSeconds(5),
             };
-            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), new LocalRunInputStore(AppData), ImageProvider, downloads);
+            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), new LocalRunInputStore(AppData), ImageProvider, new ActiveRuns(), downloads);
         }
 
         public StaticImageProvider ImageProvider { get; }
