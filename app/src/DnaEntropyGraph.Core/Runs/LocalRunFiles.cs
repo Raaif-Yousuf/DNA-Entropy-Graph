@@ -16,6 +16,12 @@ public enum LocalDeleteStatus
 
     /// <summary>Some files were deleted and some could not be; <see cref="LocalDeleteResult"/> says how many of each.</summary>
     Partial,
+
+    /// <summary>
+    /// The run's folder, or a folder between the output folder and it, is a junction or symbolic link. Nothing was deleted and
+    /// the link was not removed: following it would reach files somewhere else (Hard Rule 14).
+    /// </summary>
+    LinkRefused,
 }
 
 /// <summary>What a local delete did. The counts are files, not folders, and are set for <see cref="LocalDeleteStatus.Deleted"/> and <see cref="LocalDeleteStatus.Partial"/>.</summary>
@@ -58,9 +64,10 @@ public sealed class LocalRunFiles : ILocalRunFiles
         }
 
         string folder;
+        string root;
         try
         {
-            var root = RunOutputRoot.Resolve(run, _defaultOutputParent);
+            root = RunOutputRoot.Resolve(run, _defaultOutputParent);
             folder = Path.GetFullPath(run.OutputDir);
             if (!RunOutputRoot.IsStrictlyInside(folder, root) || _protectedPaths.Any(p => RunOutputRoot.Overlaps(folder, p)))
             {
@@ -77,7 +84,39 @@ public sealed class LocalRunFiles : ILocalRunFiles
             return new(LocalDeleteStatus.NothingToDelete);
         }
 
+        // Hard Rule 14: IsStrictlyInside is lexical, so a junction or symlink at the folder or above it (below the output folder)
+        // would still carry the delete into its target. Refuse rather than remove the link: the user did not ask to unlink anything.
+        if (HasLinkBetween(folder, root))
+        {
+            return new(LocalDeleteStatus.LinkRefused);
+        }
+
         return DeleteFilesThenFolders(folder);
+    }
+
+    /// <summary>True when <paramref name="folder"/>, or any folder above it up to (not including) <paramref name="root"/>, is a reparse point.</summary>
+    private static bool HasLinkBetween(string folder, string root)
+    {
+        var stop = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        try
+        {
+            for (var current = new DirectoryInfo(Path.TrimEndingDirectorySeparator(folder));
+                 current is not null && !string.Equals(current.FullName, stop, StringComparison.OrdinalIgnoreCase);
+                 current = current.Parent)
+            {
+                if (current.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Cannot prove the path is link-free: the safe answer is not to delete through it.
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

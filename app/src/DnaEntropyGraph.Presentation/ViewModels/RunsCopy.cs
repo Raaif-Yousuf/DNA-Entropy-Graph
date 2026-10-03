@@ -32,10 +32,14 @@ public static class RunsCopy
     public static readonly (string Title, string Body) RerunNoInput = Pair("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body");
     public static readonly (string Title, string Body) RerunFailed = Pair("Runs_Rerun_Failed_Title", "Runs_Rerun_Failed_Body");
     public static readonly (string Title, string Body) RemoveFailed = Pair("Runs_Remove_Failed_Title", "Runs_Remove_Failed_Body");
-    public static readonly (string Title, string Body) RedownloadChangedKeptAside = Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body");
     public static readonly (string Title, string Body) RefreshFailed = Pair("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body");
 
     private static readonly string[] FilterKeys = ["Runs_Filter_All", "Runs_Filter_Active", "Runs_Filter_Completed", "Runs_Filter_Failed", "Runs_Filter_Cancelled"];
+
+    /// <summary>The "changed files kept" copy for <paramref name="count"/> files: singular for exactly one (the <c>_One</c> key), else plural.</summary>
+    public static (string Title, string Body) RedownloadChangedKeptAside(int count) => count == 1
+        ? Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body_One")
+        : Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body");
 
     public static (string Title, string Body) Redownload(CloudResultsStatus status) => status switch
     {
@@ -64,6 +68,7 @@ public static class RunsCopy
         LocalDeleteStatus.InUse => Pair("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body"),
         LocalDeleteStatus.AccessDenied => Pair("Runs_DeleteLocal_AccessDenied_Title", "Runs_DeleteLocal_AccessDenied_Body"),
         LocalDeleteStatus.Partial => Pair("Runs_DeleteLocal_Partial_Title", "Runs_DeleteLocal_Partial_Body"),
+        LocalDeleteStatus.LinkRefused => Pair("Runs_DeleteLocal_Link_Title", "Runs_DeleteLocal_Link_Body"),
         _ => Pair("Runs_DeleteLocal_Refused_Title", "Runs_DeleteLocal_Refused_Body"),
     };
 
@@ -74,7 +79,7 @@ public static class RunsCopy
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         .. FilterKeys,
-        .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside),
+        .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),

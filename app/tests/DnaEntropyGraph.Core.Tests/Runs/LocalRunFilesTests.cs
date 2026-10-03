@@ -27,10 +27,27 @@ public sealed class LocalRunFilesTests : IDisposable
     {
         try
         {
+            UnlinkJunctions(new DirectoryInfo(_base));
             Directory.Delete(_base, recursive: true);
         }
         catch (IOException)
         {
+        }
+    }
+
+    // A recursive delete cannot cross a junction, so a test that left one behind would leak its folder: remove the links first.
+    private static void UnlinkJunctions(DirectoryInfo folder)
+    {
+        foreach (var directory in folder.EnumerateDirectories())
+        {
+            if (directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                directory.Delete(recursive: false);
+            }
+            else
+            {
+                UnlinkJunctions(directory);
+            }
         }
     }
 
@@ -114,6 +131,55 @@ public sealed class LocalRunFilesTests : IDisposable
         Make().DeleteOutputFolder(Run(folder)).ShouldBe(new LocalDeleteResult(LocalDeleteStatus.Deleted, FilesDeleted: 2, FilesRemaining: 0));
     }
 
+    private static void MakeJunction(string link, string target)
+    {
+        using var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true });
+        mk!.WaitForExit();
+        mk.ExitCode.ShouldBe(0, "could not create the test junction");
+    }
+
+    private string MakePreciousFolder()
+    {
+        var target = Path.Combine(_base, "Precious");
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "precious.txt"), "keep me");
+        Directory.CreateDirectory(Path.Combine(target, "sub"));
+        File.WriteAllText(Path.Combine(target, "sub", "deep.txt"), "keep me too");
+        return target;
+    }
+
+    [Fact]
+    public void A_run_folder_that_is_itself_a_junction_is_refused_and_the_target_survives()
+    {
+        var target = MakePreciousFolder();
+        var link = Path.Combine(_root, "sample");
+        MakeJunction(link, target);
+
+        var result = Make().DeleteOutputFolder(Run(link));
+
+        result.Status.ShouldBe(LocalDeleteStatus.LinkRefused);
+        File.ReadAllText(Path.Combine(target, "precious.txt")).ShouldBe("keep me");
+        File.ReadAllText(Path.Combine(target, "sub", "deep.txt")).ShouldBe("keep me too");
+        Directory.Exists(link).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_run_folder_under_a_junctioned_parent_is_refused_and_the_target_survives()
+    {
+        var target = MakePreciousFolder();
+        var runFolderInTarget = Path.Combine(target, "run");
+        Directory.CreateDirectory(runFolderInTarget);
+        File.WriteAllText(Path.Combine(runFolderInTarget, "a.bedgraph"), "x");
+        var linkedParent = Path.Combine(_root, "group");
+        MakeJunction(linkedParent, target);
+
+        var result = Make().DeleteOutputFolder(Run(Path.Combine(linkedParent, "run")));
+
+        result.Status.ShouldBe(LocalDeleteStatus.LinkRefused);
+        File.ReadAllText(Path.Combine(runFolderInTarget, "a.bedgraph")).ShouldBe("x");
+        File.ReadAllText(Path.Combine(target, "precious.txt")).ShouldBe("keep me");
+    }
+
     [Fact]
     public void A_junction_inside_the_run_folder_is_removed_as_a_link_and_its_target_is_untouched()
     {
@@ -122,12 +188,7 @@ public sealed class LocalRunFilesTests : IDisposable
         Directory.CreateDirectory(target);
         var precious = Path.Combine(target, "precious.txt");
         File.WriteAllText(precious, "keep me");
-        var link = Path.Combine(folder, "link");
-        using (var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true }))
-        {
-            mk!.WaitForExit();
-            mk.ExitCode.ShouldBe(0, "could not create the test junction");
-        }
+        MakeJunction(Path.Combine(folder, "link"), target);
 
         var result = Make().DeleteOutputFolder(Run(folder));
 

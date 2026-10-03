@@ -81,6 +81,18 @@ public interface IRunCloudResults
     Task<CloudResultsStatus> DeleteAsync(RunRecord run, CancellationToken cancellationToken);
 }
 
+/// <summary>Moves one file without ever overwriting. A seam so a test can make a move fail where only a real disk race would.</summary>
+public interface IRunFileMover
+{
+    /// <summary>Moves <paramref name="source"/> to <paramref name="destination"/>; throws <see cref="IOException"/> if the destination exists.</summary>
+    void Move(string source, string destination);
+}
+
+public sealed class DiskRunFileMover : IRunFileMover
+{
+    public void Move(string source, string destination) => File.Move(source, destination, overwrite: false);
+}
+
 public sealed class RunCloudResults : IRunCloudResults
 {
     private readonly IStorageGateway _storage;
@@ -88,9 +100,11 @@ public sealed class RunCloudResults : IRunCloudResults
     private readonly IRunRepository _runs;
     private readonly Func<string> _defaultOutputParent;
     private readonly TimeProvider _time;
+    private readonly IRunFileMover _mover;
 
-    public RunCloudResults(IStorageGateway storage, IJobObjectDeleter deleter, IRunRepository runs, Func<string> defaultOutputParent, TimeProvider time)
+    public RunCloudResults(IStorageGateway storage, IJobObjectDeleter deleter, IRunRepository runs, Func<string> defaultOutputParent, TimeProvider time, IRunFileMover? mover = null)
     {
+        _mover = mover ?? new DiskRunFileMover();
         _storage = storage;
         _deleter = deleter;
         _runs = runs;
@@ -116,6 +130,7 @@ public sealed class RunCloudResults : IRunCloudResults
             return CloudResultsStatus.Refused;
         }
 
+        var tally = new KeptAsideTally();
         try
         {
             await using var resultStream = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + "result.json", cancellationToken).ConfigureAwait(false);
@@ -136,24 +151,20 @@ public sealed class RunCloudResults : IRunCloudResults
                 return CloudResultsStatus.Refused;
             }
 
-            var changed = 0;
             foreach (var file in result.Inputs.SelectMany(i => i.Files))
             {
-                if (await DownloadFileAsync(run, folder, file, cancellationToken).ConfigureAwait(false))
-                {
-                    changed++;
-                }
+                await DownloadFileAsync(run, folder, file, tally, cancellationToken).ConfigureAwait(false);
             }
-
 
             // Same rule as RunOutcomeRecorder: every input finished with files, else the history says "partly completed".
             var allInputsDone = result.Inputs.All(i => i.Status == "done" && i.Files.Count > 0);
-            return new(string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial, changed);
+            return new(string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial, tally.Count);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Network, storage, disk or a malformed result: every one is "download failed, try again", never a crash.
-            return CloudResultsStatus.Failed;
+            // The files already moved aside stay reported: the user must still be told where their changed copies went.
+            return new(CloudResultsStatus.Failed, tally.Count);
         }
     }
 
@@ -211,18 +222,46 @@ public sealed class RunCloudResults : IRunCloudResults
         return RunOutputRoot.IsStrictlyInside(folder, root) ? folder : null;
     }
 
-    private string FreeAsideName(string path)
+    /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>
+    private sealed class KeptAsideTally
+    {
+        public int Count { get; set; }
+    }
+
+    private const int MaxAsideTries = 50;
+
+    private string AsideCandidate(string path, int attempt)
     {
         var stamp = _time.GetLocalNow().ToString("yyyy-MM-dd HHmmss", System.Globalization.CultureInfo.InvariantCulture);
         var stem = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + " (changed " + stamp);
-        var ext = Path.GetExtension(path);
-        var candidate = stem + ")" + ext;
-        for (var n = 2; File.Exists(candidate); n++)
+        return (attempt == 1 ? stem + ")" : $"{stem} {attempt})") + Path.GetExtension(path);
+    }
+
+    /// <summary>
+    /// Renames <paramref name="path"/> to a free <c>name (changed time).ext</c> and returns that name. A name that turns out taken
+    /// between the check and the move (another program, another re-download) is not an error: the next counter is tried, a bounded number of times.
+    /// </summary>
+    private string MoveAside(string path)
+    {
+        for (var attempt = 1; attempt <= MaxAsideTries; attempt++)
         {
-            candidate = $"{stem} {n}){ext}";
+            var candidate = AsideCandidate(path, attempt);
+            if (File.Exists(candidate))
+            {
+                continue;
+            }
+
+            try
+            {
+                _mover.Move(path, candidate);
+                return candidate;
+            }
+            catch (IOException) when (attempt < MaxAsideTries)
+            {
+            }
         }
 
-        return candidate;
+        throw new IOException("No free name was found to keep the changed file under.");
     }
 
     /// <summary>
@@ -246,8 +285,8 @@ public sealed class RunCloudResults : IRunCloudResults
         return string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <returns>True when a changed local file was kept aside to make room for the original.</returns>
-    private async Task<bool> DownloadFileAsync(RunRecord run, string folder, WorkerResultFile file, CancellationToken cancellationToken)
+    /// <summary>Fetches one file. A changed local file is renamed aside first and counted in <paramref name="tally"/>.</summary>
+    private async Task DownloadFileAsync(RunRecord run, string folder, WorkerResultFile file, KeptAsideTally tally, CancellationToken cancellationToken)
     {
         var relative = RunTransfer.SafeRelativeOutputPath(file.Path, "A result file");
         var destination = Path.GetFullPath(Path.Combine(folder, relative));
@@ -259,7 +298,7 @@ public sealed class RunCloudResults : IRunCloudResults
         var exists = File.Exists(destination);
         if (exists && await IsKeptFileIntactAsync(destination, file, cancellationToken).ConfigureAwait(false))
         {
-            return false;
+            return;
         }
 
         await using var source = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + file.Path, cancellationToken).ConfigureAwait(false)
@@ -294,13 +333,32 @@ public sealed class RunCloudResults : IRunCloudResults
 
             // Reached for a missing file, or a kept one that failed its size or checksum. The download is already verified, so a
             // failure above leaves the user's file exactly where it was; only now is it moved aside, never overwritten.
+            string? aside = null;
             if (exists)
             {
-                File.Move(destination, FreeAsideName(destination), overwrite: false);
+                aside = MoveAside(destination);
+                tally.Count++;
             }
 
-            File.Move(partial, destination, overwrite: false);
-            return exists;
+            try
+            {
+                _mover.Move(partial, destination);
+            }
+            catch (Exception) when (aside is not null)
+            {
+                // The user's file must never be left renamed with nothing in its place: put it back, and only then report the failure.
+                try
+                {
+                    _mover.Move(aside, destination);
+                    tally.Count--;
+                }
+                catch (IOException)
+                {
+                    // Could not put it back; it is still safe under its changed name, which the tally keeps reporting.
+                }
+
+                throw;
+            }
         }
         finally
         {

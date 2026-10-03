@@ -41,7 +41,7 @@ public sealed class RunCloudResultsTests : IDisposable
         }
     }
 
-    private RunCloudResults Make(IStorageGateway? storage = null) => new(storage ?? _gcp, _deleter, _runs, () => _root, new FixedTime(_now));
+    private RunCloudResults Make(IStorageGateway? storage = null, IRunFileMover? mover = null) => new(storage ?? _gcp, _deleter, _runs, () => _root, new FixedTime(_now), mover);
 
     private static string Prefix => WorkerManifestBuilder.JobPrefix(JobId);
 
@@ -252,6 +252,92 @@ public sealed class RunCloudResultsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_failure_partway_through_still_reports_the_files_already_kept_aside()
+    {
+        var good = BedGraph;
+        var hash = Convert.ToHexString(SHA256.HashData(good));
+        string Entry(string name, string sha) => $$"""{"path":"output/{{name}}.bedgraph","sha256":"{{sha}}","bytes":{{good.Length}}}""";
+        var files = string.Join(',', Entry("a", hash), Entry("b", hash), Entry("c", new string('0', 64)));
+        var json = $$"""{"schema":1,"status":"done","inputs":[{"id":"in1","status":"done","files":[{{files}}]}]}""";
+        _gcp.PutObject(Bucket, Prefix + "result.json", Encoding.UTF8.GetBytes(json));
+        foreach (var name in new[] { "a", "b", "c" })
+        {
+            _gcp.PutObject(Bucket, Prefix + $"output/{name}.bedgraph", good);
+        }
+
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(Path.Combine(folder, "a.bedgraph"), new byte[2]);
+
+        var result = await Make().RedownloadAsync(Run(folder), CancellationToken.None);
+
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Failed, ChangedKeptAside: 1));
+        File.ReadAllBytes(Path.Combine(folder, "a.bedgraph")).ShouldBe(good);
+        File.ReadAllBytes(Path.Combine(folder, AsideName("a"))).ShouldBe(new byte[2]);
+    }
+
+    [Fact]
+    public async Task A_final_move_that_fails_puts_the_users_file_back_where_it_was()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+        var mover = new ScriptedMover((source, _) => source.EndsWith(".part", StringComparison.Ordinal) ? new IOException("disk full") : null);
+
+        var result = await Make(mover: mover).RedownloadAsync(Run(folder), CancellationToken.None);
+
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Failed, ChangedKeptAside: 0));
+        File.ReadAllText(kept).ShouldBe("my edits");
+        Directory.GetFiles(folder).Length.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_aside_name_taken_between_the_check_and_the_move_retries_with_the_next_counter()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+        var raced = false;
+        var mover = new ScriptedMover((_, destination) =>
+        {
+            if (raced || !destination.Contains("(changed", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            raced = true;
+            return new IOException("name taken");
+        });
+
+        var result = await Make(mover: mover).RedownloadAsync(Run(folder), CancellationToken.None);
+
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Done, ChangedKeptAside: 1));
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+        File.ReadAllText(Path.Combine(folder, $"sample (changed {new FixedTime(_now).GetLocalNow():yyyy-MM-dd HHmmss} 2).bedgraph")).ShouldBe("my edits");
+    }
+
+    [Fact]
+    public async Task An_aside_that_can_never_be_moved_fails_after_a_bounded_number_of_tries_and_leaves_the_file()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+        var attempts = 0;
+        var mover = new ScriptedMover((_, destination) => destination.Contains("(changed", StringComparison.Ordinal) && ++attempts > 0 ? new IOException("name taken") : null);
+
+        (await Make(mover: mover).RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.Failed);
+
+        File.ReadAllText(kept).ShouldBe("my edits");
+        attempts.ShouldBeInRange(2, 100);
+    }
+
+    [Fact]
     public async Task A_kept_file_is_checked_by_size_alone_when_the_result_lists_no_hash()
     {
         var content = BedGraph;
@@ -377,6 +463,20 @@ public sealed class RunCloudResultsTests : IDisposable
         make.IsAvailable(Run(expires: _now.AddSeconds(-1))).ShouldBeFalse();
         make.IsAvailable(Run(deleted: true)).ShouldBeFalse();
         make.IsAvailable(Run(bucket: null)).ShouldBeFalse();
+    }
+
+    /// <summary>Moves like the disk does, except where the script returns an exception for that (source, destination).</summary>
+    private sealed class ScriptedMover(Func<string, string, Exception?> fail) : IRunFileMover
+    {
+        public void Move(string source, string destination)
+        {
+            if (fail(source, destination) is { } ex)
+            {
+                throw ex;
+            }
+
+            File.Move(source, destination, overwrite: false);
+        }
     }
 
     private sealed class FixedTime(DateTimeOffset now) : TimeProvider

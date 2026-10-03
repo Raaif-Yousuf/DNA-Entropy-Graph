@@ -526,7 +526,10 @@
     <value>Changed files kept</value>
   </data>
   <data name="Runs_Redownload_Changed_Body" xml:space="preserve">
-    <value>{0} files in this folder differed from your cloud copy. Each was kept in the same folder under a name ending in "(changed" and the time, and the original was restored. Open the folder to compare them, and delete the ones you do not need.</value>
+    <value>{0} files in this folder differed from your cloud copy. Each was kept in the same folder, renamed to its old name followed by "(changed", the date and the time in brackets, for example "report (changed 2026-10-03 120000).txt". The original of each was restored. Open the folder to compare them, and delete the ones you do not need.</value>
+  </data>
+  <data name="Runs_Redownload_Changed_Body_One" xml:space="preserve">
+    <value>1 file in this folder differed from your cloud copy. It was kept in the same folder, renamed to its old name followed by "(changed", the date and the time in brackets, for example "report (changed 2026-10-03 120000).txt". The original was restored. Open the folder to compare the two, and delete the one you do not need.</value>
   </data>
   <data name="Runs_Redownload_Partial_Title" xml:space="preserve">
     <value>Some files restored</value>
@@ -550,7 +553,13 @@
     <value>Some files were deleted</value>
   </data>
   <data name="Runs_DeleteLocal_Partial_Body" xml:space="preserve">
-    <value>{0} files were deleted. {1} could not be, because they are open in another program or Windows denied access. Close any program using the folder, then choose Delete files on this PC again.</value>
+    <value>Files deleted: {0}. Files that could not be deleted: {1}, because they are open in another program or Windows denied access. Close any program using the folder, then choose Delete files on this PC again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Link_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Link_Body" xml:space="preserve">
+    <value>This run's folder, or a folder above it, is a shortcut (a junction or symbolic link) to somewhere else, so nothing was deleted. Open the folder in File Explorer to see where it leads, and delete it there if you want it gone.</value>
   </data>
   <data name="Runs_Rerun_Failed_Title" xml:space="preserve">
     <value>Could not start the run</value>

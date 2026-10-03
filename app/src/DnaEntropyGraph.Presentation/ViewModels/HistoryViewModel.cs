@@ -110,6 +110,12 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
         catch (Exception)
         {
+            // A load that was already replaced has nobody to tell: the list on screen is the newer one and is fine.
+            if (generation != Volatile.Read(ref _loadGeneration))
+            {
+                return;
+            }
+
             // The page calls this fire-and-forget on open, so an escaped exception would be unobserved: say so and name the action.
             Toast(RunsCopy.RefreshFailed);
         }
@@ -254,7 +260,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             if (result.ChangedKeptAside > 0)
             {
                 // Files the user may have edited were renamed, not overwritten: say how many and where to look.
-                Toast(RunsCopy.RedownloadChangedKeptAside, result.ChangedKeptAside);
+                Toast(RunsCopy.RedownloadChangedKeptAside(result.ChangedKeptAside), result.ChangedKeptAside);
             }
 
             return RunsCopy.Redownload(result.Status);

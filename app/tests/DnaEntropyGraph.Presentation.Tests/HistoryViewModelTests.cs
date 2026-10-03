@@ -310,6 +310,50 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task An_older_load_that_faults_after_a_newer_one_wrote_the_list_shows_no_refresh_failure()
+    {
+        var vm = await Loaded(Row("a"));
+        var slow = new TaskCompletionSource<IReadOnlyList<RunRecord>>();
+        var calls = 0;
+        _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => Interlocked.Increment(ref calls) == 1
+            ? slow.Task
+            : Task.FromResult<IReadOnlyList<RunRecord>>([Row("new")]));
+
+        var older = vm.RefreshCommand.ExecuteAsync(null);
+        await Item(vm, "a").RemoveCommand.ExecuteAsync(null);
+        slow.SetException(new InvalidOperationException("db locked"));
+        await older;
+
+        _toasts.DidNotReceive().ShowToast("Runs_Refresh_Failed_Title", Arg.Any<string>());
+        vm.Groups.SelectMany(g => g.Items).Select(i => i.JobId).ShouldBe(["new"]);
+    }
+
+    [Fact]
+    public async Task A_failed_redownload_that_already_kept_files_aside_still_says_how_many()
+    {
+        _strings.GetString("Runs_Redownload_Changed_Body").Returns("{0} kept");
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new RedownloadResult(CloudResultsStatus.Failed, 3));
+        var vm = await Loaded(Row("a"));
+
+        await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "3 kept");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body");
+    }
+
+    [Fact]
+    public async Task One_changed_file_kept_aside_uses_the_singular_copy()
+    {
+        _strings.GetString("Runs_Redownload_Changed_Body_One").Returns("a file kept");
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new RedownloadResult(CloudResultsStatus.Done, 1));
+        var vm = await Loaded(Row("a"));
+
+        await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "a file kept");
+    }
+
+    [Fact]
     public async Task Redownload_that_kept_changed_files_aside_says_how_many_in_a_second_toast()
     {
         _strings.GetString("Runs_Redownload_Changed_Body").Returns("{0} kept");
