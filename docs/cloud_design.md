@@ -872,9 +872,47 @@ creates the project's default network).
   already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
   already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
-  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute and
-  storage gateways and the token refresher do not, so production still resolves everything to `FakeGcp` (#56, #520).
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute gateway
+  and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
+- **Proven only by a real project:** `docs/ToTest.md`.
+### The results bucket (issue #53, wizard step 5)
+
+`IStorageGateway` (`EnsureBucketAsync`, `UploadAsync`, `DownloadAsync`, `TryDownloadAsync`); the real one is
+`GoogleStorageGateway` over `Google.Apis.Storage.v1` (Apache-2.0), returned as `GoogleCloudGatewaySet.Storage`. Production
+still resolves the fake until #56 switches DI. It is never wrapped in `ResilientStorageGateway` (the ordinary decorator for a
+single-call gateway): `EnsureBucketAsync` is a list, a create, a read-back and possibly a patch, and a whole-method retry would
+replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, as the project and service gateways do.
+
+- **Name and place.** `deg-<projectNumber>-<rand6>` (6 lowercase base32 characters), in the region-group multi-region
+  (`GoogleCloudOptions.BucketLocation`, default `US`; data residency #149 changes it). The project NUMBER comes from
+  `projects.get` (`name: projects/<number>`), via `GoogleProjectCatalogGateway.GetProjectNumberAsync`; a project the account
+  cannot see is a `permission` error and nothing is sent to Storage.
+- **Settings asked for.** Uniform bucket-level access on, `publicAccessPrevention=enforced`, and two lifecycle rules:
+  Delete when age >= the retention (`GoogleCloudOptions.ResultsRetentionDays`, the user's "Cloud results retention",
+  `RunOptions.CloudResultsRetentionDays`, default 90) for objects matching prefix `jobs/`, and Delete at age 365 for `cache/`.
+- **Labels.** `app=dna-entropy-graph`, `installation-id`, `app-version` (sanitized), `lifecycle=results`. `job-id` and `model`
+  are left off: a bucket serves every run and every model, the same exemption a project has. DECISION (agent-made,
+  reversible), filed as a DECISION issue. A missing installation id fails before any request (Hard Rule 10).
+- **Applied is not present.** After an insert, and after a patch, the bucket is read back and compared: UBLA, PAP, and both
+  rules with the configured ages. A difference fails with `BUCKET_CONFIG_NOT_APPLIED` (kind `other`) naming what differs; the
+  name is not returned and no `app-config.json` is written. The next call finds the labelled bucket, sees it drifted, and patches it.
+- **Discovery by label, adoption.** `buckets.list` with prefix `deg-` for the project, keep the ones labelled
+  `app=dna-entropy-graph`, prefer this installation's, then the oldest, then by name. A second PC of the same installation, or
+  another installation in the same project, adopts it: no insert. An adopted bucket that reads back drifted (for instance the
+  user changed the retention on the other PC) is patched and read back; one that reads back right is left alone.
+- **409 on insert.** Our own insert replayed after a dropped connection also answers 409: if the named bucket reads back as
+  ours it is kept (its read is the read-back); otherwise (403 or not ours) a new suffix is drawn. Five names at most, then
+  `BUCKET_NAME_TAKEN` (kind `already_exists`).
+- **`app-config.json`** at the bucket root: schema, installation id, app version, both retentions, creation time. Written once,
+  with `ifGenerationMatch=0` ("only if absent"): a 412 means another PC wrote it first and its file stands. It is not
+  rewritten when a retention changes (the lifecycle rule on the bucket is the truth; a `retention change patches the rule` flow is #114).
+- **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
+  tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (results and manifests are
+  small; the multi-GB weights cache is the worker's, #496). `TryDownloadAsync` answers null for a 404 only; every other failure
+  throws, so a transport error never reads as "the worker has not finished".
+- **Not in the error roster yet.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are not in `SetupErrorCodes.All`, so
+  the wizard would show the Try again catch-all for them; their copy and action are filed as a follow-up issue.
 - **Proven only by a real project:** `docs/ToTest.md`.
 ## Related
 
