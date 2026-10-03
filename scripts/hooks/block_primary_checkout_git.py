@@ -34,23 +34,31 @@ WHAT IT ALLOWS
 --------------
 `merge --ff-only` (the orchestrator runs it in the primary checkout after every
 landing), `pull --ff-only`, `fetch`, `worktree add/remove/list/prune`,
-`checkout [<tree>] -- <paths>`, path-only `reset -- <paths>` / `reset HEAD
-<paths>`, `merge|rebase|cherry-pick|revert --abort|--quit` (recovery), and every
-read-only command. Anything in a linked worktree. `git stash` is not handled
+`checkout [<tree>] -- <paths>` and `checkout .` (path restores), path-only `reset -- <paths>` / `reset HEAD
+<paths>`, `merge|rebase|cherry-pick|revert --abort|--quit` (recovery), recovery of the
+primary checkout onto `main` (`switch main`, `checkout main`, `checkout -B main origin/main`,
+`switch -C main origin/main`; no other branch), and every read-only command. Anything in a linked worktree. `git stash` is not handled
 here: `block_git_stash.py` owns it. Branch deletion/`branch -f` is left alone.
 
 LIMITS (honest)
 ---------------
-This is a command-text check: `bash -c '<cmd>'` / `pwsh -Command '<cmd>'` are
-looked into, but a command assembled at runtime, a script that runs git inside
-itself, or a tool other than Bash/PowerShell is not seen.
+This is a command-text check. It looks through `bash|sh -c/-lc`, `pwsh -Command`,
+`cmd /c`, `env`, `time`, `nohup`, `command`, `then`/`do`/`{` and `git -C<path>`,
+`--git-dir`, `--work-tree`. Out of scope, documented as known limits: `gh pr checkout`,
+`git update-ref`, `git symbolic-ref`, git run inside a script, a command assembled at
+runtime, and any tool other than Bash/PowerShell.
+
+A `--` counts as a path separator only when a path follows it, so `git checkout
+feat/x --` and `git reset origin/main --` (no path) are still branch/commit changes.
 
 CONTRACT
 --------
 Reads the PreToolUse payload on stdin, writes a JSON deny decision on stdout, or
 stays silent (exit 0) for "no opinion". Registered for both `Bash` and
 `PowerShell`. It never blocks on its own failure: a malformed payload or any
-unexpected exception exits 0 quietly.
+unexpected exception exits 0 quietly. So does a failed import of the sibling
+`block_agent_dispatch_in_worktree.py` (a stderr note, exit 0), because run_hook.py
+turns any non-zero exit into a deny of every Bash/PowerShell call.
 
     python scripts/hooks/block_primary_checkout_git.py --self-test
 
@@ -65,8 +73,19 @@ import os
 import re
 import sys
 
-from block_agent_dispatch_in_worktree import classify
-from block_git_stash import _strip_cat_heredoc_bodies
+# A hook that cannot import its sibling must not crash: run_hook.py turns any
+# non-zero exit into a deny of EVERY Bash/PowerShell call. Fail open instead.
+try:
+    from block_agent_dispatch_in_worktree import classify
+except Exception as _import_error:  # noqa: BLE001 -- deliberately blanket, see above
+    classify = None
+    _IMPORT_ERROR: str | None = repr(_import_error)
+else:
+    _IMPORT_ERROR = None
+
+# git's own answer for a directory is fast; a slow git must FAIL OPEN (unknown)
+# well before run_hook.py's 8s guard kill would turn the hang into a deny.
+CLASSIFY_TIMEOUT_SECONDS = 3.0
 
 MESSAGE = """This is the PRIMARY checkout, and `git {sub}` is blocked here.
 
@@ -84,6 +103,9 @@ If that prints the primary checkout, create a worktree and work there:
 
 then run your git commands from <path> (or with `git -C <path> ...`).
 
+If this checkout was already left on another branch, `git switch main` (or
+`git checkout -B main origin/main`) is allowed, to put it back.
+
 Still allowed here: `git merge --ff-only`, `git pull --ff-only`, `git fetch`,
 `git worktree ...`, `git checkout -- <paths>`, `git reset -- <paths>`, and every
 read-only command (status, log, diff, show, rev-parse, branch --list ...)."""
@@ -93,12 +115,38 @@ _PUSH_COMMANDS = {"pushd", "push-location"}
 _POP_COMMANDS = {"popd", "pop-location"}
 _SHELLS = {"bash", "sh", "zsh", "dash"}
 _POWERSHELLS = {"pwsh", "powershell"}
+# Words that may precede a command without changing which command runs.
+_WRAPPERS = {
+    "&",
+    ".",
+    "rtk",
+    "then",
+    "do",
+    "else",
+    "elif",
+    "if",
+    "while",
+    "until",
+    "{",
+    "!",
+    "time",
+    "nohup",
+    "command",
+    "builtin",
+    "exec",
+}
 # Git global options that consume the next argument.
-_GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"}
+_GIT_VALUE_OPTS = {"-c", "--namespace", "--exec-path", "--super-prefix"}
+_GIT_DIR_OPTS = ("--git-dir", "--work-tree")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_SHELL_C_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 _RESET_MODES = {"--hard", "--soft", "--mixed", "--merge", "--keep"}
 _RECOVERY = {"--abort", "--quit"}
-_UNKNOWN = None  # an unresolvable directory
+_RECOVERY_BRANCH = "main"
+_RECOVERY_START = "origin/main"
+
+_HEREDOC = re.compile(r"<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_SHELL_CONSUMER = re.compile(r"(?:^|[\s;&|(])(?:bash|sh|zsh|dash|pwsh|powershell)(?:\.exe)?(?=\s|$)", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +154,31 @@ _UNKNOWN = None  # an unresolvable directory
 # Bash backslash trap in the README), quotes group, `&& || ; | & ( )` and
 # newlines separate segments.
 # ---------------------------------------------------------------------------
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """Blank the body of every heredoc, whatever consumes it: the body of
+    `python - <<EOF`, `tee f <<EOF` or `gh ... --body-file - <<EOF` is data, not
+    a command. The one exception is a heredoc fed to a shell (`bash <<EOF`),
+    whose body IS executed and therefore stays visible."""
+    lines = command.split("\n")
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        out.append(line)
+        i += 1
+        opener = _HEREDOC.search(line)
+        if not opener or _SHELL_CONSUMER.search(line[: opener.start()]):
+            continue
+        delimiter = opener.group(2)
+        while i < n and lines[i].strip() != delimiter:
+            out.append("")
+            i += 1
+        if i < n:
+            out.append(lines[i])
+            i += 1
+    return "\n".join(out)
 
 
 def _split_segments(command: str) -> list[list[str]]:
@@ -146,7 +219,7 @@ def _split_segments(command: str) -> list[list[str]]:
             end_segment()
         elif c == "&":
             # `&&`, a backgrounding `&`, but not a redirect (`2>&1`, `&>`) and not
-            # PowerShell's call operator (handled as a leading token below).
+            # PowerShell's call operator (a leading wrapper token, see _WRAPPERS).
             prev = command[i - 1] if i else ""
             nxt = command[i + 1] if i + 1 < n else ""
             if prev in "<>" or nxt == ">":
@@ -162,32 +235,45 @@ def _split_segments(command: str) -> list[list[str]]:
     return segments
 
 
-def _resolve(current: str | None, target: str) -> str | None:
-    """Resolve a `cd`/`-C` target against `current`; None when it cannot be."""
-    if current is _UNKNOWN or not target or target == "-" or any(ch in target for ch in "$`%"):
-        return _UNKNOWN
-    # Git Bash drive form: /c/Users/x -> C:/Users/x
+def _resolve(current: str | None, target: str | None) -> str | None:
+    """Resolve a `cd`/`-C` target against `current`; None when it cannot be.
+
+    An absolute target resolves even when `current` is unknown, so an
+    unresolvable `cd $var` cannot poison a later absolute path."""
+    if not target or target == "-" or any(ch in target for ch in "$`%"):
+        return None
+    # Git Bash drive form: /c/dir/x -> C:/dir/x
     if os.name == "nt" and re.match(r"^/[A-Za-z](/|$)", target):
         target = f"{target[1].upper()}:{target[2:] or '/'}"
     target = os.path.expanduser(target)
+    if os.path.isabs(target):
+        return os.path.normpath(target)
+    if current is None:
+        return None
     return os.path.normpath(os.path.join(current, target))
 
 
 def _leading_call(tokens: list[str]) -> list[str]:
-    """Drop env assignments, PowerShell's `&`, and an `rtk` proxy prefix."""
+    """Drop what precedes the command proper: env assignments, `env [-i] [VAR=x]`,
+    shell keywords (`then`, `do`, `{`), `time`, `nohup`, `command`, PowerShell's `&`
+    and an `rtk` proxy prefix."""
     i = 0
-    while i < len(tokens) and (_ENV_ASSIGN.match(tokens[i]) or tokens[i] in {"&", "."} or tokens[i].lower() == "rtk"):
-        i += 1
+    while i < len(tokens):
+        low = tokens[i].lower()
+        if _ENV_ASSIGN.match(tokens[i]) or low in _WRAPPERS:
+            i += 1
+        elif low == "env":
+            i += 1
+            while i < len(tokens) and (tokens[i].startswith("-") or _ENV_ASSIGN.match(tokens[i])):
+                i += 2 if tokens[i] in {"-u", "-C", "-S"} else 1
+        else:
+            break
     return tokens[i:]
 
 
 def _dir_argument(args: list[str]) -> str | None:
     """The directory operand of cd / Set-Location / Push-Location."""
-    skip_next = False
     for idx, arg in enumerate(args):
-        if skip_next:
-            skip_next = False
-            continue
         low = arg.lower()
         if low in {"-path", "-literalpath"}:
             return args[idx + 1] if idx + 1 < len(args) else None
@@ -202,33 +288,81 @@ def _dir_argument(args: list[str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_git(tokens: list[str], current: str | None) -> tuple[str | None, str, list[str]]:
-    """(effective dir after -C, subcommand, subcommand args). `tokens[0]` is git."""
+def _parse_git(tokens: list[str], current: str | None) -> tuple[list[str | None], str, list[str]]:
+    """(directories git will act on, subcommand, subcommand args). `tokens[0]` is git.
+
+    Normally one directory: `current` moved by any `-C`. With `--git-dir` or
+    `--work-tree` it is those targets instead."""
     directory = current
+    targets: list[str | None] = []
     i = 1
     while i < len(tokens):
         tok = tokens[i]
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
         if tok == "-C":
-            directory = _resolve(directory, tokens[i + 1]) if i + 1 < len(tokens) else _UNKNOWN
+            directory = _resolve(directory, nxt)
             i += 2
+        elif tok.startswith("-C") and not tok.startswith("--"):
+            directory = _resolve(directory, tok[2:])  # glued: -C<path>
+            i += 1
+        elif tok in _GIT_DIR_OPTS:
+            targets.append(nxt)
+            i += 2
+        elif tok.startswith(tuple(f"{opt}=" for opt in _GIT_DIR_OPTS)):
+            targets.append(tok.split("=", 1)[1])
+            i += 1
         elif tok in _GIT_VALUE_OPTS:
             i += 2
         elif tok.startswith("-"):
             i += 1
         else:
-            return directory, tok, tokens[i + 1 :]
-    return directory, "", []
+            dirs = [_resolve(directory, t) for t in targets] if targets else [directory]
+            return dirs, tok, tokens[i + 1 :]
+    return [], "", []
+
+
+def _has_paths_after_dashdash(args: list[str]) -> bool:
+    return "--" in args and args.index("--") + 1 < len(args)
+
+
+def _safe_branch_change(sub: str, args: list[str]) -> bool:
+    """True for the only branch changes allowed in the primary checkout: putting
+    it back on `main` (`switch main`, `checkout main`, `checkout -B main
+    origin/main`, `switch -C main origin/main`), and `checkout .` (path restore)."""
+    if not args:
+        return sub == "checkout"  # bare `git checkout` only lists status
+    if sub == "checkout" and _has_paths_after_dashdash(args):
+        return True  # path restore; HEAD does not move
+    if set(args) & {"--detach", "-d", "--orphan"}:
+        return False
+    rest = [a for a in args if a != "--"]
+    created = False
+    name: str | None = None
+    positionals: list[str] = []
+    i = 0
+    while i < len(rest):
+        if rest[i] in {"-b", "-B", "-c", "-C"}:
+            created = True
+            name = rest[i + 1] if i + 1 < len(rest) else None
+            i += 2
+        elif rest[i].startswith("-"):
+            i += 1
+        else:
+            positionals.append(rest[i])
+            i += 1
+    if created:
+        # Creating or resetting `main` is recovery only when it is reset to origin/main.
+        return name == _RECOVERY_BRANCH and positionals == [_RECOVERY_START]
+    if sub == "checkout" and positionals == ["."]:
+        return True
+    return positionals == [_RECOVERY_BRANCH]
 
 
 def _denied_subcommand(sub: str, args: list[str]) -> bool:
     flags = set(args)
     positionals = [a for a in args if not a.startswith("-")]
-    if sub == "checkout":
-        if "--" in flags:
-            return False  # path restore; HEAD does not move
-        return bool(args)  # bare `git checkout` only lists status
-    if sub == "switch":
-        return True
+    if sub in {"checkout", "switch"}:
+        return not _safe_branch_change(sub, args)
     if sub in {"merge", "rebase", "cherry-pick", "revert"}:
         if sub == "merge" and "--ff-only" in flags:
             return False
@@ -240,7 +374,7 @@ def _denied_subcommand(sub: str, args: list[str]) -> bool:
     if sub == "reset":
         if flags & _RESET_MODES:
             return True
-        if "--" in flags:
+        if _has_paths_after_dashdash(args):
             return False  # path-only reset; HEAD does not move
         # `reset`, `reset HEAD [paths]` do not move HEAD; any other first
         # positional is a commit (bare `reset <commit>`).
@@ -248,20 +382,42 @@ def _denied_subcommand(sub: str, args: list[str]) -> bool:
     return False
 
 
-def _check_segment(tokens: list[str], current: str | None) -> str | None:
+def _check_segment(tokens: list[str], current: str | None, cache: dict[str, str]) -> str | None:
     """Deny reason for a `git ...` segment, else None."""
-    directory, sub, args = _parse_git(tokens, current)
+    directories, sub, args = _parse_git(tokens, current)
     if not sub or not _denied_subcommand(sub, args):
         return None
-    if directory is _UNKNOWN or classify(directory) != "primary":
-        return None
-    return MESSAGE.format(sub=sub)
+    for directory in directories:
+        if directory is None:
+            continue
+        if directory not in cache:
+            cache[directory] = classify(directory, timeout=CLASSIFY_TIMEOUT_SECONDS)
+        if cache[directory] == "primary":
+            return MESSAGE.format(sub=sub)
+    return None
 
 
-def _verdict(command: str, cwd: str | None, depth: int) -> str | None:
+def _nested_command(head: str, tokens: list[str]) -> str | None:
+    """The command string a shell / cmd / PowerShell invocation will run, if any."""
+    if head in _SHELLS:
+        for idx, tok in enumerate(tokens[1:-1], start=1):
+            if _SHELL_C_FLAG.match(tok):  # -c, -lc, -ic ...
+                return tokens[idx + 1]
+    elif head in _POWERSHELLS:
+        for idx, tok in enumerate(tokens[1:], start=1):
+            if tok.lower() in {"-c", "-command"}:
+                return " ".join(tokens[idx + 1 :])
+    elif head == "cmd":
+        for idx, tok in enumerate(tokens[1:], start=1):
+            if tok.lower() in {"/c", "/k"}:
+                return " ".join(tokens[idx + 1 :])
+    return None
+
+
+def _verdict(command: str, cwd: str | None, depth: int, cache: dict[str, str]) -> str | None:
     current: str | None = cwd
     stack: list[str | None] = []
-    for raw in _split_segments(_strip_cat_heredoc_bodies(command or "")):
+    for raw in _split_segments(_strip_heredoc_bodies(command or "")):
         tokens = _leading_call(raw)
         if not tokens:
             continue
@@ -270,27 +426,27 @@ def _verdict(command: str, cwd: str | None, depth: int) -> str | None:
         if head in _CD_COMMANDS or head in _PUSH_COMMANDS:
             if head in _PUSH_COMMANDS:
                 stack.append(current)
-            current = _resolve(current, _dir_argument(tokens[1:]) or "")
+            current = _resolve(current, _dir_argument(tokens[1:]))
         elif head in _POP_COMMANDS:
-            current = stack.pop() if stack else _UNKNOWN
+            current = stack.pop() if stack else None
         elif head == "git":
-            reason = _check_segment(tokens, current)
+            reason = _check_segment(tokens, current, cache)
             if reason:
                 return reason
-        elif depth < 2 and head in _SHELLS | _POWERSHELLS:
-            flag = {"-c"} if head in _SHELLS else {"-c", "-command"}
-            for idx, tok in enumerate(tokens[:-1]):
-                if tok.lower() in flag:
-                    reason = _verdict(" ".join(tokens[idx + 1 :]) if head in _POWERSHELLS else tokens[idx + 1], current, depth + 1)
-                    if reason:
-                        return reason
-                    break
+        elif depth < 2:
+            nested = _nested_command(head, tokens)
+            if nested:
+                reason = _verdict(nested, current, depth + 1, cache)
+                if reason:
+                    return reason
     return None
 
 
 def verdict(command: str, cwd: str | None) -> str | None:
     """Return the reason to deny, or None to stay silent."""
-    return _verdict(command, cwd, 0)
+    if classify is None:
+        return None
+    return _verdict(command, cwd, 0, {})
 
 
 def decide(payload: dict) -> str | None:
@@ -327,6 +483,15 @@ _SELF_DENY = (
     "git status; git commit -m x",
     "git status\ngit switch -c x",
     "bash -c 'git switch -c x'",
+    "bash -lc 'git switch -c x'",
+    "git reset origin/main --",
+    "git checkout feat/x --",
+    "git switch -C main",
+    "git checkout -B main origin/feat/x",
+    "command git switch -c x",
+    "env GIT_PAGER=cat git commit -m x",
+    "if true; then git switch -c x; fi",
+    "cmd /c git switch -c x",
 )
 _SELF_ALLOW = (
     "git merge --ff-only origin/main",
@@ -354,6 +519,12 @@ _SELF_ALLOW = (
     "git blame README.md",
     "git config --get user.name",
     "echo 'git switch -c x'",
+    "git switch main",
+    "git checkout main",
+    "git checkout -B main origin/main",
+    "git switch -C main origin/main",
+    "git checkout .",
+    "python - <<'EOF'\ngit commit -m x\nEOF",
 )
 
 
@@ -443,6 +614,10 @@ def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except Exception:
+        return 0
+
+    if _IMPORT_ERROR:
+        print(f"block_primary_checkout_git: failing open, sibling import failed: {_IMPORT_ERROR}", file=sys.stderr)
         return 0
 
     try:

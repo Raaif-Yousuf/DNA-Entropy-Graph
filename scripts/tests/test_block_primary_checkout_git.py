@@ -25,7 +25,7 @@ DENIED = [
     "git checkout feat/x",
     "git checkout -b feat/x origin/main",
     "git checkout -B feat/x origin/main",
-    "git checkout main",
+    "git checkout feat/main",
     "git switch feat/x",
     "git switch -c x origin/main",
     "git switch -C x origin/main",
@@ -56,6 +56,32 @@ DENIED = [
     "git status\ngit switch -c x",
     "bash -c 'git switch -c x'",
     "& git switch -c x",
+    # review round 1: `--` with no path after it is not a path restore
+    "git reset origin/main --",
+    "git checkout feat/x --",
+    # only `main` is a recovery target, and only from origin/main
+    "git checkout -B main origin/feat/x",
+    "git switch -C main",
+    "git switch -C main origin/feat/x",
+    "git switch main --detach",
+    "git switch feat/main",
+    # wrappers and keywords before the head token
+    "if true; then git switch -c x; fi",
+    "for i in 1; do git commit -m x; done",
+    "true && { git switch -c x; }",
+    "command git switch -c x",
+    "env GIT_PAGER=cat git switch -c x",
+    "env -i git switch -c x",
+    "nohup git commit -m x",
+    "time git commit -m x",
+    "cmd /c git switch -c x",
+    'cmd /c "git switch -c x"',
+    "bash -lc 'git switch -c x'",
+    "sh -lc 'git switch -c x'",
+    "bash -ic 'git switch -c x'",
+    'pwsh -NoProfile -Command "git switch -c x"',
+    # a heredoc fed to a shell is executed, so its body counts
+    "bash <<'EOF'\ngit switch -c x\nEOF",
 ]
 
 ALLOWED = [
@@ -99,6 +125,21 @@ ALLOWED = [
     "git commit-tree HEAD^{tree}",
     "git status 2>&1",
     "",
+    # recovery: the primary checkout can always be put back on main
+    "git switch main",
+    "git checkout main",
+    "git checkout -B main origin/main",
+    "git switch -C main origin/main",
+    "git checkout -f main",
+    # a path restore
+    "git checkout .",
+    "git checkout -f .",
+    "git reset origin/main -- README.md",
+    # heredoc bodies are data for any consumer except a shell
+    "python - <<'EOF'\ngit commit -m x\nEOF",
+    "tee notes.txt <<EOF\ngit switch -c x\nEOF",
+    "gh pr create --body-file - <<'EOF'\ngit checkout feat/x\nEOF",
+    "cat > f.txt <<-EOF\n\tgit commit -m x\n\tEOF",
 ]
 
 
@@ -275,3 +316,82 @@ def test_registered_in_settings_for_bash_and_powershell():
     ]
     assert len(matchers) == 1
     assert "Bash" in matchers[0] and "PowerShell" in matchers[0]
+
+
+# ---------------------------------------------------------------------------
+# review round 1
+# ---------------------------------------------------------------------------
+
+
+def test_missing_sibling_module_fails_open_instead_of_crashing(tmp_path):
+    """run_hook.py turns a non-zero exit into a deny of EVERY Bash/PowerShell
+    call, so an ImportError of a sibling module must exit 0 and stay silent."""
+    lone = tmp_path / "block_primary_checkout_git.py"
+    lone.write_text((HOOKS_DIR / "block_primary_checkout_git.py").read_text(encoding="utf-8"), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(lone)],
+        input=json.dumps({"tool_input": {"command": "git switch -c x"}, "cwd": str(tmp_path)}),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+
+
+def test_deny_message_says_switching_to_main_recovers(repos):
+    primary, _ = repos
+    assert "git switch main" in hook.verdict("git switch -c x", _in(primary))
+
+
+def test_classify_is_cached_per_directory_and_uses_a_short_timeout(repos, monkeypatch):
+    _primary, worktree = repos
+    calls = []
+
+    def counting(directory, timeout=10.0):
+        calls.append((directory, timeout))
+        return "linked_worktree"
+
+    monkeypatch.setattr(hook, "classify", counting)
+    assert hook.verdict("git commit -m a; git commit -m b; git switch -c x", _in(worktree)) is None
+    assert len(calls) == 1
+    assert all(timeout <= 3 for _, timeout in calls)
+
+
+def test_agent_hook_classify_accepts_a_timeout(repos):
+    primary, _ = repos
+    assert agent_hook.classify(_in(primary), timeout=3) == "primary"
+
+
+def test_glued_dash_C_is_honoured(repos):
+    primary, worktree = repos
+    assert hook.verdict(f"git -C{_in(primary)} switch -c x", _in(worktree)) is not None
+    assert hook.verdict(f"git -C{_in(worktree)} switch -c x", _in(primary)) is None
+
+
+@pytest.mark.parametrize("form", ["--git-dir={}/.git", "--work-tree={}", "--git-dir {}/.git", "--work-tree {}"])
+def test_git_dir_and_work_tree_targets_are_classified(repos, form):
+    primary, worktree = repos
+    assert hook.verdict(f"git {form.format(_in(primary))} switch -c x", _in(worktree)) is not None
+
+
+def test_git_dir_of_a_linked_worktree_is_allowed(repos):
+    primary, worktree = repos
+    gitdir = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "--path-format=absolute", "--git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert hook.verdict(f"git --git-dir={Path(gitdir).as_posix()} switch -c x", _in(primary)) is None
+
+
+def test_unresolvable_cd_does_not_poison_a_later_absolute_dash_C(repos):
+    primary, worktree = repos
+    assert hook.verdict(f'cd $SOMEWHERE && git -C "{_in(primary)}" switch -c x', _in(worktree)) is not None
+    assert hook.verdict(f"cd $SOMEWHERE; cd {_in(primary)}; git switch -c x", _in(worktree)) is not None
+
+
+def test_unresolvable_relative_target_after_unresolvable_cd_still_fails_open(repos):
+    primary, _ = repos
+    assert hook.verdict("cd $SOMEWHERE && git -C sub switch -c x", _in(primary)) is None

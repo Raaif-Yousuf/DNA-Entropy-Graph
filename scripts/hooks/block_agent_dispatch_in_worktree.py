@@ -115,7 +115,7 @@ hook only fires when `cwd` resolves to a linked git worktree, never the
 primary checkout. Dispatch from the primary checkout instead.)"""
 
 
-def _git_paths(cwd: str) -> tuple[str, str] | None:
+def _git_paths(cwd: str, timeout: float = 10.0) -> tuple[str, str] | None:
     """Return (git_dir, git_common_dir), both absolute, or None if unavailable.
 
     None covers: no git on PATH, `cwd` not inside any git repository, or any
@@ -135,7 +135,7 @@ def _git_paths(cwd: str) -> tuple[str, str] | None:
             ],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=timeout,
         )
     except Exception:
         return None
@@ -150,7 +150,7 @@ def _git_paths(cwd: str) -> tuple[str, str] | None:
     return git_dir, git_common_dir
 
 
-def classify(cwd: str) -> str:
+def classify(cwd: str, timeout: float = 10.0) -> str:
     """One of "primary", "linked_worktree", or "unknown" -- the three-way
     answer this hook needs to be able to SHOW, not just act on.
 
@@ -169,7 +169,7 @@ def classify(cwd: str) -> str:
     again; the hook's own PreToolUse decision (`verdict`/`is_linked_worktree`)
     is unchanged.
     """
-    paths = _git_paths(cwd)
+    paths = _git_paths(cwd, timeout)
     if paths is None:
         return "unknown"
     git_dir, git_common_dir = paths
