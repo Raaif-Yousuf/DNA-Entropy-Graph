@@ -269,7 +269,7 @@ public sealed class HistoryViewModelTests
 
         await vm.RefreshCommand.ExecuteAsync(null).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!);
+        _toasts.DidNotReceive().ShowToast(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ToastSeverity>());
     }
 
     [Fact]
