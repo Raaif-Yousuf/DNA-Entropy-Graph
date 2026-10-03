@@ -27,6 +27,11 @@ public static class RunsCopy
     public const string RemoveConfirmTitle = "Runs_Remove_Confirm_Title";
     public const string RemoveConfirmBody = "Runs_Remove_Confirm_Body";
 
+    /// <summary>The request text for the project owner (issue #604). <c>{0}</c> the role, <c>{1}</c> the worker account's email, <c>{2}</c> the project id.</summary>
+    public const string OwnerRequestActAs = "Runs_OwnerRequest_ActAs";
+
+    public static readonly (string Title, string Body) OwnerRequestCopied = Pair("Runs_OwnerRequest_Copied_Title", "Runs_OwnerRequest_Copied_Body");
+    public static readonly (string Title, string Body) OwnerRequestCopyFailed = Pair("Runs_OwnerRequest_CopyFailed_Title", "Runs_OwnerRequest_CopyFailed_Body");
     public static readonly (string Title, string Body) OpenMissing = Pair("Runs_Open_Missing_Title", "Runs_Open_Missing_Body");
     public static readonly (string Title, string Body) RerunNoOptions = Pair("Runs_Rerun_NoOptions_Title", "Runs_Rerun_NoOptions_Body");
     public static readonly (string Title, string Body) RerunNoInput = Pair("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body");
@@ -77,9 +82,9 @@ public static class RunsCopy
     [
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
-        DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
+        OwnerRequestActAs, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         .. FilterKeys,
-        .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
+        .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),

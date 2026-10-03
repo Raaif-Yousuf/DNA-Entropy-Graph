@@ -28,6 +28,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly IToastService _toasts;
     private readonly IStringResourceProvider _strings;
+    private readonly IShellLauncher _launcher;
     private readonly TimeProvider _time;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
@@ -55,6 +56,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         IDialogService dialogs,
         IToastService toasts,
         IStringResourceProvider strings,
+        IShellLauncher launcher,
         TimeProvider time)
     {
         _runRepository = runRepository;
@@ -66,6 +68,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         _dialogs = dialogs;
         _toasts = toasts;
         _strings = strings;
+        _launcher = launcher;
         _time = time;
         StatusFilters =
         [
@@ -182,7 +185,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             new AsyncRelayCommand(() => RedownloadAsync(run)),
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
-            new AsyncRelayCommand(() => RemoveAsync(run)));
+            new AsyncRelayCommand(() => RemoveAsync(run)),
+            OwnerRequestFor(run));
     }
 
     /// <summary>
@@ -199,6 +203,23 @@ public sealed partial class HistoryViewModel : ObservableObject
 
         var hasCode = !string.IsNullOrWhiteSpace(run.ErrorCode);
         return run.Phase == JobPhase.Failed || hasCode ? _strings.GetString(RunErrorCodes.ResourceKey(run.ErrorCode)) : null;
+    }
+
+    /// <summary>
+    /// Issue #604: the "Copy request for the project owner" action of a run that failed because the user's account may not
+    /// run a VM as the worker account. Null for every other run, and for a run whose project is unknown (the account's
+    /// email is built from it).
+    /// </summary>
+    private RelayCommand? OwnerRequestFor(RunRecord run)
+        => run.ErrorCode == RunErrorCodes.PermissionActAs && !string.IsNullOrWhiteSpace(run.ProjectId)
+            ? new RelayCommand(() => CopyOwnerRequest(run.ProjectId))
+            : null;
+
+    private void CopyOwnerRequest(string projectId)
+    {
+        var template = _strings.GetString(RunsCopy.OwnerRequestActAs);
+        var text = string.Format(CultureInfo.CurrentCulture, template, WorkerIdentityNames.ActAsRole, WorkerIdentityNames.ServiceAccountEmail(projectId), projectId);
+        Toast(_launcher.CopyText(text) ? RunsCopy.OwnerRequestCopied : RunsCopy.OwnerRequestCopyFailed);
     }
 
     /// <summary>Why Delete cloud copy is off for this run (one reason, one action), or empty when it is on.</summary>

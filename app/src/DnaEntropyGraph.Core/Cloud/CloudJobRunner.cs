@@ -198,7 +198,7 @@ public sealed class CloudJobRunner
             {
                 RunFailureException failure => (failure.Kind, failure.Code),
                 CloudOperationException { Error.Code: RunErrorCodes.NotConnectedGatewayCode } cloud => (cloud.Kind, RunErrorCodes.CloudNotConnected),
-                CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Kind)),
+                CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Error, cloud.Kind)),
                 OperationCanceledException => (CloudErrorKind.Network, RunErrorCodes.For(CloudErrorKind.Network)),
                 _ => (CloudErrorKind.Other, RunErrorCodes.For(CloudErrorKind.Other)),
             };
@@ -327,7 +327,7 @@ public sealed class CloudJobRunner
         var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, token), progress, cancellationToken).ConfigureAwait(false);
         if (!provisioned.Success)
         {
-            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, RunErrorCodes.For(provisioned.FailureKind.Value), provisioned.FailureMessage, provisioned.VmEndNote).ConfigureAwait(false);
+            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, provisioned.FailureMessage, provisioned.VmEndNote).ConfigureAwait(false);
         }
 
         progress.Zone = provisioned.Zone!;

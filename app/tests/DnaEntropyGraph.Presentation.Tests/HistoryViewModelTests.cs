@@ -31,6 +31,7 @@ public sealed class HistoryViewModelTests
     private readonly IDialogService _dialogs = Substitute.For<IDialogService>();
     private readonly IToastService _toasts = Substitute.For<IToastService>();
     private readonly IStringResourceProvider _strings = Substitute.For<IStringResourceProvider>();
+    private readonly IShellLauncher _launcher = Substitute.For<IShellLauncher>();
     private List<RunRecord> _rows = [];
 
     public HistoryViewModelTests()
@@ -42,7 +43,7 @@ public sealed class HistoryViewModelTests
         _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(true);
     }
 
-    private HistoryViewModel Make() => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, new UtcClock());
+    private HistoryViewModel Make() => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, new UtcClock());
 
     private static RunRecord Row(string id, JobPhase phase = JobPhase.Completed, DateTimeOffset? created = null, string? name = null, string? outputDir = null, string? options = null, string? notes = null)
         => new(id, phase, created ?? Now.AddHours(-1), Name: name, OutputDir: outputDir, OptionsJson: options ?? "{}", Notes: notes, Bucket: "b", JobPrefix: $"jobs/{id}/");
@@ -696,5 +697,43 @@ public sealed class HistoryViewModelTests
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "live").RemoveCommand).ExecuteAsync(null);
 
         await _remover.DidNotReceiveWithAnyArgs().DeleteAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_run_that_failed_for_actAs_offers_a_copy_request_naming_the_role_the_worker_email_and_the_project()
+    {
+        _strings.GetString(RunsCopy.OwnerRequestActAs).Returns("{0}|{1}|{2}");
+        _launcher.CopyText(Arg.Any<string>()).Returns(true);
+        var vm = await Loaded(Row("denied", JobPhase.Failed) with { ErrorCode = RunErrorCodes.PermissionActAs, ProjectId = "my-lab" });
+        var item = Item(vm, "denied");
+
+        item.HasOwnerRequest.ShouldBeTrue();
+        item.CopyOwnerRequestCommand!.Execute(null);
+
+        _launcher.Received(1).CopyText("roles/iam.serviceAccountUser|dna-entropy-worker@my-lab.iam.gserviceaccount.com|my-lab");
+        _toasts.Received(1).ShowToast(RunsCopy.OwnerRequestCopied.Title, RunsCopy.OwnerRequestCopied.Body);
+    }
+
+    [Fact]
+    public async Task A_failed_clipboard_says_so_and_names_an_action()
+    {
+        _launcher.CopyText(Arg.Any<string>()).Returns(false);
+        var vm = await Loaded(Row("denied", JobPhase.Failed) with { ErrorCode = RunErrorCodes.PermissionActAs, ProjectId = "my-lab" });
+
+        Item(vm, "denied").CopyOwnerRequestCommand!.Execute(null);
+
+        _toasts.Received(1).ShowToast(RunsCopy.OwnerRequestCopyFailed.Title, RunsCopy.OwnerRequestCopyFailed.Body);
+    }
+
+    [Theory]
+    [InlineData("permission", "my-lab")]
+    [InlineData(RunErrorCodes.PermissionActAs, null)]
+    [InlineData(RunErrorCodes.WorkerDefaultAccountMissing, "my-lab")]
+    public async Task Only_an_actAs_failure_with_a_known_project_offers_the_copy_request(string code, string? project)
+    {
+        var vm = await Loaded(Row("other", JobPhase.Failed) with { ErrorCode = code, ProjectId = project });
+
+        Item(vm, "other").HasOwnerRequest.ShouldBeFalse();
+        Item(vm, "other").CopyOwnerRequestCommand.ShouldBeNull();
     }
 }
