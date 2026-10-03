@@ -127,6 +127,68 @@ public class AccountsFileRecoveryTests
     }
 
     [Fact]
+    public async Task A_project_choice_while_another_copy_holds_the_lock_returns_to_the_caller_at_once_and_fails_as_locked()
+    {
+        using var harness = new AuthHarness { SaveLockWait = TimeSpan.FromMilliseconds(400) };
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+        var path = Path.Combine(harness.AuthDirectory, "accounts.json");
+        var original = File.ReadAllBytes(path);
+
+        using (new MutexHolder(harness.AuthDirectory))
+        {
+            var pending = service.SelectProjectAsync("deg-proj-one", CancellationToken.None);
+
+            pending.IsCompleted.ShouldBeFalse("the lock wait runs off the caller's thread, so a dispatcher is never blocked by it");
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => pending);
+            failure.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
+            AuthErrorCodes.ActionResourceKey(failure.Code).ShouldBe("AuthAction_TryAgain");
+        }
+
+        File.ReadAllBytes(path).ShouldBe(original);
+        service.SelectedProjectId.ShouldBeNull("nothing was kept in memory either");
+        await service.SelectProjectAsync("deg-proj-one", CancellationToken.None);
+        service.SelectedProjectId.ShouldBe("deg-proj-one");
+    }
+
+    [Fact]
+    public async Task A_switch_and_a_sign_in_while_another_copy_holds_the_lock_say_locked_and_leave_no_orphan_token()
+    {
+        using var harness = new AuthHarness { SaveLockWait = TimeSpan.FromMilliseconds(300) };
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+        harness.Google.NextIdentity = new FakeIdentity("2002", "second@example.test");
+
+        using (new MutexHolder(harness.AuthDirectory))
+        {
+            var signIn = await Should.ThrowAsync<AccountAuthException>(() => service.SignInAsync(CancellationToken.None));
+            var switchTo = await Should.ThrowAsync<AccountAuthException>(() => service.SwitchAccountAsync("1001", CancellationToken.None));
+
+            signIn.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
+            switchTo.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
+        }
+
+        File.Exists(Path.Combine(harness.AuthDirectory, "2002.tok")).ShouldBeFalse("a token nothing lists is removed");
+    }
+
+    [Fact]
+    public async Task A_damaged_file_that_cannot_be_set_aside_says_the_folder_is_the_problem_not_a_try_again_lock()
+    {
+        using var harness = new AuthHarness();
+        Directory.CreateDirectory(harness.AuthDirectory);
+        var path = Path.Combine(harness.AuthDirectory, "accounts.json");
+        File.WriteAllBytes(path, Damaged);
+        var service = harness.NewService();
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SignInAsync(CancellationToken.None));
+
+            failure.Code.ShouldBe(AuthErrorCodes.StorageFailed);
+        }
+
+        File.ReadAllBytes(path).ShouldBe(Damaged);
+    }
+
+    [Fact]
     public async Task Choosing_a_project_over_a_damaged_file_also_keeps_it()
     {
         using var harness = new AuthHarness();

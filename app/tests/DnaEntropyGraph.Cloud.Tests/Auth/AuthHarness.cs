@@ -63,9 +63,13 @@ internal sealed class AuthHarness : IDisposable
     /// <summary>When set, the service reads this clock (the locked-accounts-file retry window); otherwise the real one.</summary>
     public TimeProvider? Clock { get; set; }
 
+    /// <summary>How long a save waits for another copy's lock; short in tests that hold it.</summary>
+    public TimeSpan? SaveLockWait { get; set; }
+
     /// <summary>A service over this harness's folder; calling it twice is "the app restarted".</summary>
     public GoogleAccountService NewService() => new(new GoogleAccountOptions
     {
+        SaveLockWait = SaveLockWait,
         TimeProvider = Clock ?? TimeProvider.System,
         AuthDirectory = AuthDirectory,
         ClientLoader = new OAuthClientLoader([ClientFile]),

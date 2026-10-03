@@ -30,26 +30,44 @@ public sealed class AccountRegistry
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, NewLine = "\n" };
 
-    private const int ReadAttempts = 5;
-    private const int ReadBackoffMs = 50;
-    // A read gives up on the mutex quickly (it can run on the UI thread); a save may wait longer because it is the user's change.
-    private static readonly TimeSpan ReadLockWait = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan SaveLockWait = TimeSpan.FromSeconds(10);
+    private const int ReadAttempts = 3;
+    private const int ReadBackoffMs = 40;
+    private static readonly TimeSpan OrphanTempAge = TimeSpan.FromMinutes(5);
+
+    // A load runs from the State getter, which can be on the UI thread, so its whole budget (one lock wait plus the read retries) stays near 300 ms.
+    // A save is always off the caller's thread (GoogleAccountService.CommitAsync), so it may wait longer: it is the user's own change.
+    private static readonly TimeSpan ReadLockWait = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan DefaultSaveLockWait = TimeSpan.FromSeconds(10);
 
     private readonly string _path;
     private readonly Func<string, Mutex> _openMutex;
+    private readonly TimeSpan _saveLockWait;
 
     public AccountRegistry(string directory)
         : this(directory, name => new Mutex(false, name))
     {
     }
 
-    /// <summary>Tests only: how the named mutex is opened, so a refusal by the system can be played.</summary>
-    internal AccountRegistry(string directory, Func<string, Mutex> openMutex)
+    /// <summary>Tests only: how the named mutex is opened (so a refusal by the system can be played) and how long a save waits for it.</summary>
+    internal AccountRegistry(string directory, Func<string, Mutex> openMutex, TimeSpan? saveLockWait = null)
     {
         _path = Path.Combine(directory, "accounts.json");
         _openMutex = openMutex;
+        _saveLockWait = saveLockWait ?? DefaultSaveLockWait;
     }
+
+    /// <summary>The longest a <see cref="Load"/> can block its caller: the lock wait plus every read-retry sleep.</summary>
+    internal static TimeSpan WorstCaseLoadBudget { get; } = ReadLockWait + TimeSpan.FromMilliseconds(Enumerable.Range(1, ReadAttempts - 1).Sum(a => ReadBackoffMs * a));
+
+    /// <summary>The name of the session-wide mutex that guards the <c>accounts.json</c> in <paramref name="directory"/>.</summary>
+    internal static string MutexNameFor(string directory)
+        => @"Local\DnaEntropyGraph.accounts." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(Path.Combine(directory, "accounts.json")).ToUpperInvariant())), 0, 8);
+
+    /// <summary>
+    /// True when the damaged file could not be moved aside (the folder is read-only or denied): a problem with the folder, not a lock, so trying again
+    /// does not help. <see cref="Unreadable"/> is also true then, so <see cref="Save"/> refuses.
+    /// </summary>
+    public bool QuarantineFailed { get; private set; }
 
     /// <summary>Where the last <see cref="Load"/> set an unparseable file aside (<c>accounts.json.bad</c>, or <c>.bad.1</c>, <c>.bad.2</c> and so on, never over an earlier one), or null when it set nothing aside.</summary>
     public string? QuarantinedTo { get; private set; }
@@ -62,6 +80,7 @@ public sealed class AccountRegistry
     public AccountsFile Load()
     {
         QuarantinedTo = null;
+        QuarantineFailed = false;
         Unreadable = false;
         var result = AccountsFile.Empty;
         try
@@ -126,6 +145,7 @@ public sealed class AccountRegistry
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Could not move it aside: the damaged file stays where it is and Save refuses.
+            QuarantineFailed = true;
             Unreadable = true;
         }
 
@@ -146,6 +166,7 @@ public sealed class AccountRegistry
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+            DeleteOrphanTempFiles();
             var temp = _path + "." + Guid.NewGuid().ToString("n") + ".tmp";
             try
             {
@@ -159,7 +180,26 @@ public sealed class AccountRegistry
                     File.Delete(temp);
                 }
             }
-        }, SaveLockWait);
+        }, _saveLockWait);
+
+    /// <summary>A save that died between writing its temp file and moving it leaves one behind. Under the lock nothing else is mid-save, but only old ones go: a copy that does not share the lock may be.</summary>
+    private void DeleteOrphanTempFiles()
+    {
+        try
+        {
+            foreach (var orphan in Directory.EnumerateFiles(Path.GetDirectoryName(_path)!, "accounts.json.*.tmp"))
+            {
+                if (DateTime.UtcNow - File.GetLastWriteTimeUtc(orphan) > OrphanTempAge)
+                {
+                    File.Delete(orphan);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: an orphan that stays is a few bytes, never a reason to fail a save.
+        }
+    }
 
     private static AccountsFile? TryParse(string text)
     {
@@ -193,10 +233,19 @@ public sealed class AccountRegistry
 
     private void WithLock(Action action, TimeSpan wait)
     {
-        var name = @"Local\DnaEntropyGraph.accounts." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(_path).ToUpperInvariant())), 0, 8);
+        Mutex mutex;
         try
         {
-            using var mutex = _openMutex(name);
+            mutex = _openMutex(MutexNameFor(Path.GetDirectoryName(_path)!));
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException or IOException)
+        {
+            // The system refused the name (an elevated copy made it, or a different object has it): a lock failure, not a disk one.
+            throw new AccountsFileLockedException(ex);
+        }
+
+        using (mutex)
+        {
             var held = false;
             try
             {
@@ -210,21 +259,21 @@ public sealed class AccountRegistry
 
             if (!held)
             {
-                throw new IOException("another copy of the app held the accounts file lock for too long");
+                throw new AccountsFileLockedException(new TimeoutException("another copy of the app held the accounts file lock for too long"));
             }
 
             try
             {
                 action();
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new TokenStorageException(ex);
+            }
             finally
             {
                 mutex.ReleaseMutex();
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new TokenStorageException(ex);
         }
     }
 }

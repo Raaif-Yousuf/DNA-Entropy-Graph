@@ -41,6 +41,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     private AccountsFile? _state;
     private bool _accountsFileSetAside;
     private bool _accountsFileLocked;
+    private bool _accountsFileFolderProblem;
     private DateTimeOffset _retryLoadAfter;
     private static readonly TimeSpan LockedRetryWindow = TimeSpan.FromSeconds(2);
 
@@ -48,7 +49,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     {
         _options = options;
         _store = new DpapiTokenStore(options.AuthDirectory, options.Protector);
-        _registry = new AccountRegistry(options.AuthDirectory);
+        _registry = new AccountRegistry(options.AuthDirectory, name => new Mutex(false, name), options.SaveLockWait);
     }
 
     public event EventHandler? AccountChanged;
@@ -88,6 +89,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 _accountsFileSetAside = _registry.QuarantinedTo is not null;
                 // An unreadable file (locked) gives an empty list that is not the truth: do not keep it as the state, read the file again after the window.
                 _accountsFileLocked = _registry.Unreadable;
+                _accountsFileFolderProblem = _registry.QuarantineFailed;
                 if (_accountsFileLocked)
                 {
                     _retryLoadAfter = now + LockedRetryWindow;
@@ -113,7 +115,10 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             if (_accountsFileLocked)
             {
-                throw new AccountAuthException(AuthErrorCodes.AccountsFileLocked, "accounts.json exists but could not be read (held open elsewhere)");
+                // A damaged file the folder would not let us move aside is a folder problem (Try again never fixes it); anything else is a hold that can clear.
+                throw _accountsFileFolderProblem
+                    ? new AccountAuthException(AuthErrorCodes.StorageFailed, "accounts.json is damaged and could not be set aside (the folder is not writable)")
+                    : new AccountAuthException(AuthErrorCodes.AccountsFileLocked, "accounts.json exists but could not be read (held open elsewhere)");
             }
         }
     }
@@ -168,7 +173,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                     var current = State;
                     // An account that signs in again (its token expired) keeps the project it chose; a signed-out one was dropped with its record.
                     var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false, current.Accounts.FirstOrDefault(a => a.Sub == identity.Sub)?.ProjectId);
-                    Commit(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record]));
+                    await CommitAsync(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record])).ConfigureAwait(false);
                 }
                 catch (TokenStorageException ex)
                 {
@@ -209,7 +214,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
             var remaining = State.Accounts.Where(a => a.Sub != active.Sub).ToList();
             var next = remaining.FirstOrDefault(a => !a.NeedsSignIn) ?? remaining.FirstOrDefault();
-            Commit(new AccountsFile(next?.Sub, remaining));
+            await CommitAsync(new AccountsFile(next?.Sub, remaining)).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -241,12 +246,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.SigninExpired, "no signed-in account");
             }
 
-            Commit(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] });
+            await CommitAsync(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] }).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
-            // Not StorageFailure: its code says "your sign-in could not be saved" and offers Sign in again, wrong for a project choice.
-            throw new AccountAuthException(AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
+            // Not StorageFailure: its code says "your sign-in could not be saved" and offers Sign in again, wrong for a project choice. A lock is still a lock.
+            throw new AccountAuthException(ex is AccountsFileLockedException ? AuthErrorCodes.AccountsFileLocked : AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
         }
         finally
         {
@@ -268,7 +273,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.AccountNotFound);
             }
 
-            Commit(current with { ActiveSub = sub });
+            await CommitAsync(current with { ActiveSub = sub }).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -425,12 +430,13 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     {
         await _store.DeleteAsync<TokenResponse>(account.Sub).ConfigureAwait(false);
         var current = State;
-        Commit(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] });
+        await CommitAsync(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] }).ConfigureAwait(false);
     }
 
-    private void Commit(AccountsFile file)
+    /// <summary>The save runs on a pool thread: it can wait up to 10 s for another copy's lock, and the caller may be a dispatcher.</summary>
+    private async Task CommitAsync(AccountsFile file)
     {
-        _registry.Save(file);
+        await Task.Run(() => _registry.Save(file)).ConfigureAwait(false);
         lock (_loadLock)
         {
             _state = file;
@@ -460,7 +466,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     }
 
     /// <summary>Only the exception type is kept: its message can carry a path with the user's name in it.</summary>
-    private static AccountAuthException StorageFailure(TokenStorageException ex) => new(AuthErrorCodes.StorageFailed, ex.Message, ex);
+    private static AccountAuthException StorageFailure(TokenStorageException ex)
+        => new(ex is AccountsFileLockedException ? AuthErrorCodes.AccountsFileLocked : AuthErrorCodes.StorageFailed, ex.Message, ex);
 
     private static AccountInfo ToInfo(AccountRecord record) => new(record.Sub, record.Email, record.NeedsSignIn);
 

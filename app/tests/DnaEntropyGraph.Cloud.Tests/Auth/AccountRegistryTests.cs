@@ -115,7 +115,114 @@ public class AccountRegistryTests : IDisposable
         registry.Load().ShouldBe(AccountsFile.Empty);
 
         registry.Unreadable.ShouldBeTrue();
+        Should.Throw<AccountsFileLockedException>(() => registry.Save(One("2002")));
+    }
+
+    [Fact]
+    public void A_mutex_that_cannot_be_opened_at_all_is_also_a_locked_file_not_a_crash()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
+        var registry = new AccountRegistry(_dir, _ => throw new WaitHandleCannotBeOpenedException());
+
+        registry.Load().ShouldBe(AccountsFile.Empty);
+
+        registry.Unreadable.ShouldBeTrue();
+        Should.Throw<AccountsFileLockedException>(() => registry.Save(One("2002")));
+    }
+
+    [Fact]
+    public void A_save_that_cannot_take_the_lock_in_time_is_a_lock_failure_and_writes_nothing()
+    {
+        var registry = new AccountRegistry(_dir, name => new Mutex(false, name), saveLockWait: TimeSpan.FromMilliseconds(200));
+        registry.Save(One("1001"));
+        var before = File.ReadAllBytes(FilePath);
+
+        using (new MutexHolder(_dir))
+        {
+            Should.Throw<AccountsFileLockedException>(() => registry.Save(One("2002")));
+        }
+
+        File.ReadAllBytes(FilePath).ShouldBe(before);
+        registry.Save(One("2002"));
+    }
+
+    [Fact]
+    public void A_disk_failure_in_a_save_is_a_storage_failure_not_a_lock_failure()
+    {
+        Directory.CreateDirectory(FilePath);
+        var registry = new AccountRegistry(_dir);
+
+        var failure = Should.Throw<TokenStorageException>(() => registry.Save(One("1001")));
+
+        failure.GetType().ShouldBe(typeof(TokenStorageException));
+    }
+
+    [Fact]
+    public void A_damaged_file_that_cannot_be_moved_aside_is_flagged_as_a_folder_problem_and_left_alone()
+    {
+        Directory.CreateDirectory(_dir);
+        var original = Encoding.UTF8.GetBytes("{\"activeSub\":");
+        File.WriteAllBytes(FilePath, original);
+        var registry = new AccountRegistry(_dir);
+
+        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            registry.Load().ShouldBe(AccountsFile.Empty);
+        }
+
+        registry.QuarantineFailed.ShouldBeTrue();
+        registry.Unreadable.ShouldBeTrue("Save refuses");
+        registry.QuarantinedTo.ShouldBeNull();
+        File.ReadAllBytes(FilePath).ShouldBe(original);
         Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
+    }
+
+    [Fact]
+    public void The_worst_case_a_load_can_block_the_caller_is_a_few_hundred_milliseconds()
+    {
+        // Load runs from the State getter, which can be on the UI thread: one bounded mutex wait plus the read retries.
+        AccountRegistry.WorstCaseLoadBudget.ShouldBeLessThanOrEqualTo(TimeSpan.FromMilliseconds(300));
+        AccountRegistry.WorstCaseLoadBudget.ShouldBeGreaterThan(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void A_load_while_another_copy_holds_the_lock_gives_up_and_leaves_the_file_alone()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
+        var registry = new AccountRegistry(_dir);
+
+        using (new MutexHolder(_dir))
+        {
+            registry.Load().ShouldBe(AccountsFile.Empty);
+        }
+
+        registry.Unreadable.ShouldBeTrue();
+        registry.QuarantineFailed.ShouldBeFalse("a held lock is not a folder problem");
+    }
+
+    [Fact]
+    public void A_save_removes_old_orphan_temp_files_and_keeps_fresh_ones_and_everything_else()
+    {
+        Directory.CreateDirectory(_dir);
+        var old = Path.Combine(_dir, "accounts.json.aaaa.tmp");
+        var fresh = Path.Combine(_dir, "accounts.json.bbbb.tmp");
+        var bad = Path.Combine(_dir, "accounts.json.bad");
+        var other = Path.Combine(_dir, "other.tmp");
+        foreach (var f in new[] { old, fresh, bad, other })
+        {
+            File.WriteAllText(f, "x");
+        }
+
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddMinutes(-30));
+
+        new AccountRegistry(_dir).Save(One("1001"));
+
+        File.Exists(old).ShouldBeFalse();
+        File.Exists(fresh).ShouldBeTrue("a save in another process may be using it");
+        File.Exists(bad).ShouldBeTrue();
+        File.Exists(other).ShouldBeTrue();
     }
 
     [Fact]
@@ -183,6 +290,5 @@ public class AccountRegistryTests : IDisposable
         var final = JsonSerializer.Deserialize<AccountsFile>(File.ReadAllText(FilePath));
         final.ShouldNotBeNull().Accounts.Count.ShouldBe(1);
         new[] { "1001", "2002" }.ShouldContain(final.ActiveSub!);
-        Directory.GetFiles(_dir).Select(Path.GetFileName).ToArray().ShouldBe(["accounts.json"], "no temp file is left behind");
-    }
+        Directory.GetFiles(_dir).Select(Path.GetFileName).ToArray().ShouldBe(["accounts.json"], "no temp file is left behind");    }
 }
