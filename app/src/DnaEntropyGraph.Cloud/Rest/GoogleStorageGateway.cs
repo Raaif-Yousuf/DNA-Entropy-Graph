@@ -480,14 +480,15 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             cancellationToken);
 
     /// <summary>
-    /// A 412 is a failed precondition unless it names an organization-policy constraint. THEORY (unverified): Cloud Storage
-    /// answers an org-policy violation with 412 as well and may give both the same <c>errors[].reason</c>, so the reason
-    /// cannot discriminate; the message naming a <c>constraints/</c> id (as <see cref="CloudErrorClassifier"/> reads org policy) does.
+    /// A 412 that positively looks like a failed precondition (the shared rule, <see cref="CloudErrorClassifier.IsPreconditionConflict"/>)
+    /// is the app's own <c>PRECONDITION_FAILED</c>; every other 412 is classified as everywhere else, which makes it an
+    /// organization-policy refusal. THEORY (unverified): Cloud Storage answers an org-policy violation with 412 as well.
     /// </summary>
     private static CloudOperationException TranslateApi(GoogleApiException api)
     {
         var status = GoogleApiErrors.FromApiException(api);
-        if (status.HttpStatus == 412 && GoogleApiErrors.KindOf(status with { HttpStatus = null }) != CloudErrorKind.OrgPolicy)
+        if (CloudErrorClassifier.IsPreconditionConflict(status.HttpStatus, status.Status, status.Message, status.Reasons)
+            && GoogleApiErrors.KindOf(status) != CloudErrorKind.OrgPolicy)
         {
             return new CloudOperationException(new CloudError(PreconditionFailedCode, 412, status.Message), CloudErrorKind.Other);
         }
