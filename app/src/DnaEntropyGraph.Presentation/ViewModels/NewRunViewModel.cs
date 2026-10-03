@@ -494,14 +494,27 @@ public sealed partial class NewRunViewModel : ObservableObject
 
         // The run has started and is paid for: open its page first, so nothing the store does can leave the user on a Run button
         // that starts a second one.
-        _navigator.NavigateTo("RunProgress", jobId);
+        try
+        {
+            _navigator.NavigateTo("RunProgress", jobId);
+        }
+        finally
+        {
+            // Also when the navigation throws: the run is paid for, so its choice is still remembered.
+            RememberOutputs(group, outputs);
+        }
+    }
+
+    private void RememberOutputs(OutputInputKinds group, OutputFileKinds outputs)
+    {
         try
         {
             _outputStore.Save(group, outputs);
         }
         catch (Exception)
         {
-            // A choice that could not be remembered only means the next run starts from the defaults; it must never reach the command.
+            // A choice that could not be remembered only means the next run starts from the defaults; it must never reach the command
+            // or replace a navigation failure that is already unwinding.
         }
     }
 

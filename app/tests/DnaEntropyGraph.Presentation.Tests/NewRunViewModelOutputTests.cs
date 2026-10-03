@@ -169,6 +169,40 @@ public sealed class NewRunViewModelOutputTests : IDisposable
         navigator.Received(1).NavigateTo("RunProgress", "job-1");
         await _jobEngine.Received(1).StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task A_navigation_that_throws_still_remembers_the_choice_for_the_run_that_started()
+    {
+        var navigator = Substitute.For<INavigator>();
+        navigator.When(n => n.NavigateTo(Arg.Any<string>(), Arg.Any<object?>())).Do(_ => throw new InvalidOperationException("frame gone"));
+        var vm = new NewRunViewModel(
+            Substitute.For<IFilePicker>(), _jobEngine, navigator, _strings,
+            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(_settings));
+        await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
+        Choice(vm, "wig").IsChecked = true;
+
+        await Should.ThrowAsync<InvalidOperationException>(() => vm.StartRunCommand.ExecuteAsync(null));
+
+        var next = NewViewModel();
+        await AddFile(next, "b.fasta", ">b\n" + Dna + "\n");
+        Choice(next, "wig").IsChecked.ShouldBeTrue("the run was paid for, so the choice is remembered even though the page did not open");
+    }
+
+    [Fact]
+    public async Task A_navigation_and_a_store_that_both_throw_surface_only_the_navigation_failure()
+    {
+        var settings = Substitute.For<ISettingsStore>();
+        settings.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new IOException("settings broke"));
+        var navigator = Substitute.For<INavigator>();
+        navigator.When(n => n.NavigateTo(Arg.Any<string>(), Arg.Any<object?>())).Do(_ => throw new InvalidOperationException("frame gone"));
+        var vm = new NewRunViewModel(
+            Substitute.For<IFilePicker>(), _jobEngine, navigator, _strings,
+            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(settings));
+        await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
+
+        await Should.ThrowAsync<InvalidOperationException>(() => vm.StartRunCommand.ExecuteAsync(null));
+    }
+
     [Fact]
     public async Task The_choice_is_remembered_separately_for_a_GenBank_file_and_a_FASTA_file()
     {
