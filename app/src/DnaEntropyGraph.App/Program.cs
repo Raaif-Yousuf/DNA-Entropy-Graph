@@ -1,3 +1,4 @@
+using DnaEntropyGraph.App.Startup;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Velopack;
@@ -16,6 +17,13 @@ public static class Program
     public static void Main(string[] args)
     {
         VelopackApp.Build().Run();
+
+        // Issue #638: the data folder (--profile / DEG_DATA_DIR) is fixed before anything can touch app state.
+        if (!StartupDataRoot.TryResolve(args))
+        {
+            Environment.ExitCode = 2;
+            return;
+        }
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
         Application.Start(p =>

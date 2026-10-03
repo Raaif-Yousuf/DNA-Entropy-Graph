@@ -95,12 +95,6 @@ public sealed class SettingsStore : ISettingsStore
         _mutexName = $@"Local\DnaEntropyGraph.Settings.{hash}";
     }
 
-    /// <summary>The default per-user location, per docs/architecture.md section 6.</summary>
-    public static string DefaultPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DNAEntropyGraph",
-        "settings.json");
-
     /// <summary>True once this instance saw a settings.json that did not parse. Sticky; see class remarks.</summary>
     public bool RecoveredFromUnreadableFile { get; private set; }
 

@@ -8,11 +8,17 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// <summary>What the reconciler did with one run row.</summary>
 public enum ReattachAction
 {
-    /// <summary>The run was handed back to <see cref="CloudJobRunner"/>, which carried it to the phase in <see cref="ReattachOutcome.FinalPhase"/>.</summary>
+    /// <summary>The run was handed back to <see cref="CloudJobRunner"/>, which carried it to the phase in <see cref="ReattachOutcome.FinalPhase"/>; a non-terminal phase there means the app's shutdown cut it short and the next launch resumes it (DECISION #599).</summary>
     Resumed,
 
     /// <summary>The run was mid-cancel; the cancel was finished.</summary>
     CancelFinished,
+
+    /// <summary>A cancel of this run was in flight and the reattach's part was cut short (the wait for a user cancel timed out, the app began to shut down, the cancel failed, or its terminal write did not land): the row is not terminal (normally Cancelling; still Running when the cancel was cut short before it recorded Cancelling, which is #610) and the next launch looks again. A snapshot, not a final answer: a cancel's delete cannot be cancelled once started, so it may still complete after this is reported. Never reported with a terminal row (DECISION #599).</summary>
+    CancelInterrupted,
+
+    /// <summary>A cancel of this run ended and could not confirm its VM gone: the row is Failed with <see cref="RunErrorCodes.CancelFailed"/> and the user is told to delete the VM by hand (DECISION #599).</summary>
+    CancelFailed,
 
     /// <summary>The VM is gone and no <c>result.json</c> exists: recorded Failed. A lost VM is never silently replaced.</summary>
     FailedVmMissing,
@@ -87,6 +93,14 @@ public sealed class JobReconciler
     /// <summary>The longest one delete or stop may take. Compute delete and stop are operations that run for tens of seconds, so this is far longer than a lookup; a refusal still comes back at once.</summary>
     private static readonly TimeSpan DefaultMutationTimeout = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Added to the mutation timeout to give the longest a reattach waits for a user cancel of the same run to settle: the cancel's own stop or delete
+    /// may take the whole mutation timeout, and the report must not give up on the very edge of a cancel that succeeds. A cancel that never ends (a
+    /// gateway call that ignores its token) then holds back only its own run's outcome, and only this long, instead of every run's until the app shuts
+    /// down (issue #551).
+    /// </summary>
+    private static readonly TimeSpan CancelSettleMargin = TimeSpan.FromSeconds(30);
+
     private readonly CloudJobRunner _runner;
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;
@@ -101,6 +115,13 @@ public sealed class JobReconciler
     private readonly DateTimeOffset _startedAt;
     private readonly TimeSpan _lookupTimeout;
     private readonly TimeSpan _mutationTimeout;
+    private readonly TimeSpan _cancelSettleTimeout;
+
+    /// <summary>
+    /// For tests: called with the job id the moment a reattach has armed its (bounded) wait for a user cancel to settle, so a test advances virtual
+    /// time only once that wait's timer exists rather than guessing from the clock's timer count.
+    /// </summary>
+    internal Action<string>? CancelSettleArmed { get; set; }
     private readonly IDiagnosticsLog _log;
 
     /// <summary>Jobs whose last reattach could not ask the cloud (Deferred), until a later pass judges them (issue #559).</summary>
@@ -215,11 +236,13 @@ public sealed class JobReconciler
         TimeProvider? timeProvider = null,
         TimeSpan? lookupTimeout = null,
         TimeSpan? mutationTimeout = null,
-        IDiagnosticsLog? log = null)
+        IDiagnosticsLog? log = null,
+        TimeSpan? cancelSettleTimeout = null)
     {
         _log = log ?? NullDiagnosticsLog.Instance;
         _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
         _mutationTimeout = mutationTimeout ?? DefaultMutationTimeout;
+        _cancelSettleTimeout = cancelSettleTimeout ?? _mutationTimeout + CancelSettleMargin;
         _active = activeRuns;
         _settings = settings;
         _runner = runner;
@@ -625,16 +648,16 @@ public sealed class JobReconciler
 
     private async Task<ReattachOutcome> ReattachCoreAsync(RunRecord row, TaskCompletionSource judged, CancellationToken cancellationToken)
     {
+        var underway = new Underway(() =>
+        {
+            SetRunDeferred(row.JobId, deferred: false);
+            judged.TrySetResult();
+        });
         try
         {
             // Registered BEFORE the first look at the cloud, and covering every write the reattach can make (the look, a failure it records,
             // a cancel it finishes, the run itself): a cancel at any moment finds the driver, stops it and waits for it, so one writer at a time.
             ReattachOutcome? outcome = null;
-            var underway = new Underway(() =>
-            {
-                SetRunDeferred(row.JobId, deferred: false);
-                judged.TrySetResult();
-            });
             var driver = _active.TryStart(row.JobId, async token =>
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
@@ -647,6 +670,15 @@ public sealed class JobReconciler
 
             await driver.ConfigureAwait(false);
             return outcome ?? await OutcomeOfCancelledAsync(row.JobId, underway.Action, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The app is shutting down while this reattach is working on the run (finishing a cancel it found half done, or driving it): say so
+            // (the row is read as it now is) instead of letting the shutdown, rethrown through Task.WhenAll, hide every other run's outcome. The row
+            // stays non-terminal when the work did not land and the next launch picks it up again (issue #551, DECISION #599).
+            _log.Warning("reconciler", row.JobId, nameof(OperationCanceledException));
+            var after = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
+            return new ReattachOutcome(row.JobId, ActionAfterShutdown(underway.Action, after?.Phase, after?.ErrorCode), after?.Phase, after?.ErrorCode);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -769,9 +801,72 @@ public sealed class JobReconciler
     /// </summary>
     private async Task<ReattachOutcome> OutcomeOfCancelledAsync(string jobId, ReattachAction underway, CancellationToken cancellationToken)
     {
-        await _active.WhenCancelSettledAsync(jobId).WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var settle = _active.WhenCancelSettledAsync(jobId).WaitAsync(_cancelSettleTimeout, _time, cancellationToken);
+            CancelSettleArmed?.Invoke(jobId);
+            await settle.ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // The cancel is still going: report the row as it is now (non-terminal), which says so, rather than wait on it for good.
+            _log.Warning("reconciler", jobId, nameof(TimeoutException));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The app is shutting down while the cancel is in flight: the same report, not an exception that would hide every other run's outcome.
+            _log.Warning("reconciler", jobId, nameof(OperationCanceledException));
+        }
+
         var settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
-        return new ReattachOutcome(jobId, underway, settled?.Phase, settled?.ErrorCode);
+        return new ReattachOutcome(jobId, ActionAfterUserCancel(underway, settled?.Phase, settled?.ErrorCode), settled?.Phase, settled?.ErrorCode);
+    }
+
+    /// <summary>
+    /// The action for a reattach a user cancel took over. A terminal row is judged as <see cref="ActionForFinalPhase"/> does. A row that is
+    /// not terminal means the cancel did not end the run (it was cut short by the shutdown or the settle deadline, or it failed): the reattach
+    /// is no longer driving the run, so it is never reported as resumed, only as <see cref="ReattachAction.CancelInterrupted"/>.
+    /// </summary>
+    /// <summary>
+    /// The action for a reattach the app's shutdown cut short. One that was finishing a cancel is judged as a cancel a user cancel took over is
+    /// (<see cref="ActionAfterUserCancel"/>). Any other is <see cref="ReattachAction.Resumed"/> (a terminal row judged by <see cref="ActionForFinalPhase"/>): it
+    /// was handed back to the runner, and <see cref="ReattachOutcome.FinalPhase"/> says the row is still non-terminal for the next launch to resume.
+    /// </summary>
+    private static ReattachAction ActionAfterShutdown(ReattachAction underway, JobPhase? finalPhase, string? errorCode)
+        => underway == ReattachAction.CancelFinished
+            ? ActionAfterUserCancel(underway, finalPhase, errorCode)
+            : finalPhase is { } phase && JobStateMachine.IsTerminal(phase) ? ActionForFinalPhase(underway, phase, errorCode) : ReattachAction.Resumed;
+
+    private static ReattachAction ActionAfterUserCancel(ReattachAction underway, JobPhase? finalPhase, string? errorCode)
+        => finalPhase is { } phase && JobStateMachine.IsTerminal(phase) ? ActionForFinalPhase(underway, phase, errorCode) : ReattachAction.CancelInterrupted;
+
+    /// <summary>
+    /// What the reattach did, as the row it left says it did. A reattach that was stopped by a user cancel may have set its own action (it
+    /// goes first, before its write) for a write that never landed: a row that ended Cancelled was cancelled, and a Failed* action is only true
+    /// of a row that is Failed. A row that is Failed because a cancel could not confirm the VM gone (<see cref="RunErrorCodes.CancelFailed"/>, or any
+    /// Failed row the reattach reached while finishing a cancel) is <see cref="ReattachAction.CancelFailed"/>, whatever the reattach was doing.
+    /// </summary>
+    internal static ReattachAction ActionForFinalPhase(ReattachAction underway, JobPhase? finalPhase, string? errorCode = null)
+    {
+        if (finalPhase == JobPhase.Cancelled)
+        {
+            return ReattachAction.CancelFinished;
+        }
+
+        if (finalPhase == JobPhase.Failed && (errorCode == RunErrorCodes.CancelFailed || underway == ReattachAction.CancelFinished))
+        {
+            return ReattachAction.CancelFailed;
+        }
+
+        if (underway == ReattachAction.CancelFinished && (finalPhase is null || !JobStateMachine.IsTerminal(finalPhase.Value)))
+        {
+            // The reattach was finishing a cancel and the row is not terminal (still Cancelling, or unreadable): a finished cancel was not seen.
+            return ReattachAction.CancelInterrupted;
+        }
+
+        return underway is ReattachAction.FailedVmMissing or ReattachAction.FailedUnrecoverable && finalPhase != JobPhase.Failed
+            ? ReattachAction.Resumed
+            : underway;
     }
 
     private enum Evidence
@@ -890,7 +985,7 @@ public sealed class JobReconciler
         }
 
         var after = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
-        return new ReattachOutcome(row.JobId, ReattachAction.CancelFinished, after?.Phase, after?.ErrorCode);
+        return new ReattachOutcome(row.JobId, ActionForFinalPhase(ReattachAction.CancelFinished, after?.Phase, after?.ErrorCode), after?.Phase, after?.ErrorCode);
     }
 
     private async Task<ReattachOutcome> FailAsync(RunRecord row, Underway underway, ReattachAction action, string code, string detail, CancellationToken cancellationToken)

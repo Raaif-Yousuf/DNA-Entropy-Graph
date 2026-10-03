@@ -35,6 +35,13 @@ real project is a deliberate, explicit choice — do not do it without reading
 `working-on-gcp` first, and never from an agent session (Hard Rule: GPU/cloud
 work is owner/CI territory, not a laptop dev loop).
 
+**Always launch on a sandbox data folder** (#638): `DnaEntropyGraph.App.exe --profile "$env:TEMP\deg-sandbox"`
+(or `DEG_DATA_DIR`). Without it the app reads and writes the owner's real
+`%LOCALAPPDATA%\DNAEntropyGraph` (history, sign-in, settings). A sandboxed window shows a
+"Sandbox profile: <folder>" badge in the title bar; no badge means the real profile, so do not
+drive it. New path-owning code takes the `AppDataRoot` from DI and never calls
+`SpecialFolder.LocalApplicationData` (a Guards test enforces it). Recipe: `docs/dev_commands.md`.
+
 Full test surface, PowerShell equivalents and the GPU-test carve-out:
 `docs/dev_commands.md`.
 

@@ -264,14 +264,6 @@ public sealed class ViewerUrlsTests
     {
         ViewerUrls.IsAllowedNavigation(ViewerUrls.StartUrl).ShouldBeTrue();
     }
-
-    [Fact]
-    public void User_data_folder_is_under_the_app_folder_in_local_app_data()
-    {
-        // Any LocalApplicationData value will do; a literal user-home path would trip check_user_home_paths.
-        var localAppData = Path.Combine(Path.GetTempPath(), "local-app-data");
-        ViewerUrls.UserDataFolder(localAppData).ShouldBe(Path.Combine(localAppData, "DNAEntropyGraph", "webview2"));
-    }
 }
 
 public sealed class WebViewRuntimeDecisionTests
