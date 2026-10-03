@@ -24,7 +24,7 @@ public class AccountSurfaceTests
     public void The_pill_shows_the_account_email_and_follows_AccountChanged()
     {
         var account = Substitute.For<IGcpAccount>();
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), account, new WeakReferenceMessenger(), Strings());
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), account, new WeakReferenceMessenger(), Strings(), TestMessages.Center());
         viewModel.StatusPillText.ShouldBe("StatusPillNotSignedIn");
 
         account.IsSignedIn.Returns(true);
@@ -47,7 +47,7 @@ public class AccountSurfaceTests
         var dispatcher = Substitute.For<IDispatcher>();
         Action? queued = null;
         dispatcher.When(d => d.Enqueue(Arg.Any<Action>())).Do(call => queued = call.Arg<Action>());
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), account, new WeakReferenceMessenger(), Strings(), dispatcher);
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), account, new WeakReferenceMessenger(), Strings(), TestMessages.Center(), dispatcher);
 
         account.IsSignedIn.Returns(true);
         account.CurrentAccount.Returns(new AccountInfo("1001", "first@example.test"));
