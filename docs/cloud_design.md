@@ -57,7 +57,7 @@ every run (fast, cached 10 minutes), and inside the zone ladder's own abort logi
 
 **Closed, issue #388:** `IProjectSetupGateway.GetProjectStateAsync` (returning a
 `ProjectLifecycleState` of `Active` / `NotFound` / `Other`) is step 1's interface method,
-`FakeGcp.WithProjectState(projectId, state)` scripts it, and `CloudJobRunner.PreflightAsync`
+`FakeGcp.WithProjectState(projectId, state)` scripts it, and `PreflightChecks.RunAsync`
 runs it first, before billing, before the Compute API check, before quota - the full
 documented order now has a caller and a test (`CloudJobRunnerTests
 .Preflight_fails_the_run_before_any_upload_when_the_project_is_not_active`).
@@ -76,7 +76,7 @@ outside the preflight chain proper. Every one of these throws the same
 `FakeGcpScriptedFailureTests.cs` round-trips several of them back through
 `CloudErrorClassifier.Classify` to prove the two agree.
 
-**Implemented** (`app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs`, issue #58):
+**Implemented** (`app/src/DnaEntropyGraph.Core/Cloud/PreflightChecks.cs`, sequenced by `CloudJobRunner.RunAsync`, issue #58):
 `CloudJobRunner.RunAsync` runs this exact preflight chain (steps 1-4; step 5, bucket-exists,
 is folded into the Uploading phase's own `EnsureBucketAsync` call) before a run ever reaches
 Uploading, and aborts to `Failed` on the first failure with the failing
@@ -117,8 +117,7 @@ per-region quota memory, persisted per project instead of the prototype's
  calls for the same spec, in two different zones, both succeed, and
  `IComputeGateway.FindByJobIdAsync` (new, issue #257) then reports two VMs for one job id.
  Nothing at the gateway level stops this, on purpose - it is what a real, per-zone-unique
- name genuinely allows. The fix is caller-side, not gateway-side: `CloudJobRunner
- .ProvisionAsync` (issue #58) calls `FindByJobIdAsync` and adopts whatever it finds BEFORE
+ name genuinely allows. The fix is caller-side, not gateway-side: `VmProvisioner.ProvisionAsync` (issue #58) calls `FindByJobIdAsync` and adopts whatever it finds BEFORE
  attempting any zone, every single time it runs - including the very first time - so a
  resumed ladder after a crash never reaches a second zone's create at all.
  `CloudJobRunnerTests.A_crash_after_provisioning_resumes_without_creating_a_second_vm`
@@ -186,7 +185,7 @@ theory plus the structured-signal cases the fixture cannot express (it is stderr
 `RpcException`/`GoogleApiException` into it before this classifier ever runs - no such
 mapping exists yet (there is no real, non-fake gateway implementation), only
 `FakeGcp`, which constructs `CloudError` directly when scripting a failure.
-**Consumed, issue #58**: `CloudJobRunner.ProvisionAsync` (`app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs`)
+**Consumed, issue #58**: `VmProvisioner.ProvisionAsync` (`app/src/DnaEntropyGraph.Core/Cloud/VmProvisioner.cs`)
 is the first production caller - it classifies every `CloudOperationException` a create
 attempt throws and applies exactly the abort-vs-continue column below (project-wide kinds
 return the failure immediately; quota/stockout/other try the next zone; **network aborts the ladder too**, because another zone cannot fix an unreachable API and trying them all would end as a false stockout). The
@@ -332,7 +331,7 @@ exercise.
 
 ## 11. The job runner and operation polling (issues #58, #256)
 
-**Implemented**: `app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs` turns one
+**Implemented**: `app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs` (a sequencer over the collaborators listed in `architecture.md` section 3) turns one
 `CloudJobRequest` into a finished run over `IComputeGateway`/`IStorageGateway`/
 `IProjectSetupGateway`/`IQuotaGateway` (today, `FakeGcp` implementing all four - there is
 no real gateway yet), driven by `JobStateMachine`'s legal-transition table over the
@@ -469,7 +468,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   - *A create that fails may still have landed.* After a Network, Other or Stockout create failure (not only a timeout) the
     runner looks by job-id label and deletes what it finds before it moves to the next zone or records the run, so a lost
     response after the server accepted the insert cannot leave one VM per zone. A sweep that cannot be confirmed records
-    `vm_end_unconfirmed`. `EnsureVmsEndedByLabelAsync` ends every VM it finds even when an earlier one could not be ended.
+    `vm_end_unconfirmed`. `VmTerminator.EnsureVmsEndedByLabelAsync` ends every VM it finds even when an earlier one could not be ended.
   - *Cancel always records one terminal state.* `CancelAsync` tolerates a 404 on delete (the worker or platform got there
     first), re-looks by label afterwards (polling to `LifecycleTimeout`) before it records `Cancelled`, and when the caller's
     token is cancelled midway makes one last uncancellable attempt and records `Cancelled` or `Failed/cancel_failed` instead of
@@ -490,7 +489,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   - *A resumed cancel cannot fail blind.* If `CancelAsync` throws before its own delete logic on a resume, the runner ends the VM
     by label and records `Cancelled` or `cancel_failed`; a repository that keeps failing leaves the row `Cancelling`.
   - *A terminal row answers with its own code,* a cancel tries every VM, and a VM found by label is ended under its own name.
-  - *The end helpers never throw.* `EnsureVmEndedAsync` and `EnsureVmsEndedByLabelAsync` catch any exception that is not the
+  - *The end helpers never throw.* `VmTerminator.EnsureVmEndedAsync` and `VmTerminator.EnsureVmsEndedByLabelAsync` catch any exception that is not the
     caller cancelling and report it as an unconfirmed end (`vm_end_unconfirmed`).
 
 - **The input is validated before anything is created (Hard Rule 2, #479).** `JobEngine` runs
@@ -559,7 +558,7 @@ resume path, not a distinct one someone has to remember to call.
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a
 `CloudOperationException` keeps its `CloudErrorKind`, anything else is `Other`;
 cancellation still propagates), so a run never stays in its last phase after an unexpected
-error (Hard Rule 11); `SetPhaseAsync` updates the existing run row (`existing with {
+error (Hard Rule 11); `RunRowStore.SetPhaseAsync` updates the existing run row (`existing with {
 Phase }`) and stamps `FinishedAt` on a terminal phase, because the SQLite repository
 replaces every column on upsert and a blank record would wipe the options and project the
 engine wrote first; and `CancelAsync` ignores a job id it never saw, records `Cancelled`
@@ -571,7 +570,7 @@ so "Stop VM now" works from any runner instance.
 the one place that polls-with-backoff (1s doubling to a 10s cap) against a deadline,
 distinguishing a real operation error from its own `OPERATION_POLL_TIMEOUT` (classified as
 `network`, never confused with a genuine `stockout`/`quota` the operation itself reported -
-see `OperationPollerTests`). `CloudJobRunner.ProvisionAsync` wraps every `CreateVmAsync`
+see `OperationPollerTests`). `VmProvisioner.ProvisionAsync` wraps every `CreateVmAsync`
 call in it today as a single-shot poll (since `FakeGcp` resolves synchronously, with no
 "not done yet" phase) - a real gateway polling an actual Google LRO would report several
 "not done yet" snapshots first, and needs no runner-side change to do so, only a real
@@ -579,7 +578,7 @@ call in it today as a single-shot poll (since `FakeGcp` resolves synchronously, 
 
 **Walking-skeleton scope, not issue #86**: `CloudJobRequest.Zones` is a plain, caller-
 supplied, sequential list - not the escalating-parallelism (3 -> 3 -> 5 -> batches of 7),
-last-good-zone-first, tier-escalating ladder section 3 describes. `PreflightAsync`'s GPU
+last-good-zone-first, tier-escalating ladder section 3 describes. `PreflightChecks`'s GPU
 quota check also uses a placeholder accelerator-type string (`"gpu"`), because `VmSpec` has
 no accelerator-type field yet (only `MachineType`) - see this round's changelog fragment
 and issue tracker for the follow-up.
@@ -611,7 +610,7 @@ the API error text, never a sequence, file name or email). `CloudRetryLog` keeps
 200 in memory. THEORY (unverified): Serilog is not wired into the app yet, so the log is
 not in the diagnostics zip; when it is, forward `OnRetry` there.
 
-The pipeline's kind is kept end to end: `CloudJobRunner.ProvisionAsync` uses the kind the
+The pipeline's kind is kept end to end: `VmProvisioner.ProvisionAsync` uses the kind the
 gateway threw instead of re-classifying the error text (which turned `network` into `other`,
 walked every zone and reported a stockout), and a run failure is recorded as a code
 (`RunErrorCodes`) with the raw text only in `ErrorDetail`; the UI shows the `RunError_<code>`

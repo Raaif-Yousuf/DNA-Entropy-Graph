@@ -1,0 +1,1 @@
+- refactor(cloud): CloudJobRunner (1744 lines) is split into a thin sequencer plus internal collaborators (PreflightChecks, RunTransfer, VmProvisioner, ResultWaiter, VmTerminator, VmCanceller, RunOutcomeRecorder, RunRowStore); no behaviour change, the in-flight create state has one owner (VmProvisioner) (#512)
