@@ -21,6 +21,11 @@ Six hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.j
   `--quit`) stay allowed; `am --skip` does not. On a git timeout it answers "unknown" and ALLOWS
   (fail open on purpose, #629): the git runs through `run_bounded()` (temp file, process tree killed by
   PID), so a stalled git can never push the hook past `run_hook.py`'s 8 s kill, which would deny every shell.
+  Time budget (asserted in `scripts/tests/test_block_primary_checkout_git.py`): one bounded git costs at most its
+  timeout plus a 1.5 s kill tail (`taskkill` wait 1.0 s + post-kill wait 0.5 s); the dispatch hook runs exactly one
+  (`GIT_TIMEOUT` 4.0 s, 5.5 s worst), this hook's calls share a 5.0 s total budget (6.5 s worst); both keep a 1.0 s
+  margin under the 8 s kill. A `#` glued to the `)` of `$( )` is part of the word, not a comment; `bash<<EOF`
+  (no space) is a shell consumer.
 - `require_premerge_before_pr.py` -- refuses `gh pr create` and `gh pr merge` unless
   `scripts/premerge.py` passed (green, unfiltered) on the CURRENT HEAD, recorded by
   `scripts/premerge_stamp.py` in `<git-dir>/premerge-stamp.json` (12 hour expiry). Escape hatch, logged to

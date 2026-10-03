@@ -131,6 +131,21 @@ hook only fires when `cwd` resolves to a linked git worktree, never the
 primary checkout. Dispatch from the primary checkout instead.)"""
 
 
+# TIME BUDGET. run_hook.py kills a guard at 8 s and a kill DENIES the tool call, so the
+# worst case of everything a hook does must fit with margin. One bounded git costs at most
+# `timeout` + KILL_TAIL_SECONDS (the taskkill wait plus the post-kill wait below).
+DISPATCHER_BUDGET_SECONDS = 8.0  # mirrors run_hook.DEFAULT_GUARD_TIMEOUT_SECONDS (tested)
+TASKKILL_TIMEOUT_SECONDS = 1.0
+POST_KILL_WAIT_SECONDS = 0.5
+KILL_TAIL_SECONDS = TASKKILL_TIMEOUT_SECONDS + POST_KILL_WAIT_SECONDS
+GIT_TIMEOUT = 4.0  # the one git this hook's verdict() runs
+
+
+def worst_case_seconds(timeout: float) -> float:
+    """Longest one `run_bounded(argv, timeout)` can take, kill tail included."""
+    return timeout + KILL_TAIL_SECONDS
+
+
 def _kill_tree(proc: subprocess.Popen) -> None:
     """Kill `proc` and everything it started, by the PID WE started (never by image name)."""
     try:
@@ -139,7 +154,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
                 ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=5,
+                timeout=TASKKILL_TIMEOUT_SECONDS,
             )
         else:
             import signal
@@ -151,7 +166,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def run_bounded(argv: list[str], timeout: float) -> tuple[int, str] | None:
+def run_bounded(argv: list[str], timeout: float, _wait=None) -> tuple[int, str] | None:
     """Run `argv`; return (returncode, stdout), or None on timeout / failure to start.
 
     WHY NOT `subprocess.run(capture_output=True, timeout=...)`: MEASURED (see
@@ -163,6 +178,9 @@ def run_bounded(argv: list[str], timeout: float) -> tuple[int, str] | None:
     call. So: no pipes (stdout goes to a temp file, stderr to nowhere), `wait()`
     only waits for the direct child, and on timeout the whole process tree is
     killed by PID.
+
+    `_wait(proc, timeout)` is a test seam for the waiting step (default `proc.wait`), so a
+    test can trigger the timeout on a signal instead of on the clock.
 
     A timeout answers None, which every caller treats as "unknown" and ALLOWS.
     Deliberately fail-open: this guard exists to prevent accidents, and a hook
@@ -180,11 +198,11 @@ def run_bounded(argv: list[str], timeout: float) -> tuple[int, str] | None:
                 start_new_session=os.name != "nt",
             )
             try:
-                proc.wait(timeout=timeout)
+                (_wait or (lambda p, t: p.wait(timeout=t)))(proc, timeout)
             except subprocess.TimeoutExpired:
                 _kill_tree(proc)
                 with contextlib.suppress(Exception):
-                    proc.wait(timeout=2)
+                    proc.wait(timeout=POST_KILL_WAIT_SECONDS)
                 return None
             out.seek(0)
             return proc.returncode, out.read().decode("utf-8", errors="replace")
@@ -192,7 +210,7 @@ def run_bounded(argv: list[str], timeout: float) -> tuple[int, str] | None:
         return None
 
 
-def _git_paths(cwd: str, timeout: float = 10.0) -> tuple[str, str] | None:
+def _git_paths(cwd: str, timeout: float = GIT_TIMEOUT) -> tuple[str, str] | None:
     """Return (git_dir, git_common_dir), both absolute, or None if unavailable.
 
     None covers: no git on PATH, `cwd` not inside any git repository, or any
@@ -215,7 +233,7 @@ def _git_paths(cwd: str, timeout: float = 10.0) -> tuple[str, str] | None:
     return git_dir, git_common_dir
 
 
-def classify(cwd: str, timeout: float = 10.0) -> str:
+def classify(cwd: str, timeout: float = GIT_TIMEOUT) -> str:
     """One of "primary", "linked_worktree", or "unknown" -- the three-way
     answer this hook needs to be able to SHOW, not just act on.
 
@@ -269,7 +287,8 @@ def explain(cwd: str) -> str:
     shell-quoting slip reads as "could not determine" instead of silently
     looking exactly like a real allow. Never used by the real PreToolUse
     path -- a pure read-only affordance for testing the hook by hand."""
-    result = classify(cwd)
+    paths = _git_paths(cwd)  # ONE git call: classify() would run a second one
+    result = _classify_paths(paths)
     if result == "unknown":
         return (
             f"UNKNOWN for cwd={cwd!r}: could not resolve --git-dir/--git-common-dir "
@@ -279,7 +298,7 @@ def explain(cwd: str) -> str:
             "an ambiguous case that would otherwise be indistinguishable from a "
             "genuine primary-checkout allow."
         )
-    git_dir, git_common_dir = _git_paths(cwd)  # cannot be None when result != "unknown"
+    git_dir, git_common_dir = paths  # cannot be None when result != "unknown"
     if result == "primary":
         return (
             f"PRIMARY CHECKOUT for cwd={cwd!r}: --git-dir == --git-common-dir "
@@ -309,10 +328,6 @@ def caller_agent_id(payload: dict) -> str | None:
         if name.startswith("agent-") and name.endswith(".jsonl"):
             return name[len("agent-") : -len(".jsonl")] or None
     return None
-
-
-# One short, explicit git timeout: run_hook.py gives the whole guard an 8 s budget.
-GIT_TIMEOUT = 4.0
 
 
 def _owns_agent_worktree(caller_id: str, common_dir: str) -> bool:

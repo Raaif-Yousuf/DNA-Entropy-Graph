@@ -496,6 +496,15 @@ DENIED_629 = [
     "source /dev/stdin <<'EOF'\ngit switch -c x\nEOF",
     "eval \"$(cat <<'EOF'\ngit switch -c x\nEOF\n)\"",
     'eval "git switch -c x"',
+    # a `#` right after `$( ... )` continues the word; it is not a comment start
+    "echo $(true)#; git switch -c x",
+    "echo $(echo a)#x\ngit switch -c x",
+    "echo $((1+1))#; git switch -c x",
+    # no space before the heredoc operator
+    "bash<<EOF\ngit switch -c x\nEOF",
+    "sh<<'EOF'\ngit switch -c x\nEOF",
+    "/bin/bash<<-EOF\ngit switch -c x\nEOF",
+    ". /dev/stdin<<EOF\ngit switch -c x\nEOF",
     # git am recovery covers only --abort/--quit/--show-current-patch; --skip applies more patches
     "git am --skip",
     "git am --continue",
@@ -518,6 +527,11 @@ ALLOWED_629 = [
     "echo a#b\ngit status",
     "git --config-env a=B status",
     "git reset --quiet HEAD README.md",
+    # a `#` at a word start IS a comment, also right after a plain subshell or `$( )`
+    "(true) # it's\ngit status",
+    "echo $(true) # don't\ngit status",
+    "echo $(true); # don't\ngit status",
+    "cat<<EOF\ngit switch -c x\nEOF",
 ]
 
 
@@ -594,26 +608,35 @@ def _pid_alive(pid: int) -> bool:
 
 
 def test_629_run_bounded_returns_on_timeout_and_kills_the_grandchild(tmp_path):
-    """The hang shape: a parent that starts a grandchild (which inherits the
-    stdout handle) and then stalls. The grandchild blocks on a RELEASE FILE,
-    not on the clock, so nothing here asserts a duration. The call runs in a
-    thread and is bounded generously (60 s) only so a regression fails instead
-    of hanging the suite; the assertion is the outcome."""
+    """The hang shape: a parent that starts a grandchild (which inherits the stdout
+    handle) and then stalls. Nothing here depends on the clock. `run_bounded` takes
+    its wait as a seam: the test's waiter blocks on a SIGNAL (the grandchild wrote its
+    pid) and then reports the timeout by waiting 0.2 s on a parent that sleeps 90 s,
+    so the timeout always fires and the kill path always runs, however slow the box.
+    The 60 s bound exists only so a regression fails instead of hanging the suite."""
     import threading
     import time
 
     release, pidfile = tmp_path / "release", tmp_path / "pid"
+
+    def expire_once_the_grandchild_runs(proc, _timeout):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and proc.poll() is None:
+            if pidfile.exists() and pidfile.stat().st_size > 0:
+                break
+            time.sleep(0.05)
+        proc.wait(timeout=0.2)  # the parent sleeps 90 s: always raises TimeoutExpired
+
     result: list = []
+    argv = [sys.executable, "-c", _PARENT, _GRANDCHILD, str(release), str(pidfile)]
     worker = threading.Thread(
-        target=lambda: result.append(
-            agent_hook.run_bounded([sys.executable, "-c", _PARENT, _GRANDCHILD, str(release), str(pidfile)], timeout=1.5)
-        ),
+        target=lambda: result.append(agent_hook.run_bounded(argv, timeout=1.0, _wait=expire_once_the_grandchild_runs)),
         daemon=True,
     )
     worker.start()
     worker.join(60)
     hung = worker.is_alive()
-    grandchild_pid = int(pidfile.read_text()) if pidfile.exists() else None
+    grandchild_pid = int(pidfile.read_text()) if pidfile.exists() and pidfile.stat().st_size else None
     alive_after = False
     if not hung and grandchild_pid is not None:
         for _ in range(100):  # let the OS reap the killed tree
@@ -642,3 +665,53 @@ def test_629_stalled_git_classifies_unknown_and_allows(repos, monkeypatch):
     monkeypatch.setattr(agent_hook, "run_bounded", lambda argv, timeout: None)
     assert agent_hook.classify(_in(primary), timeout=1) == "unknown"
     assert hook.verdict("git switch -c x", _in(primary)) is None
+
+
+# -- the dispatcher kills a guard at 8 s: every worst case must fit, with margin --
+
+
+def _run_hook_budget() -> float:
+    sys.path.insert(0, str(Path(agent_hook.__file__).parent))
+    import run_hook
+
+    return run_hook.DEFAULT_GUARD_TIMEOUT_SECONDS
+
+
+def test_629_budget_mirrors_the_dispatcher_kill():
+    assert agent_hook.DISPATCHER_BUDGET_SECONDS == _run_hook_budget()
+
+
+def test_629_worst_case_of_one_bounded_git_includes_the_kill_tail():
+    assert agent_hook.KILL_TAIL_SECONDS == agent_hook.TASKKILL_TIMEOUT_SECONDS + agent_hook.POST_KILL_WAIT_SECONDS
+    assert agent_hook.worst_case_seconds(2.0) == 2.0 + agent_hook.KILL_TAIL_SECONDS
+
+
+MARGIN = 1.0  # interpreter start-up and the JSON read, never measured, so reserved
+
+
+def test_629_dispatch_hook_worst_case_fits_the_dispatcher_budget():
+    # verdict() runs exactly one bounded git (no second _git_paths call anywhere).
+    worst = agent_hook.worst_case_seconds(agent_hook.GIT_TIMEOUT)
+    assert worst + MARGIN <= agent_hook.DISPATCHER_BUDGET_SECONDS
+
+
+def test_629_primary_checkout_hook_worst_case_fits_the_dispatcher_budget():
+    # The deadline caps each timeout to the remaining budget, and a kill tail can follow
+    # the last call, so the worst case is the budget plus one tail.
+    worst = hook.TOTAL_BUDGET_SECONDS + agent_hook.KILL_TAIL_SECONDS
+    assert worst + MARGIN <= agent_hook.DISPATCHER_BUDGET_SECONDS
+    assert hook.CLASSIFY_TIMEOUT_SECONDS <= hook.TOTAL_BUDGET_SECONDS
+
+
+def test_629_explain_runs_one_git_not_two(repos, monkeypatch):
+    primary, _ = repos
+    calls = []
+    real = agent_hook._git_paths
+
+    def counting(cwd, timeout=agent_hook.GIT_TIMEOUT):
+        calls.append(timeout)
+        return real(cwd, timeout)
+
+    monkeypatch.setattr(agent_hook, "_git_paths", counting)
+    assert "PRIMARY CHECKOUT" in agent_hook.explain(_in(primary))
+    assert len(calls) == 1

@@ -177,9 +177,9 @@ _GIT_ENV_TARGETS = {"GIT_DIR", "GIT_WORK_TREE"}
 # A heredoc consumer that EXECUTES its body: a shell by name or path (`bash`, `/bin/bash`,
 # a quoted `"C:\...\bash.exe"`), `. /dev/stdin` / `source /dev/stdin`, and `eval`.
 _SHELL_CONSUMER = re.compile(
-    r"(?:(?:^|[\s;&|(/\\'\"])(?:bash|sh|zsh|dash|pwsh|powershell)(?:\.exe)?(?=[\s'\"]|$)"
-    r"|(?:^|[\s;&|(])(?:\.|source)\s+/dev/(?:stdin|fd/0)(?=\s|$)"
-    r"|(?:^|[\s;&|(])eval(?=\s|$))",
+    r"(?:(?:^|[\s;&|(/\\'\"])(?:bash|sh|zsh|dash|pwsh|powershell)(?:\.exe)?(?=[\s'\"<]|$)"
+    r"|(?:^|[\s;&|(])(?:\.|source)\s+/dev/(?:stdin|fd/0)(?=[\s<]|$)"
+    r"|(?:^|[\s;&|(])eval(?=[\s<]|$))",
     re.IGNORECASE,
 )
 
@@ -257,6 +257,11 @@ def _split_segments(command: str) -> list[list[str]]:
     has_buf = False
     quote = ""
     i, n = 0, len(command)
+    # `(` kinds, innermost last: True for `$(`, `$((`, `<(`, `>(` (an expansion), False for a
+    # subshell or group. A `#` glued to the `)` of an EXPANSION continues that word (bash:
+    # `echo $(true)#x` prints `#x`), so it is not a comment start; after a plain `)` it is.
+    parens: list[bool] = []
+    expansion_close = -2
 
     def end_token() -> None:
         nonlocal buf, has_buf
@@ -280,7 +285,7 @@ def _split_segments(command: str) -> list[list[str]]:
                 buf.append(c)
             i += 1
             continue
-        if c == "#" and not has_buf:
+        if c == "#" and not has_buf and expansion_close != i - 1:
             # A comment (a `#` that starts a word, outside quotes) runs to the end of
             # the line. Skipping it BEFORE quote tracking stops an apostrophe in
             # `# don't` from opening a quote that swallows the commands after it.
@@ -292,6 +297,11 @@ def _split_segments(command: str) -> list[list[str]]:
         elif c in " \t\r":
             end_token()
         elif c in "\n;|()":
+            if c == "(":
+                prev = command[i - 1] if i else ""
+                parens.append(prev in "$<>" or (prev == "(" and bool(parens) and parens[-1]))
+            elif c == ")" and parens and parens.pop():
+                expansion_close = i
             end_segment()
         elif c == "&":
             # `&&`, a backgrounding `&`, but not a redirect (`2>&1`, `&>`) and not
