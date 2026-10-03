@@ -39,8 +39,15 @@ Why the `changes` job instead of a `paths:` filter on the trigger: a workflow th
 stops from starting produces *no* check, and a required check that never reports sits at "Expected,
 waiting for status" and blocks the merge button forever. A job skipped by its own `if:` reports
 Skipped, which branch protection treats as passing. So `ci-app.yml` and `ci-worker.yml` always start,
-and a tiny `changes` job (a `git diff --name-only` of the PR against its base) gates the real jobs.
-The `changes` pattern lists every path the tests *read*, not only `app/` or `worker/`: ci-app also runs for `worker/`, `tests/`, `docs/contract/`; ci-worker also for `tests/`, `docs/contract/`, `docs/copy_catalog.md`. `scripts/tests/test_ci_gate_sync.py` fails when a test reads a top-level directory the pattern omits. `workflow_dispatch` always runs everything.
+and a tiny `changes` job runs `scripts/ci_changes_gate.py`, which gates the real jobs. The gate is **fail-closed**: it skips
+only when `git diff --name-only --no-renames <base> HEAD` succeeded AND every changed path is on a short known-irrelevant
+list (`docs/**` except `docs/contract/` and `docs/copy_catalog.md`, root `*.md` except `THIRD-PARTY-NOTICES.md`, `.claude/**` and
+the other agent-tool folders, `LICENSE`, and other workflows' own files). Everything else runs the jobs, including
+`.editorconfig`, `global.json`, `scripts/**` and any unknown path; a git error, a missing base or a non-PR event also runs them.
+So a docs-only PR skips the Windows build, while a PR touching `worker/` runs ci-app too (app tests read worker files) and
+ci-worker runs on app-only PRs (cheap, and not provably irrelevant).
+`scripts/tests/test_ci_changes_gate.py` fails when a path an app or worker test reads, or a workflow step reads (including the
+implicit `.editorconfig` and `app/global.json`), would be classified irrelevant; matching is exact per path, not prefix-of-a-directory.
 
 Requiring them on `main` is an owner action in the repository settings (branch protection, MEASURED
 2026-10-03: `main` is not protected). Require the job names above, **not** `changes (...)`.
