@@ -59,7 +59,9 @@ public static class ServiceRegistration
         services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
-        services.AddSingleton<IToastService, ToastService>();
+        // Issue #585: the shell message bar is the toast service; one instance behind both types.
+        services.AddSingleton<InAppMessageCenter>();
+        services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());
         services.AddSingleton<WindowHandleProvider>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
@@ -87,9 +89,9 @@ public static class ServiceRegistration
                 : [Path.Combine(appDataRoot, OAuthClientLoader.FileName)]),
             Browser = new SystemBrowserLauncher(),
 
-            // Until #520 stores a per-account project, a signed-in account answers the id the fake used, so a run
-            // still reaches the not-connected gateways and fails as cloud_not_connected (an honest message) rather than
-            // as no_project, which names a project picker that does not exist yet. Remove with the real gateways (#56).
+            // Only a fallback since #520 (a project the account chose wins): while every gateway is FakeGcp, an account
+            // with no chosen project still reaches the not-connected gateways and fails as cloud_not_connected rather than
+            // as no_project, which names a project picker the app has no page for yet. Remove with the real gateways (#609).
             ProjectIdUntilSelectionExists = "fake-project",
             Pages = new LoopbackPages(
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserSuccess"),
@@ -162,6 +164,12 @@ public static class ServiceRegistration
 
         // Issue #102: the Results page reads a run's own output folder and opens its files through Windows.
         services.AddSingleton<IRunOutputReader, RunOutputReader>();
+
+        // Issue #586: Open in IGV (its batch port, else launch) and Open in Geneious (launch).
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IIgvBatchClient, DnaEntropyGraph.Core.Viewers.TcpIgvBatchClient>();
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IViewerLocator, DnaEntropyGraph.Core.Viewers.ViewerLocator>();
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IViewerProcessLauncher, Services.ViewerProcessLauncher>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IExternalViewerOpener, DnaEntropyGraph.Presentation.Services.ExternalViewerOpener>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IShellLauncher, Services.ShellLauncher>();
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),

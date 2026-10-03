@@ -41,12 +41,16 @@ public sealed partial class ShellViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasActiveRun;
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, IDispatcher? dispatcher = null)
+    /// <summary>The in-app message bar state (issue #585): the InfoBar in MainWindow binds to this, and it is the same instance the DI-registered <c>IToastService</c> writes to.</summary>
+    public InAppMessageCenter Messages { get; }
+
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, IDispatcher? dispatcher = null)
     {
         _navigator = navigator;
         _gcpAccount = gcpAccount;
         _dispatcher = dispatcher;
         _strings = strings;
+        Messages = messages;
         _statusPillText = BuildStatusPillText(gcpAccount, strings);
 
         messenger.Register<ShellViewModel, RunPhaseChangedMessage>(this, static (recipient, message) => recipient.OnRunPhaseChanged(message));

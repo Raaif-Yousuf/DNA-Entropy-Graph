@@ -187,6 +187,23 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.FromResult(true);
     }
 
+    public Task SelectProjectAsync(string projectId, CancellationToken cancellationToken)
+    {
+        if (!ProjectIdGenerator.IsValid(projectId))
+        {
+            throw new AccountAuthException(AuthErrorCodes.ProjectInvalid);
+        }
+
+        if (!_signedIn)
+        {
+            throw new AccountAuthException(AuthErrorCodes.SigninExpired);
+        }
+
+        _selectedProjectId = projectId;
+        AccountChanged?.Invoke(this, EventArgs.Empty);
+        return Task.CompletedTask;
+    }
+
     public Task SwitchAccountAsync(string sub, CancellationToken cancellationToken)
     {
         if (!_signedIn || sub != FakeAccount.Sub)
