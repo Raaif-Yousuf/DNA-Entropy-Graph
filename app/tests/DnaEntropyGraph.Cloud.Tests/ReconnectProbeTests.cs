@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using NSubstitute;
 using Shouldly;
@@ -205,5 +206,36 @@ public class ReconnectProbeTests
         await observer.WhenIdleAsync();
 
         passes.ShouldBe(2);
+    }
+
+    private sealed class ThrowingLog : IDiagnosticsLog
+    {
+        public void Warning(string source, string? jobId, string errorClass) => throw new InvalidOperationException("the log is broken");
+    }
+
+    [Fact]
+    public async Task A_probe_follow_up_that_faults_never_makes_WhenIdleAsync_throw()
+    {
+        // Review r5: the step after a probe pass runs on a continuation whose failure was kept in a task WhenIdleAsync awaits for ever after.
+        // Here the deferred check throws while re-arming AND the log that is told about it throws: the follow-up must swallow both.
+        var time = new VirtualTimeProvider();
+        var broken = false;
+        using var observer = new ReconcileOnReconnect(
+            Substitute.For<ICloudCallObserver>(),
+            _ => Task.FromResult<Task>(Task.CompletedTask),
+            () => broken ? throw new InvalidOperationException("boom") : true,
+            log: new ThrowingLog(),
+            time: time,
+            probeInitialDelay: Initial,
+            probeMaxDelay: Cap);
+        observer.StartProbeIfDeferred();
+
+        broken = true;
+        time.Advance(Initial);
+        var first = await Record.ExceptionAsync(observer.WhenIdleAsync);
+        var second = await Record.ExceptionAsync(observer.WhenIdleAsync);
+
+        first.ShouldBeNull();
+        second.ShouldBeNull();
     }
 }

@@ -133,7 +133,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
             {
                 // Called from inside a cloud call's own bookkeeping: nothing here may fault it. A row not judged now stays
                 // non-terminal and is looked at on the next reconnect, probe or launch; the class of the error is the only trace.
-                _log.Warning("reconcile-on-reconnect", null, ex.GetType().Name);
+                Warn("reconcile-on-reconnect", ex);
             }
         }
         while (TakeFollowUp());
@@ -158,7 +158,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
         {
             // The check itself failed (the reconciler could not be resolved, say): that is not an answer, so the probe goes on, on the delay it
             // had (not doubled: nothing was learned), rather than stop for good and leave a deferred run to the next launch.
-            _log.Warning("reconcile-probe", null, ex.GetType().Name);
+            Warn("reconcile-probe", ex);
             deferred = true;
             keepDelay = escalate;
         }
@@ -182,6 +182,19 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
         }
     }
 
+    /// <summary>Tells the log the error's class. Called from inside a cloud call's bookkeeping and from continuations nobody awaits: a log that throws must not fault either.</summary>
+    private void Warn(string source, Exception error)
+    {
+        try
+        {
+            _log.Warning(source, null, error.GetType().Name);
+        }
+        catch (Exception)
+        {
+            // The log is broken: there is nothing left to tell.
+        }
+    }
+
     private void OnProbeDue()
     {
         Task passes;
@@ -195,23 +208,33 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
 
         // Registered synchronously (StartPass sets the pass task before it returns), so WhenIdleAsync sees a probe pass the moment its timer fires.
         passes = StartPass();
-        var followUp = passes.ContinueWith(
-            _ =>
-            {
-                lock (_gate)
-                {
-                    _probing = false;
-                }
-
-                // Still deferred: wait twice as long (up to the cap) for the next pass. Nothing deferred: the probe ends and the delay starts over.
-                ArmProbe(escalate: true);
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        // Held under the gate with the probe state, so a WhenIdleAsync caller sees this follow-up the moment the pass it follows is visible.
         lock (_gate)
         {
-            _probeFollowUps = Task.WhenAll(_probeFollowUps, followUp);
+            var followUp = passes.ContinueWith(
+                _ =>
+                {
+                    // Never throws: a fault kept in _probeFollowUps would make every later WhenIdleAsync throw. A failure here (the timer could
+                    // not be created, the log itself threw) is logged by class if the log still works, and the probe simply is not re-armed.
+                    try
+                    {
+                        lock (_gate)
+                        {
+                            _probing = false;
+                        }
+
+                        // Still deferred: wait twice as long (up to the cap) for the next pass. Nothing deferred: the probe ends and the delay starts over.
+                        ArmProbe(escalate: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        Warn("reconcile-probe", ex);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            _probeFollowUps = _probeFollowUps.IsCompleted ? followUp : Task.WhenAll(_probeFollowUps, followUp);
         }
     }
 
@@ -223,7 +246,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
             {
                 if (t.IsFaulted)
                 {
-                    _log.Warning("reconcile-on-reconnect", null, t.Exception!.GetBaseException().GetType().Name);
+                    Warn("reconcile-on-reconnect", t.Exception!.GetBaseException());
                 }
 
                 // A run judged at the start of its own work (a cancel being finished) can end Deferred after the pass that started it ended: look again.
