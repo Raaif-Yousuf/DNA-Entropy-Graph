@@ -146,9 +146,9 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 sp.GetRequiredService<IRunInputStore>(),
                 sp.GetRequiredService<IWorkerImageProvider>(),
+                sp.GetRequiredService<ActiveRuns>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
-                Services.KnownFolders.Downloads,
-                activeRuns: sp.GetRequiredService<ActiveRuns>());
+                Services.KnownFolders.Downloads);
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());

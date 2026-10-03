@@ -41,10 +41,10 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IRunRepository runs,
         IRunInputStore inputs,
         IWorkerImageProvider images,
-        Func<string?>? downloadsFolder = null,
-        ActiveRuns? activeRuns = null)
+        ActiveRuns activeRuns,
+        Func<string?>? downloadsFolder = null)
     {
-        _activeRuns = activeRuns ?? new ActiveRuns();
+        _activeRuns = activeRuns;
         _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
         _messenger = messenger;
         _runner = runner;

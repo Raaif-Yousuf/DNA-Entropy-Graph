@@ -64,6 +64,7 @@ public sealed class JobReconciler
     private readonly ActiveRuns _active;
     private readonly DateTimeOffset _startedAt;
 
+    /// <param name="activeRuns">The registry the engine's Cancel looks in. Required: a private one would let a cancel miss a reattached run.</param>
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
     /// <param name="downloadsFolder">The default output parent for a run whose row names none.</param>
     public JobReconciler(
@@ -73,12 +74,12 @@ public sealed class JobReconciler
         IRunRepository runs,
         IRunInputStore inputs,
         IWorkerImageProvider images,
+        ActiveRuns activeRuns,
         Action<string, JobPhase>? onPhaseChanged = null,
         Func<string?>? downloadsFolder = null,
-        TimeProvider? timeProvider = null,
-        ActiveRuns? activeRuns = null)
+        TimeProvider? timeProvider = null)
     {
-        _active = activeRuns ?? new ActiveRuns();
+        _active = activeRuns;
         _runner = runner;
         _compute = compute;
         _storage = storage;
@@ -107,7 +108,21 @@ public sealed class JobReconciler
     {
         try
         {
-            return await DecideAndActAsync(row, cancellationToken).ConfigureAwait(false);
+            // Registered BEFORE the first look at the cloud, and covering every write the reattach can make (the look, a failure it records,
+            // a cancel it finishes, the run itself): a cancel at any moment finds the driver, stops it and waits for it, so one writer at a time.
+            ReattachOutcome? outcome = null;
+            var driver = _active.TryStart(row.JobId, async token =>
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
+                outcome = await DecideAndActAsync(row, linked.Token).ConfigureAwait(false);
+            });
+            if (driver is null)
+            {
+                return new ReattachOutcome(row.JobId, ReattachAction.Skipped);
+            }
+
+            await driver.ConfigureAwait(false);
+            return outcome ?? await OutcomeOfCancelledAsync(row.JobId).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -194,23 +209,29 @@ public sealed class JobReconciler
             [staged ?? new StagedInput(options.InputPath ?? string.Empty, Path.GetFileName(options.InputPath) is { Length: > 0 } name ? name : "input")],
             OutputParent(row, options));
 
-        // Driven through the registry the engine's Cancel looks in, so cancelling a reattached run stops and awaits it first.
-        CloudJobResult? result = null;
-        var driver = _active.TryStart(row.JobId, async token => result = await _runner.RunAsync(request, token).ConfigureAwait(false));
-        if (driver is null)
+        var result = await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
+    }
+
+    /// <summary>
+    /// The user cancelled the run while the reattach was driving it. The driver has stopped, but the canceller writes its phases after that,
+    /// so wait (bounded) for the row to reach a terminal phase instead of reporting whatever it said before.
+    /// </summary>
+    private async Task<ReattachOutcome> OutcomeOfCancelledAsync(string jobId)
+    {
+        RunRecord? settled = null;
+        for (var waited = 0; waited < 1200; waited++)
         {
-            return new ReattachOutcome(row.JobId, ReattachAction.Skipped);
+            settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
+            if (settled is not null && JobStateMachine.IsTerminal(settled.Phase))
+            {
+                break;
+            }
+
+            await Task.Delay(25).ConfigureAwait(false);
         }
 
-        await driver.ConfigureAwait(false);
-        if (result is not null)
-        {
-            return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
-        }
-
-        // The user cancelled it while it was being driven: the row says how that ended.
-        var settled = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
-        return new ReattachOutcome(row.JobId, ReattachAction.Resumed, settled?.Phase, settled?.ErrorCode);
+        return new ReattachOutcome(jobId, ReattachAction.Resumed, settled?.Phase, settled?.ErrorCode);
     }
 
     private enum Evidence

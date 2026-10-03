@@ -478,6 +478,11 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     /// <summary>The error code <see cref="WithCloudNotConnected"/> throws under; the runner maps it to <c>cloud_not_connected</c>.</summary>
     public const string NotConnectedErrorCode = RunErrorCodes.NotConnectedGatewayCode;
 
+    private int _hungCalls;
+
+    /// <summary>How many calls have been parked by <see cref="WithHungCalls"/> so far: a test waits on this to know a caller is really inside the call.</summary>
+    public int HungCalls => Volatile.Read(ref _hungCalls);
+
     private bool ConsumeHang()
     {
         while (true)
@@ -490,6 +495,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
             if (Interlocked.CompareExchange(ref _hangsRemaining, left - 1, left) == left)
             {
+                Interlocked.Increment(ref _hungCalls);
                 return true;
             }
         }
@@ -916,13 +922,13 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
 
     public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _ensureBucketCalls);
         if (ConsumeHang())
         {
             return HangAsync<string>(cancellationToken);
         }
 
         ThrowIfScriptedTransient();
-        Interlocked.Increment(ref _ensureBucketCalls);
         return Task.FromResult(BucketName(projectId));
     }
 

@@ -66,6 +66,7 @@ public class JobReconcilerTests
             Repo,
             Inputs,
             Images,
+            new ActiveRuns(),
             (id, phase) => Notified.Add((id, phase)),
             () => Path.Combine(AppData, "downloads"),
             new FixedClock(Launch));

@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.App;
 using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Cloud;
@@ -11,8 +12,9 @@ using Xunit;
 namespace DnaEntropyGraph.Guards.Tests;
 
 /// <summary>
-/// Issue #59 cold review: a run the reconciler reattached is driven through the same registry as a run the engine started, so
-/// Cancel on it stops and awaits the driver first. Without that two writers race on the row and Cancelled can be overwritten.
+/// Issue #59 cold review: a run the reconciler reattached is driven through the same registry as a run the engine started, from the
+/// first moment of the reattach (the look at the cloud included), so Cancel on it stops and awaits the driver first. Without that two
+/// writers race on the row and Cancelled can be overwritten.
 /// </summary>
 public class ReattachCancelTests : IDisposable
 {
@@ -36,14 +38,13 @@ public class ReattachCancelTests : IDisposable
         }
     }
 
-    [Fact]
-    public async Task Cancel_on_a_reattached_run_ends_it_Cancelled_and_nothing_writes_after()
+    private async Task<(ServiceProvider Provider, FakeGcp Gcp)> BuildWithRunningRowAsync(string jobId)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root);
         services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithWorker(FakeWorkerMode.Never));
-        using var provider = services.BuildServiceProvider();
-        var jobId = "job-cancel";
+        var provider = services.BuildServiceProvider();
+        var gcp = provider.GetRequiredService<FakeGcp>();
 
         using (var connection = provider.GetRequiredService<DnaEntropyGraph.Persistence.SqliteDatabase>().OpenConnection())
         {
@@ -61,9 +62,8 @@ public class ReattachCancelTests : IDisposable
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = original, OutputFolder = output };
         var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", null, [copy], output);
         await provider.GetRequiredService<CloudJobRunner>().UploadInputsAsync(request, TestContext.Current.CancellationToken);
-        await provider.GetRequiredService<FakeGcp>().CreateVmAsync(request.Spec, Zone, TestContext.Current.CancellationToken);
-        var runs = provider.GetRequiredService<IRunRepository>();
-        await runs.UpsertAsync(
+        await gcp.CreateVmAsync(request.Spec, Zone, TestContext.Current.CancellationToken);
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(
             new RunRecord(
                 jobId,
                 JobPhase.Running,
@@ -76,9 +76,11 @@ public class ReattachCancelTests : IDisposable
                 AppVersion: "0.1.0",
                 InstallationId: "install-1"),
             TestContext.Current.CancellationToken);
+        return (provider, gcp);
+    }
 
-        var launch = AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
-        var registry = provider.GetRequiredService<ActiveRuns>();
+    private static async Task WaitUntilActiveAsync(ActiveRuns registry, string jobId)
+    {
         var waited = 0;
         while (!registry.IsActive(jobId) && waited++ < 500)
         {
@@ -86,13 +88,67 @@ public class ReattachCancelTests : IDisposable
         }
 
         registry.IsActive(jobId).ShouldBeTrue("the reattached run must be registered where Cancel looks");
+    }
 
+    [Fact]
+    public async Task Cancel_on_a_reattached_run_ends_it_Cancelled_and_nothing_writes_after()
+    {
+        var jobId = "job-cancel";
+        var (provider, gcp) = await BuildWithRunningRowAsync(jobId);
+        using var _ = provider;
+        var reconciler = provider.GetRequiredService<JobReconciler>();
+
+        var launch = reconciler.ReattachAsync(TestContext.Current.CancellationToken);
+        await WaitUntilActiveAsync(provider.GetRequiredService<ActiveRuns>(), jobId);
         await provider.GetRequiredService<JobEngine>().CancelRunAsync(jobId, TestContext.Current.CancellationToken);
-        await launch.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        var outcomes = await launch.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
-        var row = (await runs.GetAllAsync(TestContext.Current.CancellationToken)).Single(r => r.JobId == jobId);
+        var row = (await provider.GetRequiredService<IRunRepository>().GetAllAsync(TestContext.Current.CancellationToken)).Single(r => r.JobId == jobId);
         row.Phase.ShouldBe(JobPhase.Cancelled, row.ErrorCode);
         row.ErrorCode.ShouldBeNull("the driver was stopped before the cancel wrote, so it recorded no failure over it");
-        (await provider.GetRequiredService<FakeGcp>().FindByJobIdAsync(jobId, TestContext.Current.CancellationToken)).ShouldBeEmpty();
+        outcomes.Single().FinalPhase.ShouldBe(JobPhase.Cancelled, "the outcome reports how the run ended, not the phase before the cancel wrote");
+        (await gcp.FindByJobIdAsync(jobId, TestContext.Current.CancellationToken)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Cancel_while_the_reattach_is_still_looking_at_the_cloud_writes_exactly_one_Cancelling_then_Cancelled()
+    {
+        var jobId = "job-look";
+        var (provider, gcp) = await BuildWithRunningRowAsync(jobId);
+        using var _ = provider;
+        var phases = new List<JobPhase>();
+        var recipient = new object();
+        provider.GetRequiredService<IMessenger>().Register<object, DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage>(recipient, (_, m) =>
+        {
+            if (m.JobId == jobId)
+            {
+                lock (phases)
+                {
+                    phases.Add(m.Phase);
+                }
+            }
+        });
+        gcp.WithHungCalls(1);
+        var reconciler = provider.GetRequiredService<JobReconciler>();
+
+        var launch = reconciler.ReattachAsync(TestContext.Current.CancellationToken);
+        await WaitUntilActiveAsync(provider.GetRequiredService<ActiveRuns>(), jobId);
+        for (var waited = 0; gcp.HungCalls == 0 && waited < 500; waited++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        gcp.HungCalls.ShouldBe(1, "precondition: the reattach is parked inside its look at the cloud");
+        await provider.GetRequiredService<JobEngine>().CancelRunAsync(jobId, TestContext.Current.CancellationToken);
+        var outcomes = await launch.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        lock (phases)
+        {
+            phases.ShouldBe([JobPhase.Cancelling, JobPhase.Cancelled], "one cancel, no run started on a Cancelling row, no illegal transition");
+        }
+
+        outcomes.Single().FinalPhase.ShouldBe(JobPhase.Cancelled);
+        (await provider.GetRequiredService<IRunRepository>().GetAllAsync(TestContext.Current.CancellationToken)).Single(r => r.JobId == jobId).Phase.ShouldBe(JobPhase.Cancelled);
+        GC.KeepAlive(recipient);
     }
 }
