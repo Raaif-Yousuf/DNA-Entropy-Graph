@@ -1157,4 +1157,5 @@ public class GoogleStorageGatewayTests
         ScriptUpload(rig.Handler, Name(0));
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(Name(0));
-    }}
+    }
+}
