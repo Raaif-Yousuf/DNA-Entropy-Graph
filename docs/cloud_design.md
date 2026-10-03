@@ -316,9 +316,38 @@ exercise.
 - A **live ticker** per running job: `(now - lastStartTimestamp) * hourlyRate / 3600 +
  disk`, labelled "estimate" everywhere it appears, because there is no billing-export
  access - every number in this app is a modeled estimate, never a real invoice figure.
-- A **pre-run estimate** from historical run durations for the same model tier (defaults:
- 12 min fresh / 5 min warm for the 7B tier, before any real measurement exists -
- THEORY (unverified) until the first GPU acceptance run records real numbers).
+- A **pre-run estimate** (issue #98, shipped): `Core/Cost/`. `PricingTable.Parse` reads
+ `app/src/DnaEntropyGraph.App/Assets/pricing.json` (schema 1: `asOf`, `source`, `region`,
+ `disk` (`usdPerGbMonth` only: the size is the run's own `RunOptions.BootDiskGb`), per-machine `onDemandUsdPerHour` and a nullable `spotUsdPerHour`; a null spot price
+ is "unknown", never zero) and returns a `PricingLoadResult` with a `PricingProblem`
+ (`FileMissing`, `Unreadable`, `Malformed`, `UnsupportedSchema`, `InvalidValue`), never an
+ exception. The app copies the file to `<output>\Assets\pricing.json` (a csproj `Content` item,
+ kept by publish) and `FilePricingSource` reads it from `AppContext.BaseDirectory`;
+ `Guards.Tests/CostEstimateWiringTests` fails if it is missing from the build output, if
+ `ci-app.yml` stops asserting `publish/Assets/pricing.json` (the "publish carries the price
+ list" step), or if any `GpuTier` the app can start lacks an on-demand price. The one
+ exclusion is H100 (`a3-highgpu-1g`): no figure has been gathered for it and an unsourced
+ price would be invented, so its estimate line says there is no estimate for that machine
+ yet (#572); the guard fails the day that row is added, so the exclusion cannot go stale. `CostEstimator.Estimate` is pure:
+ `minutes * (machine $/h + bootDiskGb * $/GB-month / 730) / 60`. Minutes with history are
+ the median of the newest 10 completed cloud runs on that machine on this PC (`RunHistory`)
+ as the fixed overhead (boot, pull, model load) PLUS this input's own predict time (2 s per
+ kb): a 5 kb and a 5 Mb file never price the same. The history does not record the past
+ inputs' sizes, so a past duration cannot be scaled; a long past run therefore overstates
+ the overhead a little (THEORY (unverified) until sizes are recorded, #571). With
+ none, the `RunTimeModel` gives a range: 5 min (warm) to 12 min (fresh) plus the same predict time.
+ The estimate also carries `StoppedDiskUsdPerDay` (the run's disk over 24 h), because the
+ default after a run is Stop (Hard Rule 11) and the disk keeps billing while stopped; the page
+ shows it as a second line labelled an estimate.
+ Those model constants are THEORY (unverified) until the first GPU acceptance run records
+ real numbers, and apply to every tier (an A100 is faster, so its model range overstates).
+ An unknown size is `UnknownSize` (no line on the page), history or not, not a guess. A model range that rounds to one figure says "no earlier runs", never "based on your earlier runs". `NoPriceForMachine` and `NoSpotPrice` each have their own copy (not an error the user can fix, so it says the estimate is not available for that machine yet); only an unreadable list says to reinstall. Starting a new check (Treat as RNA, a new validation) clears the line so a Checking pill never shows the old estimate. The
+ New run page (`NewRunViewModel.EstimateText`) shows it from the selected, valid file's
+ base count, always labelled an estimate. The shipped prices are THEORY (unverified):
+ gathered 2026-09-19 for us-central1 from public pages, not checked against the Billing
+ Catalog (#214, #303); the A100 Spot prices are left null because sources disagree 4x.
+ Still open under #98: the daily Billing Catalog refresh (#214), the live ticker (#217) and
+ the actual cost on the Results page (#557).
 - Thresholds: warn above a single-job estimate of $2 (user setting), warn at month-to-date
  above $25 (cap $50, user setting), a hard `maxRunHours` cap per job (default 4, max 24)
  enforced via `maxRunDuration`, and an explicit per-job confirmation before any A100/H100
