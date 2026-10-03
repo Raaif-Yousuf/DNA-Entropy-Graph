@@ -17,8 +17,8 @@ from typing import Any
 import numpy as np
 
 from .analysis.direction import DirectionResult, analyze_direction
-from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
 from .analysis.gene_summary import GeneRow, summarize_genes
+from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
 from .analysis.surprisal import summarize_surprisal
 from .analysis.windowing import validate_context
 from .annotators.base import GeneFeature

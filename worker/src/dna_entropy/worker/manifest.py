@@ -244,7 +244,9 @@ class AnalysisSpec:
         region_merge_gap = _region_number(d, "regionMergeGap", DEFAULT_MERGE_GAP, whole=True)
         try:
             validate_region_options(
-                threshold=float(region_threshold), min_length=int(region_min_length), merge_gap=int(region_merge_gap)
+                threshold=float(region_threshold),
+                min_length=int(region_min_length),
+                merge_gap=int(region_merge_gap),
             )
         except ValueError as exc:
             raise ManifestError(f"manifest.json analysis region options: {exc}") from exc
