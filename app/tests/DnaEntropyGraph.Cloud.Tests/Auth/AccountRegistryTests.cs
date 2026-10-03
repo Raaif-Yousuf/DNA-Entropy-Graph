@@ -290,5 +290,6 @@ public class AccountRegistryTests : IDisposable
         var final = JsonSerializer.Deserialize<AccountsFile>(File.ReadAllText(FilePath));
         final.ShouldNotBeNull().Accounts.Count.ShouldBe(1);
         new[] { "1001", "2002" }.ShouldContain(final.ActiveSub!);
-        Directory.GetFiles(_dir).Select(Path.GetFileName).ToArray().ShouldBe(["accounts.json"], "no temp file is left behind");    }
+        Directory.GetFiles(_dir).Select(Path.GetFileName).ToArray().ShouldBe(["accounts.json"], "no temp file is left behind");
+    }
 }
