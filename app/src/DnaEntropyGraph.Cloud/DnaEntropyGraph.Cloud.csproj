@@ -19,6 +19,7 @@
     <PackageReference Include="Google.Apis.CloudResourceManager.v3" />
     <PackageReference Include="Google.Apis.Cloudbilling.v1" />
     <PackageReference Include="Google.Apis.ServiceUsage.v1" />
+    <PackageReference Include="Google.Apis.Storage.v1" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 
