@@ -257,6 +257,94 @@ public sealed class ExternalViewerOpenerTests : IDisposable
         _settings.Values.ShouldNotContainKey(ViewerSettingKeys.IgvPath);
     }
 
+    [Fact]
+    public async Task A_connect_that_did_not_answer_does_not_start_a_second_igv()
+    {
+        _client.SendAsync(Arg.Any<int>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(IgvBatchOutcome.NoConnection);
+
+        var outcome = await Opener().OpenInIgvAsync(Run(@"C:\a\a.fasta", @"C:\a\a.entropy.bedgraph"), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(ExternalViewerOutcome.IgvNoAnswer);
+        _launcher.DidNotReceiveWithAnyArgs().Launch(default!, default!);
+    }
+
+    [Fact]
+    public async Task A_batch_file_with_an_unsafe_folder_is_refused_and_the_saved_program_is_kept()
+    {
+        var bat = FakeProgram("igv.bat");
+        _settings.Values[ViewerSettingKeys.IgvPath] = bat;
+
+        var outcome = await Opener().OpenInIgvAsync(Run(@"C:\Lab\R&D\a.fasta", @"C:\Lab\R&D\a.entropy.bedgraph"), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(ExternalViewerOutcome.UnsafeProgramArguments);
+        _launcher.DidNotReceiveWithAnyArgs().Launch(default!, default!);
+        _settings.Values[ViewerSettingKeys.IgvPath].ShouldBe(bat);
+    }
+
+    [Fact]
+    public async Task An_exe_is_launched_with_the_same_ampersand_folder()
+    {
+        var exe = FakeProgram("igv.exe");
+        _settings.Values[ViewerSettingKeys.IgvPath] = exe;
+
+        var outcome = await Opener().OpenInIgvAsync(Run(@"C:\Lab\R&D\a.fasta", @"C:\Lab\R&D\a.entropy.bedgraph"), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(ExternalViewerOutcome.Opened);
+        _launcher.Received(1).Launch(exe, Arg.Any<IReadOnlyList<string>>());
+    }
+
+    [Fact]
+    public async Task A_path_with_a_quote_is_its_own_outcome_not_a_failure_to_start()
+    {
+        var outcome = await Opener().OpenInIgvAsync(Run("C:\\a\"b\\a.fasta", "C:\\a\"b\\a.entropy.bedgraph"), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(ExternalViewerOutcome.IgvPathUnsendable);
+        _launcher.DidNotReceiveWithAnyArgs().Launch(default!, default!);
+    }
+
+    [Fact]
+    public async Task Tracks_with_no_genome_are_not_loaded_onto_whatever_genome_igv_has()
+    {
+        var outcome = await Opener().OpenInIgvAsync(Run(@"C:\a\a.entropy.bedgraph"), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(ExternalViewerOutcome.NoGenome);
+        await _client.DidNotReceiveWithAnyArgs().SendAsync(0, default!, TestContext.Current.CancellationToken);
+        _launcher.DidNotReceiveWithAnyArgs().Launch(default!, default!);
+    }
+
+    [Fact]
+    public async Task With_several_inputs_only_the_first_is_sent_and_the_outcome_says_so()
+    {
+        _client.SendAsync(Arg.Any<int>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(IgvBatchOutcome.Done);
+
+        var outcome = await Opener().OpenInIgvAsync(
+            [
+                new RunOutputFile("a/a.fasta", @"C:\o\a\a.fasta", 1),
+                new RunOutputFile("a/a.entropy.bedgraph", @"C:\o\a\a.entropy.bedgraph", 1),
+                new RunOutputFile("b/b.fasta", @"C:\o\b\b.fasta", 1),
+                new RunOutputFile("b/b.entropy.bedgraph", @"C:\o\b\b.entropy.bedgraph", 1),
+            ],
+            TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(ExternalViewerOutcome.OpenedFirstInputOnly);
+        await _client.Received(1).SendAsync(
+            Arg.Any<int>(),
+            Arg.Is<IReadOnlyList<string>>(c => c.Any(x => x.Contains(@"\a\a.fasta", StringComparison.Ordinal)) && !c.Any(x => x.Contains(@"\b\", StringComparison.Ordinal))),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_geneious_launch_is_also_refused_for_a_batch_file_with_an_unsafe_folder()
+    {
+        var bat = FakeProgram("geneious.cmd");
+        _settings.Values[ViewerSettingKeys.GeneiousPath] = bat;
+
+        var outcome = await Opener().OpenInGeneiousAsync(Run(@"C:\Lab\R&D\a.gb"), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(ExternalViewerOutcome.UnsafeProgramArguments);
+        _launcher.DidNotReceiveWithAnyArgs().Launch(default!, default!);
+    }
+
     private static IReadOnlyList<RunOutputFile> Run(params string[] fullPaths)
         => [.. fullPaths.Select(p => new RunOutputFile("r/" + Path.GetFileName(p), p, 1))];
 
@@ -289,3 +377,4 @@ public sealed class ExternalViewerOpenerTests : IDisposable
         }
     }
 }
+

@@ -84,6 +84,11 @@ public sealed class ResultsViewModelViewerTests : IDisposable
     [InlineData(ExternalViewerOutcome.LaunchFailed, ResultsCopy.IgvLaunchFailed)]
     [InlineData(ExternalViewerOutcome.IgvRejected, ResultsCopy.IgvRejected)]
     [InlineData(ExternalViewerOutcome.IgvNoReply, ResultsCopy.IgvNoReply)]
+    [InlineData(ExternalViewerOutcome.IgvNoAnswer, ResultsCopy.IgvNoAnswer)]
+    [InlineData(ExternalViewerOutcome.UnsafeProgramArguments, ResultsCopy.ViewerUnsafePath)]
+    [InlineData(ExternalViewerOutcome.IgvPathUnsendable, ResultsCopy.IgvPathUnsendable)]
+    [InlineData(ExternalViewerOutcome.NoGenome, ResultsCopy.IgvNoGenome)]
+    [InlineData(ExternalViewerOutcome.OpenedFirstInputOnly, ResultsCopy.IgvFirstInputOnly)]
     public async Task Every_igv_failure_shows_its_own_message(ExternalViewerOutcome outcome, string key)
     {
         _opener.OpenInIgvAsync(Arg.Any<IReadOnlyList<RunOutputFile>>(), Arg.Any<CancellationToken>()).Returns(outcome);
@@ -99,6 +104,7 @@ public sealed class ResultsViewModelViewerTests : IDisposable
     [InlineData(ExternalViewerOutcome.NoFiles, ResultsCopy.GeneiousNoFiles)]
     [InlineData(ExternalViewerOutcome.NotFound, ResultsCopy.GeneiousNotFound)]
     [InlineData(ExternalViewerOutcome.LaunchFailed, ResultsCopy.GeneiousLaunchFailed)]
+    [InlineData(ExternalViewerOutcome.UnsafeProgramArguments, ResultsCopy.ViewerUnsafePath)]
     public async Task Every_geneious_failure_shows_its_own_message(ExternalViewerOutcome outcome, string key)
     {
         _opener.OpenInGeneiousAsync(Arg.Any<IReadOnlyList<RunOutputFile>>(), Arg.Any<CancellationToken>()).Returns(outcome);
@@ -135,6 +141,28 @@ public sealed class ResultsViewModelViewerTests : IDisposable
         vm.ActionNoticeText.ShouldBe(ResultsCopy.GeneiousLaunchFailed);
     }
 
+    [Fact]
+    public async Task Leaving_the_page_cancels_an_open_that_is_still_waiting_for_igv()
+    {
+        var started = new TaskCompletionSource();
+        _opener.OpenInIgvAsync(Arg.Any<IReadOnlyList<RunOutputFile>>(), Arg.Any<CancellationToken>())
+            .Returns(async ci =>
+            {
+                started.SetResult();
+                await Task.Delay(Timeout.Infinite, ci.Arg<CancellationToken>());
+                return ExternalViewerOutcome.Opened;
+            });
+        var vm = await Loaded();
+
+        var open = vm.OpenInIgvCommand.ExecuteAsync(null);
+        await started.Task;
+        vm.CancelViewerOpen();
+        await Task.WhenAny(open, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+
+        open.IsCompleted.ShouldBeTrue();
+        vm.ActionNoticeText.ShouldBeEmpty();
+    }
+
     private ResultsViewModel Make()
         => new(_repository, new RunOutputReader(), Substitute.For<IShellLauncher>(), Substitute.For<INavigator>(), _strings, _opener);
 
@@ -145,3 +173,4 @@ public sealed class ResultsViewModelViewerTests : IDisposable
         return vm;
     }
 }
+

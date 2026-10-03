@@ -9,8 +9,11 @@ public enum ExternalViewer
     Geneious,
 }
 
-/// <summary>What IGV is sent: the genome (null when the run wrote no FASTA), then entropy tracks, then gene features.</summary>
-public sealed record IgvFiles(string? Genome, IReadOnlyList<string> BedGraphs, IReadOnlyList<string> Gff3s)
+/// <summary>
+/// What IGV is sent: the genome (null when the run wrote no FASTA), then entropy tracks, then gene features. <paramref name="Inputs"/>
+/// is how many inputs (folders holding a FASTA) the run has; IGV holds one genome at a time, so only the first is sent.
+/// </summary>
+public sealed record IgvFiles(string? Genome, IReadOnlyList<string> BedGraphs, IReadOnlyList<string> Gff3s, int Inputs = 1)
 {
     /// <summary>False when there is nothing to draw on the genome, so the command says so instead of opening an empty IGV.</summary>
     public bool HasTracks => BedGraphs.Count > 0 || Gff3s.Count > 0;
@@ -35,7 +38,8 @@ public static class ExternalViewerFiles
         return new IgvFiles(
             genomeFile?.FullPath,
             Paths(scope, f => Has(f, ".bedgraph")),
-            Paths(scope, f => Has(f, ".gff3") && !Has(f, GeneiousGff3Suffix)));
+            Paths(scope, f => Has(f, ".gff3") && !Has(f, GeneiousGff3Suffix)),
+            files.Where(f => Has(f, ".fasta")).Select(Folder).Distinct(StringComparer.Ordinal).Count());
     }
 
     /// <summary>The GenBank files first, then every GFF3 (the gene features and the Geneious heatmap track).</summary>
@@ -56,3 +60,4 @@ public static class ExternalViewerFiles
         return slash < 0 ? string.Empty : file.RelativePath[..slash];
     }
 }
+

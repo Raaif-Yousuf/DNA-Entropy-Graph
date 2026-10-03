@@ -61,7 +61,8 @@ public sealed class TcpIgvBatchClientTests
     {
         var (listener, port) = Listen();
         listener.Stop();
-        var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+        // MEASURED 2026-10-03: Windows reports a refused loopback connect after about 2.07 s, so the timeout must be longer than that.
+        var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(2));
 
         (await client.SendAsync(port, ["new"], TestContext.Current.CancellationToken)).ShouldBe(IgvBatchOutcome.NotListening);
     }
@@ -104,4 +105,83 @@ public sealed class TcpIgvBatchClientTests
             listener.Stop();
         }
     }
+
+    [Fact]
+    public void Only_a_refused_connection_means_not_listening()
+    {
+        TcpIgvBatchClient.ClassifyConnectFailure(new SocketException((int)SocketError.ConnectionRefused)).ShouldBe(IgvBatchOutcome.NotListening);
+
+        // A timeout (IGV busy loading) and any other failure must not start a second IGV.
+        TcpIgvBatchClient.ClassifyConnectFailure(new OperationCanceledException()).ShouldBe(IgvBatchOutcome.NoConnection);
+        TcpIgvBatchClient.ClassifyConnectFailure(new SocketException((int)SocketError.TimedOut)).ShouldBe(IgvBatchOutcome.NoConnection);
+        TcpIgvBatchClient.ClassifyConnectFailure(new SocketException((int)SocketError.NetworkUnreachable)).ShouldBe(IgvBatchOutcome.NoConnection);
+    }
+    [Fact]
+    public async Task A_slow_load_gets_the_short_wait_but_a_slow_genome_gets_the_long_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (listener, port) = Listen();
+        try
+        {
+            // The genome answer takes 700 ms: longer than the 250 ms wait for new and load, shorter than the genome wait.
+            var server = Serve(listener, line => line.StartsWith("genome", StringComparison.Ordinal) ? SlowOk(700) : "OK", ct);
+            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
+
+            (await client.SendAsync(port, ["new", "genome \"a\"", "load \"b\""], ct)).ShouldBe(IgvBatchOutcome.Done);
+            _ = server;
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task A_load_that_takes_longer_than_the_short_wait_is_no_reply()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (listener, port) = Listen();
+        try
+        {
+            _ = Serve(listener, line => line.StartsWith("load", StringComparison.Ordinal) ? SlowOk(700) : "OK", ct);
+            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
+
+            (await client.SendAsync(port, ["new", "load \"b\""], ct)).ShouldBe(IgvBatchOutcome.NoReply);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Cancelling_while_waiting_for_a_reply_cancels_the_send()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (listener, port) = Listen();
+        try
+        {
+            _ = Serve(listener, _ => null, ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
+            var send = client.SendAsync(port, ["new"], cts.Token);
+            await Task.Delay(200, ct);
+            await cts.CancelAsync();
+
+            await Should.ThrowAsync<OperationCanceledException>(send);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    // Serve's callback is synchronous; blocking a thread-pool thread for the delay is enough to model a slow IGV.
+    private static string SlowOk(int milliseconds)
+    {
+        Thread.Sleep(milliseconds);
+        return "OK";
+    }
 }
+
+

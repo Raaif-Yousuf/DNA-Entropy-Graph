@@ -8,7 +8,7 @@ public interface IViewerLocator
 }
 
 /// <summary>
-/// Looks in the folders installers use: <c>IGV-&lt;version&gt;</c> (newest version first; <c>igv.exe</c>, else <c>igv.bat</c>) and
+/// Looks in the folders installers use: <c>IGV-&lt;version&gt;</c> or <c>IGV_&lt;version&gt;</c> (newest version first; <c>igv.exe</c>, else <c>igv.bat</c>) and
 /// <c>Geneious*</c>, under each root (Program Files, Program Files (x86), and the per-user Programs folder).
 /// </summary>
 public sealed class ViewerLocator : IViewerLocator
@@ -62,7 +62,9 @@ public sealed class ViewerLocator : IViewerLocator
     private static Version VersionOf(string folder)
     {
         var name = Path.GetFileName(folder);
-        var dash = name.IndexOf('-', StringComparison.Ordinal);
-        return dash >= 0 && Version.TryParse(name[(dash + 1)..], out var v) ? v : new Version(0, 0);
+        // IGV's Windows installer has used both IGV-2.x.x and IGV_2.x.x; the number after the first separator is the version.
+        var separator = name.IndexOfAny(['-', '_']);
+        return separator >= 0 && Version.TryParse(name[(separator + 1)..], out var v) ? v : new Version(0, 0);
     }
 }
+

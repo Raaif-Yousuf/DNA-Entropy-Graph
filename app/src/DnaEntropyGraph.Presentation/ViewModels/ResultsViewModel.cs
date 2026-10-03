@@ -88,6 +88,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         // Only the newest load may write the page, so a slow older one finishing last cannot put its run back.
         var generation = Interlocked.Increment(ref _loadGeneration);
+        CancelViewerOpen();
         Reset();
         try
         {
@@ -239,6 +240,16 @@ public sealed partial class ResultsViewModel : ObservableObject
     private Task OpenInGeneiousAsync(CancellationToken cancellationToken)
         => OpenViewerAsync(ct => _viewers.OpenInGeneiousAsync(_outputFiles, ct), ViewerKeys.Geneious, cancellationToken);
 
+    /// <summary>
+    /// Stops an Open in IGV or Open in Geneious that is still waiting (IGV can take up to a minute to answer). The page calls it
+    /// when it is left; a run loaded in its place does the same, so a late answer never writes onto another run's page.
+    /// </summary>
+    public void CancelViewerOpen()
+    {
+        OpenInIgvCommand.Cancel();
+        OpenInGeneiousCommand.Cancel();
+    }
+
     private async Task OpenViewerAsync(Func<CancellationToken, Task<ExternalViewerOutcome>> open, ViewerKeys keys, CancellationToken cancellationToken)
     {
         ExternalViewerOutcome outcome;
@@ -262,6 +273,11 @@ public sealed partial class ResultsViewModel : ObservableObject
             ExternalViewerOutcome.NotFound => keys.NotFound,
             ExternalViewerOutcome.IgvRejected => ResultsCopy.IgvRejected,
             ExternalViewerOutcome.IgvNoReply => ResultsCopy.IgvNoReply,
+            ExternalViewerOutcome.IgvNoAnswer => ResultsCopy.IgvNoAnswer,
+            ExternalViewerOutcome.UnsafeProgramArguments => ResultsCopy.ViewerUnsafePath,
+            ExternalViewerOutcome.IgvPathUnsendable => ResultsCopy.IgvPathUnsendable,
+            ExternalViewerOutcome.NoGenome => ResultsCopy.IgvNoGenome,
+            ExternalViewerOutcome.OpenedFirstInputOnly => ResultsCopy.IgvFirstInputOnly,
             _ => keys.LaunchFailed,
         };
         ActionNoticeText = key is null ? string.Empty : _strings.GetString(key);
@@ -276,3 +292,5 @@ public sealed partial class ResultsViewModel : ObservableObject
     [RelayCommand]
     private void ShowRuns() => _navigator.NavigateTo("Runs");
 }
+
+

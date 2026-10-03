@@ -21,6 +21,11 @@ public static class ResultsCopy
     public const string IgvLaunchFailed = "Results_IgvLaunchFailed";
     public const string IgvRejected = "Results_IgvRejected";
     public const string IgvNoReply = "Results_IgvNoReply";
+    public const string IgvNoAnswer = "Results_IgvNoAnswer";
+    public const string ViewerUnsafePath = "Results_ViewerUnsafePath";
+    public const string IgvPathUnsendable = "Results_IgvPathUnsendable";
+    public const string IgvNoGenome = "Results_IgvNoGenome";
+    public const string IgvFirstInputOnly = "Results_IgvFirstInputOnly";
     public const string GeneiousNoFiles = "Results_GeneiousNoFiles";
     public const string GeneiousNotFound = "Results_GeneiousNotFound";
     public const string GeneiousLaunchFailed = "Results_GeneiousLaunchFailed";
@@ -60,7 +65,8 @@ public static class ResultsCopy
     public static IReadOnlyList<string> AllKeys { get; } =
     [
         NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed,
-        IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
+        IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, IgvNoAnswer, ViewerUnsafePath, IgvPathUnsendable, IgvNoGenome, IgvFirstInputOnly,
+        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
     ];
@@ -68,3 +74,4 @@ public static class ResultsCopy
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
     public static IReadOnlyList<string> FormatKeys { get; } = [StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
 }
+

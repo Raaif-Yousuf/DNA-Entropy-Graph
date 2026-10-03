@@ -60,6 +60,27 @@ public sealed class ViewerLocatorTests : IDisposable
         new ViewerLocator(() => [Path.Combine(_root, "nope")]).Find(ExternalViewer.Igv).ShouldBeNull();
     }
 
+    [Fact]
+    public void An_underscore_install_folder_is_found_as_well_as_a_dash_one()
+    {
+        var exe = Make(@"IGV_2.19.7\igv.exe");
+
+        Locator().Find(ExternalViewer.Igv).ShouldBe(exe);
+    }
+
+    [Theory]
+    [InlineData(@"IGV_2.9.4", @"IGV_2.19.7")]
+    [InlineData(@"IGV-2.9.4", @"IGV_2.19.7")]
+    [InlineData(@"IGV_2.9.4", @"IGV-2.19.7")]
+    [InlineData(@"IGV_2.19.7", @"IGV_2.20.0")]
+    public void The_newest_version_wins_by_number_across_both_separators(string older, string newer)
+    {
+        Make(older + @"\igv.exe");
+        var expected = Make(newer + @"\igv.exe");
+
+        Locator().Find(ExternalViewer.Igv).ShouldBe(expected);
+    }
+
     private string Make(string relative)
     {
         var path = Path.Combine(_root, relative);
@@ -70,3 +91,4 @@ public sealed class ViewerLocatorTests : IDisposable
 
     private ViewerLocator Locator() => new(() => [_root]);
 }
+

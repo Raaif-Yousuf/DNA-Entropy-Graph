@@ -80,8 +80,17 @@ public sealed class ExternalViewerFilesTests
     }
 
     [Fact]
+    public void The_number_of_inputs_is_the_number_of_folders_that_hold_a_fasta()
+    {
+        ExternalViewerFiles.ForIgv(OneRun).Inputs.ShouldBe(1);
+        ExternalViewerFiles.ForIgv([F("a/a.fasta"), F("a/a.entropy.bedgraph"), F("b/b.fasta"), F("b/b.entropy.bedgraph"), F("c/c.fasta")]).Inputs.ShouldBe(3);
+        ExternalViewerFiles.ForIgv([F("a/a.entropy.bedgraph")]).Inputs.ShouldBe(0);
+    }
+
+    [Fact]
     public void Geneious_with_nothing_to_open_gets_an_empty_list()
     {
         ExternalViewerFiles.ForGeneious([F("r/r.fasta"), F("r/r.entropy.bedgraph")]).ShouldBeEmpty();
     }
 }
+

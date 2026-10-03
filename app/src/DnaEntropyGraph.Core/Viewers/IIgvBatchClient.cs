@@ -6,7 +6,7 @@ public enum IgvBatchOutcome
     /// <summary>Every command was answered OK.</summary>
     Done,
 
-    /// <summary>Nothing accepted the connection: IGV is not running, or its batch port is off or on another number.</summary>
+    /// <summary>The connection was refused: IGV is not running, or its batch port is off or on another number.</summary>
     NotListening,
 
     /// <summary>IGV answered a command with something other than OK; later commands were not sent.</summary>
@@ -14,6 +14,12 @@ public enum IgvBatchOutcome
 
     /// <summary>Connected, but IGV did not answer a command in time.</summary>
     NoReply,
+
+    /// <summary>
+    /// The connection was not refused but did not complete (a timeout or another socket error), so something may be listening and
+    /// busy; starting a second IGV there would be wrong.
+    /// </summary>
+    NoConnection,
 }
 
 /// <summary>Talks to a running IGV desktop over its batch port (issue #586). Behind an interface so ViewModels never open a socket.</summary>
@@ -25,3 +31,4 @@ public interface IIgvBatchClient
     /// </summary>
     Task<IgvBatchOutcome> SendAsync(int port, IReadOnlyList<string> commands, CancellationToken cancellationToken);
 }
+

@@ -5,13 +5,15 @@ namespace DnaEntropyGraph.App.Services;
 
 /// <summary>
 /// Starts IGV or Geneious (issue #586). Never through a shell: an explicit program path, one argument per entry, so a file
-/// name can only ever be a file name. A failure is false, never thrown, so the page can name an action.
+/// name can only ever be a file name (a .bat or .cmd with a cmd.exe metacharacter in an argument is refused, see
+/// <see cref="ViewerLaunchSafety"/>). A failure is false, never thrown, so the page can name an action.
 /// </summary>
 public sealed class ViewerProcessLauncher : IViewerProcessLauncher
 {
     public bool Launch(string programPath, IReadOnlyList<string> arguments)
     {
-        if (!File.Exists(programPath))
+        // The opener refuses first and says why; this is the backstop for any other caller.
+        if (!File.Exists(programPath) || ViewerLaunchSafety.RefusesArguments(programPath, arguments))
         {
             return false;
         }
@@ -37,3 +39,4 @@ public sealed class ViewerProcessLauncher : IViewerProcessLauncher
         }
     }
 }
+
