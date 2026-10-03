@@ -180,6 +180,12 @@
   <data name="RunError_result_timeout" xml:space="preserve">
     <value>The rented computer did not finish in time, so we shut it down. Start the run again.</value>
   </data>
+  <data name="RunError_worker_no_heartbeat" xml:space="preserve">
+    <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
+  </data>
+  <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
+    <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
+  </data>
   <data name="RunError_vm_end_unconfirmed" xml:space="preserve">
     <value>The run stopped, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>
@@ -548,5 +554,49 @@
   </data>
   <data name="Runs_DeleteCloud_Unavailable_Hint" xml:space="preserve">
     <value>Deleting cloud copies is not available yet. Delete the run's files in your Google Cloud storage from the Google Cloud console for now.</value>
+  <data name="AuthError_SIGNIN_EXPIRED" xml:space="preserve">
+    <value>Your sign-in expired. This happens on its own, roughly once a week, while the app's Google approval is still in its early testing phase. It also happens if you removed this app's access in your Google account settings. Choose Sign in again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_CANCELLED" xml:space="preserve">
+    <value>The sign-in was cancelled on the Google page, so nothing changed. Choose Sign in again when you are ready.</value>
+  </data>
+  <data name="AuthError_SIGNIN_TIMEOUT" xml:space="preserve">
+    <value>The Google page in your browser was not finished in time. Choose Sign in again and complete the steps in the browser window that opens.</value>
+  </data>
+  <data name="AuthError_SIGNIN_FAILED" xml:space="preserve">
+    <value>Google answered, but the sign-in could not be completed. Choose Sign in again. If it keeps happening, choose a different Google account on the Google page.</value>
+  </data>
+  <data name="AuthError_SIGNIN_NETWORK" xml:space="preserve">
+    <value>Google could not be reached, so your sign-in is unchanged. Check that this computer is online, then choose Try again.</value>
+  </data>
+  <data name="AuthError_OAUTH_CLIENT_MISSING" xml:space="preserve">
+    <value>This copy of the app was built without its Google sign-in details, so it cannot sign in. Download the latest installer from the app's download page and install it over this copy.</value>
+  </data>
+  <data name="AuthError_OAUTH_CLIENT_INVALID" xml:space="preserve">
+    <value>The Google sign-in details that came with this copy of the app are damaged, so it cannot sign in. Download the latest installer from the app's download page and install it over this copy.</value>
+  </data>
+  <data name="AuthError_ACCOUNT_NOT_FOUND" xml:space="preserve">
+    <value>That Google account is no longer signed in on this computer. Choose Sign in again to add it.</value>
+  </data>
+  <data name="AuthAction_SignInAgain" xml:space="preserve">
+    <value>Sign in again</value>
+  </data>
+  <data name="AuthAction_TryAgain" xml:space="preserve">
+    <value>Try again</value>
+  </data>
+  <data name="SignInBrowserSuccess" xml:space="preserve">
+    <value>You are signed in. You can close this tab and go back to DNA Entropy Graph.</value>
+  </data>
+  <data name="SignInBrowserFailure" xml:space="preserve">
+    <value>The sign-in did not finish. Close this tab, go back to DNA Entropy Graph and choose Sign in again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_BROWSER" xml:space="preserve">
+    <value>The app could not open your web browser to show Google's sign-in page. Set a default web browser in Windows Settings, then choose Sign in again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_LOOPBACK" xml:space="preserve">
+    <value>The app could not listen on this computer for Google's reply, which a security program or a company policy can block. Allow DNA Entropy Graph in your security program, then choose Sign in again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_STORAGE" xml:space="preserve">
+    <value>The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Sign in again.</value>
   </data>
 </root>

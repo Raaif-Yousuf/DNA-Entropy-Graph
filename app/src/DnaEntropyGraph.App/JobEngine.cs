@@ -7,6 +7,7 @@ using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.Runs;
+using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -32,6 +33,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IGcpAccount _account;
     private readonly ISettingsStore _settings;
     private readonly IRunRepository _runs;
+    private readonly IProjectRepository _projects;
     private readonly IRunInputStore _inputs;
     private readonly IWorkerImageProvider _images;
     private readonly Func<string?> _downloadsFolder;
@@ -42,6 +44,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IGcpAccount account,
         ISettingsStore settings,
         IRunRepository runs,
+        IProjectRepository projects,
         IRunInputStore inputs,
         IWorkerImageProvider images,
         Func<string?>? downloadsFolder = null)
@@ -52,6 +55,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         _account = account;
         _settings = settings;
         _runs = runs;
+        _projects = projects;
         _inputs = inputs;
         _images = images;
     }
@@ -118,7 +122,10 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         // Write-ahead (docs/architecture.md section 6): the row exists
         // before the first network call, so a crash right after Run still
         // shows the run on relaunch, and the runner's later phase updates
-        // keep these columns.
+        // keep these columns. Runs.ProjectId references Projects with foreign keys on (issue #532),
+        // and every path that starts a run comes through here, so the project row is ensured here
+        // (idempotent, never overwrites a richer row) rather than at each place a project is selected.
+        await _projects.EnsureAsync(projectId, cancellationToken).ConfigureAwait(false);
         await _runs.UpsertAsync(
             new RunRecord(
                 jobId,

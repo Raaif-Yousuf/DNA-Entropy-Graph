@@ -795,3 +795,56 @@ def test_run_rejects_a_name_that_sanitizes_to_nothing(tmp_path: Path) -> None:
     cfg = RunConfig(name="../..", out_dir=str(tmp_path))
     with pytest.raises(pipeline.PipelineError):
         pipeline.run(cfg, raw=RAW)
+
+
+# --- issue #79: the end-to-end observables ---------------------------------------------
+
+
+def test_combined_track_differs_from_forward_only_exactly_in_the_first_k_bases(tmp_path: Path) -> None:
+    k = 128
+    raw = "ACGTTGCA" * 50  # L=400 >= 2K
+    comb = pipeline.run(RunConfig(name="c", out_dir=str(tmp_path / "c"), context_length=k, seed=3), raw=raw)
+    fwd = pipeline.run(
+        RunConfig(
+            name="f", out_dir=str(tmp_path / "f"), context_length=k, seed=3, direction=Direction.FORWARD_ONLY
+        ),
+        raw=raw,
+    )
+    differing = np.nonzero(comb.values != fwd.values)[0]
+    assert differing.size > 0 and differing.max() < k, "combined may differ from forward only in [0, K)"
+    assert np.array_equal(comb.values[k:], fwd.values[k:])
+    prov = json.loads((tmp_path / "c" / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["contigs"][0]["seam"] == k
+
+
+def test_provenance_records_the_reduced_context_positions_not_only_a_count(tmp_path: Path) -> None:
+    cfg = RunConfig(name="rp", out_dir=str(tmp_path), context_length=128, seed=1)
+    pipeline.run(cfg, raw="ACGT" * 40)  # L=160 < 2K=256: positions [32, 128)
+    contig = json.loads((tmp_path / "provenance.json").read_text(encoding="utf-8"))["contigs"][0]
+    assert contig["reduced_context_range"] == [32, 128]
+    assert contig["reduced_context_count"] == 96
+
+
+def test_both_separate_writes_fwd_and_rev_geneious_tracks_with_their_own_values(tmp_path: Path) -> None:
+    cfg = RunConfig(
+        name="sepg", out_dir=str(tmp_path), context_length=128, direction=Direction.BOTH_SEPARATE, seed=2
+    )
+    result = pipeline.run(cfg, raw="ACGT" * 70)
+    names = {Path(p).name for p in result.outputs}
+    assert {"sepg.entropy.fwd.geneious.gff3", "sepg.entropy.rev.geneious.gff3"} <= names
+    fwd = (tmp_path / "sepg.entropy.fwd.geneious.gff3").read_text(encoding="utf-8")
+    rev = (tmp_path / "sepg.entropy.rev.geneious.gff3").read_text(encoding="utf-8")
+    assert fwd != rev
+
+
+def test_both_separate_geneious_tracks_are_not_written_when_geneious_is_off(tmp_path: Path) -> None:
+    cfg = RunConfig(
+        name="sepn",
+        out_dir=str(tmp_path),
+        context_length=128,
+        direction=Direction.BOTH_SEPARATE,
+        include_geneious=False,
+        seed=2,
+    )
+    pipeline.run(cfg, raw="ACGT" * 70)
+    assert not list(tmp_path.glob("*.geneious.gff3"))

@@ -110,6 +110,29 @@ the scope Google requires for this feature set to work at all.
   id is the one deliberate, documented exception, since Google itself treats it as public
   for this client type).
 
+## 5a. Sign-in specifics (issue #48, implemented)
+
+- **Flow:** authorization code with PKCE (S256) and a loopback redirect to `http://127.0.0.1:<random port>/`
+  (RFC 8252). The redirect carries a random `state` that the app checks before it exchanges anything, so a
+  request forged onto the loopback port is refused. PKCE means a code stolen from the redirect is useless
+  without the verifier, which never leaves the process.
+- **Client "secret":** a Desktop-app client secret is not confidential per Google. It is still never
+  committed: it is read from `oauth_client.local.json` (gitignored in dev, injected by CI in a release).
+  The loader looks next to the executable, in the app data folder, and in `secrets/` or `app/secrets/` up to
+  eight folders above the executable; a file planted there by something already running as the user buys
+  an attacker only the ability to point the sign-in at their own OAuth client, which shows Google's consent
+  screen under that client's name.
+- **At rest:** `%LOCALAPPDATA%\DNAEntropyGraph\auth\<sub>.tok` is the whole token response encrypted with DPAPI
+  (CurrentUser, fixed app entropy). `accounts.json` beside it lists `sub` and email for the switcher and holds
+  no token. Account email is therefore on disk in clear; it is never logged or sent anywhere.
+- **The id token is read, not verified.** It arrives over TLS straight from Google's token endpoint in answer
+  to this app's own request, which OpenID Connect Core 3.1.3.7 allows to be trusted without a signature
+  check. Only `sub` and `email` are read, only to key and label the local account. No authorization decision
+  uses them: Google authorizes every call from the access token.
+- **Sign out** revokes the refresh token at Google, then deletes the file. When Google cannot be reached the
+  file is still deleted and the user is told the revoke could not be confirmed (the token then stays valid at
+  Google until it is revoked at myaccount.google.com).
+- **Prompt `select_account consent`:** `consent` forces Google to return a refresh token on every sign-in.
 ## 6. Residual risk this document does not pretend to solve
 
 - A user's own Windows account being compromised compromises the DPAPI-protected token

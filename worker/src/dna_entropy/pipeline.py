@@ -253,6 +253,7 @@ def _write_provenance(
             direction=dr.direction.value,
             seam=dr.seam,
             reduced_context_count=dr.reduced_context_count,
+            reduced_context_range=dr.reduced_context_range,
         )
         for c, dr in processed
     ]
@@ -270,6 +271,36 @@ def _write_provenance(
         extra=extra,
     )
     return ProvenanceWriter().write(out_dir=cfg.out_dir, data=data)
+
+
+def _write_separate_tracks(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: Writer
+) -> list[str]:
+    """Direction.BOTH_SEPARATE (section 5.6): the ``.fwd``/``.rev`` variant of every
+    position-indexed track writer, one block per contig, alongside the combined track.
+
+    Covers the bedGraph/WIG track (``include_track``) and the Geneious GFF3
+    (``include_geneious``, issue #79); the TSV carries all three tracks in one file
+    (:func:`_write_tsv`). Empty for every other direction.
+    """
+    if not any(dr.forward_values is not None for _, dr in processed):
+        return []
+    outputs: list[str] = []
+    for variant, pick in (("fwd", lambda dr: dr.forward_values), ("rev", lambda dr: dr.reverse_values)):
+        blocks = [(c.name, pick(dr)) for c, dr in processed]
+        if cfg.include_track:
+            outputs.append(
+                track_writer.write_multi(
+                    name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir, variant=variant
+                )
+            )
+        if cfg.include_geneious:
+            outputs.append(
+                GeneiousWriter().write_multi(
+                    name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir, variant=variant
+                )
+            )
+    return outputs
 
 
 def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
@@ -365,25 +396,7 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
 
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # record, alongside the combined track above.
-    if cfg.include_track and any(dr.forward_values is not None for _, dr in processed):
-        outputs.append(
-            track_writer.write_multi(
-                name=cfg.name,
-                blocks=[(c.name, dr.forward_values) for c, dr in processed],
-                start=cfg.start,
-                out_dir=cfg.out_dir,
-                variant="fwd",
-            )
-        )
-        outputs.append(
-            track_writer.write_multi(
-                name=cfg.name,
-                blocks=[(c.name, dr.reverse_values) for c, dr in processed],
-                start=cfg.start,
-                out_dir=cfg.out_dir,
-                variant="rev",
-            )
-        )
+    outputs += _write_separate_tracks(cfg, processed, track_writer)
 
     # Gene track for IGV, straight from the GenBank's own genes (never Prodigal). Only
     # written when the records actually carry genes AND the caller still wants it.
@@ -487,25 +500,7 @@ def _write_standard_outputs(
 
     # Direction.BOTH_SEPARATE: also emit the fwd/rev tracks (section 5.6), one block per
     # contig, alongside the combined track already written above.
-    if cfg.include_track and any(dr.forward_values is not None for _, dr in processed):
-        outputs.append(
-            track_writer.write_multi(
-                name=cfg.name,
-                blocks=[(c.name, dr.forward_values) for c, dr in processed],
-                start=cfg.start,
-                out_dir=cfg.out_dir,
-                variant="fwd",
-            )
-        )
-        outputs.append(
-            track_writer.write_multi(
-                name=cfg.name,
-                blocks=[(c.name, dr.reverse_values) for c, dr in processed],
-                start=cfg.start,
-                out_dir=cfg.out_dir,
-                variant="rev",
-            )
-        )
+    outputs += _write_separate_tracks(cfg, processed, track_writer)
 
     genes: list[GeneFeature] = []
     genes_by_contig: list[list[GeneFeature]] = [[] for _ in processed]

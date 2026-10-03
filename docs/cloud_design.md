@@ -398,6 +398,21 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `maxRunDuration` plus 5 minutes). Ending first lets the runner give up on its own terms: end the
   VM per the user's choice, verify it, record `result_timeout`. A worker still uploading in the last
   3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
+- **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
+  also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
+  CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
+  machines can disagree by minutes). Three verdicts, each ending the VM before the run is recorded Failed: no
+  worker-written heartbeat (a `status.json` whose `worker.version` is non-empty; the startup script's own infra snapshots
+  do not count) within `FirstHeartbeatTimeout` (25 min from the start of the wait: booting 8 + image pull 15 + 2 margin,
+  the stage deadlines of job_contract.md section 5; THEORY (unverified) on a real VM) records `worker_no_heartbeat`; a
+  heartbeat unchanged for `HeartbeatStaleTimeout` (default 20 x `limits.heartbeatSeconds` = 600 s, job_contract.md section 5's
+  "older than 600 s regardless of instance state") records `worker_heartbeat_stale`; and a first progress line
+  (`worker starting; GPU: ...`) that says `no GPU detected` on a GPU machine type records `gpu_not_visible` and DELETES the VM
+  (as `startup.sh` does for a box whose GPU never came up). A last look for `result.json` precedes each verdict, because a
+  worker writes it before it stops heartbeating. A transient failure reading `status.json` never ends the run. **Scope: a dead or frozen worker PROCESS only.** The real worker's heartbeat is a free-running daemon thread (`status.py` `StatusWriter._loop`), so a hung main thread under a still-ticking heartbeat is NOT caught (issue #522). The first-heartbeat deadline also cannot tell a slow CUDA image pull from a never-started worker, because `startup.sh`'s installing-stage progress is not read (recorded on #90). Not done
+  here (issue #90 remains): per-stage deadlines other than the first heartbeat, the 180 s "not RUNNING" death rule, the
+  cancel-ack 60 s rule, and showing the heartbeat in the UI. `FakeGcp` scripts `NoHeartbeat`, `HeartbeatStopsAfterRunning`,
+  `NoGpuFirstLine` and a healthy `HeartbeatingThenDone` worker.
 - **Giving up records what was verified.** After the VM end is attempted the runner re-reads the VM:
   confirmed ended is `result_timeout` ("we shut it down"); not confirmed (calls failing, still running
   at `LifecycleTimeout`) is `vm_end_unconfirmed` ("open the Cloud page and delete it"), and the raw detail
@@ -694,6 +709,44 @@ are best effort: a failure is a progress notice and the job continues. Symlinks 
 in the marker, not uploaded. Cost: about 14 GB of bucket storage per model. Until #496 the
 GCS blobstore reads each shard fully into memory.
 
+## 15. Sign-in, the token store and account switching (issue #48)
+
+`GoogleAccountService` (`DnaEntropyGraph.Cloud/Auth/`) is the one implementation of Core's `IGcpAccount`,
+`IGcpAccessTokenSource` and `ICloudTokenRefresher`. Production DI registers it as `IGcpAccount` and `IGcpAccessTokenSource`; `ICloudTokenRefresher` stays `FakeGcp` until #56 (below). The gateways are
+still `FakeGcp` until the real ones land, so who is signed in is real while what the gateways do is not.
+Two seams are deliberately still the fake, with the switch point recorded in `ServiceRegistration.cs`: `ICloudTokenRefresher`
+(a fake 401 must not call Google's token endpoint; switch to `GoogleAccountService` when the first real gateway is
+wrapped, #56) and the project id (`ProjectIdUntilSelectionExists = "fake-project"` while signed in, until #520 stores a
+per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet; the real gateways read it.
+
+- **Flow.** `PkceGoogleAuthorizationCodeFlow` from Google.Apis.Auth (it sends `code_challenge`,
+  `code_challenge_method=S256` and the matching `code_verifier`) driven by `AuthorizationCodeInstalledApp`, with our
+  own `LoopbackCodeReceiver` instead of Google's `LocalServerCodeReceiver`, because that one opens the browser itself
+  (nothing to inject in a test) and does not check `state`. Scopes `openid email https://www.googleapis.com/auth/cloud-platform`,
+  `access_type=offline`, prompt `select_account consent`.
+- **Files** under `%LOCALAPPDATA%\DNAEntropyGraph\auth\`: `<sub>.tok` (DPAPI, one per account, key = the id token's
+  `sub`, held to `[A-Za-z0-9_-]` because it becomes a file name) and `accounts.json` (`activeSub` and a list of
+  `{sub, email, needsSignIn}`, no token). Token refresh is done by Google's `UserCredential` and written back through
+  the same store, so a restart needs no browser.
+- **Errors** are `AccountAuthException` with a code from `AuthErrorCodes`; the English is `AuthError_<code>` in
+  `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
+  on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
+  `OAUTH_CLIENT_INVALID` name the installer as the action: the user never has this file, the build does.
+- **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
+  and the account entry whatever Google said, and makes the next remaining account current.
+- **Not here yet:** the selected project (a placeholder until #520), and any UI that starts a sign-in, lists
+  accounts, switches or signs out: no page binds `WizardViewModel.SignInCommand` yet (#99, #519), so today nothing
+  in the shipped UI can start a sign-in. What is wired in the UI is the shell status pill, which follows
+  `AccountChanged` and shows the account email.
+- **Failures that are not Google's answer** are mapped too, so a command never crashes: browser cannot start
+  (`SIGNIN_BROWSER`), no loopback port (`SIGNIN_LOOPBACK`), token folder not writable (`SIGNIN_STORAGE`), HTTP
+  timeout (`SIGNIN_NETWORK`). The interactive browser wait does not hold the lock that token calls use, so a
+  pending sign-in for a second account never stalls the first. A request on the loopback port with the wrong
+  `state` gets a 400 and is ignored; the wait ends on the real redirect or the timeout.
+- **Roster:** `AuthErrorCodes.All`, `docs/copy_catalog.md` and `scripts/triage_diagnostics.py` agree, enforced by
+  `Guards.Tests/AuthErrorResourceTests`.
+- **Testing.** `Cloud.Tests/Auth` runs the whole flow with no network and no browser: a fake that answers Google's
+  real token and revoke URLs and checks the PKCE proof, and a fake browser that calls the real loopback listener back.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

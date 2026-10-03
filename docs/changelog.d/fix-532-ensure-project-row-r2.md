@@ -1,0 +1,1 @@
+- Fix (#532): the first run no longer fails with a SQLite foreign key error. JobEngine ensures a Projects row (new IProjectRepository.EnsureAsync, insert-if-absent, never overwrites) before the write-ahead run row; IProjectRepository is now registered in the container.

@@ -122,6 +122,7 @@ class GeneiousWriter:
         out_dir: str,
         max_per_base_features: int | None = DEFAULT_MAX_PER_BASE_FEATURES,
         metric: str = "entropy",
+        variant: str | None = None,
     ) -> str:
         return self.write_multi(
             name=name,
@@ -130,6 +131,7 @@ class GeneiousWriter:
             out_dir=out_dir,
             max_per_base_features=max_per_base_features,
             metric=metric,
+            variant=variant,
         )
 
     def write_multi(
@@ -141,6 +143,7 @@ class GeneiousWriter:
         out_dir: str,
         max_per_base_features: int | None = DEFAULT_MAX_PER_BASE_FEATURES,
         metric: str = "entropy",
+        variant: str | None = None,
     ) -> str:
         """Write one GFF3 with a per-position (or, above the threshold, per-bin) block per
         ``(chrom, values)`` in ``blocks``.
@@ -150,7 +153,9 @@ class GeneiousWriter:
         unconditionally, for a caller that wants full per-base resolution regardless of
         length. ``metric`` (issue #123: ``"entropy"`` or ``"surprisal"``) names the file
         ``<name>.<metric>.geneious.gff3``; the default keeps every existing caller's
-        output byte-identical to before this option existed.
+        output byte-identical to before this option existed. ``variant`` (issue #79:
+        ``"fwd"``/``"rev"`` for Direction.BOTH_SEPARATE) names the file
+        ``<name>.<metric>.<variant>.geneious.gff3``.
         """
         total_length = sum(len(values) for _, values in blocks)
         binned = max_per_base_features is not None and total_length > max_per_base_features
@@ -174,4 +179,5 @@ class GeneiousWriter:
             else:
                 lines.extend(_feature_lines(chrom, values, start, metric))
         text = "\n".join(lines) + "\n"
-        return write_text_lf(Path(out_dir) / f"{name}.{metric}.geneious.gff3", text)
+        stem = f"{name}.{metric}" if variant is None else f"{name}.{metric}.{variant}"
+        return write_text_lf(Path(out_dir) / f"{stem}.geneious.gff3", text)
