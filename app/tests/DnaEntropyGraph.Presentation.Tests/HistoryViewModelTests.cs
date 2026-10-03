@@ -300,7 +300,7 @@ public sealed class HistoryViewModelTests
         await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
 
         _toasts.Received(1).ShowToast("Runs_DeleteLocal_Partial_Title", "5 deleted, 2 left", ToastSeverity.Warning);
-        _toasts.DidNotReceive().ShowToast("Runs_DeleteLocal_InUse_Title", Arg.Any<string>());
+        _toasts.DidNotReceive().ShowToast("Runs_DeleteLocal_InUse_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
     }
 
     [Fact]
@@ -379,7 +379,7 @@ public sealed class HistoryViewModelTests
         slow.SetException(new InvalidOperationException("db locked"));
         await older;
 
-        _toasts.DidNotReceive().ShowToast("Runs_Refresh_Failed_Title", Arg.Any<string>());
+        _toasts.DidNotReceive().ShowToast("Runs_Refresh_Failed_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
         vm.Groups.SelectMany(g => g.Items).Select(i => i.JobId).ShouldBe(["new"]);
     }
 
@@ -429,7 +429,7 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
 
-        _toasts.DidNotReceive().ShowToast("Runs_Redownload_Changed_Title", Arg.Any<string>());
+        _toasts.DidNotReceive().ShowToast("Runs_Redownload_Changed_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
     }
 
     [Fact]
