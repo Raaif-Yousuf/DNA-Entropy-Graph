@@ -304,7 +304,7 @@ Thirteen exist as of this revision (`scripts/premerge.py --list` always has the 
 
 ```powershell
 python scripts\check_docs_index.py            # every docs/*.md is reachable from docs/README.md's index
-python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs values, and real commit shas (--max-age-days 45 default)
+python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs values, real commit shas, and no duplicate issue + Do-this rows (--max-age-days 45 default)
 python scripts\check_user_home_paths.py       # no literal absolute user-home path in a tracked file (use %USERPROFILE%/$HOME instead)
 python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (needs dotnet AND the worker venv: runs in premerge full mode and in .github/workflows/ci-notices.yml, #416)
 # (vendored web assets, e.g. igv.js, are declared in `scripts/vendored_assets.json`; the generator verifies each sha256 + licence and emits the notices section from it)
@@ -360,12 +360,13 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_git_stash.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_recursive_delete.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py
+worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py
 ```
 
 Each reads the tool-call payload from stdin per `scripts/hooks/README.md`, so running one
 with no input will simply wait.
 
-All five, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
+All six, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
 and exercises both the allow and the deny arm:
 
 ```powershell
@@ -374,6 +375,7 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_git_stash.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_recursive_delete.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py --self-test
+worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py --self-test
 ```
 
 That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing

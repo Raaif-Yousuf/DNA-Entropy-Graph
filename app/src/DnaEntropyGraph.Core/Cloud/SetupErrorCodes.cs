@@ -1,7 +1,7 @@
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
-/// The codes the project-setup wizard steps fail under (issues #50 to #52), carried in <see cref="CloudError.Code"/>
+/// The codes the project-setup wizard steps fail under (issues #50 to #53), carried in <see cref="CloudError.Code"/>
 /// of a <see cref="CloudOperationException"/>. Same pattern as <see cref="AuthErrorCodes"/>: the English lives in
 /// <c>Resources.resw</c> under <see cref="ResourceKey"/>, names one action (Hard Rule 13), and the raw Google text is
 /// kept only for the diagnostics zip. <c>docs/copy_catalog.md</c> and <c>scripts/triage_diagnostics.py</c> list the
@@ -36,8 +36,33 @@ public static class SetupErrorCodes
     /// <summary>The billing account the project is linked to is not working and no other open account exists to pick (<see cref="BillingOutcomeKind.FixLinkedAccount"/>). Action: open the project's billing page on Google and fix or replace the account.</summary>
     public const string BillingAccountOff = "BILLING_ACCOUNT_OFF";
 
+    /// <summary>Google accepted the results bucket but reading it back shows UBLA, public access prevention or a lifecycle rule is not what was asked for ("applied is not present"). Action: try again (the next attempt repairs the bucket).</summary>
+    public const string BucketConfigNotApplied = "BUCKET_CONFIG_NOT_APPLIED";
+
+    /// <summary>Every results-bucket name the app tried was taken by someone else. Action: try again (new names are drawn).</summary>
+    public const string BucketNameTaken = "BUCKET_NAME_TAKEN";
+
+    /// <summary>
+    /// An organization policy refuses service-account creation, so the VM will run as the project's default Compute Engine
+    /// account instead (issue #54). Not a failure: the wizard shows it as a yellow note. Action: Continue.
+    /// </summary>
+    public const string WorkerDefaultAccount = "WORKER_DEFAULT_ACCOUNT";
+
+    /// <summary>Google accepted the worker role or its bindings but reading them back shows something is not as asked ("applied is not present"). Action: try again (the next attempt repairs it).</summary>
+    public const string WorkerIdentityNotApplied = "WORKER_IDENTITY_NOT_APPLIED";
+
+    /// <summary>The user may not run a VM as the worker identity (<c>iam.serviceAccounts.actAs</c> missing, Compute Admin alone lacks it). Action: copy a request for the project owner.</summary>
+    public const string PermissionActAs = "PERMISSION_ACTAS";
+
+    /// <summary>
+    /// The project's default Compute Engine account, the only identity the VM can run as when the organization forbids creating
+    /// one, no longer exists or cannot be used (issue #54). Turning the Compute API on cannot help (preflight already did), so
+    /// the one action is a link to the project's Service Accounts page (<see cref="ServiceAccountLinks"/>), where the user or their administrator can restore it.
+    /// </summary>
+    public const string WorkerDefaultAccountMissing = "WORKER_DEFAULT_ACCOUNT_MISSING";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff, BucketConfigNotApplied, BucketNameTaken, WorkerDefaultAccount, WorkerIdentityNotApplied, PermissionActAs, WorkerDefaultAccountMissing];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -51,6 +76,12 @@ public static class SetupErrorCodes
         NotProjectOwner => "SetupError_NOT_PROJECT_OWNER",
         BillingStillOff => "SetupError_BILLING_STILL_OFF",
         BillingAccountOff => "SetupError_BILLING_ACCOUNT_OFF",
+        BucketConfigNotApplied => "SetupError_BUCKET_CONFIG_NOT_APPLIED",
+        BucketNameTaken => "SetupError_BUCKET_NAME_TAKEN",
+        WorkerDefaultAccount => "SetupError_WORKER_DEFAULT_ACCOUNT",
+        WorkerIdentityNotApplied => "SetupError_WORKER_IDENTITY_NOT_APPLIED",
+        PermissionActAs => "SetupError_PERMISSION_ACTAS",
+        WorkerDefaultAccountMissing => "SetupError_WORKER_DEFAULT_ACCOUNT_MISSING",
         _ => "SetupError_OTHER",
     };
 
@@ -66,6 +97,19 @@ public static class SetupErrorCodes
         NotProjectOwner => "SetupAction_CreateProject",
         BillingStillOff => "SetupAction_PickAnotherBillingAccount",
         BillingAccountOff => "SetupAction_FixBillingAccount",
+        BucketConfigNotApplied => "SetupAction_TryAgain",
+        BucketNameTaken => "SetupAction_TryAgain",
+        WorkerDefaultAccount => "SetupAction_Continue",
+        WorkerIdentityNotApplied => "SetupAction_TryAgain",
+        PermissionActAs => "SetupAction_CopyRequestForOwner",
+        WorkerDefaultAccountMissing => "SetupAction_OpenServiceAccounts",
         _ => "SetupAction_TryAgain",
     };
+}
+
+/// <summary>The Google Cloud console page of a project's service accounts (a link action, Hard Rule 13).</summary>
+public static class ServiceAccountLinks
+{
+    public static string ForProject(string projectId)
+        => "https://console.cloud.google.com/iam-admin/serviceaccounts?project=" + Uri.EscapeDataString(projectId);
 }
