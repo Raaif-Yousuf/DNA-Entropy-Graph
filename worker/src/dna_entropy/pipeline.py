@@ -19,6 +19,7 @@ import numpy as np
 from .analysis.direction import DirectionResult, analyze_direction
 from .analysis.gene_summary import GeneRow, summarize_genes
 from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
+from .analysis.smoothing import rolling_mean, validate_smoothing_windows
 from .analysis.surprisal import summarize_surprisal
 from .analysis.windowing import validate_context
 from .annotators.base import GeneFeature
@@ -238,6 +239,28 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
     )
 
 
+def _write_smoothed(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: Writer
+) -> list[str]:
+    """Write ``<name>.entropy.smooth<W>.<bedgraph|wig>`` per configured window (issue #126):
+    the centred rolling mean of each contig's combined entropy track, in the SAME track format
+    and coordinate frame as the raw track (which is always written separately and stays
+    primary). Each contig is smoothed on its own, wrapping the origin only when that contig
+    is circular (issue #128). The window is the file's ``variant``."""
+    outputs: list[str] = []
+    for window in cfg.smoothing_windows:
+        blocks = [
+            (c.name, rolling_mean(dr.values, window, circular=cfg.topology.resolve(c.circular)))
+            for c, dr in processed
+        ]
+        outputs.append(
+            track_writer.write_multi(
+                name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir, variant=f"smooth{window}"
+            )
+        )
+    return outputs
+
+
 def _write_regions(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
     """Write ``<name>.regions.bed`` and ``.regions.gff3`` (issue #125): the low- and
     high-entropy stretches of each contig's combined entropy track. Topology is resolved per
@@ -455,6 +478,8 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if cfg.include_smoothed:
+        outputs += _write_smoothed(cfg, processed, track_writer)
     if cfg.include_regions:
         outputs += _write_regions(cfg, processed)
 
@@ -564,6 +589,8 @@ def _write_standard_outputs(
     if cfg.include_tsv:
         outputs.append(_write_tsv(cfg, processed))
 
+    if cfg.include_smoothed:
+        outputs += _write_smoothed(cfg, processed, track_writer)
     if cfg.include_regions:
         outputs += _write_regions(cfg, processed)
 
@@ -655,6 +682,8 @@ def run(
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
     try:
+        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
+            validate_smoothing_windows(cfg.smoothing_windows)
         validate_region_options(
             threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
         )

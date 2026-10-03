@@ -168,6 +168,11 @@ class RunConfig:
     # default, like every other writer toggle here (issue #123's own "Done when": "Selectable
     # output, on by default").
     include_surprisal: bool = True
+    # issue #126: rolling-mean copies of the entropy track, one file per window:
+    # <name>.entropy.smooth<W>.bedgraph (or .wig). Each W is an odd number of bases
+    # (analysis/smoothing.py validates); () means none. The raw track stays primary.
+    include_smoothed: bool = True
+    smoothing_windows: tuple[int, ...] = (51,)
     # issue #125: low/high-entropy region calls -> <name>.regions.bed + <name>.regions.gff3.
     # A base is "low" below `region_threshold` bits and "high" above the mirror
     # (2 - region_threshold); regions shorter than `region_min_length` bases are dropped, and

@@ -123,6 +123,12 @@
         },
         "regionMergeGap": {
           "type": "integer"
+        },
+        "smoothingWindows": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
         }
       }
     },

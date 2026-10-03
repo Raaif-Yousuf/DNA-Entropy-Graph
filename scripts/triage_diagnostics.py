@@ -146,6 +146,7 @@ SCHEMA_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "analysis_direction": ("manifest", ("analysis", "direction")),
     "analysis_topology": ("manifest", ("analysis", "topology")),
     "analysis_format": ("manifest", ("analysis", "format")),
+    "analysis_smoothing_windows": ("manifest", ("analysis", "smoothingWindows")),
     "analysis_region_threshold": ("manifest", ("analysis", "regionThreshold")),
     "analysis_region_min_length": ("manifest", ("analysis", "regionMinLength")),
     "analysis_region_merge_gap": ("manifest", ("analysis", "regionMergeGap")),
