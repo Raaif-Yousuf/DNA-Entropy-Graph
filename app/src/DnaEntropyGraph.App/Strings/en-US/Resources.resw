@@ -1084,6 +1084,9 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="DataFolderUnusable_MissingValue" xml:space="preserve">
     <value>The --profile option needs a folder after it. Start the app again with --profile followed by a folder path, or without the option.</value>
   </data>
+  <data name="DataFolderUnusable_InvalidPath" xml:space="preserve">
+    <value>The data folder {0} is not a valid folder path. Start the app again with a normal folder path, or without the --profile option.</value>
+  </data>
   <data name="DataFolderUnusable_CannotCreate" xml:space="preserve">
     <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
   </data>

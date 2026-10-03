@@ -37,6 +37,7 @@ public static class StartupDataRoot
         {
             DataFolderProblem.MissingValue => strings.GetString("DataFolderUnusable_MissingValue"),
             DataFolderProblem.NotAFolder => strings.GetString("DataFolderUnusable_NotAFolder"),
+            DataFolderProblem.InvalidPath => strings.GetString("DataFolderUnusable_InvalidPath"),
             _ => strings.GetString("DataFolderUnusable_CannotCreate"),
         };
         return string.Format(System.Globalization.CultureInfo.CurrentCulture, template, ex.Path);
