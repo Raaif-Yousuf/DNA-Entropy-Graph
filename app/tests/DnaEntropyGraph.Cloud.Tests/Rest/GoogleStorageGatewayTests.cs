@@ -685,6 +685,20 @@ public class GoogleStorageGatewayTests
         ex.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
     }
 
+    // Issue #54 (round 3): one 412 rule everywhere. A 412 on the config write that does not look like a failed precondition
+    // is an organization-policy refusal and reaches the caller as one; swallowing it would read a refusal as "the file is there".
+    [Fact]
+    public async Task A_412_blocked_by_an_administrator_policy_on_the_config_write_surfaces_as_org_policy()
+    {
+        var rig = NewRig();
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing)));
+        rig.Handler.Returns(Post, UploadPath(existing), 412, StorageError(412, "forbidden", "The request was blocked by an administrator policy."));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+    }
     [Fact]
     public async Task An_upload_retried_after_a_503_replays_the_exact_bytes_from_the_start()
     {

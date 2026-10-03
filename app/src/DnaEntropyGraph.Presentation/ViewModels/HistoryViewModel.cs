@@ -236,7 +236,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         // The folder may have gone since the list was built (and a network drive can be slow): probe off the UI thread.
         if (await Task.Run(() => _local.OutputFolderExists(run)))
         {
-            _navigator.NavigateTo(ViewerViewModel.PageKey, run.OutputDir);
+            _navigator.NavigateTo(ResultsViewModel.PageKey, run.JobId);
         }
         else
         {

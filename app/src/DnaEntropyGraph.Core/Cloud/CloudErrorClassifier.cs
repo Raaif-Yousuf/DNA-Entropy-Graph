@@ -33,6 +33,35 @@ public static partial class CloudErrorClassifier
     /// <summary>A per-minute rate limit: it clears by itself, so it is a plain transient error, never quota (even though the message says quota).</summary>
     public const string RateLimitCode = "RATE_LIMIT_EXCEEDED";
 
+    /// <summary>
+    /// A 412 that POSITIVELY looks like a failed precondition (an etag or generation that did not match), not a policy
+    /// refusal: the reason <c>conditionNotMet</c>, or "precondition" wording in the message, and no organization-policy marker
+    /// (a <c>constraints/</c> id or the words "org policy"). Every other 412 stays an org-policy refusal. THEORY (unverified,
+    /// issue #54): Cloud Storage answers an etag mismatch with 412 and may word an org-policy refusal the same way;
+    /// docs/ToTest.md has the row that captures the real shapes. The one rule the classifier, <c>GoogleApiErrors.KindOf</c>
+    /// and the worker-identity gateway all use.
+    /// </summary>
+    public static bool IsPreconditionConflict(int? status, string? code, string? message, IEnumerable<string>? reasons = null)
+    {
+        if (status != 412)
+        {
+            return false;
+        }
+
+        var lower = (message ?? string.Empty).ToLowerInvariant();
+        if (lower.Contains("constraints/", StringComparison.Ordinal)
+            || lower.Contains("org policy", StringComparison.Ordinal)
+            || lower.Contains("organization policy", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(code, "conditionNotMet", StringComparison.OrdinalIgnoreCase)
+            || (reasons ?? []).Any(r => string.Equals(r, "conditionNotMet", StringComparison.OrdinalIgnoreCase))
+            || lower.Contains("precondition", StringComparison.Ordinal)
+            || lower.Contains("pre-condition", StringComparison.Ordinal);
+    }
+
     public static CloudErrorKind Classify(CloudError error)
     {
         ArgumentNullException.ThrowIfNull(error);
@@ -110,7 +139,12 @@ public static partial class CloudErrorClassifier
             return CloudErrorKind.Permission;
         }
 
-        if (status == 412 || code == "CONDITION_NOT_MET" || lower.Contains("constraints/", StringComparison.Ordinal))
+        // A 412 is an org-policy refusal unless it positively looks like a failed precondition (see IsPreconditionConflict):
+        // that shared helper decides every 412. The structured CONDITION_NOT_MET code only counts where there is no HTTP 412
+        // to decide by (no status, or a different one), so the two rules cannot disagree about the same error.
+        if ((status == 412 && !IsPreconditionConflict(status, error.Code, message))
+            || (status is null or not 412 && code == "CONDITION_NOT_MET")
+            || lower.Contains("constraints/", StringComparison.Ordinal))
         {
             return CloudErrorKind.OrgPolicy;
         }
@@ -124,6 +158,27 @@ public static partial class CloudErrorClassifier
         return ClassifyBySubstring(lower);
     }
 
+    /// <summary>
+    /// A refusal to run a VM AS a service account (issue #54, the <c>PERMISSION_ACTAS</c> class): a 403 naming the
+    /// <c>iam.serviceAccounts.actAs</c> permission or the Service Account User role. It classifies as
+    /// <see cref="CloudErrorKind.Permission"/> (an abort), but its action is not the generic "ask the owner to let you
+    /// create computers": the owner must grant that one role on the worker account. THEORY (unverified, no live
+    /// project): the exact wording Compute uses; the markers are the permission and role ids Google's docs name.
+    /// </summary>
+    public static bool IsActAsDenial(CloudError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+
+        if (error.HttpStatus != 403)
+        {
+            return false;
+        }
+
+        var lower = (error.Message ?? string.Empty).ToLowerInvariant();
+        return lower.Contains("iam.serviceaccounts.actas", StringComparison.Ordinal)
+            || lower.Contains("iam.serviceaccountuser", StringComparison.Ordinal)
+            || lower.Contains("does not have access to service account", StringComparison.Ordinal);
+    }
     /// <summary>
     /// The shapes Google uses for "you lack this role": the <c>IAM_PERMISSION_DENIED</c> reason, <c>Permission 'x.y.z'
     /// denied</c>, and "does not have permission". THEORY (unverified against a real project): Cloud Billing words a
