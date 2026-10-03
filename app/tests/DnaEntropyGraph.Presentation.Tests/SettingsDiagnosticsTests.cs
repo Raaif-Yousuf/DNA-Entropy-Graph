@@ -130,6 +130,55 @@ public class SettingsDiagnosticsTests
         }
     }
 
+    private sealed class OneStatusFile(string id) : IDiagnosticsSource
+    {
+        private string Path => $"runs/{id}/status.json";
+
+        public IReadOnlyList<string> ListFiles() => [Path];
+
+        public DiagnosticsFile? TryRead(string relativePath, long maxBytes) =>
+            new(System.Text.Encoding.UTF8.GetBytes($"{{\"jobId\": \"{id}\", \"stage\": \"failed\"}}"), false);
+    }
+
+    [Fact]
+    public async Task Save_diagnostics_on_a_history_with_a_non_standard_job_id_ships_the_placeholder_and_never_the_id()
+    {
+        // The real command path: the view model runs the real exporter against a history row whose id is not the app's shape.
+        const string Odd = "secret_id-9";
+        var folder = Path.Combine(Path.GetTempPath(), "deg-vm-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var path = Path.Combine(folder, "d.zip");
+            var repository = Substitute.For<IRunRepository>();
+            repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(
+                new[] { new RunRecord(Odd, JobPhase.Failed, DateTimeOffset.UnixEpoch, Name: Odd, ManifestJson: "{}", OptionsJson: "{}") });
+            var real = new DiagnosticsExporter(new OneStatusFile(Odd), repository, () => new DiagnosticsInfo("0", "os", "net", null, Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "x"), [], DateTimeOffset.UnixEpoch, "readme"));
+            var strings = Substitute.For<IStringResourceProvider>();
+            strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>() + "|{0}");
+            var viewModel = new SettingsViewModel(Substitute.For<ISettingsStore>(), _toasts, strings, real, _picker, _launcher, TimeProvider.System);
+            _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(path);
+
+            await viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+            _toasts.Received(1).ShowToast("DiagnosticsSaved_Title|{0}", Arg.Any<string>(), ToastSeverity.Success);
+            using var archive = System.IO.Compression.ZipFile.OpenRead(path);
+            var names = archive.Entries.Select(e => e.FullName).ToList();
+            names.ShouldContain("files/runs/withheldid1/status.json");
+            var texts = archive.Entries.Select(e =>
+            {
+                using var reader = new StreamReader(e.Open());
+                return e.FullName + "\n" + reader.ReadToEnd();
+            }).ToList();
+            texts.ShouldAllBe(t => !t.Contains(Odd, StringComparison.OrdinalIgnoreCase));
+            texts.Single(t => t.StartsWith("run-history.json", StringComparison.Ordinal)).ShouldContain("withheldid1");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task A_refused_bundle_toasts_the_refusal_copy_and_does_not_offer_open_folder()
     {
