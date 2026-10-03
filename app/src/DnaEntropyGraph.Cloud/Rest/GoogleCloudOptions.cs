@@ -9,6 +9,9 @@ public sealed class GoogleCloudOptions
     /// <summary>The wait between polls of a long-running operation. Null waits for real; a test passes an instant one.</summary>
     public Func<TimeSpan, CancellationToken, Task>? Delay { get; init; }
 
+    /// <summary>The clock the operation deadline runs on (wall-clock time spent in each call counts). Production uses the system clock.</summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
     /// <summary>How long a long-running operation (create a project, enable a service) may run before it counts as timed out.</summary>
     public TimeSpan OperationDeadline { get; init; } = TimeSpan.FromMinutes(5);
 }

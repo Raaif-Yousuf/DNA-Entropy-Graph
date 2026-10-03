@@ -30,4 +30,11 @@ public static class ProjectIdGenerator
 
         return Prefix + new string(suffix);
     }
+
+    /// <summary>Google's project id grammar: 6 to 30 characters, lowercase letters, digits and hyphens, a letter first, no trailing hyphen.</summary>
+    public static bool IsValid(string? projectId)
+        => projectId is { Length: >= 6 and <= 30 }
+            && projectId[0] is >= 'a' and <= 'z'
+            && projectId[^1] != '-'
+            && projectId.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-');
 }

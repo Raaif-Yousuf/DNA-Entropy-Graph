@@ -8,10 +8,12 @@ using Google.Apis.Json;
 namespace DnaEntropyGraph.Cloud.Rest;
 
 /// <summary>
-/// The real <see cref="IProjectCatalogGateway"/> over Cloud Resource Manager v3 REST (issue #50). It does no retry of
-/// its own: it is wrapped by <see cref="ResilientProjectCatalogGateway"/>, which routes it through
-/// <see cref="CloudCallPipeline"/>. Project creation is a long-running operation: <c>projects.create</c> returns an
-/// operation, and the real error (project limit, organization policy) arrives in the polled one.
+/// The real <see cref="IProjectCatalogGateway"/> over Cloud Resource Manager v3 REST (issue #50). It is NOT wrapped in
+/// <see cref="ResilientProjectCatalogGateway"/>: it routes every HTTP call through <see cref="CloudCallPipeline"/>
+/// itself, because project creation is several calls. <c>projects.create</c> is a long-running operation (it returns
+/// an operation, and the real error, project limit or organization policy, arrives in the polled one), and wrapping the
+/// whole composite in one retry would replay the non-idempotent POST whenever a poll read hit a 429 or a timeout.
+/// So the POST is retried alone, each poll read is its own retried call, and one wall-clock deadline covers them all.
 /// </summary>
 internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
 {
@@ -19,11 +21,13 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
     private const int PageSize = 100;
 
     private readonly CloudResourceManagerService _service;
+    private readonly CloudCallPipeline _pipeline;
     private readonly GoogleCloudOptions _options;
 
-    public GoogleProjectCatalogGateway(CloudResourceManagerService service, GoogleCloudOptions options)
+    public GoogleProjectCatalogGateway(CloudResourceManagerService service, CloudCallPipeline pipeline, GoogleCloudOptions options)
     {
         _service = service;
+        _pipeline = pipeline;
         _options = options;
     }
 
@@ -33,20 +37,25 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
         string? pageToken = null;
         do
         {
-            var request = _service.Projects.Search();
-            request.Query = SearchQuery;
-            request.PageSize = PageSize;
-            request.PageToken = pageToken;
-
-            SearchProjectsResponse page;
-            try
-            {
-                page = await request.ExecuteAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (GoogleApiException ex)
-            {
-                throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-            }
+            var token = pageToken;
+            var page = await _pipeline.ExecuteAsync(
+                "ProjectCatalog.ListActiveProjects",
+                async ct =>
+                {
+                    var request = _service.Projects.Search();
+                    request.Query = SearchQuery;
+                    request.PageSize = PageSize;
+                    request.PageToken = token;
+                    try
+                    {
+                        return await request.ExecuteAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (GoogleApiException ex)
+                    {
+                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
 
             projects.AddRange((page.Projects ?? []).Select(Summarize));
             pageToken = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
@@ -58,26 +67,39 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
 
     public async Task<ProjectSummary?> GetProjectAsync(string projectId, CancellationToken cancellationToken)
     {
-        try
-        {
-            return Summarize(await _service.Projects.Get("projects/" + projectId).ExecuteAsync(cancellationToken).ConfigureAwait(false));
-        }
-        catch (GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+        // An id outside Google's grammar can never name a project, and spliced into a resource name ("a/b") it would
+        // address a different resource: answer "not visible" without a request.
+        if (!ProjectIdGenerator.IsValid(projectId))
         {
             return null;
         }
-        catch (GoogleApiException ex)
-        {
-            var exception = GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
 
+        try
+        {
+            return await _pipeline.ExecuteAsync(
+                "ProjectCatalog.GetProject",
+                async ct =>
+                {
+                    try
+                    {
+                        return Summarize(await _service.Projects.Get("projects/" + projectId).ExecuteAsync(ct).ConfigureAwait(false));
+                    }
+                    catch (GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        return null;
+                    }
+                    catch (GoogleApiException ex)
+                    {
+                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 403 && ex.Kind == CloudErrorKind.Permission)
+        {
             // Google answers 403 for a project that does not exist as well as for one the account may not see: either
             // way, pick another. A 403 that says the API is off or billing is off is a different problem and must show.
-            if (ex.HttpStatusCode == System.Net.HttpStatusCode.Forbidden && exception.Kind == CloudErrorKind.Permission)
-            {
-                return null;
-            }
-
-            throw exception;
+            return null;
         }
     }
 
@@ -96,21 +118,29 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
                 },
             };
 
-            Operation operation;
-            try
-            {
-                operation = await _service.Projects.Create(body).ExecuteAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (GoogleApiException ex)
-            {
-                throw ToCreateException(GoogleApiErrors.FromApiException(ex));
-            }
+            // The mutating call alone goes through the retrying pipeline. Replaying it after a dropped response is safe
+            // only because a 409 on the replay adopts our own project below.
+            var operation = await _pipeline.ExecuteAsync(
+                "ProjectCatalog.CreateProject",
+                async ct =>
+                {
+                    try
+                    {
+                        return await _service.Projects.Create(body).ExecuteAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (GoogleApiException ex)
+                    {
+                        throw ToCreateException(GoogleApiErrors.FromApiException(ex));
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
 
             var outcome = await OperationPoller.PollAsync(
-                token => PollAsync(operation, token),
+                token => PollAsync(operation, projectId, token),
                 _options.OperationDeadline,
                 cancellationToken,
-                _options.Delay).ConfigureAwait(false);
+                _options.Delay,
+                _options.TimeProvider).ConfigureAwait(false);
 
             if (!outcome.Success)
             {
@@ -132,19 +162,27 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
         }
     }
 
-    private async Task<OperationPoll<ProjectSummary>> PollAsync(Operation operation, CancellationToken cancellationToken)
+    /// <summary>One look at the create operation. The read is its own retried call: a 429 or a timeout here re-reads, it never re-posts.</summary>
+    private async Task<OperationPoll<ProjectSummary>> PollAsync(Operation operation, string projectId, CancellationToken cancellationToken)
     {
         // The first look is at the operation create returned; later looks ask Google for it again.
         if (operation.Done != true)
         {
-            try
-            {
-                operation = await _service.Operations.Get(operation.Name).ExecuteAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (GoogleApiException ex)
-            {
-                throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-            }
+            var name = operation.Name;
+            operation = await _pipeline.ExecuteAsync(
+                "ProjectCatalog.PollCreateOperation",
+                async ct =>
+                {
+                    try
+                    {
+                        return await _service.Operations.Get(name).ExecuteAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (GoogleApiException ex)
+                    {
+                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
         }
 
         if (operation.Done != true)
@@ -157,13 +195,34 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
             throw ToCreateException(GoogleApiErrors.FromOperationError(error.Code, error.Message, error.Details));
         }
 
-        return new OperationPoll<ProjectSummary>(true, SummarizeResponse(operation.Response), null);
+        if (operation.Response is { Count: > 0 })
+        {
+            return new OperationPoll<ProjectSummary>(true, SummarizeResponse(operation.Response), null);
+        }
+
+        // Done, no error, and no project in the response: do not call that a success with an empty id. Ask for the
+        // project we asked for; if it is not there, say so.
+        var created = await GetProjectAsync(projectId, cancellationToken).ConfigureAwait(false);
+        if (created is null)
+        {
+            throw new CloudOperationException(
+                new CloudError(NoResultCode, null, "The create operation finished without a project."),
+                CloudErrorKind.Other);
+        }
+
+        return new OperationPoll<ProjectSummary>(true, created, null);
     }
+
+    /// <summary>The <see cref="CloudError.Code"/> of a create operation that finished with neither an error nor a project.</summary>
+    internal const string NoResultCode = "OPERATION_NO_RESULT";
 
     private static CloudOperationException ToCreateException(RpcStatus status) => GoogleApiErrors.ToException(status, kind => kind switch
     {
         CloudErrorKind.Quota => SetupErrorCodes.ProjectQuota,
         CloudErrorKind.OrgPolicy => SetupErrorCodes.OrgPolicyBlock,
+        CloudErrorKind.Permission => SetupErrorCodes.Permission,
+        CloudErrorKind.ApiDisabled => SetupErrorCodes.ApiDisabled,
+        CloudErrorKind.Billing => SetupErrorCodes.NoBilling,
         _ => null,
     });
 

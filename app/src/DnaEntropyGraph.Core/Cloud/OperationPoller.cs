@@ -34,23 +34,50 @@ public static class OperationPoller
 
     public static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(10);
 
+    /// <param name="poll">One read of the operation. It receives a token that ends when the caller cancels OR the deadline is spent, so a read that hangs ends at the deadline instead of at the HTTP client's own (longer) timeout.</param>
+    /// <param name="deadline">One wall-clock budget for the whole poll, including the time spent inside each read.</param>
+    /// <param name="time">The clock the deadline runs on; null is the system clock. A test passes its own.</param>
     public static async Task<OperationOutcome<T>> PollAsync<T>(
         Func<CancellationToken, Task<OperationPoll<T>>> poll,
         TimeSpan deadline,
         CancellationToken cancellationToken,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        TimeProvider? time = null)
     {
         ArgumentNullException.ThrowIfNull(poll);
 
-        var wait = delay ?? ((span, ct) => Task.Delay(span, ct));
+        var clock = time ?? TimeProvider.System;
+        var wait = delay ?? ((span, ct) => Task.Delay(span, clock, ct));
         var backoff = InitialBackoff;
-        var elapsed = TimeSpan.Zero;
+        var waited = TimeSpan.Zero;
+        var started = clock.GetTimestamp();
+
+        // The wall clock is the truth. The waits asked for are budgeted too, so an instant (test) delay function that
+        // returns early still spends the deadline instead of polling forever.
+        TimeSpan Elapsed()
+        {
+            var wall = clock.GetElapsedTime(started);
+            return wall > waited ? wall : waited;
+        }
 
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var snapshot = await poll(cancellationToken).ConfigureAwait(false);
+            var remaining = deadline - Elapsed();
+            using var deadlineSource = new CancellationTokenSource(remaining > TimeSpan.Zero ? remaining : deadline, clock);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineSource.Token);
+
+            OperationPoll<T> snapshot;
+            try
+            {
+                snapshot = await poll(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadlineSource.IsCancellationRequested)
+            {
+                return TimedOut<T>(deadline);
+            }
+
             if (snapshot.IsDone)
             {
                 return snapshot.Error is { } error
@@ -58,33 +85,25 @@ public static class OperationPoller
                     : OperationOutcome<T>.Ok(snapshot.Result!);
             }
 
-            if (elapsed >= deadline)
+            var left = deadline - Elapsed();
+            if (left <= TimeSpan.Zero)
             {
-                // The message must itself say "timed out" - not just carry
-                // the OPERATION_POLL_TIMEOUT code - because CloudErrorClassifier
-                // falls back to a substring match on the message whenever a
-                // structured code it does not specifically recognize is
-                // given (this one is poller-local, not a Google code), and
-                // a poll deadline expiring is meant to classify the same
-                // way a real HttpRequestException/timeout would
-                // (docs/cloud_design.md section 5's table).
-                return OperationOutcome<T>.Failed(new CloudError(
-                    TimeoutCode,
-                    null,
-                    $"Polling timed out after {deadline} without the operation reporting done."));
+                return TimedOut<T>(deadline);
             }
 
-            var thisWait = backoff;
-            if (elapsed + thisWait > deadline)
-            {
-                thisWait = deadline - elapsed;
-            }
-
+            var thisWait = backoff < left ? backoff : left;
             await wait(thisWait, cancellationToken).ConfigureAwait(false);
-            elapsed += thisWait;
+            waited += thisWait;
             backoff = backoff * 2 > MaxBackoff ? MaxBackoff : backoff * 2;
         }
     }
+
+    // The message must itself say "timed out" - not just carry the OPERATION_POLL_TIMEOUT code - because
+    // CloudErrorClassifier falls back to a substring match on the message whenever a structured code it does not
+    // specifically recognize is given (this one is poller-local, not a Google code), and a poll deadline expiring is
+    // meant to classify the same way a real HttpRequestException/timeout would (docs/cloud_design.md section 5's table).
+    private static OperationOutcome<T> TimedOut<T>(TimeSpan deadline)
+        => OperationOutcome<T>.Failed(new CloudError(TimeoutCode, null, $"Polling timed out after {deadline} without the operation reporting done."));
 }
 
 /// <summary>One poll of an in-flight operation: not done yet, done with a result, or done with an error.</summary>
