@@ -29,7 +29,8 @@ internal static class GenBankFeatureTable
     public static void Validate(IReadOnlyList<string> lines, int start, int recordNumber)
     {
         var count = lines.Count > 0 && lines[^1].Length == 0 ? lines.Count - 1 : lines.Count; // the "" after a final newline is end of file
-        string? Raw(int i) => i < count ? lines[i] : null;
+        // Python counts code points; fold each surrogate pair to one placeholder char so every length and column below does too.
+        string? Raw(int i) => i < count ? FoldCodePoints(lines[i]) : null;
 
         var index = start;
         while (Raw(index) is { } marker && IsStartMarker(marker))
@@ -112,7 +113,6 @@ internal static class GenBankFeatureTable
             }
         }
 
-        string? lastKey = null;
         bool lastValueIsNull = false;
         var hasQualifier = false;
         var iteration = 0;
@@ -128,12 +128,10 @@ internal static class GenBankFeatureTable
                 var eq = line.IndexOf('=');
                 if (eq < 0)
                 {
-                    lastKey = line[1..];
                     lastValueIsNull = true; // a qualifier with no value, e.g. /pseudo
                     hasQualifier = true;
                     continue;
                 }
-                lastKey = line[1..eq];
                 var value = line[(eq + 1)..];
                 if (value.StartsWith(' ') && PythonText.TrimStart(value).StartsWith('"'))
                 {
@@ -158,6 +156,9 @@ internal static class GenBankFeatureTable
             }
         }
     }
+
+    private static string FoldCodePoints(string s) =>
+        s.Any(char.IsSurrogate) ? string.Concat(s.EnumerateRunes().Select(r => r.IsBmp ? r.ToString() : "")) : s;
 
     private static int Count(string s, char c) => s.Count(x => x == c);
 

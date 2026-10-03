@@ -80,7 +80,13 @@ public sealed class InputFileValidatorWorkerParityTests
     /// VM). These files are NOT in <see cref="Table" />; <c>Known_false_accepts_are_still_accepted_here</c>
     /// asserts the C# side so it goes red the day someone closes the gap.
     /// </summary>
-    private static readonly Dictionary<string, string> FalseAccepts = new();
+    private static readonly Dictionary<string, string> FalseAccepts = new()
+    {
+        ["malformed/genbank_stray_close_paren_line.gb"] =
+            "#611: Biopython's consumer asserts on a lone closing parenthesis line after a location; GenBankLite does not parse locations.",
+        ["malformed/genbank_second_record_terminator_in_header.gb"] =
+            "#611: Biopython refuses a '//' in a later record's header; GenBankLite skips that empty record and keeps the others.",
+    };
 
     private static string WorkerData(string relative) =>
         Path.Combine(ContractFixtures.RepoRoot, "worker", "tests", "data", relative.Replace('/', Path.DirectorySeparatorChar));
@@ -106,6 +112,7 @@ public sealed class InputFileValidatorWorkerParityTests
     [Fact]
     public void Known_false_accepts_are_still_accepted_here_and_each_has_a_reason()
     {
+        FalseAccepts.Keys.ShouldNotBeEmpty();
         foreach (var (relative, reason) in FalseAccepts)
         {
             reason.Length.ShouldBeGreaterThan(20);
