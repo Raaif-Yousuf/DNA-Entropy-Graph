@@ -21,6 +21,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     // The saved strings, in the order the Appearance radio buttons list them.
     private static readonly string[] ThemeNames = ["Light", "Dark", "System"];
 
+    // Literal resw keys, index-aligned with ThemeNames: scripts/check_app_wiring.py's ORPHAN-RESOURCE scan, and a grep, see only literal names.
+    private static readonly string[] ThemeChoiceKeys = ["ThemeChoice_Light", "ThemeChoice_Dark", "ThemeChoice_System"];
+
     private readonly ISettingsStore _settingsStore;
     private readonly IToastService _toastService;
     private readonly IStringResourceProvider _strings;
@@ -109,7 +112,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         // Plain (non-dotted) resw key: see ShellViewModel.BuildStatusPillText's comment.
         // The body is the choice in the radio button's own words ("Use system"), not the saved code ("System").
-        _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), _strings.GetString($"ThemeChoice_{theme}"), ToastSeverity.Info);
+        _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), _strings.GetString(ThemeChoiceKeys[value]), ToastSeverity.Info);
     }
 
     /// <summary>Asks where to save, builds the zip off the UI thread, and says what happened. Never throws to the caller.</summary>
