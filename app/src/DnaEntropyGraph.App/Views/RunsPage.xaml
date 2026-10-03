@@ -1,0 +1,86 @@
+<Page
+    x:Class="DnaEntropyGraph.App.Views.RunsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
+
+    <!--
+        Issue #101: every past run, grouped by day. Item commands live on RunListItem (built by
+        HistoryViewModel), so the DataTemplate binds them without reaching back to the page.
+        Sparklines on the rows are issue #118's.
+    -->
+    <Grid Padding="24" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Button x:Uid="RunsRefreshButton" Grid.Row="0" HorizontalAlignment="Right" Command="{x:Bind ViewModel.RefreshCommand}" />
+
+        <Grid Grid.Row="1" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="200" />
+            </Grid.ColumnDefinitions>
+            <TextBox
+                x:Uid="RunsSearchBox"
+                Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <ComboBox
+                x:Uid="RunsStatusFilter"
+                Grid.Column="1"
+                HorizontalAlignment="Stretch"
+                ItemsSource="{x:Bind ViewModel.StatusFilters}"
+                DisplayMemberPath="Label"
+                SelectedItem="{x:Bind ViewModel.SelectedStatusFilter, Mode=TwoWay}" />
+        </Grid>
+
+        <TextBlock
+            Grid.Row="2"
+            Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
+            Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay}"
+            TextWrapping="Wrap" />
+
+        <ScrollViewer Grid.Row="3">
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Groups}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:RunDayGroup">
+                        <StackPanel Spacing="8" Margin="0,0,0,16">
+                            <TextBlock Text="{x:Bind Header}" Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <ItemsControl ItemsSource="{x:Bind Items}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RunListItem">
+                                        <Border
+                                            Padding="12"
+                                            Margin="0,0,0,8"
+                                            CornerRadius="8"
+                                            BorderThickness="1"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                            <StackPanel Spacing="8">
+                                                <TextBlock Text="{x:Bind Title}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                                    <TextBlock Text="{x:Bind StatusText}" />
+                                                    <TextBlock Text="{x:Bind DetailText}" Opacity="0.7" />
+                                                </StackPanel>
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <Button x:Uid="RunsOpenButton" Command="{x:Bind OpenCommand}" />
+                                                    <Button x:Uid="RunsRerunButton" Command="{x:Bind RerunCommand}" />
+                                                    <Button x:Uid="RunsRedownloadButton" Command="{x:Bind RedownloadCommand}" IsEnabled="{x:Bind CanRedownload}" />
+                                                    <Button x:Uid="RunsDeleteCloudButton" Command="{x:Bind DeleteCloudCommand}" IsEnabled="{x:Bind CanDeleteCloud}" ToolTipService.ToolTip="{x:Bind DeleteCloudHint}" />
+                                                    <Button x:Uid="RunsDeleteLocalButton" Command="{x:Bind DeleteLocalCommand}" IsEnabled="{x:Bind HasLocalFiles}" />
+                                                    <Button x:Uid="RunsRemoveButton" Command="{x:Bind RemoveCommand}" IsEnabled="{x:Bind CanRemove}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</Page>

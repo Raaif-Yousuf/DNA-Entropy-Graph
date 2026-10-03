@@ -214,9 +214,11 @@ _MARKUP = re.compile(r"\{\s*(x:Bind|Binding)\s*([^}]*)\}")
 
 # A DataTemplate with an x:DataType: its {x:Bind} paths are members of that item type, not of the page's
 # ViewModel, and the XAML compiler already checks them against the type (a wrong name is a build error).
-_TYPED_TEMPLATE = re.compile(
-    r"<DataTemplate\b[^>]*\bx:DataType\s*=\s*\"(?:[\w]+:)?([\w\.]+)\"[^>]*>.*?</DataTemplate>", re.DOTALL
-)
+# The tags of a DataTemplate, and its x:DataType (double- or single-quoted). Templates nest (a list of groups whose
+# template holds a list of items), so the spans are matched with a stack, never with a non-greedy regex that would end an
+# outer template at the first inner closing tag.
+_TEMPLATE_TAG = re.compile(r"<DataTemplate\b([^>]*)>|</DataTemplate\s*>")
+_DATA_TYPE_ATTR = re.compile(r"\bx:DataType\s*=\s*([\"'])(?:[\w]+:)?([\w\.]+)\1")
 
 # Types that are constructor parameters but are never DI registrations: a
 # CancellationToken, a primitive, a string. Listing them beats a heuristic that
@@ -411,6 +413,82 @@ def _members_of(text: str) -> set[str]:
         text,
     ):
         members.add(match.group(1))
+    return members
+
+
+def _template_spans(text: str) -> list[tuple[int, int, str | None]]:
+    """(start, end, item type or None) of every DataTemplate, nested ones included. A template with no x:DataType has no type."""
+    spans: list[tuple[int, int, str | None]] = []
+    stack: list[tuple[int, str | None]] = []
+    for tag in _TEMPLATE_TAG.finditer(text):
+        if tag.group(0).startswith("</"):
+            if stack:
+                start, item_type = stack.pop()
+                spans.append((start, tag.end(), item_type))
+        else:
+            data_type = _DATA_TYPE_ATTR.search(tag.group(1))
+            stack.append((tag.start(), data_type.group(2).split(".")[-1] if data_type else None))
+    return spans
+
+
+def _type_declaration(text: str, name: str) -> re.Match[str] | None:
+    """The `class|record|struct <name>` declaration (optionally `record class|struct`, with generic parameters)."""
+    return re.search(rf"\b(?:record\s+(?:class|struct)|record|class|struct)\s+{re.escape(name)}\b(?:<[^>{{(]*>)?", text)
+
+
+def _type_body(text: str, name: str) -> tuple[str, str]:
+    """(positional-record parameter list, the type's own body) for `name`, either possibly empty.
+
+    The body is the text between the type's braces, so a member of some other type in the same file is not counted
+    as a member of this one. A `record R(int A);` has parameters and no body.
+    """
+    declaration = _type_declaration(text, name)
+    if declaration is None:
+        return "", ""
+    index = declaration.end()
+    parameters = ""
+    # A positional record (or a primary-constructor type) lists its parameters right after the name.
+    after = text[index:].lstrip()
+    if after.startswith("("):
+        start = index + (len(text[index:]) - len(after))
+        depth = 0
+        for offset in range(start, len(text)):
+            if text[offset] == "(":
+                depth += 1
+            elif text[offset] == ")":
+                depth -= 1
+                if depth == 0:
+                    parameters = text[start + 1 : offset]
+                    index = offset + 1
+                    break
+    brace = re.search(r"[{;]", text[index:])
+    if brace is None or brace.group(0) == ";":
+        return parameters, ""
+    open_at = index + brace.start()
+    depth = 0
+    for offset in range(open_at, len(text)):
+        if text[offset] == "{":
+            depth += 1
+        elif text[offset] == "}":
+            depth -= 1
+            if depth == 0:
+                return parameters, text[open_at + 1 : offset]
+    return parameters, text[open_at + 1 :]
+
+
+def _type_members(text: str, name: str) -> set[str]:
+    """Members a XAML path could resolve to on the type `name`: its own body, plus the parameters of a positional
+    record (the compiler makes them properties). A plain class's primary-constructor parameters are NOT members."""
+    parameters, body = _type_body(text, name)
+    members = _members_of(body)
+    declaration = _type_declaration(text, name)
+    if declaration is not None and declaration.group(0).lstrip().startswith("record"):
+        for token in _split_top_level(parameters):
+            declared, _ = _cut_default(token)
+            declared = re.sub(r"^(?:\[[^\]]*\]\s*)+", "", declared.strip())
+            pieces = declared.rsplit(None, 1)
+            if len(pieces) == 2:
+                members.add(pieces[1])
     return members
 
 
@@ -753,16 +831,15 @@ def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
         paths_used: set[str] = set()
         # An x:Bind inside a DataTemplate with an x:DataType belongs to that item type (the XAML compiler resolves it
         # there), so it is checked against that class, never skipped and never held to the page ViewModel.
-        typed_spans = [(m.span(), m.group(1).split(".")[-1]) for m in _TYPED_TEMPLATE.finditer(text)]
+        template_spans = _template_spans(text)
         typed_used: dict[str, set[str]] = {}
         for match in _MARKUP.finditer(text):
             root = _binding_root(match.group(2))
             if root is None:
                 continue
-            owner = next(
-                (cls for (start, end), cls in typed_spans if start <= match.start() < end and match.group(1) == "x:Bind"),
-                None,
-            )
+            # The innermost template around the binding owns it (the smallest span that contains it).
+            enclosing = [(end - start, cls) for start, end, cls in template_spans if start <= match.start() < end]
+            owner = min(enclosing, key=lambda pair: pair[0])[1] if enclosing and match.group(1) == "x:Bind" else None
             if owner is not None:
                 typed_used.setdefault(owner, set()).add(root)
             else:
@@ -773,7 +850,7 @@ def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
             if class_text is None:
                 skipped.append(f"{path}: x:DataType '{cls}' is not a class in this tree; {len(roots)} binding path(s) unchecked")
                 continue
-            for root in sorted(roots - _members_of(class_text)):
+            for root in sorted(roots - _type_members(class_text, cls)):
                 findings.append(
                     Finding(
                         "DANGLING-BINDING",
@@ -1230,6 +1307,95 @@ def self_test() -> int:
         check(
             "an x:Bind to a nonexistent member inside a typed DataTemplate is a dangling binding",
             "DANGLING-BINDING" in _codes(typed_bad_root),
+        )
+        # Templates nest: a binding in an inner typed template is held to the INNER type, not the outer one.
+        nested_root = Path(tempfile.mkdtemp(prefix="wiring-nested-"))
+        _write_wired(nested_root)
+        (nested_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
+        (nested_root / "src/Demo.Presentation/Item.cs").write_text(
+            "public sealed record Group(string Header);\npublic sealed class Row { public string Title { get; } = \"\"; }\n",
+            encoding="utf-8",
+        )
+        _patch(
+            nested_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="vm:Group"><TextBlock Text="{x:Bind Header}" />'
+            '<DataTemplate x:DataType="vm:Row"><TextBlock Text="{x:Bind Title}" /></DataTemplate></DataTemplate>',
+        )
+        check(
+            "a binding in a nested typed DataTemplate is checked against the inner type",
+            "DANGLING-BINDING" not in _codes(nested_root),
+        )
+        # A positional record's parameters are its properties; a member the record lacks is still caught.
+        record_root = Path(tempfile.mkdtemp(prefix="wiring-record-"))
+        _write_wired(record_root)
+        (record_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
+        (record_root / "src/Demo.Presentation/Item.cs").write_text(
+            "public sealed record Item(string Header, System.Collections.Generic.IReadOnlyList<string> Items);\n", encoding="utf-8"
+        )
+        _patch(
+            record_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="vm:Item"><TextBlock Text="{x:Bind Header}" />'
+            '<ListView ItemsSource="{x:Bind Items}" /></DataTemplate>',
+        )
+        check(
+            "an x:Bind to a positional record's parameter is not a dangling binding",
+            "DANGLING-BINDING" not in _codes(record_root),
+        )
+        record_bad_root = Path(tempfile.mkdtemp(prefix="wiring-record-bad-"))
+        _write_wired(record_bad_root)
+        (record_bad_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
+        (record_bad_root / "src/Demo.Presentation/Item.cs").write_text(
+            "public sealed record Item(string Header, System.Collections.Generic.IReadOnlyList<string> Items);\n", encoding="utf-8"
+        )
+        _patch(
+            record_bad_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="vm:Item"><TextBlock Text="{x:Bind Heder}" /></DataTemplate>',
+        )
+        check(
+            "an x:Bind to a name a positional record lacks is still a dangling binding",
+            "DANGLING-BINDING" in _codes(record_bad_root),
+        )
+        # The member scan is scoped to the class's own body: a property of another class in the file does not count.
+        scoped_root = Path(tempfile.mkdtemp(prefix="wiring-scoped-"))
+        _write_wired(scoped_root)
+        (scoped_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
+        (scoped_root / "src/Demo.Presentation/Item.cs").write_text(
+            "public sealed class Item { public string Own { get; } = \"\"; }\n"
+            "public sealed class Other { public string OnlyOnOther { get; } = \"\"; }\n",
+            encoding="utf-8",
+        )
+        _patch(
+            scoped_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="vm:Item"><TextBlock Text="{x:Bind OnlyOnOther}" /></DataTemplate>',
+        )
+        check(
+            "a member that exists only on another class in the same file is a dangling binding",
+            "DANGLING-BINDING" in _codes(scoped_root),
+        )
+        # A single-quoted x:DataType is read too, so its bad binding is caught instead of skipped.
+        single_root = Path(tempfile.mkdtemp(prefix="wiring-single-"))
+        _write_wired(single_root)
+        (single_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
+        (single_root / "src/Demo.Presentation/Item.cs").write_text(
+            "public sealed class Item { public string ItemOnlyMember { get; } = \"\"; }\n", encoding="utf-8"
+        )
+        _patch(
+            single_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            "{Binding SelectedInputPath}<DataTemplate x:DataType='vm:Item'><TextBlock Text=\"{x:Bind NoSuchMember}\" /></DataTemplate>",
+        )
+        check(
+            "a single-quoted x:DataType is read: a bad binding inside it is a dangling binding",
+            "DANGLING-BINDING" in _codes(single_root),
         )
         # The loosening is pinned both ways: a plain {Binding} in the same place is not compile-checked
         # against the x:DataType (it is resolved at run time), so it is still held to the page ViewModel.
