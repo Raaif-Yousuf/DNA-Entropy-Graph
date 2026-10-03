@@ -122,8 +122,22 @@ log path and pushes nothing.
 
 **The junction is removed with `os.rmdir`, then checked, then `git worktree remove`, on success and on every failure**
 (MEASURED: an earlier tool deleted the real venv through a junction). If the link cannot be removed the worktree is left
-in place and named, not removed. A worktree left by a killed run is cleaned the same way at the next start. Exit codes: 0
-PR opened, 1 refused (nothing pushed), 2 usage, 3 premerge red, 4 failed after work began.
+in place and named, not removed. A cleanup failure is a `WARNING:` that names the leftover directory; it never changes the
+exit code (a green landing stays 0).
+
+Run directories are `<slug>-<YYYYmmddHHMMSS>` under `%TEMP%\landwt`, each with a lock file (`locks\<name>.json`, pid and start
+time) written before the worktree is created. The next run sweeps only directories that match that exact pattern for its own
+branch and whose pid is dead (a sibling branch whose slug merely starts the same, or a live run, is never touched). A
+directory git no longer knows is pruned and deleted by a walker that unlinks junctions instead of entering them; failing to
+sweep one is a warning, not a refusal.
+
+Refused before any work: a `--branch` or `--land-branch` of `main`, `master`, `HEAD`, anything starting `refs/` or `-`, or
+empty. A merge that fails without conflicts reports git's own stderr (`merge failed: ...`); the merge commit gets an identity
+from the repo config or a fallback, so an empty global git config cannot fail it. The control-byte scan reads names with
+`-z` (spaces, quotes, tabs are fine) and allows ESC (0x1b, ANSI colour in logs) but refuses VT, FF and the other control
+bytes. `--gh` is one executable path (spaces allowed). Exit codes: 0 PR opened, 1 refused (nothing pushed), 2 usage, 3
+premerge red, 4 failed after work began; any failure after the push, including a missing `gh`, is 4 and names the pushed
+branch.
 
 `land_pr.py` stays for the shared-checkout case (uncommitted edits, exact paths or hunks); it is a separate script because its
 input and its return-to-main step do not apply here. `--content-dir` is deferred to #576, only needed if a wave goes back to a

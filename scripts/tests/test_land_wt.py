@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,7 +95,7 @@ class World:
         return (self.venv / "marker.txt").is_file() and (self.venv / "Scripts" / "python.exe").is_file()
 
     def leftover_worktrees(self) -> list[str]:
-        return [p.name for p in self.tmp_root.iterdir() if p.name != "logs"] if self.tmp_root.exists() else []
+        return [p.name for p in self.tmp_root.iterdir() if p.name not in ("logs", "locks")] if self.tmp_root.exists() else []
 
 
 @pytest.fixture()
@@ -142,7 +143,10 @@ def test_green_landing_pushes_one_branch_opens_one_pr_and_leaves_the_venv_and_no
     assert len(creates) == 1 and "feat/1-x" in creates[0]
     assert world.venv_intact()
     assert world.leftover_worktrees() == []
-    assert "worktree" not in _git(world.clone, "worktree", "list").split("\n", 1)[-1]
+    wt = world.premerge_calls[0][0]
+    registered = _git(world.clone, "worktree", "list", "--porcelain").replace("\\", "/").lower()
+    assert wt.as_posix().lower() not in registered  # this run's own worktree is unregistered, not just empty
+    assert not wt.exists()
 
 
 def test_premerge_runs_inside_the_worktree_with_the_venv_junction_live_and_fast_by_default(world):
@@ -302,14 +306,14 @@ def test_if_the_junction_cannot_be_removed_the_worktree_is_left_in_place(world, 
         raise lw.LandError("cannot unlink")
 
     monkeypatch.setattr(lw, "unlink_dir_link", boom)
-    assert _land(world, "feat/1-x", sha) == lw.EXIT_FAILED
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_RED  # a cleanup failure never rewrites the real outcome
     assert world.venv_intact()
     assert len(world.leftover_worktrees()) == 1  # kept on purpose: removing it could reach the venv
 
 
 def test_a_worktree_left_by_a_killed_run_is_cleaned_junction_first(world):
     sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
-    stale = world.tmp_root / "feat-1-x-000000"
+    stale = world.tmp_root / "feat-1-x-20200101000000"
     world.tmp_root.mkdir()
     _git(world.clone, "worktree", "add", "-q", "--detach", str(stale), sha)
     lw.make_dir_link(stale / "worker" / ".venv", world.venv)
@@ -323,3 +327,214 @@ def test_a_worktree_left_by_a_killed_run_is_cleaned_junction_first(world):
 def test_cli_requires_the_core_arguments():
     proc = subprocess.run([sys.executable, str(SCRIPTS_DIR / "land_wt.py")], capture_output=True, text=True, check=False)
     assert proc.returncode == lw.EXIT_USAGE
+
+
+# --- round 2 ---------------------------------------------------------------------------------------
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _write_lock(world: World, name: str, pid: int) -> None:
+    locks = world.tmp_root / "locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    (locks / f"{name}.json").write_text(json.dumps({"pid": pid, "start": time.time()}), encoding="utf-8", newline="\n")
+
+
+def _make_run_dir(world: World, name: str, sha: str) -> Path:
+    path = world.tmp_root / name
+    world.tmp_root.mkdir(parents=True, exist_ok=True)
+    _git(world.clone, "worktree", "add", "-q", "--detach", str(path), sha)
+    lw.make_dir_link(path / "worker" / ".venv", world.venv)
+    return path
+
+
+def test_a_sibling_branchs_live_worktree_is_not_swept_by_a_prefix_match(world):
+    sha = world.commit_on_branch("feat/1", {"b.txt": b"new\n"})
+    sibling = _make_run_dir(world, "feat-1-x-20200101000000", sha)  # slug of feat/1-x, prefix-matches feat-1
+    assert _land(world, "feat/1", sha) == lw.EXIT_OK
+    assert sibling.is_dir() and (sibling / "worker" / ".venv" / "marker.txt").is_file()
+
+
+def test_a_live_same_branch_run_is_not_swept_and_a_dead_one_is(world):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    live = _make_run_dir(world, "feat-1-x-20200101000000", sha)
+    _write_lock(world, live.name, os.getpid())
+    dead = _make_run_dir(world, "feat-1-x-20200102000000", sha)
+    _write_lock(world, dead.name, _dead_pid())
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    assert live.is_dir() and not dead.exists()
+    assert world.venv_intact()
+
+
+def test_an_unregistered_leftover_dir_does_not_block_and_its_junction_is_unlinked_not_followed(world):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    stale = world.tmp_root / "feat-1-x-20200101000000"
+    (stale / "sub").mkdir(parents=True)
+    (stale / "sub" / "f.txt").write_bytes(b"x")
+    lw.make_dir_link(stale / "worker" / ".venv", world.venv)
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    assert not stale.exists()
+    assert world.venv_intact()
+
+
+def test_remove_tree_no_follow_never_enters_a_junction(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "keep.txt").write_bytes(b"k")
+    tree = tmp_path / "tree"
+    (tree / "d").mkdir(parents=True)
+    ro = tree / "d" / "ro.txt"
+    ro.write_bytes(b"r")
+    os.chmod(ro, 0o444)
+    lw.make_dir_link(tree / "d" / "link", real)
+    lw.remove_tree_no_follow(tree)
+    assert not tree.exists()
+    assert (real / "keep.txt").is_file()
+
+
+def test_a_cleanup_failure_after_a_green_run_is_a_warning_and_exit_zero(world, monkeypatch, capsys):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    real_git = lw.git
+
+    def failing(cwd, *args, **kw):
+        if args[:2] == ("worktree", "remove"):
+            raise lw.LandError("remove blew up")
+        return real_git(cwd, *args, **kw)
+
+    monkeypatch.setattr(lw, "git", failing)
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    out = capsys.readouterr().out
+    leftover = world.premerge_calls[0][0]
+    assert "WARNING" in out and str(leftover) in out and "OK:" in out
+    assert "feat/1-x" in world.remote_branches()
+    assert world.venv_intact()
+
+
+@pytest.mark.parametrize("bad", ["main", "master", "HEAD", "refs/heads/x", "refs/tags/v1", "-x", ""])
+@pytest.mark.parametrize("which", ["branch", "land_branch"])
+def test_protected_or_malformed_branch_names_are_refused_before_any_work(world, which, bad):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    branch, land_branch = ("feat/1-x", bad) if which == "land_branch" else (bad, None)
+    assert _land(world, branch, sha, land_branch=land_branch) == lw.EXIT_REFUSED
+    assert world.remote_branches() == ["main"] and not world.tmp_root.exists() and not world.premerge_calls
+
+
+def test_a_merge_that_fails_without_conflicts_reports_its_real_stderr(world, monkeypatch, capsys):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    world.advance_main({"a.txt": b"two\n"})
+    real_git = lw.git
+
+    def spy(cwd, *args, **kw):
+        if "merge" in args and "--no-edit" in args:
+            return subprocess.CompletedProcess(args, 1, b"", b"boom: cannot merge")
+        return real_git(cwd, *args, **kw)
+
+    monkeypatch.setattr(lw, "git", spy)
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_REFUSED
+    out = capsys.readouterr().out
+    assert "merge failed: boom: cannot merge" in out and "conflict" not in out
+    assert world.remote_branches() == ["main"] and world.leftover_worktrees() == []
+
+
+def test_the_merge_commit_gets_an_identity_even_with_no_git_identity_configured(world, monkeypatch, tmp_path):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    world.advance_main({"a.txt": b"two\n"})
+    _git(world.clone, "config", "--unset", "user.name")
+    _git(world.clone, "config", "--unset", "user.email")
+    empty = tmp_path / "global.cfg"
+    empty.write_text("[user]\n\tuseConfigOnly = true\n", encoding="utf-8", newline="\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    assert _git(world.origin, "show", "feat/1-x:a.txt") == "two"
+
+
+def test_a_missing_gh_after_the_push_exits_4_and_names_the_pushed_branch(world, capsys):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    ctx = world.ctx()
+    ctx.gh = ["gh-that-does-not-exist-510"]
+    body = world.root / "body.md"
+    body.write_text("b\n", encoding="utf-8", newline="\n")
+    assert lw.land(ctx, "feat/1-x", sha, "t", body) == lw.EXIT_FAILED
+    assert "feat/1-x" in world.remote_branches()
+    assert "pushed" in capsys.readouterr().out and "feat/1-x" in "".join(ctx.log)
+    assert world.venv_intact() and world.leftover_worktrees() == []
+
+
+def test_an_unexpected_error_after_the_push_is_exit_4_not_1(world, capsys):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    ctx = world.ctx()
+    ctx.gh = 5  # not iterable: raises TypeError once the push is done
+    body = world.root / "body.md"
+    body.write_text("b\n", encoding="utf-8", newline="\n")
+    assert lw.land(ctx, "feat/1-x", sha, "t", body) == lw.EXIT_FAILED
+    assert "feat/1-x" in world.remote_branches()
+    assert "feat/1-x" in capsys.readouterr().out
+
+
+def test_make_dir_link_turns_an_os_error_into_a_land_error(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_bytes(b"x")
+    with pytest.raises(lw.LandError):
+        lw.make_dir_link(blocker / "x" / ".venv", tmp_path)
+
+
+def _commit_with_name(world: World, name: str, data: bytes) -> str:
+    _git(world.clone, "switch", "-q", "-c", "feat/odd", "origin/main")
+    blob_file = world.root / "blob.bin"
+    blob_file.write_bytes(data)
+    blob = _git(world.clone, "hash-object", "-w", str(blob_file))
+    _git(world.clone, "-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+    _git(world.clone, "commit", "-q", "-m", "odd name")
+    sha = _git(world.clone, "rev-parse", "HEAD")
+    _git(world.clone, "update-index", "--force-remove", "--", name)
+    _git(world.clone, "switch", "-q", "--detach", "origin/main")
+    return sha
+
+
+def test_a_file_name_with_space_quote_and_tab_is_read_exactly_and_scanned(world):
+    name = 'we ird"n\tame.txt'
+    sha = _commit_with_name(world, name, b"a\x0bb")
+    assert lw._changed_text_files(world.ctx(), sha) == {name: b"a\x0bb"}
+    assert _land(world, "feat/odd", sha) == lw.EXIT_REFUSED
+    assert world.remote_branches() == ["main"]
+
+
+def test_esc_is_allowed_because_logs_carry_colour_but_vt_and_ff_are_not():
+    assert lw.find_control_bytes({"log.txt": b"\x1b[31mred\x1b[0m\n"}) == []
+    assert lw.find_control_bytes({"a": b"\x0b", "b": b"\x0c"}) == ["a", "b"]
+
+
+def test_gh_is_taken_as_one_executable_path_even_with_spaces(world, monkeypatch):
+    seen = []
+    monkeypatch.setattr(lw, "land", lambda ctx, *a, **k: seen.append(ctx.gh) or 0)
+    body = world.root / "body.md"
+    body.write_text("b\n", encoding="utf-8", newline="\n")
+    gh = r"C:\Program Files\GitHub CLI\gh.exe"
+    argv = ["--branch", "feat/1-x", "--sha", "abc", "--title", "t", "--body-file", str(body), "--venv", str(world.venv), "--gh", gh]
+    assert lw.main(argv, repo=world.clone) == 0
+    assert seen == [[gh]]
+
+
+def test_worktree_remove_is_never_called_while_the_venv_link_is_still_present(world, monkeypatch):
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    removes: list[Path] = []
+    real_git = lw.git
+
+    def spy(cwd, *args, **kw):
+        if args[:2] == ("worktree", "remove"):
+            removes.append(Path(args[-1]))
+        return real_git(cwd, *args, **kw)
+
+    monkeypatch.setattr(lw, "git", spy)
+    monkeypatch.setattr(lw, "unlink_dir_link", lambda link: None)  # the unlink silently does nothing
+    _land(world, "feat/1-x", sha)
+    assert world.seen_in_premerge == [True]  # the link existed, so the guard below is not vacuous
+    assert removes == []
+    assert world.venv_intact()
