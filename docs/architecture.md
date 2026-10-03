@@ -148,7 +148,14 @@ deleted" (docs/cloud_design.md section 8).
 1. **Draft -> Validating**: the app validates every input locally (C# port of the
  worker's rules, `science_and_formats.md` section 4) before touching the network. A
  `Runs` row is inserted (`Phase = Validating`) **before any network call** - this is the
- write-ahead discipline in section 6.
+ write-ahead discipline in section 6. The local check is `InputFileValidator.Validate`
+   (`Core/Inputs/`, #479): it detects the format, reads every record, applies the run's
+   ambiguity policy, RNA flag and size caps (`InputLimits`, defaults equal to the worker's
+   10 Mnt whole-input cap and the manifest's 20 Mnt batch budget), and returns the FIRST
+   problem as an `InputProblemCode` plus a record index and base position, never an
+   exception. It is a pre-flight filter: a file it accepts can still be refused by the
+   worker (it does not parse GenBank feature tables); known gaps are listed in
+   `InputFileValidatorWorkerParityTests`.
 2. **Uploading**: inputs are copied to `%LOCALAPPDATA%\...\cache\inputs\<jobId>\` (so a
  later re-run works even if the original file moved) and uploaded to
  `jobs/<jobId>/input/`; `manifest.json` is written last, once every input is confirmed

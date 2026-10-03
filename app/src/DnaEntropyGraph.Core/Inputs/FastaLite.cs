@@ -7,7 +7,10 @@ public sealed class FastaReadException(string message) : Exception(message)
 }
 
 /// <summary>One raw (unvalidated) record from a FASTA file.</summary>
-public sealed record FastaRecordRaw(string Header, string Seq);
+/// <param name="Header">Text after '&gt;', verbatim.</param>
+/// <param name="Seq">Joined sequence lines, raw.</param>
+/// <param name="SourceIndex">1-based position among ALL header lines in the file, counting records skipped for having no sequence (0 when built by hand). Lets a problem name the record the user sees.</param>
+public sealed record FastaRecordRaw(string Header, string Seq, int SourceIndex = 0);
 
 /// <summary>Result of reading a FASTA file/text: every record plus any non-fatal notices.</summary>
 public sealed record FastaReadResult(IReadOnlyList<FastaRecordRaw> Records, IReadOnlyList<string> Notices);
@@ -43,7 +46,8 @@ public static class FastaLite
 
         string? header = null;
         List<string> lines = [];
-        foreach (var line in text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal).Split('\n'))
+        // Python's str.splitlines() boundaries (also \v \f \x1c-\x1e \x85 U+2028 U+2029), as the worker does.
+        foreach (var line in PythonText.SplitLines(text))
         {
             if (line.StartsWith('>'))
             {
@@ -51,12 +55,12 @@ public static class FastaLite
                 {
                     parsed.Add((header, lines));
                 }
-                header = line[1..].Trim();
+                header = PythonText.Trim(line[1..]);
                 lines = [];
             }
             else if (header is not null)
             {
-                lines.Add(line.Trim());
+                lines.Add(PythonText.Trim(line));
             }
         }
         if (header is not null)
@@ -81,7 +85,7 @@ public static class FastaLite
                 notices.Add($"Skipped FASTA record {idx + 1} ({headerDesc}): no sequence lines after its header.");
                 continue;
             }
-            records.Add(new FastaRecordRaw(recHeader, seq));
+            records.Add(new FastaRecordRaw(recHeader, seq, idx + 1));
         }
 
         if (records.Count == 0)
@@ -105,7 +109,7 @@ public static class FastaLite
             {
                 continue;
             }
-            var recId = r.Header.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries)[0];
+            var recId = PythonText.FirstWord(r.Header);
             seen[recId] = seen.GetValueOrDefault(recId) + 1;
         }
         var dupes = seen.Where(kv => kv.Value > 1).Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal).ToList();
