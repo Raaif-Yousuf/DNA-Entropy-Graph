@@ -160,6 +160,10 @@ class DirectionResult:
     stride: int
     seam: int | None  # position K, when L >= 2K makes the clean forward/reverse split apply
     reduced_context_count: int  # positions where NEITHER direction reached K (only L < 2K)
+    # issue #79: WHERE those positions are, as a 0-based half-open `(start, end)` span, or
+    # `None` when there are none. Always one contiguous span (`[L - fwd K, rev K)`): a
+    # position lacks K bases before it iff `i < K` and lacks K after it iff `i >= L - K`.
+    reduced_context_range: tuple[int, int] | None = None
     forward_values: np.ndarray | None = None  # populated for BOTH_SEPARATE
     reverse_values: np.ndarray | None = None  # populated for BOTH_SEPARATE
     notices: list[str] = field(default_factory=list)
@@ -211,7 +215,7 @@ def _combine(
     rev_context_length: int,
     *,
     averaged: bool,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int, tuple[int, int] | None]:
     """Section 5.6's combination rule.
 
     Base ``i`` takes forward once it has ``>= K`` bases before it, else reverse once it
@@ -259,7 +263,10 @@ def _combine(
         values[idx[fwd_wins]] = fwd_entropy[idx[fwd_wins]]
         values[idx[~fwd_wins]] = rev_entropy[idx[~fwd_wins]]
 
-    return values, reduced
+    reduced_range = None
+    if reduced:
+        reduced_range = (int(idx[0]), int(idx[-1]) + 1)
+    return values, reduced, reduced_range
 
 
 def analyze_direction(
@@ -324,6 +331,7 @@ def analyze_direction(
     length = len(seq)
     seam: int | None = None
     reduced = 0
+    reduced_range: tuple[int, int] | None = None
 
     if direction is Direction.FORWARD_ONLY:
         values = fwd_entropy
@@ -341,7 +349,7 @@ def analyze_direction(
         # this scenario).
         fwd_k_used = fwd.window - fwd.stride
         rev_k_used = rev.window - rev.stride
-        values, reduced = _combine(
+        values, reduced, reduced_range = _combine(
             fwd_entropy,
             fwd_context,
             rev_entropy,
@@ -354,7 +362,7 @@ def analyze_direction(
         # `reduced` count as above, deliberately discarded here rather than reassigned):
         # surprisal is a second metric riding the SAME per-position forward/reverse
         # selection entropy already used, not a second, independent combination decision.
-        surprisal_values, _ = _combine(
+        surprisal_values, _, _ = _combine(
             fwd_surprisal,
             fwd_context,
             rev_surprisal,
@@ -393,6 +401,7 @@ def analyze_direction(
         stride=stride,
         seam=seam,
         reduced_context_count=reduced,
+        reduced_context_range=reduced_range,
         ceiling=ceiling,
         forward_values=fwd_entropy if direction is Direction.BOTH_SEPARATE else None,
         reverse_values=rev_entropy if direction is Direction.BOTH_SEPARATE else None,
