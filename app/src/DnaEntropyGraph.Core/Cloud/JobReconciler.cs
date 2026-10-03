@@ -164,7 +164,8 @@ public sealed class JobReconciler
         => await (await BeginReconcileAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
 
     /// <summary>
-    /// The same pass as <see cref="ReconcileAsync"/>, split at the point that matters to a repeating caller. The returned (outer) task ends when the
+    /// The same pass as <see cref="ReconcileAsync"/>, split at the point that matters to a repeating caller. A failure of the lifecycle step is logged,
+    /// not thrown, so the reattached runs are always returned. The returned (outer) task ends when the
     /// lifecycle enforcement and the idle sweep have run and every non-terminal run has been judged (looked at in the cloud, so <see cref="HasDeferred"/>
     /// is settled) and handed to its own driver in <see cref="ActiveRuns"/>;
     /// its result is the inner task, which ends only when every reattached run has ENDED (minutes or hours). A caller that runs passes one at a
@@ -173,7 +174,18 @@ public sealed class JobReconciler
     public async Task<Task> BeginReconcileAsync(CancellationToken cancellationToken)
     {
         var started = StartReattachAsync(cancellationToken);
-        await EnforceLifecycleAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await EnforceLifecycleAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            // The reattach is already under way (its runs register as drivers whatever happens here), so the caller must still be handed
+            // the task for them: a lifecycle failure that threw instead would orphan them, unwaited and unreported (issue #575). The class
+            // of the error is the only trace (never its message, which could carry a path); the next launch or reconnect looks again.
+            _log.Warning("reconciler", null, ex.GetType().Name);
+        }
+
         var (judged, outcomes) = await started.ConfigureAwait(false);
         await judged.ConfigureAwait(false);
         return outcomes;

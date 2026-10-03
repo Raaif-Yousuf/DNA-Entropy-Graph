@@ -32,7 +32,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
     private readonly TimeSpan _probeMaxDelay;
     private readonly object _gate = new();
     private Task _passes = Task.CompletedTask;
-    private Task _background = Task.CompletedTask;
+    private readonly List<Task> _runGroups = [];
     private bool _running;
     private bool _again;
     private bool _probing;
@@ -220,9 +220,39 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+        if (watched.IsCompleted)
+        {
+            return;
+        }
+
         lock (_gate)
         {
-            _background = Task.WhenAll(_background, watched);
+            _runGroups.Add(watched);
+        }
+
+        // Dropped as soon as its runs end, so a laptop that reconnects all day while one long run goes on holds one task, not a chain of them (#575).
+        _ = watched.ContinueWith(
+            done =>
+            {
+                lock (_gate)
+                {
+                    _runGroups.Remove(done);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>How many passes' reattached-run groups are still going (for tests).</summary>
+    internal int TrackedRunGroups
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _runGroups.Count;
+            }
         }
     }
 
@@ -255,13 +285,13 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
         }
 
         await passes.ConfigureAwait(false);
-        Task background;
+        Task[] groups;
         lock (_gate)
         {
-            background = _background;
+            groups = [.. _runGroups];
         }
 
-        await background.ConfigureAwait(false);
+        await Task.WhenAll(groups).ConfigureAwait(false);
     }
 
     /// <summary>Stops the probe. Passes already running finish.</summary>

@@ -596,6 +596,11 @@ it ends; a resumed run is judged as it is handed to its driver and does not hold
 (b) feeding reconciler failures into the breaker, which changes what `bypassBreaker` means for every caller. Cost while offline: one pass (a few failing lookups, no retries beyond
 the pipeline's own) per backoff step, never while nothing is deferred. THEORY (unverified): the 30 s first delay and 5 minute cap are reasonable for a laptop waking from sleep; nothing measured them.
 
+**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logspp.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
+because it is called from inside the reconciler's catch blocks. A lifecycle step that throws no longer orphans the reattach: `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
+`WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) holds now: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
+(#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
+
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a

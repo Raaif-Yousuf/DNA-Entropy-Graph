@@ -36,4 +36,33 @@ public class FileDiagnosticsLogTests
 
         Should.NotThrow(() => new FileDiagnosticsLog(blocker).Warning("reconciler", "job-1", "X"));
     }
+
+    [Fact]
+    public void A_log_whose_root_makes_the_framework_throw_something_other_than_an_IO_error_does_not_throw()
+    {
+        // A null character in the path is an ArgumentException from Directory.CreateDirectory, not an IOException: the log is called from
+        // inside the reconciler's own catch blocks, so whatever it throws would end the whole lifecycle pass (issue #575 item 2).
+        var log = new FileDiagnosticsLog("C:\\deg-log\0bad");
+
+        Should.NotThrow(() => log.Warning("reconciler", "job-1", "X"));
+    }
+
+    [Fact]
+    public void The_log_never_grows_past_its_cap_plus_one_line_and_keeps_the_newest_lines_with_one_rotated_file()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "deg-log-cap-" + Guid.NewGuid().ToString("N"));
+        var log = new FileDiagnosticsLog(root, new FixedClock(new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero)), maxBytes: 400);
+        var path = Path.Combine(root, "logs", "app.log");
+
+        for (var i = 0; i < 100; i++)
+        {
+            log.Warning("reconciler", "job-" + i, "InvalidOperationException");
+        }
+
+        new FileInfo(path).Length.ShouldBeLessThanOrEqualTo(400 + 120, "one appended line past the cap at most");
+        File.Exists(path + ".1").ShouldBeTrue("the previous file is kept once, not deleted");
+        new FileInfo(path + ".1").Length.ShouldBeLessThanOrEqualTo(400 + 120);
+        Directory.GetFiles(Path.Combine(root, "logs")).Length.ShouldBe(2, "never more than the log and one rotated copy");
+        File.ReadAllText(path).ShouldContain("job=job-99 ", Case.Sensitive, "the newest line is in the live file");
+    }
 }

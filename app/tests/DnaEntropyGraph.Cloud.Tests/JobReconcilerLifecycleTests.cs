@@ -670,6 +670,105 @@ public class JobReconcilerLifecycleTests
         await observer.WhenIdleAsync();
     }
 
+    // ---- 4a. issue #575: a lifecycle pass that throws must not orphan the reattached runs ----
+
+    private sealed class ThrowingSettings : ISettingsStore
+    {
+        public string? GetString(string key) => throw new InvalidOperationException("settings unreadable");
+
+        public void SetString(string key, string value) => throw new InvalidOperationException("settings unreadable");
+    }
+
+    private static JobReconciler ReconcilerWhoseLifecycleThrows(Rig rig) => new(
+        rig.Env.Runner,
+        rig.Gcp,
+        rig.Gcp,
+        rig.Env.Repo,
+        rig.Env.Inputs,
+        rig.Env.Images,
+        rig.Env.Active,
+        new ThrowingSettings(),
+        timeProvider: rig.Clock,
+        log: rig.Env.Log);
+
+    [Fact]
+    public async Task When_the_lifecycle_pass_throws_the_reattached_runs_are_still_returned_and_the_failure_is_logged()
+    {
+        var rig = new Rig();
+        rig.Env.ResultTimeout = TimeSpan.FromMinutes(5);
+        await rig.Env.SeedAsync("job-orphan", JobPhase.Running, vm: true);
+        var reconciler = ReconcilerWhoseLifecycleThrows(rig);
+
+        var reattached = await reconciler.BeginReconcileAsync(CancellationToken.None);
+
+        reattached.IsCompleted.ShouldBeFalse("the run the pass reattached is still going, and the caller holds the task for it");
+        rig.Env.Active.IsActive("job-orphan").ShouldBeTrue("handed to its driver before the pass returned");
+        rig.Env.Log.Entries.ShouldContain(e => e.Source == "reconciler" && e.ErrorClass == nameof(InvalidOperationException));
+        await rig.Env.Active.CancelAsync("job-orphan", () => Task.CompletedTask);
+        await reattached.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task WhenIdleAsync_still_waits_for_a_run_reattached_by_a_pass_whose_lifecycle_step_threw()
+    {
+        var rig = new Rig();
+        rig.Env.ResultTimeout = TimeSpan.FromMinutes(5);
+        await rig.Env.SeedAsync("job-orphan2", JobPhase.Running, vm: true);
+        var reconciler = ReconcilerWhoseLifecycleThrows(rig);
+        var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
+
+        observer.OnConnectivityChanged(offline: false);
+        await WaitUntilAsync(() => Task.FromResult(rig.Env.Log.Entries.Any(e => e.Source == "reconciler") && rig.Env.Active.IsActive("job-orphan2")));
+        var idle = observer.WhenIdleAsync();
+
+        idle.IsCompleted.ShouldBeFalse("a run the pass reattached is still going");
+        await rig.Env.Active.CancelAsync("job-orphan2", () => Task.CompletedTask);
+        await idle.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task The_pass_hands_every_reattached_run_to_its_driver_before_it_returns()
+    {
+        // Issue #575 item 4: two passes' reattach listings must not overlap, so a pass ends only once its runs are registered.
+        var rig = new Rig();
+        rig.Env.ResultTimeout = TimeSpan.FromMinutes(5);
+        await rig.Env.SeedAsync("job-h1", JobPhase.Running, vm: true);
+        await rig.Env.SeedAsync("job-h2", JobPhase.Running, vm: true);
+
+        var reattached = await rig.Reconciler().BeginReconcileAsync(CancellationToken.None);
+
+        rig.Env.Active.IsActive("job-h1").ShouldBeTrue();
+        rig.Env.Active.IsActive("job-h2").ShouldBeTrue();
+        await rig.Env.Active.CancelAsync("job-h1", () => Task.CompletedTask);
+        await rig.Env.Active.CancelAsync("job-h2", () => Task.CompletedTask);
+        await reattached.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task The_observer_does_not_keep_a_nested_wait_for_every_reconnect_pass_whose_runs_already_ended()
+    {
+        // Issue #575 item 5: each pass's reattached-runs task is dropped from what WhenIdleAsync waits on as soon as it ends.
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var passes = 0;
+        var observer = new ReconcileOnReconnect(new NullObserver(), _ =>
+        {
+            var n = Interlocked.Increment(ref passes);
+            return Task.FromResult<Task>(n == 3 ? held.Task : Task.CompletedTask);
+        });
+
+        for (var i = 1; i <= 5; i++)
+        {
+            observer.OnConnectivityChanged(offline: false);
+            await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref passes) == i));
+            await Task.Yield();
+        }
+
+        // Pass 5 may still be finishing; settle on the passes (not the held run).
+        await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 1));
+        held.SetResult();
+        await observer.WhenIdleAsync();
+        await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 0));
+    }
     private static async Task WaitUntilAsync(Func<Task<bool>> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);
