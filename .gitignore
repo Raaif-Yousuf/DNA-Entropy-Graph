@@ -1,6 +1,8 @@
 # .NET
 app/**/bin/
 app/**/obj/
+# scripts/heavy.py's per-lane dotnet --artifacts-path (#487); inside the repo so tests that walk up to app/DnaEntropyGraph.sln still find it
+app/.artifacts/
 app/**/*.user
 .vs/
 *.suo

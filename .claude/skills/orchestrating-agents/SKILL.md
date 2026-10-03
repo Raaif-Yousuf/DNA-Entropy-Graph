@@ -60,6 +60,7 @@ Every brief needs, at minimum:
 | **"Never a recursive delete inside the repo"** | Denied at the settings/hook level (see `.claude/settings.json`) but state it anyway, so the agent has the right instinct and not just the block |
 | **The exact paths it owns, and the paths it must not touch** | The single check the shared-checkout model rests on. `scripts/agent_wave.ps1 -Start` refuses a wave whose assignments overlap |
 | **Its own pytest `--basetemp`** | MEASURED 2026-09-19: concurrent runs race in the default Windows temp directory, and the teardown `PermissionError` reads as a real test failure |
+| **"Route every `dotnet build`/`dotnet test` and every multi-file `pytest` through `worker\.venv\Scripts\python.exe scripts\heavy.py -- <cmd...>`"** | MEASURED 2026-10-02: several concurrent full suites froze the 32 GB laptop, and overlapping `dotnet build`s fight over `obj/`/`bin/`. `heavy.py` takes one of N machine-wide slots (limit set once with `heavy.py --set-slots N`, default 2) and adds `--artifacts-path app\.artifacts\<lane>` (`--lane <name>` is required for dotnet; run `dotnet test` from `app\`); a dead agent frees its slot (#487) |
 
 **Name the skills. Do not paraphrase them.** Every brief that touches a bug,
 a fix, or anything reported as done must tell the agent, in these words, to

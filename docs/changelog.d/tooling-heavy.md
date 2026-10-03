@@ -1,0 +1,1 @@
+- tooling: `scripts/heavy.py` takes one of N machine-wide slots (limit via `--set-slots`, default 2) before a heavy command, names the holders while waiting, and for `dotnet build|test|run|pack|publish` requires `--lane` and injects `--artifacts-path app/.artifacts/<lane>`; documented in dev_commands.md and the orchestrating-agents brief template (#487)
