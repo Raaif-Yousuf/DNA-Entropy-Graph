@@ -4,11 +4,16 @@
 
 On the **New run** page, either:
 
-- Drag a file onto the window (a GenBank file, a FASTA file, or a plain text file), or
-- Click **Add files...**, or
-- Click **Paste sequence...** and type or paste letters directly.
+- Drag files, or a folder of them, onto the drop area (GenBank, FASTA, or plain text; from a
+  folder the app takes the sequence files directly inside it, not those in sub-folders), or
+- Click **Add files** (or press Ctrl+O), or
+- Open **Paste a sequence**, type or paste letters, a FASTA record, or the path of a file, and
+  click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
+  letters are saved in the app's own folder, never next to your files.
 
-You can add more than one file at once; the app runs them as a batch and gives you
+You can add more than one file at once. For now each press of **Run** runs the file you
+have selected in the list (running several files together as one batch is not built yet),
+and the batch limits below describe where that work is heading. When it arrives it gives you
 results for each, up to a limit on how many files or how many total letters one batch can
 hold (50 files or 20 million letters, by default). That ceiling is there for cost, not
 policy: a batch large enough to matter for your bill should be caught before you press

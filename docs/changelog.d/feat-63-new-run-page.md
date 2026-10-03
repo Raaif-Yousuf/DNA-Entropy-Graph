@@ -1,0 +1,1 @@
+- The New run page: a drop area for files and folders, Add files (Ctrl+O), a Paste a sequence panel with a live base counter, one pill per file, the Treat as RNA button and the run name box; the wiring guard no longer reports x:Bind inside a typed DataTemplate (#63).

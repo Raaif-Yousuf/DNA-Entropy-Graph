@@ -174,6 +174,31 @@ If a future Windows App SDK bump fixes either of these upstream, this section (a
 workaround it documents) should be removed in the same commit as the version bump, not
 left as unnecessary caution.
 
+## 9. The New run page (issue #63)
+
+`Views/NewRunPage.xaml` binds `NewRunViewModel` only; its code-behind forwards the two drag events to
+`Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
+`*.xaml.cs`) and the dropped paths to `AddPathsCommand`.
+
+- **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
+  The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
+  `WindowHandleProvider` singleton.
+- **Paste a sequence** is an inline `Expander`, not a `ContentDialog`: a dialog needs a `XamlRoot` and a
+  click handler, both of which would put logic in code-behind. The live counter is
+  `PastedSequenceCounter` (letters only; header lines, digits and spaces left out).
+- **Pills** are `InputPillItem`s in a `ListView` whose `DataTemplate` has an `x:DataType`. Kind, records,
+  bases and genes are `NewRunPill*` resources; the validator's notices are shown as it wrote them (they
+  carry no sequence text or file names); a problem is the existing `RunError_input_*` copy plus
+  "(record N, base M)". A U is shown as `NewRunPillRnaNotice` with a **Treat as RNA** button
+  (`TreatAsRnaCommand`), which re-checks every pill with the RNA flag.
+- `scripts/check_app_wiring.py` does not resolve `{x:Bind}` inside a typed `DataTemplate` against the page
+  ViewModel (the XAML compiler checks it against the `x:DataType`).
+- Run name: `RunNamer` expands `{file} {date:...} {time:...} {model} {n}`, sanitises for Windows and
+  appends `_2` on a collision. The page shows the preview; the template is saved in settings
+  (`NameTemplate`) and sent in `RunOptions.NameTemplate`.
+- **Not wired yet** (MEASURED 2026-10-03: `CloudJobRunner.cs:1286` names the folder from the input file
+  name, not `NameTemplate`): the result folder does not use the template, and `RunOptions.InputPath` is a
+  single file, so **Run** runs the selected pill.
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text

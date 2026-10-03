@@ -212,6 +212,10 @@ _RESW_DATA = re.compile(r'<data\s+name\s*=\s*"([^"]+)"')
 # first positional token or an explicit Path=.
 _MARKUP = re.compile(r"\{\s*(x:Bind|Binding)\s*([^}]*)\}")
 
+# A DataTemplate with an x:DataType: its {x:Bind} paths are members of that item type, not of the page's
+# ViewModel, and the XAML compiler already checks them against the type (a wrong name is a build error).
+_TYPED_TEMPLATE = re.compile(r"<DataTemplate\b[^>]*\bx:DataType\s*=[^>]*>.*?</DataTemplate>", re.DOTALL)
+
 # Types that are constructor parameters but are never DI registrations: a
 # CancellationToken, a primitive, a string. Listing them beats a heuristic that
 # guesses at "looks like an interface".
@@ -719,7 +723,10 @@ def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
 
     for path, text in scan.xaml_files.items():
         paths_used: set[str] = set()
+        typed_spans = [m.span() for m in _TYPED_TEMPLATE.finditer(text)]
         for match in _MARKUP.finditer(text):
+            if match.group(1) == "x:Bind" and any(start <= match.start() < end for start, end in typed_spans):
+                continue
             body = match.group(2).strip()
             if not body:
                 continue
@@ -1142,6 +1149,21 @@ def self_test() -> int:
             "an allowlist entry that no longer fires fails the run",
             exit_code == 1,
             f"exit={exit_code}",
+        )
+
+        # An x:Bind inside a DataTemplate with an x:DataType belongs to the item type (the XAML compiler checks it),
+        # so it is not a dangling binding on the page ViewModel; a plain {Binding} in the same place still is.
+        typed_root = Path(tempfile.mkdtemp(prefix="wiring-typed-"))
+        _write_wired(typed_root)
+        _patch(
+            typed_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="Item"><TextBlock Text="{x:Bind ItemOnlyMember}" /></DataTemplate>',
+        )
+        check(
+            "an x:Bind inside a typed DataTemplate is not a dangling binding on the page ViewModel",
+            "DANGLING-BINDING" not in _codes(typed_root),
         )
 
     print()

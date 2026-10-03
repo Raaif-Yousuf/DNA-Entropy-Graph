@@ -5,8 +5,8 @@ namespace DnaEntropyGraph.App.Startup;
 
 /// <summary>
 /// Every page key -> Page type mapping <see cref="NavigationService"/>
-/// needs. Only "RunProgress" is registered today (issue #66): "New run",
-/// "Runs", "Cloud" and "Settings" are sibling issues' own Views (#63, #101,
+/// needs. "NewRun" (#63), "RunProgress" (#66) and the viewer (#72/#73) are registered:
+/// "Runs", "Cloud" and "Settings" are sibling issues' own Views (#101,
 /// #105, #104 per <c>scripts/app_wiring_allowlist.json</c>) and are not
 /// registered yet; until each lands, its NavigationView item resolves to the
 /// fallback <see cref="PlaceholderPage"/> (issue #490), never an empty frame.
@@ -15,6 +15,9 @@ public static class NavigationRoutes
 {
     public static void RegisterAll(NavigationService navigationService)
     {
+        // Issue #63: the New run page, the first item of the navigation menu (ShellViewModel.InitialPageKeyValue).
+        navigationService.RegisterPage(DnaEntropyGraph.Presentation.ViewModels.ShellViewModel.InitialPageKeyValue, typeof(NewRunPage));
+
         navigationService.RegisterPage("RunProgress", typeof(RunProgressPage));
 
         // Issues #72/#73: the igv.js viewer. Navigate with the run's output folder (a string) as the parameter.

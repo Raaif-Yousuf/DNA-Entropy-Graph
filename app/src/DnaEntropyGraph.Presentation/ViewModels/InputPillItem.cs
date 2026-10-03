@@ -48,8 +48,8 @@ public sealed partial class InputPillItem : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsValid))]
     private bool _hasError;
 
-    [ObservableProperty]
-    private bool _needsRnaChoice;
+    /// <summary>True when the only thing wrong is a U: the page offers Treat as RNA instead of an error.</summary>
+    public bool NeedsRnaChoice { get; private set; }
 
     public bool HasNotices => NoticesText.Length > 0;
 
