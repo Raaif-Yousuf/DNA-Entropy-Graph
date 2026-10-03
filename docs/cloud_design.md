@@ -787,6 +787,27 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   A 403 on create stays `PERMISSION_DENIED` (kind `permission`). A 429 with no quota marker is a rate limit and is
   retried.
 - **Not proven without a real account:** `docs/ToTest.md`.
+### Billing check and link (issue #51, wizard step 4)
+
+`IBillingGateway`: `GetBillingStatusAsync`, `ListOpenBillingAccountsAsync`, `LinkProjectAsync`; `BillingSetup` (Core) is the policy over it.
+
+- **Requests.** `GET /v1/projects/{id}/billingInfo`; `GET /v1/billingAccounts?filter=open=true` (paged; a closed account is
+  also dropped client-side); `PUT /v1/projects/{id}/billingInfo` with `{"billingAccountName": "billingAccounts/..."}`.
+  Google omits `billingEnabled` when it is false, so an absent value reads as off. Billing is "enabled" only when an
+  account is linked and `billingEnabled` is true.
+- **Policy.** On: nothing is linked. Off with one open account: linked for the user, then the status is read back
+  (a link Google accepted that did not turn billing on is `NeedsAccount`, not success). Several: `ChooseAccount`,
+  and `LinkAsync` links the one the user picked. None: `NeedsAccount` with `BillingLinks.ForProject(projectId)`, the
+  console page for that project; calling `EnsureAsync` again after the user adds a payment method is the re-check.
+  The wizard action for the code `NO_BILLING` is that link (`SetupAction_LinkBilling`).
+- **No permission.** A 403 on the link is `BILLING_NO_PERMISSION` (kind `permission`), decided on the status, because the
+  classifier reads the word "billing" in a 403 message as a billing-off error. The action is a copyable request:
+  `SetupBillingRequestText` (with `{project}` and `{account}`) filled by `BillingRequestText.Fill`.
+- **Not here yet.** The wizard page (#99) and the health row that must go green on its own after a link: nothing in
+  the shipped UI calls this until then. `ResilientProjectSetupGateway.IsBillingEnabledAsync` (the preflight step) is
+  still backed by the fake; the composite real `IProjectSetupGateway` that delegates it to `GetBillingStatusAsync`
+  lands with #52.
+- **Proven only by a real account:** `docs/ToTest.md`.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

@@ -378,5 +378,21 @@
   <data name="SetupAction_CopyMessageForIt" xml:space="preserve">
     <value>Copy message for IT</value>
   </data>
+  <data name="SetupError_NO_BILLING" xml:space="preserve">
+    <value>This project has no billing account, so Google will not start any computer. Choose Link billing to open Google's billing page and add a payment method.</value>
+  </data>
+  <data name="SetupError_BILLING_NO_PERMISSION" xml:space="preserve">
+    <value>You can use this billing account but you are not allowed to link projects to it. Choose Copy request for the billing admin and send it to the person who manages billing.</value>
+  </data>
+  <data name="SetupAction_LinkBilling" xml:space="preserve">
+    <value>Link billing</value>
+  </data>
+  <data name="SetupAction_CopyBillingRequest" xml:space="preserve">
+    <value>Copy request for the billing admin</value>
+  </data>
+  <data name="SetupBillingRequestText" xml:space="preserve">
+    <value>Hello, I use DNA Entropy Graph, which runs analyses on a Google Cloud project. Please link the project {project} to the billing account {account}, or give me the Billing Account User role on it. Thank you.</value>
+  </data>
 </root>
+
 

@@ -62,4 +62,14 @@ public class SetupErrorResourceTests
             triage.ShouldContain($"\"{code}\"", customMessage: $"scripts/triage_diagnostics.py KNOWN_CLOUD_ERROR_CODES lacks {code}");
         }
     }
+
+    [Fact]
+    public void The_billing_request_text_template_exists_and_carries_both_placeholders()
+    {
+        var text = ReswValues()["SetupBillingRequestText"];
+
+        text.ShouldContain("{project}");
+        text.ShouldContain("{account}");
+        text.ShouldNotContain("\u2014");
+    }
 }

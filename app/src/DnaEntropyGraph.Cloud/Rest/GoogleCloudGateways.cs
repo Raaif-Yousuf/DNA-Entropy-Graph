@@ -1,10 +1,11 @@
 using DnaEntropyGraph.Core.Cloud;
+using Google.Apis.Cloudbilling.v1;
 using Google.Apis.CloudResourceManager.v3;
 
 namespace DnaEntropyGraph.Cloud.Rest;
 
 /// <summary>The real, Google-backed gateways, each already wrapped in the resilience pipeline.</summary>
-public sealed record GoogleCloudGatewaySet(IProjectCatalogGateway ProjectCatalog);
+public sealed record GoogleCloudGatewaySet(IProjectCatalogGateway ProjectCatalog, IBillingGateway Billing);
 
 /// <summary>
 /// The one place the real gateways are built, and so the one place production switches from <see cref="FakeGcp"/> to
@@ -22,7 +23,9 @@ public static class GoogleCloudGateways
         options ??= new GoogleCloudOptions();
 
         var resourceManager = new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options));
+        var billing = new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options));
         return new GoogleCloudGatewaySet(
-            new ResilientProjectCatalogGateway(new GoogleProjectCatalogGateway(resourceManager, options), pipeline));
+            new ResilientProjectCatalogGateway(new GoogleProjectCatalogGateway(resourceManager, options), pipeline),
+            new ResilientBillingGateway(new GoogleBillingGateway(billing), pipeline));
     }
 }
