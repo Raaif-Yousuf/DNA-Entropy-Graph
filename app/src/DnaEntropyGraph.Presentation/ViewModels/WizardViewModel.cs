@@ -52,6 +52,17 @@ public sealed partial class WizardViewModel : ObservableObject
         _navigator = navigator;
         _isSignedIn = gcpAccount.IsSignedIn;
         _selectedProjectId = gcpAccount.SelectedProjectId;
+
+        // A sign-in, a switch or a sign-out changes whose project this is; the event is not guaranteed to be on the UI thread.
+        // Like ShellViewModel, this lives as long as the account service, so there is nothing to unsubscribe.
+        gcpAccount.AccountChanged += (_, _) => OnUiThread(RefreshAccountState);
+    }
+
+    private void RefreshAccountState()
+    {
+        SelectedProjectId = _gcpAccount.SelectedProjectId;
+        ProjectErrorText = string.Empty;
+        ProjectActionText = string.Empty;
     }
 
     /// <summary>Stores the project the user picked (or just created) on the current account (issue #520).</summary>
@@ -104,6 +115,7 @@ public sealed partial class WizardViewModel : ObservableObject
             SignInErrorText = string.Empty;
             SignInActionText = string.Empty;
             IsSignedIn = _gcpAccount.IsSignedIn;
+            SelectedProjectId = _gcpAccount.SelectedProjectId;
             if (IsSignedIn)
             {
                 _navigator.NavigateTo("Wizard/Project");

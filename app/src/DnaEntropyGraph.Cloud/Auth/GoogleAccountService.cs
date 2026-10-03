@@ -176,7 +176,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         }
         catch (TokenStorageException ex)
         {
-            throw StorageFailure(ex);
+            // Not StorageFailure: its code says "your sign-in could not be saved" and offers Sign in again, wrong for a project choice.
+            throw new AccountAuthException(AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
         }
         finally
         {

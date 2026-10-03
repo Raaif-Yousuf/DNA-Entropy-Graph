@@ -123,6 +123,16 @@ public class ProjectSelectionTests
     }
 
     [Fact]
+    public async Task An_invalid_id_is_refused_as_invalid_even_with_nobody_signed_in()
+    {
+        using var harness = new AuthHarness();
+
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => harness.NewService().SelectProjectAsync("", CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.ProjectInvalid);
+    }
+
+    [Fact]
     public async Task Choosing_a_project_with_nobody_signed_in_says_sign_in()
     {
         using var harness = new AuthHarness();
@@ -147,7 +157,7 @@ public class ProjectSelectionTests
     }
 
     [Fact]
-    public async Task A_folder_that_cannot_be_written_is_SIGNIN_STORAGE_and_the_choice_is_not_kept()
+    public async Task A_folder_that_cannot_be_written_is_PROJECT_SAVE_FAILED_and_the_choice_is_not_kept()
     {
         using var harness = new AuthHarness();
         var service = await harness.SignedInAsync("1001", "first@example.test");
@@ -157,7 +167,7 @@ public class ProjectSelectionTests
 
         var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SelectProjectAsync(Project, CancellationToken.None));
 
-        failure.Code.ShouldBe(AuthErrorCodes.StorageFailed);
+        failure.Code.ShouldBe(AuthErrorCodes.ProjectSaveFailed);
         service.SelectedProjectId.ShouldBeNull();
     }
 }

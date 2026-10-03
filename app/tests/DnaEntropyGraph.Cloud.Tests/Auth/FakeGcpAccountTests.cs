@@ -39,6 +39,7 @@ public class FakeGcpAccountTests
     public async Task SelectProjectAsync_sets_the_project_validates_the_id_and_needs_a_signed_in_account()
     {
         var gcp = new FakeGcp();
+        (await Should.ThrowAsync<AccountAuthException>(() => gcp.SelectProjectAsync("", CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.ProjectInvalid, "the id is checked first, as the real service does");
         (await Should.ThrowAsync<AccountAuthException>(() => gcp.SelectProjectAsync("my-project-1", CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.SigninExpired);
 
         await gcp.SignInAsync(CancellationToken.None);

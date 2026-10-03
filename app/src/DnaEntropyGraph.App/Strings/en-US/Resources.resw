@@ -831,6 +831,9 @@
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
   </data>
+  <data name="AuthError_PROJECT_SAVE_FAILED" xml:space="preserve">
+    <value>The app could not save your project choice in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Try again.</value>
+  </data>
   <data name="SettingsPageTitle.Text" xml:space="preserve">
     <value>Settings</value>
   </data>
