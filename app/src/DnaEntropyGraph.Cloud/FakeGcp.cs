@@ -121,6 +121,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
     private int? _allRegionsGpuCap;
+    private CloudErrorKind? _quotaReadFailure;
     private const int DefaultRegionalQuota = 1;
 
     // --- Preemption (a running VM discovered TERMINATED after a deadline) ---
@@ -679,6 +680,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public FakeGcp WithAllRegionsGpuCap(int cap)
     {
         _allRegionsGpuCap = cap;
+        return this;
+    }
+
+    /// <summary>Makes <see cref="ReadQuotaAsync"/> report a failed read of the given kind (UNKNOWN quota, never zero), as a 403 or an outage would.</summary>
+    public FakeGcp WithQuotaReadFailing(CloudErrorKind kind)
+    {
+        _quotaReadFailure = kind;
         return this;
     }
 
@@ -1404,6 +1412,31 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // project-wide cap is a ceiling under every region's own number.
         var effective = _allRegionsGpuCap.HasValue ? Math.Min(regional, _allRegionsGpuCap.Value) : regional;
         return Task.FromResult(effective);
+    }
+
+    public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        if (_quotaReadFailure is { } kind)
+        {
+            return Task.FromResult(QuotaReadResult.Failed(new QuotaReadFailure("regions.list", new CloudError("QUOTA_READ_FAILED", null, "The quota could not be read."), kind)));
+        }
+
+        // Only the regions a test configured appear; the always-succeeds default of 1 for an unconfigured region has no table row.
+        var regions = new Dictionary<string, List<QuotaMetric>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ((region, accelerator), available) in _regionalQuota)
+        {
+            if (!regions.TryGetValue(region, out var metrics))
+            {
+                regions[region] = metrics = [];
+            }
+
+            metrics.Add(new QuotaMetric(QuotaMetrics.ForAccelerator(accelerator) ?? accelerator.ToUpperInvariant(), available, 0));
+        }
+
+        // No cap configured is a project that never hits one: a ceiling far above any regional number.
+        var table = regions.ToDictionary(r => r.Key, r => (IReadOnlyList<QuotaMetric>)r.Value, StringComparer.OrdinalIgnoreCase);
+        return Task.FromResult(new QuotaReadResult(table, new QuotaMetric(QuotaMetrics.GpusAllRegions, _allRegionsGpuCap ?? 1000, 0), []));
     }
 
     // ----------------------------------------------------------------
