@@ -38,5 +38,8 @@ public partial class App : Application
         Startup.NavigationRoutes.RegisterAll(navigationService);
         window.Activate();
         _window = window;
+
+        // Issue #59: reattach runs a killed app left behind. Not awaited: launch never waits on a run.
+        _ = Startup.AppStartup.BeginAsync(Services);
     }
 }

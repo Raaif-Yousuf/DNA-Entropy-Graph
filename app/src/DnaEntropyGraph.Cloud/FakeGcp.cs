@@ -884,6 +884,12 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         }
 
         ThrowIfScriptedTransient();
+        if (_notConnected)
+        {
+            // Nothing can be listed without a connection (issue #59: the reconciler must see this as "no answer", not as "no VM").
+            throw Build(CloudErrorKind.Other, NotConnectedErrorCode, null, "No Google Cloud connection is built into this version.");
+        }
+
         if (_findFailuresRemaining > 0 && _findError is not null)
         {
             _findFailuresRemaining--;

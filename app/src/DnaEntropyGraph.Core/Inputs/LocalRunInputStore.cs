@@ -22,9 +22,25 @@ public sealed class LocalRunInputStore : IRunInputStore
         _root = root;
     }
 
+    private static bool IsPlainName(string jobId)
+        => !string.IsNullOrWhiteSpace(jobId) && jobId.IndexOfAny(NotInAJobId) < 0 && !jobId.Contains("..", StringComparison.Ordinal);
+
+    public Task<StagedInput?> FindAsync(string jobId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsPlainName(jobId))
+        {
+            return Task.FromResult<StagedInput?>(null);
+        }
+
+        var directory = Path.Combine(_root, "runs", jobId, "input");
+        var first = Directory.Exists(directory) ? Directory.EnumerateFiles(directory).Order(StringComparer.Ordinal).FirstOrDefault() : null;
+        return Task.FromResult(first is null ? null : new StagedInput(first, Path.GetFileName(first)));
+    }
+
     public async Task<StagedInput> StageAsync(string jobId, string sourcePath, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(jobId) || jobId.IndexOfAny(NotInAJobId) >= 0 || jobId.Contains("..", StringComparison.Ordinal))
+        if (!IsPlainName(jobId))
         {
             throw new ArgumentException("The job id is not a plain name.", nameof(jobId));
         }
