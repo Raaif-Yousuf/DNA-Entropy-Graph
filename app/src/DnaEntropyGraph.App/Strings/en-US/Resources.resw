@@ -318,4 +318,100 @@
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
   </data>
+  <data name="NewRunPastedName" xml:space="preserve">
+    <value>Pasted sequence</value>
+  </data>
+  <data name="NewRunPillKind_Fasta" xml:space="preserve">
+    <value>FASTA</value>
+  </data>
+  <data name="NewRunPillKind_GenBank" xml:space="preserve">
+    <value>GenBank</value>
+  </data>
+  <data name="NewRunPillKind_Paste" xml:space="preserve">
+    <value>Plain sequence</value>
+  </data>
+  <data name="NewRunPillRecordsOne" xml:space="preserve">
+    <value>1 record</value>
+  </data>
+  <data name="NewRunPillRecordsMany" xml:space="preserve">
+    <value>{0} records</value>
+  </data>
+  <data name="NewRunPillBases" xml:space="preserve">
+    <value>{0} bases</value>
+  </data>
+  <data name="NewRunPillGenesOne" xml:space="preserve">
+    <value>1 gene</value>
+  </data>
+  <data name="NewRunPillGenesMany" xml:space="preserve">
+    <value>{0} genes</value>
+  </data>
+  <data name="NewRunPillWhereRecordBase" xml:space="preserve">
+    <value>(record {0}, base {1})</value>
+  </data>
+  <data name="NewRunPillWhereRecord" xml:space="preserve">
+    <value>(record {0})</value>
+  </data>
+  <data name="NewRunPillRnaNotice" xml:space="preserve">
+    <value>This file has the letter U, which means it is RNA. Choose Treat as RNA below to read each U as T and run it.</value>
+  </data>
+  <data name="NewRunPasteCount" xml:space="preserve">
+    <value>{0} bases</value>
+  </data>
+  <data name="NewRunStatusPathNotFound" xml:space="preserve">
+    <value>We could not find the file {0}. Check the path, or drop the file onto this page instead.</value>
+  </data>
+  <data name="NewRunStatusFolderEmpty" xml:space="preserve">
+    <value>There are no FASTA or GenBank files directly inside {0}. Drop the files themselves, or a folder that holds them.</value>
+  </data>
+  <data name="NewRunPillChecking.Text" xml:space="preserve">
+    <value>Checking this file...</value>
+  </data>
+  <data name="NewRunDropTitle.Text" xml:space="preserve">
+    <value>Drop FASTA or GenBank files, or a folder of them, here</value>
+  </data>
+  <data name="NewRunDropHint.Text" xml:space="preserve">
+    <value>Each file is checked on this PC before anything is rented from Google Cloud.</value>
+  </data>
+  <data name="NewRunAddFiles.Content" xml:space="preserve">
+    <value>Add files</value>
+  </data>
+  <data name="NewRunAddFiles.ToolTipService.ToolTip" xml:space="preserve">
+    <value>Add files (Ctrl+O)</value>
+  </data>
+  <data name="NewRunPasteExpander.Header" xml:space="preserve">
+    <value>Paste a sequence</value>
+  </data>
+  <data name="NewRunPasteBox.PlaceholderText" xml:space="preserve">
+    <value>Paste bases here, or a FASTA record, or the path of a file</value>
+  </data>
+  <data name="NewRunPasteAdd.Content" xml:space="preserve">
+    <value>Add sequence</value>
+  </data>
+  <data name="NewRunRemoveItem.Content" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="NewRunTreatAsRna.Content" xml:space="preserve">
+    <value>Treat as RNA</value>
+  </data>
+  <data name="NewRunStopTreatAsRna.Content" xml:space="preserve">
+    <value>Stop treating as RNA</value>
+  </data>
+  <data name="NewRunRnaTreatedNote.Text" xml:space="preserve">
+    <value>Treating the input as RNA: each U is read as T.</value>
+  </data>
+  <data name="NewRunNameTemplate.Header" xml:space="preserve">
+    <value>Run name</value>
+  </data>
+  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
+    <value>{file}</value>
+  </data>
+  <data name="NewRunNameHelp.Text" xml:space="preserve">
+    <value>You can use {file}, {date}, {time}, {model} and {n} in the name.</value>
+  </data>
+  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
+    <value>This run will be named</value>
+  </data>
+  <data name="NewRunRun.Content" xml:space="preserve">
+    <value>Run</value>
+  </data>
 </root>

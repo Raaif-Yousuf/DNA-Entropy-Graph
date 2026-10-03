@@ -73,6 +73,9 @@ public sealed record InputValidationResult(
     IReadOnlyList<string> Notices)
 {
     public bool IsValid => Problem is null;
+
+    /// <summary>Gene features a GenBank file already carries (a pill shows them); 0 for FASTA and plain text.</summary>
+    public int GeneCount { get; init; }
 }
 
 /// <summary>
@@ -133,6 +136,7 @@ public static class InputFileValidator
         }
         var notices = new List<string>();
         List<(string Seq, int Index)> records;
+        var geneCount = 0;
         try
         {
             switch (kind)
@@ -140,6 +144,7 @@ public static class InputFileValidator
                 case InputKind.GenBank:
                     var gb = GenBankLite.Read(text);
                     notices.AddRange(gb.Notices);
+                    geneCount = gb.Records.Sum(r => r.GeneCount);
                     records = gb.Records.Select(r => (r.Seq, r.SourceIndex)).ToList();
                     break;
                 case InputKind.Fasta:
@@ -200,7 +205,7 @@ public static class InputFileValidator
                 total);
         }
 
-        return new InputValidationResult(null, kind, records.Count, total, notices);
+        return new InputValidationResult(null, kind, records.Count, total, notices) { GeneCount = geneCount };
     }
 
     private static InputProblemCode Map(SequenceFailure reason) => reason switch

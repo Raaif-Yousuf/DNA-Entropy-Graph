@@ -36,6 +36,7 @@ public partial class App : Application
         var navigationService = Services.GetRequiredService<NavigationService>();
         navigationService.Initialize(window.RootFrame);
         Startup.NavigationRoutes.RegisterAll(navigationService);
+        Services.GetRequiredService<Services.WindowHandleProvider>().Hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         window.Activate();
         _window = window;
     }
