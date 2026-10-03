@@ -96,6 +96,7 @@ public class AccountRegistryTests : IDisposable
             Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
         }
 
+        Should.Throw<TokenStorageException>(() => registry.Save(One("2002")), "the lock is gone but the file was never read, so Save still refuses");
         File.ReadAllBytes(FilePath).ShouldBe(original);
         File.Exists(FilePath + ".bad").ShouldBeFalse();
         registry.Load().ActiveSub.ShouldBe("1001", "after the lock clears the real file is read");
