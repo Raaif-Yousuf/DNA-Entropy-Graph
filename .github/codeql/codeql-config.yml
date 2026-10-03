@@ -1,0 +1,15 @@
+name: dna-entropy-graph codeql config
+
+# Donor and prototype copies are not this project's code (legacy/clair is gitignored and
+# never committed, see check_repo_hygiene.py); do not report alerts against them.
+#
+# **/obj/** and **/bin/** are build output (XamlTypeInfo.g.cs, *.xaml.g.cs, ...). NOTE: GitHub
+# applies paths-ignore only to interpreted languages and to compiled languages analysed WITHOUT a
+# build; the csharp lane builds, so there codeql.yml also filters the SARIF (advanced-security/
+# filter-sarif) before upload. See https://docs.github.com/en/code-security/code-scanning/
+# creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning
+paths-ignore:
+  - legacy/**
+  - worker/legacy/**
+  - '**/obj/**'
+  - '**/bin/**'

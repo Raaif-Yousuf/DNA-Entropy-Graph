@@ -302,6 +302,7 @@ python scripts\check_version_lockstep.py --tag v1.2.3   # release mode (#33): th
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
 python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behaviour files changed => a fragment exists (#429); rules in docs/changelog.d/README.md
 python scripts\check_repo_hygiene.py        # legacy/clair is not tracked; AGENTS.md exists and stays under 20 lines (#449)
+python scripts\check_actions_pinned.py       # every workflow `uses:` is a 40-char commit SHA with a `# vX.Y.Z` comment; local and docker:// are exempt (#485). Dependabot's github-actions entry bumps SHA and comment together
 python scripts\check_em_dash.py              # no em dash in user-facing copy: docs/user_guide, *.resw, ISSUE_TEMPLATE, README.md (#425)
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
@@ -369,13 +370,13 @@ what I asked for", which is the question you actually have when a command is den
 
 ## CI triggers, and the local gate that does not depend on them
 
-**The owner's 2026-09-19 decision was on-demand CI** (no push, pull request or schedule trigger). MEASURED 2026-10-02: the workflow files no longer match it: `ci-docs.yml` has a `pull_request` trigger and `ci-worker.yml` has one for `worker/**`; `ci-app.yml` and `codeql.yml` are `workflow_dispatch` only. Whichever is intended, a green-looking PR is not proof for `app/` (no automatic trigger), so run `scripts/premerge.py` locally. A run on demand:
+**The owner's 2026-09-19 decision was on-demand CI** (no push, pull request or schedule trigger). MEASURED 2026-10-02: the workflow files no longer match it: `ci-docs.yml` has a `pull_request` trigger and `ci-worker.yml` has one for `worker/**`; `ci-app.yml` is `workflow_dispatch` only; `codeql.yml` (#484) also runs weekly, on pull requests and on pushes to main touching `app/**`, `worker/**`, `scripts/**` or `.github/workflows/**`. Whichever is intended, a green-looking PR is not proof for `app/` (no automatic trigger), so run `scripts/premerge.py` locally. A run on demand:
 
 ```powershell
 gh workflow run ci-worker.yml       # pytest, ruff, build, schema, shellcheck, CPU container
 gh workflow run ci-docs.yml         # repo guards, check_*.py, scripts tests, link check
 gh workflow run ci-app.yml          # skips until app/ exists (issue #61)
-gh workflow run codeql.yml          # python and actions analysis
+gh workflow run codeql.yml          # python, actions and csharp analysis (also runs weekly, on PRs and pushes to main touching app/, worker/, scripts/ or .github/workflows/; config in .github/codeql/codeql-config.yml, #484)
 gh run watch                        # follow the run you just started
 gh run list --limit 5               # what ran recently and how it went
 ```
