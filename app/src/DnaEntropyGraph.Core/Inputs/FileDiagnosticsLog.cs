@@ -37,7 +37,11 @@ public sealed class FileDiagnosticsLog : IDiagnosticsLog
             lock (_gate)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-                RotateIfFull();
+                if (!RotateIfFull())
+                {
+                    return;
+                }
+
                 File.AppendAllText(_path, line, new System.Text.UTF8Encoding(false));
             }
         }
@@ -46,7 +50,8 @@ public sealed class FileDiagnosticsLog : IDiagnosticsLog
         }
     }
 
-    private void RotateIfFull()
+    /// <summary>Rotates a full file. False when the rotation failed and the live file is already at twice the cap: the line is dropped, so a rotation that fails for good cannot grow the log without bound.</summary>
+    private bool RotateIfFull()
     {
         var info = new FileInfo(_path);
         if (info.Exists && info.Length >= _maxBytes)
@@ -57,11 +62,24 @@ public sealed class FileDiagnosticsLog : IDiagnosticsLog
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // The rotated copy is held open (the diagnostics zip reads it) or locked: append anyway. A brief overshoot of the cap
-                // beats dropping every line until the lock goes away; the next write tries the rotation again.
+                // The rotated copy is held open (the diagnostics zip reads it) or locked: append anyway, up to twice the cap. A brief overshoot
+                // of the cap beats dropping every line until the lock goes away; the next write tries the rotation again. Past twice the cap the
+                // rotation is not coming back soon (a read-only app.log.1), so the line is dropped rather than the file left to grow for good.
+                return info.Length < 2 * _maxBytes;
             }
         }
+
+        return true;
     }
 
-    private static string Clean(string value) => value.Replace('\n', ' ').Replace('\r', ' ');
+    /// <summary>One event is one line: every control character (line feed, carriage return, NEL, form feed, escape, NUL...) and the Unicode line and paragraph separators become a space.</summary>
+    private static string Clean(string value)
+        => string.Create(value.Length, value, static (span, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                var c = source[i];
+                span[i] = char.IsControl(c) || c is '\u2028' or '\u2029' ? ' ' : c;
+            }
+        });
 }
