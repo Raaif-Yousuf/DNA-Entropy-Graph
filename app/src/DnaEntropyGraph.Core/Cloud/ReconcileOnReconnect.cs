@@ -175,10 +175,22 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
                 return;
             }
 
-            _probing = true;
-            _probeDelay = keepDelay ? _probeDelay : escalate ? TimeSpan.FromTicks(Math.Min(_probeDelay.Ticks * 2, _probeMaxDelay.Ticks)) : _probeInitialDelay;
+            var delay = keepDelay ? _probeDelay : escalate ? TimeSpan.FromTicks(Math.Min(_probeDelay.Ticks * 2, _probeMaxDelay.Ticks)) : _probeInitialDelay;
             _probeTimer?.Dispose();
-            _probeTimer = _time.CreateTimer(_ => OnProbeDue(), null, _probeDelay, Timeout.InfiniteTimeSpan);
+            _probeTimer = null;
+            _probeDelay = delay;
+            _probing = true;
+            try
+            {
+                _probeTimer = _time.CreateTimer(_ => OnProbeDue(), null, delay, Timeout.InfiniteTimeSpan);
+            }
+            catch (Exception ex)
+            {
+                // No timer, so no probe: "probing" is reset below, or every later start would return early above and the probe would be wedged until
+                // restart. The next pass, reconnect or launch arms it again. Not thrown: this runs at the end of a pass and in a continuation.
+                _probing = false;
+                Warn("reconcile-probe", ex);
+            }
         }
     }
 
