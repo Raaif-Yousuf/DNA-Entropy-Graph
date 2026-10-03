@@ -400,3 +400,34 @@ def test_stride_is_always_exactly_window_minus_context_length(context_length: in
     assert stride == window - context_length
     plan = plan_windows(length=window * 3, context_length=context_length, ceiling=ceiling)
     assert plan.stride == window - context_length
+
+
+# --- issue #128: validate_context knows about circular molecules -------------------------
+
+
+def test_circular_input_shorter_than_k_gets_the_wrapped_notice_not_the_no_full_context_one() -> None:
+    notices = validate_context(context_length=4096, ceiling=8192, seq_len=200, circular=True)
+    assert len(notices) == 1
+    assert "circular" in notices[0]
+    assert "200" in notices[0] and "4096" in notices[0]
+    assert "wrapped around" in notices[0]
+    assert "no base reaches full context" not in notices[0]
+
+
+def test_linear_input_shorter_than_k_keeps_the_no_full_context_notice() -> None:
+    notices = validate_context(context_length=4096, ceiling=8192, seq_len=200, circular=False)
+    assert len(notices) == 1
+    assert "no base reaches full context" in notices[0]
+
+
+def test_circular_input_at_least_k_long_has_no_length_notice() -> None:
+    assert validate_context(context_length=4096, ceiling=8192, seq_len=5000, circular=True) == []
+
+
+def test_circular_does_not_waive_the_hard_refusals_or_the_other_notices() -> None:
+    with pytest.raises(WindowingError):
+        validate_context(context_length=64, ceiling=8192, seq_len=1000, circular=True)
+    with pytest.raises(WindowingError):
+        validate_context(context_length=4096, ceiling=8192, seq_len=5, circular=True)
+    notices = validate_context(context_length=512, ceiling=8192, seq_len=50000, circular=True)
+    assert any("recommended minimum" in n for n in notices)

@@ -120,8 +120,13 @@ MIN_CONTEXT_LENGTH = 128
 MIN_SEQUENCE_LENGTH = 10
 
 
-def validate_context(*, context_length: int, ceiling: int, seq_len: int) -> list[str]:
+def validate_context(*, context_length: int, ceiling: int, seq_len: int, circular: bool = False) -> list[str]:
     """Re-validate K/ceiling/input-length against section 5.6's pushback rules.
+
+    ``circular`` (issue #128): a circular molecule shorter than ``K`` still gives every base
+    full context (the wrap-around repeats it), so it gets a "wrapped around several times"
+    notice instead of the linear "no base reaches full context" one. Every refusal and the
+    other notices apply to a circular molecule unchanged.
 
     The app is expected to validate these first; the worker re-validates so a
     misconfigured or bypassed client can never silently produce a bad run. Returns
@@ -147,7 +152,13 @@ def validate_context(*, context_length: int, ceiling: int, seq_len: int) -> list
             f"{MIN_RECOMMENDED_CONTEXT_LENGTH}: predictions near a window edge are "
             "dominated by the model's prior; results may be noisy."
         )
-    if seq_len < context_length:
+    if seq_len < context_length and circular:
+        notices.append(
+            f"This circular molecule ({seq_len} nt) is shorter than the context length "
+            f"(K={context_length}), so it is wrapped around several times to give every base "
+            "full context; results are still produced."
+        )
+    elif seq_len < context_length:
         notices.append(
             f"This sequence ({seq_len} nt) is shorter than the context length "
             f"(K={context_length}), so no base reaches full context; results are still "
