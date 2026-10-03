@@ -891,6 +891,51 @@
   <data name="ResultsOpenFolderButton.Content" xml:space="preserve">
     <value>Open folder</value>
   </data>
+  <data name="Results_IgvNoFiles" xml:space="preserve">
+    <value>This run has no entropy track or gene file to show in IGV. Choose Open folder to see which files it did write.</value>
+  </data>
+  <data name="Results_IgvNotFound" xml:space="preserve">
+    <value>IGV was not found on this computer. Install IGV from igv.org, then choose Open in IGV again and pick its program file when asked.</value>
+  </data>
+  <data name="Results_IgvLaunchFailed" xml:space="preserve">
+    <value>IGV would not start. Check that it opens from the Start menu, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_IgvRejected" xml:space="preserve">
+    <value>IGV is open but refused to load these files. Close any message box in IGV, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_IgvNoReply" xml:space="preserve">
+    <value>IGV is open but did not answer in time. Wait for IGV to finish what it is doing, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_IgvNoAnswer" xml:space="preserve">
+    <value>IGV did not answer. Wait for it to finish loading, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_ViewerUnsafePath" xml:space="preserve">
+    <value>This run's folder name has a character (one of &amp; | ^ % &lt; &gt; ( ) ! or a quote) that cannot be passed safely to a program started from a .bat or .cmd file. Move the run's output folder to a path without those characters, then try again.</value>
+  </data>
+  <data name="Results_IgvPathUnsendable" xml:space="preserve">
+    <value>IGV cannot be sent a file whose path has a quote or a line break in it. Rename or move the run's output folder, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_IgvNoGenome" xml:space="preserve">
+    <value>This run did not save a sequence file (.fasta), so IGV has no sequence to show the tracks on. Choose Open folder and load the files in IGV yourself.</value>
+  </data>
+  <data name="Results_IgvFirstInputOnly" xml:space="preserve">
+    <value>IGV shows one sequence at a time, so only the first input was opened. To see the others, choose Open folder and load their files in IGV yourself.</value>
+  </data>
+  <data name="Results_GeneiousNoFiles" xml:space="preserve">
+    <value>This run has no GenBank or GFF3 file to open in Geneious. Choose Open folder to see which files it did write.</value>
+  </data>
+  <data name="Results_GeneiousNotFound" xml:space="preserve">
+    <value>Geneious was not found on this computer. Install Geneious Prime, then choose Open in Geneious again and pick its program file when asked.</value>
+  </data>
+  <data name="Results_GeneiousLaunchFailed" xml:space="preserve">
+    <value>Geneious would not start. Check that it opens from the Start menu, then choose Open in Geneious again.</value>
+  </data>
+  <data name="ResultsOpenInIgvButton.Content" xml:space="preserve">
+    <value>Open in IGV</value>
+  </data>
+  <data name="ResultsOpenInGeneiousButton.Content" xml:space="preserve">
+    <value>Open in Geneious</value>
+  </data>
   <data name="ResultsOpenInViewerButton.Content" xml:space="preserve">
     <value>Open in viewer</value>
   </data>
