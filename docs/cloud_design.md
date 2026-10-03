@@ -458,9 +458,14 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   carry on without the app, so a network blip of a minute must not cost the user a second run.
   Pinned by `More_transient_503s_than_the_retry_pipeline_absorbs...` (14 scripted 503s behind the real
   retry pipeline and breaker, then a valid result: Completed with the track on disk).
+- **`EnsureBucket` budget (issue #600).** `EnsureBucketAsync` is a sequence of up to about ten requests (project get, list, insert, read-back,
+  second list, loser delete or config write, patch), each with its own retry backoff inside the gateway, so it runs under its own
+  `EnsureBucketTimeout` (5 min, `CloudRunSettings`) and not the 60 s of one request. A cut still lands as a network failure; the next call finds
+  the bucket by label and writes a missing config (`GoogleStorageGateway.ConvergeAsync`, proven by
+  `A_second_listing_that_keeps_failing_strands_a_created_bucket_and_the_next_call_adopts_and_configures_it`). The duplicate a lost
+  two-PC race leaves is not cleaned up by a cut; it stays an empty labelled bucket.
 - **Per-call deadline.** Every gateway call the runner makes runs under `CallTimeout` (60 s) through
-  `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, `EnsureBucket`,
-  every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
+  `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
   `StopVmAsync` and `DeleteVmAsync`, and each read of a downloaded file. A call that outlives it is a
   network failure: the wait loops look again, anywhere else the run (or the cancel) is recorded Failed
   instead of hanging. **Uploads** have their own deadline, `UploadTimeout`, default a floor of 2 minutes plus

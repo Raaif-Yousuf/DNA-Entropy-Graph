@@ -1,0 +1,1 @@
+- Fix: the results-bucket setup (EnsureBucketAsync, up to about ten requests) now runs under its own 5 minute budget (CloudRunSettings.EnsureBucketTimeout) instead of the 60 s meant for one request, so slow retries no longer cut it between creating the bucket and writing its config. Docs: docs/cloud_design.md section 11.

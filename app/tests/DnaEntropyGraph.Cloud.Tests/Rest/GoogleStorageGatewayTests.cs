@@ -998,4 +998,74 @@ public class GoogleStorageGatewayTests
         using var reader = new StreamReader(stream);
         (await reader.ReadToEndAsync(TestContext.Current.CancellationToken)).ShouldBe("{\"done\":true}");
     }
-}
+
+    // ---- issue #600: 503s inside the multi-request sequence ----
+
+    private static void Script503(ScriptedHttpHandler handler, HttpMethod method, string path, int times)
+    {
+        for (var i = 0; i < times; i++)
+        {
+            handler.Returns(method, path, 503, RpcError(503, "UNAVAILABLE", "try again"));
+        }
+    }
+
+    [Fact]
+    public async Task A_503_on_the_insert_and_on_the_second_listing_is_retried_per_request_and_the_sequence_finishes_configured()
+    {
+        var rig = NewRig();
+        var name = Name(0);
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        Script503(rig.Handler, Post, Buckets, 1);
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
+        Script503(rig.Handler, Get, Buckets, 1);
+        ScriptCreatedListing(rig.Handler, name);
+        ScriptUpload(rig.Handler, name);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
+
+        rig.Handler.To(Post, Buckets).Count.ShouldBe(2, "one 503 then the insert that landed");
+        rig.Handler.To(Get, Buckets).Count.ShouldBe(3, "first listing, the 503, the second listing");
+        rig.Handler.To(HttpMethod.Delete, BucketPath(name)).ShouldBeEmpty();
+        rig.Handler.To(Post, UploadPath(name)).Count.ShouldBe(1, "the config write ran: the bucket is not left unconfigured");
+    }
+
+    [Fact]
+    public async Task A_second_listing_that_keeps_failing_strands_a_created_bucket_and_the_next_call_adopts_and_configures_it()
+    {
+        // MEASURED 2026-10-03 (this test): when the sequence is cut after the insert, the bucket exists without app-config.json;
+        // the next call finds it by label (oldest first) and ConvergeAsync writes the config, so an unconfigured bucket is repaired, not stranded.
+        var rig = NewRig();
+        var name = Name(0);
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
+        Script503(rig.Handler, Get, Buckets, 3);
+        var first = async () => await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+        await first.ShouldThrowAsync<CloudOperationException>();
+        rig.Handler.To(Post, UploadPath(name)).ShouldBeEmpty("cut before the config write");
+
+        rig.Handler.Returns(Get, Project, 200, ProjectBody());
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(name)));
+        ScriptUpload(rig.Handler, name);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
+
+        rig.Handler.To(Post, Buckets).Count.ShouldBe(1, "no second bucket was inserted");
+        rig.Handler.To(Post, UploadPath(name)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_insert_that_keeps_returning_503_fails_cleanly_with_no_bucket_to_orphan()
+    {
+        var rig = NewRig();
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        Script503(rig.Handler, Post, Buckets, 3);
+
+        var call = async () => await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        await call.ShouldThrowAsync<CloudOperationException>();
+        rig.Handler.To(Post, UploadPath(Name(0))).ShouldBeEmpty();
+        rig.Handler.To(HttpMethod.Delete, BucketPath(Name(0))).ShouldBeEmpty();
+    }}
+
