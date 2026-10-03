@@ -1070,15 +1070,24 @@ public class GoogleStorageGatewayTests
     }
 
     // ---- issue #600, round 2: a per-attempt cap on single requests, none on media transfers ----
+    // The retry pipeline runs on a clock the test moves by hand. A request that is "slow" moves it past the cap while the request is in flight, so
+    // a cap that applies cuts the request at once and one that does not lets it finish.
+
+    private static readonly TimeSpan PastTheCap = TimeSpan.FromMinutes(10);
 
     [Fact]
     public async Task A_bucket_listing_that_never_answers_is_cut_per_attempt_and_fails_as_a_network_TIMEOUT()
     {
-        // The retry clock fires every timer at once (a virtual clock), so each attempt's cap passes at once: nothing waits 30 s of real time.
-        var rig = NewRig(retryClock: new VirtualTimeProvider(autoAdvance: true), attemptTimeout: TimeSpan.FromSeconds(30));
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
         for (var i = 0; i < 3; i++)
         {
-            rig.Handler.Hangs(Get, Buckets);
+            rig.Handler.Calls(Get, Buckets, async ct =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(30));
+                await Task.Delay(Timeout.Infinite, ct);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
         }
 
         var failure = await Should.ThrowAsync<CloudOperationException>(
@@ -1086,24 +1095,27 @@ public class GoogleStorageGatewayTests
 
         failure.Kind.ShouldBe(CloudErrorKind.Network);
         failure.Error.Code.ShouldBe("TIMEOUT");
+        rig.Handler.To(Get, Buckets).Count.ShouldBe(3, "every attempt was sent and cut, then the retries ran out");
         rig.Handler.To(Post, Buckets).ShouldBeEmpty("a hung listing must not reach the insert");
     }
 
     [Fact]
     public async Task A_slow_upload_is_not_cut_by_the_per_attempt_cap()
     {
-        // The cap is 10 ms and every timer fires at once: were it applied to a transfer, this upload would be cut at once.
-        var rig = NewRig(retryClock: new VirtualTimeProvider(autoAdvance: true), attemptTimeout: TimeSpan.FromMilliseconds(10));
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
         rig.Handler.Calls(Post, UploadPath("deg-b"), async ct =>
         {
-            await Task.Delay(150, ct);
+            clock.Advance(PastTheCap);
+            await Task.Delay(50, ct);
             var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
             response.Headers.Location = new Uri("https://storage.googleapis.com" + UploadPath("deg-b") + "?uploadType=resumable&upload_id=sess-1");
             return response;
         });
         rig.Handler.Calls(Put, UploadPath("deg-b"), async ct =>
         {
-            await Task.Delay(150, ct);
+            clock.Advance(PastTheCap);
+            await Task.Delay(50, ct);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"name\":\"x\",\"bucket\":\"deg-b\"}", Encoding.UTF8, "application/json") };
         });
 
@@ -1115,10 +1127,12 @@ public class GoogleStorageGatewayTests
     [Fact]
     public async Task A_slow_download_is_not_cut_by_the_per_attempt_cap()
     {
-        var rig = NewRig(retryClock: new VirtualTimeProvider(autoAdvance: true), attemptTimeout: TimeSpan.FromMilliseconds(10));
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
         rig.Handler.Calls(Get, ObjectPath, async ct =>
         {
-            await Task.Delay(150, ct);
+            clock.Advance(PastTheCap);
+            await Task.Delay(50, ct);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json") };
         });
 
@@ -1126,4 +1140,21 @@ public class GoogleStorageGatewayTests
 
         using var reader = new StreamReader(stream);
         (await reader.ReadToEndAsync(TestContext.Current.CancellationToken)).ShouldBe("{\"ok\":true}");
+    }
+
+    [Fact]
+    public async Task A_slow_but_answering_metadata_request_inside_the_cap_is_not_cut()
+    {
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
+        rig.Handler.Calls(Get, Buckets, async ct =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(20));
+            await Task.Delay(20, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(List(BucketJson(Name(0))), Encoding.UTF8, "application/json") };
+        });
+        rig.Handler.Returns(Get, BucketPath(Name(0)), 200, BucketJson(Name(0)));
+        ScriptUpload(rig.Handler, Name(0));
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(Name(0));
     }}
