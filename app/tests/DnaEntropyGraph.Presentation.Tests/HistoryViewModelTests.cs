@@ -156,19 +156,69 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
-    public async Task Delete_cloud_is_disabled_with_a_hint_when_the_service_cannot_delete()
+    public async Task Delete_cloud_is_disabled_with_the_reason_that_applies_and_enabled_with_no_hint()
     {
-        _cloud.CanDelete(Arg.Is<RunRecord>(r => r.JobId == "a")).Returns(false);
-        var vm = await Loaded(Row("a"), Row("b"));
+        _cloud.CanDelete(Arg.Is<RunRecord>(r => r.JobId != "ok")).Returns(false);
+        _cloud.IsAvailable(Arg.Is<RunRecord>(r => r.JobId == "nocopy")).Returns(false);
+        var vm = await Loaded(Row("ok"), Row("live", JobPhase.Running), Row("nocopy"), Row("offline"));
 
-        Item(vm, "a").CanDeleteCloud.ShouldBeFalse();
-        Item(vm, "a").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Unavailable_Hint");
-        Item(vm, "b").CanDeleteCloud.ShouldBeTrue();
-        Item(vm, "b").DeleteCloudHint.ShouldBeEmpty();
+        Item(vm, "ok").CanDeleteCloud.ShouldBeTrue();
+        Item(vm, "ok").DeleteCloudHint.ShouldBeEmpty();
+        Item(vm, "live").CanDeleteCloud.ShouldBeFalse();
+        Item(vm, "live").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Hint_Running");
+        Item(vm, "nocopy").CanDeleteCloud.ShouldBeFalse();
+        Item(vm, "nocopy").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Hint_NoCopy");
+        Item(vm, "offline").CanDeleteCloud.ShouldBeFalse();
+        Item(vm, "offline").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Hint_NotConnected");
     }
 
     [Fact]
-    public async Task A_local_delete_that_throws_or_fails_toasts_the_failure_copy_and_refreshes()
+    public async Task A_live_run_whose_deleter_is_also_unavailable_gets_the_running_hint_first()
+    {
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false);
+        var vm = await Loaded(Row("live", JobPhase.Running));
+
+        Item(vm, "live").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Hint_Running");
+    }
+
+    [Fact]
+    public async Task Refreshing_when_the_history_cannot_be_read_toasts_the_refresh_failure_and_does_not_throw()
+    {
+        _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<RunRecord>>>(_ => throw new InvalidOperationException("db locked"));
+        var vm = Make();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body");
+    }
+
+    [Fact]
+    public async Task Refreshing_when_a_folder_probe_throws_toasts_the_refresh_failure_and_does_not_throw()
+    {
+        _rows = [Row("a")];
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(_ => throw new IOException("network drive gone"));
+        var vm = Make();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body");
+    }
+
+    [Fact]
+    public async Task A_cancelled_refresh_is_silent()
+    {
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<RunRecord>>>(_ => throw new OperationCanceledException(cancelled.Token));
+        var vm = Make();
+
+        await vm.RefreshCommand.ExecuteAsync(null).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!);
+    }
+
+    [Fact]
+    public async Task A_local_delete_that_throws_or_is_in_use_toasts_the_in_use_copy_and_refreshes()
     {
         _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(_ => throw new IOException("in use"));
         var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
@@ -176,13 +226,58 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Failed_Title", "Runs_DeleteLocal_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body");
         await _repository.Received(1).GetAllAsync(Arg.Any<CancellationToken>());
 
         _toasts.ClearReceivedCalls();
-        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(LocalDeleteStatus.Failed);
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.InUse));
         await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Failed_Title", "Runs_DeleteLocal_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body");
+    }
+
+    [Fact]
+    public async Task A_partial_local_delete_says_what_was_deleted_and_what_was_not()
+    {
+        _strings.GetString("Runs_DeleteLocal_Partial_Body").Returns("{0} deleted, {1} left");
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.Partial, 5, 2));
+        var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
+
+        await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Partial_Title", "5 deleted, 2 left");
+        _toasts.DidNotReceive().ShowToast("Runs_DeleteLocal_InUse_Title", Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task A_permission_denied_local_delete_has_its_own_copy_distinct_from_in_use()
+    {
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.AccessDenied));
+        var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
+
+        await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_AccessDenied_Title", "Runs_DeleteLocal_AccessDenied_Body");
+    }
+
+    [Fact]
+    public async Task Open_probes_the_disk_off_the_calling_thread()
+    {
+        using var gate = new ManualResetEventSlim();
+        _rows = [Row("a", outputDir: @"C:\out\a")];
+        var vm = Make();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(_ =>
+        {
+            gate.Wait(TimeSpan.FromSeconds(3));
+            return true;
+        });
+
+        var opening = Item(vm, "a").OpenCommand.ExecuteAsync(null);
+
+        opening.IsCompleted.ShouldBeFalse("the folder probe ran on the calling thread");
+        gate.Set();
+        await opening;
+        _navigator.Received(1).NavigateTo(ViewerViewModel.PageKey, @"C:\out\a");
     }
 
     [Fact]
@@ -232,7 +327,7 @@ public sealed class HistoryViewModelTests
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
         var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
 
-        Item(vm, "a").OpenCommand.Execute(null);
+        await Item(vm, "a").OpenCommand.ExecuteAsync(null);
 
         _navigator.Received(1).NavigateTo(ViewerViewModel.PageKey, @"C:\out\a");
     }
@@ -243,7 +338,7 @@ public sealed class HistoryViewModelTests
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(false);
         var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
 
-        Item(vm, "a").OpenCommand.Execute(null);
+        await Item(vm, "a").OpenCommand.ExecuteAsync(null);
 
         _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, TestContext.Current.CancellationToken);
         _toasts.Received(1).ShowToast("Runs_Open_Missing_Title", "Runs_Open_Missing_Body");
@@ -254,7 +349,7 @@ public sealed class HistoryViewModelTests
     {
         var vm = await Loaded(Row("live", JobPhase.Running));
 
-        Item(vm, "live").OpenCommand.Execute(null);
+        await Item(vm, "live").OpenCommand.ExecuteAsync(null);
 
         _navigator.Received(1).NavigateTo("RunProgress", "live");
     }
@@ -377,7 +472,7 @@ public sealed class HistoryViewModelTests
     [Fact]
     public async Task Delete_local_files_after_confirming_deletes_through_the_service_and_toasts()
     {
-        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(LocalDeleteStatus.Deleted);
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.Deleted, 3));
         var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteLocalCommand).ExecuteAsync(null);
@@ -389,7 +484,7 @@ public sealed class HistoryViewModelTests
     [Fact]
     public async Task A_refused_local_delete_says_so_and_names_an_action()
     {
-        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(LocalDeleteStatus.Refused);
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.Refused));
         var vm = await Loaded(Row("a", outputDir: @"C:\elsewhere"));
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteLocalCommand).ExecuteAsync(null);

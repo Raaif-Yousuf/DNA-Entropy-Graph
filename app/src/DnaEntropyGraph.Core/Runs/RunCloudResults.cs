@@ -131,7 +131,7 @@ public sealed class RunCloudResults : IRunCloudResults
                 await DownloadFileAsync(run, folder, file, cancellationToken).ConfigureAwait(false);
             }
 
-            
+
             // Same rule as RunOutcomeRecorder: every input finished with files, else the history says "partly completed".
             var allInputsDone = result.Inputs.All(i => i.Status == "done" && i.Files.Count > 0);
             return string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial;

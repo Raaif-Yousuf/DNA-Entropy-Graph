@@ -1,4 +1,3 @@
-using System.Windows.Input;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
@@ -40,7 +39,7 @@ public sealed class RunListItem
         bool cloudAvailable,
         bool canDeleteCloud,
         string deleteCloudHint,
-        ICommand openCommand,
+        IAsyncRelayCommand openCommand,
         IAsyncRelayCommand rerunCommand,
         IAsyncRelayCommand redownloadCommand,
         IAsyncRelayCommand deleteCloudCommand,
@@ -89,7 +88,7 @@ public sealed class RunListItem
     /// <summary>Why Delete cloud copy is unavailable, or empty when it is available; shown as its tooltip.</summary>
     public string DeleteCloudHint { get; }
 
-    public ICommand OpenCommand { get; }
+    public IAsyncRelayCommand OpenCommand { get; }
 
     public IAsyncRelayCommand RerunCommand { get; }
 

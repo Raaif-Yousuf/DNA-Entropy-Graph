@@ -53,30 +53,74 @@ public sealed class LocalRunFilesTests : IDisposable
     {
         var folder = MakeRunFolder();
 
-        Make().DeleteOutputFolder(Run(folder)).ShouldBe(LocalDeleteStatus.Deleted);
+        Make().DeleteOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.Deleted);
 
         Directory.Exists(folder).ShouldBeFalse();
         Directory.Exists(_root).ShouldBeTrue();
     }
 
     [Fact]
-    public void A_folder_with_a_file_open_elsewhere_is_failed_not_thrown_and_keeps_its_files()
+    public void A_folder_whose_only_file_is_open_elsewhere_is_in_use_not_thrown_and_keeps_its_files()
     {
         var folder = MakeRunFolder();
         using var held = new FileStream(Path.Combine(folder, "a.bedgraph"), FileMode.Open, FileAccess.Read, FileShare.None);
 
-        Make().DeleteOutputFolder(Run(folder)).ShouldBe(LocalDeleteStatus.Failed);
+        Make().DeleteOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.InUse);
 
         File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
     }
 
     [Fact]
+    public void A_folder_with_one_file_open_elsewhere_is_partial_and_counts_what_went_and_what_stayed()
+    {
+        var folder = MakeRunFolder();
+        File.WriteAllText(Path.Combine(folder, "b.gff3"), "y");
+        Directory.CreateDirectory(Path.Combine(folder, "sub"));
+        File.WriteAllText(Path.Combine(folder, "sub", "c.txt"), "z");
+        using var held = new FileStream(Path.Combine(folder, "a.bedgraph"), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var result = Make().DeleteOutputFolder(Run(folder));
+
+        result.ShouldBe(new LocalDeleteResult(LocalDeleteStatus.Partial, FilesDeleted: 2, FilesRemaining: 1));
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+        File.Exists(Path.Combine(folder, "b.gff3")).ShouldBeFalse();
+        Directory.Exists(Path.Combine(folder, "sub")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_read_only_file_is_access_denied_not_in_use_and_stays()
+    {
+        var folder = MakeRunFolder();
+        var file = Path.Combine(folder, "a.bedgraph");
+        File.SetAttributes(file, FileAttributes.ReadOnly);
+
+        try
+        {
+            Make().DeleteOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.AccessDenied);
+            File.Exists(file).ShouldBeTrue();
+        }
+        finally
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
+    public void A_folder_whose_files_all_delete_reports_the_count()
+    {
+        var folder = MakeRunFolder();
+        File.WriteAllText(Path.Combine(folder, "b.gff3"), "y");
+
+        Make().DeleteOutputFolder(Run(folder)).ShouldBe(new LocalDeleteResult(LocalDeleteStatus.Deleted, FilesDeleted: 2, FilesRemaining: 0));
+    }
+
+    [Fact]
     public void Deleting_a_folder_that_is_already_gone_is_nothing_to_delete()
-        => Make().DeleteOutputFolder(Run(Path.Combine(_root, "gone"))).ShouldBe(LocalDeleteStatus.NothingToDelete);
+        => Make().DeleteOutputFolder(Run(Path.Combine(_root, "gone"))).Status.ShouldBe(LocalDeleteStatus.NothingToDelete);
 
     [Fact]
     public void A_run_without_a_recorded_folder_has_nothing_to_delete()
-        => Make().DeleteOutputFolder(Run(null)).ShouldBe(LocalDeleteStatus.NothingToDelete);
+        => Make().DeleteOutputFolder(Run(null)).Status.ShouldBe(LocalDeleteStatus.NothingToDelete);
 
     [Fact]
     public void A_folder_outside_the_output_root_is_refused_and_survives()
@@ -85,7 +129,7 @@ public sealed class LocalRunFilesTests : IDisposable
         Directory.CreateDirectory(outside);
         File.WriteAllText(Path.Combine(outside, "thesis.docx"), "keep");
 
-        Make().DeleteOutputFolder(Run(outside)).ShouldBe(LocalDeleteStatus.Refused);
+        Make().DeleteOutputFolder(Run(outside)).Status.ShouldBe(LocalDeleteStatus.Refused);
 
         File.Exists(Path.Combine(outside, "thesis.docx")).ShouldBeTrue();
     }
@@ -98,7 +142,7 @@ public sealed class LocalRunFilesTests : IDisposable
 
         var sneaky = Path.Combine(_root, "..", "Documents");
 
-        Make().DeleteOutputFolder(Run(sneaky)).ShouldBe(LocalDeleteStatus.Refused);
+        Make().DeleteOutputFolder(Run(sneaky)).Status.ShouldBe(LocalDeleteStatus.Refused);
         Directory.Exists(outside).ShouldBeTrue();
     }
 
@@ -107,7 +151,7 @@ public sealed class LocalRunFilesTests : IDisposable
     {
         MakeRunFolder();
 
-        Make().DeleteOutputFolder(Run(_root)).ShouldBe(LocalDeleteStatus.Refused);
+        Make().DeleteOutputFolder(Run(_root)).Status.ShouldBe(LocalDeleteStatus.Refused);
 
         Directory.Exists(_root).ShouldBeTrue();
     }
@@ -118,7 +162,7 @@ public sealed class LocalRunFilesTests : IDisposable
         var lookalike = _root + "-backup";
         Directory.CreateDirectory(lookalike);
 
-        Make().DeleteOutputFolder(Run(lookalike)).ShouldBe(LocalDeleteStatus.Refused);
+        Make().DeleteOutputFolder(Run(lookalike)).Status.ShouldBe(LocalDeleteStatus.Refused);
 
         Directory.Exists(lookalike).ShouldBeTrue();
     }
@@ -132,7 +176,7 @@ public sealed class LocalRunFilesTests : IDisposable
         File.WriteAllText(Path.Combine(inputCopy, "in.gb"), "keep");
         var runFolder = Path.Combine(_appData, "runs");
 
-        Make().DeleteOutputFolder(Run(runFolder, outputFolderOption: _appData)).ShouldBe(LocalDeleteStatus.Refused);
+        Make().DeleteOutputFolder(Run(runFolder, outputFolderOption: _appData)).Status.ShouldBe(LocalDeleteStatus.Refused);
 
         File.Exists(Path.Combine(inputCopy, "in.gb")).ShouldBeTrue();
     }
@@ -144,7 +188,7 @@ public sealed class LocalRunFilesTests : IDisposable
         var folder = Path.Combine(custom, "sample");
         Directory.CreateDirectory(folder);
 
-        Make().DeleteOutputFolder(Run(folder, outputFolderOption: custom)).ShouldBe(LocalDeleteStatus.Deleted);
+        Make().DeleteOutputFolder(Run(folder, outputFolderOption: custom)).Status.ShouldBe(LocalDeleteStatus.Deleted);
     }
 
     [Fact]

@@ -8,9 +8,18 @@ public enum LocalDeleteStatus
     NothingToDelete,
     Refused,
 
-    /// <summary>The folder could not be removed (a file is open in another program, or access was denied); whatever was left is untouched.</summary>
-    Failed,
+    /// <summary>Nothing could be deleted because a file is open in another program.</summary>
+    InUse,
+
+    /// <summary>Nothing could be deleted because Windows denied access (a read-only file, or a folder the user may not change).</summary>
+    AccessDenied,
+
+    /// <summary>Some files were deleted and some could not be; <see cref="LocalDeleteResult"/> says how many of each.</summary>
+    Partial,
 }
+
+/// <summary>What a local delete did. The counts are files, not folders, and are set for <see cref="LocalDeleteStatus.Deleted"/> and <see cref="LocalDeleteStatus.Partial"/>.</summary>
+public sealed record LocalDeleteResult(LocalDeleteStatus Status, int FilesDeleted = 0, int FilesRemaining = 0);
 
 /// <summary>The run's files on this PC (issue #101). Hard Rule 14: nothing here ever touches the input copy or anything outside the run's own output folder.</summary>
 public interface ILocalRunFiles
@@ -18,7 +27,7 @@ public interface ILocalRunFiles
     bool OutputFolderExists(RunRecord run);
 
     /// <summary>Deletes the run's own output folder, only if it lies strictly inside the folder the run was told to write under. Never the input copy.</summary>
-    LocalDeleteStatus DeleteOutputFolder(RunRecord run);
+    LocalDeleteResult DeleteOutputFolder(RunRecord run);
 
     /// <summary>The input a re-run should use: the app's own copy, else the original file, else null.</summary>
     string? FindRerunInput(RunRecord run, RunOptions options);
@@ -41,11 +50,11 @@ public sealed class LocalRunFiles : ILocalRunFiles
     public bool OutputFolderExists(RunRecord run)
         => !string.IsNullOrWhiteSpace(run.OutputDir) && Directory.Exists(run.OutputDir);
 
-    public LocalDeleteStatus DeleteOutputFolder(RunRecord run)
+    public LocalDeleteResult DeleteOutputFolder(RunRecord run)
     {
         if (string.IsNullOrWhiteSpace(run.OutputDir))
         {
-            return LocalDeleteStatus.NothingToDelete;
+            return new(LocalDeleteStatus.NothingToDelete);
         }
 
         string folder;
@@ -55,29 +64,92 @@ public sealed class LocalRunFiles : ILocalRunFiles
             folder = Path.GetFullPath(run.OutputDir);
             if (!RunOutputRoot.IsStrictlyInside(folder, root) || _protectedPaths.Any(p => RunOutputRoot.Overlaps(folder, p)))
             {
-                return LocalDeleteStatus.Refused;
+                return new(LocalDeleteStatus.Refused);
             }
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            return LocalDeleteStatus.Refused;
+            return new(LocalDeleteStatus.Refused);
         }
 
         if (!Directory.Exists(folder))
         {
-            return LocalDeleteStatus.NothingToDelete;
+            return new(LocalDeleteStatus.NothingToDelete);
         }
 
+        return DeleteFilesThenFolders(folder);
+    }
+
+    /// <summary>
+    /// Deletes file by file so a file that cannot go (open elsewhere, read-only) does not hide how much did:
+    /// the caller reports the counts. Folders are removed deepest first, only once empty.
+    /// </summary>
+    private static LocalDeleteResult DeleteFilesThenFolders(string folder)
+    {
+        string[] files;
+        string[] directories;
         try
         {
-            Directory.Delete(folder, recursive: true);
+            files = Directory.GetFiles(folder, "*", SearchOption.AllDirectories);
+            directories = Directory.GetDirectories(folder, "*", SearchOption.AllDirectories);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new(LocalDeleteStatus.AccessDenied);
+        }
+        catch (IOException)
+        {
+            return new(LocalDeleteStatus.InUse);
+        }
+
+        int deleted = 0, inUse = 0, denied = 0;
+        foreach (var file in files)
+        {
+            try
+            {
+                File.Delete(file);
+                deleted++;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                denied++;
+            }
+            catch (IOException)
+            {
+                inUse++;
+            }
+        }
+
+        foreach (var directory in directories.OrderByDescending(d => d.Length))
+        {
+            TryDeleteEmptyFolder(directory);
+        }
+
+        var remaining = inUse + denied;
+        if (remaining == 0)
+        {
+            // Every file went; the folder itself failing to go (something opened it meanwhile) is still "in use".
+            return TryDeleteEmptyFolder(folder) || !Directory.Exists(folder)
+                ? new(LocalDeleteStatus.Deleted, deleted)
+                : new(LocalDeleteStatus.InUse);
+        }
+
+        return deleted > 0
+            ? new(LocalDeleteStatus.Partial, deleted, remaining)
+            : new(inUse > 0 ? LocalDeleteStatus.InUse : LocalDeleteStatus.AccessDenied, 0, remaining);
+    }
+
+    private static bool TryDeleteEmptyFolder(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: false);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return LocalDeleteStatus.Failed;
+            return false;
         }
-
-        return LocalDeleteStatus.Deleted;
     }
 
     public string? FindRerunInput(RunRecord run, RunOptions options)

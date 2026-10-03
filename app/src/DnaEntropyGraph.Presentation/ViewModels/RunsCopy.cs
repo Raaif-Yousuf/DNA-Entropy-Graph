@@ -21,7 +21,9 @@ public static class RunsCopy
     public const string DeleteCloudConfirmBody = "Runs_DeleteCloud_Confirm_Body";
     public const string DeleteLocalConfirmTitle = "Runs_DeleteLocal_Confirm_Title";
     public const string DeleteLocalConfirmBody = "Runs_DeleteLocal_Confirm_Body";
-    public const string DeleteCloudUnavailableHint = "Runs_DeleteCloud_Unavailable_Hint";
+    public const string DeleteCloudHintRunning = "Runs_DeleteCloud_Hint_Running";
+    public const string DeleteCloudHintNoCopy = "Runs_DeleteCloud_Hint_NoCopy";
+    public const string DeleteCloudHintNotConnected = "Runs_DeleteCloud_Hint_NotConnected";
     public const string RemoveConfirmTitle = "Runs_Remove_Confirm_Title";
     public const string RemoveConfirmBody = "Runs_Remove_Confirm_Body";
 
@@ -54,11 +56,13 @@ public static class RunsCopy
         _ => Pair("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body"),
     };
 
-    public static (string Title, string Body) DeleteLocal(Core.Runs.LocalDeleteStatus status) => status switch
+    public static (string Title, string Body) DeleteLocal(LocalDeleteStatus status) => status switch
     {
         LocalDeleteStatus.Deleted => Pair("Runs_DeleteLocal_Done_Title", "Runs_DeleteLocal_Done_Body"),
         LocalDeleteStatus.NothingToDelete => Pair("Runs_DeleteLocal_Nothing_Title", "Runs_DeleteLocal_Nothing_Body"),
-        LocalDeleteStatus.Failed => Pair("Runs_DeleteLocal_Failed_Title", "Runs_DeleteLocal_Failed_Body"),
+        LocalDeleteStatus.InUse => Pair("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body"),
+        LocalDeleteStatus.AccessDenied => Pair("Runs_DeleteLocal_AccessDenied_Title", "Runs_DeleteLocal_AccessDenied_Body"),
+        LocalDeleteStatus.Partial => Pair("Runs_DeleteLocal_Partial_Title", "Runs_DeleteLocal_Partial_Body"),
         _ => Pair("Runs_DeleteLocal_Refused_Title", "Runs_DeleteLocal_Refused_Body"),
     };
 
@@ -67,7 +71,7 @@ public static class RunsCopy
     [
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
-        DeleteCloudUnavailableHint, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
+        DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         .. FilterKeys,
         .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),

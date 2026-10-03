@@ -85,12 +85,24 @@ public sealed partial class HistoryViewModel : ObservableObject
     [RelayCommand]
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        var runs = await _runRepository.GetAllAsync(cancellationToken);
+        try
+        {
+            var runs = await _runRepository.GetAllAsync(cancellationToken);
 
-        // One disk probe per row: off the UI thread.
-        var rows = await Task.Run(() => runs.OrderByDescending(r => r.CreatedUtc).Select(r => (Run: r, HasFolder: _local.OutputFolderExists(r))).ToList(), cancellationToken);
-        _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder))];
-        ApplyFilter();
+            // One disk probe per row: off the UI thread.
+            var rows = await Task.Run(() => runs.OrderByDescending(r => r.CreatedUtc).Select(r => (Run: r, HasFolder: _local.OutputFolderExists(r))).ToList(), cancellationToken);
+            _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder))];
+            ApplyFilter();
+        }
+        catch (OperationCanceledException)
+        {
+            // The page went away mid-load: nothing to show and nobody to tell.
+        }
+        catch (Exception)
+        {
+            // The page calls this fire-and-forget on open, so an escaped exception would be unobserved: say so and name the action.
+            Toast(RunsCopy.RefreshFailed);
+        }
     }
 
     partial void OnSearchTextChanged(string value) => ApplyFilter();
@@ -146,13 +158,27 @@ public sealed partial class HistoryViewModel : ObservableObject
             hasFolder,
             _cloud.IsAvailable(run),
             _cloud.CanDelete(run),
-            _cloud.CanDelete(run) ? string.Empty : _strings.GetString(RunsCopy.DeleteCloudUnavailableHint),
-            new RelayCommand(() => Open(run)),
+            DeleteCloudHint(run),
+            new AsyncRelayCommand(() => OpenAsync(run)),
             new AsyncRelayCommand(() => RerunAsync(run)),
             new AsyncRelayCommand(() => RedownloadAsync(run)),
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
             new AsyncRelayCommand(() => RemoveAsync(run)));
+    }
+
+    /// <summary>Why Delete cloud copy is off for this run (one reason, one action), or empty when it is on.</summary>
+    private string DeleteCloudHint(RunRecord run)
+    {
+        if (_cloud.CanDelete(run) && IsFinished(run.Phase))
+        {
+            return string.Empty;
+        }
+
+        var key = !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
+            : !_cloud.IsAvailable(run) ? RunsCopy.DeleteCloudHintNoCopy
+            : RunsCopy.DeleteCloudHintNotConnected;
+        return _strings.GetString(key);
     }
 
     private static (RunStatusFilter Status, string Key) Classify(JobPhase phase) => phase switch
@@ -164,13 +190,16 @@ public sealed partial class HistoryViewModel : ObservableObject
         _ => (RunStatusFilter.Active, RunsCopy.StatusActive),
     };
 
-    private void Open(RunRecord run)
+    private async Task OpenAsync(RunRecord run)
     {
         if (!IsFinished(run.Phase))
         {
             _navigator.NavigateTo("RunProgress", run.JobId);
+            return;
         }
-        else if (_local.OutputFolderExists(run))
+
+        // The folder may have gone since the list was built (and a network drive can be slow): probe off the UI thread.
+        if (await Task.Run(() => _local.OutputFolderExists(run)))
         {
             _navigator.NavigateTo(ViewerViewModel.PageKey, run.OutputDir);
         }
@@ -233,9 +262,17 @@ public sealed partial class HistoryViewModel : ObservableObject
             }
 
             // Recursive disk work: off the UI thread.
-            return RunsCopy.DeleteLocal(await Task.Run(() => _local.DeleteOutputFolder(run)));
+            var result = await Task.Run(() => _local.DeleteOutputFolder(run));
+            if (result.Status != LocalDeleteStatus.Partial)
+            {
+                return RunsCopy.DeleteLocal(result.Status);
+            }
+
+            // Partial says what went and what stayed, so it carries the counts the other outcomes do not.
+            Toast(RunsCopy.DeleteLocal(LocalDeleteStatus.Partial), result.FilesDeleted, result.FilesRemaining);
+            return null;
         },
-        RunsCopy.DeleteLocal(LocalDeleteStatus.Failed));
+        RunsCopy.DeleteLocal(LocalDeleteStatus.InUse));
 
     private Task RemoveAsync(RunRecord run) => ActAsync(
         async () =>
@@ -272,14 +309,12 @@ public sealed partial class HistoryViewModel : ObservableObject
             Toast(shown);
         }
 
-        try
-        {
-            await RefreshAsync(CancellationToken.None);
-        }
-        catch (Exception)
-        {
-            Toast(RunsCopy.RefreshFailed);
-        }
+        await RefreshAsync(CancellationToken.None);
     }
-    private void Toast((string Title, string Body) copy) => _toasts.ShowToast(_strings.GetString(copy.Title), _strings.GetString(copy.Body));
+
+    private void Toast((string Title, string Body) copy, params object[] args)
+    {
+        var body = _strings.GetString(copy.Body);
+        _toasts.ShowToast(_strings.GetString(copy.Title), args.Length == 0 ? body : string.Format(CultureInfo.CurrentCulture, body, args));
+    }
 }

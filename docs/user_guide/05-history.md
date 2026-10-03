@@ -44,5 +44,6 @@ runs pile up.
 
 ## Good to know
 
-- **Download again** never overwrites a file that is already in the run's folder (it may hold your own edits); it only brings back files that are missing. If the run did not finish, the files that exist are restored and the app tells you they may be incomplete.
-- **Delete cloud copy** is greyed out for now, with a note explaining why; delete the files from the Google Cloud console until it is available.
+- **Download again** checks each file already in the run's folder against the size and checksum the run recorded. A file that matches is left exactly as it is; a file that is missing, cut off or damaged is fetched again and replaced, so a file you edited by hand is replaced too. Copy it elsewhere first if you want to keep your edits. If the run did not finish, or one of its files failed, the files that exist are restored and the app tells you they may be incomplete.
+- **Delete cloud copy** is greyed out when it cannot work, and hovering over it says why: the run is still going (wait for it to finish), the run has no cloud copy left (choose Run again if you need the results), or cloud storage is not connected (open Settings to connect).
+- **Delete files on this PC** deletes file by file. If some files cannot be deleted, the app says how many were deleted and how many were not. A file open in another program, and a file Windows will not let you change, each get their own message; close the program or fix the permission, then choose it again.
