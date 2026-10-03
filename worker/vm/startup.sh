@@ -221,10 +221,16 @@ fi
 # through done/failed/cancelled, the real heartbeat/progress cadence, uploading outputs,
 # and writing result.json LAST (docs/job_contract.md). This script's job is done once the
 # container is handed off; it only interprets the container's own exit code below.
+# Issue #75: the worker image runs as uid 10001 (Dockerfile.cuda `USER worker`), so the
+# Hugging Face cache must be a folder that uid can write, and HF_HOME must point at it:
+# the old `/root/.cache/huggingface` mount was never read or written by that user.
+mkdir -p /var/cache/deg-hf
+chown 10001:10001 /var/cache/deg-hf
 docker run --rm \
   --gpus all --shm-size=8g \
   -v /work:/work \
-  -v /var/cache/deg-hf:/root/.cache/huggingface \
+  -v /var/cache/deg-hf:/hf-cache \
+  -e HF_HOME=/hf-cache \
   -e DEG_JOB_URI="$JOBURI" \
   -e DEG_BUCKET="$BUCKET" \
   -e DEG_VM_NAME="$NAME" \

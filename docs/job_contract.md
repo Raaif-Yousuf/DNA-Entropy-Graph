@@ -34,7 +34,7 @@ correctly-implemented worker accept it.
 ```
 gs://deg-<projectNumber>-<rand6>/               (or a local dir for LocalBlobstore/local runs)
   app-config.json
-  cache/models/<modelId>/...                    # HF weights, mirrored after first download
+  cache/models/<modelId>/...                    # HF weights, mirrored after first download; _COMPLETE.json is written LAST and is what marks the set usable
   jobs/<jobId>/
     manifest.json                               # written by the app, immutable once the worker starts reading it
     input/<original filename(s)>

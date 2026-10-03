@@ -1278,3 +1278,225 @@ def test_a_matching_or_undeclared_bucket_and_prefix_runs_normally(monkeypatch, p
     result = run_job(store)
     assert result.status == "done"
     assert "jobs/j1/result.json" in fake.objects
+
+
+# --- issue #75: the model-weights cache is wired into the run, not just defined ----------
+
+
+def _evo_manifest_store(tmp_path: Path) -> LocalBlobstore:
+    store = LocalBlobstore(tmp_path / "job")
+    _write_manifest(store, predictor={"kind": "evo", "model": "evo2_7b"})
+    _seed_fasta_input(store)
+    return store
+
+
+def _progress(store: LocalBlobstore) -> list[dict]:
+    return [json.loads(ln) for ln in store.read_text("progress.jsonl").splitlines() if ln.strip()]
+
+
+def _downloading_factory(hf: Path, built: list):
+    """Stands in for evo2/huggingface_hub: 'downloads' files into the HF cache dir."""
+    from dna_entropy.predictors.mock import MockPredictor
+
+    def _factory(cfg):
+        built.append(cfg)
+        (hf / "models--arcinstitute--evo2_7b" / "blobs").mkdir(parents=True, exist_ok=True)
+        (hf / "models--arcinstitute--evo2_7b" / "blobs" / "sha1").write_bytes(b"weights")
+        return MockPredictor(seed=0)
+
+    return _factory
+
+
+def test_first_job_downloads_then_mirrors_and_second_job_restores(tmp_path: Path) -> None:
+    from dna_entropy.worker.weights import is_cached
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf1, hf2 = tmp_path / "vm1-hf", tmp_path / "vm2-hf"
+
+    store1 = _evo_manifest_store(tmp_path / "a")
+    built1: list = []
+    r1 = run_job(
+        store1, predictor_factory=_downloading_factory(hf1, built1), cache_store=cache, hf_cache_dir=hf1
+    )
+    assert r1.status == "done"
+    assert is_cached(cache, "evo2_7b") is True  # mirrored after the download
+    msgs1 = [p["message"] for p in _progress(store1)]
+    assert any("mirrored" in m for m in msgs1), msgs1
+    assert not any("restored from the cache" in m for m in msgs1)
+
+    # a second FRESH VM (empty HF dir): restores BEFORE the loader runs
+    store2 = _evo_manifest_store(tmp_path / "b")
+    seen_at_load: list[bool] = []
+    from dna_entropy.predictors.mock import MockPredictor
+
+    def _factory2(cfg):
+        seen_at_load.append((hf2 / "models--arcinstitute--evo2_7b" / "blobs" / "sha1").exists())
+        return MockPredictor(seed=0)
+
+    r2 = run_job(store2, predictor_factory=_factory2, cache_store=cache, hf_cache_dir=hf2)
+    assert r2.status == "done"
+    assert seen_at_load == [True], "weights must be in the HF dir before the predictor is built"
+    prog2 = _progress(store2)
+    stages = [p["stage"] for p in prog2]
+    assert "restoring-cache" in stages
+    assert any("restored from the cache" in p["message"] for p in prog2)
+    assert not any("mirrored" in p["message"] for p in prog2)  # nothing new downloaded
+
+
+def test_mirror_failure_is_a_notice_and_never_fails_the_job(tmp_path: Path) -> None:
+    class _BrokenCache(LocalBlobstore):
+        def upload_file(self, local_src, path):
+            raise BlobstoreError("bucket unreachable")
+
+    cache = _BrokenCache(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    store = _evo_manifest_store(tmp_path)
+    result = run_job(
+        store, predictor_factory=_downloading_factory(hf, []), cache_store=cache, hf_cache_dir=hf
+    )
+    assert result.status == "done"
+    assert [i.status for i in result.inputs] == ["done"]
+    failed = [p for p in _progress(store) if "could not be mirrored" in p["message"]]
+    assert failed
+    # non-fatal: contract levels are info/notice/error and "error" reads as a failure
+    assert failed[0]["level"] == "notice"
+
+
+def test_partial_cache_is_ignored_and_the_loader_downloads(tmp_path: Path) -> None:
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    cache.write_text("cache/models/evo2_7b/blobs/sha1", "half")  # no marker
+    hf = tmp_path / "hf"
+    built: list = []
+    store = _evo_manifest_store(tmp_path)
+    result = run_job(
+        store, predictor_factory=_downloading_factory(hf, built), cache_store=cache, hf_cache_dir=hf
+    )
+    assert result.status == "done"
+    assert len(built) == 1
+    assert (hf / "models--arcinstitute--evo2_7b" / "blobs" / "sha1").read_bytes() == b"weights"
+    assert not any("restored from the cache" in p["message"] for p in _progress(store))
+
+
+def test_corrupt_cache_restore_failure_falls_back_to_download(tmp_path: Path) -> None:
+    from dna_entropy.worker.weights import save_to_cache
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    src = tmp_path / "src"
+    (src / "blobs").mkdir(parents=True)
+    (src / "blobs" / "sha1").write_bytes(b"weights")
+    save_to_cache(cache, "evo2_7b", src)
+    cache.write_text("cache/models/evo2_7b/blobs/sha1", "bad")
+    hf = tmp_path / "hf"
+    store = _evo_manifest_store(tmp_path / "j")
+    result = run_job(
+        store, predictor_factory=_downloading_factory(hf, []), cache_store=cache, hf_cache_dir=hf
+    )
+    assert result.status == "done"
+    assert any("could not be restored" in p["message"] for p in _progress(store))
+
+
+def test_mock_predictor_never_touches_the_weights_cache(tmp_path: Path) -> None:
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    store = LocalBlobstore(tmp_path / "job")
+    _write_manifest(store)  # mock
+    _seed_fasta_input(store)
+    result = run_job(store, cache_store=cache, hf_cache_dir=tmp_path / "hf")
+    assert result.status == "done"
+    assert "restoring-cache" not in [p["stage"] for p in _progress(store)]
+    assert cache.list_prefix("cache/") == []
+
+
+def test_gcs_job_mirrors_to_the_bucket_root_not_under_the_job_prefix(tmp_path: Path) -> None:
+    """The default wiring: with no explicit cache_store, a GCS job store derives the
+    bucket-root cache. Under jobs/<id>/ the cache would never be shared across jobs."""
+    from fake_gcs import FakeGcs
+
+    from dna_entropy.worker.blobstore import GcsBlobstore
+
+    fake = FakeGcs("deg-bucket")
+    job = GcsBlobstore("deg-bucket", "jobs/j1/", opener=fake)
+    _write_manifest(job, predictor={"kind": "evo", "model": "evo2_7b"})
+    _seed_fasta_input(job)
+    hf = tmp_path / "hf"
+
+    result = run_job(job, predictor_factory=_downloading_factory(hf, []), hf_cache_dir=hf)
+
+    assert result.status == "done"
+    assert "cache/models/evo2_7b/_COMPLETE.json" in fake.objects
+    assert "cache/models/evo2_7b/models--arcinstitute--evo2_7b/blobs/sha1" in fake.objects
+    assert not [n for n in fake.objects if n.startswith("jobs/j1/cache/")]
+
+
+def test_mirror_is_announced_before_it_starts(tmp_path: Path) -> None:
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    store = _evo_manifest_store(tmp_path)
+    run_job(store, predictor_factory=_downloading_factory(hf, []), cache_store=cache, hf_cache_dir=hf)
+    msgs = [p["message"] for p in _progress(store)]
+    start = [i for i, m in enumerate(msgs) if "mirroring model weights" in m]
+    done = [i for i, m in enumerate(msgs) if "mirrored to the bucket cache" in m]
+    assert start and done and start[0] < done[0]
+
+
+def test_a_non_empty_local_cache_is_never_mirrored_as_a_complete_set(tmp_path: Path) -> None:
+    """Marker would list only part of the set: skip the mirror and say why."""
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    (hf / "models--other--model" / "blobs").mkdir(parents=True)
+    (hf / "models--other--model" / "blobs" / "old").write_bytes(b"old")
+    store = _evo_manifest_store(tmp_path)
+    result = run_job(
+        store, predictor_factory=_downloading_factory(hf, []), cache_store=cache, hf_cache_dir=hf
+    )
+    assert result.status == "done"
+    assert cache.list_prefix("cache/") == []
+    assert any("not mirrored: the local cache was not empty" in p["message"] for p in _progress(store))
+
+
+def test_an_oserror_scanning_the_hf_dir_after_a_good_load_does_not_fail_the_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dna_entropy.worker.runner as runner_mod
+
+    real = runner_mod.snapshot_tree
+    calls = 0
+
+    def _flaky(path):
+        nonlocal calls
+        calls += 1
+        if calls >= 2:  # the post-load scan
+            raise OSError("scan failed")
+        return real(path)
+
+    monkeypatch.setattr(runner_mod, "snapshot_tree", _flaky)
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    store = _evo_manifest_store(tmp_path)
+    result = run_job(
+        store, predictor_factory=_downloading_factory(hf, []), cache_store=cache, hf_cache_dir=hf
+    )
+    assert result.status == "done"
+    assert any("could not be mirrored" in p["message"] for p in _progress(store))
+
+
+def test_cancel_during_the_mirror_stops_it_without_a_marker(tmp_path: Path) -> None:
+    from dna_entropy.predictors.mock import MockPredictor
+    from dna_entropy.worker.weights import is_cached
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    store = LocalBlobstore(tmp_path / "job")
+    _write_manifest(store, predictor={"kind": "evo", "model": "evo2_7b"}, limits={"cancelPollSeconds": 0})
+    _seed_fasta_input(store)
+
+    def _factory(cfg):
+        d = hf / "models--arcinstitute--evo2_7b" / "blobs"
+        d.mkdir(parents=True)
+        (d / "a").write_bytes(b"a")
+        (d / "b").write_bytes(b"b")
+        store.write_text(CANCEL_PATH, "")  # the user cancels while weights are downloading
+        return MockPredictor(seed=0)
+
+    run_job(store, predictor_factory=_factory, cache_store=cache, hf_cache_dir=hf)
+    assert is_cached(cache, "evo2_7b") is False
+    assert any("mirror stopped" in p["message"] for p in _progress(store))
