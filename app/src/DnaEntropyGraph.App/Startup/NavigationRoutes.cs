@@ -25,6 +25,8 @@ public static class NavigationRoutes
         // Issues #72/#73: the igv.js viewer. Navigate with the run's output folder (a string) as the parameter.
         navigationService.RegisterPage(DnaEntropyGraph.Presentation.ViewModels.ViewerViewModel.PageKey, typeof(ViewerPage));
 
+        // Issue #102: a finished run's numbers and files. Navigate with the run's job id (a string) as the parameter.
+        navigationService.RegisterPage(DnaEntropyGraph.Presentation.ViewModels.ResultsViewModel.PageKey, typeof(ResultsPage));
         // Issue #106: the Settings page, so far only its Diagnostics group (Save diagnostics). #104 adds the rest of the
         // groups to this same page. The nav item's Tag is "Settings".
         navigationService.RegisterPage("Settings", typeof(SettingsPage));

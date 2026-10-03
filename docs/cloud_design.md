@@ -198,7 +198,8 @@ Health page (#208) is still unbuilt and still has no caller of its own.
 | HTTP 403 `accessNotConfigured` / "has not been used in project" | `api_disabled` | Abort; route to the setup wizard's "enable APIs" step |
 | HTTP 403 mentioning "billing" / `BILLING_DISABLED` | `billing` | Abort; route to "link billing" |
 | HTTP 403 `forbidden`, `IAM_PERMISSION_DENIED`, mentioning "actAs" | `permission` | Abort |
-| HTTP 412 / `CONDITION_NOT_MET`, message mentions `constraints/` | `org_policy` | Abort; copyable text for IT |
+| HTTP 412 (unless it positively looks like a precondition conflict, next row), `CONDITION_NOT_MET`, or any message mentioning `constraints/` | `org_policy` | Abort; copyable text for IT |
+| HTTP 412 that positively looks like a failed precondition (reason `conditionNotMet`, or "precondition" wording, and no `constraints/` or org-policy wording) | `other` | THEORY (unverified): Cloud Storage uses 412 for an etag or generation mismatch. The caller that sent the precondition decides (the worker-identity bucket write re-reads and retries). One shared rule, `CloudErrorClassifier.IsPreconditionConflict`, used by the classifier, `GoogleApiErrors.KindOf` and the gateway. Every other 412 stays `org_policy`. `docs/ToTest.md` has the row that captures the real shapes. No new enum value: `other` is the existing class for an error nothing else claims, so no `DECISION` was needed |
 | HTTP 409 `alreadyExists` | `already_exists` | Adopt the existing resource rather than retry-as-failure |
 | `HttpRequestException` / timeout | `network` | Retry with backoff (see `docs/migration/2026-09-19-worker-migration-inventory.md`'s note on the prototype's differentiated backoff, which does not carry over unchanged - the always-on keeper's infinite retry loop is exactly what D1 removes; only the *mechanical* polling backoff, issue #256, survives into the per-job model) |
 
@@ -233,15 +234,48 @@ Two distinct quota reads matter, and conflating them is a real bug shape:
 
 ## 7. Least-privilege IAM for the worker service account
 
-A custom role (`projects/<p>/roles/dnaEntropyWorker`) grants exactly
-`compute.instances.get`, `compute.instances.stop`, `compute.instances.delete`, and
-`compute.zoneOperations.get`, bound at the project level with an IAM condition:
-`resource.type == "compute.googleapis.com/Instance" && resource.name.extract("/instances/
-{name}").startsWith("deg-")`. On the results bucket, the worker SA gets
-`roles/storage.objectAdmin` and nothing else. No `logging.logWriter`, no SSH-related
-permission (SSH itself is never used - see section 9). The signed-in user separately needs
-`iam.serviceAccounts.actAs` on this SA (Owner/Editor have it implicitly; a bare Compute
-Admin role does not, which is the `PERMISSION_ACTAS` error class).
+The VM runs as the service account `dna-entropy-worker@<project>.iam.gserviceaccount.com`
+(`WorkerIdentityNames`, issue #54). A custom role (`projects/<p>/roles/dnaEntropyWorker`)
+grants exactly `compute.instances.get`, `compute.instances.stop`,
+`compute.instances.delete` and `compute.zoneOperations.get`.
+
+**What the VM actually calls (MEASURED 2026-10-03 by reading `worker/vm/startup.sh`):** only
+`DELETE .../instances/<name>` and `POST .../instances/<name>/stop` on itself (both with the
+metadata token, both `|| true`), plus Cloud Storage object calls with `curl`. It never reads
+its own instance, never polls a zone operation, never sets metadata. So `instances.get` and
+`zoneOperations.get` are not needed by the script today; they stay because the issue asks for
+them (the worker reading its own state and the operation a stop or delete returns) and they
+are read-only. Nothing the script calls is missing from the role.
+
+The role is bound at the project, to the worker account, with an IAM condition:
+`resource.type != "compute.googleapis.com/Instance" || resource.name.contains("/instances/deg-")`
+(`WorkerIdentityNames.ConditionExpression`). `deg-` is the prefix `VmSpec.VmName` gives every
+VM (`deg-<jobId>`). A VM the user named anything else (`other-x`) fails the condition, so the
+worker account cannot stop or delete it. The first half passes any resource that is not an
+Instance (a zone operation read is checked against a `ZoneOperation`), so the permission that
+needs it is not blocked by a condition written for instances. THEORY (unverified, no live
+project): that Compute evaluates the condition this way for `instances.stop`/`instances.delete`
+and for `zoneOperations.get`; the earlier text of this section and Appendix B wrote
+`resource.type == ... && resource.name.extract(...)`, which would also deny the zone-operation
+read, and asked for the CEL to be verified once. `docs/ToTest.md` carries that row. On the
+results bucket the worker account gets `roles/storage.objectAdmin` and nothing else (a bucket
+policy binding, not a project one). No `logging.logWriter`, no SSH-related permission (SSH
+itself is never used - see section 9).
+
+**Honest limit of the condition (cold review, round 2).** The condition scopes the account to VMs named `deg-*`, not to
+the VM the token belongs to: every worker VM runs as the same account, so one `deg-` VM's token can stop or delete any other
+`deg-` VM in the project (never a VM named anything else, and it cannot create one). Per-instance IAM (`instances.setIamPolicy`
+at create time) would scope it to the VM itself; it is a follow-up under #56 and is not built. See `threat_model.md`.
+
+The signed-in user separately needs `iam.serviceAccounts.actAs` on this account (Owner/Editor
+have it implicitly; a bare Compute Admin role does not). A VM create that fails for that reason
+is the `PERMISSION_ACTAS` error: `CloudErrorClassifier.IsActAsDenial` recognises a 403 naming
+`iam.serviceAccounts.actAs` or `roles/iam.serviceAccountUser`, `GoogleApiErrors.ToException`
+(used for an HTTP error body and for the `error` of a polled operation alike, which `FromOperationError` converts first)
+gives it the code `PERMISSION_ACTAS` (still the `permission` bucket, so it still aborts), and the
+one action is Copy request for the project owner. **Reachable only once #604 lands:** there is no Compute insert path yet, so today only tests produce
+this code, and the Copy request action does not yet name `roles/iam.serviceAccountUser` on the worker account's email (it would
+copy the generic request); both are #604's Done when.
 
 ## 8. Termination semantics - the pitfall this project has already been burned by once
 
@@ -896,7 +930,7 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   Requests per minute", no details); THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word
   "quota" without per-minute or per-second wording. A PERMISSION_DENIED 403 that merely quotes a `constraints/` id is a
   permission error, not an organization-policy one, so `GetProjectAsync` still answers "not visible"; only an
-  ORG_POLICY reason, a 412, or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
+  ORG_POLICY reason, a 412 that is not a positively identified precondition conflict (issue #54), or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
   null, with no request, for an id outside Google's project-id grammar.
 - **Not proven without a real account:** `docs/ToTest.md`.
 ### Billing check and link (issue #51, wizard step 4)
@@ -949,10 +983,127 @@ creates the project's default network).
   already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
   already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
-  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute and
-  storage gateways and the token refresher do not, so production still resolves everything to `FakeGcp` (#56, #520).
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute gateway
+  and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
 - **Proven only by a real project:** `docs/ToTest.md`.
+### The results bucket (issue #53, wizard step 5)
+
+`IStorageGateway` (`EnsureBucketAsync`, `UploadAsync`, `DownloadAsync`, `TryDownloadAsync`); the real one is
+`GoogleStorageGateway` over `Google.Apis.Storage.v1` (Apache-2.0), returned as `GoogleCloudGatewaySet.Storage`. Production
+still resolves the fake until #56 switches DI. It is never wrapped in `ResilientStorageGateway` (the ordinary decorator for a
+single-call gateway): `EnsureBucketAsync` is a list, a create, a read-back and possibly a patch, and a whole-method retry would
+replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, as the project and service gateways do.
+
+- **Name and place.** `deg-<projectNumber>-<rand6>` (6 lowercase base32 characters), in the region-group multi-region
+  (`GoogleCloudOptions.BucketLocation`, default `US`; data residency #149 changes it). The project NUMBER comes from
+  `projects.get` (`name: projects/<number>`), via `GoogleProjectCatalogGateway.GetProjectNumberAsync`; a project the account
+  cannot see is a `permission` error and nothing is sent to Storage.
+- **Settings asked for.** Uniform bucket-level access on, `publicAccessPrevention=enforced`, and two lifecycle rules:
+  Delete when age >= the retention (`GoogleCloudOptions.ResultsRetentionDays`, the user's "Cloud results retention",
+  `RunOptions.CloudResultsRetentionDays`, default 90) for objects matching prefix `jobs/`, and Delete at age 365 for `cache/`.
+- **Labels.** `app=dna-entropy-graph`, `installation-id`, `app-version` (sanitized), `lifecycle=results`. `job-id` and `model`
+  are left off: a bucket serves every run and every model, the same exemption a project has. DECISION (agent-made,
+  reversible): see #582; the carve-out is recorded under Rules 9 and 10 in `hard_rules.md`. A missing installation id fails before any request (Hard Rule 10).
+- **Applied is not present.** After an insert, and after a patch, the bucket is read back and compared: UBLA, PAP, and both
+  rules with the configured ages. A difference fails with `BUCKET_CONFIG_NOT_APPLIED` (kind `other`) naming what differs; the
+  name is not returned and no `app-config.json` is written. The next call finds the labelled bucket, sees it drifted, and patches it.
+- **Discovery by label, adoption.** `buckets.list` with prefix `deg-` for the project, keep the ones labelled
+  `app=dna-entropy-graph`, prefer this installation's, then the oldest, then by name. A second PC of the same installation, or
+  another installation in the same project, adopts it: no insert. An adopted bucket that reads back drifted (for instance the
+  user changed the retention on the other PC) is patched and read back; one that reads back right is left alone. The patch
+  keeps every lifecycle rule that is not ours (see the next point for what counts as ours) and
+  replaces only ours. Two installations with different retention settings never shorten each other: see the next point.
+- **Never shorten the `jobs/` or `cache/` age.** DECISION (agent-made, reversible; issue #597): an adopting installation may LENGTHEN the shared
+  bucket's `jobs/` and `cache/` ages, never shorten them, because shortening makes Cloud Storage delete other installations' files
+  (results, the weights cache) early (Hard Rule 14). A Delete rule at or above the configured age (`jobs/`: the retention; `cache/`: 365) is not
+  drift (no patch); a shorter one is lengthened to the configured age; a patch made for any other reason keeps the longest own age it found for
+  each prefix. So the bucket holds the longest age any installation asked for. A rule counts as ours only if its condition is exactly an age and
+  the one prefix with a Delete action; a user's `jobs/` rule with any extra condition (storage class, live state, noncurrent time, suffix...)
+  is neither counted toward our age nor replaced.
+  Consequence: lowering retention in Settings against a longer bucket is silently ignored today. #598 owns the fix: an explicit, user-confirmed
+  shortening, and the user seeing that the bucket keeps the longer age (copy names the action).
+- **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference
+  order); if the preferred bucket is not the one it just made, it deletes its own (still empty: the config is written after this
+  check) and adopts the preferred one. A delete Google refuses (not empty, because the other PC adopted it meanwhile) is
+  swallowed and the bucket stays labelled. A bucket this call did not create is never deleted. Two installations in one project
+  each prefer their own bucket, so they may keep one each; that is the same accepted behaviour as before.
+- **409 on insert.** Our own insert replayed after a dropped connection also answers 409: if the named bucket reads back as
+  ours it is kept (its read is the read-back); otherwise (403 or not ours) a new suffix is drawn. Five names at most, then
+  `BUCKET_NAME_TAKEN` (kind `already_exists`).
+- **`app-config.json`** at the bucket root: schema, installation id, app version, both retentions, creation time (built with
+  `System.Text.Json`, so ids are escaped). Written on create and again on every adopt or repair, always with
+  `ifGenerationMatch=0` ("only if absent"): a 412 means the file is already there and stands, so a first write that failed is
+  made good by the next call. THEORY (unverified): Cloud Storage answers a failed precondition (`ifGenerationMatch`, `ifMetagenerationMatch`)
+  with 412, and an organization-policy denial is also a 412 whose message carries `constraints/`, so only a 412 without `constraints/`
+  is swallowed and the other surfaces as `org_policy`; the documented shapes are not captured from a real project (a ToTest row covers it). It is not
+  rewritten when a retention changes (the lifecycle rule on the bucket is the truth; a `retention change patches the rule` flow is #114).
+- **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
+  tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (results and manifests are
+  small; the multi-GB weights cache is the worker's, #496). `TryDownloadAsync` answers null for a 404 only; every other failure
+  throws, so a transport error never reads as "the worker has not finished".
+- **Error roster.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are `SetupErrorCodes.BucketConfigNotApplied` and
+  `BucketNameTaken` (in `SetupErrorCodes.All`, `Resources.resw`, `copy_catalog.md` and `triage_diagnostics.py`); both name Try
+  again. A project the account cannot see is `PERMISSION`, whose message names Copy request for owner.
+- **Retention is validated.** `ResultsRetentionDays` outside 1 to 3650 throws `ArgumentOutOfRangeException` before any request
+  (0 would delete job results at once). The default is `ResultsBucket.DefaultRetentionDays`, which `RunOptions.CloudResultsRetentionDays` reuses.
+- **Proven only by a real project:** `docs/ToTest.md`.
+### The worker identity (issue #54)
+
+`GoogleIamGateway` (IAM v1, Resource Manager v3 and Cloud Storage v1; `Google.Apis.Iam.v1` 1.77.0.4285, Apache-2.0, the
+version NuGet resolved online because the offline cache did not hold it) implements `IWorkerIdentityGateway`. Like the
+catalog and the bucket gateways it is never wrapped in a `Resilient*` decorator (a test fails if one appears): it creates an
+account and a role and edits two policies, and a whole-method retry would replay the creates. Each HTTP call goes through
+`CloudCallPipeline` itself.
+
+- **Order.** Read the project (its number names the fallback account; a project the user cannot see fails first), then the
+  account, then the role, then the project binding, then the bucket binding.
+- **Account.** `serviceAccounts.create`. A 409 is adopted (confirmed with a `get`). An organization-policy refusal
+  (`iam.disableServiceAccountCreation`, which classifies as `org_policy`) falls back to the default Compute Engine account
+  `<projectNumber>-compute@developer.gserviceaccount.com` with the same role and bindings, and the result carries
+  `WorkerIdentity.NoteCode = WORKER_DEFAULT_ACCOUNT`: the wizard shows `SetupError_WORKER_DEFAULT_ACCOUNT` as a yellow note
+  with Continue, not as a failure. THEORY (unverified, no live project): that account may already hold a broad role (in older
+  projects often Editor; organizations with `iam.automaticIamGrantsForDefaultServiceAccounts` enforced do not grant it), which the
+  app cannot narrow, and the note says "may". If the default account is missing too, the code is `WORKER_DEFAULT_ACCOUNT_MISSING`. Any other refusal (a plain 403) does not fall back. THEORY (unverified, no live project): the exact wording of
+  the org-policy refusal; the classifier keys on the `constraints/` id, and the gateway also accepts the bare
+  `iam.disableServiceAccountCreation` name. A 409 on create followed by a 404 on the read (the account vanished between the
+  two) creates once more, then fails with `WORKER_IDENTITY_NOT_APPLIED`. The default account also receives
+  `roles/storage.objectAdmin` on the results bucket, which every workload running as it holds (see `threat_model.md`); the
+  yellow note says so.
+- **Role.** `roles.create`. A 409 reads the role back: `deleted=true` is undeleted (a deleted custom role keeps its id for about
+  7 days), a role whose permission set is not exactly the four is patched with `updateMask=includedPermissions` and read back,
+  and a patch that does not read back fails with `WORKER_IDENTITY_NOT_APPLIED` ("applied is not present", as for the bucket).
+- **The answer is read.** Each `setIamPolicy` returns the policy it stored. The project answer must hold the role, the member
+  and the `deg-` condition; the bucket answer must hold `roles/storage.objectAdmin` and the member (no condition). A 200 whose
+  answer lacks the binding fails with `WORKER_IDENTITY_NOT_APPLIED` (Try again) instead of reporting success for a binding that
+  is not there.
+- **Policies.** Conditional bindings need policy version 3: the read sends `requestedPolicyVersion=3` and the write sets
+  `version=3`. A binding is its role plus its condition; it is added only when missing, so a second run writes nothing, and
+  nothing the app did not add is touched (other bindings, audit configs). The write carries the etag it read; a 409 re-reads
+  and re-applies, five attempts at most. THEORY (unverified): Cloud Storage words the same etag conflict as a 412, so a 412
+  that positively looks like a failed precondition (the shared rule in section 5) is treated alike (re-read and retry, three
+  writes at most, then `WORKER_IDENTITY_NOT_APPLIED`); any other 412, a constraint-naming one included, stays `org_policy` and
+  is not retried. A default account that "does not exist" at `setIamPolicy` was deleted or disabled (preflight already enabled Compute, so
+  "Turn it on" could not help and would loop): it is `WORKER_DEFAULT_ACCOUNT_MISSING` at once, with no wait, whose one action
+  is a link to the project's Service Accounts page (`ServiceAccountLinks.ForProject`), where the user or their administrator can
+  restore it or allow the app to create its own. A just-created account
+  can be briefly invisible to `setIamPolicy` (400 "does not exist"); that case alone waits on the injected delay (2 s, 4 s,
+  ... ) and re-reads, six tries and five waits at most, then fails with `WORKER_IDENTITY_NOT_APPLIED` whose button is Try
+  again. The wait applies only to an account this call just created: an adopted or default account that "does not exist" is a
+  real failure and surfaces at once (Try again could never fix it): the default account as `WORKER_DEFAULT_ACCOUNT_MISSING`, an
+  adopted one as the raw error.
+- **Hard Rule 10 and labels.** A service account and a custom role cannot carry labels (Google's IAM has no label field on
+  either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
+  per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers
+  labels on these two, so there is no allowlist entry. Everything that bills (the VM, the bucket) keeps its labels.
+- **No production caller yet.** `IWorkerIdentityGateway` has no registration in `ServiceRegistration` and nothing calls
+  `EnsureWorkerIdentityAsync`: only `GoogleCloudGateways.Create` builds it (and tests use it). Calling it from the setup flow
+  before a VM is created, and registering it, is issue #606 (P1). Until then no VM runs as the worker account. `FakeGcp`
+  implements the member
+  with scripted failures (`WithServiceAccountCreationBlockedByOrgPolicy`, `WithWorkerIdentityPermissionDenied`,
+  `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
+- **Proven only by a real project:** `docs/ToTest.md`.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

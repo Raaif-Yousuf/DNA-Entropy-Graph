@@ -159,6 +159,10 @@ public static class ServiceRegistration
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
             [Path.GetDirectoryName(settingsPath)!]));
         services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
+
+        // Issue #102: the Results page reads a run's own output folder and opens its files through Windows.
+        services.AddSingleton<IRunOutputReader, RunOutputReader>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IShellLauncher, Services.ShellLauncher>();
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),
