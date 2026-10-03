@@ -22,12 +22,12 @@ from pathlib import Path
 # Paths under these prefixes are irrelevant to the app/worker jobs, unless a RELEVANT_EXCEPTIONS entry claims them.
 IRRELEVANT_PREFIXES = ("docs/", ".claude/", ".agents/", ".codex/", ".serena/")
 # Exact root files with no effect on any job (root Markdown is handled by is_root_markdown).
-IRRELEVANT_FILES = frozenset({"LICENSE", ".gitignore", ".ignore"})
+IRRELEVANT_FILES = frozenset({"license", ".gitignore", ".ignore"})
 # Read by tests or by a job step although they live under an irrelevant prefix. Matched exactly (prefix match only where
 # the entry ends with '/'), never by substring.
 RELEVANT_EXCEPTIONS = ("docs/contract/", "docs/copy_catalog.md")
 # Root files that LOOK like docs but are read: THIRD-PARTY-NOTICES.md is regenerated and checked against dotnet/pip state.
-RELEVANT_ROOT_MARKDOWN = frozenset({"THIRD-PARTY-NOTICES.md"})
+RELEVANT_ROOT_MARKDOWN = frozenset({"third-party-notices.md"})
 WORKFLOWS = ("ci-app", "ci-worker")
 
 
@@ -36,9 +36,14 @@ def is_root_markdown(path: str) -> bool:
 
 
 def is_relevant(workflow: str, path: str) -> bool:
-    """True unless `path` is known to be irrelevant to `workflow` (so unknown paths run the jobs)."""
+    """True unless `path` is known to be irrelevant to `workflow` (so unknown paths run the jobs).
+
+    Matching is case-insensitive: every rule above is lowercase and `path` is lowercased first, because paths authored on
+    Windows can differ in case from what git recorded (Docs/, Readme.md) and a miss must never be a surprise skip.
+    """
+    path = path.lower()
     if path.startswith(".github/workflows/") and path.endswith(".yml"):
-        return path == f".github/workflows/{workflow}.yml"
+        return path == f".github/workflows/{workflow}.yml".lower()
     for exception in RELEVANT_EXCEPTIONS:
         if path == exception or (exception.endswith("/") and path.startswith(exception)):
             return True

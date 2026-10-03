@@ -1,0 +1,1 @@
+- CI: the changes gate is now fail-closed at job level (a failed or broken gate runs the app and worker jobs instead of skipping them), path matching is case-insensitive, and a test pins the needs/if wiring (#31).

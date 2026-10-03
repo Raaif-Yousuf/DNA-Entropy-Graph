@@ -46,6 +46,7 @@ the other agent-tool folders, `LICENSE`, and other workflows' own files). Everyt
 `.editorconfig`, `global.json`, `scripts/**` and any unknown path; a git error, a missing base or a non-PR event also runs them.
 So a docs-only PR skips the Windows build, while a PR touching `worker/` runs ci-app too (app tests read worker files) and
 ci-worker runs on app-only PRs (cheap, and not provably irrelevant).
+**Fail-closed at job level too.** A job whose `needs` did not succeed is Skipped unless its `if:` has a status function, and a Skipped required check reads as green. So every job gated on `changes` uses `!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true')`: a failed or broken gate RUNS the real jobs instead of skipping them, and a cancelled run stays cancelled. The test parses the workflow files and evaluates that expression for gate failed, run true and run false. Path matching in the script is case-insensitive.
 `scripts/tests/test_ci_changes_gate.py` fails when a path an app or worker test reads, or a workflow step reads (including the
 implicit `.editorconfig` and `app/global.json`), would be classified irrelevant; matching is exact per path, not prefix-of-a-directory.
 

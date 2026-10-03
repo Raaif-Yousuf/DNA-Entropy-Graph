@@ -152,7 +152,9 @@ def _add_joined(found: set[str], segments: list[str]) -> None:
 
 
 def _run_line_paths(workflow: str) -> set[str]:
-    text = (REPO / ".github" / "workflows" / f"{workflow}.yml").read_text(encoding="utf-8")
+    raw = (REPO / ".github" / "workflows" / f"{workflow}.yml").read_text(encoding="utf-8")
+    # Comments only mention paths ("see docs/ToTest.md."); the trailing dot also made Path.exists() lie on Windows.
+    text = "\n".join(line for line in raw.splitlines() if not line.lstrip().startswith("#"))
     found: set[str] = set()
     for token in re.findall(r"[\w./-]+/[\w./-]+", text):
         token = token.strip("./") if token.startswith("./") else token
@@ -198,3 +200,72 @@ def test_a_pull_request_with_no_base_sha_runs_the_jobs(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert out.read_text(encoding="utf-8").strip() == "run=true"
     assert "::warning" in proc.stdout
+
+
+# --- the needs/if wiring: a broken gate must RUN the real jobs, never skip them (#31 round 2) -----------------------------
+#
+# GitHub semantics: a job whose `needs` did not succeed is SKIPPED unless its `if:` contains a status function
+# (always(), cancelled(), failure(), success() explicitly); a skipped required job reads as green. So with the bare
+# `if: needs.changes.outputs.run == 'true'` a failed `changes` job (outputs.run is empty) skipped every real job and the PR
+# went green with nothing tested. The fix is `!cancelled() && (needs.changes.result != 'success' || ...run == 'true')`.
+
+_STATUS_FUNCTIONS = re.compile(r"\b(always|cancelled|failure)\(\)")
+
+
+def _jobs_needing_changes(workflow: str) -> dict[str, str]:
+    """{job id: its `if:` expression ('' when absent)} for every top-level job with `needs: changes` (text parse, no yaml dep)."""
+    lines = (REPO / ".github" / "workflows" / f"{workflow}.yml").read_text(encoding="utf-8").splitlines()
+    jobs: dict[str, list[str]] = {}
+    current = None
+    in_jobs = False
+    for line in lines:
+        if re.match(r"^jobs:\s*$", line):
+            in_jobs = True
+        elif in_jobs and re.match(r"^\S", line):
+            in_jobs = False
+        elif in_jobs and (m := re.match(r"^  ([\w-]+):\s*$", line)):
+            current = m.group(1)
+            jobs[current] = []
+        elif in_jobs and current is not None:
+            jobs[current].append(line)
+    found: dict[str, str] = {}
+    for job, body in jobs.items():
+        if any(re.match(r"^    needs:\s*(changes|\[\s*changes\s*\])\s*$", ln) for ln in body):
+            expr = next((m.group(1).strip() for ln in body if (m := re.match(r"^    if:\s*(.*)$", ln))), "")
+            found[job] = expr
+    return found
+
+
+def _evaluate(expr: str, result: str, run: str) -> bool:
+    """Evaluate the small GitHub expression subset the workflows use, for a given `changes` result and `run` output."""
+    body = re.sub(r"^\$\{\{\s*|\s*\}\}$", "", expr)
+    py = body.replace("&&", " and ").replace("||", " or ")
+    py = re.sub(r"!(?!=)", " not ", py)
+    py = py.replace("needs.changes.result", repr(result)).replace("needs.changes.outputs.run", repr(run))
+    py = py.replace("always()", "True").replace("cancelled()", "False").replace("failure()", "False")
+    assert re.fullmatch(r"[\sA-Za-z'!=()]*", py), f"expression outside the supported subset: {expr!r} -> {py!r}"
+    return bool(eval(py, {"__builtins__": {}}, {}))  # noqa: S307  (a closed-vocabulary expression from our own workflows)
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS)
+def test_every_job_gated_on_changes_runs_when_the_gate_itself_failed(workflow):
+    jobs = _jobs_needing_changes(workflow)
+    assert len(jobs) >= {"ci-app": 1, "ci-worker": 3}[workflow], f"vacuity guard: found only {sorted(jobs)}"
+    for job, expr in jobs.items():
+        assert _STATUS_FUNCTIONS.search(expr), (
+            f"{workflow}:{job} has no status function in its if ({expr!r}), so a failed `changes` job SKIPS it and a skipped "
+            "required job reads as green"
+        )
+        assert _evaluate(expr, "failure", "") is True, f"{workflow}:{job} is skipped when the changes job fails"
+        assert _evaluate(expr, "success", "true") is True, f"{workflow}:{job} does not run when the gate says run"
+        assert _evaluate(expr, "success", "false") is False, f"{workflow}:{job} runs although the gate said skip"
+
+
+def test_the_gate_decision_is_case_insensitive():
+    # Windows-authored paths can differ in case (Docs/Readme.md, APP/x.cs); a case miss must not turn into a skip or a run by luck.
+    assert gate.is_relevant("ci-app", "Docs/Architecture.MD") is False
+    assert gate.is_relevant("ci-app", "APP/src/A.cs") is True
+    assert gate.is_relevant("ci-app", "Docs/Contract/x.json") is True
+    assert gate.is_relevant("ci-app", "docs/COPY_CATALOG.md") is True
+    assert gate.is_relevant("ci-app", "ReadMe.md") is False
+    assert gate.is_relevant("ci-app", "third-party-notices.md") is True
