@@ -5,8 +5,10 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// <summary>
 /// The real <see cref="IProjectSetupGateway"/> (the preflight chain a run walks), built from the three real gateways
 /// instead of a fourth set of Google calls: project state from Resource Manager, billing from Cloud Billing, the
-/// Compute API from Service Usage. It is built over the raw gateways and wrapped once by
-/// <see cref="ResilientProjectSetupGateway"/>, so a call is retried by one pipeline, not two.
+/// Compute API from Service Usage. It is NOT wrapped in <see cref="ResilientProjectSetupGateway"/>: the catalog and
+/// service gateways it is built over already send each HTTP call through the pipeline themselves (so enabling Compute
+/// retries its POST alone and never replays it when a poll read fails), and billing arrives already wrapped. A second
+/// layer here would retry a retried call and could replay the POST.
 /// </summary>
 internal sealed class GoogleProjectSetupGateway : IProjectSetupGateway
 {

@@ -10,46 +10,62 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// returns an operation, polled every 5 seconds; once it reports done,
 /// <c>services.get</c> is asked every 5 seconds until each service reads ENABLED, all inside ONE deadline (5 minutes in
 /// production) for the whole call, because a finished operation is not
-/// the same as a service that is ready. No retry of its own: it is wrapped by the resilience pipeline.
+/// the same as a service that is ready. It is NOT wrapped in <see cref="ResilientServiceEnablementGateway"/>: it routes
+/// every HTTP call through <see cref="CloudCallPipeline"/> itself, so the mutating <c>batchEnable</c> POST is retried
+/// alone and each poll read (<c>operations.get</c>, <c>services.get</c>) is its own retried idempotent call. A 429 or
+/// 5xx while polling re-reads; it never re-POSTs. The deadline is wall-clock and covers the time inside each read.
 /// </summary>
 internal sealed class GoogleServiceUsageGateway : IServiceEnablementGateway
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
     private readonly ServiceUsageService _service;
+    private readonly CloudCallPipeline _pipeline;
     private readonly GoogleCloudOptions _options;
 
-    public GoogleServiceUsageGateway(ServiceUsageService service, GoogleCloudOptions options)
+    public GoogleServiceUsageGateway(ServiceUsageService service, CloudCallPipeline pipeline, GoogleCloudOptions options)
     {
         _service = service;
+        _pipeline = pipeline;
         _options = options;
     }
 
-    public async Task<bool> IsServiceEnabledAsync(string projectId, string serviceId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var service = await _service.Services.Get($"projects/{projectId}/services/{serviceId}").ExecuteAsync(cancellationToken).ConfigureAwait(false);
-            return string.Equals(service.State, "ENABLED", StringComparison.Ordinal);
-        }
-        catch (GoogleApiException ex)
-        {
-            throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-        }
-    }
+    public Task<bool> IsServiceEnabledAsync(string projectId, string serviceId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync(
+            "Services.IsServiceEnabled",
+            async ct =>
+            {
+                try
+                {
+                    var service = await _service.Services.Get($"projects/{projectId}/services/{serviceId}").ExecuteAsync(ct).ConfigureAwait(false);
+                    return string.Equals(service.State, "ENABLED", StringComparison.Ordinal);
+                }
+                catch (GoogleApiException ex)
+                {
+                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                }
+            },
+            cancellationToken);
 
     public async Task EnableServicesAsync(string projectId, IReadOnlyList<string> serviceIds, CancellationToken cancellationToken)
     {
-        UsageData.Operation operation;
-        try
-        {
-            var body = new UsageData.BatchEnableServicesRequest { ServiceIds = serviceIds.ToList() };
-            operation = await _service.Services.BatchEnable(body, "projects/" + projectId).ExecuteAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (GoogleApiException ex)
-        {
-            throw ToEnableException(GoogleApiErrors.FromApiException(ex));
-        }
+        // The mutating call alone goes through the retrying pipeline (batchEnable is idempotent: enabling an enabled
+        // service is a no-op).
+        var body = new UsageData.BatchEnableServicesRequest { ServiceIds = serviceIds.ToList() };
+        var operation = await _pipeline.ExecuteAsync(
+            "Services.EnableServices",
+            async ct =>
+            {
+                try
+                {
+                    return await _service.Services.BatchEnable(body, "projects/" + projectId).ExecuteAsync(ct).ConfigureAwait(false);
+                }
+                catch (GoogleApiException ex)
+                {
+                    throw ToEnableException(GoogleApiErrors.FromApiException(ex));
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
 
         // One poll, one deadline for the whole call: first the operation, then (in the same loop, without a second wait
         // budget) each service reading ENABLED. Two separate polls would let the call wait twice the deadline.
@@ -73,6 +89,7 @@ internal sealed class GoogleServiceUsageGateway : IServiceEnablementGateway
             _options.OperationDeadline,
             cancellationToken,
             _options.Delay,
+            _options.TimeProvider,
             PollInterval).ConfigureAwait(false);
         ThrowIfFailed(ready);
     }
@@ -90,14 +107,21 @@ internal sealed class GoogleServiceUsageGateway : IServiceEnablementGateway
         // The first look is at the operation batchEnable returned; later looks ask Google for it again.
         if (operation.Done != true)
         {
-            try
-            {
-                operation = await _service.Operations.Get(operation.Name).ExecuteAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (GoogleApiException ex)
-            {
-                throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-            }
+            var name = operation.Name;
+            operation = await _pipeline.ExecuteAsync(
+                "Services.PollEnableOperation",
+                async ct =>
+                {
+                    try
+                    {
+                        return await _service.Operations.Get(name).ExecuteAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (GoogleApiException ex)
+                    {
+                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
         }
 
         if (operation.Done != true)

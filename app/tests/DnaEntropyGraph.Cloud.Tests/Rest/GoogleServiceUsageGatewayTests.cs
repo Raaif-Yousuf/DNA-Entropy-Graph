@@ -231,6 +231,98 @@ public class GoogleServiceUsageGatewayTests
         rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(20);
     }
 
+    [Fact]
+    public async Task A_transient_error_on_a_poll_read_is_retried_on_its_own_and_never_posts_batchEnable_again()
+    {
+        var rig = new GoogleGatewayHarness(retries: 3);
+        rig.Handler.Returns(Post, BatchEnable, 200, OperationDone);
+        for (var i = 0; i < 3; i++)
+        {
+            rig.Handler.Returns(Get, Compute, 200, Service("compute.googleapis.com", "ENABLING"));
+        }
+
+        rig.Handler
+            .Returns(Get, Compute, 503, RpcError(503, "UNAVAILABLE", "The service is currently unavailable."))
+            .Returns(Get, Compute, 200, Service("compute.googleapis.com", "ENABLED"))
+            .Returns(Get, Storage, 200, Service("storage.googleapis.com", "ENABLED"))
+            .Returns(Get, Quotas, 200, Service("cloudquotas.googleapis.com", "ENABLED"));
+
+        await rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None);
+
+        rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
+        rig.Handler.To(Get, Compute).Count.ShouldBe(5);
+        rig.Log.Retries.Count.ShouldBe(1);
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBeLessThanOrEqualTo(TimeSpan.FromMinutes(2).TotalSeconds);
+    }
+
+    [Fact]
+    public async Task A_transient_error_on_the_operation_poll_is_retried_on_its_own_and_never_posts_batchEnable_again()
+    {
+        var rig = new GoogleGatewayHarness(retries: 3);
+        rig.Handler
+            .Returns(Post, BatchEnable, 200, OperationPending)
+            .Returns(Get, OperationPath, 503, RpcError(503, "UNAVAILABLE", "The service is currently unavailable."))
+            .Returns(Get, OperationPath, 200, OperationDone);
+        AllEnabled(rig.Handler);
+
+        await rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None);
+
+        rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
+        rig.Handler.To(Get, OperationPath).Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_hung_services_get_ends_at_the_deadline_as_the_poll_timeout_after_one_post()
+    {
+        var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromMilliseconds(300), retries: 3);
+        rig.Handler.Returns(Post, BatchEnable, 200, OperationDone).Hangs(Get, Compute);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
+        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(30));
+        rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
+        rig.Handler.To(Get, Compute).Count.ShouldBe(1);
+        rig.Log.Retries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_callers_cancel_mid_poll_is_a_cancel_and_is_not_replayed()
+    {
+        var rig = new GoogleGatewayHarness(retries: 3);
+        using var cts = new CancellationTokenSource();
+        rig.Handler
+            .Returns(Post, BatchEnable, 200, OperationDone)
+            .Calls(Get, Compute, async token =>
+            {
+                await cts.CancelAsync();
+                await Task.Delay(Timeout.Infinite, token);
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+            });
+
+        await Should.ThrowAsync<OperationCanceledException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, cts.Token));
+
+        rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
+        rig.Log.Retries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Enabling_through_preflight_never_replays_the_post_when_a_poll_read_keeps_failing()
+    {
+        var rig = new GoogleGatewayHarness(retries: 2);
+        rig.Handler.Returns(Post, BatchEnable, 200, OperationDone);
+        for (var i = 0; i < 12; i++)
+        {
+            rig.Handler.Returns(Get, Compute, 503, RpcError(503, "UNAVAILABLE", "The service is currently unavailable."));
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.ProjectSetup.EnableComputeApiAsync("my-lab", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
+    }
+
     [Theory]
     [InlineData("ENABLED", true)]
     [InlineData("DISABLED", false)]

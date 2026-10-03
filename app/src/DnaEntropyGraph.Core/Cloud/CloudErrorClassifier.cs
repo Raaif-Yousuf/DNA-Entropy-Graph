@@ -81,7 +81,7 @@ public static partial class CloudErrorClassifier
 
         // Issue #539: a refusal that names a missing permission is a missing role even when the permission is
         // "billing.*" and the text mentions a billing account; only a message that says billing is OFF is Billing.
-        if (IsPermissionDenial(code, lower))
+        if ((status is null or 403) && IsPermissionDenial(code, lower))
         {
             return CloudErrorKind.Permission;
         }

@@ -75,15 +75,16 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             Task<VmDescriptor>? createTask = null;
             progress.VmMayExist = true;
             var outcome = await OperationPoller.PollAsync<VmDescriptor>(
-                async pollToken =>
+                async _ =>
                 {
                     try
                     {
-                        // WaitAsync: the poller only checks its deadline between polls, so a create that never answers
-                        // would otherwise hang the run forever.
-                        createTask = compute.CreateVmAsync(spec, zone, pollToken);
+                        // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
+                        // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
+                        // token (the same instant, so the poller's would win and hide the abandoned create).
+                        createTask = compute.CreateVmAsync(spec, zone, cancellationToken);
                         TrackInflightCreate(request.JobId, createTask);
-                        var vm = await createTask.WaitAsync(settings.CreateTimeout, pollToken).ConfigureAwait(false);
+                        var vm = await createTask.WaitAsync(settings.CreateTimeout, cancellationToken).ConfigureAwait(false);
                         return new OperationPoll<VmDescriptor>(true, vm, null);
                     }
                     catch (TimeoutException)

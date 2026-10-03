@@ -14,21 +14,35 @@ internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Autho
 /// </summary>
 internal sealed class ScriptedHttpHandler : HttpMessageHandler
 {
-    private readonly Dictionary<(string Method, string Path), Queue<Func<HttpResponseMessage>>> _routes = new();
+    private readonly Dictionary<(string Method, string Path), Queue<Func<CancellationToken, Task<HttpResponseMessage>>>> _routes = new();
 
     public List<RecordedRequest> Requests { get; } = [];
 
     public ScriptedHttpHandler Returns(HttpMethod method, string absolutePath, int status, string json)
     {
+        return Calls(method, absolutePath, _ => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status) { Content = new StringContent(json, Encoding.UTF8, "application/json") }));
+    }
+
+    /// <summary>Queues a response the test computes: it can hang until the request is cancelled, throw, or cancel the caller mid-request.</summary>
+    public ScriptedHttpHandler Calls(HttpMethod method, string absolutePath, Func<CancellationToken, Task<HttpResponseMessage>> respond)
+    {
         var key = (method.Method, absolutePath);
         if (!_routes.TryGetValue(key, out var queue))
         {
-            _routes[key] = queue = new Queue<Func<HttpResponseMessage>>();
+            _routes[key] = queue = new Queue<Func<CancellationToken, Task<HttpResponseMessage>>>();
         }
 
-        queue.Enqueue(() => new HttpResponseMessage((HttpStatusCode)status) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+        queue.Enqueue(respond);
         return this;
     }
+
+    /// <summary>Queues a request that never answers: it ends only when the request's own token is cancelled (a hung connection).</summary>
+    public ScriptedHttpHandler Hangs(HttpMethod method, string absolutePath)
+        => Calls(method, absolutePath, async token =>
+        {
+            await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
 
     public IReadOnlyList<RecordedRequest> To(HttpMethod method, string absolutePath)
         => Requests.Where(r => r.Method == method && r.Uri.AbsolutePath == absolutePath).ToList();
@@ -40,7 +54,7 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
 
         if (_routes.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var queue) && queue.Count > 0)
         {
-            return queue.Dequeue()();
+            return await queue.Dequeue()(cancellationToken);
         }
 
         return new HttpResponseMessage((HttpStatusCode)599)

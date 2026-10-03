@@ -110,10 +110,10 @@ public class GoogleProjectCatalogGatewayTests
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, "/v3/projects/my-lab", 200, """{"name":"projects/1","projectId":"my-lab","state":"ACTIVE","displayName":"My Lab"}""")
-            .Returns(Get, "/v3/projects/going", 200, """{"name":"projects/2","projectId":"going","state":"DELETE_REQUESTED","displayName":"Going"}""");
+            .Returns(Get, "/v3/projects/going-lab", 200, """{"name":"projects/2","projectId":"going-lab","state":"DELETE_REQUESTED","displayName":"Going"}""");
 
         var active = await rig.Gateways.ProjectCatalog.GetProjectAsync("my-lab", CancellationToken.None);
-        var going = await rig.Gateways.ProjectCatalog.GetProjectAsync("going", CancellationToken.None);
+        var going = await rig.Gateways.ProjectCatalog.GetProjectAsync("going-lab", CancellationToken.None);
 
         active!.State.ShouldBe(ProjectLifecycleState.Active);
         going!.State.ShouldBe(ProjectLifecycleState.Other);
@@ -126,9 +126,9 @@ public class GoogleProjectCatalogGatewayTests
     public async Task A_project_that_cannot_be_described_is_null(int http, string status)
     {
         var rig = new GoogleGatewayHarness();
-        rig.Handler.Returns(Get, "/v3/projects/ghost", http, RpcError(http, status, "The caller does not have permission"));
+        rig.Handler.Returns(Get, "/v3/projects/ghost-lab", http, RpcError(http, status, "The caller does not have permission"));
 
-        (await rig.Gateways.ProjectCatalog.GetProjectAsync("ghost", CancellationToken.None)).ShouldBeNull();
+        (await rig.Gateways.ProjectCatalog.GetProjectAsync("ghost-lab", CancellationToken.None)).ShouldBeNull();
     }
 
     [Theory]
@@ -258,7 +258,7 @@ public class GoogleProjectCatalogGatewayTests
     }
 
     [Fact]
-    public async Task Missing_permission_to_create_projects_is_a_permission_error_without_a_setup_code()
+    public async Task Missing_permission_to_create_projects_is_the_PERMISSION_setup_error()
     {
         var rig = new GoogleGatewayHarness();
         rig.Handler.Returns(Post, "/v3/projects", 403, RpcError(403, "PERMISSION_DENIED", "Permission 'resourcemanager.projects.create' denied on resource"));
@@ -267,8 +267,261 @@ public class GoogleProjectCatalogGatewayTests
             () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
-        ex.Error.Code.ShouldBe("PERMISSION_DENIED");
+        ex.Error.Code.ShouldBe(SetupErrorCodes.Permission);
         ex.Error.HttpStatus.ShouldBe(403);
+        SetupErrorCodes.ActionResourceKey(ex.Error.Code).ShouldNotBe("SetupAction_TryAgain");
+    }
+
+    [Theory]
+    [InlineData("SERVICE_DISABLED", "Cloud Resource Manager API has not been used in project 123 before or it is disabled.", "API_DISABLED")]
+    [InlineData("BILLING_DISABLED", "This API method requires billing to be enabled.", "NO_BILLING")]
+    public async Task A_permanent_403_on_create_carries_a_setup_code_whose_action_fits(string reason, string message, string expectedCode)
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(
+            Post,
+            "/v3/projects",
+            403,
+            RpcError(403, "PERMISSION_DENIED", message, $$"""[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"{{reason}}","domain":"googleapis.com"}]"""));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe(expectedCode);
+        SetupErrorCodes.ActionResourceKey(ex.Error.Code).ShouldNotBe("SetupAction_TryAgain");
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+    }
+
+    private const string UserProjectDenied = "Caller does not have required permission to use project 123. Grant the caller the roles/serviceusage.serviceUsageConsumer role, or a custom role with the serviceusage.services.use permission, by visiting https://console.developers.google.com/iam-admin/iam/project?project=123 and then retry (propagation of new permission may take a few minutes), or use another project to pass your quota and billing.";
+
+    [Fact]
+    public async Task A_USER_PROJECT_DENIED_403_when_listing_is_a_permission_error_not_quota()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, "/v3/projects:search", 403, RpcError(403, "PERMISSION_DENIED", UserProjectDenied, """[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"USER_PROJECT_DENIED","domain":"googleapis.com"}]"""));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.ProjectCatalog.ListActiveProjectsAsync(CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_USER_PROJECT_DENIED_403_on_create_is_PERMISSION_not_PROJECT_QUOTA(bool withReason)
+    {
+        // Google's standard shape for "you may not use this project to pass quota": its text says quota and billing.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(
+            Post,
+            "/v3/projects",
+            403,
+            RpcError(403, "PERMISSION_DENIED", UserProjectDenied, withReason ? """[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"USER_PROJECT_DENIED","domain":"googleapis.com"}]""" : null));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        ex.Error.Code.ShouldBe(SetupErrorCodes.Permission);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.ProjectQuota);
+    }
+
+    [Fact]
+    public async Task A_403_that_really_says_a_quota_was_exceeded_is_still_quota()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, "/v3/projects:search", 403, RpcError(403, "PERMISSION_DENIED", "Cloud billing quota exceeded: https://support.google.com/code/contact/billing_quota_increase"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.ProjectCatalog.ListActiveProjectsAsync(CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Quota);
+    }
+
+    // The mutating POST is retried alone; every poll read is its own idempotent, retried call.
+
+    [Fact]
+    public async Task A_transient_error_while_polling_is_retried_on_its_own_and_never_posts_the_create_again()
+    {
+        var rig = new GoogleGatewayHarness(retries: 3);
+        rig.Handler
+            .Returns(Post, "/v3/projects", 200, CreateOperationPending)
+            .Returns(Get, "/v3/operations/cp.7001", 503, RpcError(503, "UNAVAILABLE", "The service is currently unavailable."))
+            .Returns(Get, "/v3/operations/cp.7001", 200, CreateOperationDone);
+
+        var project = await rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+
+        project.ProjectId.ShouldBe("dna-entropy-abcd1234");
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+        rig.Handler.To(Get, "/v3/operations/cp.7001").Count.ShouldBe(2);
+        rig.Log.Retries.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_poll_read_that_never_recovers_ends_as_a_network_error_after_one_create()
+    {
+        var rig = new GoogleGatewayHarness(retries: 2);
+        rig.Handler.Returns(Post, "/v3/projects", 200, CreateOperationPending);
+        for (var i = 0; i < 3; i++)
+        {
+            rig.Handler.Returns(Get, "/v3/operations/cp.7001", 503, RpcError(503, "UNAVAILABLE", "The service is currently unavailable."));
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+        rig.Handler.To(Get, "/v3/operations/cp.7001").Count.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_hung_poll_read_ends_at_the_deadline_as_the_poll_timeout_after_one_create()
+    {
+        var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromMilliseconds(300), retries: 3);
+        rig.Handler
+            .Returns(Post, "/v3/projects", 200, CreateOperationPending)
+            .Hangs(Get, "/v3/operations/cp.7001");
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(30));
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+        rig.Handler.To(Get, "/v3/operations/cp.7001").Count.ShouldBe(1);
+        rig.Log.Retries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_poll_read_that_times_out_in_the_http_client_is_retried_alone_and_never_posts_the_create_again()
+    {
+        var rig = new GoogleGatewayHarness(retries: 3);
+        rig.Handler
+            .Returns(Post, "/v3/projects", 200, CreateOperationPending)
+            .Calls(Get, "/v3/operations/cp.7001", _ => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 100 seconds elapsing."))
+            .Returns(Get, "/v3/operations/cp.7001", 200, CreateOperationDone);
+
+        var project = await rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+
+        project.ProjectId.ShouldBe("dna-entropy-abcd1234");
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_callers_own_cancel_mid_poll_surfaces_as_a_cancel_and_is_not_replayed()
+    {
+        var rig = new GoogleGatewayHarness(retries: 3);
+        using var cts = new CancellationTokenSource();
+        rig.Handler
+            .Returns(Post, "/v3/projects", 200, CreateOperationPending)
+            .Calls(Get, "/v3/operations/cp.7001", async token =>
+            {
+                await cts.CancelAsync();
+                await Task.Delay(Timeout.Infinite, token);
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+            });
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", cts.Token));
+
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+        rig.Handler.To(Get, "/v3/operations/cp.7001").Count.ShouldBe(1);
+        rig.Log.Retries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_operation_done_with_no_response_falls_back_to_reading_the_requested_project()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, "/v3/projects", 200, """{"name":"operations/cp.7001","done":true}""")
+            .Returns(Get, "/v3/projects/dna-entropy-abcd1234", 200, OurProjectJson);
+
+        var project = await rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+
+        project.ProjectId.ShouldBe("dna-entropy-abcd1234");
+        project.IsAppProject.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_operation_done_with_no_response_and_no_project_is_an_error_never_an_empty_success()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, "/v3/projects", 200, """{"name":"operations/cp.7001","done":true}""")
+            .Returns(Get, "/v3/projects/dna-entropy-abcd1234", 404, RpcError(404, "NOT_FOUND", "Project not found"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("OPERATION_NO_RESULT");
+    }
+
+    [Fact]
+    public async Task A_quota_worded_429_without_details_that_is_a_per_minute_rate_limit_is_retried()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, "/v3/projects", 429, RpcError(429, "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute' of service 'cloudresourcemanager.googleapis.com' for consumer 'project_number:123'."))
+            .Returns(Post, "/v3/projects", 200, CreateOperationDone);
+
+        var project = await rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+
+        project.ProjectId.ShouldBe("dna-entropy-abcd1234");
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(2);
+        rig.Log.Retries.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_quota_worded_429_without_details_and_without_a_rate_wording_stays_the_project_limit()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Post, "/v3/projects", 429, RpcError(429, "RESOURCE_EXHAUSTED", "Project creation quota exceeded for this account."));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe(SetupErrorCodes.ProjectQuota);
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_PERMISSION_DENIED_403_that_mentions_a_constraint_is_still_not_visible_not_an_org_policy_error()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, "/v3/projects/ghost-lab", 403, RpcError(403, "PERMISSION_DENIED", "Permission denied on resource project ghost-lab. See constraints/iam.allowedPolicyMemberDomains for the policy."));
+
+        (await rig.Gateways.ProjectCatalog.GetProjectAsync("ghost-lab", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_412_org_policy_refusal_when_getting_a_project_still_surfaces()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, "/v3/projects/ghost-lab", 412, RpcError(412, "FAILED_PRECONDITION", "Request blocked by constraints/gcp.restrictServiceUsage."));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.ProjectCatalog.GetProjectAsync("ghost-lab", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+    }
+
+    [Theory]
+    [InlineData("a/b")]
+    [InlineData("../projects")]
+    [InlineData("")]
+    [InlineData("Has-Capitals1")]
+    [InlineData("short")]
+    [InlineData("ends-with-hyphen-")]
+    [InlineData("1starts-with-digit")]
+    public async Task An_id_that_is_not_a_legal_project_id_is_null_and_sends_nothing(string projectId)
+    {
+        var rig = new GoogleGatewayHarness();
+
+        (await rig.Gateways.ProjectCatalog.GetProjectAsync(projectId, CancellationToken.None)).ShouldBeNull();
+
+        rig.Handler.Requests.ShouldBeEmpty();
     }
 
     [Fact]

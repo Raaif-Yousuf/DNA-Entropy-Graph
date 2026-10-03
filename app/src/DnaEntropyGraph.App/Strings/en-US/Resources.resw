@@ -393,6 +393,18 @@
   <data name="SetupError_BILLING_NO_PERMISSION" xml:space="preserve">
     <value>You can use this billing account but you are not allowed to link projects to it. Choose Copy request for the billing admin and send it to the person who manages billing.</value>
   </data>
+  <data name="SetupError_PERMISSION" xml:space="preserve">
+    <value>Your Google account is not allowed to do this in the project. Choose Copy request for the project owner and send it to the person who owns the project.</value>
+  </data>
+  <data name="SetupError_API_DISABLED" xml:space="preserve">
+    <value>A Google service this step needs is switched off in your project. Choose Turn it on, then try the step again.</value>
+  </data>
+  <data name="SetupAction_CopyRequestForOwner" xml:space="preserve">
+    <value>Copy request for the project owner</value>
+  </data>
+  <data name="SetupAction_TurnItOn" xml:space="preserve">
+    <value>Turn it on</value>
+  </data>
   <data name="SetupAction_LinkBilling" xml:space="preserve">
     <value>Link billing</value>
   </data>

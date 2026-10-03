@@ -31,14 +31,17 @@ public static class GoogleCloudGateways
         ArgumentNullException.ThrowIfNull(pipeline);
         options ??= new GoogleCloudOptions();
 
-        var catalog = new GoogleProjectCatalogGateway(new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options)), options);
-        var billing = new GoogleBillingGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options)));
-        var services = new GoogleServiceUsageGateway(new ServiceUsageService(GoogleRestClient.CreateInitializer(tokens, options)), options);
+        var catalog = new GoogleProjectCatalogGateway(new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options);
+        var billing = new ResilientBillingGateway(new GoogleBillingGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options))), pipeline);
+        var services = new GoogleServiceUsageGateway(new ServiceUsageService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options);
 
         return new GoogleCloudGatewaySet(
-            new ResilientProjectCatalogGateway(catalog, pipeline),
-            new ResilientBillingGateway(billing, pipeline),
-            new ResilientServiceEnablementGateway(services, pipeline),
-            new ResilientProjectSetupGateway(new GoogleProjectSetupGateway(catalog, billing, services), pipeline));
+            // Not wrapped: the project catalog and the service-enablement gateway route each of their own HTTP calls through
+            // the pipeline (a create or enable is a POST plus polled reads, and one retry around the whole thing would
+            // re-POST when a read fails). Billing is single-call, so it is wrapped whole.
+            catalog,
+            billing,
+            services,
+            new GoogleProjectSetupGateway(catalog, billing, services));
     }
 }

@@ -1,0 +1,1 @@
+- Review fixes, round 3, for switching on Google services (issue #52): a hiccup while waiting for Google to finish switching a service on (a busy answer or a hung check) no longer sends the switch-on request a second time; each check is retried by itself, and the whole call still waits at most one 5 minute limit.

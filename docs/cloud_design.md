@@ -761,8 +761,9 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
 
 - **Where it lives.** `DnaEntropyGraph.Cloud/Rest/`. `GoogleCloudGateways.Create(IGcpAccessTokenSource, CloudCallPipeline,
   GoogleCloudOptions?)` is the one construction point: it builds each client with a bearer-token interceptor that reads
-  the token source on every request (so a refreshed token is used by the replayed call) and wraps each gateway in its
-  `Resilient*` decorator. Google.Apis's own 503 retry is switched off (`ExponentialBackOffPolicy.None`) so
+  the token source on every request (so a refreshed token is used by the replayed call) and puts each gateway behind the
+  pipeline: single-call gateways (billing) in their `Resilient*` decorator, the two that are a POST plus polled reads
+  (project catalog, service enablement) by sending each HTTP call through the pipeline themselves. Google.Apis's own 503 retry is switched off (`ExponentialBackOffPolicy.None`) so
   `CloudCallPipeline` is the only retry. MEASURED 2026-10-02: with the library default, three scripted 503s were all
   consumed inside one gateway call and the pipeline's retry saw a different error; with `None` the pipeline retried
   twice and gave up as `network` (THEORY, unverified: that the default is the cause of that, not the scripted handler).
@@ -792,14 +793,31 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   (`ProjectIdGenerator`), display name "DNA Entropy Graph", labels `app=dna-entropy-graph` and `installation-id`
   (the VM-only labels `job-id`, `model`, `app-version` and `lifecycle` do not apply to a project). The response is a
   long-running operation, polled with `OperationPoller` (1 s doubling to 10 s, 5 minute deadline); a timeout is
-  `OPERATION_POLL_TIMEOUT`, classed `network`. The resilience pipeline never replays a spent poll deadline (`CloudCallPipeline.IsTransient`): a replay would POST the create or enable again (a duplicate create answers 409) and wait the whole deadline once per retry, so it surfaces after one deadline. A per-minute rate limit (ErrorInfo reason `RATE_LIMIT_EXCEEDED`, code `RATE_LIMIT_EXCEEDED`, kind `other`) is retried and is never `PROJECT_QUOTA`, even though it also carries a QuotaFailure; THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word "quota" without that reason.
-- **Replay safety.** The resilience pipeline replays a whole create after a dropped connection. A `409 ALREADY_EXISTS`
+  `OPERATION_POLL_TIMEOUT`, classed `network`.
+- **One retry per HTTP call, never per composite.** `GoogleProjectCatalogGateway` is not wrapped in
+  `ResilientProjectCatalogGateway`: it sends every call through `CloudCallPipeline` itself. The mutating
+  `POST /v3/projects` is retried alone; each `operations.get` is its own retried idempotent read. A 429 or 5xx on a
+  poll read therefore re-reads and never re-POSTs. The poll deadline is wall-clock (`GoogleCloudOptions.TimeProvider`)
+  and covers the time inside each read: `OperationPoller` hands every read a token that ends at the deadline, so a hung
+  GET (the HTTP client would wait about 100 s) ends at the deadline as `OPERATION_POLL_TIMEOUT`, not at the client's
+  timeout. The caller's own cancel still surfaces as a cancel. `CloudCallPipeline.IsTransient` also never replays a
+  spent poll deadline. A finished operation with no error and no project in its response is read back with
+  `projects.get` for the requested id; if that finds nothing the error is `OPERATION_NO_RESULT`, never a success with
+  an empty id.
+- **Replay safety.** The POST is replayed after a dropped connection. A `409 ALREADY_EXISTS`
   is followed by a `projects.get`: a project of ours (it carries the app label) is returned, anyone else's is an
   error. One wizard click therefore never makes two projects.
 - **Errors.** A project-limit refusal is `PROJECT_QUOTA` (kind `quota`, never retried; action: pick an existing
   project); an organization-policy refusal is `ORG_POLICY_BLOCK` (kind `org_policy`; action: copy the message for IT).
-  A 403 on create stays `PERMISSION_DENIED` (kind `permission`). A 429 with no quota marker is a rate limit and is
-  retried.
+  A permanent create failure carries a setup code whose button fits (never the Try again catch-all): `PERMISSION`
+  (kind `permission`; Copy request for the project owner), `API_DISABLED` (Turn it on), `NO_BILLING` (Link billing).
+  A per-minute rate limit is retried and never `PROJECT_QUOTA`, whether it carries the ErrorInfo reason
+  `RATE_LIMIT_EXCEEDED` or only says so in a RESOURCE_EXHAUSTED message ("Quota exceeded for quota metric 'Requests' ...
+  Requests per minute", no details); THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word
+  "quota" without per-minute or per-second wording. A PERMISSION_DENIED 403 that merely quotes a `constraints/` id is a
+  permission error, not an organization-policy one, so `GetProjectAsync` still answers "not visible"; only an
+  ORG_POLICY reason, a 412, or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
+  null, with no request, for an id outside Google's project-id grammar.
 - **Not proven without a real account:** `docs/ToTest.md`.
 ### Billing check and link (issue #51, wizard step 4)
 
@@ -814,8 +832,7 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   and `LinkAsync` links the one the user picked. None: `NeedsAccount` with `BillingLinks.ForProject(projectId)`, the
   console page for that project; calling `EnsureAsync` again after the user adds a payment method is the re-check.
   The wizard action for the code `NO_BILLING` is that link (`SetupAction_LinkBilling`).
-- **No permission.** The error reason and kind decide first (a Billing API that is off is `api_disabled`, a billing quota 403 is `quota`, billing off is `billing`, a 403 naming a non-billing permission such as `resourcemanager.projects.createBillingAssignment` is a plain `permission`); only a remaining permission 403 on the link is `BILLING_NO_PERMISSION` (kind `permission`). The classifier (issue #539) no longer reads the word "billing" in a permission denial as billing-off, and the
-  action is a copyable request:
+- **No permission.** The error reason and kind decide first (a Billing API that is off is `api_disabled`, a billing quota 403 is `quota`, billing off is `billing`, a 403 naming a non-billing permission such as `resourcemanager.projects.createBillingAssignment` is a plain `permission`); only a remaining permission 403 on the link is `BILLING_NO_PERMISSION` (kind `permission`). The classifier (issue #539) no longer reads the word "billing" in a permission denial as billing-off, only reads a permission-denial wording on a 403 or an error with no status (a 412 or 409 that happens to say "does not have permission" keeps its org-policy or already-exists meaning), and a 403 counts as quota only when it says a quota was *exceeded* and does not read as a permission denial: Google's standard USER_PROJECT_DENIED 403 ("Caller does not have required permission to use project ... or use another project to pass your quota and billing") is `permission`, never quota, and on a create never `PROJECT_QUOTA`. The action is a copyable request:
   `SetupBillingRequestText` (with `{project}` and `{account}`) filled by `BillingRequestText.Fill`.
 - **Not here yet.** The wizard page (#99) and the health row that must go green on its own after a link: nothing in
   the shipped UI calls this until then. `ResilientProjectSetupGateway.IsBillingEnabledAsync` (the preflight step) is
@@ -832,15 +849,23 @@ creates the project's default network).
   `GET /v1/operations/{name}` is polled every 5 s (`OperationPoller` with its new `fixedInterval`, the doubling
   backoff would be wrong for a documented cadence); once the operation is done,
   `GET /v1/projects/{id}/services/{service}` is asked every 5 s until each reads `ENABLED`. A finished operation is not
-  a ready service, so each service is checked after the operation, but both phases share ONE 5 minute deadline for the whole call (two separate polls could wait twice that). A timeout in either is
-  `OPERATION_POLL_TIMEOUT`, classed `network`.
+  a ready service, so each service is checked after the operation, but both phases share ONE 5 minute deadline for the
+  whole call (two separate polls could wait twice that), so the call waits at most one deadline. The deadline is
+  wall-clock and covers the time inside each read (a hung GET ends at the deadline, not at the HTTP client's 100 s).
+  A timeout in either is `OPERATION_POLL_TIMEOUT`, classed `network`.
+- **One retry per HTTP call, never per composite.** `GoogleServiceUsageGateway` is not wrapped in
+  `ResilientServiceEnablementGateway`: the `batchEnable` POST is retried alone, and each `operations.get` and
+  `services.get` is its own retried idempotent read. A 429 or 5xx while polling re-reads and never re-POSTs; a poll
+  read that keeps failing ends the call as `network` after one POST. The caller's own cancel still surfaces as a cancel.
 - **Errors.** The reason and kind decide first: a 403 that says Service Usage is off is `api_disabled`, billing off is `billing`, an organization policy is `org_policy`. A remaining plain permission 403, on the call or as `PERMISSION_DENIED` inside the operation, is `NOT_PROJECT_OWNER` (kind
   `permission`; action: create a project of your own). Enabling Compute on a project with no billing keeps the billing
   kind (Google answers a precondition failure that names billing), so the wizard sends the user back to step 4 rather
   than to "ask the owner". A Service Usage API that is itself off reads as `api_disabled`.
 - **The preflight gateway.** `GoogleProjectSetupGateway` implements the existing `IProjectSetupGateway` from the
   three real gateways (project state from Resource Manager, billing from Cloud Billing, the Compute API from Service
-  Usage), wrapped once by `ResilientProjectSetupGateway`. `GoogleCloudGateways.Create(...)` returns it as
+  Usage). It is not wrapped in `ResilientProjectSetupGateway` (the catalog and service gateways it is built from
+  already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
+  already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
   `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute and
   storage gateways and the token refresher do not, so production still resolves everything to `FakeGcp` (#56, #520).
