@@ -90,6 +90,7 @@ self-test failure.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -115,6 +116,67 @@ hook only fires when `cwd` resolves to a linked git worktree, never the
 primary checkout. Dispatch from the primary checkout instead.)"""
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill `proc` and everything it started, by the PID WE started (never by image name)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        else:
+            import signal
+
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        pass
+    with contextlib.suppress(Exception):
+        proc.kill()
+
+
+def run_bounded(argv: list[str], timeout: float) -> tuple[int, str] | None:
+    """Run `argv`; return (returncode, stdout), or None on timeout / failure to start.
+
+    WHY NOT `subprocess.run(capture_output=True, timeout=...)`: MEASURED (see
+    docs/changelog.d/fix-629-git-guard-followups.md) that on Windows the timeout
+    kills only the direct child (the git.exe launcher). The real git is its
+    child and still holds the stdout/stderr PIPES, so the follow-up `communicate()`
+    blocks until that grandchild exits: a stalled git (an unreachable UNC path)
+    pushes the hook past run_hook.py's 8 s kill, which DENIES every Bash/PowerShell
+    call. So: no pipes (stdout goes to a temp file, stderr to nowhere), `wait()`
+    only waits for the direct child, and on timeout the whole process tree is
+    killed by PID.
+
+    A timeout answers None, which every caller treats as "unknown" and ALLOWS.
+    Deliberately fail-open: this guard exists to prevent accidents, and a hook
+    that stalls every shell is a worse outcome than one missed block.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryFile() as out:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.DEVNULL,
+                start_new_session=os.name != "nt",
+            )
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=2)
+                return None
+            out.seek(0)
+            return proc.returncode, out.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
 def _git_paths(cwd: str, timeout: float = 10.0) -> tuple[str, str] | None:
     """Return (git_dir, git_common_dir), both absolute, or None if unavailable.
 
@@ -122,26 +184,14 @@ def _git_paths(cwd: str, timeout: float = 10.0) -> tuple[str, str] | None:
     other failure -- all of which this hook treats as "cannot tell", and it
     fails OPEN (does not block) rather than guess, per the contract above.
     """
-    try:
-        proc = subprocess.run(
-            [
-                "git",
-                "-C",
-                cwd,
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-dir",
-                "--git-common-dir",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except Exception:
+    argv = ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"]
+    result = run_bounded(argv, timeout)
+    if result is None:
         return None
-    if proc.returncode != 0:
+    returncode, stdout = result
+    if returncode != 0:
         return None
-    lines = proc.stdout.splitlines()
+    lines = stdout.splitlines()
     if len(lines) != 2:
         return None
     git_dir, git_common_dir = lines[0].strip(), lines[1].strip()

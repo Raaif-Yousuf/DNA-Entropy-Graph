@@ -17,7 +17,10 @@ Six hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.j
 - `block_primary_checkout_git.py` -- refuses history-changing git (`checkout`/`switch`,
   `merge` other than `--ff-only`, `commit`, `reset --hard|--soft|--mixed|<commit>`, `rebase`,
   `cherry-pick`, `revert`, `am`, `pull` other than `--ff-only`) when the effective directory
-  is the PRIMARY checkout (issue #542). Registered for both `Bash` and `PowerShell`.
+  is the PRIMARY checkout (issue #542). Registered for both `Bash` and `PowerShell`. Recovery shapes (`merge|rebase|cherry-pick|revert|am --abort`,
+  `--quit`) stay allowed; `am --skip` does not. On a git timeout it answers "unknown" and ALLOWS
+  (fail open on purpose, #629): the git runs through `run_bounded()` (temp file, process tree killed by
+  PID), so a stalled git can never push the hook past `run_hook.py`'s 8 s kill, which would deny every shell.
 - `require_premerge_before_pr.py` -- refuses `gh pr create` and `gh pr merge` unless
   `scripts/premerge.py` passed (green, unfiltered) on the CURRENT HEAD, recorded by
   `scripts/premerge_stamp.py` in `<git-dir>/premerge-stamp.json` (12 hour expiry). Escape hatch, logged to

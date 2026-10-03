@@ -477,3 +477,168 @@ def test_each_classify_timeout_is_capped_by_the_remaining_budget(repos, monkeypa
 
 def test_budget_is_shorter_than_the_dispatcher_kill():
     assert hook.TOTAL_BUDGET_SECONDS < 8.0
+
+
+# ---------------------------------------------------------------------------
+# #629 follow-ups
+# ---------------------------------------------------------------------------
+
+DENIED_629 = [
+    # (M, bypass) an apostrophe in a `#` comment must not open a quote
+    "# don't\ngit switch -c x",
+    "echo hi # it's fine\ngit switch -c x",
+    "git status # don't\ngit commit -m x",
+    # shell consumers of a heredoc: the body is executed
+    "/bin/bash <<EOF\ngit switch -c x\nEOF",
+    '"C:\\Program Files\\Git\\bin\\bash.exe" <<EOF\ngit switch -c x\nEOF',
+    "'/usr/bin/bash' <<'EOF'\ngit switch -c x\nEOF",
+    ". /dev/stdin <<EOF\ngit switch -c x\nEOF",
+    "source /dev/stdin <<'EOF'\ngit switch -c x\nEOF",
+    "eval \"$(cat <<'EOF'\ngit switch -c x\nEOF\n)\"",
+    'eval "git switch -c x"',
+    # git am recovery covers only --abort/--quit/--show-current-patch; --skip applies more patches
+    "git am --skip",
+    "git am --continue",
+    # git global options that take a value
+    "git --config-env a=B switch -c x",
+    "git --config-env=a=B switch -c x",
+    # abbreviated reset modes
+    "git reset --har HEAD",
+    "git reset --so HEAD~1",
+    "git reset --mi HEAD~1",
+    "git reset --kee HEAD~1",
+]
+
+ALLOWED_629 = [
+    "git am --abort",
+    "git am --quit",
+    "git am --show-current-patch",
+    "# don't\ngit status",
+    "git log --grep='#1'",
+    "echo a#b\ngit status",
+    "git --config-env a=B status",
+    "git reset --quiet HEAD README.md",
+]
+
+
+@pytest.mark.parametrize("command", DENIED_629)
+def test_629_denies_in_primary(repos, command):
+    primary, worktree = repos
+    assert hook.verdict(command, _in(primary)) is not None
+    assert hook.verdict(command, _in(worktree)) is None
+
+
+@pytest.mark.parametrize("command", ALLOWED_629)
+def test_629_allows_in_primary(repos, command):
+    primary, _ = repos
+    assert hook.verdict(command, _in(primary)) is None
+
+
+def test_629_vacuity_guard():
+    assert len(DENIED_629) >= 15 and len(ALLOWED_629) >= 6
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "env -C {p} git switch -c x",
+        "env --chdir={p} git switch -c x",
+        "env --chdir {p} git switch -c x",
+        "env -i -C {p} git switch -c x",
+        "pwsh -WorkingDirectory {p} -Command 'git switch -c x'",
+        "pwsh -wd {p} -Command 'git switch -c x'",
+        "pwsh -NoProfile -WorkingDirectory {p} -c 'git switch -c x'",
+    ],
+)
+def test_629_directory_changing_wrappers_into_primary_deny(repos, template):
+    primary, worktree = repos
+    assert hook.verdict(template.format(p=_in(primary)), _in(worktree)) is not None
+    # and out of the primary into a worktree allows
+    assert hook.verdict(template.format(p=_in(worktree)), _in(primary)) is None
+
+
+def test_629_env_chdir_does_not_persist_to_the_next_segment(repos):
+    primary, worktree = repos
+    command = f"env -C {_in(primary)} true; git switch -c x"
+    assert hook.verdict(command, _in(worktree)) is None
+
+
+# -- the Windows pipe hang: a child that outlives its parent holding the pipes --
+
+_GRANDCHILD = (
+    "import os, sys, time\n"
+    "release, pidfile = sys.argv[1], sys.argv[2]\n"
+    "open(pidfile, 'w').write(str(os.getpid()))\n"
+    "deadline = time.time() + 90\n"
+    "while not os.path.exists(release) and time.time() < deadline:\n"
+    "    time.sleep(0.05)\n"
+)
+_PARENT = (
+    "import subprocess, sys, time\n"
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]])\n"
+    "time.sleep(90)\n"
+)
+
+
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    import os
+
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def test_629_run_bounded_returns_on_timeout_and_kills_the_grandchild(tmp_path):
+    """The hang shape: a parent that starts a grandchild (which inherits the
+    stdout handle) and then stalls. The grandchild blocks on a RELEASE FILE,
+    not on the clock, so nothing here asserts a duration. The call runs in a
+    thread and is bounded generously (60 s) only so a regression fails instead
+    of hanging the suite; the assertion is the outcome."""
+    import threading
+    import time
+
+    release, pidfile = tmp_path / "release", tmp_path / "pid"
+    result: list = []
+    worker = threading.Thread(
+        target=lambda: result.append(
+            agent_hook.run_bounded([sys.executable, "-c", _PARENT, _GRANDCHILD, str(release), str(pidfile)], timeout=1.5)
+        ),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(60)
+    hung = worker.is_alive()
+    grandchild_pid = int(pidfile.read_text()) if pidfile.exists() else None
+    alive_after = False
+    if not hung and grandchild_pid is not None:
+        for _ in range(100):  # let the OS reap the killed tree
+            if not _pid_alive(grandchild_pid):
+                break
+            time.sleep(0.1)
+        alive_after = _pid_alive(grandchild_pid)
+    release.write_text("go")  # always release, so a failing run leaves nothing behind
+    assert not hung, "run_bounded blocked on the grandchild that holds the stdout handle"
+    assert result == [None]
+    assert grandchild_pid is not None, "vacuity: the grandchild never started"
+    assert not alive_after, "the grandchild survived the timeout"
+
+
+def test_629_run_bounded_returns_output_and_code():
+    code, out = agent_hook.run_bounded([sys.executable, "-c", "print('hi')"], timeout=60)
+    assert code == 0 and out.strip() == "hi"
+    code, _ = agent_hook.run_bounded([sys.executable, "-c", "raise SystemExit(3)"], timeout=60)
+    assert code == 3
+    assert agent_hook.run_bounded(["definitely-not-a-real-binary-629"], timeout=5) is None
+
+
+def test_629_stalled_git_classifies_unknown_and_allows(repos, monkeypatch):
+    """A timeout inside classify is 'unknown', which allows (fail open, on purpose)."""
+    primary, _ = repos
+    monkeypatch.setattr(agent_hook, "run_bounded", lambda argv, timeout: None)
+    assert agent_hook.classify(_in(primary), timeout=1) == "unknown"
+    assert hook.verdict("git switch -c x", _in(primary)) is None
