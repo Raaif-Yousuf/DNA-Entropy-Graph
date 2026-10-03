@@ -1,6 +1,7 @@
 name: ci-app
 
-# Runs on every pull request that touches app/ (or this file), plus on demand:
+# Runs on every pull request (the `changes` job skips the real work when nothing under app/
+# or this file changed, see #31 below), plus on demand:
 #
 #     gh workflow run ci-app.yml
 #     gh run watch
@@ -26,9 +27,6 @@ name: ci-app
 # uploaded as an artifact on failure or cancel. If this hangs again, open the artifact.
 on:
   pull_request:
-    paths:
-      - "app/**"
-      - ".github/workflows/ci-app.yml"
   workflow_dispatch:
 
 permissions:
@@ -39,8 +37,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # #31: a workflow-level `paths:` filter means the workflow never starts on a PR that
+  # touches nothing under app/, so its checks never appear, and a required status check that
+  # never appears stays "Expected - waiting" forever (it blocks the merge button). A job that
+  # is skipped by its own `if:` reports as Skipped, which branch protection counts as passing.
+  # So: no path filter on the trigger; this tiny job decides, and the real jobs are gated on it.
+  # FAIL-OPEN HAZARD (#31 round 2): a job whose `needs` failed is SKIPPED unless its `if:` contains a status function, and a
+  # skipped required check reads as green. So a broken `changes` job (outputs.run empty) would skip every real job and turn
+  # the PR green with nothing tested. Each gated job therefore uses
+  #     !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false')
+  # (an explicit 'false' is the only thing that skips; a missing or empty output runs the jobs.)
+  # `!cancelled()` is a status function, so it replaces the implicit success() and the job is evaluated even when `changes`
+  # failed; then `result != 'success'` makes a broken gate RUN the tests. A cancelled run (the workflow is being cancelled)
+  # still stops, and reads as cancelled, not green. Chosen over a final aggregator job because the required check names stay
+  # the real jobs' names. Pinned by scripts/tests/test_ci_changes_gate.py (parses this file's needs/if wiring).
+  changes:
+    name: changes (app)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # Fail-CLOSED (#31 round 2): the jobs are skipped only when the diff succeeded and EVERY changed path is on a short
+      # known-irrelevant list; any git error runs them. Skipped counts as passing for branch protection, so the old inline
+      # `git diff | grep -Eq` (no pipefail, rename-collapsing, allowlist-shaped) could turn a broken diff into a green PR.
+      # The list and its rules live in scripts/ci_changes_gate.py, pinned by scripts/tests/test_ci_changes_gate.py, which fails
+      # when a path a test or a step of this workflow reads would be skipped.
+      - name: Does this PR change anything ci-app cares about?
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci_changes_gate.py --workflow ci-app --event "$EVENT" --base "$BASE_SHA"
+
   build:
     name: build and test
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
