@@ -13,7 +13,11 @@ public sealed class FastaReadException(string message) : Exception(message)
 public sealed record FastaRecordRaw(string Header, string Seq, int SourceIndex = 0);
 
 /// <summary>Result of reading a FASTA file/text: every record plus any non-fatal notices.</summary>
-public sealed record FastaReadResult(IReadOnlyList<FastaRecordRaw> Records, IReadOnlyList<string> Notices);
+public sealed record FastaReadResult(IReadOnlyList<FastaRecordRaw> Records, IReadOnlyList<string> Notices)
+{
+    /// <summary>The same notices as <see cref="Notices"/>, as machine codes with their numbers (built side by side).</summary>
+    public IReadOnlyList<InputNotice> NoticeCodes { get; init; } = [];
+}
 
 /// <summary>
 /// Read a FASTA file into ALL its records - a hand-rolled, dependency-free C# port of
@@ -42,6 +46,7 @@ public static class FastaLite
         ArgumentNullException.ThrowIfNull(text);
 
         var notices = new List<string>();
+        var coded = new List<InputNotice>();
         var parsed = new List<(string Header, List<string> Lines)>();
 
         string? header = null;
@@ -83,6 +88,7 @@ public static class FastaLite
                 var headerDesc = recHeader.Length > 0 ? PrivacySafeText.DescribeLen(recHeader) : "no header text";
                 // 1-based position among ALL parsed records (Python's enumerate(parsed, start=1)).
                 notices.Add($"Skipped FASTA record {idx + 1} ({headerDesc}): no sequence lines after its header.");
+                coded.Add(new InputNotice(InputNoticeCode.RecordSkippedNoSequence, idx + 1));
                 continue;
             }
             records.Add(new FastaRecordRaw(recHeader, seq, idx + 1));
@@ -97,6 +103,7 @@ public static class FastaLite
         if (nMissingHeader > 0)
         {
             notices.Add($"{nMissingHeader} record(s) have an empty header line (a bare '>' with no name).");
+            coded.Add(new InputNotice(InputNoticeCode.EmptyHeaders, nMissingHeader));
         }
 
         // issue #351: key on the record ID - the header up to its first whitespace, the
@@ -120,13 +127,15 @@ public static class FastaLite
             notices.Add(
                 $"{dupes.Count} id(s) repeat across records (fingerprints: {shown}{more}); "
                 + "records are still kept and numbered separately.");
+            coded.Add(new InputNotice(InputNoticeCode.RepeatedIds, dupes.Count));
         }
 
         if (records.Count > 1)
         {
             notices.Add($"Read {records.Count} record(s) from the FASTA (all processed).");
+            coded.Add(new InputNotice(InputNoticeCode.RecordsRead, records.Count));
         }
 
-        return new FastaReadResult(records, notices);
+        return new FastaReadResult(records, notices) { NoticeCodes = coded };
     }
 }

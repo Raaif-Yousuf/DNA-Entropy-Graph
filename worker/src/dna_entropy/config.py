@@ -168,3 +168,7 @@ class RunConfig:
     # default, like every other writer toggle here (issue #123's own "Done when": "Selectable
     # output, on by default").
     include_surprisal: bool = True
+    # issue #124: <name>.genes.tsv + <name>.genes.csv, one row per gene/CDS (GenBank features,
+    # or Prodigal's calls when `genes` is set) with mean/min/max entropy over the gene's bases.
+    # Only written when the run actually has genes; on by default like every other writer.
+    include_gene_summary: bool = True
