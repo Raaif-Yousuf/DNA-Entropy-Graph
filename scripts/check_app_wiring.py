@@ -70,7 +70,7 @@ Nine findings, each with its own code so the allowlist can be specific:
     page open, not at build (CLAUDE.md's DI row).
 
 `UNREGISTERED-RESOLVE`
-    A `GetRequiredService<T>()` / `GetService<T>()` inside `ServiceRegistration.cs` (typically a factory lambda)
+    A `GetRequiredService<T>()` inside `ServiceRegistration.cs` (typically a factory lambda)
     whose `T` is never registered there. Factory-registered types skip the constructor check above, so this is the
     check that covers what their lambda asks the container for.
 
@@ -216,6 +216,8 @@ _ADD_SERVICE_INFERRED = re.compile(
     r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*(?:static\s+)?(?:async\s+)?(?:\w+|\((?:[^()]|\([^()]*\))*\))\s*=>\s*new\s+([\w.]+)"
 )
 _GET_SERVICE = re.compile(r"\.Get(?:Required)?Service\s*<\s*([\w\.]+)\s*>")
+# Only the required resolve throws on a missing registration; GetService<T> returns null by design.
+_GET_REQUIRED_SERVICE = re.compile(r"\.GetRequiredService\s*<\s*([\w\.]+)\s*>")
 
 _X_UID = re.compile(r'x:Uid\s*=\s*"([^"]+)"')
 _RESW_DATA = re.compile(r'<data\s+name\s*=\s*"([^"]+)"')
@@ -739,7 +741,7 @@ def _check_di(scan: Scan) -> list[Finding]:
     if registration is None:
         return []
 
-    reg_text = scan.cs_files[registration]
+    reg_text = _strip_comments(scan.cs_files[registration])
     registered, service_types = _registered_types(reg_text)
     factory_built = _factory_only_types(reg_text)
 
@@ -775,9 +777,9 @@ def _check_di(scan: Scan) -> list[Finding]:
     # Every `GetRequiredService<T>()` in the registration file names a registered type. Factory-built types are
     # exempt from the constructor check above because their lambda supplies the arguments, so this is where a
     # missing one is caught (#530).
-    for match in _GET_SERVICE.finditer(_strip_comments(reg_text)):
+    for match in _GET_REQUIRED_SERVICE.finditer(reg_text):
         resolved = match.group(1).split(".")[-1]
-        if resolved in registered or resolved in _NON_SERVICE_PARAM_TYPES or resolved == "IServiceProvider":
+        if resolved in service_types or resolved in _NON_SERVICE_PARAM_TYPES or resolved == "IServiceProvider":
             continue
         finding = Finding(
             "UNREGISTERED-RESOLVE",
