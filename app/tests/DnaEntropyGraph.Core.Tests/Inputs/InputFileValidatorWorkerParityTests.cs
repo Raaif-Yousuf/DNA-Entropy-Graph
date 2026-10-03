@@ -81,6 +81,8 @@ public sealed class InputFileValidatorWorkerParityTests
     {
         ["malformed/genbank_qualifier_missing_slash.gb"] =
             "Biopython rejects a feature qualifier without its leading slash; GenBankLite does not parse the feature table.",
+        ["malformed/genbank_feature_line_shorter_than_qualifier_indent.gb"] =
+            "The worker refuses a feature-table line shorter than the GenBank qualifier indent (#536); GenBankLite does not parse the feature table.",
     };
 
     private static string WorkerData(string relative) =>
