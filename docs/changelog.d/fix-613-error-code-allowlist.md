@@ -1,0 +1,1 @@
+- Fixed: a third-party exception's free-text .code could reach esult.json rror.code and the Save diagnostics zip. The worker now writes only codes from its own registry (anything else is WORKER_CRASH), and the diagnostics bundle keeps an rror.code only when it is a known worker code (#613).

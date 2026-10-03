@@ -721,6 +721,61 @@ def test_unrecognized_exception_falls_back_to_worker_crash(
     assert "detail" in result.inputs[0].error  # traceback attached for WORKER_CRASH only
 
 
+@pytest.mark.parametrize("free_text_code", ["my-patient-42", "", 404, "input_invalid"])
+def test_a_foreign_exceptions_free_text_code_never_reaches_result_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    free_text_code: object,
+) -> None:
+    """Issue #613: a third-party exception's own `.code` (an HTTP library's status, an OSError
+    errno, or text naming a path or run) is not one of OUR codes. Only a code in the worker's
+    registry is written to result.json's error.code; anything else is a WORKER_CRASH."""
+    from dna_entropy.worker import runner as runner_module
+
+    class _ForeignError(Exception):
+        code = free_text_code
+
+    def _raise_foreign(*args, **kwargs):
+        raise _ForeignError("boom")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise_foreign)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    result = run_job(store)
+
+    assert result.inputs[0].error["code"] == "WORKER_CRASH"
+    on_disk = (tmp_path / "result.json").read_text(encoding="utf-8")
+    assert "my-patient-42" not in on_disk or free_text_code != "my-patient-42"
+    written = json.loads(on_disk)["inputs"][0]["error"]["code"]
+    assert written == "WORKER_CRASH"
+
+
+def test_a_foreign_exception_with_a_registered_code_name_is_still_classified_by_type(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ValidationError whose `.code` is junk still maps to INPUT_INVALID by type, not to a crash."""
+    from dna_entropy.validation.validators import ValidationError
+    from dna_entropy.worker import runner as runner_module
+
+    class _OddValidation(ValidationError):
+        code = "my-patient-42"
+
+    def _raise(*args, **kwargs):
+        raise _OddValidation("bad")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise)
+
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    assert run_job(store).inputs[0].error["code"] == "INPUT_INVALID"
+
+
 # --- lifecycle.afterTask == "keep" must never be an unbounded no-op (Hard Rule 11) -----
 
 

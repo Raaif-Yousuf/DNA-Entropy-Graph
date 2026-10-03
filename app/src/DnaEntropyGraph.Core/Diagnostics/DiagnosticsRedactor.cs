@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Inputs;
 
 namespace DnaEntropyGraph.Core.Diagnostics;
@@ -12,9 +13,18 @@ namespace DnaEntropyGraph.Core.Diagnostics;
 /// key with <c>null</c> is a leaf, a listed key with a <see cref="KeySpec"/> is a container whose children are checked
 /// the same way. Arrays are transparent: each element is checked against the array key's spec.
 /// </summary>
-internal sealed class KeySpec(IReadOnlyDictionary<string, KeySpec?> keys)
+internal sealed class KeySpec(IReadOnlyDictionary<string, KeySpec?> keys, Func<string, bool>? isAllowedValue = null)
 {
     public IReadOnlyDictionary<string, KeySpec?> Keys { get; } = keys;
+
+    /// <summary>For a leaf only: a string value ships only when this accepts it, otherwise it is replaced (an enum-valued field such as <c>error.code</c>, where plain-looking text is still not a known value).</summary>
+    public Func<string, bool>? IsAllowedValue { get; } = isAllowedValue;
+
+    /// <summary>A leaf whose string value must be one of <paramref name="allowed"/>.</summary>
+    public static KeySpec OneOf(IReadOnlySet<string> allowed) => new(new Dictionary<string, KeySpec?>(), allowed.Contains);
+
+    /// <summary><c>error</c> in <c>status.json</c> and <c>result.json</c>: the code must be one the worker's registry defines (#613).</summary>
+    private static KeySpec ErrorSpec { get; } = Of(("code", OneOf(RunErrorCodes.WorkerErrorCodes)), ("retriable", null));
 
     public static KeySpec Of(params (string Key, KeySpec? Child)[] entries) =>
         new(entries.ToDictionary(e => e.Key, e => e.Child, StringComparer.Ordinal));
@@ -26,7 +36,7 @@ internal sealed class KeySpec(IReadOnlyDictionary<string, KeySpec?> keys)
         ("startedAt", null), ("updatedAt", null), ("heartbeatSeq", null),
         ("vm", Of(("zone", null), ("gpu", null), ("driver", null))),
         ("worker", Of(("version", null), ("image", null))),
-        ("error", Of(("code", null), ("retriable", null))));
+        ("error", ErrorSpec));
 
     /// <summary>One line of <c>progress.jsonl</c>. The free-text <c>message</c> and <c>data</c> name contigs and inputs, so they are not kept.</summary>
     public static KeySpec Progress { get; } = Of(("seq", null), ("ts", null), ("stage", null), ("level", null), ("percent", null));
@@ -39,7 +49,7 @@ internal sealed class KeySpec(IReadOnlyDictionary<string, KeySpec?> keys)
             ("stats", Of(("contigs", null), ("totalNt", null), ("meanEntropy", null), ("minEntropy", null), ("maxEntropy", null))))),
         ("timing", Of(("startedAt", null), ("finishedAt", null))),
         ("gpu", Of(("name", null), ("zone", null), ("spot", null))),
-        ("error", Of(("code", null), ("retriable", null))));
+        ("error", ErrorSpec));
 }
 
 /// <summary>
@@ -205,7 +215,7 @@ internal sealed partial class DiagnosticsRedactor
     {
         switch (node)
         {
-            case JsonObject obj when spec is not null:
+            case JsonObject obj when spec is not null && spec.IsAllowedValue is null:
                 var kept = new JsonObject();
                 foreach (var (key, value) in obj)
                 {
@@ -218,7 +228,7 @@ internal sealed partial class DiagnosticsRedactor
                 }
 
                 return kept;
-            case JsonArray array when spec is not null:
+            case JsonArray array when spec is not null && spec.IsAllowedValue is null:
                 var items = new JsonArray();
                 foreach (var item in array)
                 {
@@ -227,8 +237,16 @@ internal sealed partial class DiagnosticsRedactor
 
                 return items;
             case JsonValue value when value.TryGetValue<string>(out var text):
+                if (spec?.IsAllowedValue is { } isAllowed && !isAllowed(text))
+                {
+                    return RedactedValue;
+                }
+
                 text = rewrite is null ? text : rewrite(text);
                 return SafeValue().IsMatch(text) && !SequenceShape.IsSequenceLine(text, minLength: 20, out _) ? RedactText(text) : RedactedValue;
+            case JsonValue when spec?.IsAllowedValue is not null:
+                // An enum-valued leaf (error.code) holding a number, bool or null is not a registry code either (#613).
+                return RedactedValue;
             case JsonValue number when rewriteNumber is not null:
                 // A number is not copied as it is: a withheld all-digit id (`"id": 12`) is a number leaf too. Only a leaf the
                 // rewrite changes becomes a string; any other number keeps its type and value.
@@ -276,6 +294,14 @@ internal sealed partial class DiagnosticsRedactor
                     else if (!known)
                     {
                         Harvest(value, null, sink, inDropped: true);
+                    }
+                    else if (child?.IsAllowedValue is { } isAllowed)
+                    {
+                        // An enum-valued leaf (error.code) holding anything else is not shipped, so it is scrubbed from the logs too.
+                        if (value is JsonValue leaf && leaf.TryGetValue<string>(out var rejected) && !isAllowed(rejected) && rejected.Length is >= 3 and <= 260)
+                        {
+                            sink.Add(rejected);
+                        }
                     }
                     else if (child is not null)
                     {
