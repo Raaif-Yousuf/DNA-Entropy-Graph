@@ -268,14 +268,14 @@ public class ReattachOnStartupTests : IDisposable
         var observer = (ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>();
         time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
         await observer.WhenIdleAsync();
-        await WaitForPendingTimersAsync(time, 1);
+        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
         (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the first probe pass found the network still down");
 
         gcp.WithCloudConnected();
         time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
         await observer.WhenIdleAsync();
         (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the re-armed probe waits twice as long: 30 s is not enough");
-        await WaitForPendingTimersAsync(time, 1);
+        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
         time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
         await observer.WhenIdleAsync();
 
@@ -317,16 +317,6 @@ public class ReattachOnStartupTests : IDisposable
             => Interlocked.Increment(ref _reads) == 1 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
 
         public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
-    }
-
-    private static async Task WaitForPendingTimersAsync(VirtualTimeProvider time, int expected)
-    {
-        for (var i = 0; i < 500 && time.PendingTimers != expected; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
-
-        time.PendingTimers.ShouldBe(expected);
     }
 
     private sealed class TimingOutRepository : IRunRepository
