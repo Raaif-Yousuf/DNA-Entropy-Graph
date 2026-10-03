@@ -177,56 +177,56 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
         switch (fields.GetValueOrDefault("grant_type"))
         {
             case "authorization_code":
-            {
-                if (!_codes.Remove(fields.GetValueOrDefault("code") ?? string.Empty, out var issued))
                 {
-                    return Json(HttpStatusCode.BadRequest, new { error = "invalid_grant" });
-                }
+                    if (!_codes.Remove(fields.GetValueOrDefault("code") ?? string.Empty, out var issued))
+                    {
+                        return Json(HttpStatusCode.BadRequest, new { error = "invalid_grant" });
+                    }
 
-                var verifier = fields.GetValueOrDefault("code_verifier");
-                if (verifier is null || Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))) != issued.Challenge)
-                {
-                    return Json(HttpStatusCode.BadRequest, new { error = "invalid_grant", error_description = "Missing or wrong code_verifier" });
-                }
+                    var verifier = fields.GetValueOrDefault("code_verifier");
+                    if (verifier is null || Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))) != issued.Challenge)
+                    {
+                        return Json(HttpStatusCode.BadRequest, new { error = "invalid_grant", error_description = "Missing or wrong code_verifier" });
+                    }
 
-                var refresh = "rt-" + issued.Identity.Sub + "-" + Interlocked.Increment(ref _counter);
-                _refreshTokens[refresh] = issued.Identity;
-                var body = new Dictionary<string, object?>
-                {
-                    ["access_token"] = "at-" + Interlocked.Increment(ref _counter),
-                    ["expires_in"] = ExpiresInSeconds,
-                    ["token_type"] = "Bearer",
-                    ["scope"] = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform",
-                };
-                if (ReturnRefreshToken)
-                {
-                    body["refresh_token"] = refresh;
-                }
+                    var refresh = "rt-" + issued.Identity.Sub + "-" + Interlocked.Increment(ref _counter);
+                    _refreshTokens[refresh] = issued.Identity;
+                    var body = new Dictionary<string, object?>
+                    {
+                        ["access_token"] = "at-" + Interlocked.Increment(ref _counter),
+                        ["expires_in"] = ExpiresInSeconds,
+                        ["token_type"] = "Bearer",
+                        ["scope"] = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform",
+                    };
+                    if (ReturnRefreshToken)
+                    {
+                        body["refresh_token"] = refresh;
+                    }
 
-                if (ReturnIdToken)
-                {
-                    body["id_token"] = IdToken(issued.Identity);
-                }
+                    if (ReturnIdToken)
+                    {
+                        body["id_token"] = IdToken(issued.Identity);
+                    }
 
-                return Json(HttpStatusCode.OK, body);
-            }
+                    return Json(HttpStatusCode.OK, body);
+                }
 
             case "refresh_token":
-            {
-                var token = fields.GetValueOrDefault("refresh_token") ?? string.Empty;
-                if (!_refreshTokens.ContainsKey(token) || _revokedRefreshTokens.Contains(token))
                 {
-                    return Json(HttpStatusCode.BadRequest, new { error = "invalid_grant", error_description = "Token has been expired or revoked." });
-                }
+                    var token = fields.GetValueOrDefault("refresh_token") ?? string.Empty;
+                    if (!_refreshTokens.ContainsKey(token) || _revokedRefreshTokens.Contains(token))
+                    {
+                        return Json(HttpStatusCode.BadRequest, new { error = "invalid_grant", error_description = "Token has been expired or revoked." });
+                    }
 
-                // Google's refresh response carries no refresh_token: the client must keep the one it has.
-                return Json(HttpStatusCode.OK, new Dictionary<string, object?>
-                {
-                    ["access_token"] = "at-" + Interlocked.Increment(ref _counter),
-                    ["expires_in"] = 3600,
-                    ["token_type"] = "Bearer",
-                });
-            }
+                    // Google's refresh response carries no refresh_token: the client must keep the one it has.
+                    return Json(HttpStatusCode.OK, new Dictionary<string, object?>
+                    {
+                        ["access_token"] = "at-" + Interlocked.Increment(ref _counter),
+                        ["expires_in"] = 3600,
+                        ["token_type"] = "Bearer",
+                    });
+                }
 
             default:
                 return Json(HttpStatusCode.BadRequest, new { error = "unsupported_grant_type" });
