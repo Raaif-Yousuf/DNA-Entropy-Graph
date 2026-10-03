@@ -89,12 +89,14 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PACKAGE_ROOT = Path("worker/src/dna_entropy")
-ALLOWLIST_PATH = Path("scripts/unused_fields_allowlist.json")
+# Script-relative, never cwd-relative (MEASURED 2026-10-02).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = REPO_ROOT / "worker" / "src" / "dna_entropy"
+ALLOWLIST_PATH = REPO_ROOT / "scripts" / "unused_fields_allowlist.json"
 
 # Directories scanned for READS only, never for field definitions. A generator
 # outside the package can be a field's only legitimate consumer.
-EXTRA_READ_ROOTS = (Path("scripts"),)
+EXTRA_READ_ROOTS = (REPO_ROOT / "scripts",)
 
 # Methods whose body is about turning the object into bytes, not about acting on
 # it. A read in here keeps a field alive on the wire without giving it any
@@ -208,7 +210,10 @@ class _Collector(ast.NodeVisitor):
 
 def _scan_into(scan: Scan, root: Path, collect_fields: bool) -> None:
     for path in sorted(root.rglob("*.py")):
-        rel = path.as_posix()
+        try:
+            rel = path.resolve().relative_to(REPO_ROOT).as_posix()  # report repo-relative paths
+        except ValueError:
+            rel = path.as_posix()
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
         except (SyntaxError, UnicodeDecodeError):
@@ -309,7 +314,7 @@ def _print_report(findings: list[Finding], stale: list[str]) -> None:
         print(f"{f.path}:{f.line}: {f.kind} {f.key} -- {f.detail}")
     for s in stale:
         print("::error title=stale allowlist entry::Delete it, or say why it is still needed.")
-        print(f"{ALLOWLIST_PATH}: STALE {s}")
+        print(f"{ALLOWLIST_PATH.relative_to(REPO_ROOT).as_posix()}: STALE {s}")
 
 
 def self_test() -> int:
@@ -450,7 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             "Either make the field do something, delete it, or add it to "
-            f"{ALLOWLIST_PATH} with a reason a human wrote."
+            f"{ALLOWLIST_PATH.relative_to(REPO_ROOT).as_posix()} with a reason a human wrote."
         )
         return 1
 

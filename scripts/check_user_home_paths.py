@@ -33,6 +33,7 @@ import argparse
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 # Account names that are self-evidently stand-ins. Compared lower-case.
 PLACEHOLDERS = {
@@ -81,15 +82,19 @@ def scan_text(text: str) -> list[tuple[int, str]]:
     return hits
 
 
-def tracked_files() -> list[str]:
+# Script-relative, never cwd-relative (MEASURED 2026-10-02).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def tracked_files(root: Path = REPO_ROOT) -> list[str]:
     out = subprocess.run(
-        ["git", "ls-files"], check=True, capture_output=True, text=True
+        ["git", "ls-files"], check=True, capture_output=True, text=True, cwd=root
     ).stdout
     return [p for p in out.split("\n") if p]
 
 
-def check() -> int:
-    files = tracked_files()
+def check(root: Path = REPO_ROOT) -> int:
+    files = tracked_files(root)
     hits: list[str] = []
     for path in files:
         if path.startswith(EXEMPT_PREFIXES) or path.rsplit("/", 1)[-1].startswith(
@@ -97,7 +102,7 @@ def check() -> int:
         ):
             continue
         try:
-            with open(path, encoding="utf-8") as handle:
+            with open(root / path, encoding="utf-8") as handle:
                 text = handle.read()
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             # Binary, a submodule, or deleted since `git ls-files` ran. Nothing

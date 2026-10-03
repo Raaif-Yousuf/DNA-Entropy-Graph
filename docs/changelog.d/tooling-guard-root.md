@@ -1,0 +1,1 @@
+- Every `scripts/check_*.py` now defaults its repo root (and allowlist paths) to the repo the script lives in, not the current directory, so running a worktree's guard from the shared checkout scans the worktree; `scripts/tests/test_guard_roots.py` runs each guard from a foreign cwd and asserts identical output.

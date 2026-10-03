@@ -379,11 +379,16 @@ def self_test() -> bool:
     return ok
 
 
+# Script-relative, never cwd-relative: running another tree's copy of this guard from
+# elsewhere must scan the tree the script lives in (MEASURED 2026-10-02).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Validate docs/ToTest.md's row shape, Needs values, commit shas, and row age.",
     )
-    ap.add_argument("--root", type=Path, default=Path.cwd(), help="repo root (default: current directory)")
+    ap.add_argument("--root", type=Path, default=REPO_ROOT, help="repo root (default: the repo this script lives in)")
     ap.add_argument("--max-age-days", type=int, default=DEFAULT_MAX_AGE_DAYS,
                      help=f"fail a row whose closing commit is older than this many days (default {DEFAULT_MAX_AGE_DAYS})")
     ap.add_argument("--self-test", action="store_true", help="run against synthetic fixtures and exit")

@@ -199,11 +199,16 @@ def self_test() -> bool:
     return ok
 
 
+# Script-relative, never cwd-relative: running another tree's copy of this guard from
+# elsewhere must scan the tree the script lives in (MEASURED 2026-10-02).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Check that worker/pyproject.toml and app/Directory.Build.props agree on version.",
     )
-    ap.add_argument("--root", type=Path, default=Path.cwd(), help="repo root (default: current directory)")
+    ap.add_argument("--root", type=Path, default=REPO_ROOT, help="repo root (default: the repo this script lives in)")
     ap.add_argument("--tag", default=None, metavar="vX.Y.Z",
                     help="release mode: the git tag must also equal both versions (what release.yml runs)")
     ap.add_argument("--self-test", action="store_true", help="run against synthetic fixtures and exit")
