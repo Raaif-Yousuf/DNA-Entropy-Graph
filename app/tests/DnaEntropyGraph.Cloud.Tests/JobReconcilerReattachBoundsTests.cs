@@ -1,7 +1,6 @@
 using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Cloud;
-using DnaEntropyGraph.Guards.Tests;
 using Shouldly;
 using Xunit;
 
@@ -13,7 +12,13 @@ namespace DnaEntropyGraph.Cloud.Tests;
 /// </summary>
 public class JobReconcilerReattachBoundsTests
 {
-    private static readonly DateTimeOffset Launch = new(2026, 10, 3, 12, 0, 0, TimeSpan.Zero);
+    /// <summary>The virtual clock starts before the seeded rows were created; the reconciler only reattaches rows older than its own start, so move it past them first.</summary>
+    private static VirtualTimeProvider ClockAfterTheSeededRows()
+    {
+        var time = new VirtualTimeProvider();
+        time.Advance(TimeSpan.FromDays(2));
+        return time;
+    }
 
     [Fact]
     public async Task One_runs_cancel_that_never_ends_does_not_hold_back_the_reattach_of_the_others_past_the_settle_deadline()
@@ -22,7 +27,7 @@ public class JobReconcilerReattachBoundsTests
         await env.SeedAsync("job-hung", JobPhase.Running, vm: true);
         env.Gcp.WithWorker(FakeWorkerMode.Done);
         await env.SeedAsync("job-ok", JobPhase.Running, vm: true);
-        var time = new VirtualTimeProvider(Launch);
+        var time = ClockAfterTheSeededRows();
         var reattach = env.Reconciler(time).ReattachAsync(CancellationToken.None);
         await WaitUntilAsync(() => env.Active.IsActive("job-hung") && env.Row("job-ok").Phase == JobPhase.Completed);
 
@@ -47,7 +52,7 @@ public class JobReconcilerReattachBoundsTests
     {
         var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
         await env.SeedAsync("job-slow", JobPhase.Running, vm: true);
-        var time = new VirtualTimeProvider(Launch);
+        var time = ClockAfterTheSeededRows();
         var reattach = env.Reconciler(time).ReattachAsync(CancellationToken.None);
         await WaitUntilAsync(() => env.Active.IsActive("job-slow"));
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -84,6 +84,13 @@ public sealed class JobReconciler
     /// <summary>The longest one delete or stop may take. Compute delete and stop are operations that run for tens of seconds, so this is far longer than a lookup; a refusal still comes back at once.</summary>
     private static readonly TimeSpan DefaultMutationTimeout = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// The longest a reattach waits for a user cancel of the same run to settle (it stops the VM or deletes it, which are operations of tens of seconds,
+    /// so this matches <see cref="DefaultMutationTimeout"/>). A cancel that never ends (a gateway call that ignores its token) then holds back only its own
+    /// run's outcome, and only this long, instead of every run's until the app shuts down (issue #551).
+    /// </summary>
+    private static readonly TimeSpan DefaultCancelSettleTimeout = TimeSpan.FromMinutes(5);
+
     private readonly CloudJobRunner _runner;
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;
@@ -98,6 +105,7 @@ public sealed class JobReconciler
     private readonly DateTimeOffset _startedAt;
     private readonly TimeSpan _lookupTimeout;
     private readonly TimeSpan _mutationTimeout;
+    private readonly TimeSpan _cancelSettleTimeout;
     private readonly IDiagnosticsLog _log;
 
     /// <summary>Jobs whose last reattach could not ask the cloud (Deferred), until a later pass judges them (issue #559).</summary>
@@ -130,8 +138,10 @@ public sealed class JobReconciler
         TimeProvider? timeProvider = null,
         TimeSpan? lookupTimeout = null,
         TimeSpan? mutationTimeout = null,
-        IDiagnosticsLog? log = null)
+        IDiagnosticsLog? log = null,
+        TimeSpan? cancelSettleTimeout = null)
     {
+        _cancelSettleTimeout = cancelSettleTimeout ?? DefaultCancelSettleTimeout;
         _log = log ?? NullDiagnosticsLog.Instance;
         _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
         _mutationTimeout = mutationTimeout ?? DefaultMutationTimeout;
@@ -624,12 +634,36 @@ public sealed class JobReconciler
     /// </summary>
     private async Task<ReattachOutcome> OutcomeOfCancelledAsync(string jobId, ReattachAction underway, CancellationToken cancellationToken)
     {
-        await _active.WhenCancelSettledAsync(jobId).WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _active.WhenCancelSettledAsync(jobId).WaitAsync(_cancelSettleTimeout, _time, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // The cancel is still going: report the row as it is now (non-terminal), which says so, rather than wait on it for good.
+            _log.Warning("reconciler", jobId, nameof(TimeoutException));
+        }
+
         var settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
         return new ReattachOutcome(jobId, ActionForFinalPhase(underway, settled?.Phase), settled?.Phase, settled?.ErrorCode);
     }
 
-    internal static ReattachAction ActionForFinalPhase(ReattachAction underway, JobPhase? finalPhase) => underway;
+    /// <summary>
+    /// What the reattach did, as the row it left says it did. A reattach that was stopped by a user cancel may have set its own action (it
+    /// goes first, before its write) for a write that never landed: a row that ended Cancelled was cancelled, and a Failed* action is only true
+    /// of a row that is Failed.
+    /// </summary>
+    internal static ReattachAction ActionForFinalPhase(ReattachAction underway, JobPhase? finalPhase)
+    {
+        if (finalPhase == JobPhase.Cancelled)
+        {
+            return ReattachAction.CancelFinished;
+        }
+
+        return underway is ReattachAction.FailedVmMissing or ReattachAction.FailedUnrecoverable && finalPhase != JobPhase.Failed
+            ? ReattachAction.Resumed
+            : underway;
+    }
 
     private enum Evidence
     {

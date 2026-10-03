@@ -643,6 +643,11 @@ because it is called from inside the reconciler's catch blocks. A lifecycle step
 `WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) holds now: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
 (#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
 
+**Reattach bounds (issue #551)**: a reattached run stopped by a user cancel waits for that cancel to settle for at most 5 minutes (`JobReconciler`'s `cancelSettleTimeout`, on its `TimeProvider`);
+on expiry it logs the error class and reports the row as it is (non-terminal), so one cancel stuck in a gateway call that ignores its token holds back only its own run's outcome (the other runs are not blocked
+on a wait that never ends). The reported `ReattachAction` is derived from the row's final phase (`ActionForFinalPhase`): Cancelled is `CancelFinished`, and a `Failed*` action is reported only for a row that is Failed.
+Decision (agent-made, reversible): a per-run deadline over per-run outcome callbacks, because no consumer reads outcomes yet and the deadline is the smaller change.
+
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a
