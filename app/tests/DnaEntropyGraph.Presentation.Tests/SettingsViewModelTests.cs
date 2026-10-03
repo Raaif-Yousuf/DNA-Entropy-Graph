@@ -52,8 +52,8 @@ public class SettingsViewModelTests
         viewModel.SetThemeCommand.Execute("Dark");
 
         viewModel.Theme.ShouldBe("Dark");
-        toastService.Received(1).ShowToast("ThemeNotSaved_Title", "ThemeNotSaved_Body");
-        toastService.DidNotReceive().ShowToast("ThemeUpdated_Title", Arg.Any<string>());
+        toastService.Received(1).ShowToast("ThemeNotSaved_Title", "ThemeNotSaved_Body", ToastSeverity.Warning);
+        toastService.DidNotReceive().ShowToast("ThemeUpdated_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
     }
 
     [Fact]
@@ -84,6 +84,6 @@ public class SettingsViewModelTests
 
         viewModel.SetThemeCommand.Execute("Dark");
 
-        toastService.Received(1).ShowToast("Theme updated (from resw)", "Dark");
+        toastService.Received(1).ShowToast("Theme updated (from resw)", "Dark", ToastSeverity.Info);
     }
 }

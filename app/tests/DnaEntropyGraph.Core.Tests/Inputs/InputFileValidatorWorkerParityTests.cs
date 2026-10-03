@@ -59,6 +59,9 @@ public sealed class InputFileValidatorWorkerParityTests
         // Python refuses these for Biopython-specific reasons (a parse error); the C# reader finds
         // no ORIGIN block and also refuses. Same verdict, different reason text.
         ["malformed/genbank_missing_origin.gb"] = new(false, InputProblemCode.NoRecords),
+        // Feature-table refusals (#548): Biopython's own scanner raises on these two shapes.
+        ["malformed/genbank_qualifier_missing_slash.gb"] = new(false, InputProblemCode.NoRecords),
+        ["malformed/genbank_feature_line_shorter_than_qualifier_indent.gb"] = new(false, InputProblemCode.NoRecords),
         ["malformed/genbank_truncated_mid_feature_table.gb"] = new(false, InputProblemCode.NoRecords),
 
         // refused: a bad base, same code and same 1-based position as Python's message
@@ -79,10 +82,10 @@ public sealed class InputFileValidatorWorkerParityTests
     /// </summary>
     private static readonly Dictionary<string, string> FalseAccepts = new()
     {
-        ["malformed/genbank_qualifier_missing_slash.gb"] =
-            "Biopython rejects a feature qualifier without its leading slash; GenBankLite does not parse the feature table.",
-        ["malformed/genbank_feature_line_shorter_than_qualifier_indent.gb"] =
-            "The worker refuses a feature-table line shorter than the GenBank qualifier indent (#536); GenBankLite does not parse the feature table.",
+        ["malformed/genbank_stray_close_paren_line.gb"] =
+            "#611: Biopython's consumer asserts on a lone closing parenthesis line after a location; GenBankLite does not parse locations.",
+        ["malformed/genbank_second_record_terminator_in_header.gb"] =
+            "#611: Biopython refuses a '//' in a later record's header; GenBankLite skips that empty record and keeps the others.",
     };
 
     private static string WorkerData(string relative) =>

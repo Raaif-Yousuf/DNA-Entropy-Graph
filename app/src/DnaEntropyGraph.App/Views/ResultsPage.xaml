@@ -6,7 +6,7 @@
 
     <!--
         Issue #102: a finished run's numbers and files. Everything is read from the run's own output folder by
-        ResultsViewModel. Gene tables (#552), IGV/Geneious launch (#586) and Export PNG (#587) are not here yet.
+        ResultsViewModel. Gene tables (#552) and Export PNG (#587) are not here yet.
     -->
     <ScrollViewer>
         <StackPanel Padding="24" Spacing="16">
@@ -31,6 +31,8 @@
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button x:Uid="ResultsOpenFolderButton" Command="{x:Bind ViewModel.OpenFolderCommand}" />
                 <Button x:Uid="ResultsOpenInViewerButton" Command="{x:Bind ViewModel.OpenInViewerCommand}" />
+                <Button x:Uid="ResultsOpenInIgvButton" Command="{x:Bind ViewModel.OpenInIgvCommand}" />
+                <Button x:Uid="ResultsOpenInGeneiousButton" Command="{x:Bind ViewModel.OpenInGeneiousCommand}" />
             </StackPanel>
 
             <TextBlock x:Uid="ResultsStatsHeading" Style="{StaticResource SubtitleTextBlockStyle}" />

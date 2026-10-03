@@ -818,8 +818,22 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `access_type=offline`, prompt `select_account consent`.
 - **Files** under `%LOCALAPPDATA%\DNAEntropyGraph\auth\`: `<sub>.tok` (DPAPI, one per account, key = the id token's
   `sub`, held to `[A-Za-z0-9_-]` because it becomes a file name) and `accounts.json` (`activeSub` and a list of
-  `{sub, email, needsSignIn}`, no token). Token refresh is done by Google's `UserCredential` and written back through
+  `{sub, email, needsSignIn, projectId?}`, no token). `projectId` is the project that account chose in the wizard (issue #520):
+  `IGcpAccount.SelectProjectAsync` validates it with `ProjectIdGenerator.IsValid` and stores it in the active account's record, so it
+  follows the account on a switch, survives a restart, is dropped with the record on sign-out and is kept when an expired account
+  signs in again; a file written before it existed loads with no project. `SelectedProjectId` reads it. While every gateway is
+  `FakeGcp`, a signed-in account with no chosen project still answers `GoogleAccountOptions.ProjectIdUntilSelectionExists`
+  (`"fake-project"`); a chosen project always wins, and the fallback goes with the real gateways (#609). Token refresh is done by Google's `UserCredential` and written back through
   the same store, so a restart needs no browser.
+  `AccountRegistry` (issue #616) writes `accounts.json` under a session-wide named mutex (`Local\DnaEntropyGraph.accounts.<hash of the path>`, so shared by every copy one user runs in one Windows session, and an elevated copy may not be able to open it: that is `ACCOUNTS_FILE_LOCKED`, a ToTest row) to a unique temp name, waiting up to 10 s for a save and 150 ms for a read, so two saves at once serialise; the lock is cross-process by construction, the test drives two
+  instances on two threads. A missing file is a normal empty list. A file that does not parse is moved to `accounts.json.bad` (`.bad.1`,
+  `.bad.2`, never over an earlier one) before anything can overwrite it, and the first sign-in, project choice or switch afterwards fails
+  once with `ACCOUNTS_FILE_UNREADABLE` (action Sign in again) before a browser opens. `Load` reads under the same mutex and retries a failed read
+  (3 tries, 40 ms steps; a load blocks at most `AccountRegistry.WorstCaseLoadBudget`, about 270 ms). A file that still cannot be read (held open by another program or copy) is not empty and not set aside: the registry
+  is `Unreadable`, `Save` refuses to replace it, the service does not cache the empty list, and the sign-in, project choice or switch fails with
+  `ACCOUNTS_FILE_LOCKED` (action Try again); a read is not retried more often than every 2 s while it is locked (the result is remembered, so a UI read never waits on the file each time), and a token request or sign-out in that state fails with the same code instead of reading as signed out; the next call after the window reads the file again and succeeds once the hold is gone. A save that cannot take the lock in time, or whose mutex the system refuses to open, is `AccountsFileLockedException` (not a disk failure) and reaches the user as `ACCOUNTS_FILE_LOCKED` from sign-in, switch and project choice; a disk failure keeps `SIGNIN_STORAGE` or `PROJECT_SAVE_FAILED`. The save runs on a pool thread (`CommitAsync`) so a 10 s lock wait never blocks a dispatcher, and a load's worst case is about 270 ms (150 ms lock wait plus two read-retry sleeps), because the state getter can run on the UI thread. A damaged file the folder will not let the app move aside reports `SIGNIN_STORAGE` (the folder is the problem, Try again would never help). A save also deletes leftover `accounts.json.<guid>.tmp` files older than 5 minutes (including the old fixed `accounts.json.tmp`), best effort.
+  THEORY (unverified): a virus scanner or a second app instance is what damaged the file in the field. Not covered: two processes doing
+  load-modify-save can still lose one update (last writer wins); only corruption is prevented.
 - **Errors** are `AccountAuthException` with a code from `AuthErrorCodes`; the English is `AuthError_<code>` in
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
   on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
