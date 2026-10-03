@@ -27,7 +27,8 @@ public static class WorkerManifestBuilder
 {
     // Defaults the worker documents for limits.* (job_contract.md section 3, "Field notes").
     private const int CancelPollSeconds = 10;
-    private const int HeartbeatSeconds = 30;
+    /// <summary>The <c>limits.heartbeatSeconds</c> the manifest asks for; the runner derives its staleness limit from it.</summary>
+    public const int HeartbeatSeconds = 30;
     private const int MaxInputs = 50;
     private const int MaxTotalNt = 20_000_000;
 

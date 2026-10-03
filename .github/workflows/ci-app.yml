@@ -42,7 +42,14 @@ jobs:
   # never appears stays "Expected - waiting" forever (it blocks the merge button). A job that
   # is skipped by its own `if:` reports as Skipped, which branch protection counts as passing.
   # So: no path filter on the trigger; this tiny job decides, and the real jobs are gated on it.
-  changes:
+  # FAIL-OPEN HAZARD (#31 round 2): a job whose `needs` failed is SKIPPED unless its `if:` contains a status function, and a
+  # skipped required check reads as green. So a broken `changes` job (outputs.run empty) would skip every real job and turn
+  # the PR green with nothing tested. Each gated job therefore uses
+  #     !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true')
+  # `!cancelled()` is a status function, so it replaces the implicit success() and the job is evaluated even when `changes`
+  # failed; then `result != 'success'` makes a broken gate RUN the tests. A cancelled run (the workflow is being cancelled)
+  # still stops, and reads as cancelled, not green. Chosen over a final aggregator job because the required check names stay
+  # the real jobs' names. Pinned by scripts/tests/test_ci_changes_gate.py (parses this file's needs/if wiring).  changes:
     name: changes (app)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -67,7 +74,7 @@ jobs:
   build:
     name: build and test
     needs: changes
-    if: ${{ needs.changes.outputs.run == 'true' }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -84,6 +91,26 @@ jobs:
         with:
           global-json-file: app/global.json
 
+      # #438. MEASURED 2026-10-03 (minidump of PR #529's run): the hung test was blocked in the Windows App SDK
+      # bootstrap (MddBootstrapInitialize2) because windows-latest has no Windows App Runtime, and the default
+      # bootstrap option opens a dialog nobody can answer. DnaEntropyGraph.App.csproj now sets option None (a missing
+      # runtime exits with an HRESULT instead of hanging). MEASURED 2026-10-03 on a laptop: the bootstrap cannot be
+      # disabled for the tests either (COMException 0x80040154 in Guards DiResolutionTests), so this step installs the
+      # runtime and the next one asserts it is there, so a silent --quiet no-op fails here and not as a test error.
+      # THEORY (unverified) until a run shows it: that the redistributable installs silently on windows-latest; see docs/ToTest.md.
+      - name: install Windows App Runtime
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe -OutFile "$env:RUNNER_TEMP/windowsappruntimeinstall.exe"
+          $p = Start-Process -FilePath "$env:RUNNER_TEMP/windowsappruntimeinstall.exe" -ArgumentList '--quiet' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Windows App Runtime install exited $($p.ExitCode)" }
+
+      - name: assert Windows App Runtime 1.8 is installed
+        shell: pwsh
+        run: |
+          $pkgs = Get-AppxPackage -AllUsers 'Microsoft.WindowsAppRuntime.1.8*'
+          if (-not $pkgs) { throw 'Windows App Runtime 1.8 is not installed after the install step (a silent --quiet no-op).' }
+          $pkgs | ForEach-Object { Write-Host "installed: $($_.Name) $($_.Version)" }
       - name: restore
         working-directory: app
         run: dotnet restore
@@ -130,6 +157,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { $failed += "$p (exit $LASTEXITCODE)" }
             Write-Host "::endgroup::"
           }
+          $trx = @(Get-ChildItem TestResults -Recurse -Filter *.trx -ErrorAction SilentlyContinue)
+          if ($trx.Count -lt 5) { $failed += "expected 5 .trx files, found $($trx.Count) (a dropped --report-trx flag)" }
           if ($failed.Count -gt 0) {
             Write-Host "::error title=app tests failed::$($failed -join ', '). Exit 7 means the hang dump fired; download the test-results artifact."
             exit 1
