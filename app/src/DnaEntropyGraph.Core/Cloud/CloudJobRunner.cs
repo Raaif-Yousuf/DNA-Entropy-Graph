@@ -110,6 +110,9 @@ public sealed class CloudJobRunner
     /// <summary>The longest one gateway call may take before the runner treats it as a transient failure and looks again.</summary>
     public TimeSpan CallTimeout { get => _settings.CallTimeout; init => _settings.CallTimeout = value; }
 
+    /// <summary>The longest <c>EnsureBucketAsync</c> may take: it is a sequence of requests, so it gets more than <see cref="CallTimeout"/> (see <see cref="CloudRunSettings.EnsureBucketTimeout"/>).</summary>
+    public TimeSpan EnsureBucketTimeout { get => _settings.EnsureBucketTimeout; init => _settings.EnsureBucketTimeout = value; }
+
     /// <summary>How long to wait for a stop or delete to land (verifying the VM's terminal state) before recording it unverified.</summary>
     public TimeSpan LifecycleTimeout { get => _settings.LifecycleTimeout; init => _settings.LifecycleTimeout = value; }
 
@@ -286,7 +289,7 @@ public sealed class CloudJobRunner
         await _transfer.PrepareRunFolderAsync(request, cancellationToken).ConfigureAwait(false);
 
         // Step 5 of the preflight order (docs/cloud_design.md section 2): the bucket exists.
-        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken).ConfigureAwait(false);
+        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
 
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Uploading, cancellationToken).ConfigureAwait(false);
 
@@ -419,7 +422,7 @@ public sealed class CloudJobRunner
     /// </summary>
     public async Task UploadInputsAsync(CloudJobRequest request, CancellationToken cancellationToken)
     {
-        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken).ConfigureAwait(false);
+        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
         await _transfer.UploadAsync(request, bucket, cancellationToken).ConfigureAwait(false);
     }
 }

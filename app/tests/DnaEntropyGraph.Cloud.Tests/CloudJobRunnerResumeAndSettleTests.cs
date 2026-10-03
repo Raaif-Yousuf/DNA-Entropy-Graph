@@ -36,6 +36,7 @@ public class CloudJobRunnerResumeAndSettleTests
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
             CallTimeout = TimeSpan.FromMilliseconds(50),
+            EnsureBucketTimeout = TimeSpan.FromMilliseconds(50),
             CreateTimeout = TimeSpan.FromMilliseconds(50),
             CreateSettleTimeout = TimeSpan.FromSeconds(2),
             UploadTimeout = TimeSpan.FromMilliseconds(50),
