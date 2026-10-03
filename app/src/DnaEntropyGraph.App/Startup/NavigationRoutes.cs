@@ -26,6 +26,9 @@ public static class NavigationRoutes
         // Issues #72/#73: the igv.js viewer. Navigate with the run's output folder (a string) as the parameter.
         navigationService.RegisterPage(DnaEntropyGraph.Presentation.ViewModels.ViewerViewModel.PageKey, typeof(ViewerPage));
 
+        // Issue #102: a finished run's numbers and files. Navigate with the run's job id (a string) as the parameter.
+        navigationService.RegisterPage(DnaEntropyGraph.Presentation.ViewModels.ResultsViewModel.PageKey, typeof(ResultsPage));
+
         // Issue #490: every destination without a page of its own lands on one
         // generic "not built yet" page rather than an empty frame.
         navigationService.RegisterFallbackPage(typeof(PlaceholderPage));
