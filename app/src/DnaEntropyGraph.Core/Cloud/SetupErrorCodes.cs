@@ -54,8 +54,15 @@ public static class SetupErrorCodes
     /// <summary>The user may not run a VM as the worker identity (<c>iam.serviceAccounts.actAs</c> missing, Compute Admin alone lacks it). Action: copy a request for the project owner.</summary>
     public const string PermissionActAs = "PERMISSION_ACTAS";
 
+    /// <summary>
+    /// The project's default Compute Engine account, the only identity the VM can run as when the organization forbids creating
+    /// one, no longer exists or cannot be used (issue #54). Turning the Compute API on cannot help (preflight already did), so
+    /// the one action is a link to the project's Service Accounts page (<see cref="ServiceAccountLinks"/>), where the user or their administrator can restore it.
+    /// </summary>
+    public const string WorkerDefaultAccountMissing = "WORKER_DEFAULT_ACCOUNT_MISSING";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff, BucketConfigNotApplied, BucketNameTaken, WorkerDefaultAccount, WorkerIdentityNotApplied, PermissionActAs];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff, BucketConfigNotApplied, BucketNameTaken, WorkerDefaultAccount, WorkerIdentityNotApplied, PermissionActAs, WorkerDefaultAccountMissing];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -74,6 +81,7 @@ public static class SetupErrorCodes
         WorkerDefaultAccount => "SetupError_WORKER_DEFAULT_ACCOUNT",
         WorkerIdentityNotApplied => "SetupError_WORKER_IDENTITY_NOT_APPLIED",
         PermissionActAs => "SetupError_PERMISSION_ACTAS",
+        WorkerDefaultAccountMissing => "SetupError_WORKER_DEFAULT_ACCOUNT_MISSING",
         _ => "SetupError_OTHER",
     };
 
@@ -94,6 +102,14 @@ public static class SetupErrorCodes
         WorkerDefaultAccount => "SetupAction_Continue",
         WorkerIdentityNotApplied => "SetupAction_TryAgain",
         PermissionActAs => "SetupAction_CopyRequestForOwner",
+        WorkerDefaultAccountMissing => "SetupAction_OpenServiceAccounts",
         _ => "SetupAction_TryAgain",
     };
+}
+
+/// <summary>The Google Cloud console page of a project's service accounts (a link action, Hard Rule 13).</summary>
+public static class ServiceAccountLinks
+{
+    public static string ForProject(string projectId)
+        => "https://console.cloud.google.com/iam-admin/serviceaccounts?project=" + Uri.EscapeDataString(projectId);
 }

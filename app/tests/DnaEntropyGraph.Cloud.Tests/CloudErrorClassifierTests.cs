@@ -164,11 +164,20 @@ public class CloudErrorClassifierTests
     [InlineData(null, "The request was refused.", CloudErrorKind.OrgPolicy)]
     [InlineData("FAILED_PRECONDITION", "Precondition check failed: constraints/compute.requireOsLogin is enforced.", CloudErrorKind.OrgPolicy)]
     [InlineData("CONDITION_NOT_MET", "Operation denied", CloudErrorKind.OrgPolicy)]
+    [InlineData("CONDITION_NOT_MET", "Precondition Failed", CloudErrorKind.Other)]
     public void A_412_is_a_precondition_conflict_only_when_it_positively_looks_like_one(string? code, string message, CloudErrorKind expected)
     {
         CloudErrorClassifier.Classify(new CloudError(code, 412, message)).ShouldBe(expected);
     }
 
+    // Where there is no HTTP 412 to decide by, the structured CONDITION_NOT_MET code is the only signal and means org policy.
+    [Theory]
+    [InlineData(null, "Operation denied")]
+    [InlineData(503, "Operation denied")]
+    public void The_CONDITION_NOT_MET_code_is_an_org_policy_refusal_when_there_is_no_412_to_decide_by(int? status, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError("CONDITION_NOT_MET", status, message)).ShouldBe(CloudErrorKind.OrgPolicy);
+    }
     // Round 4: an org-policy marker (a constraints/ id) beats the permission wording when no status says otherwise,
     // and "billing is required" on a 403 is billing off, not Other.
     [Theory]

@@ -83,11 +83,17 @@ the message. Choose **Copy request for the project owner** and send it to them. 
 
 **"Using the default computer identity"**, a yellow note, not a failure: your organization does
 not let apps create their own worker identity (a service account), so the rented computer
-runs as your project's default one instead. That identity often has broad access to your whole
-project (usually the Editor role), which the app cannot reduce, and the app also gives it read
+runs as your project's default one instead. That identity may have broad access to your whole
+project (in older projects often the Editor role), which the app cannot reduce, and the app also gives it read
 and write access to your results storage, so any other computer in this project that runs as
 the default identity can reach your results too. Choose **Continue** to accept this.
 *(`WORKER_DEFAULT_ACCOUNT`)*
+
+**"The default computer identity is missing"**: your organization does not let the app create
+its own worker identity, and your project's default one is missing or switched off, so the app has
+nothing to run as. Choose **Open service accounts** to see this project's identities, restore the
+default one there (or ask your administrator to), or ask them to allow the app to create its own.
+*(`WORKER_DEFAULT_ACCOUNT_MISSING`)*
 
 If you would rather the app used its own narrow identity, ask your IT department to allow
 service accounts in the project, then run setup again; the app will use its own account from

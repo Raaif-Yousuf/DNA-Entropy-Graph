@@ -139,9 +139,11 @@ public static partial class CloudErrorClassifier
             return CloudErrorKind.Permission;
         }
 
-        // A 412 is an org-policy refusal unless it positively looks like a failed precondition (see IsPreconditionConflict).
+        // A 412 is an org-policy refusal unless it positively looks like a failed precondition (see IsPreconditionConflict):
+        // that shared helper decides every 412. The structured CONDITION_NOT_MET code only counts where there is no HTTP 412
+        // to decide by (no status, or a different one), so the two rules cannot disagree about the same error.
         if ((status == 412 && !IsPreconditionConflict(status, error.Code, message))
-            || code == "CONDITION_NOT_MET"
+            || (status is null or not 412 && code == "CONDITION_NOT_MET")
             || lower.Contains("constraints/", StringComparison.Ordinal))
         {
             return CloudErrorKind.OrgPolicy;

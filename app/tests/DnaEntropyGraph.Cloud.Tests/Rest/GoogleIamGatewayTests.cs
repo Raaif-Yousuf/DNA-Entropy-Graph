@@ -506,7 +506,7 @@ public class GoogleIamGatewayTests
         var theirs = "{\"role\":\"roles/storage.legacyBucketReader\",\"members\":[\"projectViewer:my-lab\"]}";
         rig.Handler
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", ""))
-            .Returns(Put, BucketPolicy, 412, StorageError(412, "conditionNotMet", "Precondition Failed"))
+            .Returns(Put, BucketPolicy, 412, StorageError(412, "conditionNotMet", "The supplied etag does not match the current one."))
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAI=", theirs))
             .Returns(Put, BucketPolicy, 200, PolicyBody("CAM=", theirs + "," + BucketBinding(WorkerEmail), 3));
 
@@ -601,9 +601,10 @@ public class GoogleIamGatewayTests
         var failure = await Should.ThrowAsync<CloudOperationException>(
             () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
 
-        // The default account exists once the Compute API has ever been enabled: the one real action is "Turn it on".
-        failure.Error.Code.ShouldBe(SetupErrorCodes.ApiDisabled);
-        failure.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
+        // Preflight already enabled Compute, so "Turn it on" cannot help: the account was deleted or disabled, and the one action
+        // that can work is the project's Service Accounts page (restore it there, or let an admin allow the app to create its own).
+        failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerDefaultAccountMissing);
+        failure.Kind.ShouldBe(CloudErrorKind.Permission);
         rig.Delays.ShouldBeEmpty();
         rig.Handler.To(Post, ProjectSetPolicy).Count.ShouldBe(1);
     }

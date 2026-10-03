@@ -73,6 +73,13 @@ internal static class GoogleApiErrors
 
         var kind = KindOf(status);
         var code = IsRateLimit(status) ? CloudErrorClassifier.RateLimitCode : codeFor?.Invoke(kind) ?? status.Status;
+        // The reasons do not travel in a CloudError, so a failed precondition (decided with them) keeps its reason as the code:
+        // the one shared rule (CloudErrorClassifier.IsPreconditionConflict) then reads it the same way downstream.
+        if (kind != CloudErrorKind.OrgPolicy && CloudErrorClassifier.IsPreconditionConflict(status.HttpStatus, status.Status, status.Message, status.Reasons))
+        {
+            code = "conditionNotMet";
+        }
+
         var error = new CloudError(code, status.HttpStatus, status.Message);
 
         // A refusal to run a VM as the worker service account is a permission error with its own code and action (issue #54).
@@ -163,6 +170,12 @@ internal static class GoogleApiErrors
             return CloudErrorKind.OrgPolicy;
         }
 
+        // A 412 that is a failed precondition (decided above with the reasons, which Classify cannot see) is not a setup failure.
+        if (status.HttpStatus == 412)
+        {
+            return CloudErrorKind.Other;
+        }
+
         return CloudErrorClassifier.Classify(new CloudError(status.Status, status.HttpStatus, status.Message));
     }
 
@@ -194,6 +207,18 @@ internal static class GoogleApiErrors
                     }
 
                     if (detail.TryGetProperty("reason", out var reason) && reason.ValueKind == JsonValueKind.String && reason.GetString() is { Length: > 0 } text)
+                    {
+                        reasons.Add(text);
+                    }
+                }
+            }
+
+            // Cloud Storage and Compute (the Google JSON API shape, not google.rpc) put the reason in errors[].reason.
+            if (error.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in errors.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("reason", out var reason) && reason.ValueKind == JsonValueKind.String && reason.GetString() is { Length: > 0 } text)
                     {
                         reasons.Add(text);
                     }

@@ -312,9 +312,10 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             }
             catch (CloudOperationException ex) when (origin == AccountOrigin.DefaultCompute && IsAccountNotVisibleYet(ex))
             {
-                // THEORY (unverified): Compute creates the default account when the API is first enabled, so its absence means
-                // the API never was. "Turn it on" is an action that can help; Try again could not.
-                throw new CloudOperationException(new CloudError(SetupErrorCodes.ApiDisabled, ex.Error.HttpStatus, ex.Error.Message), CloudErrorKind.ApiDisabled);
+                // Preflight already enabled Compute, so "Turn it on" cannot help (it would loop). The account was deleted or
+                // disabled; the Service Accounts page is the one action that can work. THEORY (unverified): Compute creates the
+                // default account when the API is first enabled.
+                throw new CloudOperationException(new CloudError(SetupErrorCodes.WorkerDefaultAccountMissing, ex.Error.HttpStatus, ex.Error.Message), CloudErrorKind.Permission);
             }
             catch (CloudOperationException ex) when (origin == AccountOrigin.Created && IsAccountNotVisibleYet(ex))
             {

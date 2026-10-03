@@ -1033,8 +1033,9 @@ account and a role and edits two policies, and a whole-method retry would replay
   (`iam.disableServiceAccountCreation`, which classifies as `org_policy`) falls back to the default Compute Engine account
   `<projectNumber>-compute@developer.gserviceaccount.com` with the same role and bindings, and the result carries
   `WorkerIdentity.NoteCode = WORKER_DEFAULT_ACCOUNT`: the wizard shows `SetupError_WORKER_DEFAULT_ACCOUNT` as a yellow note
-  with Continue, not as a failure. That account usually already has the broad Editor role, which the app cannot narrow, and the
-  note says so. Any other refusal (a plain 403) does not fall back. THEORY (unverified, no live project): the exact wording of
+  with Continue, not as a failure. THEORY (unverified, no live project): that account may already hold a broad role (in older
+  projects often Editor; organizations with `iam.automaticIamGrantsForDefaultServiceAccounts` enforced do not grant it), which the
+  app cannot narrow, and the note says "may". If the default account is missing too, the code is `WORKER_DEFAULT_ACCOUNT_MISSING`. Any other refusal (a plain 403) does not fall back. THEORY (unverified, no live project): the exact wording of
   the org-policy refusal; the classifier keys on the `constraints/` id, and the gateway also accepts the bare
   `iam.disableServiceAccountCreation` name. A 409 on create followed by a 404 on the read (the account vanished between the
   two) creates once more, then fails with `WORKER_IDENTITY_NOT_APPLIED`. The default account also receives
@@ -1053,12 +1054,15 @@ account and a role and edits two policies, and a whole-method retry would replay
   and re-applies, five attempts at most. THEORY (unverified): Cloud Storage words the same etag conflict as a 412, so a 412
   that positively looks like a failed precondition (the shared rule in section 5) is treated alike (re-read and retry, three
   writes at most, then `WORKER_IDENTITY_NOT_APPLIED`); any other 412, a constraint-naming one included, stays `org_policy` and
-  is not retried. A default account that "does not exist" at `setIamPolicy` means the Compute API was never enabled: it is
-  `API_DISABLED` ("Turn it on") at once, with no wait. A just-created account
+  is not retried. A default account that "does not exist" at `setIamPolicy` was deleted or disabled (preflight already enabled Compute, so
+  "Turn it on" could not help and would loop): it is `WORKER_DEFAULT_ACCOUNT_MISSING` at once, with no wait, whose one action
+  is a link to the project's Service Accounts page (`ServiceAccountLinks.ForProject`), where the user or their administrator can
+  restore it or allow the app to create its own. A just-created account
   can be briefly invisible to `setIamPolicy` (400 "does not exist"); that case alone waits on the injected delay (2 s, 4 s,
   ... ) and re-reads, six tries and five waits at most, then fails with `WORKER_IDENTITY_NOT_APPLIED` whose button is Try
   again. The wait applies only to an account this call just created: an adopted or default account that "does not exist" is a
-  real failure, and the raw error surfaces at once (Try again could never fix it).
+  real failure and surfaces at once (Try again could never fix it): the default account as `WORKER_DEFAULT_ACCOUNT_MISSING`, an
+  adopted one as the raw error.
 - **Hard Rule 10 and labels.** A service account and a custom role cannot carry labels (Google's IAM has no label field on
   either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
   per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers

@@ -886,13 +886,19 @@
     <value>Google would not give your results storage any of the names the app tried, because other people already use them. Choose Try again and the app will pick new names.</value>
   </data>
   <data name="SetupError_WORKER_DEFAULT_ACCOUNT" xml:space="preserve">
-    <value>Your organization does not let the app create its own worker identity (a service account), so the rented computer will run as your project's default computer identity instead. That identity often has broad access to your whole project (usually the Editor role), which the app cannot reduce, and the app also gives it read and write access to your results storage, so any other computer in this project that runs as the default identity can reach your results too. Choose Continue to accept this.</value>
+    <value>Your organization does not let the app create its own worker identity (a service account), so the rented computer will run as your project's default computer identity instead. That identity may have broad access to your whole project (in older projects often the Editor role), which the app cannot reduce, and the app also gives it read and write access to your results storage, so any other computer in this project that runs as the default identity can reach your results too. Choose Continue to accept this.</value>
   </data>
   <data name="SetupError_WORKER_IDENTITY_NOT_APPLIED" xml:space="preserve">
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app will not start a run with it. Choose Try again and the app will repair it.</value>
   </data>
   <data name="SetupError_PERMISSION_ACTAS" xml:space="preserve">
     <value>Google will not let your account run a rented computer as the app's worker identity (a service account). The Service Account User role on that identity is missing. Choose Copy request for the project owner and send it to them.</value>
+  </data>
+  <data name="SetupError_WORKER_DEFAULT_ACCOUNT_MISSING" xml:space="preserve">
+    <value>Your organization does not let the app create its own worker identity (a service account), and your project's default computer identity, which the app would use instead, is missing or switched off. Choose Open service accounts to see this project's identities, then restore the default one there (or ask your administrator to), or ask them to allow the app to create its own.</value>
+  </data>
+  <data name="SetupAction_OpenServiceAccounts" xml:space="preserve">
+    <value>Open service accounts</value>
   </data>
   <data name="SetupAction_Continue" xml:space="preserve">
     <value>Continue</value>
