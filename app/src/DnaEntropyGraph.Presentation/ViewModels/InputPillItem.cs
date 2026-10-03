@@ -51,6 +51,9 @@ public sealed partial class InputPillItem : ObservableObject
     /// <summary>Total bases in the file when the last check found it valid; null while checking or when there is a problem. The cost estimate (#98) is sized from it.</summary>
     public long? TotalBases { get; private set; }
 
+    /// <summary>The kind the last check found (or, for a file that could not be read, its extension said); null while unknown. The output choices (#103) follow it.</summary>
+    public InputKind? Kind { get; private set; }
+
     /// <summary>True when the only thing wrong is a U: the page offers Treat as RNA instead of an error.</summary>
     public bool NeedsRnaChoice { get; private set; }
 
@@ -89,6 +92,7 @@ public sealed partial class InputPillItem : ObservableObject
 
         Problem = null;
         TotalBases = null;
+        Kind = null;
         KindText = string.Empty;
         SummaryText = string.Empty;
         NoticesText = string.Empty;
@@ -108,6 +112,7 @@ public sealed partial class InputPillItem : ObservableObject
         }
 
         var kind = KindFor(result);
+        Kind = kind;
         KindText = kind is null ? string.Empty : _strings.GetString(kind switch
         {
             InputKind.GenBank => "NewRunPillKind_GenBank",
