@@ -32,7 +32,7 @@ public class SettingsDiagnosticsTests
         strings.GetString("DiagnosticsFileNamePrefix").Returns("prefix-from-resw");
         _viewModel = new SettingsViewModel(
             Substitute.For<ISettingsStore>(), _toasts, strings, _exporter, _picker, _launcher,
-            new FixedClock(new DateTimeOffset(2026, 10, 3, 9, 0, 0, TimeSpan.Zero)));
+            new FixedClock(new DateTimeOffset(2026, 10, 3, 9, 0, 0, TimeSpan.Zero)), Substitute.For<IThemeApplier>());
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class SettingsDiagnosticsTests
             repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Array.Empty<RunRecord>());
             var real = new DiagnosticsExporter(new NoFiles(), repository, () => new DiagnosticsInfo("0", "os", "net", null, Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "x"), [], DateTimeOffset.UnixEpoch, "readme"));
             var viewModel = new SettingsViewModel(
-                Substitute.For<ISettingsStore>(), _toasts, Substitute.For<IStringResourceProvider>(), real, _picker, _launcher, TimeProvider.System);
+                Substitute.For<ISettingsStore>(), _toasts, Substitute.For<IStringResourceProvider>(), real, _picker, _launcher, TimeProvider.System, Substitute.For<IThemeApplier>());
             _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
             {
                 File.WriteAllBytes(path, []);

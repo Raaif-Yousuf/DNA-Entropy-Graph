@@ -24,8 +24,5 @@
   "UNBOUND-COMMAND:CloudResourcesViewModel.ConfirmDeleteCommand": "#105 builds the Cloud page",
   "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests.",
 
-  "TEST-ONLY-COMMAND:SettingsViewModel.SetThemeCommand": "#104 builds the Settings page",
-  "TEST-ONLY-OBSERVABLE:SettingsViewModel.Theme": "#104 builds the Settings page",
-
   "DEAD-REGISTRATION:RunTargetResolver": "#173's run-target picker is the first consumer"
 }
