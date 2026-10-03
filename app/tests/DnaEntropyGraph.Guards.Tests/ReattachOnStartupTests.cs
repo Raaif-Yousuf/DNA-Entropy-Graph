@@ -1,5 +1,6 @@
 using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Cloud;
+using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
@@ -38,10 +39,17 @@ public class ReattachOnStartupTests : IDisposable
         }
     }
 
-    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done)
+    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done, TimeProvider? time = null, Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root);
+        if (time is not null)
+        {
+            services.AddSingleton(time);
+        }
+
+        configure?.Invoke(services);
+
         if (connected)
         {
             // The last registration wins: the same fake, but connected, behind every resilient wrapper the app resolves.
@@ -168,6 +176,80 @@ public class ReattachOnStartupTests : IDisposable
         var row = await RowAsync(provider, "job-reconnect");
         row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
         provider.GetRequiredService<CloudRetryLog>().IsOffline.ShouldBeFalse("the offline banner's source still hears every change");
+    }
+
+    [Fact]
+    public async Task An_offline_launch_that_defers_a_run_judges_it_when_the_network_returns_with_no_other_call()
+    {
+        // Issue #559: nothing else touches the cloud after launch (no user action, no breaker event), so only the reconnect probe can notice.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: true, time: time);
+        await SeedKilledRunAsync(provider, "job-probe", JobPhase.Running, vm: true);
+        var gcp = provider.GetRequiredService<FakeGcp>().WithCloudNotConnected();
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "precondition: offline at launch, the row is deferred");
+
+        // Still offline when the first probe (30 s) fires: it must re-arm on the doubled wait (60 s) rather than stop, and only that second probe,
+        // after the network is back, judges the run.
+        var observer = (ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>();
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the first probe pass found the network still down");
+
+        gcp.WithCloudConnected();
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the re-armed probe waits twice as long: 30 s is not enough");
+        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+
+        var row = await RowAsync(provider, "job-probe");
+        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_launch_pass_that_throws_a_network_error_still_starts_the_probe()
+    {
+        // Issue #559 review F1: BeginReconcileAsync throwing (the run table unreadable because the network-backed store timed out) must not skip
+        // the probe; the pass records the failure as deferred and the probe is armed from a finally.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: false, time: time, configure: services => services.AddSingleton<IRunRepository>(_ => new TimingOutRepository()));
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        time.PendingTimers.ShouldBe(1, "the probe is armed even though the launch pass threw");
+    }
+
+    [Fact]
+    public async Task A_launch_whose_first_run_table_read_alone_times_out_still_starts_the_probe()
+    {
+        // Issue #559 review r4 F1: only the reattach's own listing fails (the lifecycle read after it succeeds), so (connected, so the idle sweep defers nothing) the only thing that can
+        // arm the probe is the reattach-level deferral; the test above throws on every read and proves the lifecycle path alone.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: true, time: time, configure: services => services.AddSingleton<IRunRepository>(_ => new FirstReadTimesOutRepository()));
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        time.PendingTimers.ShouldBe(1, "the probe is armed: the reattach could not read the run table");
+    }
+
+    private sealed class FirstReadTimesOutRepository : IRunRepository
+    {
+        private int _reads;
+
+        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
+            => Interlocked.Increment(ref _reads) == 1 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
+
+        public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class TimingOutRepository : IRunRepository
+    {
+        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => throw new TimeoutException();
+
+        public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => throw new TimeoutException();
     }
 
     [Fact]
