@@ -18,6 +18,35 @@ on the project's GitHub page.
 the app's Google approval is still in its early "testing" phase; it is expected, not a
 sign anything is broken. Click **Sign in again**. *(`SIGNIN_EXPIRED`)*
 
+It can also happen if you removed this app's access in your Google account settings
+(myaccount.google.com, Security, third-party access), or after a long time unused. The fix
+is the same: click **Sign in again**.
+
+**"The Google page in your browser was not finished in time"** or **"The sign-in was cancelled
+on the Google page"**, nothing changed. Click **Sign in again** and finish the steps in the
+browser window that opens. *(`SIGNIN_TIMEOUT`, `SIGNIN_CANCELLED`)*
+
+**"Google could not be reached"**, your sign-in is unchanged. Check that the computer is
+online, then click **Try again**. *(`SIGNIN_NETWORK`)*
+
+**"This copy of the app was built without its Google sign-in details"**, download the
+latest installer from the app's download page and install it over this copy.
+*(`OAUTH_CLIENT_MISSING`, `OAUTH_CLIENT_INVALID`)*
+
+**"The app could not open your web browser"**, set a default web browser in Windows Settings,
+then click **Sign in again**. *(`SIGNIN_BROWSER`)*
+
+**"The app could not listen on this computer for Google's reply"**, a security program or a
+company policy blocked it. Allow DNA Entropy Graph in your security program, then click
+**Sign in again**. *(`SIGNIN_LOOPBACK`)*
+
+**"The app could not save your sign-in"**, free some disk space or make sure the folder
+`%LOCALAPPDATA%\DNAEntropyGraph` is not read-only, then click **Sign in again**. *(`SIGNIN_STORAGE`)*
+
+**Using more than one Google account:** each account you sign in with is remembered
+separately on this computer, so you can switch between them without signing in again.
+Signing out removes the sign-in from this computer and also tells Google to cancel it.
+
 ## The app can't finish setting up your project
 
 **"You can use this project but not set it up"**, you are a member of this Google Cloud

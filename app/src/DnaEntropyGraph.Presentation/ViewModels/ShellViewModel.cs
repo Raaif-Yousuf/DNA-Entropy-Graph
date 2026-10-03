@@ -26,6 +26,8 @@ public sealed partial class ShellViewModel : ObservableObject
     public static string InitialPageKey => InitialPageKeyValue;
 
     private readonly INavigator _navigator;
+    private readonly IGcpAccount _gcpAccount;
+    private readonly IDispatcher? _dispatcher;
     private readonly IStringResourceProvider _strings;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
@@ -39,13 +41,30 @@ public sealed partial class ShellViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasActiveRun;
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, IDispatcher? dispatcher = null)
     {
         _navigator = navigator;
+        _gcpAccount = gcpAccount;
+        _dispatcher = dispatcher;
         _strings = strings;
         _statusPillText = BuildStatusPillText(gcpAccount, strings);
 
         messenger.Register<ShellViewModel, RunPhaseChangedMessage>(this, static (recipient, message) => recipient.OnRunPhaseChanged(message));
+
+        // Issue #48: sign-in, sign-out and an account switch change the pill. The shell lives as long as the app, so no unsubscribe.
+        gcpAccount.AccountChanged += (_, _) => RefreshStatusPill();
+    }
+
+    /// <summary>The account service raises its event from whatever thread finished the sign-in; the pill is bound to the UI, so the update goes through the dispatcher when there is one.</summary>
+    private void RefreshStatusPill()
+    {
+        if (_dispatcher is null)
+        {
+            StatusPillText = BuildStatusPillText(_gcpAccount, _strings);
+            return;
+        }
+
+        _dispatcher.Enqueue(() => StatusPillText = BuildStatusPillText(_gcpAccount, _strings));
     }
 
     /// <summary>The NavigationView header: the localized page name (issue #490), never the raw page key; empty for a page with no title key.</summary>
@@ -105,6 +124,6 @@ public sealed partial class ShellViewModel : ObservableObject
     // same convention the Phase*_Title keys already use.
     private static string BuildStatusPillText(IGcpAccount gcpAccount, IStringResourceProvider strings)
         => gcpAccount.IsSignedIn
-            ? string.Format(strings.GetString("StatusPillSignedIn"), gcpAccount.SelectedProjectId)
+            ? string.Format(strings.GetString("StatusPillSignedIn"), gcpAccount.CurrentAccount?.Email ?? gcpAccount.SelectedProjectId)
             : strings.GetString("StatusPillNotSignedIn");
 }
