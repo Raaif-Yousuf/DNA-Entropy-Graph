@@ -80,9 +80,7 @@ def test_check_against_this_repos_real_tree_agrees_on_one_version():
     problems, notices = cvl.check(repo_root)
 
     assert problems == []
-    assert not any(f"#{cvl.APP_SKELETON_ISSUE}" in n for n in notices), (
-        "app/ exists now, so the guard must be enforcing rather than noticing."
-    )
+    assert notices == [], "app/ exists, so the guard must be enforcing rather than noticing."
 
     app_version = cvl.read_app_version(repo_root / "app" / "Directory.Build.props")
     assert app_version is not None, "app/Directory.Build.props must carry a readable <Version>."
@@ -150,3 +148,20 @@ def test_a_tag_without_app_skeleton_is_refused_because_a_release_needs_both_halv
     (tmp_path / "worker" / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8")
     proc = _cli(tmp_path, "--tag", "v1.2.3")
     assert proc.returncode == 1 and "app/Directory.Build.props" in proc.stderr
+
+
+def test_a_missing_app_props_is_a_failure_even_without_a_tag(tmp_path):
+    """The pre-#61 notice-and-pass branch made this guard unable to fail if the file was ever deleted or
+    renamed (the exact 'passes by declining to check' shape). app/ exists now, so absence is an error."""
+    (tmp_path / "worker").mkdir()
+    (tmp_path / "worker" / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8")
+    proc = _cli(tmp_path)
+    assert proc.returncode == 1
+    assert "app/Directory.Build.props" in proc.stderr
+
+
+def test_the_cli_names_both_files_and_both_versions_on_a_planted_mismatch(tmp_path):
+    _plant(tmp_path, "0.0.1", "0.0.2")
+    proc = _cli(tmp_path)
+    assert proc.returncode == 1
+    assert "'0.0.1'" in proc.stderr and "'0.0.2'" in proc.stderr
