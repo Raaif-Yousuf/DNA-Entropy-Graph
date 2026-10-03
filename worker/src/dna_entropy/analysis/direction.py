@@ -14,7 +14,7 @@ mistake available in this codebase to get wrong — see ``test_reverse_uses_comp
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -190,6 +190,9 @@ class DirectionResult:
     # parameter. Recorded here so a report can show WHY window < 2*context_length (the
     # ceiling clamped it) without digging through run notices text.
     ceiling: int = 0
+    # issue #128: True when this contig was analyzed as a circular molecule (wrap-around
+    # context, so ``seam`` is None and ``reduced_context_*`` are empty by construction).
+    circular: bool = False
 
 
 _NEEDS_FORWARD = {
@@ -269,6 +272,15 @@ def _combine(
     return values, reduced, reduced_range
 
 
+def _wrapped(seq: str, pad: int) -> str:
+    """``seq`` with ``pad`` bases of wrap-around context on each side: the molecule's own tail
+    in front and its own head behind. A molecule shorter than ``pad`` simply wraps more than
+    once (every index is taken modulo ``len(seq)``)."""
+    codes = np.frombuffer(seq.encode("ascii"), dtype=np.uint8)
+    idx = np.arange(-pad, len(seq) + pad) % len(seq)
+    return codes[idx].tobytes().decode("ascii")
+
+
 def analyze_direction(
     predictor: Predictor,
     seq: str,
@@ -277,8 +289,69 @@ def analyze_direction(
     ceiling: int,
     direction: Direction,
     on_window: Callable[[], None] | None = None,
+    circular: bool = False,
 ) -> DirectionResult:
     """Run the windowed forward and/or reverse-complement passes and combine them.
+
+    ``circular`` (issue #128, a plasmid): ``seq`` is padded with ``K`` wrap-around bases on
+    both sides BEFORE the tiled passes and the outputs are trimmed back to ``len(seq)``
+    after, so every base, including position 0, has ``K`` bases of real context in both
+    directions. Everything else (one forward pass per window, reverse = reverse complement,
+    the combination rule) runs unchanged on the padded sequence; because every kept base then
+    qualifies from both directions there is no seam and no reduced context. The cost is
+    ``2K`` extra bases of model input per pass.
+    """
+    if not circular:
+        return _analyze_linear(
+            predictor,
+            seq,
+            context_length=context_length,
+            ceiling=ceiling,
+            direction=direction,
+            on_window=on_window,
+        )
+    pad = context_length
+    length = len(seq)
+    padded = _analyze_linear(
+        predictor,
+        _wrapped(seq, pad),
+        context_length=context_length,
+        ceiling=ceiling,
+        direction=direction,
+        on_window=on_window,
+    )
+
+    def keep(a: np.ndarray | None) -> np.ndarray | None:
+        return None if a is None else a[pad : pad + length].copy()
+
+    return replace(
+        padded,
+        values=keep(padded.values),
+        forward_values=keep(padded.forward_values),
+        reverse_values=keep(padded.reverse_values),
+        surprisal_values=keep(padded.surprisal_values),
+        seam=None,
+        reduced_context_count=0,
+        reduced_context_range=None,
+        circular=True,
+        notices=[
+            *padded.notices,
+            f"Circular topology: the {length} nt molecule was wrapped around by {pad} nt on each side, "
+            "so every base, including the first, has full context and there is no forward/reverse seam.",
+        ],
+    )
+
+
+def _analyze_linear(
+    predictor: Predictor,
+    seq: str,
+    *,
+    context_length: int,
+    ceiling: int,
+    direction: Direction,
+    on_window: Callable[[], None] | None = None,
+) -> DirectionResult:
+    """The linear-molecule body of :func:`analyze_direction`.
 
     Calls the predictor at most twice per contig regardless of sequence length (once per
     direction actually needed), each call itself tiled into one predictor.predict() per

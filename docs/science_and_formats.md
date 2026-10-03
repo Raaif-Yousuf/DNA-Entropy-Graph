@@ -278,6 +278,27 @@ compares them and checks the seam at position `K` for a jump larger than typical
 neighbour-to-neighbour variation - a large jump would indicate a direction-combination
 bug, not a real biological feature.
 
+**Circular molecules (plasmids; issue #128).** On a circular molecule base 1 follows the
+last base, so a linear read throws away real context at both ends (Forward-only gives base
+1 zero context, the uniform 2.0-bit row). `RunOptions.Topology` (`auto | linear | circular`,
+default `auto`; CLI `--topology`, manifest `analysis.topology`) fixes that: a circular contig
+is wrapped around by `K` bases on each side (its own last `K` bases in front, its own first
+`K` behind; a molecule shorter than `K` wraps more than once) **before** the tiled passes, and
+the outputs are trimmed back to `L` afterwards. Everything else is unchanged (one forward
+pass per window of the `L + 2K` padded sequence, reverse = reverse complement, the same
+combination rule), and because every kept base then has `>= K` context in both directions
+there is **no seam and no reduced context**: `provenance.json` records `seam: null`,
+`reduced_context_count: 0`, `reduced_context_range: null`. Cost: `2K` extra bases through
+each pass. `auto` resolves per contig: a GenBank `LOCUS` line saying `circular` is circular,
+everything else (`linear`, FASTA, pasted text) is linear; `linear`/`circular` override the
+input. `provenance.json` records the requested option (`run.topology`) and what each contig
+actually ran with (`contigs[].topology`: `linear | circular`). A circular molecule shorter than `K` is
+allowed (it wraps several times) and gets a notice saying so instead of the linear "no base
+reaches full context" one. The mock predictor seeds on
+window content, so rotation invariance (rotating a circular input rotates the output) is
+tested with a pure-local-context stub (`worker/tests/test_circular.py`), not the mock. The
+output GenBank keeps writing a linear `LOCUS` (not changed here).
+
 ---
 
 ## 4. Validation rules
@@ -333,6 +354,30 @@ traceback. Line endings are also normalized (`\r`/`\r\n`/`\n` all become `\n`) b
 the text reaches Biopython's scanner, the same way `read_fasta`'s `text.splitlines()`
 already handles them for free — a lone `\r` (classic Mac, and what some sequencing
 instruments still emit) now parses successfully rather than merely failing cleanly.
+
+**Biopython's escape types are `ValueError`, `AssertionError` and `IndexError`, and an
+undefined sequence is a skipped record (issues #403, #536, MEASURED 2026-10-03):** the
+parse `try` catches all three. `IndexError` comes from a feature line shorter than the
+scanner's qualifier column (fixture `malformed/genbank_feature_line_shorter_than_qualifier_indent.gb`;
+three seeds of a 6000-file mutation sweep of `sample.gb` found no other type). A truncated
+file (a `LOCUS` length and an `ORIGIN` header, no sequence lines) parses into a record whose
+sequence is undefined, and reading its bases raises Biopython's `UndefinedSequenceError`
+(a `ValueError`) *after* the parse block; `_record_sequence` turns it into "no sequence", so
+the record is skipped with a notice, and a file with no readable record is refused with
+`GenBankReadError` (`INPUT_INVALID`), the same skip-then-refuse as the app's `GenBankLite`.
+
+**A non-ASCII character in an ORIGIN block is refused before Biopython reads it (issue
+#492, MEASURED 2026-10-02):** Biopython upper-cases the ORIGIN text with `str.upper()`,
+which folds some non-ASCII letters into ASCII (long s U+017F becomes `S`, a valid IUPAC
+code), so `validate_sequence` never saw the original and the run accepted a letter that is
+not DNA. `readers/genbank.py` therefore scans the raw ORIGIN lines first and raises
+`GenBankReadError` in `validate_sequence`'s own wording: `Invalid character U+017F at
+position 9 of GenBank record 1's sequence`. The position is 1-based over the record's own
+sequence characters (the line-start numbers and the spaces between 10-base groups are
+skipped; a non-ASCII space or digit is refused, not skipped), and the record is named by
+index, never by id. The app's `GenBankLite` already refuses the same characters at the same
+position, so this closes the worker-versus-app divergence for GenBank (FASTA and paste were
+already correct).
 
 **Contig names are hardened against real filename hazards (issue #350, MEASURED
 2026-09-19):** `_safe_contig_name` (`readers/input.py`) disambiguates a name that

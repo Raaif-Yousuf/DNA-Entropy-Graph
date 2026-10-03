@@ -59,6 +59,7 @@ def test_top_level_shape_has_the_expected_keys() -> None:
         "direction": "both-combined",
         "ambiguity_policy": "keep",
         "rna": False,
+        "topology": "auto",
     }
     assert data["predictor"] == {"kind": "mock", "model": "evo2_7b", "device": "cuda", "seed": 0}
     assert len(data["contigs"]) == 1
@@ -179,3 +180,15 @@ def test_reduced_context_range_is_recorded_as_a_zero_based_half_open_span() -> N
 
 def test_reduced_context_range_defaults_to_null() -> None:
     assert _contig()["reduced_context_range"] is None
+
+
+# --- issue #128: topology --------------------------------------------------------------
+
+
+def test_contig_topology_defaults_to_linear_and_records_circular() -> None:
+    assert _contig()["topology"] == "linear"
+    assert _contig(topology="circular", seam=None)["topology"] == "circular"
+
+
+def test_run_topology_records_the_requested_option() -> None:
+    assert _run(topology="circular")["run"]["topology"] == "circular"

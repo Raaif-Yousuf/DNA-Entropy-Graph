@@ -1,0 +1,1 @@
+- Worker: a GenBank file whose sequence block holds a non-ASCII letter (for example a long s, which used to be quietly read as the base code S) is now refused, naming the character's code point and its position in the record's sequence (#492).
