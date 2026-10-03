@@ -601,17 +601,19 @@ def _status_marker(
 # ---------------------------------------------------------------------------
 
 # (should_flag, sample_text, expected_pattern_name_substring_or_None)
+# Provider-shaped fixtures are assembled at runtime (split concatenation) so no full
+# match exists as a literal in the tree (issue #486: GitHub secret scanning).
 _SELF_TEST_CASES: tuple[tuple[bool, str, str | None], ...] = (
     (True, "contact me at a.researcher@university.example for details", "email"),
     (True, "ya29.a0AfH6SMBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "google-oauth-access-token"),
-    (True, "AIzaSyD1234567890abcdefghijklmnopqrstuv", "google-api-key"),
-    (True, "GOCSPX-abcdefghijklmnopqrstuvwx1234", "google-oauth-client-secret"),
+    (True, "AIza" + "SyD1234567890abcdefghijklmnopqrstuv", "google-api-key"),
+    (True, "GOCSPX" + "-abcdefghijklmnopqrstuvwx1234", "google-oauth-client-secret"),
     (True, 'client_secret: "abcdefghijklmnop12345678"', "oauth-client-secret-field"),
-    (True, "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-token"),
-    (True, "AKIAIOSFODNN7EXAMPLE", "aws-access-key-id"),
+    (True, "ghp" + "_abcdefghijklmnopqrstuvwxyz0123456789", "github-token"),
+    (True, "AKIA" + "IOSFODNN7EXAMPLE", "aws-access-key-id"),
     (True, "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ_abc123", "jwt"),
     (True, 'password = "hunter2hunter2hunter2"', "generic-secret-field"),
-    (True, "-----BEGIN RSA PRIVATE KEY-----", "private-key-material"),
+    (True, "-----BEGIN RSA " + "PRIVATE KEY-----", "private-key-material"),
     (True, "the project number is 123456789012", "gcp-project-number"),
     (True, "billing account 015919-31E210-2E7E0B is linked", "gcp-billing-account-id"),
     (True, r"C:\Users\username\DNA-Entropy-Graph\worker", "windows-user-home-path"),

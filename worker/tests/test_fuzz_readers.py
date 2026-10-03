@@ -56,6 +56,7 @@ def test_fuzz_genbank_reader_never_raises_a_raw_exception(path: Path) -> None:
         for rec in records:
             validate_sequence(rec.seq, ambiguity_policy="keep")
     except (GenBankReadError, ValidationError):
+        # A typed, documented rejection is the accepted outcome; only a raw exception fails.
         pass
     except Exception as exc:  # noqa: BLE001
         pytest.fail(f"{path.name} raised a raw {type(exc).__name__}: {exc}")

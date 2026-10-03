@@ -88,6 +88,7 @@ def _log_bypass(repo: Path, verb: str, reason: str) -> None:
         with open(path.with_name("premerge-bypass.log"), "a", encoding="utf-8", newline="\n") as handle:
             handle.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} gh pr {verb}: {reason}\n")
     except OSError:
+        # The bypass log is an audit aid only; a hook must never fail a command over it.
         pass
 
 

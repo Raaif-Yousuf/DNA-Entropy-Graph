@@ -361,8 +361,6 @@ def test_stats_records_surprisal_mean_and_log_likelihood(tmp_path: Path) -> None
 
 
 def test_provenance_json_is_always_written(tmp_path: Path) -> None:
-    import json
-
     cfg = RunConfig(name="prov1", out_dir=str(tmp_path))
     result = pipeline.run(cfg, raw="ATGCATGCATGC")
     names = {Path(p).name for p in result.outputs}
@@ -378,8 +376,6 @@ def test_provenance_json_is_always_written(tmp_path: Path) -> None:
 
 
 def test_provenance_json_records_the_seam_and_reduced_context(tmp_path: Path) -> None:
-    import json
-
     cfg = RunConfig(name="prov2", out_dir=str(tmp_path), context_length=128, seed=1)
     result = pipeline.run(cfg, raw="ACGT" * 70)  # L=280 >= 2*128
     prov_path = next(p for p in result.outputs if p.endswith("provenance.json"))
@@ -393,8 +389,6 @@ def test_two_runs_of_the_same_input_produce_provenance_differing_only_in_timesta
 ) -> None:
     """issue #82's own named Observable: "Two runs of the same input on the same GPU
     class produce identical entropy files and provenance differing only in timestamps."""
-    import json
-
     cfg_a = RunConfig(name="reproA", out_dir=str(tmp_path / "a"), seed=7)
     cfg_b = RunConfig(name="reproB", out_dir=str(tmp_path / "b"), seed=7)
     result_a = pipeline.run(cfg_a, raw="ATGCATGCATGCATGCATGC")
@@ -527,6 +521,40 @@ def test_on_contig_exception_still_writes_partial_output_for_completed_contigs(
     assert written, "expected partial.fasta to exist from the salvaged partial output"
     fasta_text = written[0].read_text(encoding="utf-8")
     assert fasta_text.count(">") == 1  # only the one completed contig, not both
+
+
+def test_failed_partial_write_logs_one_ascii_line_and_keeps_the_original_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The salvage write is best-effort, but losing partial results (job_contract.md
+    section 6) must not be silent: one ASCII stderr line names the failure class."""
+
+    class _Stop(Exception):
+        pass
+
+    class _DiskGone(OSError):
+        pass
+
+    def _boom(*_a, **_k):
+        raise _DiskGone("secret-path-should-not-be-logged")
+
+    monkeypatch.setattr(pipeline, "_write_standard_outputs", _boom)
+    cfg = RunConfig(name="salvagefail", out_dir=str(tmp_path))
+    calls = []
+
+    def _on_contig(_contig):
+        calls.append(1)
+        raise _Stop()
+
+    with pytest.raises(_Stop):
+        pipeline.run(cfg, raw="ATGCATGCATGC", on_contig=_on_contig)
+
+    assert calls == [1]
+    err = capsys.readouterr().err
+    assert err.isascii()
+    assert err.startswith("ERROR: could not write partial outputs (_DiskGone)")
+    assert err.count("\n") == 1
+    assert "secret-path" not in err
 
 
 def test_on_window_exception_before_any_contig_completes_writes_nothing(tmp_path: Path) -> None:

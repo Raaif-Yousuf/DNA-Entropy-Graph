@@ -312,8 +312,10 @@ def test_block_unlabelled_vm_create_denies_missing_flags(command):
 @pytest.mark.parametrize(
     "command",
     [
-        "gcloud compute instances create deg-job-1 --labels=app=dna-entropy-graph,job-id=1 "
-        "--max-run-duration=14400s",
+        (
+            "gcloud compute instances create deg-job-1 --labels=app=dna-entropy-graph,job-id=1 "
+            "--max-run-duration=14400s"
+        ),
         "CloudCli vm create --labels app=x --max-run-duration 14400s",
         "gcloud compute instances list",
         "gcloud compute instances delete deg-job-1",

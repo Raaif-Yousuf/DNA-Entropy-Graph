@@ -32,4 +32,3 @@ class Annotator(Protocol):
 
     def annotate(self, seq: str) -> list[GeneFeature]:
         """Return predicted genes as a list of :class:`GeneFeature`."""
-        ...

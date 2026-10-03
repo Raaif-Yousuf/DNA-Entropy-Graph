@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from fake_gcs import FakeGcs
 
+import dna_entropy.worker.blobstore as mod
 from dna_entropy.worker.blobstore import Blobstore, BlobstoreError, GcsBlobstore, LocalBlobstore
 
 PREFIX = "jobs/j1/"
@@ -118,7 +119,6 @@ def test_local_upload_file_is_atomic_temp_then_rename(
 ) -> None:
     """A reader of the destination must never see a half-copied file: upload_file writes a
     temp sibling and swaps it in with os.replace, like write_text."""
-    import dna_entropy.worker.blobstore as mod
 
     s = LocalBlobstore(tmp_path / "root")
     src = tmp_path / "src.bin"
@@ -139,7 +139,6 @@ def test_local_upload_file_is_atomic_temp_then_rename(
 def test_local_download_file_is_atomic_temp_then_rename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import dna_entropy.worker.blobstore as mod
 
     s = LocalBlobstore(tmp_path / "root")
     s.write_text("input/in.txt", "payload")

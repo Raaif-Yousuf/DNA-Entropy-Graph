@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import dna_entropy.readers.input as input_mod
 from dna_entropy import pipeline
 from dna_entropy.config import RunConfig
 from dna_entropy.readers import detect
@@ -128,7 +129,6 @@ def test_load_input_refuses_a_contig_name_collision_rather_than_overwriting(
     different records in one file -- unreachable today by construction, since the index
     suffix is preserved through truncation, but proven wired here directly -- load_input
     must refuse rather than silently letting one record's output overwrite another's."""
-    import dna_entropy.readers.input as input_mod
 
     p = tmp_path / "two.fasta"
     p.write_text(">a\nACGTACGTACGT\n>b\nTTTTGGGGCCCC\n", encoding="utf-8")

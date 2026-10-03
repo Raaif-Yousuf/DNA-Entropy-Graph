@@ -324,6 +324,7 @@ def load_known_error_codes(schemas_dir: Path | None = None) -> frozenset[str]:
             if isinstance(entry, dict) and isinstance(entry.get("code"), str):
                 codes.add(entry["code"])
     except (OSError, json.JSONDecodeError):
+        # Missing or malformed error-codes.json: triage still runs, with no known codes.
         pass
     return frozenset(codes)
 

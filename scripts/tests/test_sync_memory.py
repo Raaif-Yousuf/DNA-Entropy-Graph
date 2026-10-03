@@ -48,6 +48,43 @@ def test_self_test_passes():
     assert sm.self_test() is True
 
 
+_PROVIDER_FIXTURE_NAMES = (
+    "google-api-key",
+    "google-oauth-client-secret",
+    "github-token",
+    "aws-access-key-id",
+    "private-key-material",
+)
+
+
+def test_provider_fixtures_each_flag_under_their_own_pattern():
+    # Issue #486: the fixtures are assembled at runtime; prove each still flags
+    # under the named pattern (the VALUE, not mere presence).
+    by_name = {name: text for flag, text, name in sm._SELF_TEST_CASES if flag and name}
+    for name in _PROVIDER_FIXTURE_NAMES:
+        assert name in by_name, name
+        hits = sm.find_secrets(by_name[name])
+        assert any(h.pattern_name == name for h in hits), (name, [h.pattern_name for h in hits])
+
+
+def test_sync_memory_source_holds_no_full_provider_shaped_literal():
+    # Issue #486: a literal match in the tree trips GitHub secret scanning.
+    import re
+
+    forbidden = (
+        r"AIza[0-9A-Za-z_-]{35}",
+        r"GOCSPX-[0-9A-Za-z_-]{20,}",
+        r"ghp_[0-9A-Za-z]{36}",
+        r"AKIA[0-9A-Z]{16}",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    )
+    for path in (Path(sm.__file__), Path(__file__)):
+        text = path.read_text(encoding="utf-8")
+        assert len(text) > 1000  # vacuity: the scan read real content
+        for pat in forbidden:
+            assert re.search(pat, text) is None, (path.name, pat)
+
+
 def test_pattern_names_are_unique():
     names = [p.name for p in sm.SECRET_PATTERNS]
     assert len(names) == len(set(names))
