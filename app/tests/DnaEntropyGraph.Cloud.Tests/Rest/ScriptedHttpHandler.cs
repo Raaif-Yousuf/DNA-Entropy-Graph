@@ -16,7 +16,26 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
 {
     private readonly Dictionary<(string Method, string Path), Queue<Func<CancellationToken, Task<HttpResponseMessage>>>> _routes = new();
 
+    private readonly Dictionary<(string Method, string Path), Queue<int>> _midBodyFailures = new();
+
     public List<RecordedRequest> Requests { get; } = [];
+
+    /// <summary>
+    /// Queues a transport failure for the next unanswered request to this route: the handler reads only the first
+    /// <paramref name="bytesRead"/> bytes of the request body, records them, then fails like a dropped connection
+    /// (<see cref="HttpRequestException"/>). It takes precedence over a queued response and is consumed first.
+    /// </summary>
+    public ScriptedHttpHandler FailsMidBody(HttpMethod method, string absolutePath, int bytesRead)
+    {
+        var key = (method.Method, absolutePath);
+        if (!_midBodyFailures.TryGetValue(key, out var queue))
+        {
+            _midBodyFailures[key] = queue = new Queue<int>();
+        }
+
+        queue.Enqueue(bytesRead);
+        return this;
+    }
 
     public ScriptedHttpHandler Returns(HttpMethod method, string absolutePath, int status, string json)
     {
@@ -49,6 +68,16 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        if (_midBodyFailures.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var failures) && failures.Count > 0 && request.Content is not null)
+        {
+            var limit = failures.Dequeue();
+            var partial = new byte[limit];
+            var stream = await request.Content.ReadAsStreamAsync(cancellationToken);
+            var read = await stream.ReadAtLeastAsync(partial, limit, throwOnEndOfStream: false, cancellationToken);
+            Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), Encoding.UTF8.GetString(partial, 0, read), request.Content.Headers.ContentRange?.ToString()));
+            throw new HttpRequestException("The connection dropped while the request body was being sent.");
+        }
+
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
         Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString()));
 

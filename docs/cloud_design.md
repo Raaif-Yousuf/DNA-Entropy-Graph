@@ -950,8 +950,12 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
   another installation in the same project, adopts it: no insert. An adopted bucket that reads back drifted (for instance the
   user changed the retention on the other PC) is patched and read back; one that reads back right is left alone. The patch
   keeps every lifecycle rule that is not ours (anything other than a Delete rule whose only prefix is `jobs/` or `cache/`) and
-  replaces only ours. Two installations with different retention settings overwrite each other's `jobs/` age: last writer wins,
-  accepted (spec Appendix A, "same account, two PCs").
+  replaces only ours. Two installations with different retention settings never shorten each other: see the next point.
+- **Never shorten the `jobs/` age.** DECISION (agent-made, reversible; issue #597): an adopting installation may LENGTHEN the shared
+  bucket's `jobs/` age, never shorten it, because shortening makes Cloud Storage delete other installations' results (Hard Rule 14).
+  A `jobs/` Delete rule at or above the configured age is not drift (no patch); a shorter one is lengthened to the configured age; a patch made
+  for any other reason keeps the longest own `jobs/` age it found. So the bucket holds the longest age any installation asked for.
+  Lowering retention in Settings therefore does not shorten an existing bucket; an explicit, user-confirmed shortening is #598 (refs #114).
 - **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference
   order); if the preferred bucket is not the one it just made, it deletes its own (still empty: the config is written after this
   check) and adopts the preferred one. A delete Google refuses (not empty, because the other PC adopted it meanwhile) is
@@ -963,7 +967,9 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
 - **`app-config.json`** at the bucket root: schema, installation id, app version, both retentions, creation time (built with
   `System.Text.Json`, so ids are escaped). Written on create and again on every adopt or repair, always with
   `ifGenerationMatch=0` ("only if absent"): a 412 means the file is already there and stands, so a first write that failed is
-  made good by the next call. It is not
+  made good by the next call. THEORY (unverified): Cloud Storage answers a failed precondition (`ifGenerationMatch`, `ifMetagenerationMatch`)
+  with 412, and an organization-policy denial is also a 412 whose message carries `constraints/`, so only a 412 without `constraints/`
+  is swallowed and the other surfaces as `org_policy`; the documented shapes are not captured from a real project (a ToTest row covers it). It is not
   rewritten when a retention changes (the lifecycle rule on the bucket is the truth; a `retention change patches the rule` flow is #114).
 - **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
   tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (results and manifests are

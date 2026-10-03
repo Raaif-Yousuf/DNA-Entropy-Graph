@@ -70,6 +70,8 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
         // The Google client sends a seekable stream from offset 0 whatever its Position, so a stream positioned part way is
         // wrapped to start where it stands. A retry rewinds to that start; a stream that cannot seek cannot be replayed and gets one attempt.
+        // MEASURED 2026-10-03: with the rewind below removed every upload test stayed green, including one that drops the connection part way
+        // through the body, so the Google client already seeks a seekable stream to its start on each session; the rewind is defense in depth.
         Stream source = content.CanSeek ? new RemainderStream(content) : content;
         await _pipeline.ExecuteAsync(
             "Storage.Upload",

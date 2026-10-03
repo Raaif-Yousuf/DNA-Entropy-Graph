@@ -697,6 +697,27 @@ public class GoogleStorageGatewayTests
     }
 
     [Fact]
+    public async Task An_upload_that_fails_part_way_through_the_stream_is_retried_with_every_byte_from_position_zero()
+    {
+        var rig = NewRig();
+        rig.Handler.FailsMidBody(Put, UploadPath("deg-b"), bytesRead: 4)
+            .FailsMidBody(Put, UploadPath("deg-b"), bytesRead: 4)
+            .FailsMidBody(Put, UploadPath("deg-b"), bytesRead: 4);
+        // The data PUT dies after 4 bytes and so do the Google client's own resume queries, so the failure reaches the pipeline,
+        // which must start the whole upload again from the first byte (the stream now stands at 4 or later).
+        ScriptUpload(rig.Handler, "deg-b");
+        ScriptUpload(rig.Handler, "deg-b");
+        var content = new MemoryStream(Encoding.UTF8.GetBytes("0123456789"));
+
+        await rig.Gateways.Storage.UploadAsync("deg-b", "jobs/j1/manifest.json", content, CancellationToken.None);
+
+        rig.Handler.To(Post, UploadPath("deg-b")).Count.ShouldBe(2);
+        var puts = rig.Handler.To(Put, UploadPath("deg-b"));
+        puts[0].Body.ShouldBe("0123");
+        puts[^1].Body.ShouldBe("0123456789");
+    }
+
+    [Fact]
     public async Task An_upload_of_a_stream_that_cannot_seek_gets_exactly_one_attempt()
     {
         var rig = NewRig();
