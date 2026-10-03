@@ -109,7 +109,13 @@ public static class ServiceRegistration
         // CloudRetryOptions after calling this method (the last one wins).
         services.AddSingleton<CloudRetryOptions>(_ => new CloudRetryOptions());
         services.AddSingleton<CloudRetryLog>();
-        services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<CloudRetryLog>());
+        // Issue #530: the pipeline reports to this wrapper, which forwards to the log (the offline banner) and runs the reconciler again when the
+        // connection comes back. The reconciler is resolved lazily, on the first reconnect: it needs the gateways, which need this observer.
+        services.AddSingleton<ReconcileOnReconnect>(sp => new ReconcileOnReconnect(
+            sp.GetRequiredService<CloudRetryLog>(),
+            () => sp.GetRequiredService<JobReconciler>(),
+            sp.GetRequiredService<IDiagnosticsLog>()));
+        services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<ReconcileOnReconnect>());
         // SWITCH POINT (#56): while every gateway is FakeGcp the refresher is FakeGcp too, because a 401 from a fake
         // must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked
         // about). When the first real gateway is wrapped, register GoogleAccountService here instead.
@@ -136,6 +142,9 @@ public static class ServiceRegistration
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
         services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(Path.GetDirectoryName(settingsPath)!));
+
+        // Issue #530: where the reconciler records an error it did not expect (job id and error class only), under the same app data folder.
+        services.AddSingleton<IDiagnosticsLog>(_ => new FileDiagnosticsLog(Path.GetDirectoryName(settingsPath)!));
 
         // Issue #63: a pasted sequence is saved under app data too, never next to anything of the user's.
         services.AddSingleton<IPastedInputStore>(_ => new LocalPastedInputStore(Path.GetDirectoryName(settingsPath)!));
@@ -212,8 +221,10 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunInputStore>(),
                 sp.GetRequiredService<IWorkerImageProvider>(),
                 sp.GetRequiredService<ActiveRuns>(),
+                sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
-                Services.KnownFolders.Downloads);
+                Services.KnownFolders.Downloads,
+                log: sp.GetRequiredService<IDiagnosticsLog>());
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());
