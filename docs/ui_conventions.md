@@ -197,8 +197,8 @@ left as unnecessary caution.
   appends `_2` on a collision. The page shows the preview; the template is saved in settings
   (`NameTemplate`) and sent in `RunOptions.NameTemplate`.
 - **Not wired yet** (MEASURED 2026-10-03: `CloudJobRunner.cs:1286` names the folder from the input file
-  name, not `NameTemplate`): the result folder does not use the template, and `RunOptions.InputPath` is a
-  single file, so **Run** runs the selected pill.
+  name, not `NameTemplate`, #514): the result folder does not use the template, and `RunOptions.InputPath` is a
+  single file (#515), so **Run** runs the selected pill (decision #516).
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text

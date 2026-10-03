@@ -154,7 +154,7 @@ public sealed partial class NewRunViewModel : ObservableObject
 
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRemoveItem))]
     private void RemoveItem(InputPillItem? item)
     {
         if (item is null)
@@ -176,6 +176,8 @@ public sealed partial class NewRunViewModel : ObservableObject
 
         OnPropertyChanged(nameof(OfferTreatAsRna));
     }
+
+    private static bool CanRemoveItem(InputPillItem? item) => item is not null;
 
     /// <summary>The "Treat as RNA" button: converts U to T for this run and checks every file again.</summary>
     [RelayCommand]

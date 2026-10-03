@@ -71,7 +71,8 @@ public sealed partial class InputPillItem : ObservableObject
             InputKind.Fasta => "NewRunPillKind_Fasta",
             _ => "NewRunPillKind_Paste",
         });
-        SummaryText = Summary(result);
+        // A failed file stops at its first problem, so its counts would be partial: show none.
+        SummaryText = result.IsValid ? Summary(result) : string.Empty;
         NoticesText = string.Join('\n', result.Notices);
 
         var problem = result.Problem;

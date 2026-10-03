@@ -246,6 +246,18 @@ public sealed class NewRunViewModelTests : IDisposable
         _viewModel.StartRunCommand.CanExecute(null).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task A_pill_with_a_problem_shows_no_counts()
+    {
+        var pill = await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));
+
+        pill.SummaryText.ShouldBe(string.Empty);
+    }
+
+    [Fact]
+    public void Remove_cannot_run_with_nothing_selected()
+        => _viewModel.RemoveItemCommand.CanExecute(null).ShouldBeFalse();
+
     // ---- RNA: the observable of the issue ----
 
     [Fact]
