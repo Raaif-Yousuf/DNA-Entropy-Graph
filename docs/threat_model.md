@@ -156,11 +156,12 @@ the scope Google requires for this feature set to work at all.
 - The default-Compute-account fallback (issue #54) gives a worker VM an identity with whatever that account already holds,
   often Editor. The app cannot narrow it and says so in the wizard. It also grants `roles/storage.objectAdmin` on the results
   bucket to the default account, which every workload in the project that runs as the default account holds, so any such VM
-  (not only the app's) can read, overwrite and delete every job's results in that bucket. The yellow note says so.
+  (not only the app's) can read, overwrite and delete every job's results in that bucket. The yellow note says so, and that the default account often holds Editor.
 - THEORY (unverified): Cloud Storage answers a failed precondition (an etag that did not match) with HTTP 412, and an
-  organization-policy refusal with 412 too; the app tells them apart only by a `constraints/` id in the message. If a real
-  org-policy 412 omits it, the bucket binding retries three times and then fails with `WORKER_IDENTITY_NOT_APPLIED` instead of
-  `org_policy`. Safe (nothing is bound), and `docs/ToTest.md` has the row that captures the real shapes.
+  organization-policy refusal with 412 too; the app treats a 412 as a conflict only when it positively says so (reason
+  `conditionNotMet` or "precondition" wording, no `constraints/`), and every other 412 stays an org-policy refusal that is not
+  retried. If a real etag conflict is worded differently the bucket binding fails as `org_policy` (safe: nothing is bound,
+  the user sees the policy action); `docs/ToTest.md` has the row that captures the real shapes.
 - A quota-eligible new Google Cloud billing account is, in Google's own words, commonly
   ineligible for GPU quota (`cloud_design.md`'s quota section); this is an availability
   constraint on the user's side, not a vulnerability, but it is worth naming here since a

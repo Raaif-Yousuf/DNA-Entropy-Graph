@@ -198,8 +198,8 @@ Health page (#208) is still unbuilt and still has no caller of its own.
 | HTTP 403 `accessNotConfigured` / "has not been used in project" | `api_disabled` | Abort; route to the setup wizard's "enable APIs" step |
 | HTTP 403 mentioning "billing" / `BILLING_DISABLED` | `billing` | Abort; route to "link billing" |
 | HTTP 403 `forbidden`, `IAM_PERMISSION_DENIED`, mentioning "actAs" | `permission` | Abort |
-| `CONDITION_NOT_MET`, or any error whose message mentions `constraints/` (a 412 included) | `org_policy` | Abort; copyable text for IT |
-| HTTP 412 with neither marker | `other` | THEORY (unverified): a failed precondition (Cloud Storage uses 412 for an etag or generation mismatch), not a policy refusal. The caller that sent the precondition decides (the worker-identity bucket write re-reads and retries); `docs/ToTest.md` has the row that captures the real shapes. No new enum value: `other` is the existing class for an error nothing else claims, so no `DECISION` was needed |
+| HTTP 412 (unless it positively looks like a precondition conflict, next row), `CONDITION_NOT_MET`, or any message mentioning `constraints/` | `org_policy` | Abort; copyable text for IT |
+| HTTP 412 that positively looks like a failed precondition (reason `conditionNotMet`, or "precondition" wording, and no `constraints/` or org-policy wording) | `other` | THEORY (unverified): Cloud Storage uses 412 for an etag or generation mismatch. The caller that sent the precondition decides (the worker-identity bucket write re-reads and retries). One shared rule, `CloudErrorClassifier.IsPreconditionConflict`, used by the classifier, `GoogleApiErrors.KindOf` and the gateway. Every other 412 stays `org_policy`. `docs/ToTest.md` has the row that captures the real shapes. No new enum value: `other` is the existing class for an error nothing else claims, so no `DECISION` was needed |
 | HTTP 409 `alreadyExists` | `already_exists` | Adopt the existing resource rather than retry-as-failure |
 | `HttpRequestException` / timeout | `network` | Retry with backoff (see `docs/migration/2026-09-19-worker-migration-inventory.md`'s note on the prototype's differentiated backoff, which does not carry over unchanged - the always-on keeper's infinite retry loop is exactly what D1 removes; only the *mechanical* polling backoff, issue #256, survives into the per-job model) |
 
@@ -273,7 +273,9 @@ is the `PERMISSION_ACTAS` error: `CloudErrorClassifier.IsActAsDenial` recognises
 `iam.serviceAccounts.actAs` or `roles/iam.serviceAccountUser`, `GoogleApiErrors.ToException`
 (used for an HTTP error body and for the `error` of a polled operation alike, which `FromOperationError` converts first)
 gives it the code `PERMISSION_ACTAS` (still the `permission` bucket, so it still aborts), and the
-one action is Copy request for the project owner.
+one action is Copy request for the project owner. **Reachable only once #604 lands:** there is no Compute insert path yet, so today only tests produce
+this code, and the Copy request action does not yet name `roles/iam.serviceAccountUser` on the worker account's email (it would
+copy the generic request); both are #604's Done when.
 
 ## 8. Termination semantics - the pitfall this project has already been burned by once
 
@@ -899,7 +901,7 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   Requests per minute", no details); THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word
   "quota" without per-minute or per-second wording. A PERMISSION_DENIED 403 that merely quotes a `constraints/` id is a
   permission error, not an organization-policy one, so `GetProjectAsync` still answers "not visible"; only an
-  ORG_POLICY reason, a 412 that names a `constraints/` id (a bare 412 is not, issue #54 round 2), or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
+  ORG_POLICY reason, a 412 that is not a positively identified precondition conflict (issue #54), or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
   null, with no request, for an id outside Google's project-id grammar.
 - **Not proven without a real account:** `docs/ToTest.md`.
 ### Billing check and link (issue #51, wizard step 4)
@@ -1049,8 +1051,10 @@ account and a role and edits two policies, and a whole-method retry would replay
   `version=3`. A binding is its role plus its condition; it is added only when missing, so a second run writes nothing, and
   nothing the app did not add is touched (other bindings, audit configs). The write carries the etag it read; a 409 re-reads
   and re-applies, five attempts at most. THEORY (unverified): Cloud Storage words the same etag conflict as a 412, so a 412
-  whose message has no `constraints/` id is treated alike (re-read and retry, three writes at most, then
-  `WORKER_IDENTITY_NOT_APPLIED`); a 412 that names a constraint stays `org_policy` and is not retried. A just-created account
+  that positively looks like a failed precondition (the shared rule in section 5) is treated alike (re-read and retry, three
+  writes at most, then `WORKER_IDENTITY_NOT_APPLIED`); any other 412, a constraint-naming one included, stays `org_policy` and
+  is not retried. A default account that "does not exist" at `setIamPolicy` means the Compute API was never enabled: it is
+  `API_DISABLED` ("Turn it on") at once, with no wait. A just-created account
   can be briefly invisible to `setIamPolicy` (400 "does not exist"); that case alone waits on the injected delay (2 s, 4 s,
   ... ) and re-reads, six tries and five waits at most, then fails with `WORKER_IDENTITY_NOT_APPLIED` whose button is Try
   again. The wait applies only to an account this call just created: an adopted or default account that "does not exist" is a
@@ -1059,7 +1063,10 @@ account and a role and edits two policies, and a whole-method retry would replay
   either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
   per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers
   labels on these two, so there is no allowlist entry. Everything that bills (the VM, the bucket) keeps its labels.
-- **Production** still resolves `FakeGcp` for `IWorkerIdentityGateway` until the switch in #56; `FakeGcp` implements the member
+- **No production caller yet.** `IWorkerIdentityGateway` has no registration in `ServiceRegistration` and nothing calls
+  `EnsureWorkerIdentityAsync`: only `GoogleCloudGateways.Create` builds it (and tests use it). Calling it from the setup flow
+  before a VM is created, and registering it, is issue #606 (P1). Until then no VM runs as the worker account. `FakeGcp`
+  implements the member
   with scripted failures (`WithServiceAccountCreationBlockedByOrgPolicy`, `WithWorkerIdentityPermissionDenied`,
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.

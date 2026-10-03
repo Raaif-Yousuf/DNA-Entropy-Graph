@@ -33,6 +33,35 @@ public static partial class CloudErrorClassifier
     /// <summary>A per-minute rate limit: it clears by itself, so it is a plain transient error, never quota (even though the message says quota).</summary>
     public const string RateLimitCode = "RATE_LIMIT_EXCEEDED";
 
+    /// <summary>
+    /// A 412 that POSITIVELY looks like a failed precondition (an etag or generation that did not match), not a policy
+    /// refusal: the reason <c>conditionNotMet</c>, or "precondition" wording in the message, and no organization-policy marker
+    /// (a <c>constraints/</c> id or the words "org policy"). Every other 412 stays an org-policy refusal. THEORY (unverified,
+    /// issue #54): Cloud Storage answers an etag mismatch with 412 and may word an org-policy refusal the same way;
+    /// docs/ToTest.md has the row that captures the real shapes. The one rule the classifier, <c>GoogleApiErrors.KindOf</c>
+    /// and the worker-identity gateway all use.
+    /// </summary>
+    public static bool IsPreconditionConflict(int? status, string? code, string? message, IEnumerable<string>? reasons = null)
+    {
+        if (status != 412)
+        {
+            return false;
+        }
+
+        var lower = (message ?? string.Empty).ToLowerInvariant();
+        if (lower.Contains("constraints/", StringComparison.Ordinal)
+            || lower.Contains("org policy", StringComparison.Ordinal)
+            || lower.Contains("organization policy", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(code, "conditionNotMet", StringComparison.OrdinalIgnoreCase)
+            || (reasons ?? []).Any(r => string.Equals(r, "conditionNotMet", StringComparison.OrdinalIgnoreCase))
+            || lower.Contains("precondition", StringComparison.Ordinal)
+            || lower.Contains("pre-condition", StringComparison.Ordinal);
+    }
+
     public static CloudErrorKind Classify(CloudError error)
     {
         ArgumentNullException.ThrowIfNull(error);
@@ -110,10 +139,10 @@ public static partial class CloudErrorClassifier
             return CloudErrorKind.Permission;
         }
 
-        // THEORY (unverified, issue #54 round 2): a bare 412 is NOT an org-policy refusal. Cloud Storage uses 412 for a failed
-        // precondition (an etag or generation that did not match). Only a constraint id or the structured code makes it one;
-        // docs/ToTest.md has the row that captures the real shapes.
-        if (code == "CONDITION_NOT_MET" || lower.Contains("constraints/", StringComparison.Ordinal))
+        // A 412 is an org-policy refusal unless it positively looks like a failed precondition (see IsPreconditionConflict).
+        if ((status == 412 && !IsPreconditionConflict(status, error.Code, message))
+            || code == "CONDITION_NOT_MET"
+            || lower.Contains("constraints/", StringComparison.Ordinal))
         {
             return CloudErrorKind.OrgPolicy;
         }

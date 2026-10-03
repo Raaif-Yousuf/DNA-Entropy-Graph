@@ -28,8 +28,9 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// <para>
 /// <b>Policy edits.</b> Conditional bindings need policy version 3, so the read asks for it and the write sets it. The
 /// write carries the etag it read; a 409 (another writer got in) re-reads and re-applies, five attempts at most. THEORY
-/// (unverified): Cloud Storage words that same etag conflict as a 412, so a 412 that does not name a "constraints/" id is
-/// treated alike, three attempts at most (a 412 that names one is an organization-policy refusal and surfaces). A binding
+/// (unverified): Cloud Storage words that same etag conflict as a 412, so a 412 that positively looks like a failed
+/// precondition (the shared <see cref="CloudErrorClassifier.IsPreconditionConflict"/> rule) is
+/// treated alike, three attempts at most (any other 412 is an organization-policy refusal and surfaces). A binding
 /// is added only if it is missing (a binding is its role plus its condition), so a second run writes nothing, and a
 /// binding or an audit config this code did not add is never removed or changed. A just-created account can be briefly
 /// invisible to <c>setIamPolicy</c> (400 "does not exist"): that case alone waits (on the injected clock) and retries,
@@ -80,7 +81,6 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         var identity = origin == AccountOrigin.DefaultCompute
             ? new WorkerIdentity(WorkerIdentityNames.DefaultComputeAccountEmail(projectNumber), SetupErrorCodes.WorkerDefaultAccount)
             : new WorkerIdentity(ownEmail, null);
-        var justCreated = origin == AccountOrigin.Created;
 
         await EnsureRoleAsync(projectId, cancellationToken).ConfigureAwait(false);
 
@@ -91,7 +91,7 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             policy => AddProjectBinding(policy, WorkerIdentityNames.ProjectRoleName(projectId), member),
             (policy, ct) => WriteProjectPolicyAsync(projectId, policy, ct),
             applied => HasProjectBinding(applied, WorkerIdentityNames.ProjectRoleName(projectId), member),
-            justCreated,
+            origin,
             cancellationToken).ConfigureAwait(false);
 
         await UpdatePolicyAsync(
@@ -100,7 +100,7 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             policy => AddBucketBinding(policy, member),
             (policy, ct) => WriteBucketPolicyAsync(bucket, policy, ct),
             applied => HasBucketBinding(applied, member),
-            justCreated,
+            origin,
             cancellationToken).ConfigureAwait(false);
 
         return identity;
@@ -261,7 +261,8 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
     /// changed anything: false means the binding is already there, so nothing is written (a second run adds nothing).
     /// <paramref name="write"/> returns the policy Google ANSWERED with, and <paramref name="isApplied"/> must find the
     /// binding in it: a 200 that does not hold the binding is not success (applied is not present).
-    /// <paramref name="retryUnseenAccount"/> is true only for an account this call created.
+    /// The visibility wait applies only to an account this call created (<see cref="AccountOrigin.Created"/>); a default
+    /// account that does not exist means the Compute API was never enabled, which is <see cref="SetupErrorCodes.ApiDisabled"/>.
     /// </summary>
     private async Task UpdatePolicyAsync<TPolicy>(
         string operation,
@@ -269,7 +270,7 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         Func<TPolicy, bool> apply,
         Func<TPolicy, CancellationToken, Task<TPolicy>> write,
         Func<TPolicy, bool> isApplied,
-        bool retryUnseenAccount,
+        AccountOrigin origin,
         CancellationToken cancellationToken)
     {
         var conflicts = 0;
@@ -309,7 +310,13 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
                     throw NotApplied($"{operation}: the policy kept changing under the app ({preconditions} failed preconditions).");
                 }
             }
-            catch (CloudOperationException ex) when (retryUnseenAccount && IsAccountNotVisibleYet(ex))
+            catch (CloudOperationException ex) when (origin == AccountOrigin.DefaultCompute && IsAccountNotVisibleYet(ex))
+            {
+                // THEORY (unverified): Compute creates the default account when the API is first enabled, so its absence means
+                // the API never was. "Turn it on" is an action that can help; Try again could not.
+                throw new CloudOperationException(new CloudError(SetupErrorCodes.ApiDisabled, ex.Error.HttpStatus, ex.Error.Message), CloudErrorKind.ApiDisabled);
+            }
+            catch (CloudOperationException ex) when (origin == AccountOrigin.Created && IsAccountNotVisibleYet(ex))
             {
                 // A just-created account can be briefly invisible to setIamPolicy. Wait on the injected clock, then re-read.
                 if (++unseen >= MaxVisibilityAttempts)
@@ -322,9 +329,9 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         }
     }
 
-    /// <summary>A 412 that does not name an organization-policy constraint (the classifier calls that one <see cref="CloudErrorKind.OrgPolicy"/>).</summary>
+    /// <summary>A 412 that positively looks like a failed precondition (the shared rule); every other 412 is an org-policy refusal and surfaces.</summary>
     private static bool IsPreconditionConflict(CloudOperationException ex)
-        => ex.Error.HttpStatus == 412 && ex.Kind != CloudErrorKind.OrgPolicy;
+        => CloudErrorClassifier.IsPreconditionConflict(ex.Error.HttpStatus, ex.Error.Code, ex.Error.Message) && ex.Kind != CloudErrorKind.OrgPolicy;
 
     private static bool IsAccountNotVisibleYet(CloudOperationException ex)
         => ex.Error.HttpStatus == 400 && ex.Error.Message?.Contains("does not exist", StringComparison.OrdinalIgnoreCase) == true;

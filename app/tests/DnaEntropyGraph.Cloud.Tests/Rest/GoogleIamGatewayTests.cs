@@ -556,6 +556,22 @@ public class GoogleIamGatewayTests
     }
 
     [Fact]
+    public async Task A_bucket_412_with_no_constraint_id_and_no_precondition_wording_is_an_org_policy_refusal_and_is_not_retried()
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptProjectAlreadyBound(rig.Handler);
+        rig.Handler
+            .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", ""))
+            .Returns(Put, BucketPolicy, 412, StorageError(412, "forbidden", "The request was blocked by an administrator policy."));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+        rig.Handler.To(Put, BucketPolicy).Count.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task An_org_policy_refusal_worded_by_its_constraint_name_alone_still_falls_back_to_the_default_account()
     {
         var rig = new GoogleGatewayHarness();
@@ -585,7 +601,9 @@ public class GoogleIamGatewayTests
         var failure = await Should.ThrowAsync<CloudOperationException>(
             () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
 
-        failure.Error.Code.ShouldNotBe(SetupErrorCodes.WorkerIdentityNotApplied, "Try again can never make a missing default account appear");
+        // The default account exists once the Compute API has ever been enabled: the one real action is "Turn it on".
+        failure.Error.Code.ShouldBe(SetupErrorCodes.ApiDisabled);
+        failure.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
         rig.Delays.ShouldBeEmpty();
         rig.Handler.To(Post, ProjectSetPolicy).Count.ShouldBe(1);
     }

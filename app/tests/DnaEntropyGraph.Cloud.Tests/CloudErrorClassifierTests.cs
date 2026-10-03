@@ -152,15 +152,19 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
     }
 
-    // Issue #54 (round 2): THEORY (unverified): Cloud Storage answers a failed precondition (an etag or generation that
-    // did not match) with 412, so a bare 412 is not an org-policy refusal. Only a "constraints/" id or the structured
-    // CONDITION_NOT_MET code makes it one. ToTest has the row that captures the real shapes.
+    // Issue #54 (rounds 2 and 3): THEORY (unverified): Cloud Storage answers a failed precondition (an etag or generation
+    // that did not match) with 412. A 412 is a precondition conflict ONLY when it positively looks like one (the reason
+    // "conditionNotMet", or "Precondition Failed" wording); every other 412, with or without a "constraints/" id, stays an
+    // org-policy refusal as before. ToTest has the row that captures the real shapes.
     [Theory]
     [InlineData(null, "At least one of the pre-conditions you specified did not hold.", CloudErrorKind.Other)]
     [InlineData("conditionNotMet", "Precondition Failed", CloudErrorKind.Other)]
     [InlineData(null, "Request violates constraints/storage.retentionPolicySeconds.", CloudErrorKind.OrgPolicy)]
+    [InlineData("FAILED_PRECONDITION", "Operation blocked by an administrator policy on this project.", CloudErrorKind.OrgPolicy)]
+    [InlineData(null, "The request was refused.", CloudErrorKind.OrgPolicy)]
+    [InlineData("FAILED_PRECONDITION", "Precondition check failed: constraints/compute.requireOsLogin is enforced.", CloudErrorKind.OrgPolicy)]
     [InlineData("CONDITION_NOT_MET", "Operation denied", CloudErrorKind.OrgPolicy)]
-    public void A_412_is_an_org_policy_refusal_only_when_it_names_a_constraint(string? code, string message, CloudErrorKind expected)
+    public void A_412_is_a_precondition_conflict_only_when_it_positively_looks_like_one(string? code, string message, CloudErrorKind expected)
     {
         CloudErrorClassifier.Classify(new CloudError(code, 412, message)).ShouldBe(expected);
     }
