@@ -59,6 +59,7 @@ public static class ServiceRegistration
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
         services.AddSingleton<IToastService, ToastService>();
+        services.AddSingleton<WindowHandleProvider>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
         services.AddSingleton<IDialogService>(sp => sp.GetRequiredService<DialogService>());
@@ -134,6 +135,9 @@ public static class ServiceRegistration
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
         services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(Path.GetDirectoryName(settingsPath)!));
+
+        // Issue #63: a pasted sequence is saved under app data too, never next to anything of the user's.
+        services.AddSingleton<IPastedInputStore>(_ => new LocalPastedInputStore(Path.GetDirectoryName(settingsPath)!));
 
         // Issue #101: the Runs page's services. Output folders are only ever deleted from under the run's own
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).

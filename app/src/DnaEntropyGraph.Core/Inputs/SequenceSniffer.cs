@@ -22,6 +22,9 @@ public static class SequenceSniffer
         ".gb", ".gbk", ".genbank", ".gbff",
     };
 
+    /// <summary>Every extension <see cref="DetectKindByExtension"/> decides on (GenBank first, then FASTA).</summary>
+    public static IReadOnlyCollection<string> KnownExtensions => [.. GenBankExtensions, .. FastaExtensions];
+
     private static readonly HashSet<string> FastaExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".fa", ".fasta", ".fna", ".ffn",
