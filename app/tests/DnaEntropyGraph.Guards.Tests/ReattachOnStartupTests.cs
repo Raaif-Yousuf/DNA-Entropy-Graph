@@ -1,9 +1,9 @@
 using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Cloud;
-using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Runs;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Xunit;

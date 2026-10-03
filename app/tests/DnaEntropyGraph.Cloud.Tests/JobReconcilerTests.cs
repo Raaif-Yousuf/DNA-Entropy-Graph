@@ -1,9 +1,9 @@
 using DnaEntropyGraph.Cloud;
-using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.Runs;
 using NSubstitute;
 using Shouldly;
 using Xunit;
