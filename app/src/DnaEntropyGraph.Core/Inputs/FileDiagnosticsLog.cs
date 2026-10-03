@@ -51,7 +51,15 @@ public sealed class FileDiagnosticsLog : IDiagnosticsLog
         var info = new FileInfo(_path);
         if (info.Exists && info.Length >= _maxBytes)
         {
-            File.Move(_path, _path + ".1", overwrite: true);
+            try
+            {
+                File.Move(_path, _path + ".1", overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The rotated copy is held open (the diagnostics zip reads it) or locked: append anyway. A brief overshoot of the cap
+                // beats dropping every line until the lock goes away; the next write tries the rotation again.
+            }
         }
     }
 

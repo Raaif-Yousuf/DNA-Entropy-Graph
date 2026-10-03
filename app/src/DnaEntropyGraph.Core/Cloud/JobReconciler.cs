@@ -188,6 +188,17 @@ public sealed class JobReconciler
             // of the error is the only trace (never its message, which could carry a path); the next launch or reconnect looks again.
             _log.Warning("reconciler", null, ex.GetType().Name);
         }
+        catch (OperationCanceledException)
+        {
+            // Shutdown: the exception goes to the caller, and the reattach task is observed here so a fault in it is never an unobserved task
+            // exception. Its runs are cancelled by the same token, and their drivers end with the process.
+            _ = started.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+            throw;
+        }
 
         var (judged, outcomes) = await started.ConfigureAwait(false);
         await judged.ConfigureAwait(false);

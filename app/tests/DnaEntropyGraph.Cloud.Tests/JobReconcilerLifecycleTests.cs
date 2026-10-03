@@ -792,7 +792,8 @@ public class JobReconcilerLifecycleTests
     [Fact]
     public async Task The_pass_hands_every_reattached_run_to_its_driver_before_it_returns()
     {
-        // Issue #575 item 4: two passes' reattach listings must not overlap, so a pass ends only once its runs are registered.
+        // REGRESSION GUARD for #559's judged signal (it is green before any #575 change): two passes' reattach listings must not overlap, so a pass
+        // ends only once its runs are registered as drivers. #575 item 4 asked for this and #559 already delivered it.
         var rig = new Rig();
         rig.Env.ResultTimeout = TimeSpan.FromMinutes(5);
         await rig.Env.SeedAsync("job-h1", JobPhase.Running, vm: true);
@@ -810,28 +811,33 @@ public class JobReconcilerLifecycleTests
     [Fact]
     public async Task The_observer_does_not_keep_a_nested_wait_for_every_reconnect_pass_whose_runs_already_ended()
     {
-        // Issue #575 item 5: each pass's reattached-runs task is dropped from what WhenIdleAsync waits on as soon as it ends.
-        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Issue #575 item 5: each pass's reattached-runs task is dropped from what WhenIdleAsync waits on as soon as it ends. Every pass here hands
+        // back a run group that is still going when it is tracked (completed later by the test), so each one is really added and must really be
+        // removed: a group that is already complete when tracked never reaches the removal.
+        var groups = Enumerable.Range(0, 5).Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
         var passes = 0;
-        var observer = new ReconcileOnReconnect(new NullObserver(), _ =>
-        {
-            var n = Interlocked.Increment(ref passes);
-            return Task.FromResult<Task>(n == 3 ? held.Task : Task.CompletedTask);
-        });
+        var observer = new ReconcileOnReconnect(new NullObserver(), _ => Task.FromResult<Task>(groups[Interlocked.Increment(ref passes) - 1].Task));
 
         for (var i = 1; i <= 5; i++)
         {
             observer.OnConnectivityChanged(offline: false);
-            await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref passes) == i));
-            await Task.Yield();
+            await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == i));
         }
 
-        // Pass 5 may still be finishing; settle on the passes (not the held run).
+        observer.TrackedRunGroups.ShouldBe(5, "each pass's still-running group is tracked");
+
+        // Out of order, and the last one held back: the tracked set follows the groups that are still going, one wait and not a chain.
+        foreach (var i in new[] { 1, 3, 0, 4 })
+        {
+            groups[i].SetResult();
+        }
+
         await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 1));
-        held.SetResult();
+        groups[2].SetResult();
         await observer.WhenIdleAsync();
         await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 0));
     }
+
     private static async Task WaitUntilAsync(Func<Task<bool>> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);

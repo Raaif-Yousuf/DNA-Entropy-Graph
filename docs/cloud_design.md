@@ -642,10 +642,10 @@ network class (no connection, `CloudErrorKind.Network`, or a lookup deadline). A
 by error class, row untouched, left for the next launch, and it does not keep the probe alive. A lifecycle pass that throws sets deferred by the same rule and
 rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
 
-**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logspp.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
+**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
 because it is called from inside the reconciler's catch blocks. A lifecycle step that throws no longer orphans the reattach: `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
-`WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) holds now: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
-(#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
+`WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) was already delivered by #559, not #575: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
+(#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive; the test for it is a regression guard, green before #575. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
 
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
