@@ -215,6 +215,15 @@ runs\<jobId>\                  local-run manifest copy, status history, worker.l
 engine\                        local engine (uv-managed venv, hf-cache, engine.json, install.log)
 ```
 
+`settings.json` is never destroyed by a read problem (#558). It is read as JSON of any
+value type (`GetString` returns a number or bool as its invariant text) and every key a
+`SetString` does not touch is rewritten with its original JSON type. A file that does not
+parse is copied to `settings.json.unreadable-<yyyyMMdd-HHmmss>` before the first write,
+scalar `"key": value` pairs are salvaged from it (so `installation_id` survives and no new
+id is minted), and `SettingsStore.RecoveredFromUnreadableFile` is set for the recovery UX
+(DECISION #404). A file that cannot be read at all (locked) makes writes throw rather than
+replace it. Writes are temp file plus `File.Move(overwrite)`.
+
 The full SQLite DDL (`Accounts`, `Projects`, `Runs`, `RunInputs`, `RunOutputs`,
 `RunEvents`, `CloudResources`, `CostLedger`, `MonthlySpend`, `LocalEngine`) is in
 [Appendix A, section 3](superpowers/specs/2026-09-18-appendix-a-app-design.md#3-local-state-model);
