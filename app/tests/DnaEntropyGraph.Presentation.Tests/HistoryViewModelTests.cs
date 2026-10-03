@@ -244,7 +244,7 @@ public sealed class HistoryViewModelTests
 
         await vm.RefreshCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -256,7 +256,7 @@ public sealed class HistoryViewModelTests
 
         await vm.RefreshCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -281,13 +281,13 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body", ToastSeverity.Error);
         await _repository.Received(1).GetAllAsync(Arg.Any<CancellationToken>());
 
         _toasts.ClearReceivedCalls();
         _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.InUse));
         await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_InUse_Title", "Runs_DeleteLocal_InUse_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -299,7 +299,7 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Partial_Title", "5 deleted, 2 left");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Partial_Title", "5 deleted, 2 left", ToastSeverity.Warning);
         _toasts.DidNotReceive().ShowToast("Runs_DeleteLocal_InUse_Title", Arg.Any<string>());
     }
 
@@ -311,7 +311,7 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_AccessDenied_Title", "Runs_DeleteLocal_AccessDenied_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_AccessDenied_Title", "Runs_DeleteLocal_AccessDenied_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -392,8 +392,8 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "3 kept");
-        _toasts.Received(1).ShowToast("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "3 kept", ToastSeverity.Info);
+        _toasts.Received(1).ShowToast("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -405,7 +405,7 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "a file kept");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "a file kept", ToastSeverity.Info);
     }
 
     [Fact]
@@ -417,8 +417,8 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "2 kept");
-        _toasts.Received(1).ShowToast("Runs_Redownload_Done_Title", "Runs_Redownload_Done_Body");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "2 kept", ToastSeverity.Info);
+        _toasts.Received(1).ShowToast("Runs_Redownload_Done_Title", "Runs_Redownload_Done_Body", ToastSeverity.Success);
     }
 
     [Fact]
@@ -462,7 +462,7 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").RerunCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_Rerun_Failed_Title", "Runs_Rerun_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_Rerun_Failed_Title", "Runs_Rerun_Failed_Body", ToastSeverity.Error);
         _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
     }
 
@@ -477,10 +477,10 @@ public sealed class HistoryViewModelTests
         var vm = await Loaded(Row("a"));
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
-        _toasts.Received(1).ShowToast("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error);
 
         await Item(vm, "a").DeleteCloudCommand.ExecuteAsync(null);
-        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -491,7 +491,7 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body", ToastSeverity.Warning);
     }
 
     [Fact]
@@ -514,7 +514,7 @@ public sealed class HistoryViewModelTests
         await Item(vm, "a").OpenCommand.ExecuteAsync(null);
 
         _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, TestContext.Current.CancellationToken);
-        _toasts.Received(1).ShowToast("Runs_Open_Missing_Title", "Runs_Open_Missing_Body");
+        _toasts.Received(1).ShowToast("Runs_Open_Missing_Title", "Runs_Open_Missing_Body", ToastSeverity.Warning);
     }
 
     [Fact]
@@ -551,7 +551,7 @@ public sealed class HistoryViewModelTests
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
 
         await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
-        _toasts.Received(1).ShowToast("Runs_Rerun_NoOptions_Title", "Runs_Rerun_NoOptions_Body");
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoOptions_Title", "Runs_Rerun_NoOptions_Body", ToastSeverity.Warning);
     }
 
     [Fact]
@@ -563,7 +563,7 @@ public sealed class HistoryViewModelTests
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
 
         await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
-        _toasts.Received(1).ShowToast("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body");
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body", ToastSeverity.Warning);
     }
 
     [Fact]
@@ -576,25 +576,25 @@ public sealed class HistoryViewModelTests
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RedownloadCommand).ExecuteAsync(null);
 
         await _cloud.Received(1).RedownloadAsync(Arg.Is<RunRecord>(r => r.JobId == "a"), Arg.Any<CancellationToken>());
-        _toasts.Received(1).ShowToast("Runs_Redownload_Done_Title", "Runs_Redownload_Done_Body");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Done_Title", "Runs_Redownload_Done_Body", ToastSeverity.Success);
         await _repository.Received(1).GetAllAsync(Arg.Any<CancellationToken>());
     }
 
     [Theory]
-    [InlineData(CloudResultsStatus.Expired, "Runs_Redownload_Expired")]
-    [InlineData(CloudResultsStatus.NoCloudCopy, "Runs_Redownload_NoCloudCopy")]
-    [InlineData(CloudResultsStatus.ResultNotFound, "Runs_Redownload_ResultNotFound")]
-    [InlineData(CloudResultsStatus.Refused, "Runs_Redownload_Refused")]
-    [InlineData(CloudResultsStatus.Failed, "Runs_Redownload_Failed")]
-    [InlineData(CloudResultsStatus.Partial, "Runs_Redownload_Partial")]
-    public async Task Each_redownload_failure_has_its_own_copy(CloudResultsStatus status, string keyPrefix)
+    [InlineData(CloudResultsStatus.Expired, "Runs_Redownload_Expired", ToastSeverity.Warning)]
+    [InlineData(CloudResultsStatus.NoCloudCopy, "Runs_Redownload_NoCloudCopy", ToastSeverity.Info)]
+    [InlineData(CloudResultsStatus.ResultNotFound, "Runs_Redownload_ResultNotFound", ToastSeverity.Error)]
+    [InlineData(CloudResultsStatus.Refused, "Runs_Redownload_Refused", ToastSeverity.Error)]
+    [InlineData(CloudResultsStatus.Failed, "Runs_Redownload_Failed", ToastSeverity.Error)]
+    [InlineData(CloudResultsStatus.Partial, "Runs_Redownload_Partial", ToastSeverity.Warning)]
+    public async Task Each_redownload_failure_has_its_own_copy(CloudResultsStatus status, string keyPrefix, ToastSeverity severity)
     {
         _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(status);
         var vm = await Loaded(Row("a"));
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RedownloadCommand).ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast(keyPrefix + "_Title", keyPrefix + "_Body");
+        _toasts.Received(1).ShowToast(keyPrefix + "_Title", keyPrefix + "_Body", severity);
     }
 
     [Fact]
@@ -617,7 +617,7 @@ public sealed class HistoryViewModelTests
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
 
         await _cloud.Received(1).DeleteAsync(Arg.Is<RunRecord>(r => r.JobId == "a"), Arg.Any<CancellationToken>());
-        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Done_Title", "Runs_DeleteCloud_Done_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Done_Title", "Runs_DeleteCloud_Done_Body", ToastSeverity.Success);
     }
 
     [Fact]
@@ -628,7 +628,7 @@ public sealed class HistoryViewModelTests
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -651,7 +651,7 @@ public sealed class HistoryViewModelTests
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteLocalCommand).ExecuteAsync(null);
 
         _local.Received(1).DeleteOutputFolder(Arg.Is<RunRecord>(r => r.JobId == "a"));
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Done_Title", "Runs_DeleteLocal_Done_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Done_Title", "Runs_DeleteLocal_Done_Body", ToastSeverity.Success);
     }
 
     [Fact]
@@ -662,7 +662,7 @@ public sealed class HistoryViewModelTests
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteLocalCommand).ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Refused_Title", "Runs_DeleteLocal_Refused_Body");
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Refused_Title", "Runs_DeleteLocal_Refused_Body", ToastSeverity.Error);
     }
 
     [Fact]
