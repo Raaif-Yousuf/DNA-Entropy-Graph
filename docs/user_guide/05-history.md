@@ -41,3 +41,8 @@ read-only entries.
 [06-costs-and-cleanup.md](06-costs-and-cleanup.md), what happens to cost and storage as
 runs pile up.
 [03-run.md](03-run.md), running a new sequence.
+
+## Good to know
+
+- **Download again** never overwrites a file that is already in the run's folder (it may hold your own edits); it only brings back files that are missing. If the run did not finish, the files that exist are restored and the app tells you they may be incomplete.
+- **Delete cloud copy** is greyed out for now, with a note explaining why; delete the files from the Google Cloud console until it is available.

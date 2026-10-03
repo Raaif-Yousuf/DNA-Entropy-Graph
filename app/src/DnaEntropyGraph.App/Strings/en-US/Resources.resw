@@ -474,9 +474,6 @@
   <data name="Runs_Remove_Confirm_Body" xml:space="preserve">
     <value>This removes the run from this list only. Its files and cloud copy are not deleted. Choose Continue to go ahead.</value>
   </data>
-  <data name="RunsPageTitle.Text" xml:space="preserve">
-    <value>Runs</value>
-  </data>
   <data name="RunsSearchBox.PlaceholderText" xml:space="preserve">
     <value>Search by name, file or id</value>
   </data>
@@ -518,5 +515,38 @@
   </data>
   <data name="Runs_DeleteCloud_NotConnected_Body" xml:space="preserve">
     <value>Deleting a cloud copy needs a connection to your Google Cloud project. Open Settings to connect, then try again.</value>
+  </data>
+  <data name="Runs_Redownload_Partial_Title" xml:space="preserve">
+    <value>Some files restored</value>
+  </data>
+  <data name="Runs_Redownload_Partial_Body" xml:space="preserve">
+    <value>This run did not finish, so its results may be incomplete. The files that exist were restored. Choose Run again for a complete result.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Failed_Title" xml:space="preserve">
+    <value>Could not delete the files</value>
+  </data>
+  <data name="Runs_DeleteLocal_Failed_Body" xml:space="preserve">
+    <value>A file in the folder is open in another program. Close that program, then choose Delete files on this PC again.</value>
+  </data>
+  <data name="Runs_Rerun_Failed_Title" xml:space="preserve">
+    <value>Could not start the run</value>
+  </data>
+  <data name="Runs_Rerun_Failed_Body" xml:space="preserve">
+    <value>The run could not be started. Choose Run again to try once more, or choose New run.</value>
+  </data>
+  <data name="Runs_Remove_Failed_Title" xml:space="preserve">
+    <value>Could not remove the run</value>
+  </data>
+  <data name="Runs_Remove_Failed_Body" xml:space="preserve">
+    <value>The run could not be removed from the list. Choose Remove from list again.</value>
+  </data>
+  <data name="Runs_Refresh_Failed_Title" xml:space="preserve">
+    <value>Could not load the list</value>
+  </data>
+  <data name="Runs_Refresh_Failed_Body" xml:space="preserve">
+    <value>The list of runs could not be read. Choose Refresh to try again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Unavailable_Hint" xml:space="preserve">
+    <value>Deleting cloud copies is not available yet. Delete the run's files in your Google Cloud storage from the Google Cloud console for now.</value>
   </data>
 </root>

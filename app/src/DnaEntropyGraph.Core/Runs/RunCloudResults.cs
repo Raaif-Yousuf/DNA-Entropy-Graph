@@ -21,6 +21,9 @@ public enum CloudResultsStatus
     /// <summary>The request named a folder or prefix that is not this run's own.</summary>
     Refused,
 
+    /// <summary>The job did not finish (failed or cancelled): the files it did upload were restored, and may be incomplete.</summary>
+    Partial,
+
     /// <summary>No real cloud connection exists to delete through yet.</summary>
     NotConnected,
 
@@ -42,6 +45,9 @@ public sealed class CloudNotConnectedException : Exception
 /// </summary>
 public interface IJobObjectDeleter
 {
+    /// <summary>False while nothing real is behind this deleter, so the UI offers no deletion it cannot perform.</summary>
+    bool IsAvailable { get; }
+
     Task DeleteJobObjectsAsync(string bucket, string jobPrefix, CancellationToken cancellationToken);
 }
 
@@ -51,7 +57,13 @@ public interface IRunCloudResults
     /// <summary>True when the bucket copy is believed to exist: a recorded location, not deleted, not past retention.</summary>
     bool IsAvailable(RunRecord run);
 
-    /// <summary>Restores the run's output files from the bucket into its output folder (recreated if it was deleted).</summary>
+    /// <summary>True when <see cref="DeleteAsync"/> can really delete this run's cloud copy.</summary>
+    bool CanDelete(RunRecord run);
+
+    /// <summary>
+    /// Restores the run's output files from the bucket into its output folder (recreated if it was deleted).
+    /// A file already in the folder is left exactly as it is (Hard Rule 14: it may hold the user's edits); only missing files are fetched.
+    /// </summary>
     Task<CloudResultsStatus> RedownloadAsync(RunRecord run, CancellationToken cancellationToken);
 
     /// <summary>Deletes the objects under this run's job-id prefix and records that the cloud copy is gone. Never anything outside that prefix (Hard Rule 11).</summary>
@@ -77,6 +89,9 @@ public sealed class RunCloudResults : IRunCloudResults
 
     public bool IsAvailable(RunRecord run)
         => Classify(run) is null;
+
+    public bool CanDelete(RunRecord run)
+        => _deleter.IsAvailable && !run.CloudResultsDeleted && !string.IsNullOrWhiteSpace(run.Bucket) && !string.IsNullOrWhiteSpace(run.JobPrefix);
 
     public async Task<CloudResultsStatus> RedownloadAsync(RunRecord run, CancellationToken cancellationToken)
     {
@@ -115,10 +130,11 @@ public sealed class RunCloudResults : IRunCloudResults
                 await DownloadFileAsync(run, folder, file, cancellationToken).ConfigureAwait(false);
             }
 
-            return CloudResultsStatus.Done;
+            return string.Equals(result.Status, "done", StringComparison.Ordinal) ? CloudResultsStatus.Done : CloudResultsStatus.Partial;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or RunFailureException or CloudOperationException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            // Network, storage, disk or a malformed result: every one is "download failed, try again", never a crash.
             return CloudResultsStatus.Failed;
         }
     }
@@ -170,10 +186,10 @@ public sealed class RunCloudResults : IRunCloudResults
         {
             var created = RunOutputFolders.CreateUnique(root, string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name);
             await _runs.UpsertAsync(run with { OutputDir = created }, cancellationToken).ConfigureAwait(false);
-            return Path.GetFullPath(created);
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(created));
         }
 
-        var folder = Path.GetFullPath(run.OutputDir);
+        var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
         return RunOutputRoot.IsStrictlyInside(folder, root) ? folder : null;
     }
 
@@ -184,6 +200,11 @@ public sealed class RunCloudResults : IRunCloudResults
         if (!destination.StartsWith(folder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("A result file leaves the output folder.");
+        }
+
+        if (File.Exists(destination))
+        {
+            return;
         }
 
         await using var source = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + file.Path, cancellationToken).ConfigureAwait(false)
@@ -216,7 +237,7 @@ public sealed class RunCloudResults : IRunCloudResults
                 throw new InvalidDataException("A result file does not match its checksum.");
             }
 
-            File.Move(partial, destination, overwrite: true);
+            File.Move(partial, destination, overwrite: false);
         }
         finally
         {

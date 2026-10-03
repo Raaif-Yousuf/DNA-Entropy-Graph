@@ -7,6 +7,9 @@ public enum LocalDeleteStatus
     Deleted,
     NothingToDelete,
     Refused,
+
+    /// <summary>The folder could not be removed (a file is open in another program, or access was denied); whatever was left is untouched.</summary>
+    Failed,
 }
 
 /// <summary>The run's files on this PC (issue #101). Hard Rule 14: nothing here ever touches the input copy or anything outside the run's own output folder.</summary>
@@ -65,7 +68,15 @@ public sealed class LocalRunFiles : ILocalRunFiles
             return LocalDeleteStatus.NothingToDelete;
         }
 
-        Directory.Delete(folder, recursive: true);
+        try
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return LocalDeleteStatus.Failed;
+        }
+
         return LocalDeleteStatus.Deleted;
     }
 

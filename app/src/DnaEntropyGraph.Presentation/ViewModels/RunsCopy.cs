@@ -21,18 +21,23 @@ public static class RunsCopy
     public const string DeleteCloudConfirmBody = "Runs_DeleteCloud_Confirm_Body";
     public const string DeleteLocalConfirmTitle = "Runs_DeleteLocal_Confirm_Title";
     public const string DeleteLocalConfirmBody = "Runs_DeleteLocal_Confirm_Body";
+    public const string DeleteCloudUnavailableHint = "Runs_DeleteCloud_Unavailable_Hint";
     public const string RemoveConfirmTitle = "Runs_Remove_Confirm_Title";
     public const string RemoveConfirmBody = "Runs_Remove_Confirm_Body";
 
     public static readonly (string Title, string Body) OpenMissing = Pair("Runs_Open_Missing_Title", "Runs_Open_Missing_Body");
     public static readonly (string Title, string Body) RerunNoOptions = Pair("Runs_Rerun_NoOptions_Title", "Runs_Rerun_NoOptions_Body");
     public static readonly (string Title, string Body) RerunNoInput = Pair("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body");
+    public static readonly (string Title, string Body) RerunFailed = Pair("Runs_Rerun_Failed_Title", "Runs_Rerun_Failed_Body");
+    public static readonly (string Title, string Body) RemoveFailed = Pair("Runs_Remove_Failed_Title", "Runs_Remove_Failed_Body");
+    public static readonly (string Title, string Body) RefreshFailed = Pair("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body");
 
     private static readonly string[] FilterKeys = ["Runs_Filter_All", "Runs_Filter_Active", "Runs_Filter_Completed", "Runs_Filter_Failed", "Runs_Filter_Cancelled"];
 
     public static (string Title, string Body) Redownload(CloudResultsStatus status) => status switch
     {
         CloudResultsStatus.Done => Pair("Runs_Redownload_Done_Title", "Runs_Redownload_Done_Body"),
+        CloudResultsStatus.Partial => Pair("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body"),
         CloudResultsStatus.Expired => Pair("Runs_Redownload_Expired_Title", "Runs_Redownload_Expired_Body"),
         CloudResultsStatus.NoCloudCopy => Pair("Runs_Redownload_NoCloudCopy_Title", "Runs_Redownload_NoCloudCopy_Body"),
         CloudResultsStatus.ResultNotFound => Pair("Runs_Redownload_ResultNotFound_Title", "Runs_Redownload_ResultNotFound_Body"),
@@ -53,6 +58,7 @@ public static class RunsCopy
     {
         LocalDeleteStatus.Deleted => Pair("Runs_DeleteLocal_Done_Title", "Runs_DeleteLocal_Done_Body"),
         LocalDeleteStatus.NothingToDelete => Pair("Runs_DeleteLocal_Nothing_Title", "Runs_DeleteLocal_Nothing_Body"),
+        LocalDeleteStatus.Failed => Pair("Runs_DeleteLocal_Failed_Title", "Runs_DeleteLocal_Failed_Body"),
         _ => Pair("Runs_DeleteLocal_Refused_Title", "Runs_DeleteLocal_Refused_Body"),
     };
 
@@ -61,9 +67,9 @@ public static class RunsCopy
     [
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
-        DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
+        DeleteCloudUnavailableHint, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         .. FilterKeys,
-        .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput),
+        .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),

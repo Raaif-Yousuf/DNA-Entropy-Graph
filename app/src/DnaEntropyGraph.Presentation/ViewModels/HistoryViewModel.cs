@@ -86,7 +86,10 @@ public sealed partial class HistoryViewModel : ObservableObject
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
         var runs = await _runRepository.GetAllAsync(cancellationToken);
-        _items = [.. runs.OrderByDescending(r => r.CreatedUtc).Select(BuildItem)];
+
+        // One disk probe per row: off the UI thread.
+        var rows = await Task.Run(() => runs.OrderByDescending(r => r.CreatedUtc).Select(r => (Run: r, HasFolder: _local.OutputFolderExists(r))).ToList(), cancellationToken);
+        _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder))];
         ApplyFilter();
     }
 
@@ -130,7 +133,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             : day == today.AddDays(-1) ? _strings.GetString(RunsCopy.GroupYesterday)
             : day.ToString("D", CultureInfo.CurrentCulture);
 
-    private RunListItem BuildItem(RunRecord run)
+    private RunListItem BuildItem(RunRecord run, bool hasFolder)
     {
         var local = TimeZoneInfo.ConvertTime(run.CreatedUtc, _time.LocalTimeZone);
         var (status, statusKey) = Classify(run.Phase);
@@ -140,8 +143,10 @@ public sealed partial class HistoryViewModel : ObservableObject
             _strings.GetString(statusKey),
             status,
             local.ToString("t", CultureInfo.CurrentCulture),
-            _local.OutputFolderExists(run),
+            hasFolder,
             _cloud.IsAvailable(run),
+            _cloud.CanDelete(run),
+            _cloud.CanDelete(run) ? string.Empty : _strings.GetString(RunsCopy.DeleteCloudUnavailableHint),
             new RelayCommand(() => Open(run)),
             new AsyncRelayCommand(() => RerunAsync(run)),
             new AsyncRelayCommand(() => RedownloadAsync(run)),
@@ -175,72 +180,106 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
     }
 
-    private async Task RerunAsync(RunRecord run)
+    private Task RerunAsync(RunRecord run) => ActAsync(
+        async () =>
+        {
+            var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
+            if (options is null)
+            {
+                return RunsCopy.RerunNoOptions;
+            }
+
+            var input = await Task.Run(() => _local.FindRerunInput(run, options));
+            if (input is null)
+            {
+                return RunsCopy.RerunNoInput;
+            }
+
+            var jobId = await _engine.StartRunAsync(options with { InputPath = input }, CancellationToken.None);
+            _navigator.NavigateTo("RunProgress", jobId);
+            return null;
+        },
+        RunsCopy.RerunFailed);
+
+    private Task RedownloadAsync(RunRecord run) => ActAsync(
+        async () => RunsCopy.Redownload(await _cloud.RedownloadAsync(run, CancellationToken.None)),
+        RunsCopy.Redownload(CloudResultsStatus.Failed));
+
+    private Task DeleteCloudAsync(RunRecord run) => ActAsync(
+        async () =>
+        {
+            if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteCloudConfirmTitle), _strings.GetString(RunsCopy.DeleteCloudConfirmBody), CancellationToken.None))
+            {
+                return null;
+            }
+
+            return RunsCopy.DeleteCloud(await _cloud.DeleteAsync(run, CancellationToken.None));
+        },
+        RunsCopy.DeleteCloud(CloudResultsStatus.Failed));
+
+    private Task DeleteLocalAsync(RunRecord run) => ActAsync(
+        async () =>
+        {
+            // A run that is still going owns its output folder; deleting under it would corrupt the run.
+            if (!IsFinished(run.Phase))
+            {
+                return null;
+            }
+
+            var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
+            if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
+            {
+                return null;
+            }
+
+            // Recursive disk work: off the UI thread.
+            return RunsCopy.DeleteLocal(await Task.Run(() => _local.DeleteOutputFolder(run)));
+        },
+        RunsCopy.DeleteLocal(LocalDeleteStatus.Failed));
+
+    private Task RemoveAsync(RunRecord run) => ActAsync(
+        async () =>
+        {
+            if (!IsFinished(run.Phase)
+                || !await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.RemoveConfirmTitle), _strings.GetString(RunsCopy.RemoveConfirmBody), CancellationToken.None))
+            {
+                return null;
+            }
+
+            await _remover.DeleteAsync(run.JobId, CancellationToken.None);
+            return null;
+        },
+        RunsCopy.RemoveFailed);
+
+    /// <summary>
+    /// Runs one row action. Whatever it throws becomes the <paramref name="failure"/> toast (each names an action,
+    /// Hard Rule 13), never an unobserved exception; the list is rebuilt afterwards so it shows what is really on disk.
+    /// </summary>
+    private async Task ActAsync(Func<Task<(string Title, string Body)?>> action, (string Title, string Body) failure)
     {
-        var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
-        if (options is null)
+        (string Title, string Body)? copy;
+        try
         {
-            Toast(RunsCopy.RerunNoOptions);
-            return;
+            copy = await action();
+        }
+        catch (Exception)
+        {
+            copy = failure;
         }
 
-        var input = _local.FindRerunInput(run, options);
-        if (input is null)
+        if (copy is { } shown)
         {
-            Toast(RunsCopy.RerunNoInput);
-            return;
+            Toast(shown);
         }
 
-        var jobId = await _engine.StartRunAsync(options with { InputPath = input }, CancellationToken.None);
-        _navigator.NavigateTo("RunProgress", jobId);
+        try
+        {
+            await RefreshAsync(CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            Toast(RunsCopy.RefreshFailed);
+        }
     }
-
-    private async Task RedownloadAsync(RunRecord run)
-    {
-        var status = await _cloud.RedownloadAsync(run, CancellationToken.None);
-        Toast(RunsCopy.Redownload(status));
-        await RefreshAsync(CancellationToken.None);
-    }
-
-    private async Task DeleteCloudAsync(RunRecord run)
-    {
-        if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteCloudConfirmTitle), _strings.GetString(RunsCopy.DeleteCloudConfirmBody), CancellationToken.None))
-        {
-            return;
-        }
-
-        var status = await _cloud.DeleteAsync(run, CancellationToken.None);
-        Toast(RunsCopy.DeleteCloud(status));
-        await RefreshAsync(CancellationToken.None);
-    }
-
-    private async Task DeleteLocalAsync(RunRecord run)
-    {
-        var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
-        if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
-        {
-            return;
-        }
-
-        Toast(RunsCopy.DeleteLocal(_local.DeleteOutputFolder(run)));
-        await RefreshAsync(CancellationToken.None);
-    }
-
-    private async Task RemoveAsync(RunRecord run)
-    {
-        if (!IsFinished(run.Phase))
-        {
-            return;
-        }
-
-        if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.RemoveConfirmTitle), _strings.GetString(RunsCopy.RemoveConfirmBody), CancellationToken.None))
-        {
-            return;
-        }
-
-        await _remover.DeleteAsync(run.JobId, CancellationToken.None);
-        await RefreshAsync(CancellationToken.None);
-    }
-
     private void Toast((string Title, string Body) copy) => _toasts.ShowToast(_strings.GetString(copy.Title), _strings.GetString(copy.Body));
 }

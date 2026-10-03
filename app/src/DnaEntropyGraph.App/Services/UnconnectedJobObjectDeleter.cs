@@ -9,6 +9,8 @@ namespace DnaEntropyGraph.App.Services;
 /// </summary>
 public sealed class UnconnectedJobObjectDeleter : IJobObjectDeleter
 {
+    public bool IsAvailable => false;
+
     public Task DeleteJobObjectsAsync(string bucket, string jobPrefix, CancellationToken cancellationToken)
         => throw new CloudNotConnectedException();
 }

@@ -60,6 +60,17 @@ public sealed class LocalRunFilesTests : IDisposable
     }
 
     [Fact]
+    public void A_folder_with_a_file_open_elsewhere_is_failed_not_thrown_and_keeps_its_files()
+    {
+        var folder = MakeRunFolder();
+        using var held = new FileStream(Path.Combine(folder, "a.bedgraph"), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        Make().DeleteOutputFolder(Run(folder)).ShouldBe(LocalDeleteStatus.Failed);
+
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
     public void Deleting_a_folder_that_is_already_gone_is_nothing_to_delete()
         => Make().DeleteOutputFolder(Run(Path.Combine(_root, "gone"))).ShouldBe(LocalDeleteStatus.NothingToDelete);
 

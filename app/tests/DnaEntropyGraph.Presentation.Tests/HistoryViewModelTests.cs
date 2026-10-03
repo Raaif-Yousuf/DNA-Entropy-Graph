@@ -38,6 +38,7 @@ public sealed class HistoryViewModelTests
         _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => _rows);
         _dialogs.ConfirmAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs(true);
         _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(true);
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(true);
     }
 
     private HistoryViewModel Make() => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, new UtcClock());
@@ -142,6 +143,90 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task A_live_run_never_offers_local_deletion_and_the_command_does_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        var vm = await Loaded(Row("live", JobPhase.Running, outputDir: @"C:\out\live"));
+
+        Item(vm, "live").HasLocalFiles.ShouldBeFalse();
+        await Item(vm, "live").DeleteLocalCommand.ExecuteAsync(null);
+
+        _local.DidNotReceiveWithAnyArgs().DeleteOutputFolder(default!);
+        await _dialogs.DidNotReceiveWithAnyArgs().ConfirmAsync(default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Delete_cloud_is_disabled_with_a_hint_when_the_service_cannot_delete()
+    {
+        _cloud.CanDelete(Arg.Is<RunRecord>(r => r.JobId == "a")).Returns(false);
+        var vm = await Loaded(Row("a"), Row("b"));
+
+        Item(vm, "a").CanDeleteCloud.ShouldBeFalse();
+        Item(vm, "a").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Unavailable_Hint");
+        Item(vm, "b").CanDeleteCloud.ShouldBeTrue();
+        Item(vm, "b").DeleteCloudHint.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_local_delete_that_throws_or_fails_toasts_the_failure_copy_and_refreshes()
+    {
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(_ => throw new IOException("in use"));
+        var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
+        _repository.ClearReceivedCalls();
+
+        await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Failed_Title", "Runs_DeleteLocal_Failed_Body");
+        await _repository.Received(1).GetAllAsync(Arg.Any<CancellationToken>());
+
+        _toasts.ClearReceivedCalls();
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(LocalDeleteStatus.Failed);
+        await Item(vm, "a").DeleteLocalCommand.ExecuteAsync(null);
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Failed_Title", "Runs_DeleteLocal_Failed_Body");
+    }
+
+    [Fact]
+    public async Task A_rerun_whose_start_throws_toasts_the_failure_copy_and_does_not_navigate()
+    {
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\in.gb");
+        _engine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns<Task<string>>(_ => throw new InvalidOperationException("boom"));
+        var vm = await Loaded(Row("a", options: RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud" })));
+
+        await Item(vm, "a").RerunCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_Rerun_Failed_Title", "Runs_Rerun_Failed_Body");
+        _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
+    }
+
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(OperationCanceledException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public async Task A_redownload_or_cloud_delete_that_throws_toasts_the_failure_copy(Type exception)
+    {
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudResultsStatus>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudResultsStatus>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+        var vm = await Loaded(Row("a"));
+
+        await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
+        _toasts.Received(1).ShowToast("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body");
+
+        await Item(vm, "a").DeleteCloudCommand.ExecuteAsync(null);
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body");
+    }
+
+    [Fact]
+    public async Task A_partial_redownload_has_its_own_copy()
+    {
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.Partial);
+        var vm = await Loaded(Row("a", JobPhase.Failed));
+
+        await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body");
+    }
+
+    [Fact]
     public async Task Open_navigates_to_the_viewer_with_the_output_folder_when_it_exists()
     {
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
@@ -233,6 +318,7 @@ public sealed class HistoryViewModelTests
     [InlineData(CloudResultsStatus.ResultNotFound, "Runs_Redownload_ResultNotFound")]
     [InlineData(CloudResultsStatus.Refused, "Runs_Redownload_Refused")]
     [InlineData(CloudResultsStatus.Failed, "Runs_Redownload_Failed")]
+    [InlineData(CloudResultsStatus.Partial, "Runs_Redownload_Partial")]
     public async Task Each_redownload_failure_has_its_own_copy(CloudResultsStatus status, string keyPrefix)
     {
         _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(status);

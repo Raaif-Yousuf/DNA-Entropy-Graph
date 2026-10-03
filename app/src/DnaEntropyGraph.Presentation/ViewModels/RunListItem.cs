@@ -38,6 +38,8 @@ public sealed class RunListItem
         string detailText,
         bool hasLocalFiles,
         bool cloudAvailable,
+        bool canDeleteCloud,
+        string deleteCloudHint,
         ICommand openCommand,
         IAsyncRelayCommand rerunCommand,
         IAsyncRelayCommand redownloadCommand,
@@ -50,10 +52,11 @@ public sealed class RunListItem
         StatusText = statusText;
         Status = status;
         DetailText = detailText;
-        HasLocalFiles = hasLocalFiles;
         var finished = HistoryViewModel.IsFinished(run.Phase);
+        HasLocalFiles = finished && hasLocalFiles;
         CanRedownload = finished && cloudAvailable;
-        CanDeleteCloud = finished && cloudAvailable;
+        CanDeleteCloud = finished && cloudAvailable && canDeleteCloud;
+        DeleteCloudHint = deleteCloudHint;
         CanRemove = finished;
         OpenCommand = openCommand;
         RerunCommand = rerunCommand;
@@ -82,6 +85,9 @@ public sealed class RunListItem
     public bool CanDeleteCloud { get; }
 
     public bool CanRemove { get; }
+
+    /// <summary>Why Delete cloud copy is unavailable, or empty when it is available; shown as its tooltip.</summary>
+    public string DeleteCloudHint { get; }
 
     public ICommand OpenCommand { get; }
 

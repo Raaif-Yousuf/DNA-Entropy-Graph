@@ -17,14 +17,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock x:Uid="RunsPageTitle" Style="{StaticResource TitleTextBlockStyle}" />
-            <Button x:Uid="RunsRefreshButton" Grid.Column="1" Command="{x:Bind ViewModel.RefreshCommand}" />
-        </Grid>
+        <Button x:Uid="RunsRefreshButton" Grid.Row="0" HorizontalAlignment="Right" Command="{x:Bind ViewModel.RefreshCommand}" />
 
         <Grid Grid.Row="1" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
@@ -75,7 +68,7 @@
                                                     <Button x:Uid="RunsOpenButton" Command="{x:Bind OpenCommand}" />
                                                     <Button x:Uid="RunsRerunButton" Command="{x:Bind RerunCommand}" />
                                                     <Button x:Uid="RunsRedownloadButton" Command="{x:Bind RedownloadCommand}" IsEnabled="{x:Bind CanRedownload}" />
-                                                    <Button x:Uid="RunsDeleteCloudButton" Command="{x:Bind DeleteCloudCommand}" IsEnabled="{x:Bind CanDeleteCloud}" />
+                                                    <Button x:Uid="RunsDeleteCloudButton" Command="{x:Bind DeleteCloudCommand}" IsEnabled="{x:Bind CanDeleteCloud}" ToolTipService.ToolTip="{x:Bind DeleteCloudHint}" />
                                                     <Button x:Uid="RunsDeleteLocalButton" Command="{x:Bind DeleteLocalCommand}" IsEnabled="{x:Bind HasLocalFiles}" />
                                                     <Button x:Uid="RunsRemoveButton" Command="{x:Bind RemoveCommand}" IsEnabled="{x:Bind CanRemove}" />
                                                 </StackPanel>
