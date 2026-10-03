@@ -94,4 +94,26 @@ public class SetupErrorResourceTests
         text.ShouldContain("{account}");
         text.ShouldNotContain("\u2014");
     }
+
+    [Theory]
+    [InlineData("BUCKET_CONFIG_NOT_APPLIED", "SetupError_BUCKET_CONFIG_NOT_APPLIED")]
+    [InlineData("BUCKET_NAME_TAKEN", "SetupError_BUCKET_NAME_TAKEN")]
+    public void The_results_bucket_failures_are_in_the_setup_roster_and_do_not_fall_to_the_catch_all(string code, string messageKey)
+    {
+        SetupErrorCodes.All.ShouldContain(code);
+        SetupErrorCodes.ResourceKey(code).ShouldBe(messageKey);
+        ReswValues().ShouldContainKey(messageKey);
+    }
+
+    [Theory]
+    [InlineData(SetupErrorCodes.BucketConfigNotApplied)]
+    [InlineData(SetupErrorCodes.BucketNameTaken)]
+    public void The_copy_catalog_body_of_a_bucket_code_is_the_resw_text_exactly(string code)
+    {
+        var repo = Path.GetFullPath(Path.Combine(RepoPaths.AppRoot, ".."));
+        var catalog = File.ReadAllText(Path.Combine(repo, "docs", "copy_catalog.md"));
+        var row = catalog.Split('\n').Single(l => l.StartsWith($"| `{code}` |", StringComparison.Ordinal));
+
+        row.ShouldContain(ReswValues()[SetupErrorCodes.ResourceKey(code)]);
+    }
 }

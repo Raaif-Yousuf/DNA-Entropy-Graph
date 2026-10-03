@@ -1,7 +1,7 @@
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
-/// The codes the project-setup wizard steps fail under (issues #50 to #52), carried in <see cref="CloudError.Code"/>
+/// The codes the project-setup wizard steps fail under (issues #50 to #53), carried in <see cref="CloudError.Code"/>
 /// of a <see cref="CloudOperationException"/>. Same pattern as <see cref="AuthErrorCodes"/>: the English lives in
 /// <c>Resources.resw</c> under <see cref="ResourceKey"/>, names one action (Hard Rule 13), and the raw Google text is
 /// kept only for the diagnostics zip. <c>docs/copy_catalog.md</c> and <c>scripts/triage_diagnostics.py</c> list the
@@ -36,8 +36,14 @@ public static class SetupErrorCodes
     /// <summary>The billing account the project is linked to is not working and no other open account exists to pick (<see cref="BillingOutcomeKind.FixLinkedAccount"/>). Action: open the project's billing page on Google and fix or replace the account.</summary>
     public const string BillingAccountOff = "BILLING_ACCOUNT_OFF";
 
+    /// <summary>Google accepted the results bucket but reading it back shows UBLA, public access prevention or a lifecycle rule is not what was asked for ("applied is not present"). Action: try again (the next attempt repairs the bucket).</summary>
+    public const string BucketConfigNotApplied = "BUCKET_CONFIG_NOT_APPLIED";
+
+    /// <summary>Every results-bucket name the app tried was taken by someone else. Action: try again (new names are drawn).</summary>
+    public const string BucketNameTaken = "BUCKET_NAME_TAKEN";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff, BucketConfigNotApplied, BucketNameTaken];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -51,6 +57,8 @@ public static class SetupErrorCodes
         NotProjectOwner => "SetupError_NOT_PROJECT_OWNER",
         BillingStillOff => "SetupError_BILLING_STILL_OFF",
         BillingAccountOff => "SetupError_BILLING_ACCOUNT_OFF",
+        BucketConfigNotApplied => "SetupError_BUCKET_CONFIG_NOT_APPLIED",
+        BucketNameTaken => "SetupError_BUCKET_NAME_TAKEN",
         _ => "SetupError_OTHER",
     };
 
@@ -66,6 +74,8 @@ public static class SetupErrorCodes
         NotProjectOwner => "SetupAction_CreateProject",
         BillingStillOff => "SetupAction_PickAnotherBillingAccount",
         BillingAccountOff => "SetupAction_FixBillingAccount",
+        BucketConfigNotApplied => "SetupAction_TryAgain",
+        BucketNameTaken => "SetupAction_TryAgain",
         _ => "SetupAction_TryAgain",
     };
 }

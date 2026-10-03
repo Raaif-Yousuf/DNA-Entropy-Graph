@@ -157,7 +157,7 @@ public sealed record RunOptions
     public int MaxRunDurationMinutes { get; init; } = 240;
 
     /// <summary>How long cloud-side outputs are kept before the bucket's own lifecycle rule deletes them. Not sent to the worker; consumed by bucket provisioning.</summary>
-    public int CloudResultsRetentionDays { get; init; } = 90;
+    public int CloudResultsRetentionDays { get; init; } = Cloud.ResultsBucket.DefaultRetentionDays;
 
     /// <summary>Boot disk size for the VM. Not sent to the worker manifest; consumed by <c>VmSpec</c>.</summary>
     public int BootDiskGb { get; init; } = 150;
