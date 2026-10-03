@@ -136,7 +136,6 @@ public static class ServiceRegistration
 
         // Issue #63: a pasted sequence is saved under app data too, never next to anything of the user's.
         services.AddSingleton<IPastedInputStore>(_ => new LocalPastedInputStore(Path.GetDirectoryName(settingsPath)!));
-        services.AddSingleton<TimeProvider>(TimeProvider.System);
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());

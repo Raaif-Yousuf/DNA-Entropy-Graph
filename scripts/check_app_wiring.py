@@ -214,7 +214,9 @@ _MARKUP = re.compile(r"\{\s*(x:Bind|Binding)\s*([^}]*)\}")
 
 # A DataTemplate with an x:DataType: its {x:Bind} paths are members of that item type, not of the page's
 # ViewModel, and the XAML compiler already checks them against the type (a wrong name is a build error).
-_TYPED_TEMPLATE = re.compile(r"<DataTemplate\b[^>]*\bx:DataType\s*=[^>]*>.*?</DataTemplate>", re.DOTALL)
+_TYPED_TEMPLATE = re.compile(
+    r"<DataTemplate\b[^>]*\bx:DataType\s*=\s*\"(?:[\w]+:)?([\w\.]+)\"[^>]*>.*?</DataTemplate>", re.DOTALL
+)
 
 # Types that are constructor parameters but are never DI registrations: a
 # CancellationToken, a primitive, a string. Listing them beats a heuristic that
@@ -717,30 +719,70 @@ def _viewmodel_for(xaml_path: Path, scan: Scan) -> tuple[str, str] | None:
     return None
 
 
+def _binding_root(body: str) -> str | None:
+    """The first path segment a markup-extension body names, when it looks like a member (upper-case first letter)."""
+    body = body.strip()
+    if not body:
+        return None
+    explicit = re.search(r"\bPath\s*=\s*([\w\.\[\]]+)", body)
+    if explicit:
+        expression = explicit.group(1)
+    else:
+        first = body.split(",")[0].strip()
+        if "=" in first:
+            return None
+        expression = first
+    root = expression.split(".")[0].split("[")[0].strip()
+    return root if root and root[0].isupper() else None
+
+
+def _class_text(name: str, scan: Scan) -> str | None:
+    for path, text in scan.cs_files.items():
+        if _is_test_path(path):
+            continue
+        if re.search(rf"\b(?:class|record)\s+{re.escape(name)}\b", text):
+            return text
+    return None
+
+
 def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
     findings: list[Finding] = []
     skipped: list[str] = []
 
     for path, text in scan.xaml_files.items():
         paths_used: set[str] = set()
-        typed_spans = [m.span() for m in _TYPED_TEMPLATE.finditer(text)]
+        # An x:Bind inside a DataTemplate with an x:DataType belongs to that item type (the XAML compiler resolves it
+        # there), so it is checked against that class, never skipped and never held to the page ViewModel.
+        typed_spans = [(m.span(), m.group(1).split(".")[-1]) for m in _TYPED_TEMPLATE.finditer(text)]
+        typed_used: dict[str, set[str]] = {}
         for match in _MARKUP.finditer(text):
-            if match.group(1) == "x:Bind" and any(start <= match.start() < end for start, end in typed_spans):
+            root = _binding_root(match.group(2))
+            if root is None:
                 continue
-            body = match.group(2).strip()
-            if not body:
-                continue
-            explicit = re.search(r"\bPath\s*=\s*([\w\.\[\]]+)", body)
-            if explicit:
-                expression = explicit.group(1)
+            owner = next(
+                (cls for (start, end), cls in typed_spans if start <= match.start() < end and match.group(1) == "x:Bind"),
+                None,
+            )
+            if owner is not None:
+                typed_used.setdefault(owner, set()).add(root)
             else:
-                first = body.split(",")[0].strip()
-                if "=" in first:
-                    continue
-                expression = first
-            root = expression.split(".")[0].split("[")[0].strip()
-            if root and root[0].isupper():
                 paths_used.add(root)
+
+        for cls, roots in sorted(typed_used.items()):
+            class_text = _class_text(cls, scan)
+            if class_text is None:
+                skipped.append(f"{path}: x:DataType '{cls}' is not a class in this tree; {len(roots)} binding path(s) unchecked")
+                continue
+            for root in sorted(roots - _members_of(class_text)):
+                findings.append(
+                    Finding(
+                        "DANGLING-BINDING",
+                        f"{path.name}:{cls}.{root}",
+                        f"Binding path root '{root}' inside a DataTemplate typed {cls} is not a member of {cls}. "
+                        f"It compiles in the template's own scope only when the member exists; otherwise it renders blank.",
+                        str(path),
+                    )
+                )
 
         if not paths_used:
             continue
@@ -1158,15 +1200,36 @@ def self_test() -> int:
         # so it is not a dangling binding on the page ViewModel; a plain {Binding} in the same place still is.
         typed_root = Path(tempfile.mkdtemp(prefix="wiring-typed-"))
         _write_wired(typed_root)
+        (typed_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
+        (typed_root / "src/Demo.Presentation/Item.cs").write_text(
+            "public sealed class Item { public string ItemOnlyMember { get; } = \"\"; }\n", encoding="utf-8"
+        )
         _patch(
             typed_root,
             "src/Demo.App/Views/NewRunPage.xaml",
             "{Binding SelectedInputPath}",
-            '{Binding SelectedInputPath}<DataTemplate x:DataType="Item"><TextBlock Text="{x:Bind ItemOnlyMember}" /></DataTemplate>',
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="vm:Item"><TextBlock Text="{x:Bind ItemOnlyMember}" /></DataTemplate>',
         )
         check(
-            "an x:Bind inside a typed DataTemplate is not a dangling binding on the page ViewModel",
+            "an x:Bind inside a typed DataTemplate is checked against the template's class, not the page ViewModel",
             "DANGLING-BINDING" not in _codes(typed_root),
+        )
+        # And it is still checked: a member the item type does not have is a dangling binding.
+        typed_bad_root = Path(tempfile.mkdtemp(prefix="wiring-typed-bad-"))
+        _write_wired(typed_bad_root)
+        (typed_bad_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
+        (typed_bad_root / "src/Demo.Presentation/Item.cs").write_text(
+            "public sealed class Item { public string ItemOnlyMember { get; } = \"\"; }\n", encoding="utf-8"
+        )
+        _patch(
+            typed_bad_root,
+            "src/Demo.App/Views/NewRunPage.xaml",
+            "{Binding SelectedInputPath}",
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="vm:Item"><TextBlock Text="{x:Bind NoSuchMember}" /></DataTemplate>',
+        )
+        check(
+            "an x:Bind to a nonexistent member inside a typed DataTemplate is a dangling binding",
+            "DANGLING-BINDING" in _codes(typed_bad_root),
         )
         # The loosening is pinned both ways: a plain {Binding} in the same place is not compile-checked
         # against the x:DataType (it is resolved at run time), so it is still held to the page ViewModel.
@@ -1176,7 +1239,7 @@ def self_test() -> int:
             untyped_root,
             "src/Demo.App/Views/NewRunPage.xaml",
             "{Binding SelectedInputPath}",
-            '{Binding SelectedInputPath}<DataTemplate x:DataType="Item"><TextBlock Text="{Binding ItemOnlyMember}" /></DataTemplate>',
+            '{Binding SelectedInputPath}<DataTemplate x:DataType="vm:Item"><TextBlock Text="{Binding ItemOnlyMember}" /></DataTemplate>',
         )
         check(
             "a plain {Binding} inside a typed DataTemplate is still a dangling binding",

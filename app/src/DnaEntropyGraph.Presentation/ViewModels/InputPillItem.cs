@@ -73,6 +73,9 @@ public sealed partial class InputPillItem : ObservableObject
         return ++_generation;
     }
 
+    /// <summary>Ends whatever check is the pill's newest, the same way <see cref="Abandon(int)"/> does.</summary>
+    public void AbandonLatest() => Abandon(_generation);
+
     /// <summary>Ends a check that was cancelled: the pill leaves the checking state with one action for the user. Ignored when a newer check has started.</summary>
     public void Abandon(int generation)
     {

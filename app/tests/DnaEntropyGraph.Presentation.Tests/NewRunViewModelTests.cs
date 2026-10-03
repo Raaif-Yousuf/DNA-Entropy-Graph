@@ -22,7 +22,6 @@ public sealed class NewRunViewModelTests : IDisposable
     private readonly IFilePicker _picker = Substitute.For<IFilePicker>();
     private readonly IJobEngine _jobEngine = Substitute.For<IJobEngine>();
     private readonly INavigator _navigator = Substitute.For<INavigator>();
-    private readonly ISettingsStore _settings = Substitute.For<ISettingsStore>();
     private readonly FakeStrings _strings = new();
     private NewRunViewModel _viewModel;
 
@@ -48,12 +47,10 @@ public sealed class NewRunViewModelTests : IDisposable
 
     private NewRunViewModel NewViewModel(IPastedInputStore? store = null, Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null, IInputFileSystem? files = null) => new(
         _picker,
-        _settings,
         _jobEngine,
         _navigator,
         _strings,
         store ?? new LocalPastedInputStore(_appData),
-        new FixedTimeProvider(new DateTimeOffset(2026, 10, 3, 14, 7, 0, TimeSpan.Zero)),
         validate,
         files);
 
@@ -108,24 +105,13 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         var path = Write("SetTnpB.fasta", ">x\n" + Dna + "\n");
         await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
-        _viewModel.NameTemplate = "{file}_{model}";
 
         await _viewModel.StartRunCommand.ExecuteAsync(null);
 
         await _jobEngine.Received(1).StartRunAsync(
-            Arg.Is<RunOptions>(o => o.InputPath == path && o.NameTemplate == "{file}_{model}" && !o.TreatAsRna && o.ModelId == "evo2_7b"),
+            Arg.Is<RunOptions>(o => o.InputPath == path && !o.TreatAsRna && o.ModelId == "evo2_7b"),
             Arg.Any<CancellationToken>());
         _navigator.Received(1).NavigateTo("RunProgress", "job-1");
-        _settings.Received().SetString("LastModelId", "evo2_7b");
-        _settings.Received().SetString("NameTemplate", "{file}_{model}");
-    }
-
-    [Fact]
-    public void The_name_template_the_user_last_used_is_read_back()
-    {
-        _settings.GetString("NameTemplate").Returns("{date}_{file}");
-
-        NewViewModel().NameTemplate.ShouldBe("{date}_{file}");
     }
 
     [Fact]
@@ -418,33 +404,6 @@ public sealed class NewRunViewModelTests : IDisposable
         _viewModel.Items.ShouldBeEmpty();
         _viewModel.StatusMessage.ShouldBe("NewRunStatusPathNotFound:" + missing);
     }
-
-    // ---- Run name ----
-
-    [Fact]
-    public async Task The_run_name_preview_follows_the_template_and_the_selected_file()
-    {
-        await AddOne(Write("SetTnpB.fasta", ">a\n" + Dna + "\n"));
-
-        _viewModel.RunNamePreview.ShouldBe("SetTnpB");
-
-        _viewModel.NameTemplate = "{file}_{date:yyyy-MM-dd}_{model}";
-        _viewModel.RunNamePreview.ShouldBe("SetTnpB_2026-10-03_evo2_7b");
-    }
-
-    [Fact]
-    public async Task A_pasted_sequence_is_named_pasted()
-    {
-        _viewModel.PasteText = Dna;
-        await _viewModel.AddPastedCommand.ExecuteAsync(null);
-
-        _viewModel.RunNamePreview.ShouldBe("pasted");
-    }
-
-    [Fact]
-    public void With_nothing_selected_the_preview_is_empty()
-        => _viewModel.RunNamePreview.ShouldBe(string.Empty);
-
 
     // ---- Review of #63 ----
 
@@ -788,13 +747,11 @@ public sealed class NewRunViewModelTests : IDisposable
         _viewModel.SelectedItem.ShouldBeSameAs(a);
 
         _viewModel.SelectedItem = b;
-        _viewModel.RunNamePreview.ShouldBe("b");
         await _viewModel.StartRunCommand.ExecuteAsync(null);
         await _jobEngine.Received(1).StartRunAsync(Arg.Is<RunOptions>(o => o.InputPath == b.Path), Arg.Any<CancellationToken>());
 
         _viewModel.SelectedItem = bad;
         _viewModel.StartRunCommand.CanExecute(null).ShouldBeFalse();
-        _viewModel.RunNamePreview.ShouldBe("bad");
 
         _viewModel.SelectedItem = a;
         _viewModel.StartRunCommand.CanExecute(null).ShouldBeTrue();
@@ -938,11 +895,187 @@ public sealed class NewRunViewModelTests : IDisposable
         File.Exists(pasted.Path).ShouldBeFalse();
     }
 
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => now;
+    // ---- Round 3 of #63 ----
 
-        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+    [Fact]
+    public async Task A_run_that_fails_to_start_says_one_action_and_leaves_no_faulted_command()
+    {
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new InvalidOperationException("boom")));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusStartFailed");
+        _viewModel.StartRunCommand.ExecutionTask?.IsFaulted.ShouldNotBe(true);
+        _navigator.DidNotReceive().NavigateTo(Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task A_run_start_that_is_cancelled_says_nothing()
+    {
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new OperationCanceledException()));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBe(string.Empty);
+        _navigator.DidNotReceive().NavigateTo(Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task A_file_picker_that_fails_says_one_action_and_adds_nothing()
+    {
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("COM")));
+
+        await _viewModel.BrowseCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusBrowseFailed");
+        _viewModel.Items.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_file_picker_that_is_cancelled_says_nothing()
+    {
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new OperationCanceledException()));
+
+        await _viewModel.BrowseCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBe(string.Empty);
+    }
+
+    [Fact]
+    public async Task Cancelling_an_add_after_the_first_file_leaves_no_pill_stuck_on_checking()
+    {
+        BrowseCancelsOnFirstCheck(out var a, out var b);
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([a, b]));
+
+        await _viewModel.BrowseCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldNotBeEmpty();
+        _viewModel.Items.ShouldAllBe(item => !item.IsChecking);
+        _viewModel.Items.Select(i => i.Path).ShouldNotContain(b);
+    }
+
+    private void BrowseCancelsOnFirstCheck(out string a, out string b)
+    {
+        a = Write("a.fasta", ">a\n" + Dna + "\n");
+        b = Write("b.fasta", ">b\n" + Dna + "\n");
+        _viewModel = NewViewModel(validate: (path, format, policy, rna) =>
+        {
+            _viewModel.BrowseCommand.Cancel();
+            Thread.Sleep(50);
+            return InputFileValidator.Validate(path, format, policy, rna);
+        });
+    }
+
+    [Fact]
+    public async Task A_cancelled_paste_never_leaves_a_saved_copy_no_pill_owns()
+    {
+        _viewModel = NewViewModel(validate: (path, format, policy, rna) =>
+        {
+            _viewModel.AddPastedCommand.Cancel();
+            Thread.Sleep(50);
+            return InputFileValidator.Validate(path, format, policy, rna);
+        });
+        _viewModel.PasteText = Dna;
+
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+
+        var owned = _viewModel.Items.Select(i => i.Path).ToHashSet();
+        Directory.GetFiles(Path.Combine(_appData, "pasted")).ShouldAllBe(file => owned.Contains(file));
+        _viewModel.Items.ShouldAllBe(item => !item.IsChecking);
+    }
+
+    private sealed class CancellingStore(string root, Action cancel) : IPastedInputStore
+    {
+        public string Save(string text)
+        {
+            var path = new LocalPastedInputStore(root).Save(text);
+            cancel();
+            Thread.Sleep(50);
+            return path;
+        }
+
+        public void Delete(string path) => new LocalPastedInputStore(root).Delete(path);
+    }
+
+    [Fact]
+    public async Task A_paste_cancelled_after_it_was_saved_deletes_the_saved_copy_and_keeps_the_text()
+    {
+        _viewModel = NewViewModel(new CancellingStore(_appData, () => _viewModel.AddPastedCommand.Cancel()));
+        _viewModel.PasteText = Dna;
+
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        _viewModel.PasteText.ShouldBe(Dna);
+        Directory.GetFiles(Path.Combine(_appData, "pasted")).ShouldBeEmpty();
+    }
+    [Fact]
+    public async Task A_later_drop_does_not_wipe_what_an_earlier_one_said_while_another_is_still_running()
+    {
+        var gated = new BlockableValidator { BlockSuffix = "slow.fasta" };
+        _viewModel = NewViewModel(validate: gated.Validate);
+        Directory.CreateDirectory(Path.Combine(_dir, "empty"));
+        var slow = Write("slow.fasta", ">a\n" + Dna + "\n");
+        var quick = Write("quick.fasta", ">b\n" + Dna + "\n");
+
+        _viewModel.AddDroppedCommand.Execute(Drop(slow));
+        var running = _viewModel.AddDroppedCommand.ExecutionTask!;
+        gated.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(Path.Combine(_dir, "empty")));
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusFolderEmpty:" + Path.Combine(_dir, "empty"));
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(quick));
+        gated.Release();
+        await running;
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusFolderEmpty:" + Path.Combine(_dir, "empty"));
+    }
+    [Fact]
+    public async Task Two_problems_in_one_drop_are_both_said()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "empty1"));
+        Directory.CreateDirectory(Path.Combine(_dir, "empty2"));
+
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(Path.Combine(_dir, "empty1"), Path.Combine(_dir, "empty2")));
+
+        _viewModel.StatusMessage.ShouldContain("empty1");
+        _viewModel.StatusMessage.ShouldContain("empty2");
+    }
+
+    [Fact]
+    public async Task The_count_of_a_large_paste_is_not_worked_out_on_the_thread_that_typed_it()
+    {
+        _viewModel.PasteText = new string('A', 1_000_000);
+
+        _viewModel.PasteCountText.ShouldBe("NewRunPasteCount:0");
+        await WaitFor(() => _viewModel.PasteCountText == "NewRunPasteCount:1000000");
+    }
+
+    [Fact]
+    public async Task A_late_count_of_an_older_large_paste_never_replaces_the_count_of_a_newer_one()
+    {
+        _viewModel.PasteText = new string('A', 1_000_000);
+        _viewModel.PasteText = "ACGT";
+
+        _viewModel.PasteCountText.ShouldBe("NewRunPasteCount:4");
+        await Task.Delay(700, TestContext.Current.CancellationToken);
+        _viewModel.PasteCountText.ShouldBe("NewRunPasteCount:4");
+    }
+
+    private static async Task WaitFor(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        condition().ShouldBeTrue();
     }
 
     private sealed class FakeStrings : IStringResourceProvider

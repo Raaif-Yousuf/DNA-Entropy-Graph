@@ -468,6 +468,12 @@
   <data name="NewRunStatusDropVirtual" xml:space="preserve">
     <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
   </data>
+  <data name="NewRunStatusStartFailed" xml:space="preserve">
+    <value>We could not start the run. Check your Google Cloud connection on the Cloud page, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusBrowseFailed" xml:space="preserve">
+    <value>The file chooser could not open. Drag your files onto the drop area instead, or choose Add files again.</value>
+  </data>
   <data name="NewRunStatusPasteFailed" xml:space="preserve">
     <value>We could not save the pasted sequence. Check that your disk has free space, then choose Add sequence again.</value>
   </data>
