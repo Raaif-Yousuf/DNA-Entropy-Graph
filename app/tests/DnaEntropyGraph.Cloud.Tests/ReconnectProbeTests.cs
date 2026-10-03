@@ -220,9 +220,14 @@ public class ReconnectProbeTests
         // Here the deferred check throws while re-arming AND the log that is told about it throws: the follow-up must swallow both.
         var time = new VirtualTimeProvider();
         var broken = false;
+        var passes = 0;
         using var observer = new ReconcileOnReconnect(
             Substitute.For<ICloudCallObserver>(),
-            _ => Task.FromResult<Task>(Task.CompletedTask),
+            _ =>
+            {
+                passes++;
+                return Task.FromResult<Task>(Task.CompletedTask);
+            },
             () => broken ? throw new InvalidOperationException("boom") : true,
             log: new ThrowingLog(),
             time: time,
@@ -237,5 +242,44 @@ public class ReconnectProbeTests
 
         first.ShouldBeNull();
         second.ShouldBeNull();
+        passes.ShouldBe(1, "the probe fired and ran its pass");
+        time.PendingTimers.ShouldBe(1, "and re-armed on the same delay even though the check and the log both threw");
+    }
+
+    /// <summary>A clock whose next CreateTimer calls throw, then behaves as the wrapped virtual clock.</summary>
+    private sealed class FlakyTimerClock(VirtualTimeProvider inner, int failures) : TimeProvider
+    {
+        private int _failures = failures;
+
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+
+        public override long GetTimestamp() => inner.GetTimestamp();
+
+        public override long TimestampFrequency => inner.TimestampFrequency;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+            => _failures-- > 0 ? throw new InvalidOperationException("no timer") : inner.CreateTimer(callback, state, dueTime, period);
+    }
+
+    [Fact]
+    public async Task A_timer_that_cannot_be_created_does_not_wedge_the_probe()
+    {
+        // Review r6: _probing was set before CreateTimer, so a throw left it true with no timer and every later start returned early.
+        var time = new VirtualTimeProvider();
+        using var observer = new ReconcileOnReconnect(
+            Substitute.For<ICloudCallObserver>(),
+            _ => Task.FromResult<Task>(Task.CompletedTask),
+            () => true,
+            time: new FlakyTimerClock(time, failures: 1),
+            probeInitialDelay: Initial,
+            probeMaxDelay: Cap);
+
+        var first = Record.Exception(observer.StartProbeIfDeferred);
+        time.PendingTimers.ShouldBe(0, "precondition: the first timer could not be created");
+        observer.StartProbeIfDeferred();
+
+        first.ShouldBeNull("a failed timer is logged, not thrown at the caller (a pass's own end)");
+        time.PendingTimers.ShouldBe(1, "the next start arms the probe: nothing is left marked as probing");
+        await observer.WhenIdleAsync();
     }
 }
