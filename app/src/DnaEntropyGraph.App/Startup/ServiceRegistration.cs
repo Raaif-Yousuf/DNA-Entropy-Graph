@@ -9,6 +9,7 @@ using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
+using DnaEntropyGraph.Presentation.Viewer;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DnaEntropyGraph.App.Startup;
@@ -143,6 +144,10 @@ public static class ServiceRegistration
         services.AddTransient<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
+        // Issues #72/#73: the igv.js viewer page's state and its WebView2 host.
+        services.AddSingleton<IWebViewRuntimeProbe, WebView2RuntimeProbe>();
+        services.AddTransient<IgvViewerHost>();
+        services.AddTransient<ViewerViewModel>();
         services.AddTransient<HistoryViewModel>();
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();

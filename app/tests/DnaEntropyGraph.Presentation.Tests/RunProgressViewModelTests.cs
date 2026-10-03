@@ -42,7 +42,7 @@ public class RunProgressViewModelTests
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
 
-        return new RunProgressViewModel(jobEngine, new ImmediateDispatcher(), dialogService, vmActions, logTailReader, strings, messenger);
+        return new RunProgressViewModel(jobEngine, new ImmediateDispatcher(), dialogService, vmActions, logTailReader, strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger);
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class RunProgressViewModelTests
         var messenger = new WeakReferenceMessenger();
         var viewModel = new RunProgressViewModel(
             Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
-            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, messenger)
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger)
         {
             JobId = "job-1",
         };
@@ -211,7 +211,7 @@ public class RunProgressViewModelTests
         strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
         var viewModel = new RunProgressViewModel(
             Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
-            Substitute.For<IRunVmActions>(), logTailReader, strings, new WeakReferenceMessenger());
+            Substitute.For<IRunVmActions>(), logTailReader, strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), new WeakReferenceMessenger());
 
         viewModel.JobId = "job-1";
 

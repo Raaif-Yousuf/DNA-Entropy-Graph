@@ -1,0 +1,16 @@
+{
+  "directory": "app/src/DnaEntropyGraph.App/Assets/viewer/",
+  "assets": [
+    {
+      "path": "app/src/DnaEntropyGraph.App/Assets/viewer/igv.min.js",
+      "name": "igv.min.js",
+      "description": "igv.js, the embedded genome viewer; licence text beside it as `igv.LICENSE.txt`",
+      "version": "3.8.9",
+      "license": "MIT",
+      "license_file": "app/src/DnaEntropyGraph.App/Assets/viewer/igv.LICENSE.txt",
+      "source": "`dist/igv.min.js` of the npm tarball https://registry.npmjs.org/igv/-/igv-3.8.9.tgz",
+      "upstream_shasum": "5c7a042cee252e0df05f0c00449d2273f057033a",
+      "sha256": "240C31F8DC20D233B023E8482CB4B388F87679F69779AFE3685A5C0C979E93FF"
+    }
+  ]
+}

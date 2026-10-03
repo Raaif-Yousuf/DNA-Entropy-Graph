@@ -224,6 +224,37 @@ regardless:
  that should have been deleted but was only stopped (because the app died before
  verifying) gets deleted now, not silently left as a stopped-disk cost leak.
 
+## The embedded viewer (igv.js in WebView2), issues #72 and #73
+
+Page key `ViewerViewModel.PageKey` ("Viewer"), parameter = the run's output folder (a string).
+`ViewerViewModel` (Presentation, no WinUI) decides what to show: `IWebViewRuntimeProbe` /
+`WebViewRuntimeDecision` (runtime missing -> a named-action error), `IgvLoadPlanner` (which
+files exist in the run folder -> the JSON `load` command: FASTA reference with `indexed:false`
+because the worker writes no `.fai`, `<name>.entropy.bedgraph` or `.wig` or `.fwd/.rev` pair as
+wig tracks fixed to 0..2, `<name>.genes.gff3` as an annotation track), and `ViewerUrls`
+(navigation allowed only to `https://viewer.deg/`). `IgvViewerHost` (App) only wires the
+`WebView2` to it: `viewer.deg` -> `Assets/viewer`, `run.deg` -> the run folder (remapped when
+`MapRunFolder` changes), DevTools on in Debug builds only, web messages on, no
+new windows or downloads. `Assets/viewer/bridge.js` takes `load/goto/theme/snapshot` commands
+and posts `ready/locusChanged/error/snapshot` events; the load command is held until `ready`,
+and a page reload re-sends it. MEASURED 2026-10-02: `run.deg` must be mapped with `Allow`, not
+`DenyCors` (igv.js's cross-origin fetch of the FASTA fails with status 0 under `DenyCors`).
+igv.js still tries to fetch its genome lists from igv.org and raw.githubusercontent.com on
+start; the page's Content-Security-Policy `connect-src` (viewer.deg and run.deg only) blocks
+both, so the viewer makes no network request.
+
+Entry: the run page's **Open viewer** button (`RunProgressViewModel.OpenViewerCommand`, enabled only for
+Completed/PartiallyCompleted with a known `RunRecord.OutputDir`) calls `INavigator.NavigateTo("Viewer", folder)`.
+Planner outcomes: the sequence is the `*.fasta` whose stem has an entropy file (several candidates ->
+`AmbiguousSequenceFile`, none -> `NoEntropyTrack`), larger than 50 MB -> `SequenceTooLarge` (a `.fai` is #497).
+Bridge events: `ready`, `loaded` (drawn), `warning` (page noise, ignored) and `error` (fatal; the ViewModel keeps the
+run so **Try again** or a reloaded page redraws it). A renderer crash shows an error and the host reloads the page
+once. The host only accepts web messages whose source is `https://viewer.deg/`, keeps WebView2's profile under
+`%LOCALAPPDATA%\DNAEntropyGraph\webview2`, disables browser accelerator keys, and enables DevTools in Debug builds
+only (#69 will own a real developer-mode switch). MEASURED 2026-10-02: igv.js 3.8.9 draws its toolbar, ruler,
+sequence, bar and gene tracks under `script-src 'self'` (no inline script, no eval) and `style-src 'self'`; popups
+(markup built from FASTA headers and GFF3 attributes) were not exercised, so `style-src` keeps `'unsafe-inline'`.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the manifest/status/progress/result files this

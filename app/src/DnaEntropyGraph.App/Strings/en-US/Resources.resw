@@ -246,4 +246,76 @@
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
+  <data name="ViewerRuntimeMissing_Title" xml:space="preserve">
+    <value>The genome viewer needs a Microsoft component</value>
+  </data>
+  <data name="ViewerRuntimeMissing_Body" xml:space="preserve">
+    <value>The built-in genome viewer uses Microsoft's WebView2 Runtime, which is not installed on this computer. Install it, then open this run again.</value>
+  </data>
+  <data name="ViewerRuntimeMissing_Action" xml:space="preserve">
+    <value>Install the WebView2 Runtime</value>
+  </data>
+  <data name="ViewerNoRun_Title" xml:space="preserve">
+    <value>No run selected</value>
+  </data>
+  <data name="ViewerNoRun_Body" xml:space="preserve">
+    <value>The viewer has no run to show. Open a finished run from the Runs page.</value>
+  </data>
+  <data name="ViewerFolderMissing_Title" xml:space="preserve">
+    <value>This run's results are not on this computer</value>
+  </data>
+  <data name="ViewerFolderMissing_Body" xml:space="preserve">
+    <value>The folder that held this run's results was moved or deleted. Open the run from the Runs page and download the results again.</value>
+  </data>
+  <data name="ViewerNoSequenceFile_Title" xml:space="preserve">
+    <value>This run has no sequence file to show</value>
+  </data>
+  <data name="ViewerNoSequenceFile_Body" xml:space="preserve">
+    <value>The results folder has no sequence file (.fasta), so there is nothing to draw the graph against. Open the run from the Runs page and download the results again.</value>
+  </data>
+  <data name="ViewerError_Title" xml:space="preserve">
+    <value>The viewer could not draw this run</value>
+  </data>
+  <data name="ViewerError_Body" xml:space="preserve">
+    <value>Something in the results files could not be read by the viewer. Choose Try again.</value>
+  </data>
+  <data name="ViewerError_Action" xml:space="preserve">
+    <value>Try again</value>
+  </data>
+  <data name="ViewerProcessFailed_Title" xml:space="preserve">
+    <value>The viewer stopped working</value>
+  </data>
+  <data name="ViewerProcessFailed_Body" xml:space="preserve">
+    <value>The part of Windows that draws the viewer stopped unexpectedly. The viewer is restarting; if it does not come back, close this run and open it again.</value>
+  </data>
+  <data name="ViewerInitFailed_Title" xml:space="preserve">
+    <value>The viewer could not start</value>
+  </data>
+  <data name="ViewerInitFailed_Body" xml:space="preserve">
+    <value>The viewer's Microsoft component would not start on this computer. Close the app and open it again.</value>
+  </data>
+  <data name="ViewerNoEntropyTrack_Title" xml:space="preserve">
+    <value>This run has no entropy results to show</value>
+  </data>
+  <data name="ViewerNoEntropyTrack_Body" xml:space="preserve">
+    <value>The results folder has a sequence file but no entropy track, so the run may not have finished. Open the run from the Runs page and download the results again.</value>
+  </data>
+  <data name="ViewerAmbiguousSequence_Title" xml:space="preserve">
+    <value>This folder holds more than one run</value>
+  </data>
+  <data name="ViewerAmbiguousSequence_Body" xml:space="preserve">
+    <value>The results folder has entropy results for more than one sequence file, so the viewer cannot tell which to show. Move each run into its own folder, then open it again.</value>
+  </data>
+  <data name="ViewerSequenceTooLarge_Title" xml:space="preserve">
+    <value>This sequence is too large for the built-in viewer</value>
+  </data>
+  <data name="ViewerSequenceTooLarge_Body" xml:space="preserve">
+    <value>The sequence file is larger than 50 MB, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
+  </data>
+  <data name="ViewerLoading.Text" xml:space="preserve">
+    <value>Loading the genome viewer...</value>
+  </data>
+  <data name="RunProgressOpenViewer.Content" xml:space="preserve">
+    <value>Open viewer</value>
+  </data>
 </root>

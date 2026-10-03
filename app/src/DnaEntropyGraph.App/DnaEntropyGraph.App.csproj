@@ -41,6 +41,11 @@
     <EmbeddedResource Include="worker-images.json" LogicalName="worker-images.json" />
   </ItemGroup>
 
+  <!-- Issues #72/#73: the vendored igv.js viewer, served to WebView2 as https://viewer.deg/ from <output>\Assets\viewer. -->
+  <ItemGroup>
+    <Content Include="Assets\viewer\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!--
     Hard Rule 13: every user-visible string lives in
     Strings\en-US\Resources.resw, referenced via x:Uid, never inline. The

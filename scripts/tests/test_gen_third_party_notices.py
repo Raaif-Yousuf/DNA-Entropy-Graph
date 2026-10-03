@@ -91,3 +91,107 @@ def test_generate_against_the_real_repo_tree_runs_end_to_end(real_dependency_tre
     # question (see gen_third_party_notices.py's own CURATED_LICENSES comment) -- this test
     # would need updating the day that is resolved, not before.
     assert isinstance(clean, bool)
+
+
+# ---------------------------------------------------------------------------
+# Vendored web assets (scripts/vendored_assets.json)
+# ---------------------------------------------------------------------------
+
+import hashlib  # noqa: E402
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+
+_ASSET_BYTES = b"console.log('vendored');\n"
+_LICENSE_TEXT = "The MIT License (MIT)\n"
+
+
+def _make_root(tmp_path: Path, *, licence: str = "MIT", sha: str | None = None,
+               write_asset: bool = True, write_licence: bool = True) -> Path:
+    (tmp_path / "scripts").mkdir()
+    viewer = tmp_path / "web"
+    viewer.mkdir()
+    if write_asset:
+        (viewer / "lib.min.js").write_bytes(_ASSET_BYTES)
+    if write_licence:
+        (viewer / "lib.LICENSE.txt").write_text(_LICENSE_TEXT, encoding="utf-8")
+    manifest = {
+        "directory": "web",
+        "assets": [{
+            "path": "web/lib.min.js",
+            "name": "lib.min.js",
+            "description": "a test library",
+            "version": "1.2.3",
+            "license": licence,
+            "license_file": "web/lib.LICENSE.txt",
+            "source": "https://example.invalid/lib-1.2.3.tgz",
+            "upstream_shasum": "abc123",
+            "sha256": sha if sha is not None else hashlib.sha256(_ASSET_BYTES).hexdigest().upper(),
+        }],
+    }
+    (tmp_path / "scripts" / "vendored_assets.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return tmp_path
+
+
+def test_vendored_section_is_emitted_from_a_manifest_in_a_tmp_root(tmp_path):
+    root = _make_root(tmp_path)
+    entries = gtpn.load_vendored_assets(root)
+    text = gtpn.render([], [], vendored=entries)
+    assert "## Vendored web assets (app installer payload, `web/`)" in text
+    assert "| Asset | Version | Licence | Source | sha256 |" in text
+    assert "| lib.min.js (a test library) | 1.2.3 | MIT |" in text
+    assert hashlib.sha256(_ASSET_BYTES).hexdigest().upper() in text
+    assert "(shasum abc123)" in text
+
+
+def test_sha_mismatch_names_the_file(tmp_path):
+    root = _make_root(tmp_path, sha="0" * 64)
+    with pytest.raises(gtpn.VendoredAssetError) as exc:
+        gtpn.load_vendored_assets(root)
+    assert "web/lib.min.js" in str(exc.value)
+    assert "sha256" in str(exc.value)
+
+
+def test_missing_asset_names_the_file(tmp_path):
+    root = _make_root(tmp_path, write_asset=False)
+    with pytest.raises(gtpn.VendoredAssetError) as exc:
+        gtpn.load_vendored_assets(root)
+    assert "web/lib.min.js" in str(exc.value)
+
+
+def test_missing_licence_file_names_the_file(tmp_path):
+    root = _make_root(tmp_path, write_licence=False)
+    with pytest.raises(gtpn.VendoredAssetError) as exc:
+        gtpn.load_vendored_assets(root)
+    assert "web/lib.LICENSE.txt" in str(exc.value)
+
+
+@pytest.mark.parametrize("licence", ["GPL-3.0-only", "LGPL-2.1-or-later", "AGPL-3.0-only",
+                                      "LicenseRef-Whatever", "MIT AND GPL-2.0-only"])
+def test_non_allowed_licence_fails_naming_the_file(tmp_path, licence):
+    root = _make_root(tmp_path, licence=licence)
+    with pytest.raises(gtpn.VendoredAssetError) as exc:
+        gtpn.load_vendored_assets(root)
+    assert "web/lib.min.js" in str(exc.value)
+    assert licence in str(exc.value)
+
+
+def test_cli_exits_2_with_error_line_on_sha_mismatch(tmp_path):
+    root = _make_root(tmp_path, sha="0" * 64)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "gen_third_party_notices.py"), "--stdout",
+         "--repo-root", str(root), "--app-root", str(root / "app"), "--worker-root", str(root / "worker")],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 2
+    assert any(line.startswith("ERROR:") and "web/lib.min.js" in line for line in proc.stderr.splitlines())
+
+
+def test_real_manifest_matches_the_committed_vendored_section_and_files():
+    repo_root = SCRIPTS_DIR.parent
+    entries = gtpn.load_vendored_assets(repo_root)  # also verifies sha256 + licence on disk
+    assert len(entries) >= 1
+    assert any(e.path.endswith("igv.min.js") and e.license == "MIT" for e in entries)
+    section = gtpn.render_vendored_section(entries)
+    committed = (repo_root / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert section in committed

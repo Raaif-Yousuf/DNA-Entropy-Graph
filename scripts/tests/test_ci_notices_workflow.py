@@ -128,5 +128,8 @@ def test_path_filter_covers_every_input_of_the_notices():
         "app/Directory.Packages.props",
         "THIRD-PARTY-NOTICES.md",
         "scripts/gen_third_party_notices.py",
+        # the vendored-asset manifest and the assets it hashes are notices inputs too
+        "scripts/vendored_assets.json",
+        "app/src/DnaEntropyGraph.App/Assets/viewer/**",
     ):
         assert needed in paths

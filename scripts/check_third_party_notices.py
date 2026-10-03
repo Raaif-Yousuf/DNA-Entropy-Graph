@@ -75,7 +75,8 @@ def check(root: Path, *, app_root: Path | None = None, worker_root: Path | None 
 
     proc = subprocess.run(
         [sys.executable, str(generator_path), "--stdout",
-         "--app-root", str(app_root), "--worker-root", str(worker_root)],
+         "--app-root", str(app_root), "--worker-root", str(worker_root),
+         "--repo-root", str(root)],
         capture_output=True, text=True, timeout=180,
     )
     # A generator failure (an unresolved licence problem, e.g. evo2's -- see the module

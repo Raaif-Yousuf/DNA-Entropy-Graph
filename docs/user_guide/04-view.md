@@ -73,6 +73,23 @@ The app shows two views itself:
   use as a standalone program), which loads automatically and lets you scroll and zoom
   along your sequence with the entropy track and any genes shown together.
 
+The embedded viewer shows your sequence, a bar graph of the entropy (always drawn from 0 to
+2 bits, so two runs look comparable at a glance), and a gene track when your run has genes.
+It works with no internet connection, because everything it needs ships inside the app and
+reads your results from the folder on your computer. It follows the app's light or dark
+theme.
+
+Open it from a finished run with the **Open viewer** button on the run page. If the viewer
+says it could not draw the run, choose **Try again**. Sequences larger than 50 MB are too
+big for the built-in viewer; open the sequence file and the entropy track in IGV on your
+computer instead.
+
+**If the viewer says it needs a Microsoft component:** the viewer uses Microsoft's WebView2
+Runtime, which comes with Windows 11 and most up-to-date Windows 10 computers. If yours
+does not have it, the viewer page offers an **Install the WebView2 Runtime** link; install
+it, then open the run again. **If it says the results are not on this computer**, the
+results folder was moved or deleted; download the results again from the run.
+
 You can also open your results in other tools you may already have:
 
 - **IGV (desktop)**: use **Open in IGV** if you have IGV installed and running; the app
