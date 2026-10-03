@@ -556,3 +556,37 @@ def test_a_variable_of_unknown_or_owning_type_is_still_a_read(tmp_path):
                    "public class Reader { string A() { var options = Make(); return options.Caption; } }\n"):
         root = _unbound_caption_tree(tmp_path / f"v{abs(hash(reader))}", reader)
         assert "CODE-ONLY-OBSERVABLE" in _codes(root), reader
+
+
+# --- #530: a factory registration builds the type itself, the container injects none of its constructor ------
+
+
+def test_a_factory_registered_type_with_a_func_parameter_is_not_an_unregistered_dependency(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<Reconciler>();",
+            "s.AddSingleton<Watcher>(sp => new Watcher(\n        () => sp.GetRequiredService<Reconciler>()));",
+            "s.AddSingleton<IObserver>(sp => sp.GetRequiredService<Watcher>());",
+        ),
+        "src/Demo.Core/Reconciler.cs": "public sealed class Reconciler { }\n",
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<Reconciler> factory) { } }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == []  # was: Watcher(Func<Reconciler>)
+
+
+def test_a_factory_registered_type_with_an_interface_and_a_lambda_parameter_is_skipped_too(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<IWatcher, Watcher>((IServiceProvider _) => new Watcher(null!));",
+        ),
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher : IWatcher { public Watcher(Func<int> f) { } }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == []
+
+
+def test_a_type_registered_without_a_factory_and_taking_a_func_is_still_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Watcher>();"),
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == ["Watcher(Func<int>)"]
