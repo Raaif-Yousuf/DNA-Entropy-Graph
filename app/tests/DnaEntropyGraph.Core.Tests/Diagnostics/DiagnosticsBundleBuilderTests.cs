@@ -559,6 +559,54 @@ public class DiagnosticsBundleBuilderTests
         entries["files/runs/withheldid1/status.json"].ShouldContain("\"stage\": \"failed\"");
     }
 
+    [Theory]
+    [InlineData("12345678")]
+    [InlineData("ACGTACGTACGTACGTACGTACGT")]
+    [InlineData("Patient_42")]
+    public void A_withheld_job_id_is_rewritten_inside_file_bodies_and_logs_even_when_the_scrub_list_would_drop_it(string id)
+    {
+        // An all-digit id (a record number) is dropped by the scrub list's digit filter, and jobId is an allowlisted leaf, so
+        // without a rewrite keyed on the folder the raw id would ship in status.json, result.json and the logs.
+        var folder = new Dictionary<string, string>
+        {
+            [$"runs/{id}/status.json"] = JsonSerializer.Serialize(new { jobId = id, stage = "failed" }),
+            [$"runs/{id}/result.json"] = JsonSerializer.Serialize(new { jobId = id, status = "failed" }),
+            [$"runs/{id}/logs/worker.log"] = $"INFO job {id} ended",
+            ["logs/app.log"] = $"opened run {id} for display",
+        };
+        var run = Run with { JobId = id, Name = "n", ManifestJson = "{}", OptionsJson = "{}" };
+
+        var entries = BuildWith(folder, Info, run);
+
+        entries.Count.ShouldBeGreaterThan(6, "vacuity: the bundle was built");
+        Entries(entries).ShouldNotContain(id, Case.Insensitive);
+        entries["files/runs/withheldid1/status.json"].ShouldContain("\"jobId\": \"withheldid1\"");
+        entries["files/runs/withheldid1/result.json"].ShouldContain("\"jobId\": \"withheldid1\"");
+    }
+
+    [Fact]
+    public void A_standard_id_folder_whose_status_names_a_different_job_id_ships_the_folders_id()
+    {
+        var folder = new Dictionary<string, string>
+        {
+            [$"runs/{StandardId}/status.json"] = JsonSerializer.Serialize(new { jobId = "Patient 42", stage = "failed" }),
+            [$"runs/{StandardId}/result.json"] = JsonSerializer.Serialize(new { jobId = "Patient 42", status = "failed" }),
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = StandardId });
+
+        Entries(entries).ShouldNotContain("Patient 42", Case.Insensitive);
+        entries[$"files/runs/{StandardId}/status.json"].ShouldContain($"\"jobId\": \"{StandardId}\"");
+    }
+
+    [Theory]
+    [InlineData("20261003-120000-abcdef\n")]
+    [InlineData("\u0662\u0660\u0662\u0666\u0661\u0660\u0660\u0663-120000-abcdef")]
+    [InlineData("20261003-120000-abcdeF")]
+    [InlineData("")]
+    public void Only_the_exact_standard_job_id_shape_matches_the_convention(string id) =>
+        DnaEntropyGraph.Core.Cloud.JobId.MatchesConvention(id).ShouldBeFalse();
+
     [Fact]
     public void A_standard_id_keeps_its_own_entry_names()
     {

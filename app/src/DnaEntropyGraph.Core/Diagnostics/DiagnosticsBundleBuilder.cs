@@ -112,7 +112,7 @@ public static partial class DiagnosticsBundleBuilder
         var logCounters = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var file in loaded)
         {
-            entries[EntryName(file, ids, logCounters)] = Copy(file, redactor) ?? OmittedUnreadable;
+            entries[EntryName(file, ids, logCounters)] = Copy(file with { Text = ids.Rewrite(file.Text) }, redactor, ids.FolderId(file.Path)) ?? OmittedUnreadable;
         }
 
         // The scan backstops the redactor on the user's own identifiers (the same list the redactor used, plus the profile
@@ -246,12 +246,12 @@ public static partial class DiagnosticsBundleBuilder
         }
     }
 
-    private static string? Copy(Loaded file, DiagnosticsRedactor redactor)
+    private static string? Copy(Loaded file, DiagnosticsRedactor redactor, string? folderJobId)
     {
         var spec = SpecFor(file.Kind);
         if (file.Kind is FileKind.Status or FileKind.Result)
         {
-            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!);
+            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!, folderJobId);
         }
 
         // A cut file starts mid-line: drop that partial line and say so.
@@ -367,6 +367,27 @@ internal sealed class JobIdWithholder(ISet<string> scrub)
         }
 
         return placeholder;
+    }
+
+    /// <summary>
+    /// Replaces every withheld id in <paramref name="text"/> with its placeholder (exact, case-insensitive, whatever the id is:
+    /// the scrub list drops an all-digit or 1-character value, a record number among them, and this does not).
+    /// </summary>
+    public string Rewrite(string text)
+    {
+        foreach (var (id, placeholder) in _placeholders.OrderByDescending(pair => pair.Key.Length))
+        {
+            text = text.Replace(id, placeholder, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return text;
+    }
+
+    /// <summary>The id a file under <c>runs/&lt;id&gt;/</c> belongs to, as shipped (the placeholder for a withheld one); null elsewhere.</summary>
+    public string? FolderId(string path)
+    {
+        var parts = path.Split('/');
+        return parts.Length >= 3 && parts[0] == "runs" ? Map(parts[1]) : null;
     }
 
     /// <summary>Replaces the job id segment of a <c>runs/&lt;id&gt;/...</c> path; any other path is returned unchanged.</summary>

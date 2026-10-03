@@ -164,11 +164,14 @@ internal sealed partial class DiagnosticsRedactor
     public static bool IsUnreadableJson(Exception ex) => ex is not OutOfMemoryException;
 
     /// <summary>A parsed JSON document cut down to <paramref name="spec"/>; null when the text cannot be parsed.</summary>
-    public string? RedactJson(string json, KeySpec spec)
+    /// <param name="json">The file text.</param>
+    /// <param name="spec">The keys it may carry.</param>
+    /// <param name="jobId">When given, every <c>jobId</c> leaf is rewritten to it: the file's own run folder decides the id, not the file.</param>
+    public string? RedactJson(string json, KeySpec spec, string? jobId = null)
     {
         try
         {
-            return Sanitize(JsonNode.Parse(json), spec)?.ToJsonString(JsonOptions);
+            return Sanitize(JsonNode.Parse(json), spec, jobId)?.ToJsonString(JsonOptions);
         }
         catch (Exception ex) when (IsUnreadableJson(ex))
         {
@@ -196,7 +199,7 @@ internal sealed partial class DiagnosticsRedactor
         return string.Join('\n', lines) + "\n";
     }
 
-    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec)
+    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec, string? jobId = null)
     {
         switch (node)
         {
@@ -206,7 +209,9 @@ internal sealed partial class DiagnosticsRedactor
                 {
                     if (spec.Keys.TryGetValue(key, out var child) && (child is not null || value is not (JsonObject or JsonArray)))
                     {
-                        kept[key] = Sanitize(value, child);
+                        kept[key] = jobId is not null && key == "jobId" && value is JsonValue
+                            ? JsonValue.Create(jobId)
+                            : Sanitize(value, child, jobId);
                     }
                 }
 
@@ -215,7 +220,7 @@ internal sealed partial class DiagnosticsRedactor
                 var items = new JsonArray();
                 foreach (var item in array)
                 {
-                    items.Add(Sanitize(item, spec));
+                    items.Add(Sanitize(item, spec, jobId));
                 }
 
                 return items;
