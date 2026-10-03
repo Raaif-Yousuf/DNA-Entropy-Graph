@@ -27,7 +27,9 @@ public class CloudHousekeepingSettingsTests
         { "720", 720 },
         { "721", 720 },
         { "100000", 720 },
-        { "99999999999999", CloudHousekeepingSettings.DefaultIdleStoppedVmHours },
+        { "3000000000", 720 },
+        { "99999999999999999999999999", 720 },
+        { "-99999999999999999999999999", CloudHousekeepingSettings.DefaultIdleStoppedVmHours },
         { "soon", CloudHousekeepingSettings.DefaultIdleStoppedVmHours },
         { "", CloudHousekeepingSettings.DefaultIdleStoppedVmHours },
     };
@@ -58,7 +60,7 @@ public class CloudHousekeepingSettingsTests
     [Fact]
     public void The_case_table_covers_off_default_and_explicit_values()
     {
-        Cases.Count.ShouldBeGreaterThanOrEqualTo(10);
+        Cases.Count.ShouldBeGreaterThanOrEqualTo(12);
         CloudHousekeepingSettings.DefaultIdleStoppedVmHours.ShouldBeGreaterThan(0);
     }
 }

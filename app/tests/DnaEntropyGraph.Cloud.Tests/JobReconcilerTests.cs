@@ -27,6 +27,19 @@ public class JobReconcilerTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
+    internal sealed class RecordingLog : IDiagnosticsLog
+    {
+        public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass)
+        {
+            lock (Entries)
+            {
+                Entries.Add((source, jobId, errorClass));
+            }
+        }
+    }
+
     internal sealed class Env
     {
         public Env(FakeGcp? gcp = null, WorkerImageResolution? image = null)
@@ -40,6 +53,10 @@ public class JobReconcilerTests
         }
 
         public FakeGcp Gcp { get; }
+
+        public TimeSpan ResultTimeout { get; set; } = TimeSpan.FromMilliseconds(80);
+
+        public RecordingLog Log { get; } = new();
 
         public InMemoryRunRepository Repo { get; }
 
@@ -58,13 +75,13 @@ public class JobReconcilerTests
         public CloudJobRunner Runner => new(Gcp, Gcp, Gcp, Gcp, Repo, (id, phase) => Notified.Add((id, phase)))
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
-            ResultTimeout = TimeSpan.FromMilliseconds(80),
+            ResultTimeout = ResultTimeout,
             CallTimeout = TimeSpan.FromMilliseconds(200),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         };
 
-        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null) => new(
             Runner,
             Gcp,
             Gcp,
@@ -77,7 +94,8 @@ public class JobReconcilerTests
             () => Path.Combine(AppData, "downloads"),
             clock ?? new FixedClock(Launch),
             lookupTimeout,
-            mutationTimeout);
+            mutationTimeout,
+            log ?? Log);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 

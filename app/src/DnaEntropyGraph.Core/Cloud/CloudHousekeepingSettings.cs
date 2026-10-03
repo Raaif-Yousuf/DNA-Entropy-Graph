@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using DnaEntropyGraph.Core.Abstractions;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -32,8 +33,9 @@ public static class CloudHousekeepingSettings
     {
         ArgumentNullException.ThrowIfNull(settings);
         var raw = settings.GetString(IdleStoppedVmHoursKey)?.Trim();
-        var hours = int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed >= MinIdleStoppedVmHours
-            ? Math.Min(parsed, MaxIdleStoppedVmHours)
+        // Parsed as a BigInteger so a number of any size above the range clamps to the maximum instead of failing to parse and becoming the default.
+        var hours = BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed >= MinIdleStoppedVmHours
+            ? (int)BigInteger.Min(parsed, MaxIdleStoppedVmHours)
             : DefaultIdleStoppedVmHours;
         return TimeSpan.FromHours(hours);
     }

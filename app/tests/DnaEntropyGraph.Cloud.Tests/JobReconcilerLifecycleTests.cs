@@ -494,7 +494,7 @@ public class JobReconcilerLifecycleTests
     public async Task The_reconnect_observer_forwards_every_event_to_the_observer_it_wraps()
     {
         var inner = new NullObserver();
-        var observer = new ReconcileOnReconnect(inner, () => throw new InvalidOperationException("never resolved for these events"));
+        var observer = new ReconcileOnReconnect(inner, (Func<JobReconciler>)(() => throw new InvalidOperationException("never resolved for these events")));
 
         observer.OnRetry(new CloudRetryEvent("op", 1, TimeSpan.Zero, 503, CloudErrorKind.Other, "m"));
         observer.OnTokenRefreshed("op");
@@ -510,15 +510,18 @@ public class JobReconcilerLifecycleTests
     public async Task Reconnects_during_a_slow_pass_coalesce_into_one_follow_up_and_never_overlap()
     {
         var running = 0;
-        var maxRunning = 0;
+        var overlapped = false;
         var passes = 0;
-        var gate = new TaskCompletionSource();
-        var firstStarted = new TaskCompletionSource();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var observer = new ReconcileOnReconnect(new NullObserver(), async _ =>
         {
             var n = Interlocked.Increment(ref passes);
-            var now = Interlocked.Increment(ref running);
-            InterlockedMax(ref maxRunning, now);
+            if (Interlocked.Increment(ref running) > 1)
+            {
+                overlapped = true;
+            }
+
             if (n == 1)
             {
                 firstStarted.SetResult();
@@ -526,6 +529,7 @@ public class JobReconcilerLifecycleTests
             }
 
             Interlocked.Decrement(ref running);
+            return Task.CompletedTask;
         });
 
         observer.OnConnectivityChanged(offline: false);
@@ -537,18 +541,22 @@ public class JobReconcilerLifecycleTests
         await observer.WhenIdleAsync();
 
         passes.ShouldBe(2, "three reconnects during pass 1 are one follow-up pass");
-        maxRunning.ShouldBe(1, "two passes must never overlap");
+        overlapped.ShouldBeFalse("a pass started while another was still running");
     }
 
     [Fact]
     public async Task A_reconnect_after_the_passes_have_ended_starts_a_fresh_pass_and_a_faulting_pass_does_not_stop_later_ones()
     {
         var passes = 0;
-        var observer = new ReconcileOnReconnect(new NullObserver(), _ =>
-        {
-            Interlocked.Increment(ref passes);
-            throw new InvalidOperationException("boom");
-        });
+        var log = new JobReconcilerTests.RecordingLog();
+        var observer = new ReconcileOnReconnect(
+            new NullObserver(),
+            _ =>
+            {
+                Interlocked.Increment(ref passes);
+                throw new InvalidOperationException("boom: secret-file-name.gb");
+            },
+            log);
 
         observer.OnConnectivityChanged(offline: false);
         await observer.WhenIdleAsync();
@@ -556,14 +564,105 @@ public class JobReconcilerLifecycleTests
         await observer.WhenIdleAsync();
 
         passes.ShouldBe(2);
+        log.Entries.Count.ShouldBe(2, "a pass that throws leaves a trace");
+        log.Entries.ShouldAllBe(e => e.ErrorClass == nameof(InvalidOperationException) && e.JobId == null);
+        log.Entries.ShouldAllBe(e => !e.Source.Contains("secret") && !e.ErrorClass.Contains("secret"), "the message, which could carry a file name, is never logged");
     }
 
-    private static void InterlockedMax(ref int target, int value)
+    // ---- 4. a long reattached run never holds the next pass back ----
+
+    [Fact]
+    public async Task A_pass_ends_when_its_reattached_runs_are_handed_off_not_when_they_end_so_a_second_reconnect_runs_the_lifecycle_and_sweep()
     {
-        int seen;
-        while (value > (seen = Volatile.Read(ref target)) && Interlocked.CompareExchange(ref target, value, seen) != seen)
+        var rig = new Rig();
+        rig.Env.ResultTimeout = TimeSpan.FromMinutes(5);
+        await rig.Env.SeedAsync("job-long", JobPhase.Running, vm: true);
+        var reconciler = rig.Reconciler();
+        var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
+        using var cts = new CancellationTokenSource();
+
+        // Pass 1 (the "first reconnect") reattaches job-long, whose worker never finishes: it is still running when the pass ends.
+        var first = await reconciler.BeginReconcileAsync(cts.Token);
+        first.IsCompleted.ShouldBeFalse("the reattached run is still being driven");
+        rig.Env.Active.IsActive("job-long").ShouldBeTrue();
+
+        // Work that appears while that run is still running: a stopped delete-labelled VM and an idle stopped VM.
+        await rig.SeedFinishedAsync("job-del-late", AfterTaskAction.Delete);
+        await rig.StopAsync("job-del-late");
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Stop };
+        var orphan = CloudJobRequestFactory.Create(options, "job-orphan-late", Project, "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
+        await rig.Gcp.CreateVmAsync(orphan.Spec, Zone, CancellationToken.None);
+        await rig.Gcp.StopVmAsync(orphan.Spec.VmName, Zone, CancellationToken.None);
+        rig.Clock.Advance(TimeSpan.FromDays(10));
+
+        // The observer's pass: it must return (so the next reconnect is not coalesced behind it) while job-long still runs.
+        observer.OnConnectivityChanged(offline: false);
+        await WaitUntilAsync(async () => (await rig.VmsAsync("job-del-late")).Count == 0 && (await rig.VmsAsync("job-orphan-late")).Count == 0);
+        rig.Env.Active.IsActive("job-long").ShouldBeTrue("the long run is still going while the lifecycle and the sweep already ran");
+
+        // A second reconnect is a pass of its own, not a flag waiting for the long run to end.
+        await rig.SeedFinishedAsync("job-del-later", AfterTaskAction.Delete);
+        await rig.StopAsync("job-del-later");
+        observer.OnConnectivityChanged(offline: false);
+        await WaitUntilAsync(async () => (await rig.VmsAsync("job-del-later")).Count == 0);
+        rig.Env.Active.IsActive("job-long").ShouldBeTrue();
+
+        cts.Cancel();
+        try
+        {
+            await first;
+        }
+        catch (OperationCanceledException)
         {
         }
+    }
+
+    [Fact]
+    public async Task The_observer_pass_returns_while_a_reattached_run_is_held_open_and_a_later_reconnect_starts_a_second_pass()
+    {
+        var passes = 0;
+        var heldRun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondPassStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observer = new ReconcileOnReconnect(new NullObserver(), _ =>
+        {
+            if (Interlocked.Increment(ref passes) == 2)
+            {
+                secondPassStarted.SetResult();
+            }
+
+            return Task.FromResult<Task>(heldRun.Task);
+        });
+
+        observer.OnConnectivityChanged(offline: false);
+        await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref passes) == 1));
+        observer.OnConnectivityChanged(offline: false);
+        await secondPassStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        heldRun.Task.IsCompleted.ShouldBeFalse("the run the first pass reattached is still going");
+        passes.ShouldBe(2);
+        heldRun.SetResult();
+        await observer.WhenIdleAsync();
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!await condition())
+        {
+            (DateTime.UtcNow < deadline).ShouldBeTrue("the condition was not met within 10 s");
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task A_row_that_throws_is_logged_by_job_id_and_error_class_only()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-bad-log", AfterTaskAction.KeepAlive, keepAliveMinutes: 30, tweak: row => row with { FinishedAt = DateTimeOffset.MaxValue });
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        rig.Env.Log.Entries.ShouldBe([("reconciler", "job-bad-log", nameof(ArgumentOutOfRangeException))]);
     }
 
     private sealed class NullObserver : ICloudCallObserver

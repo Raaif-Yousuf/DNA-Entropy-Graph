@@ -581,7 +581,7 @@ found by job-id label in a state its `lifecycle` label forbids is deleted (`dele
 than `idle_stopped_vm_hours` is deleted (default 72, range 1 to 720, no off switch: 0, a negative or an unreadable value is 72, above 720 is clamped to 720; DECISION #555). `VmDescriptor` now carries `Labels` and `StoppedAt` (the instance's
 `lastStopTimestamp`; a gateway that cannot fill it makes the sweep skip the VM, never delete it). Only VMs with our app label AND this
 installation's id are touched (two users may share one account). The pass runs at launch and again when the pipeline reports the
-connection is back (`ReconcileOnReconnect`, single-flight: reconnects while a pass runs coalesce into at most one follow-up pass; the observer
+connection is back (`ReconcileOnReconnect`, single-flight: reconnects while a pass runs coalesce into at most one follow-up pass, and a pass ends once the lifecycle and the sweep have run and the reattached runs are handed to their own drivers, not when those runs end (`JobReconciler.BeginReconcileAsync`; launch still awaits them through `ReconcileAsync`); the observer
 is rarely invoked today because reconciler calls bypass the breaker, #559). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
 and its label filter matches as `FakeGcp` models it; nothing here has touched a real project (docs/ToTest.md).
 

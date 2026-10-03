@@ -111,7 +111,8 @@ public static class ServiceRegistration
         // connection comes back. The reconciler is resolved lazily, on the first reconnect: it needs the gateways, which need this observer.
         services.AddSingleton<ReconcileOnReconnect>(sp => new ReconcileOnReconnect(
             sp.GetRequiredService<CloudRetryLog>(),
-            () => sp.GetRequiredService<JobReconciler>()));
+            () => sp.GetRequiredService<JobReconciler>(),
+            sp.GetRequiredService<IDiagnosticsLog>()));
         services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<ReconcileOnReconnect>());
         // SWITCH POINT (#56): while every gateway is FakeGcp the refresher is FakeGcp too, because a 401 from a fake
         // must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked
@@ -139,6 +140,9 @@ public static class ServiceRegistration
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
         services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(Path.GetDirectoryName(settingsPath)!));
+
+        // Issue #530: where the reconciler records an error it did not expect (job id and error class only), under the same app data folder.
+        services.AddSingleton<IDiagnosticsLog>(_ => new FileDiagnosticsLog(Path.GetDirectoryName(settingsPath)!));
 
         // Issue #101: the Runs page's services. Output folders are only ever deleted from under the run's own
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
@@ -201,7 +205,8 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ActiveRuns>(),
                 sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
-                Services.KnownFolders.Downloads);
+                Services.KnownFolders.Downloads,
+                log: sp.GetRequiredService<IDiagnosticsLog>());
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());

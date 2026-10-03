@@ -97,6 +97,7 @@ public sealed class JobReconciler
     private readonly DateTimeOffset _startedAt;
     private readonly TimeSpan _lookupTimeout;
     private readonly TimeSpan _mutationTimeout;
+    private readonly IDiagnosticsLog _log;
 
     /// <summary>
     /// How far back a finished run's VM is looked up by its job-id label. Older leaks are caught by the idle sweep, which lists by installation and
@@ -121,8 +122,10 @@ public sealed class JobReconciler
         Func<string?>? downloadsFolder = null,
         TimeProvider? timeProvider = null,
         TimeSpan? lookupTimeout = null,
-        TimeSpan? mutationTimeout = null)
+        TimeSpan? mutationTimeout = null,
+        IDiagnosticsLog? log = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
         _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
         _mutationTimeout = mutationTimeout ?? DefaultMutationTimeout;
         _active = activeRuns;
@@ -145,7 +148,20 @@ public sealed class JobReconciler
     /// reconnect): a job something already drives is skipped, a row already judged is terminal.
     /// </summary>
     public async Task ReconcileAsync(CancellationToken cancellationToken)
-        => await Task.WhenAll(ReattachAsync(cancellationToken), EnforceLifecycleAsync(cancellationToken)).ConfigureAwait(false);
+        => await (await BeginReconcileAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+
+    /// <summary>
+    /// The same pass as <see cref="ReconcileAsync"/>, split at the point that matters to a repeating caller. The returned (outer) task ends when the
+    /// lifecycle enforcement and the idle sweep have run and every non-terminal run has been handed to its own driver in <see cref="ActiveRuns"/>;
+    /// its result is the inner task, which ends only when every reattached run has ENDED (minutes or hours). A caller that runs passes one at a
+    /// time (<see cref="ReconcileOnReconnect"/>) waits for the outer task only: a long run must not hold the next pass back.
+    /// </summary>
+    public async Task<Task> BeginReconcileAsync(CancellationToken cancellationToken)
+    {
+        var reattached = ReattachAsync(cancellationToken);
+        await EnforceLifecycleAsync(cancellationToken).ConfigureAwait(false);
+        return reattached;
+    }
 
     /// <summary>
     /// Hard Rules 9 and 11, applied to what already exists. (1) A finished run's VM, found by its job-id label, in a state its lifecycle label
@@ -222,6 +238,7 @@ public sealed class JobReconciler
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             RecordUnexpected(outcomes, row.JobId, string.Empty, ex);
+            _log.Warning("reconciler", row.JobId, ex.GetType().Name);
         }
     }
 
@@ -325,6 +342,7 @@ public sealed class JobReconciler
             catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
                 RecordUnexpected(outcomes, jobId, vm.Name, ex);
+                _log.Warning("reconciler", jobId, ex.GetType().Name);
             }
         }
     }
