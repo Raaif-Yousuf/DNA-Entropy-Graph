@@ -159,4 +159,17 @@ public sealed class ActiveRunsTests
 
         ran.ShouldBeTrue();
     }
+
+    [Fact]
+    public async Task A_Started_handler_that_throws_does_not_starve_the_handlers_after_it()
+    {
+        var runs = new ActiveRuns();
+        var second = new List<string>();
+        runs.Started += _ => throw new InvalidOperationException("first handler");
+        runs.Started += jobId => second.Add(jobId);
+
+        await runs.TryStart("job-1", _ => Task.CompletedTask)!;
+
+        second.ShouldBe(["job-1"], "every subscriber hears the start, whatever an earlier one did");
+    }
 }

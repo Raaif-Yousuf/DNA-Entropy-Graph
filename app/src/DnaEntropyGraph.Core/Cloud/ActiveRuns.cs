@@ -45,13 +45,17 @@ public sealed class ActiveRuns
             return null;
         }
 
-        try
+        // One handler at a time, each guarded: a listener's failure is its own, and neither stops the driver nor starves the listeners after it.
+        foreach (var handler in Started?.GetInvocationList() ?? [])
         {
-            Started?.Invoke(jobId);
-        }
-        catch (Exception)
-        {
-            // A listener's failure is its own; the driver starts regardless.
+            try
+            {
+                ((Action<string>)handler)(jobId);
+            }
+            catch (Exception)
+            {
+                // Ignored on purpose (see above).
+            }
         }
 
         _ = Task.Run(async () =>
