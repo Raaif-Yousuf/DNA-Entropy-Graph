@@ -574,6 +574,16 @@ non-terminal. It reads the VM by label and `result.json`, decides (architecture.
 `FindByJobIdAsync` throw `CLOUD_NOT_CONNECTED`, because a listing cannot succeed with no connection: the reconciler reads that, and a network
 error, as "no answer" and leaves the row alone instead of calling the run lost.
 
+**Lifecycle enforcement and idle VMs (issue #530)**: the same `JobReconciler` pass also revisits runs that already ended. A finished run's VM
+found by job-id label in a state its `lifecycle` label forbids is deleted (`delete`), stopped when still running (`stop`), or ended per
+`afterKeepAlive` once its keep-alive expiry has passed (Hard Rule 11). Separately, `IComputeGateway.ListByInstallationAsync` (real gateway:
+`instances.aggregatedList` filtered on `labels.app` and `labels.installation-id`) feeds an idle sweep: a stopped VM of this installation older
+than `idle_stopped_vm_hours` (default 72, DECISION #555) is deleted. `VmDescriptor` now carries `Labels` and `StoppedAt` (the instance's
+`lastStopTimestamp`; a gateway that cannot fill it makes the sweep skip the VM, never delete it). Only VMs with our app label AND this
+installation's id are touched (two users may share one account). The pass runs at launch and again when the pipeline reports the
+connection is back (`ReconcileOnReconnect`). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
+and its label filter matches as `FakeGcp` models it; nothing here has touched a real project (docs/ToTest.md).
+
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a
