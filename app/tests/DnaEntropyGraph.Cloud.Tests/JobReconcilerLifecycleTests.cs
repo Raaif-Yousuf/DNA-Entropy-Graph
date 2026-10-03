@@ -526,6 +526,66 @@ public class JobReconcilerLifecycleTests
     }
 
     [Fact]
+    public async Task Overlapping_passes_that_finish_out_of_order_leave_HasDeferred_as_the_latest_started_pass_found_it()
+    {
+        // Issue #559 review: the launch pass runs outside ReconcileOnReconnect's single-flight, so it can overlap an observer pass. The older pass,
+        // finishing last with a network error, must not overwrite what the newer pass (which could ask the cloud) found.
+        var rig = new Rig();
+        var reconciler = rig.Reconciler();
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Counting from here: the older pass's reattach read is 1 and its lifecycle read is 2 (parked, then times out).
+        rig.Env.Repo.BeforeGetAll = async (call, _) =>
+        {
+            if (call == 2)
+            {
+                parked.TrySetResult();
+                await release.Task;
+                throw new TimeoutException();
+            }
+        };
+        var older = reconciler.BeginReconcileAsync(CancellationToken.None);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        reconciler.HasDeferred.ShouldBeFalse("precondition: the newer pass found nothing deferred");
+        release.SetResult();
+        await Record.ExceptionAsync(() => older); // ends in the TimeoutException, or (once a lifecycle failure is logged, not thrown, #575) normally
+
+        reconciler.HasDeferred.ShouldBeFalse("the older pass ended last but only the latest-started pass may write the flag");
+    }
+
+    [Fact]
+    public async Task A_cancel_finish_that_never_returns_does_not_hold_the_pass_or_the_next_pass_back()
+    {
+        // Issue #559 review: FinishCancelAsync never marked its run judged, so one stuck cancel held the outer pass task (and, behind
+        // ReconcileOnReconnect, the single-flight slot, so no later reconnect ran a pass).
+        var rig = new Rig();
+        await rig.Env.SeedAsync("job-stuck", JobPhase.Cancelling, vm: true);
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Read 1 is the reattach listing, 2 the lifecycle pass, 3 the runner's cancel looking at the row with the reattach's token.
+        rig.Env.Repo.BeforeGetAll = async (call, token) =>
+        {
+            if (call == 3)
+            {
+                parked.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+            }
+        };
+        var reconciler = rig.Reconciler();
+        using var shutdown = new CancellationTokenSource();
+
+        var inner = await reconciler.BeginReconcileAsync(shutdown.Token).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        inner.IsCompleted.ShouldBeFalse("the cancel finish is still stuck");
+        var second = await reconciler.BeginReconcileAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        second.IsCompleted.ShouldBeTrue("the next pass skips the run something already drives and ends");
+        await shutdown.CancelAsync();
+        await Record.ExceptionAsync(() => inner.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task A_network_failure_judging_a_run_still_counts_as_deferred()
     {
         var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));

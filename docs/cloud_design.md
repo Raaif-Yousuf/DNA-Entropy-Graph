@@ -633,7 +633,10 @@ also probes: while `JobReconciler.HasDeferred` is true (a reattach ended Deferre
 had a Deferred outcome) it runs the same pass again after 30 s, then 60 s, doubling up to a 5 minute cap, on the `TimeProvider` in the container (tests move virtual time);
 it stops when nothing is deferred and starts over at 30 s next time. The launch pass runs outside this class, so `AppStartup.BeginAsync` calls
 `StartProbeIfDeferred()` once the pass has judged every run (`BeginReconcileAsync`'s outer task now also waits for each run's look at the cloud, so `HasDeferred` is settled when
-it ends; a resumed run is judged as it is handed to its driver and does not hold it). DECISION (agent-made, reversible): a probe that re-runs the pass, over
+it ends; a resumed run is judged as it is handed to its driver and does not hold it, and neither does a run whose half-done cancel is being finished: it is judged at the start of that work, so a stuck cancel never holds
+the single-flight slot, and `ReconcileOnReconnect` and `AppStartup` look at the probe again when the reattached runs end, because such a run can still end Deferred). The call is in a `finally`, so a launch pass that throws (a network
+timeout reading the run table) still arms the probe: the pass has already recorded itself deferred. Passes can overlap (the launch pass is outside the single flight): each takes a generation and only the latest-started pass may write
+the deferred state (`_lifecycleDeferred`, `_deferredRuns`), so an older pass that ends last never overwrites a newer one's answer. DECISION (agent-made, reversible): a probe that re-runs the pass, over
 (a) `NetworkChange.NetworkAvailabilityChanged`, which cannot be tested without a network stack and fires on LAN changes that say nothing about Google reachability, and
 (b) feeding reconciler failures into the breaker, which changes what `bypassBreaker` means for every caller. Cost while offline: one pass (a few failing lookups, no retries beyond
 the pipeline's own) per backoff step, never while nothing is deferred. THEORY (unverified): the 30 s first delay and 5 minute cap are reasonable for a laptop waking from sleep; nothing measured them.
@@ -643,7 +646,7 @@ by error class, row untouched, left for the next launch, and it does not keep th
 rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
 
 **Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
-because it is called from inside the reconciler's catch blocks. A lifecycle step that throws no longer orphans the reattach: `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
+because it is called from inside the reconciler's catch blocks. A rotation that cannot move the file (the copy is held open or read-only) keeps appending up to twice the cap, then drops lines until a rotation works, so a failing rotation cannot grow the log without bound; every control character and the Unicode line and paragraph separators in a field become a space, so one event is always one line. A lifecycle step that throws no longer orphans the reattach: `EnforceLifecycleAsync` itself rethrows, and `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
 `WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) was already delivered by #559, not #575: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
 (#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive; the test for it is a regression guard, green before #575. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
 

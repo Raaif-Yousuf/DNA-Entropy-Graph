@@ -22,9 +22,21 @@ public static class AppStartup
         {
             // The pass runs here, not through ReconcileOnReconnect, so the reconnect probe is started by hand once the pass has judged every run:
             // a launch with no network leaves Deferred rows, and nothing else would look at them again until the next launch (issue #559).
-            var reattached = await services.GetRequiredService<JobReconciler>().BeginReconcileAsync(cancellationToken).ConfigureAwait(false);
-            services.GetRequiredService<ReconcileOnReconnect>().StartProbeIfDeferred();
+            // In a finally: a pass that throws (the run table timed out) has recorded itself as deferred, and the probe must still look again.
+            Task reattached;
+            try
+            {
+                reattached = await services.GetRequiredService<JobReconciler>().BeginReconcileAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                services.GetRequiredService<ReconcileOnReconnect>().StartProbeIfDeferred();
+            }
+
             await reattached.ConfigureAwait(false);
+
+            // A cancel finished at launch can end Deferred after the pass ended: the same probe check, once the runs have ended.
+            services.GetRequiredService<ReconcileOnReconnect>().StartProbeIfDeferred();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
