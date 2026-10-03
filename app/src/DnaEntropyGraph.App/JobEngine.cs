@@ -108,7 +108,26 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             return jobId;
         }
 
-        var installationId = InstallationId.GetOrCreate(_settings);
+        // #558: the id lives in its own write-once file. If it cannot be read or is unusable we
+        // fail the run here, before any cloud resource exists, rather than mint a new id (that
+        // would orphan every labelled resource, Hard Rules 9 and 10) or crash the UI thread.
+        string installationId;
+        try
+        {
+            installationId = InstallationId.GetOrCreate(_settings);
+        }
+        catch (InstallationIdUnusableException ex)
+        {
+            // Names a true action (restore the set-aside copy or contact support); full recovery UX is DECISION #404.
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.InstallationIdUnusable, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
+            return jobId;
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.Other, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
+            return jobId;
+        }
+
         var request = CloudJobRequestFactory.Create(
             options,
             jobId,
