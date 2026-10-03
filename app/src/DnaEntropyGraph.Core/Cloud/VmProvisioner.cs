@@ -64,6 +64,11 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             return ProvisionResult.Ok(existing[0].Zone);
         }
 
+        // One value for both the create's own timeout and the poller's deadline, so they cannot drift apart: the create's
+        // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the
+        // backstop at the same instant.
+        var createTimeout = settings.CreateTimeout;
+
         foreach (var zone in request.Zones)
         {
             // The kind the gateway (or the resilience pipeline in front of
@@ -84,7 +89,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         // token (the same instant, so the poller's would win and hide the abandoned create).
                         createTask = compute.CreateVmAsync(spec, zone, cancellationToken);
                         TrackInflightCreate(request.JobId, createTask);
-                        var vm = await createTask.WaitAsync(settings.CreateTimeout, cancellationToken).ConfigureAwait(false);
+                        var vm = await createTask.WaitAsync(createTimeout, cancellationToken).ConfigureAwait(false);
                         return new OperationPoll<VmDescriptor>(true, vm, null);
                     }
                     catch (TimeoutException)
@@ -99,7 +104,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         return new OperationPoll<VmDescriptor>(true, null, ex.Error);
                     }
                 },
-                settings.CreateTimeout,
+                createTimeout,
                 cancellationToken).ConfigureAwait(false);
 
             if (createTimedOut)

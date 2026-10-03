@@ -51,6 +51,7 @@ public static class OperationPoller
         var backoff = InitialBackoff;
         var waited = TimeSpan.Zero;
         var started = clock.GetTimestamp();
+        var firstRead = true;
 
         // The wall clock is the truth. The waits asked for are budgeted too, so an instant (test) delay function that
         // returns early still spends the deadline instead of polling forever.
@@ -64,8 +65,16 @@ public static class OperationPoller
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // The first read always happens (a zero deadline still reads once). Every later read gets only what is left;
+            // when nothing is left the poll is over, and a read must never be handed a fresh full deadline.
             var remaining = deadline - Elapsed();
-            using var deadlineSource = new CancellationTokenSource(remaining > TimeSpan.Zero ? remaining : deadline, clock);
+            if (!firstRead && remaining <= TimeSpan.Zero)
+            {
+                return TimedOut<T>(deadline);
+            }
+
+            firstRead = false;
+            using var deadlineSource = new CancellationTokenSource(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, clock);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineSource.Token);
 
             OperationPoll<T> snapshot;
