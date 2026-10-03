@@ -176,9 +176,24 @@ promises ("Copy details, since it carries the exact technical error and your run
 The `Body` column below is the plain-language text only; the technical text never appears
 in it.
 
+**Sign-in codes (issue #48) as built:** the app holds title and body as one string, `AuthError_<CODE>`
+(for example `AuthError_SIGNIN_EXPIRED`), and the button label as `AuthAction_SignInAgain` or `AuthAction_TryAgain`,
+because the sign-in message is one sentence group on the wizard, not a card. `AuthErrorCodes.All` in Core is the
+roster; `Guards.Tests/AuthErrorResourceTests` fails when a code in it has no row below or no `.resw` entry.
+
 | Code | Key | Title | Body | Actions |
 |---|---|---|---|---|
-| `SIGNIN_EXPIRED` | `SigninExpired` | Your sign-in expired | This happens on its own, roughly once a week, while the app's Google approval is still in its early testing phase. | [Sign in again] |
+| `SIGNIN_EXPIRED` | `SigninExpired` | Your sign-in expired | This happens on its own, roughly once a week, while the app's Google approval is still in its early testing phase. It also happens if you removed this app's access in your Google account settings. | [Sign in again] |
+| `SIGNIN_CANCELLED` | `SigninCancelled` | The sign-in was cancelled | The sign-in was cancelled on the Google page, so nothing changed. | [Sign in again] |
+| `SIGNIN_TIMEOUT` | `SigninTimeout` | The Google page was not finished | The Google page in your browser was not finished in time. Complete the steps in the browser window that opens. | [Sign in again] |
+| `SIGNIN_FAILED` | `SigninFailed` | The sign-in could not be completed | Google answered, but the sign-in could not be completed. If it keeps happening, choose a different Google account on the Google page. | [Sign in again] |
+| `SIGNIN_NETWORK` | `SigninNetwork` | Google could not be reached | Your sign-in is unchanged. Check that this computer is online. | [Try again] |
+| `SIGNIN_BROWSER` | `SigninBrowser` | The browser could not be opened | The app could not open your web browser to show Google's sign-in page. Set a default web browser in Windows Settings. | [Sign in again] |
+| `SIGNIN_LOOPBACK` | `SigninLoopback` | The app could not hear Google's reply | A security program or a company policy can block the app from listening on this computer for Google's reply. Allow DNA Entropy Graph in your security program. | [Sign in again] |
+| `SIGNIN_STORAGE` | `SigninStorage` | Your sign-in could not be saved | The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder is not read-only. | [Sign in again] |
+| `OAUTH_CLIENT_MISSING` | `OauthClientMissing` | This copy of the app cannot sign in | This copy was built without its Google sign-in details. Download the latest installer from the app's download page and install it over this copy. | (none, the text is the action) |
+| `OAUTH_CLIENT_INVALID` | `OauthClientInvalid` | This copy of the app cannot sign in | The Google sign-in details that came with this copy are damaged. Download the latest installer from the app's download page and install it over this copy. | (none, the text is the action) |
+| `ACCOUNT_NOT_FOUND` | `AccountNotFound` | That account is not signed in | That Google account is no longer signed in on this computer. | [Sign in again] |
 | `CONSENT_INCOMPLETE` | `ConsentIncomplete` | Permission wasn't granted | The app didn't get permission to manage your Google Cloud project. | [Grant permission] |
 | `NOT_PROJECT_OWNER` | `NotProjectOwner` | You can't set up this project | You can use this project but not set it up. Ask the owner to make you an Owner, or create your own project. | [Create project] / [Copy request text] |
 | `PROJECT_QUOTA` | `ProjectQuota` | Too many projects | You've reached Google's limit on how many Google Cloud projects you can have. | [Pick an existing project] / [Request more from Google] |

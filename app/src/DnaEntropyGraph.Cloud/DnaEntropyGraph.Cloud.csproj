@@ -2,7 +2,7 @@
 
   <!--
     Hard Rule 7: this is the ONLY project allowed to reference Google.*.
-    The skeleton (#61) does not yet reference any Google.Cloud.* package -
+    The only Google package so far is Google.Apis.Auth (issue #48, the OAuth sign-in);
     the real gateway implementations (GoogleAuthService, ProjectSetupService,
     VmAllocator, ...) are a follow-up issue under this epic. FakeGcp below
     is real: it is what every other test project depends on instead of a
@@ -15,6 +15,8 @@
 
   <ItemGroup>
     <PackageReference Include="Polly.Core" />
+    <PackageReference Include="Google.Apis.Auth" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 
   <ItemGroup>
