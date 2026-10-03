@@ -359,3 +359,44 @@ def test_the_file_is_a_real_gzip_stream(tmp_path: Path) -> None:
     with gzip.GzipFile(path, "rb") as fh:
         assert fh.read().startswith(b"position\t")
     assert Path(path).read_bytes()[:2] == b"\x1f\x8b"
+
+
+# --- end to end through the worker: manifest -> run_job -> result.json -----------------------------------
+
+
+def _job(tmp_path: Path, outputs: list[str]) -> tuple[dict, set[str]]:
+    from dna_entropy.worker.blobstore import LocalBlobstore
+    from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job
+
+    store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "probs-job",
+        "inputs": [{"id": "in1", "path": "input/a.fasta", "name": "a"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "outputs": outputs,
+        "store": {"kind": "localdir", "root": "unused"},
+    }
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/a.fasta", ">a\n" + _seq(300, 21) + "\n")
+    run_job(store)
+    doc = json.loads(store.read_text(RESULT_PATH))
+    return doc, {Path(f["path"]).name for f in doc["inputs"][0]["files"]}
+
+
+def test_a_job_that_names_probs_lists_both_files_in_result_json_with_hashes(tmp_path: Path) -> None:
+    doc, listed = _job(tmp_path, ["bedgraph", "probs", "probs_npy"])
+    assert {"a.probs.tsv.gz", "a.probs.npy"} <= listed
+    probs = next(f for f in doc["inputs"][0]["files"] if f["path"].endswith(".probs.tsv.gz"))
+    assert len(probs["sha256"]) == 64
+    assert probs["bytes"] > 0
+    assert (tmp_path / probs["path"]).read_bytes()[:2] == b"\x1f\x8b"  # the uploaded object is the gzip
+
+
+def test_a_job_that_does_not_name_probs_never_uploads_them_even_with_outputs_unspecified(
+    tmp_path: Path,
+) -> None:
+    for sub, outputs in (("none", []), ("some", ["bedgraph", "tsv"])):
+        _, listed = _job(tmp_path / sub, outputs)
+        assert not any("probs" in n for n in listed)
