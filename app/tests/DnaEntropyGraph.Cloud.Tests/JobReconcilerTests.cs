@@ -527,9 +527,11 @@ public class JobReconcilerTests
         var launch = env.Reconciler().ReattachAsync(CancellationToken.None);
         await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        await env.Active.CancelAsync("job-cc", () => Task.CompletedTask);
+        // The user's cancel ends the run (a cancel that wrote nothing would leave the row Cancelling, which is CancelInterrupted, #551).
+        await env.Active.CancelAsync("job-cc", () => env.Repo.UpsertAsync(env.Row("job-cc") with { Phase = JobPhase.Cancelled }, CancellationToken.None));
         var outcomes = await launch.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         outcomes.Single().Action.ShouldBe(ReattachAction.CancelFinished, "the reattach was finishing a cancel, not resuming a run");
+        outcomes.Single().FinalPhase.ShouldBe(JobPhase.Cancelled);
     }
 }
