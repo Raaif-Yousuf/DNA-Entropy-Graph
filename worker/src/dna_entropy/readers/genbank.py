@@ -51,6 +51,47 @@ def _record_sequence(rec) -> str:
         return ""
 
 
+def _refuse_non_ascii_origin(text: str) -> None:
+    """Refuse a non-ASCII character in any record's ORIGIN block, before Biopython sees it.
+
+    Issue #492, MEASURED 2026-10-02: Biopython upper-cases the ORIGIN text itself, and
+    ``str.upper()`` folds some non-ASCII letters into ASCII (long s U+017F becomes ``S``, a
+    valid IUPAC code), so ``validate_sequence`` downstream never saw the original letter
+    and the run accepted a character that is not DNA. Scanning the raw text here, on the
+    same ``\\n``-normalised lines Biopython reads, is the only place the original survives.
+
+    The position matches ``validate_sequence``'s ("Invalid character U+XXXX at position N"):
+    1-based, counted over the record's own sequence characters, so the position numbers
+    GenBank prints at the start of each ORIGIN line and the spacing between 10-base groups
+    are skipped, exactly as Biopython skips them. Only ASCII spaces, tabs and digits are
+    skipped: a non-ASCII space or digit is a non-ASCII character and is refused too, never
+    silently treated as layout.
+    """
+    record = 1
+    position = 0
+    in_origin = False
+    for line in text.split("\n"):
+        if line.startswith("//"):
+            record += 1
+            position = 0
+            in_origin = False
+        elif line.startswith("ORIGIN"):
+            in_origin = True
+        elif in_origin and not line[:1].isspace() and line[:1]:
+            in_origin = False  # a new section keyword (CONTIG, LOCUS, ...) ends the sequence block
+        elif in_origin:
+            for char in line:
+                if char in " \t" or (char.isascii() and char.isdigit()):
+                    continue
+                position += 1
+                if not char.isascii():
+                    raise GenBankReadError(
+                        f"Invalid character U+{ord(char):04X} at position {position} of GenBank "
+                        f"record {record}'s sequence (its ORIGIN block). Only A, C, G, T are "
+                        "allowed. Remove or correct that character in the file and try again."
+                    )
+
+
 def _describe_bare_assertion(exc: AssertionError) -> str:
     """Recover a true, non-empty reason from a bare (message-less) `AssertionError`.
 
@@ -220,6 +261,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     # not get Python's universal-newlines treatment the way str.splitlines() does, so it
     # has to be done here, before the text reaches Bio.GenBank.Scanner.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    _refuse_non_ascii_origin(text)
     parsed: list = []
     try:
         # #349's own claim here ("every malformed-content failure this scanner raises for

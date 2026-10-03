@@ -11,7 +11,7 @@ namespace DnaEntropyGraph.Persistence;
 /// <c>CreatedAt</c>) rather than relying on Dapper's implicit name matching,
 /// so a rename on either side is a compile error here, not a silent NULL.
 /// </summary>
-public sealed class RunRepository : IRunRepository
+public sealed class RunRepository : IRunRepository, IRunHistoryRemover
 {
     private const string SelectAllSql = """
         SELECT Id, Name, IsBatch, Target, Phase, ErrorCode, ErrorDetail, CreatedAt, StartedAt, VmReadyAt, FinishedAt,
@@ -80,6 +80,13 @@ public sealed class RunRepository : IRunRepository
     {
         using var connection = _database.OpenConnection();
         var command = new CommandDefinition(UpsertSql, ToRow(run), cancellationToken: cancellationToken);
+        await connection.ExecuteAsync(command).ConfigureAwait(false);
+    }
+
+    public async Task DeleteAsync(string jobId, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition("DELETE FROM Runs WHERE Id = @Id;", new { Id = jobId }, cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 

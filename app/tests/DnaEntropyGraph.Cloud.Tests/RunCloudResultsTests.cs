@@ -1,0 +1,486 @@
+using System.Security.Cryptography;
+using System.Text;
+using DnaEntropyGraph.Core;
+using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Runs;
+using NSubstitute;
+using Shouldly;
+using Xunit;
+
+namespace DnaEntropyGraph.Cloud.Tests;
+
+/// <summary>Issue #101: re-download and delete a run's cloud results, through the real Core service over FakeGcp.</summary>
+public sealed class RunCloudResultsTests : IDisposable
+{
+    private const string Bucket = "deg-proj-fake";
+    private const string JobId = "20261003-aaaa";
+    private readonly string _base = Path.Combine(Path.GetTempPath(), "deg-runs-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _root;
+    private readonly FakeGcp _gcp = new();
+    private readonly InMemoryRunRepository _runs = new();
+    private readonly IJobObjectDeleter _deleter = Substitute.For<IJobObjectDeleter>();
+    private readonly DateTimeOffset _now = new(2026, 10, 3, 12, 0, 0, TimeSpan.Zero);
+    private static readonly byte[] BedGraph = Encoding.UTF8.GetBytes("chr1\t0\t10\t1.5\n");
+
+    public RunCloudResultsTests()
+    {
+        _root = Path.Combine(_base, "Downloads");
+        Directory.CreateDirectory(_root);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_base, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private RunCloudResults Make(IStorageGateway? storage = null, IRunFileMover? mover = null) => new(storage ?? _gcp, _deleter, _runs, () => _root, new FixedTime(_now), mover);
+
+    private static string Prefix => WorkerManifestBuilder.JobPrefix(JobId);
+
+    private RunRecord Run(string? outputDir = null, DateTimeOffset? expires = null, bool deleted = false, string? prefix = null, string? bucket = Bucket)
+        => new(JobId, JobPhase.Completed, _now.AddHours(-1), Bucket: bucket, JobPrefix: prefix ?? Prefix, OutputDir: outputDir ?? Path.Combine(_root, "sample"),
+            CloudResultsExpireAt: expires, CloudResultsDeleted: deleted,
+            OptionsJson: RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud" }));
+
+    private void PutResult(string path = "output/sample.bedgraph", byte[]? content = null, string? sha = null, long? bytes = null, string status = "done")
+    {
+        content ??= BedGraph;
+        sha ??= Convert.ToHexString(SHA256.HashData(content));
+        bytes ??= content.Length;
+        var json = $$"""{"schema":1,"status":"{{status}}","inputs":[{"id":"in1","status":"{{status}}","files":[{"path":"{{path}}","sha256":"{{sha}}","bytes":{{bytes}}}]}]}""";
+        _gcp.PutObject(Bucket, Prefix + "result.json", Encoding.UTF8.GetBytes(json));
+        _gcp.PutObject(Bucket, Prefix + path, content);
+    }
+
+    [Fact]
+    public async Task Redownload_restores_a_deleted_local_folder_from_the_bucket()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(Path.Combine(folder, "sample.bedgraph"), BedGraph);
+        Directory.Delete(folder, recursive: true);
+
+        var status = await Make().RedownloadAsync(Run(folder), CancellationToken.None);
+
+        status.ShouldBe(CloudResultsStatus.Done);
+        File.ReadAllBytes(Path.Combine(folder, "sample.bedgraph")).ShouldBe(BedGraph);
+    }
+
+    [Fact]
+    public async Task Redownload_with_no_recorded_folder_creates_a_unique_one_under_the_output_root_and_records_it()
+    {
+        PutResult();
+        var run = Run() with { OutputDir = null, Name = "my run" };
+
+        var status = await Make().RedownloadAsync(run, CancellationToken.None);
+
+        status.ShouldBe(CloudResultsStatus.Done);
+        var recorded = _runs.AllRecordedInOrder.Last().OutputDir!;
+        Path.GetDirectoryName(recorded).ShouldBe(_root);
+        File.Exists(Path.Combine(recorded, "sample.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Redownload_after_the_retention_window_is_expired_and_downloads_nothing()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+
+        var status = await Make().RedownloadAsync(Run(folder, expires: _now.AddMinutes(-1)), CancellationToken.None);
+
+        status.ShouldBe(CloudResultsStatus.Expired);
+        Directory.Exists(folder).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Redownload_when_the_cloud_copy_was_deleted_or_never_recorded_is_no_cloud_copy()
+    {
+        PutResult();
+        var make = Make();
+
+        (await make.RedownloadAsync(Run(deleted: true), CancellationToken.None)).ShouldBe(CloudResultsStatus.NoCloudCopy);
+        (await make.RedownloadAsync(Run(bucket: null), CancellationToken.None)).ShouldBe(CloudResultsStatus.NoCloudCopy);
+    }
+
+    [Fact]
+    public async Task Redownload_when_the_bucket_has_no_result_json_says_so()
+        => (await Make().RedownloadAsync(Run(), CancellationToken.None)).ShouldBe(CloudResultsStatus.ResultNotFound);
+
+    [Fact]
+    public async Task A_file_that_fails_its_checksum_fails_the_download_and_leaves_no_final_file()
+    {
+        PutResult(sha: new string('0', 64));
+        var folder = Path.Combine(_root, "sample");
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Failed);
+
+        File.Exists(Path.Combine(folder, "sample.bedgraph")).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("output/../../escape.txt")]
+    [InlineData("output/a/../../../escape.txt")]
+    [InlineData("secrets.txt")]
+    [InlineData("output/C:/escape.txt")]
+    public async Task A_result_path_that_leaves_the_output_folder_is_refused_and_writes_nothing_outside(string path)
+    {
+        PutResult(path: path);
+        var folder = Path.Combine(_root, "sample");
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Failed);
+
+        File.Exists(Path.Combine(_base, "escape.txt")).ShouldBeFalse();
+        File.Exists(Path.Combine(_root, "escape.txt")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_recorded_folder_outside_the_output_root_is_refused_before_anything_is_written()
+    {
+        PutResult();
+        var outside = Path.Combine(_base, "Documents", "sample");
+
+        (await Make().RedownloadAsync(Run(outside), CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+
+        Directory.Exists(outside).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public async Task A_job_that_did_not_finish_restores_its_partial_files_but_says_partial_not_done(string status)
+    {
+        PutResult(status: status);
+        var folder = Path.Combine(_root, "sample");
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Partial);
+
+        File.Exists(Path.Combine(folder, "sample.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_verified_file_already_in_the_folder_is_left_untouched_and_missing_ones_are_restored()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllBytes(kept, BedGraph);
+        var stamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(kept, stamp);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        File.GetLastWriteTimeUtc(kept).ShouldBe(stamp);
+        File.Delete(kept);
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+    }
+
+    private string AsideName(string stem = "sample", string ext = ".bedgraph")
+        => $"{stem} (changed {new FixedTime(_now).GetLocalNow():yyyy-MM-dd HHmmss}){ext}";
+
+    [Fact]
+    public async Task A_kept_file_with_the_wrong_size_is_moved_aside_never_overwritten_and_the_original_is_downloaded()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllBytes(kept, BedGraph[..4]);
+
+        var result = await Make().RedownloadAsync(Run(folder), CancellationToken.None);
+
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Done, ChangedKeptAside: 1));
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+        File.ReadAllBytes(Path.Combine(folder, AsideName())).ShouldBe(BedGraph[..4]);
+    }
+
+    [Fact]
+    public async Task A_kept_file_of_the_right_size_but_the_wrong_hash_is_moved_aside_and_downloaded_again()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        var edited = new byte[BedGraph.Length];
+        File.WriteAllBytes(kept, edited);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ChangedKeptAside.ShouldBe(1);
+
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+        File.ReadAllBytes(Path.Combine(folder, AsideName())).ShouldBe(edited);
+    }
+
+    [Fact]
+    public async Task Two_changed_files_are_both_kept_aside_and_a_name_clash_gets_a_counter()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(Path.Combine(folder, AsideName()), "earlier aside");
+        File.WriteAllBytes(kept, new byte[3]);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ChangedKeptAside.ShouldBe(1);
+
+        File.ReadAllText(Path.Combine(folder, AsideName())).ShouldBe("earlier aside");
+        Directory.GetFiles(folder).Length.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_failed_download_leaves_the_changed_file_where_it_was()
+    {
+        PutResult(sha: new string('0', 64));
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.Failed);
+
+        File.ReadAllText(kept).ShouldBe("my edits");
+        Directory.GetFiles(folder).Length.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_failure_partway_through_still_reports_the_files_already_kept_aside()
+    {
+        var good = BedGraph;
+        var hash = Convert.ToHexString(SHA256.HashData(good));
+        string Entry(string name, string sha) => $$"""{"path":"output/{{name}}.bedgraph","sha256":"{{sha}}","bytes":{{good.Length}}}""";
+        var files = string.Join(',', Entry("a", hash), Entry("b", hash), Entry("c", new string('0', 64)));
+        var json = $$"""{"schema":1,"status":"done","inputs":[{"id":"in1","status":"done","files":[{{files}}]}]}""";
+        _gcp.PutObject(Bucket, Prefix + "result.json", Encoding.UTF8.GetBytes(json));
+        foreach (var name in new[] { "a", "b", "c" })
+        {
+            _gcp.PutObject(Bucket, Prefix + $"output/{name}.bedgraph", good);
+        }
+
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(Path.Combine(folder, "a.bedgraph"), new byte[2]);
+
+        var result = await Make().RedownloadAsync(Run(folder), CancellationToken.None);
+
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Failed, ChangedKeptAside: 1));
+        File.ReadAllBytes(Path.Combine(folder, "a.bedgraph")).ShouldBe(good);
+        File.ReadAllBytes(Path.Combine(folder, AsideName("a"))).ShouldBe(new byte[2]);
+    }
+
+    [Fact]
+    public async Task A_final_move_that_fails_puts_the_users_file_back_where_it_was()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+        var mover = new ScriptedMover((source, _) => source.EndsWith(".part", StringComparison.Ordinal) ? new IOException("disk full") : null);
+
+        var result = await Make(mover: mover).RedownloadAsync(Run(folder), CancellationToken.None);
+
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Failed, ChangedKeptAside: 0));
+        File.ReadAllText(kept).ShouldBe("my edits");
+        Directory.GetFiles(folder).Length.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_aside_name_taken_between_the_check_and_the_move_retries_with_the_next_counter()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+        var raced = false;
+        var mover = new ScriptedMover((_, destination) =>
+        {
+            if (raced || !destination.Contains("(changed", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            raced = true;
+            return new IOException("name taken");
+        });
+
+        var result = await Make(mover: mover).RedownloadAsync(Run(folder), CancellationToken.None);
+
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Done, ChangedKeptAside: 1));
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+        File.ReadAllText(Path.Combine(folder, $"sample (changed {new FixedTime(_now).GetLocalNow():yyyy-MM-dd HHmmss} 2).bedgraph")).ShouldBe("my edits");
+    }
+
+    [Fact]
+    public async Task An_aside_that_can_never_be_moved_fails_after_a_bounded_number_of_tries_and_leaves_the_file()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+        var attempts = 0;
+        var mover = new ScriptedMover((_, destination) => destination.Contains("(changed", StringComparison.Ordinal) && ++attempts > 0 ? new IOException("name taken") : null);
+
+        (await Make(mover: mover).RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.Failed);
+
+        File.ReadAllText(kept).ShouldBe("my edits");
+        attempts.ShouldBeInRange(2, 100);
+    }
+
+    [Fact]
+    public async Task A_kept_file_is_checked_by_size_alone_when_the_result_lists_no_hash()
+    {
+        var content = BedGraph;
+        var json = $$"""{"schema":1,"status":"done","inputs":[{"id":"in1","status":"done","files":[{"path":"output/sample.bedgraph","bytes":{{content.Length}}}]}]}""";
+        _gcp.PutObject(Bucket, Prefix + "result.json", Encoding.UTF8.GetBytes(json));
+        _gcp.PutObject(Bucket, Prefix + "output/sample.bedgraph", content);
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllBytes(kept, new byte[content.Length]);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        File.ReadAllBytes(kept).ShouldBe(new byte[content.Length]);
+        File.WriteAllBytes(kept, content[..3]);
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ChangedKeptAside.ShouldBe(1);
+        File.ReadAllBytes(kept).ShouldBe(content);
+    }
+
+    [Fact]
+    public async Task A_done_job_with_a_failed_input_is_partial_not_done()
+    {
+        var json = $$"""{"schema":1,"status":"done","inputs":[{"id":"in1","status":"done","files":[{"path":"output/sample.bedgraph","bytes":{{BedGraph.Length}}}]},{"id":"in2","status":"failed","files":[]}]}""";
+        _gcp.PutObject(Bucket, Prefix + "result.json", Encoding.UTF8.GetBytes(json));
+        _gcp.PutObject(Bucket, Prefix + "output/sample.bedgraph", BedGraph);
+
+        (await Make().RedownloadAsync(Run(Path.Combine(_root, "sample")), CancellationToken.None)).ShouldBe(CloudResultsStatus.Partial);
+    }
+
+    [Fact]
+    public async Task A_recorded_folder_with_a_trailing_separator_still_downloads()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample") + Path.DirectorySeparatorChar;
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        File.Exists(Path.Combine(_root, "sample", "sample.bedgraph")).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(TimeoutException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public async Task Any_unexpected_storage_failure_is_failed_not_thrown(Type exception)
+    {
+        var storage = Substitute.For<IStorageGateway>();
+        storage.TryDownloadAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task<Stream?>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+
+        (await Make(storage).RedownloadAsync(Run(), CancellationToken.None)).ShouldBe(CloudResultsStatus.Failed);
+    }
+
+    [Fact]
+    public void Can_delete_needs_an_available_cloud_copy_and_a_connected_deleter()
+    {
+        var make = Make();
+        _deleter.IsAvailable.Returns(true);
+        make.CanDelete(Run()).ShouldBeTrue();
+        make.CanDelete(Run(deleted: true)).ShouldBeFalse();
+        _deleter.IsAvailable.Returns(false);
+        make.CanDelete(Run()).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Delete_removes_only_this_jobs_prefix_and_records_the_deletion()
+    {
+        var run = Run();
+
+        var status = await Make().DeleteAsync(run, CancellationToken.None);
+
+        status.ShouldBe(CloudResultsStatus.Done);
+        await _deleter.Received(1).DeleteJobObjectsAsync(Bucket, Prefix, Arg.Any<CancellationToken>());
+        _runs.AllRecordedInOrder.Last().CloudResultsDeleted.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("jobs/")]
+    [InlineData("jobs//")]
+    [InlineData("jobs/other-job/")]
+    [InlineData("jobs/20261003-aaaa")]
+    [InlineData("jobs/20261003-aaaa/../other/")]
+    public async Task Delete_refuses_a_prefix_that_is_not_exactly_this_jobs_prefix(string prefix)
+    {
+        (await Make().DeleteAsync(Run(prefix: prefix), CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+
+        await _deleter.DidNotReceiveWithAnyArgs().DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Delete_of_an_already_deleted_copy_does_not_call_the_bucket_again()
+    {
+        (await Make().DeleteAsync(Run(deleted: true), CancellationToken.None)).ShouldBe(CloudResultsStatus.NoCloudCopy);
+
+        await _deleter.DidNotReceiveWithAnyArgs().DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_failing_delete_is_failed_and_the_row_is_not_marked_deleted()
+    {
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw new InvalidOperationException("boom"));
+
+        (await Make().DeleteAsync(Run(), CancellationToken.None)).ShouldBe(CloudResultsStatus.Failed);
+
+        _runs.AllRecordedInOrder.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_deleter_that_is_not_connected_reports_not_connected_and_keeps_the_row()
+    {
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw new CloudNotConnectedException());
+
+        (await Make().DeleteAsync(Run(), CancellationToken.None)).ShouldBe(CloudResultsStatus.NotConnected);
+
+        _runs.AllRecordedInOrder.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Is_available_reflects_expiry_deletion_and_a_recorded_location()
+    {
+        var make = Make();
+        make.IsAvailable(Run()).ShouldBeTrue();
+        make.IsAvailable(Run(expires: _now.AddDays(1))).ShouldBeTrue();
+        make.IsAvailable(Run(expires: _now.AddSeconds(-1))).ShouldBeFalse();
+        make.IsAvailable(Run(deleted: true)).ShouldBeFalse();
+        make.IsAvailable(Run(bucket: null)).ShouldBeFalse();
+    }
+
+    /// <summary>Moves like the disk does, except where the script returns an exception for that (source, destination).</summary>
+    private sealed class ScriptedMover(Func<string, string, Exception?> fail) : IRunFileMover
+    {
+        public void Move(string source, string destination)
+        {
+            if (fail(source, destination) is { } ex)
+            {
+                throw ex;
+            }
+
+            File.Move(source, destination, overwrite: false);
+        }
+    }
+
+    private sealed class FixedTime(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+}

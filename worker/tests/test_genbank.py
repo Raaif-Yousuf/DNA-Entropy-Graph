@@ -645,3 +645,93 @@ def test_a_feature_line_shorter_than_the_qualifier_indent_is_the_readers_own_err
         read_genbank(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb")
     assert "Check" in str(exc.value)  # names the action
     assert "string index out of range" not in str(exc.value)  # a Python-internal phrase, not a fact
+
+
+# --- issue #492: a non-ASCII letter in ORIGIN is refused before Biopython can fold it into ASCII ---
+
+
+def _gb_with_origin(*origin_lines: str, locus_len: int = 16) -> str:
+    return (
+        f"LOCUS       toy    {locus_len} bp    DNA              UNK 01-JAN-1980\n"
+        "FEATURES             Location/Qualifiers\n"
+        "     gene            1..4\n"
+        '                     /gene="g"\n'
+        "ORIGIN\n" + "".join(line + "\n" for line in origin_lines) + "//\n"
+    )
+
+
+NON_ASCII_ORIGIN_LETTERS = [
+    ("\u017f", "U+017F"),  # long s: str.upper() gives "S", a valid IUPAC code (the #492 probe)
+    ("\u00df", "U+00DF"),  # sharp s: str.upper() gives "SS"
+    ("\u0131", "U+0131"),  # dotless i: str.upper() gives "I"
+    ("\u00e9", "U+00E9"),  # e acute: Biopython's own ascii encode used to fail with an opaque codec error
+    ("\u00a0", "U+00A0"),  # no-break space: str.split() would silently treat it as whitespace
+    ("\u0663", "U+0663"),  # Arabic-Indic digit three: str.isdigit() is True, but it is not a position number
+]
+
+
+def test_non_ascii_origin_letter_table_is_not_vacuous() -> None:
+    assert len(NON_ASCII_ORIGIN_LETTERS) >= 6
+    assert all(not ch.isascii() for ch, _ in NON_ASCII_ORIGIN_LETTERS)
+
+
+@pytest.mark.parametrize(("char", "code_point"), NON_ASCII_ORIGIN_LETTERS)
+def test_a_non_ascii_origin_letter_is_refused_naming_its_code_point_and_position(
+    tmp_path: Path, char: str, code_point: str
+) -> None:
+    path = tmp_path / "non_ascii.gb"
+    path.write_text(_gb_with_origin(f"        1 acgtacgt{char}acgtacg"), encoding="utf-8", newline="\n")
+    with pytest.raises(GenBankReadError) as exc:
+        read_genbank(str(path))
+    message = str(exc.value)
+    assert f"Invalid character {code_point} at position 9" in message
+    assert "record 1" in message
+    assert message.isascii()  # Hard Rule 5: the console line never carries the lookalike glyph
+
+
+def test_the_issue_492_probe_is_refused_through_load_input_naming_u017f_at_position_9(tmp_path: Path) -> None:
+    path = tmp_path / "long_s.gb"
+    path.write_text(_gb_with_origin("        1 acgtacgt\u017facgtacg"), encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="t", input_path=str(path), informat="genbank", out_dir=str(tmp_path))
+    with pytest.raises(ValidationError, match=r"U\+017F at position 9"):
+        load_input(cfg)
+
+
+def test_the_non_ascii_position_counts_bases_across_origin_lines_not_digits_or_spaces(tmp_path: Path) -> None:
+    path = tmp_path / "second_line.gb"
+    path.write_text(
+        _gb_with_origin("        1 acgtacgtac gtacgtacgt", "       21 acgt\u017facgtac", locus_len=30),
+        encoding="utf-8",
+        newline="\n",
+    )
+    with pytest.raises(GenBankReadError, match=r"U\+017F at position 25"):
+        read_genbank(str(path))
+
+
+def test_the_non_ascii_refusal_names_the_record_and_counts_from_its_own_origin(tmp_path: Path) -> None:
+    good = _gb_with_origin("        1 acgtacgtacgtacgt")
+    bad = _gb_with_origin("        1 acg\u017facgtacgtacgt")
+    path = tmp_path / "second_record.gb"
+    path.write_text(good + bad, encoding="utf-8", newline="\n")
+    with pytest.raises(
+        GenBankReadError, match=r"U\+017F at position 4 .*record 2|record 2.*U\+017F at position 4"
+    ):
+        read_genbank(str(path))
+
+
+def test_non_ascii_outside_the_origin_block_is_still_read(tmp_path: Path) -> None:
+    text = _gb_with_origin("        1 acgtacgtacgtacgt").replace(
+        '/gene="g"', '/gene="g\u00e9ne"\n                     /note="\u017f"'
+    )
+    path = tmp_path / "qualifier.gb"
+    path.write_text(text, encoding="utf-8", newline="\n")
+    records, _ = read_genbank(str(path))
+    assert records[0].seq == "ACGTACGTACGTACGT"
+    assert records[0].features[0].gene_id == "g\u00e9ne"
+
+
+def test_an_ascii_lowercase_origin_is_still_uppercased(tmp_path: Path) -> None:
+    path = tmp_path / "lower.gb"
+    path.write_text(_gb_with_origin("        1 acgtacgtrykmacgt"), encoding="utf-8", newline="\n")
+    records, _ = read_genbank(str(path))
+    assert records[0].seq == "ACGTACGTRYKMACGT"
