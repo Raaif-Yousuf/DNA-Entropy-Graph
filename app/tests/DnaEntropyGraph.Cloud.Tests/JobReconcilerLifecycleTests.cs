@@ -563,17 +563,19 @@ public class JobReconcilerLifecycleTests
         var rig = new Rig();
         await rig.Env.SeedAsync("job-stuck", JobPhase.Cancelling, vm: true);
         var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        // Read 1 is the reattach listing, 2 the lifecycle pass, 3 the runner's cancel looking at the row with the reattach's token.
-        rig.Env.Repo.BeforeGetAll = async (call, token) =>
+        using var shutdown = new CancellationTokenSource();
+        var shutdownToken = shutdown.Token;
+        // The pass's own reads (the reattach listing and the lifecycle pass) use the shutdown token itself; the runner's cancel looks at the row with
+        // the reattach driver's linked token, a different one. Parking by that, not by the read's number: the two run on different threads.
+        rig.Env.Repo.BeforeGetAll = async (_, token) =>
         {
-            if (call == 3)
+            if (token != shutdownToken && token.CanBeCanceled)
             {
                 parked.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
             }
         };
         var reconciler = rig.Reconciler();
-        using var shutdown = new CancellationTokenSource();
 
         var inner = await reconciler.BeginReconcileAsync(shutdown.Token).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
