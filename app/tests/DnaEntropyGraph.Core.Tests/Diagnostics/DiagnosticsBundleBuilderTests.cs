@@ -644,6 +644,31 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void A_character_that_only_case_folds_to_a_withheld_id_is_rewritten_and_never_crashes_the_build()
+    {
+        // U+212A (Kelvin sign) matches the pattern "k" under Unicode case folding but is not equal to it ordinally.
+        var kelvin = ((char)0x212A).ToString();
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = $"run k and {kelvin} done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "k", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("run withheldid1 and withheldid1 done");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_job_id_row_is_withheld_in_the_history_and_never_rewrites_text(string blank)
+    {
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "a b - c ... done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = blank, Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("a b - c ... done");
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("jobId").GetString().ShouldBe("withheldid0");
+    }
+
+    [Fact]
     public void A_longer_withheld_id_wins_over_a_shorter_one_and_a_placeholder_is_never_rewritten_again()
     {
         var folder = new Dictionary<string, string> { ["logs/app.log"] = "runs ab-12 and ab and withheldid2 done" };

@@ -355,13 +355,22 @@ internal sealed class JobIdWithholder(ISet<string> scrub)
 {
     private readonly Dictionary<string, string> _placeholders = new(StringComparer.OrdinalIgnoreCase);
     private Regex? _pattern;
+    private string[] _alternativePlaceholders = [];
     private int _patternCount;
+
+    /// <summary>What a blank id (an empty or whitespace-only row id) ships as. Never part of the rewrite pattern: it would match everywhere.</summary>
+    private const string BlankPlaceholder = "withheldid0";
 
     public string Map(string id)
     {
         if (JobId.MatchesConvention(id))
         {
             return id;
+        }
+
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return BlankPlaceholder;
         }
 
         if (!_placeholders.TryGetValue(id, out var placeholder))
@@ -390,14 +399,29 @@ internal sealed class JobIdWithholder(ISet<string> scrub)
 
         if (_pattern is null || _patternCount != _placeholders.Count)
         {
-            var alternatives = _placeholders.Keys.OrderByDescending(id => id.Length).ThenBy(id => id, StringComparer.Ordinal).Select(Regex.Escape);
+            // One numbered group per id, longest first. The placeholder is found by WHICH group matched, never by looking the
+            // matched text up: the regex folds case by Unicode rules (a Kelvin sign matches "k") and a dictionary does not.
+            var ordered = _placeholders.OrderByDescending(pair => pair.Key.Length).ThenBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
+            _alternativePlaceholders = [.. ordered.Select(pair => pair.Value)];
             _pattern = new Regex(
-                @"(?<![\p{L}\p{N}])(?:" + string.Join('|', alternatives) + @")(?![\p{L}\p{N}])",
+                @"(?<![\p{L}\p{N}])(?:" + string.Join('|', ordered.Select(pair => "(" + Regex.Escape(pair.Key) + ")")) + @")(?![\p{L}\p{N}])",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             _patternCount = _placeholders.Count;
         }
 
-        return _pattern.Replace(text, match => _placeholders[match.Value]);
+        return _pattern.Replace(text, match =>
+        {
+            for (var i = 0; i < _alternativePlaceholders.Length; i++)
+            {
+                if (match.Groups[i + 1].Success)
+                {
+                    return _alternativePlaceholders[i];
+                }
+            }
+
+            // Cannot happen (every match is one group), but a miss must never ship the raw text.
+            return "withheldid-unknown";
+        });
     }
 
     /// <summary>The id a file under <c>runs/&lt;id&gt;/</c> belongs to, as shipped (the placeholder for a withheld one); null elsewhere.</summary>
