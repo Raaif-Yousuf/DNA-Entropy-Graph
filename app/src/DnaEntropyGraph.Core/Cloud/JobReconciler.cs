@@ -626,8 +626,10 @@ public sealed class JobReconciler
     {
         await _active.WhenCancelSettledAsync(jobId).WaitAsync(cancellationToken).ConfigureAwait(false);
         var settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
-        return new ReattachOutcome(jobId, underway, settled?.Phase, settled?.ErrorCode);
+        return new ReattachOutcome(jobId, ActionForFinalPhase(underway, settled?.Phase), settled?.Phase, settled?.ErrorCode);
     }
+
+    internal static ReattachAction ActionForFinalPhase(ReattachAction underway, JobPhase? finalPhase) => underway;
 
     private enum Evidence
     {
