@@ -45,6 +45,24 @@
   <data name="NavSettings.Content" xml:space="preserve">
     <value>Settings</value>
   </data>
+  <data name="PageTitle_NewRun" xml:space="preserve">
+    <value>New run</value>
+  </data>
+  <data name="PageTitle_Runs" xml:space="preserve">
+    <value>Runs</value>
+  </data>
+  <data name="PageTitle_Cloud" xml:space="preserve">
+    <value>Cloud</value>
+  </data>
+  <data name="PageTitle_Settings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="PlaceholderPageTitle.Text" xml:space="preserve">
+    <value>This page is not built yet</value>
+  </data>
+  <data name="PlaceholderPageBody.Text" xml:space="preserve">
+    <value>This part of the app is still being built. Choose another item from the menu on the left, or check the app's download page for a newer version.</value>
+  </data>
   <data name="StatusPillNotSignedIn" xml:space="preserve">
     <value>Not signed in</value>
   </data>

@@ -2,7 +2,6 @@
   "_README": "Keys are '<CODE>:<Symbol>' exactly as scripts/check_app_wiring.py prints them. The value is why the finding is accepted, and it should name the issue that will make it stop firing. Checked in BOTH directions: an entry whose finding no longer fires fails the run, so this file cannot rot into a list of things that used to be true. Delete an entry the moment its page lands.",
   "_WHY_THIS_FILE_IS_LONG_TODAY": "Every entry below is the same fact said twenty-five times: app/ is a skeleton whose ViewModels exist and whose Views do not, so every command and every observable property is genuinely bound to nothing. That is not a false positive; it is the guard correctly describing an unfinished app. Each entry names the issue whose page will bind it, and the entry must be deleted in that issue's own PR.",
 
-  "ORPHAN-RESOURCE:AppDisplayName": "#62: no view shows the app name yet",
 
   "CODE-ONLY-COMMAND:ShellViewModel.NavigateToCommand": "#62, done: NavigationView.SelectionChanged is an event, not a bindable Command= property in WinUI 3 - MainWindow.xaml.cs's handler is the only way to wire a NavigationView selection to a RelayCommand, so this stays C#-only by construction, not by omission.",
 

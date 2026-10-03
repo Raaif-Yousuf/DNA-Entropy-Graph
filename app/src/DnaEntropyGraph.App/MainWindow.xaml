@@ -56,8 +56,9 @@
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
             AlwaysShowHeader="True"
-            Header="{x:Bind ViewModel.CurrentPageKey, Mode=OneWay}"
-            SelectionChanged="RootNavigationView_SelectionChanged">
+            Header="{x:Bind ViewModel.CurrentPageTitle, Mode=OneWay}"
+            SelectionChanged="RootNavigationView_SelectionChanged"
+            Loaded="RootNavigationView_Loaded">
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Uid="NavNewRun" Tag="NewRun">
                     <NavigationViewItem.Icon>

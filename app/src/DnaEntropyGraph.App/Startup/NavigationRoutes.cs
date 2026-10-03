@@ -7,15 +7,18 @@ namespace DnaEntropyGraph.App.Startup;
 /// Every page key -> Page type mapping <see cref="NavigationService"/>
 /// needs. Only "RunProgress" is registered today (issue #66): "New run",
 /// "Runs", "Cloud" and "Settings" are sibling issues' own Views (#63, #101,
-/// #105, #104 per <c>scripts/app_wiring_allowlist.json</c>) and are
-/// deliberately left unregistered rather than built here - clicking one of
-/// those NavigationView items today is <see cref="NavigationService"/>'s
-/// own documented no-op-rather-than-crash, not a new gap this session
-/// introduced. See this session's report for the tracking issue filed on
-/// making that gap visible to a user instead of silent.
+/// #105, #104 per <c>scripts/app_wiring_allowlist.json</c>) and are not
+/// registered yet; until each lands, its NavigationView item resolves to the
+/// fallback <see cref="PlaceholderPage"/> (issue #490), never an empty frame.
 /// </summary>
 public static class NavigationRoutes
 {
     public static void RegisterAll(NavigationService navigationService)
-        => navigationService.RegisterPage("RunProgress", typeof(RunProgressPage));
+    {
+        navigationService.RegisterPage("RunProgress", typeof(RunProgressPage));
+
+        // Issue #490: every destination without a page of its own lands on one
+        // generic "not built yet" page rather than an empty frame.
+        navigationService.RegisterFallbackPage(typeof(PlaceholderPage));
+    }
 }

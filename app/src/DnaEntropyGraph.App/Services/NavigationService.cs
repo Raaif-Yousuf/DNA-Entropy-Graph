@@ -16,16 +16,24 @@ public sealed class NavigationService : INavigator
 {
     private readonly Dictionary<string, Type> _pages = new(StringComparer.OrdinalIgnoreCase);
     private Frame? _frame;
+    private Type? _fallbackPageType;
 
     public void Initialize(Frame frame) => _frame = frame;
 
     public void RegisterPage(string pageKey, Type pageType) => _pages[pageKey] = pageType;
 
+    /// <summary>The one generic page shown for a destination with no registered page yet (issue #490).</summary>
+    public void RegisterFallbackPage(Type pageType) => _fallbackPageType = pageType;
+
+    /// <summary>Registered page for the key, else the fallback page, else null. Pure, so it is testable without a UI thread.</summary>
+    public Type? ResolvePageType(string pageKey) => _pages.TryGetValue(pageKey, out var pageType) ? pageType : _fallbackPageType;
+
     public bool CanGoBack => _frame?.CanGoBack ?? false;
 
     public void NavigateTo(string pageKey, object? parameter = null)
     {
-        if (_frame is null || !_pages.TryGetValue(pageKey, out var pageType))
+        var pageType = ResolvePageType(pageKey);
+        if (_frame is null || pageType is null)
         {
             return;
         }
