@@ -39,6 +39,12 @@ Test frameworks, linters, and `worker`'s own `[dev]` extra. Never installed into
 | jsonschema | pypi | 4.26.0 | MIT |
 | pytest | pypi | 9.1.1 | MIT |
 
+## Vendored web assets (app installer payload, `app/src/DnaEntropyGraph.App/Assets/viewer/`)
+
+| Asset | Version | Licence | Source | sha256 |
+|---|---|---|---|---|
+| igv.min.js (igv.js, the embedded genome viewer; licence text beside it as `igv.LICENSE.txt`) | 3.8.9 | MIT | `dist/igv.min.js` of the npm tarball https://registry.npmjs.org/igv/-/igv-3.8.9.tgz (shasum 5c7a042cee252e0df05f0c00449d2273f057033a) | 240C31F8DC20D233B023E8482CB4B388F87679F69779AFE3685A5C0C979E93FF |
+
 ## Platform components (Microsoft proprietary redistributables, not a third-party OSS choice)
 
 The Windows App SDK, WebView2, and Windows SDK build tools a WinUI 3 app is built on, under Microsoft's own "MICROSOFT SOFTWARE LICENSE TERMS" (their nuspecs declare `<license type="file">`, not an SPDX expression). Whether Hard Rule 21's MIT/Apache/BSD gate reaches the platform runtime itself, as opposed to a dependency this project chose to add, is an open scoping question - flagged as a DECISION rather than assumed silently either way.

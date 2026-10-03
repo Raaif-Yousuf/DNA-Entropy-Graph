@@ -66,7 +66,9 @@ entries marked as an unverified assumption, distinct from a measured one (Hard R
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import posixpath
 import subprocess
 import sys
 import tomllib
@@ -199,6 +201,23 @@ class Dependency:
     license: str
     license_verified: bool
     license_source: str  # where the license string came from, for a human to double check
+
+
+@dataclass(frozen=True)
+class VendoredAsset:
+    path: str  # repo-relative, forward slashes
+    name: str
+    description: str
+    version: str
+    license: str
+    license_file: str
+    source: str
+    upstream_shasum: str
+    sha256: str
+
+
+VENDORED_MANIFEST_RELATIVE = "scripts/vendored_assets.json"
+_VENDORED_KEYS = ("path", "name", "description", "version", "license", "license_file", "source", "sha256")
 
 
 class NoticesGenerationError(RuntimeError):
@@ -415,6 +434,71 @@ def _python_dependency(name: str, scope: str, info: dict) -> Dependency:
 
 
 # ---------------------------------------------------------------------------
+# Vendored web assets (scripts/vendored_assets.json)
+# ---------------------------------------------------------------------------
+
+class VendoredAssetError(NoticesGenerationError):
+    """A vendored asset is missing, tampered with, or under a licence Hard Rule 21 rejects."""
+
+
+def _license_allowed(expression: str) -> bool:
+    atoms = [a.strip() for a in expression.replace(" OR ", " AND ").split(" AND ") if a.strip()]
+    return bool(atoms) and all(a in ALLOWED_LICENSES for a in atoms)
+
+
+def load_vendored_assets(repo_root: Path, manifest: Path | None = None) -> list[VendoredAsset]:
+    """Read the manifest and verify every entry against the disk. Raises VendoredAssetError
+    (message names the offending file) on a missing manifest/asset/licence file, a sha256
+    mismatch, or a licence outside ALLOWED_LICENSES (Hard Rule 21)."""
+    manifest = manifest if manifest is not None else repo_root / VENDORED_MANIFEST_RELATIVE
+    if not manifest.is_file():
+        raise VendoredAssetError(f"{manifest}: vendored-assets manifest not found")
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise VendoredAssetError(f"{manifest}: not valid JSON: {exc}") from exc
+    raw_assets = data.get("assets")
+    if not isinstance(raw_assets, list) or not raw_assets:
+        raise VendoredAssetError(f"{manifest}: needs a non-empty list 'assets'")
+    out: list[VendoredAsset] = []
+    for raw in raw_assets:
+        missing = [k for k in _VENDORED_KEYS if not isinstance(raw.get(k), str) or not raw[k]]
+        if missing:
+            raise VendoredAssetError(f"{manifest}: entry {raw.get('path', '?')} is missing {missing}")
+        asset = VendoredAsset(**{k: raw[k] for k in _VENDORED_KEYS}, upstream_shasum=raw.get("upstream_shasum", ""))
+        asset_file = repo_root / asset.path
+        if not asset_file.is_file():
+            raise VendoredAssetError(f"{asset.path}: vendored asset listed in {manifest.name} does not exist")
+        if not (repo_root / asset.license_file).is_file():
+            raise VendoredAssetError(f"{asset.license_file}: licence file for {asset.path} does not exist")
+        actual = hashlib.sha256(asset_file.read_bytes()).hexdigest()
+        if actual.lower() != asset.sha256.lower():
+            raise VendoredAssetError(
+                f"{asset.path}: sha256 mismatch (manifest {asset.sha256.lower()}, on disk {actual}); "
+                "re-vendor from the pinned source, or update the manifest if the change is intended"
+            )
+        if not _license_allowed(asset.license):
+            raise VendoredAssetError(
+                f"{asset.path}: licence '{asset.license}' is not MIT/Apache/BSD (Hard Rule 21)"
+            )
+        out.append(asset)
+    out.sort(key=lambda a: a.path.lower())
+    return out
+
+
+def render_vendored_section(assets: list[VendoredAsset]) -> str:
+    # Heading names the common parent directory of every listed asset.
+    directory = posixpath.commonpath([posixpath.dirname(a.path) for a in assets]) + "/"
+    lines = [f"## Vendored web assets (app installer payload, `{directory}`)", "",
+             "| Asset | Version | Licence | Source | sha256 |", "|---|---|---|---|---|"]
+    for a in assets:
+        shasum = f" (shasum {a.upstream_shasum})" if a.upstream_shasum else ""
+        lines.append(f"| {a.name} ({a.description}) | {a.version} | {a.license} | {a.source}{shasum} | {a.sha256.upper()} |")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Classification + rendering
 # ---------------------------------------------------------------------------
 
@@ -435,7 +519,8 @@ def classify(dep: Dependency) -> str:
     return "unrecognized"
 
 
-def render(dotnet_deps: list[Dependency], python_deps: list[Dependency]) -> str:
+def render(dotnet_deps: list[Dependency], python_deps: list[Dependency],
+           vendored: list[VendoredAsset] | None = None) -> str:
     lines: list[str] = []
     lines.append("# Third-Party Notices")
     lines.append("")
@@ -482,6 +567,10 @@ def render(dotnet_deps: list[Dependency], python_deps: list[Dependency]) -> str:
         lines.append(f"| {d.name} | pypi | {d.version} | {d.license} |")
     lines.append("")
 
+    if vendored:
+        lines.extend(render_vendored_section(vendored).rstrip("\n").split("\n"))
+        lines.append("")
+
     lines.append(
         "## Platform components (Microsoft proprietary redistributables, not a third-party OSS choice)"
     )
@@ -526,11 +615,15 @@ def render(dotnet_deps: list[Dependency], python_deps: list[Dependency]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def generate(app_root: Path, worker_root: Path) -> tuple[str, bool]:
-    """Return (rendered_markdown, clean). clean=False means an unresolved licence problem exists."""
+def generate(app_root: Path, worker_root: Path, repo_root: Path | None = None,
+             manifest: Path | None = None) -> tuple[str, bool]:
+    """Return (rendered_markdown, clean). clean=False means an unresolved licence problem exists.
+    Raises VendoredAssetError (a NoticesGenerationError) for a bad vendored asset."""
+    repo_root = repo_root if repo_root is not None else app_root.resolve().parent
+    vendored = load_vendored_assets(repo_root, manifest)
     dotnet_deps = collect_dotnet_dependencies(app_root)
     python_deps = collect_python_dependencies(worker_root)
-    text = render(dotnet_deps, python_deps)
+    text = render(dotnet_deps, python_deps, vendored)
     clean = not any(classify(d) in ("denied", "unrecognized") for d in dotnet_deps + python_deps)
     return text, clean
 
@@ -617,6 +710,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--app-root", type=Path, default=Path("app"), help="path to app/ (default: ./app)")
     ap.add_argument("--worker-root", type=Path, default=Path("worker"), help="path to worker/ (default: ./worker)")
+    ap.add_argument("--repo-root", type=Path, default=None, help="repo root for vendored assets (default: parent of --app-root)")
+    ap.add_argument("--manifest", type=Path, default=None, help="vendored-assets manifest (default: <repo-root>/scripts/vendored_assets.json)")
     ap.add_argument("--stdout", action="store_true", help="print the notices instead of writing THIRD-PARTY-NOTICES.md")
     ap.add_argument("--out", type=Path, default=Path("THIRD-PARTY-NOTICES.md"), help="output path (default: ./THIRD-PARTY-NOTICES.md)")
     ap.add_argument("--self-test", action="store_true", help="run against synthetic fixtures and exit")
@@ -626,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if self_test() else 1
 
     try:
-        text, clean = generate(args.app_root, args.worker_root)
+        text, clean = generate(args.app_root, args.worker_root, args.repo_root, args.manifest)
     except NoticesGenerationError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

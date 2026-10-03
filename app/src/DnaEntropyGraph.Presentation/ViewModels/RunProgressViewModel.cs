@@ -30,6 +30,8 @@ public sealed partial class RunProgressViewModel : ObservableObject
     private readonly IRunVmActions _vmActions;
     private readonly ILogTailReader _logTailReader;
     private readonly IStringResourceProvider _strings;
+    private readonly IRunRepository _runRepository;
+    private readonly INavigator _navigator;
 
     [ObservableProperty]
     private string? _jobId;
@@ -61,6 +63,12 @@ public sealed partial class RunProgressViewModel : ObservableObject
     [ObservableProperty]
     private bool _isStayOpenBannerVisible = true;
 
+    // True only for a Completed or PartiallyCompleted run whose output folder is known (issues #72/#73).
+    // Not observable: the button binds OpenViewerCommand, whose CanExecute reads this.
+    private bool _canOpenViewer;
+
+    private string? _outputFolder;
+
     public RunProgressViewModel(
         IJobEngine jobEngine,
         IDispatcher dispatcher,
@@ -68,6 +76,8 @@ public sealed partial class RunProgressViewModel : ObservableObject
         IRunVmActions vmActions,
         ILogTailReader logTailReader,
         IStringResourceProvider strings,
+        IRunRepository runRepository,
+        INavigator navigator,
         IMessenger messenger)
     {
         _jobEngine = jobEngine;
@@ -76,13 +86,20 @@ public sealed partial class RunProgressViewModel : ObservableObject
         _vmActions = vmActions;
         _logTailReader = logTailReader;
         _strings = strings;
+        _runRepository = runRepository;
+        _navigator = navigator;
         ApplyPhase(JobPhase.Draft);
 
         messenger.Register<RunProgressViewModel, RunPhaseChangedMessage>(this, static (recipient, message) => recipient.OnRunPhaseChanged(message));
         messenger.Register<RunProgressViewModel, RunProgressChangedMessage>(this, static (recipient, message) => recipient.OnRunProgressChanged(message));
     }
 
-    partial void OnJobIdChanged(string? value) => RefreshLogTail();
+    partial void OnJobIdChanged(string? value)
+    {
+        RefreshLogTail();
+        _outputFolder = null;
+        UpdateCanOpenViewer();
+    }
 
     private void OnRunPhaseChanged(RunPhaseChangedMessage message)
     {
@@ -115,7 +132,46 @@ public sealed partial class RunProgressViewModel : ObservableObject
         IsVmActionable = phase is JobPhase.Provisioning or JobPhase.Preparing or JobPhase.Running or JobPhase.Finalizing;
         CanCancel = !IsTerminal(phase) && phase != JobPhase.Cancelling;
         IsStayOpenBannerVisible = !IsTerminal(phase);
+        _outputFolder = null;
+        UpdateCanOpenViewer();
+        if (phase is JobPhase.Completed or JobPhase.PartiallyCompleted)
+        {
+            _ = LoadOutputFolderAsync(phase);
+        }
     }
+
+    // The folder the finished run's results were downloaded to (RunRecord.OutputDir, written by the runner).
+    private async Task LoadOutputFolderAsync(JobPhase phase)
+    {
+        try
+        {
+            var runs = await _runRepository.GetAllAsync(CancellationToken.None).ConfigureAwait(false);
+            var folder = runs.FirstOrDefault(r => r.JobId == JobId)?.OutputDir;
+            _dispatcher.Enqueue(() =>
+            {
+                if (CurrentPhase == phase)
+                {
+                    _outputFolder = folder;
+                    UpdateCanOpenViewer();
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // No folder known: Open viewer stays disabled rather than failing the page.
+        }
+    }
+
+    private void UpdateCanOpenViewer()
+    {
+        _canOpenViewer = CurrentPhase is JobPhase.Completed or JobPhase.PartiallyCompleted && !string.IsNullOrEmpty(_outputFolder);
+        OpenViewerCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanOpenViewer() => _canOpenViewer;
+
+    [RelayCommand(CanExecute = nameof(CanOpenViewer))]
+    private void OpenViewer() => _navigator.NavigateTo(ViewerViewModel.PageKey, _outputFolder);
 
     [RelayCommand(CanExecute = nameof(CanCancel))]
     private async Task CancelAsync(CancellationToken cancellationToken)

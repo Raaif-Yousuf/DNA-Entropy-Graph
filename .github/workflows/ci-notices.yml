@@ -24,6 +24,8 @@ on:
       - "THIRD-PARTY-NOTICES.md"
       - "scripts/gen_third_party_notices.py"
       - "scripts/check_third_party_notices.py"
+      - "scripts/vendored_assets.json"
+      - "app/src/DnaEntropyGraph.App/Assets/viewer/**"
       - ".github/workflows/ci-notices.yml"
   workflow_dispatch:
 

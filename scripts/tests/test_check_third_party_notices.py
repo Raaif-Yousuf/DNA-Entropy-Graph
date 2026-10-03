@@ -65,5 +65,38 @@ def test_a_planted_stale_line_in_the_real_committed_file_is_caught(real_dependen
     (tmp_path / ctpn.GENERATOR_RELATIVE).write_text(
         (repo_root / ctpn.GENERATOR_RELATIVE).read_text(encoding="utf-8"), encoding="utf-8"
     )
+    # The generator resolves the vendored manifest + assets against the checked root, so the
+    # tmp root needs them too (copied, so the real tree is never touched).
+    import shutil
+    shutil.copy(repo_root / "scripts" / "vendored_assets.json", tmp_path / "scripts" / "vendored_assets.json")
+    import json
+    for entry in json.loads((repo_root / "scripts" / "vendored_assets.json").read_text(encoding="utf-8"))["assets"]:
+        for rel in (entry["path"], entry["license_file"]):
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(repo_root / rel, tmp_path / rel)
     problems, _notices = ctpn.check(tmp_path, app_root=repo_root / "app", worker_root=repo_root / "worker")
     assert problems and any("stale" in p for p in problems)
+
+
+def test_check_reports_a_vendored_sha_mismatch_naming_the_file(tmp_path):
+    """The real generator, a real manifest, a tampered asset: the check must fail and the
+    problem text must name the file (the sha256 gate, not just byte-staleness)."""
+    import hashlib
+    import json
+
+    repo_root = SCRIPTS_DIR.parent
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "lib.js").write_bytes(b"tampered\n")
+    (tmp_path / "web" / "lib.LICENSE.txt").write_text("MIT\n", encoding="utf-8")
+    (tmp_path / "scripts" / "vendored_assets.json").write_text(json.dumps({"assets": [{
+        "path": "web/lib.js", "name": "lib.js", "description": "d", "version": "1", "license": "MIT",
+        "license_file": "web/lib.LICENSE.txt", "source": "s",
+        "sha256": hashlib.sha256(b"original\n").hexdigest(),
+    }]}), encoding="utf-8")
+    (tmp_path / ctpn.NOTICES_RELATIVE).write_text("# anything\n", encoding="utf-8")
+    (tmp_path / ctpn.GENERATOR_RELATIVE).write_text(
+        (repo_root / ctpn.GENERATOR_RELATIVE).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    problems, _ = ctpn.check(tmp_path)
+    assert problems and any("web/lib.js" in p and "sha256" in p for p in problems), problems

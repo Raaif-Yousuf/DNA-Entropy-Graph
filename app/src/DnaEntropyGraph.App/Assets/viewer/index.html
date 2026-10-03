@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Issue #72/#73: served from https://viewer.deg/ (virtual host mapping). Nothing here
+     fetches from the network: connect-src allows only the two virtual hosts, so a run
+     works with networking disabled and igv.js cannot phone home. Scripts are the two
+     files beside this page only (no inline script, no eval). -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src https://viewer.deg https://run.deg; worker-src blob:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Genome viewer</title>
+<link rel="stylesheet" href="viewer.css">
+<link rel="stylesheet" href="dark.css">
+</head>
+<body>
+<div id="igv"></div>
+<script src="igv.min.js"></script>
+<script src="bridge.js"></script>
+</body>
+</html>

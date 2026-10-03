@@ -297,6 +297,7 @@ python scripts\check_docs_index.py            # every docs/*.md is reachable fro
 python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs values, and real commit shas (--max-age-days 45 default)
 python scripts\check_user_home_paths.py       # no literal absolute user-home path in a tracked file (use %USERPROFILE%/$HOME instead)
 python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (needs dotnet AND the worker venv: runs in premerge full mode and in .github/workflows/ci-notices.yml, #416)
+# (vendored web assets, e.g. igv.js, are declared in `scripts/vendored_assets.json`; the generator verifies each sha256 + licence and emits the notices section from it)
 python scripts\check_version_lockstep.py      # every version-bearing file agrees
 python scripts\check_version_lockstep.py --tag v1.2.3   # release mode (#33): the tag must also equal both versions; a missing app/Directory.Build.props fails. release.yml (#178, not yet written) must call it with "${GITHUB_REF_NAME}" BEFORE building
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)

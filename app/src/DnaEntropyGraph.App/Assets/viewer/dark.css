@@ -1,0 +1,6 @@
+/* Dark mode, toggled by a "dark" class on <body> (bridge.js "theme" command).
+   igv.js draws its tracks, ruler and ideogram on canvases with white backgrounds, which CSS
+   selectors cannot recolor, so the whole viewer is inverted and hue-rotated back: white becomes
+   near-black and the base and gene colors keep their hue. */
+body.dark { background: #1f1f1f; color: #e6e6e6; }
+body.dark #igv { filter: invert(0.9) hue-rotate(180deg); }

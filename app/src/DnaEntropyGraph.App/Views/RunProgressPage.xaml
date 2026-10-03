@@ -53,6 +53,7 @@
             <Button x:Uid="RunProgressCancel" Command="{x:Bind ViewModel.CancelCommand}" />
             <Button x:Uid="RunProgressStopVm" Command="{x:Bind ViewModel.StopVmCommand}" />
             <Button x:Uid="RunProgressDeleteVm" Command="{x:Bind ViewModel.DeleteVmCommand}" />
+            <Button x:Uid="RunProgressOpenViewer" Command="{x:Bind ViewModel.OpenViewerCommand}" />
         </StackPanel>
     </Grid>
 </Page>
