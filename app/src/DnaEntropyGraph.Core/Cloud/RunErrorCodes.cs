@@ -19,6 +19,8 @@ public static class RunErrorCodes
     public const string WorkerImageUnavailable = "no_worker_image";
     public const string WorkerImageRefused = "worker_image_refused";
     public const string ResultTimeout = "result_timeout";
+    public const string WorkerNoHeartbeat = "worker_no_heartbeat";
+    public const string WorkerHeartbeatStale = "worker_heartbeat_stale";
     public const string WorkerFailed = "worker_failed";
     public const string DownloadFailed = "download_failed";
     public const string DownloadCorrupt = "download_corrupt";
@@ -49,7 +51,7 @@ public static class RunErrorCodes
     public static IReadOnlyList<string> All { get; } =
     [
         NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
-        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
+        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
         InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong,
@@ -108,6 +110,8 @@ public static class RunErrorCodes
         WorkerImageUnavailable => "RunError_no_worker_image",
         WorkerImageRefused => "RunError_worker_image_refused",
         ResultTimeout => "RunError_result_timeout",
+        WorkerNoHeartbeat => "RunError_worker_no_heartbeat",
+        WorkerHeartbeatStale => "RunError_worker_heartbeat_stale",
         WorkerFailed => "RunError_worker_failed",
         DownloadFailed => "RunError_download_failed",
         DownloadCorrupt => "RunError_download_corrupt",

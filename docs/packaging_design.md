@@ -51,6 +51,9 @@ installer; a lab PC with no .NET installed, or an old one, still works. `dotnet 
 win-x64 --self-contained -p:WindowsAppSDKSelfContained=true
 -p:WindowsPackageType=None`, then `vpk pack`.
 
+`WindowsAppSDKSelfContained` is also set in `DnaEntropyGraph.App.csproj` itself, conditioned on `_IsPublishing` (#475), so `dotnet publish` carries the runtime even without the flag; `msbuild -t:Publish` and VS publish profiles do not set `_IsPublishing` and must pass it.
+MEASURED 2026-10-03: `dotnet publish -r win-x64 --self-contained` without it produced 252 files and no `Microsoft.ui.xaml.dll`; with it, 441 files including `Microsoft.ui.xaml.dll`. `SelfContained` alone covers the .NET runtime only. It is publish-only because, set for every build, a self-contained Windows App SDK drops the bootstrap auto-initializer and the Guards.Tests host failed with `COMException: ClassFactory cannot supply requested class` in `DispatcherAdapter` (MEASURED 2026-10-03). `Guards.Tests/AppPublishPropertiesGuardTests` fails if the property goes missing.
+
 An unsigned build (7-day artifact retention) comes out of every `ci-app.yml` run for
 review; only a tagged push runs `release.yml`, which is the only path that signs and
 publishes.
@@ -100,6 +103,14 @@ already-released app version pulls onto a VM. `provenance.json` (per
 `science_and_formats.md`) and `status.json`'s `worker.version`/`worker.image` fields
 (per `job_contract.md`) both record the running worker's exact version and digest, so a
 support conversation about "which worker actually ran this job" never has to guess.
+
+**Enforcement.** `scripts/check_version_lockstep.py` compares `app/Directory.Build.props`'s `<Version>` with
+`worker/pyproject.toml`'s `[project].version` and exits 1 naming both files when they differ, or when
+`Directory.Build.props` is missing (a guard that skips a missing file can never fail). `ci-docs.yml` runs it on
+every PR through its `for script in scripts/check_*.py` glob, so a grep for its name in the workflow finds nothing.
+With `--tag vX.Y.Z` it also requires the tag to equal both; that call belongs in `release.yml` (#178, not yet written).
+MEASURED 2026-10-03: a planted pair (`0.0.1` vs `0.0.2`) printed `ERROR: version mismatch: worker/pyproject.toml says
+'0.0.1', app/Directory.Build.props says '0.0.2'` and exited 1.
 
 ## 6. Container images (spec D6)
 
