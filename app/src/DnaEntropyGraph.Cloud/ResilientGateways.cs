@@ -102,6 +102,27 @@ public sealed class ResilientProjectSetupGateway : IProjectSetupGateway
         => _pipeline.ExecuteAsync("ProjectSetup.EnableComputeApi", token => _inner.EnableComputeApiAsync(projectId, token), cancellationToken);
 }
 
+public sealed class ResilientProjectCatalogGateway : IProjectCatalogGateway
+{
+    private readonly IProjectCatalogGateway _inner;
+    private readonly CloudCallPipeline _pipeline;
+
+    public ResilientProjectCatalogGateway(IProjectCatalogGateway inner, CloudCallPipeline pipeline)
+    {
+        _inner = inner;
+        _pipeline = pipeline;
+    }
+
+    public Task<IReadOnlyList<ProjectSummary>> ListActiveProjectsAsync(CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("ProjectCatalog.ListActiveProjects", token => _inner.ListActiveProjectsAsync(token), cancellationToken);
+
+    public Task<ProjectSummary?> GetProjectAsync(string projectId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("ProjectCatalog.GetProject", token => _inner.GetProjectAsync(projectId, token), cancellationToken);
+
+    public Task<ProjectSummary> CreateProjectAsync(string projectId, string displayName, string installationId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("ProjectCatalog.CreateProject", token => _inner.CreateProjectAsync(projectId, displayName, installationId, token), cancellationToken);
+}
+
 public sealed class ResilientQuotaGateway : IQuotaGateway
 {
     private readonly IQuotaGateway _inner;

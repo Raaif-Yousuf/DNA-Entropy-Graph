@@ -30,6 +30,9 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public static class CloudErrorClassifier
 {
+    /// <summary>A per-minute rate limit: it clears by itself, so it is a plain transient error, never quota (even though the message says quota).</summary>
+    public const string RateLimitCode = "RATE_LIMIT_EXCEEDED";
+
     public static CloudErrorKind Classify(CloudError error)
     {
         ArgumentNullException.ThrowIfNull(error);
@@ -40,6 +43,11 @@ public static class CloudErrorClassifier
         var lower = message.ToLowerInvariant();
 
         // --- 1. Structured signals (docs/cloud_design.md section 5) ---
+
+        if (code == RateLimitCode)
+        {
+            return CloudErrorKind.Other;
+        }
 
         // A capacity-shaped structured code. RESOURCE_NOT_FOUND and
         // UNSUPPORTED_OPERATION are ambiguous on their own (they cover far

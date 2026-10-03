@@ -795,6 +795,80 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `Guards.Tests/AuthErrorResourceTests`.
 - **Testing.** `Cloud.Tests/Auth` runs the whole flow with no network and no browser: a fake that answers Google's
   real token and revoke URLs and checks the PKCE proof, and a fake browser that calls the real loopback listener back.
+## 16. The real Google gateways (issues #50 to #52)
+
+**Library decision (agent-made, reversible; filed as a DECISION issue).** The real gateways use the REST discovery
+clients `Google.Apis.CloudResourceManager.v3` (#50), `Google.Apis.Cloudbilling.v1` (#51) and `Google.Apis.ServiceUsage.v1` (#52),
+not the `Google.Cloud.*` gRPC-first packages the CLAUDE.md stack row names. Evidence (inspected 2026-10-02 in the
+restored `Google.Cloud.ResourceManager.V3` 2.6.0 and `Google.Api.Gax.Grpc` 4.12.1 packages): the only REST transport in
+that stack is `RestGrpcAdapter.Default`, which builds its own `HttpClient` and exposes no `HttpMessageHandler` or
+`HttpClient` seam, so a unit test cannot intercept a request. The discovery clients take
+`BaseClientService.Initializer.HttpClientFactory`, so the tests script an `HttpMessageHandler` and assert the method, the
+URL, the body and the bearer token. All are Apache-2.0 and share `Google.Apis.Core` with `Google.Apis.Auth`, which moved
+from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CLAUDE.md stack row.
+
+- **Where it lives.** `DnaEntropyGraph.Cloud/Rest/`. `GoogleCloudGateways.Create(IGcpAccessTokenSource, CloudCallPipeline,
+  GoogleCloudOptions?)` is the one construction point: it builds each client with a bearer-token interceptor that reads
+  the token source on every request (so a refreshed token is used by the replayed call) and wraps each gateway in its
+  `Resilient*` decorator. Google.Apis's own 503 retry is switched off (`ExponentialBackOffPolicy.None`) so
+  `CloudCallPipeline` is the only retry. MEASURED 2026-10-02: with the library default, three scripted 503s were all
+  consumed inside one gateway call and the pipeline's retry saw a different error; with `None` the pipeline retried
+  twice and gave up as `network` (THEORY, unverified: that the default is the cause of that, not the scripted handler).
+- **The production switch.** Production DI still resolves every gateway to `FakeGcp.WithCloudNotConnected()`
+  (`ServiceRegistration.cs`, "SWITCH POINT (#56)"). The switch is one call to `GoogleCloudGateways.Create(...)`, made when
+  every preflight step has a real implementation (#56) and the placeholder project id is gone (#520). Until then the
+  real gateways are built and exercised only by `Cloud.Tests/Rest`.
+- **Errors.** `GoogleApiErrors` reads Google's `google.rpc.Status` (an HTTP error body, or the `error` of a polled
+  operation) and throws `CloudOperationException`. A `QuotaFailure` detail, or "quota" in a `RESOURCE_EXHAUSTED`
+  message, is `Quota`; an `ORG_POLICY` reason, a `constraints/` id or the words "organization policy" is `OrgPolicy`;
+  everything else goes through `CloudErrorClassifier`. A setup step may give those kinds its own code
+  (`SetupErrorCodes`, below). THEORY (unverified, no live project): the exact markers Resource Manager uses for a
+  project-limit and an organization-policy refusal. The test fixtures are Google's documented shapes, not captures.
+- **Roster.** `SetupErrorCodes.All`, `docs/copy_catalog.md` and `scripts/triage_diagnostics.py` agree, enforced by
+  `Guards.Tests/SetupErrorResourceTests`. The English is `SetupError_<code>` in `Resources.resw`.
+- **Wizard wiring.** No wizard page exists yet (#99). The interfaces are in Core, `FakeGcp` implements them, and the
+  ViewModels that call them arrive with the page.
+
+### Project list and create (issue #50, wizard step 3)
+
+`IProjectCatalogGateway`: `ListActiveProjectsAsync`, `GetProjectAsync`, `CreateProjectAsync`. It has no production
+consumer and no DI registration until the wizard (#99) and its ViewModel (#56) arrive; it is not wired here on purpose.
+
+- **List.** `GET /v3/projects:search?query=state:ACTIVE`, following `nextPageToken`. Projects labelled
+  `app=dna-entropy-graph` sort first (`ProjectCatalogOrder`), then by name. An account with no projects gets an empty
+  list, which the wizard answers with one click on Create.
+- **Create.** `POST /v3/projects` with `projectId` `dna-entropy-<8 random lowercase alphanumerics>`
+  (`ProjectIdGenerator`), display name "DNA Entropy Graph", labels `app=dna-entropy-graph` and `installation-id`
+  (the VM-only labels `job-id`, `model`, `app-version` and `lifecycle` do not apply to a project). The response is a
+  long-running operation, polled with `OperationPoller` (1 s doubling to 10 s, 5 minute deadline); a timeout is
+  `OPERATION_POLL_TIMEOUT`, classed `network`.
+- **One retry per HTTP call, never per composite.** `GoogleProjectCatalogGateway` is not wrapped in
+  `ResilientProjectCatalogGateway`: it sends every call through `CloudCallPipeline` itself. The mutating
+  `POST /v3/projects` is retried alone; each `operations.get` is its own retried idempotent read. A 429 or 5xx on a
+  poll read therefore re-reads and never re-POSTs. The poll deadline is wall-clock (`GoogleCloudOptions.TimeProvider`)
+  and covers the time inside each read: `OperationPoller` hands every read a token that ends at the deadline, so a hung
+  GET (the HTTP client would wait about 100 s) ends at the deadline as `OPERATION_POLL_TIMEOUT`, not at the client's
+  timeout. The caller's own cancel still surfaces as a cancel. `CloudCallPipeline.IsTransient` also never replays a
+  spent poll deadline (defence in depth: no caller runs `PollAsync` inside the pipeline today; pinned by a direct
+  pipeline test). The last read is never given a fresh deadline: once the waits have spent the deadline the poll ends
+  as `OPERATION_POLL_TIMEOUT` without another read. A finished operation with no error and no project in its response is read back with
+  `projects.get` for the requested id; if that finds nothing the error is `OPERATION_NO_RESULT`, never a success with
+  an empty id.
+- **Replay safety.** The POST is replayed after a dropped connection. A `409 ALREADY_EXISTS`
+  is followed by a `projects.get`: a project of ours (it carries the app label) is returned, anyone else's is an
+  error. One wizard click therefore never makes two projects.
+- **Errors.** A project-limit refusal is `PROJECT_QUOTA` (kind `quota`, never retried; action: pick an existing
+  project); an organization-policy refusal is `ORG_POLICY_BLOCK` (kind `org_policy`; action: copy the message for IT).
+  A permanent create failure carries a setup code whose button fits (never the Try again catch-all): `PERMISSION`
+  (kind `permission`; Copy request for the project owner), `API_DISABLED` (Turn it on), `NO_BILLING` (Link billing).
+  A per-minute rate limit is retried and never `PROJECT_QUOTA`, whether it carries the ErrorInfo reason
+  `RATE_LIMIT_EXCEEDED` or only says so in a RESOURCE_EXHAUSTED message ("Quota exceeded for quota metric 'Requests' ...
+  Requests per minute", no details); THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word
+  "quota" without per-minute or per-second wording. A PERMISSION_DENIED 403 that merely quotes a `constraints/` id is a
+  permission error, not an organization-policy one, so `GetProjectAsync` still answers "not visible"; only an
+  ORG_POLICY reason, a 412, or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
+  null, with no request, for an id outside Google's project-id grammar.
+- **Not proven without a real account:** `docs/ToTest.md`.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

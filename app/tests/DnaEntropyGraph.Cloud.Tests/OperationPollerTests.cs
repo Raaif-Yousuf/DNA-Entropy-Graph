@@ -134,4 +134,67 @@ public class OperationPollerTests
             cts.Token,
             RecordingInstantDelay([])));
     }
+
+    [Fact]
+    public async Task A_poll_that_hangs_ends_at_the_wall_clock_deadline_as_the_timeout_code()
+    {
+        var outcome = await OperationPoller.PollAsync<string>(
+            async token =>
+            {
+                await Task.Delay(Timeout.Infinite, token);
+                return new OperationPoll<string>(true, "never", null);
+            },
+            deadline: TimeSpan.FromMilliseconds(200),
+            CancellationToken.None,
+            RecordingInstantDelay([]));
+
+        outcome.Success.ShouldBeFalse();
+        outcome.Error!.Code.ShouldBe(OperationPoller.TimeoutCode);
+    }
+
+    [Fact]
+    public async Task The_callers_cancel_during_a_hung_poll_is_a_cancel_not_a_timeout()
+    {
+        using var cts = new CancellationTokenSource();
+        var poll = OperationPoller.PollAsync<string>(
+            async token =>
+            {
+                await cts.CancelAsync();
+                await Task.Delay(Timeout.Infinite, token);
+                return new OperationPoll<string>(true, "never", null);
+            },
+            deadline: TimeSpan.FromMinutes(5),
+            cts.Token,
+            RecordingInstantDelay([]));
+
+        await Should.ThrowAsync<OperationCanceledException>(() => poll);
+    }
+
+    [Fact]
+    public async Task After_the_last_capped_wait_spends_the_deadline_the_poller_times_out_without_another_read()
+    {
+        // Waits of 1s and 2s sum to the 3s deadline. A third read would start with nothing left, so it must not be
+        // issued at all (it used to get a fresh FULL deadline, so a hang there waited up to 2x the deadline).
+        var reads = 0;
+        var poll = OperationPoller.PollAsync<string>(
+            async token =>
+            {
+                reads++;
+                if (reads <= 2)
+                {
+                    return new OperationPoll<string>(false, null, null);
+                }
+
+                await Task.Delay(Timeout.Infinite, token);
+                return new OperationPoll<string>(true, "never", null);
+            },
+            deadline: TimeSpan.FromSeconds(3),
+            CancellationToken.None,
+            RecordingInstantDelay([]));
+
+        var outcome = await poll.WaitAsync(TimeSpan.FromMilliseconds(1000), TestContext.Current.CancellationToken);
+
+        outcome.Error!.Code.ShouldBe(OperationPoller.TimeoutCode);
+        reads.ShouldBe(2);
+    }
 }
