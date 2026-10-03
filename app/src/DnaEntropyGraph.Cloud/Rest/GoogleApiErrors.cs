@@ -103,7 +103,7 @@ internal static class GoogleApiErrors
             return CloudErrorKind.Billing;
         }
 
-        if (status.HasQuotaFailure || (status.Status == "RESOURCE_EXHAUSTED" && lower.Contains("quota", StringComparison.Ordinal)))
+        if (status.HasQuotaFailure || ((status.Status == "RESOURCE_EXHAUSTED" || status.HttpStatus == 403) && lower.Contains("quota", StringComparison.Ordinal)))
         {
             return CloudErrorKind.Quota;
         }

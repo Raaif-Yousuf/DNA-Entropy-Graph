@@ -396,6 +396,12 @@
   <data name="SetupAction_LinkBilling" xml:space="preserve">
     <value>Link billing</value>
   </data>
+  <data name="SetupError_BILLING_STILL_OFF" xml:space="preserve">
+    <value>Google accepted that billing account, but this project still has billing off. The account may be suspended or may have no working payment method. Choose Pick another billing account and select a different one.</value>
+  </data>
+  <data name="SetupAction_PickAnotherBillingAccount" xml:space="preserve">
+    <value>Pick another billing account</value>
+  </data>
   <data name="SetupAction_CopyBillingRequest" xml:space="preserve">
     <value>Copy request for the billing admin</value>
   </data>

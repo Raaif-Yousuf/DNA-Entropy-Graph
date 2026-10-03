@@ -202,6 +202,7 @@ roster; `Guards.Tests/AuthErrorResourceTests` fails when a code in it has no row
 | `ORG_POLICY_BLOCK` | `OrgPolicyBlock` | Your organization blocks this | Your organization's Google Cloud settings block this action. | [Copy message for IT] |
 | `NO_BILLING` | `NoBilling` | No payment method on file | This project has no billing account, so Google won't start any computer. | [Link billing] / [Create billing account] |
 | `BILLING_NO_PERMISSION` | `BillingNoPermission` | Can't link this billing account | You can use this billing account but you're not allowed to link projects to it. | [Copy request for the billing admin] |
+| `BILLING_STILL_OFF` | `BillingStillOff` | Billing is still off | Google accepted that billing account, but this project still has billing off. The account may be suspended or may have no working payment method. | [Pick another billing account] |
 | `FREE_TRIAL_NO_GPU` | `FreeTrialNoGpu` | Free Trial can't use graphics cards | Free Trial accounts can't rent a graphics-card computer at all. Activate the full account; your free credit carries over. | [Open billing] |
 | `API_DISABLED` | `ApiDisabled` | A Google service isn't switched on | Compute Engine isn't switched on in this project yet. | [Turn it on] |
 | `PERMISSION` | `Permission` | Not allowed to create computers | Your account isn't allowed to create computers in this project. | [Copy request for the project owner] |

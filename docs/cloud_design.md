@@ -810,12 +810,12 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   Google omits `billingEnabled` when it is false, so an absent value reads as off. Billing is "enabled" only when an
   account is linked and `billingEnabled` is true.
 - **Policy.** On: nothing is linked. Off with one open account: linked for the user, then the status is read back
-  (a link Google accepted that did not turn billing on is `NeedsAccount`, not success). Several: `ChooseAccount`,
+  (a link Google accepted that did not turn billing on is `LinkedButStillOff`, code `BILLING_STILL_OFF`, action Pick another billing account; never `NO_BILLING`, which would loop the user back to Link). Several: `ChooseAccount`,
   and `LinkAsync` links the one the user picked. None: `NeedsAccount` with `BillingLinks.ForProject(projectId)`, the
   console page for that project; calling `EnsureAsync` again after the user adds a payment method is the re-check.
   The wizard action for the code `NO_BILLING` is that link (`SetupAction_LinkBilling`).
-- **No permission.** A 403 on the link is `BILLING_NO_PERMISSION` (kind `permission`), decided on the status, because the
-  classifier reads the word "billing" in a 403 message as a billing-off error. The action is a copyable request:
+- **No permission.** The error reason and kind decide first (a Billing API that is off is `api_disabled`, a billing quota 403 is `quota`, billing off is `billing`, a 403 naming a non-billing permission such as `resourcemanager.projects.createBillingAssignment` is a plain `permission`); only a remaining permission 403 on the link is `BILLING_NO_PERMISSION` (kind `permission`). The classifier (issue #539) no longer reads the word "billing" in a permission denial as billing-off, and the
+  action is a copyable request:
   `SetupBillingRequestText` (with `{project}` and `{account}`) filled by `BillingRequestText.Fill`.
 - **Not here yet.** The wizard page (#99) and the health row that must go green on its own after a link: nothing in
   the shipped UI calls this until then. `ResilientProjectSetupGateway.IsBillingEnabledAsync` (the preflight step) is

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DnaEntropyGraph.Core.Cloud;
 using Google;
 using Google.Apis.Cloudbilling.v1;
@@ -10,7 +11,7 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// <c>billingAccounts.list</c> with <c>filter=open=true</c>, and <c>projects.updateBillingInfo</c> (a PUT). Wrapped by
 /// <see cref="ResilientBillingGateway"/>; no retry of its own.
 /// </summary>
-internal sealed class GoogleBillingGateway : IBillingGateway
+internal sealed partial class GoogleBillingGateway : IBillingGateway
 {
     private const string OpenFilter = "open=true";
     private const int PageSize = 100;
@@ -80,12 +81,24 @@ internal sealed class GoogleBillingGateway : IBillingGateway
         }
         catch (GoogleApiException ex)
         {
-            // THEORY (unverified, no live account): a 403 here means the user lacks billing.resourceAssociations.create on the account.
-            // Decided on the status, not the classifier: that one reads the word "billing" in the message as a billing-off error.
+            // The reason and kind decide first (the Billing API being off, a billing quota, billing off are not a missing
+            // role). THEORY (unverified, no live account): a plain permission 403 that names no other permission means
+            // the user lacks billing.resourceAssociations.create on the account; one that names a non-billing
+            // permission (for example resourcemanager.projects.createBillingAssignment) is about the project.
             var status = GoogleApiErrors.FromApiException(ex);
-            throw status.HttpStatus == 403
+            var exception = GoogleApiErrors.ToException(status);
+            throw status.HttpStatus == 403 && exception.Kind == CloudErrorKind.Permission && !NamesNonBillingPermission(status.Message)
                 ? new CloudOperationException(new CloudError(SetupErrorCodes.BillingNoPermission, 403, status.Message), CloudErrorKind.Permission)
-                : GoogleApiErrors.ToException(status);
+                : exception;
         }
     }
+
+    private static bool NamesNonBillingPermission(string message)
+    {
+        var named = NamedPermission().Match(message);
+        return named.Success && !named.Groups[1].Value.StartsWith("billing.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    [GeneratedRegex(@"permission\s+'?([a-z][a-zA-Z0-9]*\.[a-zA-Z0-9.]+)", RegexOptions.IgnoreCase)]
+    private static partial Regex NamedPermission();
 }

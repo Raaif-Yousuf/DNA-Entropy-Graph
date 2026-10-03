@@ -123,11 +123,78 @@ public class GoogleBillingGatewayTests
     public async Task Reading_billing_with_a_403_stays_a_plain_permission_error()
     {
         var rig = new GoogleGatewayHarness();
-        rig.Handler.Returns(Get, "/v1/projects/my-lab/billingInfo", 403, RpcError(403, "PERMISSION_DENIED", "The caller does not have permission"));
+        // The message names a billing permission: it must not be read as "billing is off" (issue #539).
+        rig.Handler.Returns(Get, "/v1/projects/my-lab/billingInfo", 403, RpcError(403, "PERMISSION_DENIED", "The caller does not have permission billing.resourceAssociations.get"));
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Billing.GetBillingStatusAsync("my-lab", CancellationToken.None));
 
         ex.Error.Code.ShouldBe("PERMISSION_DENIED");
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        ex.Error.Message.ShouldContain("billing.resourceAssociations.get");
+    }
+
+    [Fact]
+    public async Task Listing_accounts_with_a_403_that_names_a_billing_permission_is_a_permission_error()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, "/v1/billingAccounts", 403, RpcError(403, "PERMISSION_DENIED", "Permission 'billing.accounts.list' denied on the billing account"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Billing.ListOpenBillingAccountsAsync(CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+    }
+
+    private static string RpcErrorWithReason(int http, string status, string message, string reason)
+        => "{\"error\":{\"code\":" + http + ",\"message\":" + JsonSerializer.Serialize(message) + ",\"status\":\"" + status
+            + "\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"" + reason + "\",\"domain\":\"googleapis.com\"}]}}";
+
+    [Fact]
+    public async Task Linking_with_the_billing_api_off_is_api_disabled_not_a_request_for_the_billing_admin()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Put, "/v1/projects/my-lab/billingInfo", 403, RpcErrorWithReason(403, "PERMISSION_DENIED", "Cloud Billing API has not been used in project 123 before or it is disabled.", "SERVICE_DISABLED"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Billing.LinkProjectAsync("my-lab", "billingAccounts/AAA", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.BillingNoPermission);
+    }
+
+    [Fact]
+    public async Task Linking_with_a_project_side_permission_denial_is_a_plain_permission_error_not_a_request_for_the_billing_admin()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Put, "/v1/projects/my-lab/billingInfo", 403, RpcError(403, "PERMISSION_DENIED", "Permission 'resourcemanager.projects.createBillingAssignment' denied on project 'my-lab'"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Billing.LinkProjectAsync("my-lab", "billingAccounts/AAA", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        ex.Error.Code.ShouldBe("PERMISSION_DENIED");
+        ex.Error.Message.ShouldContain("resourcemanager.projects.createBillingAssignment");
+    }
+
+    [Fact]
+    public async Task Linking_with_a_billing_quota_403_is_quota_not_a_request_for_the_billing_admin()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Put, "/v1/projects/my-lab/billingInfo", 403, RpcError(403, "PERMISSION_DENIED", "Cloud billing quota exceeded: this billing account cannot link more projects."));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Billing.LinkProjectAsync("my-lab", "billingAccounts/AAA", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Quota);
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.BillingNoPermission);
+        rig.Handler.To(Put, "/v1/projects/my-lab/billingInfo").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Linking_with_a_bare_403_still_falls_back_to_BILLING_NO_PERMISSION()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Put, "/v1/projects/my-lab/billingInfo", 403, RpcError(403, "PERMISSION_DENIED", "The caller does not have permission"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Billing.LinkProjectAsync("my-lab", "billingAccounts/AAA", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe(SetupErrorCodes.BillingNoPermission);
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
     }
 

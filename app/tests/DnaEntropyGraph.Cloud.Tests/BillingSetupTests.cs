@@ -86,12 +86,15 @@ public class BillingSetupTests
     }
 
     [Fact]
-    public async Task A_link_that_did_not_turn_billing_on_is_reported_as_needing_an_account_not_as_success()
+    public async Task A_link_that_did_not_turn_billing_on_is_reported_as_still_off_with_its_own_code_not_as_no_account_or_success()
     {
         var gcp = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/AAA", "Lab card").WithBillingLinkThatDoesNotEnable();
 
         var outcome = await new BillingSetup(gcp).EnsureAsync(Project, CancellationToken.None);
 
-        outcome.Kind.ShouldBe(BillingOutcomeKind.NeedsAccount);
+        outcome.Kind.ShouldBe(BillingOutcomeKind.LinkedButStillOff);
+        outcome.Code.ShouldBe(SetupErrorCodes.BillingStillOff);
+        outcome.Code.ShouldNotBe(SetupErrorCodes.NoBilling);
+        outcome.DeepLink.ShouldBe(BillingLinks.ForProject(Project));
     }
 }

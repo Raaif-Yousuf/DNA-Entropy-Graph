@@ -100,6 +100,31 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(expected);
     }
 
+    // Issue #539: a permission denial that names a billing permission is a missing role, not "billing is off".
+    [Theory]
+    [InlineData("IAM_PERMISSION_DENIED", 403, "Permission 'billing.resourceAssociations.create' denied on resource '//cloudbilling.googleapis.com/billingAccounts/AAA'.")]
+    [InlineData("PERMISSION_DENIED", 403, "The caller does not have permission billing.resourceAssociations.get")]
+    [InlineData("PERMISSION_DENIED", 403, "Permission 'billing.accounts.list' denied on the billing account")]
+    [InlineData(null, 403, "Permission 'billing.resourceAssociations.create' denied")]
+    [InlineData(null, null, "Permission 'billing.resourceAssociations.create' denied on billing account AAA")]
+    public void A_permission_denial_that_mentions_billing_is_permission_and_keeps_the_permission_name(string? code, int? httpStatus, string message)
+    {
+        var error = new CloudError(code, httpStatus, message);
+
+        CloudErrorClassifier.Classify(error).ShouldBe(CloudErrorKind.Permission);
+        error.Message.ShouldContain("billing.");
+    }
+
+    [Theory]
+    [InlineData("BILLING_DISABLED", 403, "This API method requires billing to be enabled.")]
+    [InlineData(null, 403, "Billing must be enabled for activation of service(s)")]
+    [InlineData(null, 403, "The billing account for the owning project is disabled in state absent")]
+    [InlineData(null, 403, "Billing account is not active for this project")]
+    public void A_403_that_says_billing_is_off_stays_billing(string? code, int? httpStatus, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(CloudErrorKind.Billing);
+    }
+
     [Fact]
     public void A_structured_QUOTA_EXCEEDED_code_is_never_confused_with_a_structured_stockout_code()
     {

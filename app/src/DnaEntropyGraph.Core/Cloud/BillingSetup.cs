@@ -14,6 +14,9 @@ public enum BillingOutcomeKind
 
     /// <summary>No usable account: open <see cref="BillingOutcome.DeepLink"/>, then call <see cref="BillingSetup.EnsureAsync"/> again (that is the re-check).</summary>
     NeedsAccount,
+
+    /// <summary>The link was accepted but billing is still off: <see cref="BillingOutcome.DeepLink"/> opens the project's billing page, or the user picks another account.</summary>
+    LinkedButStillOff,
 }
 
 public sealed record BillingOutcome(
@@ -25,7 +28,12 @@ public sealed record BillingOutcome(
     public IReadOnlyList<BillingAccountSummary> Accounts { get; init; } = Accounts ?? [];
 
     /// <summary>The <see cref="SetupErrorCodes"/> code whose message the wizard shows for this outcome, or null when nothing is wrong.</summary>
-    public string? Code => Kind == BillingOutcomeKind.NeedsAccount ? SetupErrorCodes.NoBilling : null;
+    public string? Code => Kind switch
+    {
+        BillingOutcomeKind.NeedsAccount => SetupErrorCodes.NoBilling,
+        BillingOutcomeKind.LinkedButStillOff => SetupErrorCodes.BillingStillOff,
+        _ => null,
+    };
 }
 
 /// <summary>
@@ -66,7 +74,7 @@ public sealed class BillingSetup
         var status = await _gateway.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
         return status.Enabled
             ? new BillingOutcome(BillingOutcomeKind.Linked, billingAccountId)
-            : new BillingOutcome(BillingOutcomeKind.NeedsAccount, DeepLink: BillingLinks.ForProject(projectId));
+            : new BillingOutcome(BillingOutcomeKind.LinkedButStillOff, DeepLink: BillingLinks.ForProject(projectId));
     }
 }
 
