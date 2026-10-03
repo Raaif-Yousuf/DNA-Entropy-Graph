@@ -52,7 +52,7 @@ public class CloudJobRunnerEnsureBucketTimeoutTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static async Task<(CloudJobResult Result, SlowBucketStorage Storage)> RunAsync(TimeSpan bucketBudget)
+    private static (CloudJobRunner Runner, SlowBucketStorage Storage) NewRunner(TimeSpan bucketBudget)
     {
         var gcp = new FakeGcp();
         var clock = new VirtualTimeProvider();
@@ -73,10 +73,15 @@ public class CloudJobRunnerEnsureBucketTimeoutTests
                 return Task.CompletedTask;
             },
         };
+        return (runner, storage);
+    }
+
+    private static async Task<(CloudJobResult Result, SlowBucketStorage Storage)> RunAsync(TimeSpan bucketBudget)
+    {
+        var (runner, storage) = NewRunner(bucketBudget);
         var result = await runner.RunAsync(TestInputs.Request("job-600", Spec("job-600")), CancellationToken.None);
         return (result, storage);
     }
-
     [Fact]
     public async Task A_bucket_sequence_longer_than_the_call_timeout_but_inside_the_bucket_budget_completes_the_run()
     {
@@ -93,6 +98,30 @@ public class CloudJobRunnerEnsureBucketTimeoutTests
 
         storage.Completed.ShouldBe(0);
         result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldBe(RunErrorCodes.For(CloudErrorKind.Network));
+        result.FailureMessage.ShouldNotBeNull().ShouldContain("timed out", Case.Insensitive, "the cut is the TIMEOUT network error, not some other failure");
+    }
+
+    [Fact]
+    public async Task Uploading_inputs_gives_the_bucket_sequence_the_bucket_budget_too()
+    {
+        var (runner, storage) = NewRunner(TimeSpan.FromMinutes(5));
+
+        await runner.UploadInputsAsync(TestInputs.Request("job-600u", Spec("job-600u")), CancellationToken.None);
+
+        storage.Completed.ShouldBe(1, "the 90 s bucket sequence was cut by the 60 s one-request deadline on the upload path");
+    }
+
+    [Fact]
+    public async Task Uploading_inputs_past_the_bucket_budget_is_cut_as_a_network_timeout()
+    {
+        var (runner, storage) = NewRunner(TimeSpan.FromSeconds(80));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(() => runner.UploadInputsAsync(TestInputs.Request("job-600v", Spec("job-600v")), CancellationToken.None));
+
+        failure.Kind.ShouldBe(CloudErrorKind.Network);
+        failure.Error.Code.ShouldBe("TIMEOUT");
+        storage.Completed.ShouldBe(0);
     }
 
     [Fact]

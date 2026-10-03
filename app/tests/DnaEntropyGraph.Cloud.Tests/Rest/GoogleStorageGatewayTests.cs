@@ -122,9 +122,9 @@ public class GoogleStorageGatewayTests
     private static void ScriptCreatedListing(ScriptedHttpHandler handler, string created)
         => handler.Returns(Get, Buckets, 200, List(BucketJson(created)));
 
-    private static GoogleGatewayHarness NewRig(int retentionDays = 30, string? installationId = "installation-1")
+    private static GoogleGatewayHarness NewRig(int retentionDays = 30, string? installationId = "installation-1", TimeProvider? retryClock = null, TimeSpan? attemptTimeout = null)
     {
-        var rig = new GoogleGatewayHarness(retries: 2, installationId: installationId, retentionDays: retentionDays);
+        var rig = new GoogleGatewayHarness(retries: 2, installationId: installationId, retentionDays: retentionDays, retryClock: retryClock, attemptTimeout: attemptTimeout);
         rig.Handler.Returns(Get, Project, 200, ProjectBody());
         return rig;
     }
@@ -1068,5 +1068,62 @@ public class GoogleStorageGatewayTests
         rig.Handler.To(Post, UploadPath(Name(0))).ShouldBeEmpty();
         rig.Handler.To(HttpMethod.Delete, BucketPath(Name(0))).ShouldBeEmpty();
     }
-}
 
+    // ---- issue #600, round 2: a per-attempt cap on single requests, none on media transfers ----
+
+    [Fact]
+    public async Task A_bucket_listing_that_never_answers_is_cut_per_attempt_and_fails_as_a_network_TIMEOUT()
+    {
+        // The retry clock fires every timer at once (a virtual clock), so each attempt's cap passes at once: nothing waits 30 s of real time.
+        var rig = NewRig(retryClock: new VirtualTimeProvider(autoAdvance: true), attemptTimeout: TimeSpan.FromSeconds(30));
+        for (var i = 0; i < 3; i++)
+        {
+            rig.Handler.Hangs(Get, Buckets);
+        }
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+
+        failure.Kind.ShouldBe(CloudErrorKind.Network);
+        failure.Error.Code.ShouldBe("TIMEOUT");
+        rig.Handler.To(Post, Buckets).ShouldBeEmpty("a hung listing must not reach the insert");
+    }
+
+    [Fact]
+    public async Task A_slow_upload_is_not_cut_by_the_per_attempt_cap()
+    {
+        // The cap is 10 ms and every timer fires at once: were it applied to a transfer, this upload would be cut at once.
+        var rig = NewRig(retryClock: new VirtualTimeProvider(autoAdvance: true), attemptTimeout: TimeSpan.FromMilliseconds(10));
+        rig.Handler.Calls(Post, UploadPath("deg-b"), async ct =>
+        {
+            await Task.Delay(150, ct);
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+            response.Headers.Location = new Uri("https://storage.googleapis.com" + UploadPath("deg-b") + "?uploadType=resumable&upload_id=sess-1");
+            return response;
+        });
+        rig.Handler.Calls(Put, UploadPath("deg-b"), async ct =>
+        {
+            await Task.Delay(150, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"name\":\"x\",\"bucket\":\"deg-b\"}", Encoding.UTF8, "application/json") };
+        });
+
+        await rig.Gateways.Storage.UploadAsync("deg-b", "jobs/j1/input.gb", new MemoryStream(new byte[1024]), CancellationToken.None);
+
+        rig.Handler.To(Put, UploadPath("deg-b")).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_slow_download_is_not_cut_by_the_per_attempt_cap()
+    {
+        var rig = NewRig(retryClock: new VirtualTimeProvider(autoAdvance: true), attemptTimeout: TimeSpan.FromMilliseconds(10));
+        rig.Handler.Calls(Get, ObjectPath, async ct =>
+        {
+            await Task.Delay(150, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json") };
+        });
+
+        await using var stream = await rig.Gateways.Storage.DownloadAsync("deg-b", "jobs/j1/result.json", CancellationToken.None);
+
+        using var reader = new StreamReader(stream);
+        (await reader.ReadToEndAsync(TestContext.Current.CancellationToken)).ShouldBe("{\"ok\":true}");
+    }}

@@ -463,7 +463,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `EnsureBucketTimeout` (5 min, `CloudRunSettings`) and not the 60 s of one request. A cut still lands as a network failure; the next call finds
   the bucket by label and writes a missing config (`GoogleStorageGateway.ConvergeAsync`, proven by
   `A_second_listing_that_keeps_failing_strands_a_created_bucket_and_the_next_call_adopts_and_configures_it`). The duplicate a lost
-  two-PC race leaves is not cleaned up by a cut; it stays an empty labelled bucket.
+  two-PC race leaves is not cleaned up by a cut; it stays an empty labelled bucket. A request that never answers is not left to that 5 minutes: see the per-attempt cap in section 12.
 - **Per-call deadline.** Every gateway call the runner makes runs under `CallTimeout` (60 s) through
   `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
   `StopVmAsync` and `DeleteVmAsync`, and each read of a downloaded file. A call that outlives it is a
@@ -711,6 +711,8 @@ the policy for free.
 | HTTP 401 | `ICloudTokenRefresher.RefreshAsync` once, then the call is replayed once. A second 401 becomes kind `permission` (sign in again) |
 | 403, 409, 412, stockout, anything else | Untouched: `CloudErrorClassifier` and the zone ladder own them |
 | Most recent calls failed (6+ calls in 30s, 80% transient failures) | The breaker opens for 30s. Calls fail fast as kind `network` with code `OFFLINE` and are not sent. **Cleanup bypasses the breaker**: `StopVm`, `DeleteVm` and `FindByJobId` go through a second pipeline with the same retries and no breaker, because they are what stops the meter; if a cancel's cleanup still fails the run is recorded `Failed` with code `cancel_failed`, never left in `Cancelling`. `CloudCallPipeline.IsOffline`/`OfflineChanged` report it; it closes after a successful half-open call |
+
+**Per-attempt cap (issue #600).** A request that never answers would otherwise wait for the caller's own deadline (the 5 minute `EnsureBucketTimeout`) or the HTTP client's 100 s default. `CloudCallPipeline.ExecuteAsync(..., singleRequest: true)` adds an innermost Polly timeout of `CloudRetryOptions.AttemptTimeout` (30 s) to that call, so each hung attempt is cut (a `TimeoutRejectedException`, transient: retried, counted by the breaker) and the call ends as kind `network`, code `TIMEOUT`, after the retries. Only the single small metadata requests pass it: `GoogleStorageGateway` list, insert, get, delete, patch and the ~300 byte config write (`GoogleStorageGateway.cs`, `singleRequest: true` sites) and `GoogleProjectCatalogGateway.FetchAsync`. **Never capped:** `GoogleStorageGateway.UploadAsync` and the two downloads (a large input or result must be allowed to take as long as the link needs; the runner's size-scaled `UploadTimeout` and the result wait bound them), and anything that wraps several requests (the `Resilient*` wrappers).
 
 Retrying a mutating call is safe only because of two earlier decisions: `CreateVmAsync`
 carries a deterministic request id (issue #257, so a replay is idempotent) and stop/delete

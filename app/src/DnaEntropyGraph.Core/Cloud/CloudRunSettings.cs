@@ -49,9 +49,12 @@ internal sealed class CloudRunSettings
 
     /// <summary>
     /// The budget of the one gateway call that is a whole sequence, <see cref="IStorageGateway.EnsureBucketAsync"/> (project get, list, insert,
-    /// read-back, second list, loser delete or config write, patch: up to about ten requests, each with its own retry backoff of
-    /// up to about 35 s under the default retry options). One <see cref="CallTimeout"/> for all of them could cut the call between
-    /// the insert and the config write (#600). THEORY (unverified): a cut happens in practice; the next call repairs an unconfigured bucket either way.
+    /// read-back, second list, loser delete or config write, patch: up to about ten requests, each with its own retries inside the gateway), so one
+    /// <see cref="CallTimeout"/> could cut it between the insert and the config write (#600). Sizing from the retry defaults (4 retries, backoff about
+    /// 1 + 2 + 4 + 8 = 15 s, each attempt capped at 30 s): a bad stretch where every one of 10 requests needs all its retries costs about 150 s of backoff
+    /// plus request time, so 300 s leaves about twice that; a single request that never answers uses at most 5 x 30 s + 15 s = 165 s of it. This is the
+    /// cap on the whole sequence, not the hung-request guard (that is the per-attempt cap). THEORY (unverified): a cut happens in practice; the next call
+    /// repairs an unconfigured bucket either way.
     /// </summary>
     public TimeSpan EnsureBucketTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
