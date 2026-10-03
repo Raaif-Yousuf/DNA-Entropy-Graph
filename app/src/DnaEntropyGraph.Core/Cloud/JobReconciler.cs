@@ -29,6 +29,28 @@ public enum ReattachAction
 /// <summary>One row's outcome. <paramref name="FinalPhase"/> and <paramref name="ErrorCode"/> are what the row ended as, when it ended.</summary>
 public sealed record ReattachOutcome(string JobId, ReattachAction Action, JobPhase? FinalPhase = null, string? ErrorCode = null);
 
+/// <summary>What the lifecycle enforcement did with one VM (issue #530).</summary>
+public enum LifecycleAction
+{
+    /// <summary>A finished run's VM existed in a state its lifecycle label forbids (delete, or keep-alive past its expiry with afterKeepAlive delete): deleted.</summary>
+    VmDeleted,
+
+    /// <summary>A finished run's VM was running when its lifecycle label says it should be stopped (stop, or keep-alive past its expiry with afterKeepAlive stop): stopped.</summary>
+    VmStopped,
+
+    /// <summary>A stopped VM of this installation sat idle longer than <see cref="CloudHousekeepingSettings.IdleStoppedVmHoursKey"/>: deleted.</summary>
+    IdleVmDeleted,
+
+    /// <summary>The cloud could not be asked (no connection, offline, a deadline). Nothing was changed; the next launch or reconnect looks again.</summary>
+    Deferred,
+
+    /// <summary>The cloud refused the stop or delete (permission, org policy, billing). Nothing was changed; <see cref="LifecycleOutcome.ErrorCode"/> names why.</summary>
+    Failed,
+}
+
+/// <summary>One VM the lifecycle enforcement acted on, or could not. A VM it looked at and left alone has no outcome.</summary>
+public sealed record LifecycleOutcome(string JobId, string VmName, LifecycleAction Action, string? ErrorCode = null);
+
 /// <summary>
 /// Issue #59 (docs/architecture.md section 6, "Crash-safe resumption"): on launch, every run a killed or closed app left in a
 /// non-terminal phase is reattached. This class only DECIDES; the walking is the runner's. A run is handed back to
@@ -46,13 +68,20 @@ public sealed record ReattachOutcome(string JobId, ReattachAction Action, JobPha
 /// <item><term>Preparing to Downloading, no VM, no result</term><description><see cref="ReattachAction.FailedVmMissing"/>.</description></item>
 /// </list>
 /// Only rows created before this reconciler was built are considered: a run the user starts after launch is owned by the engine.
-/// Retroactive lifecycle enforcement (a VM that should be deleted but is only stopped, keep-alive expiry, idle stopped VMs) and the
-/// reconnect trigger are the follow-up issue's; see docs/architecture.md section 6.
+///
+/// Issue #530 adds <see cref="EnforceLifecycleAsync"/> (a finished run's VM in a state its lifecycle label forbids; keep-alive past its
+/// expiry; this installation's stopped VMs idle longer than <see cref="CloudHousekeepingSettings.IdleStoppedVmHoursKey"/>) and
+/// <see cref="ReconcileAsync"/>, the one entry that does both and that <see cref="ReconcileOnReconnect"/> runs again when the connection returns.
+/// Every job a pass touches is registered in <see cref="ActiveRuns"/> first, so two passes (launch and a reconnect), or a pass and the engine,
+/// never write the same job at once.
 /// </summary>
 public sealed class JobReconciler
 {
     /// <summary>The longest one look at the cloud (find the VM, read result.json) may take before the run is deferred to the next launch.</summary>
-    private static readonly TimeSpan LookupTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultLookupTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>The longest one delete or stop may take. Compute delete and stop are operations that run for tens of seconds, so this is far longer than a lookup; a refusal still comes back at once.</summary>
+    private static readonly TimeSpan DefaultMutationTimeout = TimeSpan.FromMinutes(5);
 
     private readonly CloudJobRunner _runner;
     private readonly IComputeGateway _compute;
@@ -63,9 +92,21 @@ public sealed class JobReconciler
     private readonly RunRowStore _rows;
     private readonly Func<string?> _downloadsFolder;
     private readonly ActiveRuns _active;
+    private readonly ISettingsStore _settings;
+    private readonly TimeProvider _time;
     private readonly DateTimeOffset _startedAt;
+    private readonly TimeSpan _lookupTimeout;
+    private readonly TimeSpan _mutationTimeout;
+    private readonly IDiagnosticsLog _log;
+
+    /// <summary>
+    /// How far back a finished run's VM is looked up by its job-id label. Older leaks are caught by the idle sweep, which lists by installation and
+    /// so costs one call however long the history is; this keeps a launch from making one lookup per run row ever recorded.
+    /// </summary>
+    private static readonly TimeSpan LifecycleLookback = TimeSpan.FromDays(14);
 
     /// <param name="activeRuns">The registry the engine's Cancel looks in. Required: a private one would let a cancel miss a reattached run.</param>
+    /// <param name="settings">Where the installation id (which VMs are ours, Hard Rule 9) and the idle-VM limit are read, on every pass so a changed setting applies at once.</param>
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
     /// <param name="downloadsFolder">The default output parent for a run whose row names none.</param>
     public JobReconciler(
@@ -76,11 +117,19 @@ public sealed class JobReconciler
         IRunInputStore inputs,
         IWorkerImageProvider images,
         ActiveRuns activeRuns,
+        ISettingsStore settings,
         Action<string, JobPhase>? onPhaseChanged = null,
         Func<string?>? downloadsFolder = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        TimeSpan? lookupTimeout = null,
+        TimeSpan? mutationTimeout = null,
+        IDiagnosticsLog? log = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
+        _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
+        _mutationTimeout = mutationTimeout ?? DefaultMutationTimeout;
         _active = activeRuns;
+        _settings = settings;
         _runner = runner;
         _compute = compute;
         _storage = storage;
@@ -89,7 +138,273 @@ public sealed class JobReconciler
         _images = images;
         _rows = new RunRowStore(runs, onPhaseChanged);
         _downloadsFolder = downloadsFolder ?? (() => null);
-        _startedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        _time = timeProvider ?? TimeProvider.System;
+        _startedAt = _time.GetUtcNow();
+    }
+
+    /// <summary>
+    /// One full pass: reattaches the runs a killed app left (<see cref="ReattachAsync"/>) and enforces lifecycles (<see cref="EnforceLifecycleAsync"/>),
+    /// concurrently, because a reattached run can take minutes and must not hold the housekeeping back. Safe to call again at any time (on
+    /// reconnect): a job something already drives is skipped, a row already judged is terminal.
+    /// </summary>
+    public async Task ReconcileAsync(CancellationToken cancellationToken)
+        => await (await BeginReconcileAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+
+    /// <summary>
+    /// The same pass as <see cref="ReconcileAsync"/>, split at the point that matters to a repeating caller. The returned (outer) task ends when the
+    /// lifecycle enforcement and the idle sweep have run and every non-terminal run has been handed to its own driver in <see cref="ActiveRuns"/>;
+    /// its result is the inner task, which ends only when every reattached run has ENDED (minutes or hours). A caller that runs passes one at a
+    /// time (<see cref="ReconcileOnReconnect"/>) waits for the outer task only: a long run must not hold the next pass back.
+    /// </summary>
+    public async Task<Task> BeginReconcileAsync(CancellationToken cancellationToken)
+    {
+        var reattached = ReattachAsync(cancellationToken);
+        await EnforceLifecycleAsync(cancellationToken).ConfigureAwait(false);
+        return reattached;
+    }
+
+    /// <summary>
+    /// Hard Rules 9 and 11, applied to what already exists. (1) A finished run's VM, found by its job-id label, in a state its lifecycle label
+    /// forbids is fixed: <c>delete</c> deletes it, <c>stop</c> stops a running one, <c>keep</c> past its expiry (the run's finish plus its keep-alive
+    /// minutes; at once for a run that did not complete, as startup.sh does) ends per afterKeepAlive. (2) This installation's VMs stopped longer
+    /// than <see cref="CloudHousekeepingSettings.IdleStoppedVmLimit"/> are deleted. Only VMs carrying our app label AND this installation's id are
+    /// touched; a VM whose labels were not read is judged only by its job id and the run row's own installation id.
+    /// Returns what it did. Never throws for a cloud failure or an error in one row: that row or VM gets a <see cref="LifecycleAction.Deferred"/> or <see cref="LifecycleAction.Failed"/> outcome and the pass goes on with the rest.
+    /// </summary>
+    public async Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleAsync(CancellationToken cancellationToken)
+    {
+        var outcomes = new List<LifecycleOutcome>();
+        var installation = InstallationId.GetOrCreate(_settings);
+        var now = _time.GetUtcNow();
+        var all = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        var finished = all
+            .Select(r => r.JobId)
+            .Distinct()
+            .Select(id => RunRowStore.LatestRecord(all, id)!)
+            .Where(r => JobStateMachine.IsTerminal(r.Phase)
+                && string.Equals(r.Target, "cloud", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(r.InstallationId, installation, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(r.ProjectId)
+                && (r.FinishedAt ?? r.CreatedUtc) >= now - LifecycleLookback)
+            .ToList();
+        foreach (var row in finished)
+        {
+            await EnforceRowAsync(row, installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        }
+
+        await SweepIdleAsync(installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        return outcomes;
+    }
+
+    /// <summary>
+    /// One finished run. Whatever goes wrong here is this row's alone: a cloud answer that does not come, a refusal, or an error nobody
+    /// foresaw (recorded by its class, never its message, which could carry a file name) all end THIS row and the pass goes on to the next.
+    /// </summary>
+    private async Task EnforceRowAsync(RunRecord row, string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var driver = _active.TryStart(row.JobId, async token =>
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
+                IReadOnlyList<VmDescriptor> vms;
+                try
+                {
+                    vms = await Lookup(t => _compute.FindByJobIdAsync(row.JobId, t), linked.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+                {
+                    Record(outcomes, row.JobId, string.Empty, ex);
+                    return;
+                }
+
+                var options = RunOptionsJson.TryDeserialize(row.OptionsJson);
+                foreach (var vm in vms)
+                {
+                    var want = WantedByLifecycle(row, vm, options, installation, now);
+                    if (want == VmWant.Leave)
+                    {
+                        continue;
+                    }
+
+                    await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
+                }
+            });
+            if (driver is not null)
+            {
+                await driver.ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            RecordUnexpected(outcomes, row.JobId, string.Empty, ex);
+            _log.Warning("reconciler", row.JobId, ex.GetType().Name);
+        }
+    }
+
+    private enum VmWant
+    {
+        Leave,
+        Stop,
+        Delete,
+    }
+
+    /// <summary>What a finished run's VM should be now, from its lifecycle label (or, when the gateway did not read labels, the run's own options).</summary>
+    private static VmWant WantedByLifecycle(RunRecord row, VmDescriptor vm, RunOptions? options, string installation, DateTimeOffset now)
+    {
+        if (!IsOurs(vm, installation))
+        {
+            return VmWant.Leave;
+        }
+
+        var lifecycle = vm.Labels is not null && vm.Labels.TryGetValue("lifecycle", out var label)
+            ? label
+            : options is null ? null : CloudJobRequestFactory.LifecycleLabel(options.AfterTask);
+        switch (lifecycle)
+        {
+            case "delete":
+                return VmWant.Delete;
+            case "stop":
+                return vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave;
+            case "keep" when options is not null:
+                // startup.sh keep_hold holds the VM for the whole window only after worker exit 0, which the app records as Completed or
+                // PartiallyCompleted; exit 2 (Failed) and 3 (Cancelled) apply afterKeepAlive at once.
+                var held = row.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted;
+                var expired = !held || now >= (row.FinishedAt ?? row.CreatedUtc).AddMinutes(options.KeepAliveMinutes);
+                if (!expired)
+                {
+                    return VmWant.Leave;
+                }
+
+                return options.AfterKeepAlive == AfterKeepAliveAction.Delete ? VmWant.Delete : vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave;
+            default:
+                return VmWant.Leave;
+        }
+    }
+
+    /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read say nothing against it (its job id already matched a row of this installation).</summary>
+    private static bool IsOurs(VmDescriptor vm, string installation)
+        => vm.Labels is null
+            || (vm.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
+                && vm.Labels.TryGetValue("installation-id", out var owner) && owner == installation);
+
+    private async Task SweepIdleAsync(string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    {
+        var limit = CloudHousekeepingSettings.IdleStoppedVmLimit(_settings);
+
+        IReadOnlyList<VmDescriptor> listed;
+        try
+        {
+            listed = await Lookup(token => _compute.ListByInstallationAsync(installation, token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+        {
+            Record(outcomes, string.Empty, string.Empty, ex);
+            return;
+        }
+
+        var all = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var vm in listed.Where(v => IsOurs(v, installation) && v.Labels is not null && IsIdle(v, now, limit)))
+        {
+            var jobId = vm.Labels!.TryGetValue("job-id", out var id) ? id : string.Empty;
+            if (jobId.Length == 0 || (RunRowStore.LatestRecord(all, jobId) is { } row && !JobStateMachine.IsTerminal(row.Phase)))
+            {
+                continue;
+            }
+
+            try
+            {
+                var driver = _active.TryStart(jobId, async token =>
+                {
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
+                    // Looked at again just before the delete: a run that restarted the VM since the list must not lose it.
+                    VmDescriptor? fresh;
+                    try
+                    {
+                        fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+                    {
+                        Record(outcomes, jobId, vm.Name, ex);
+                        return;
+                    }
+
+                    if (fresh is not null && IsIdle(fresh, now, limit))
+                    {
+                        await ApplyAsync(jobId, vm, true, LifecycleAction.IdleVmDeleted, outcomes, linked.Token).ConfigureAwait(false);
+                    }
+                });
+                if (driver is not null)
+                {
+                    await driver.ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            {
+                RecordUnexpected(outcomes, jobId, vm.Name, ex);
+                _log.Warning("reconciler", jobId, ex.GetType().Name);
+            }
+        }
+    }
+
+    /// <summary>Stopped for longer than <paramref name="limit"/>. A VM whose stop time is unknown is not provably idle, so it is kept.</summary>
+    private static bool IsIdle(VmDescriptor vm, DateTimeOffset now, TimeSpan limit)
+        => VmFacts.IsStopped(vm) && vm.StoppedAt is { } stoppedAt && now - stoppedAt >= limit;
+
+    /// <summary>Deletes or stops one VM under its own name and zone (found by label, never by a remembered name). A 404 on delete is the state wanted.</summary>
+    private async Task ApplyAsync(string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await WithDeadline(
+                async token =>
+                {
+                    try
+                    {
+                        await (delete ? _compute.DeleteVmAsync(vm.Name, vm.Zone, token) : _compute.StopVmAsync(vm.Name, vm.Zone, token)).ConfigureAwait(false);
+                    }
+                    catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+                    {
+                    }
+
+                    return true;
+                },
+                _mutationTimeout,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+        {
+            Record(outcomes, jobId, vm.Name, ex);
+            return;
+        }
+
+        lock (outcomes)
+        {
+            outcomes.Add(new LifecycleOutcome(jobId, vm.Name, done));
+        }
+    }
+
+    /// <summary>
+    /// Records why a call did not answer: no answer (offline, a deadline) is <see cref="LifecycleAction.Deferred"/>, a refusal (permission, org
+    /// policy) is <see cref="LifecycleAction.Failed"/>. Either is that row's or VM's alone: the pass goes on with the rest.
+    /// </summary>
+    private static void Record(List<LifecycleOutcome> outcomes, string jobId, string vmName, Exception ex)
+    {
+        var noAnswer = ex is TimeoutException || (ex is CloudOperationException cloud && IsNoAnswer(cloud));
+        var code = ex is CloudOperationException c ? c.Error.Code : "TIMEOUT";
+        lock (outcomes)
+        {
+            outcomes.Add(new LifecycleOutcome(jobId, vmName, noAnswer ? LifecycleAction.Deferred : LifecycleAction.Failed, code));
+        }
+    }
+
+    /// <summary>An error nobody foresaw for one row or VM: recorded as Failed with the error's class name (never its message).</summary>
+    private static void RecordUnexpected(List<LifecycleOutcome> outcomes, string jobId, string vmName, Exception ex)
+    {
+        lock (outcomes)
+        {
+            outcomes.Add(new LifecycleOutcome(jobId, vmName, LifecycleAction.Failed, ex.GetType().Name));
+        }
     }
 
     /// <summary>Reattaches every non-terminal cloud run created before this reconciler existed, concurrently, and returns what happened to each once they have all ended.</summary>
@@ -259,7 +574,7 @@ public sealed class JobReconciler
     {
         try
         {
-            var vms = await WithDeadline(token => _compute.FindByJobIdAsync(row.JobId, token), cancellationToken).ConfigureAwait(false);
+            var vms = await Lookup(token => _compute.FindByJobIdAsync(row.JobId, token), cancellationToken).ConfigureAwait(false);
             if (vms.Count > 0)
             {
                 return Evidence.Found;
@@ -271,7 +586,7 @@ public sealed class JobReconciler
             }
 
             var bucket = row.Bucket;
-            var stream = await WithDeadline(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "result.json", token), cancellationToken).ConfigureAwait(false);
+            var stream = await Lookup(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "result.json", token), cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
                 return Evidence.Nothing;
@@ -286,13 +601,16 @@ public sealed class JobReconciler
         }
     }
 
-    private static async Task<T> WithDeadline<T>(Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken)
+    private Task<T> Lookup<T>(Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken)
+        => WithDeadline(call, _lookupTimeout, cancellationToken);
+
+    private static async Task<T> WithDeadline<T>(Func<CancellationToken, Task<T>> call, TimeSpan timeout, CancellationToken cancellationToken)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(LookupTimeout);
+        deadline.CancelAfter(timeout);
         try
         {
-            return await call(deadline.Token).WaitAsync(LookupTimeout, cancellationToken).ConfigureAwait(false);
+            return await call(deadline.Token).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

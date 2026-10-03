@@ -1,0 +1,120 @@
+<Page
+    x:Class="DnaEntropyGraph.App.Views.ResultsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
+
+    <!--
+        Issue #102: a finished run's numbers and files. Everything is read from the run's own output folder by
+        ResultsViewModel. Gene tables (#552), IGV/Geneious launch (#586) and Export PNG (#587) are not here yet.
+    -->
+    <ScrollViewer>
+        <StackPanel Padding="24" Spacing="16">
+            <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="{x:Bind ViewModel.Title, Mode=OneWay}" />
+
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.IsNoticeVisible, Mode=OneWay}"
+                Severity="Warning"
+                IsClosable="False"
+                Message="{x:Bind ViewModel.NoticeText, Mode=OneWay}">
+                <InfoBar.ActionButton>
+                    <Button x:Uid="ResultsShowRunsButton" Command="{x:Bind ViewModel.ShowRunsCommand}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.IsActionNoticeVisible, Mode=OneWay}"
+                Severity="Warning"
+                IsClosable="False"
+                Message="{x:Bind ViewModel.ActionNoticeText, Mode=OneWay}" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Uid="ResultsOpenFolderButton" Command="{x:Bind ViewModel.OpenFolderCommand}" />
+                <Button x:Uid="ResultsOpenInViewerButton" Command="{x:Bind ViewModel.OpenInViewerCommand}" />
+            </StackPanel>
+
+            <TextBlock x:Uid="ResultsStatsHeading" Style="{StaticResource SubtitleTextBlockStyle}" />
+
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.IsStatsNoticeVisible, Mode=OneWay}"
+                Severity="Informational"
+                IsClosable="False"
+                Message="{x:Bind ViewModel.StatsNoticeText, Mode=OneWay}" />
+
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Groups}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ResultsStatsGroup">
+                        <StackPanel Spacing="8" Margin="0,0,0,12">
+                            <TextBlock Text="{x:Bind Title}" Visibility="{x:Bind HasTitle}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind Headline}" TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Uid="ResultsColumnContig" Grid.Column="0" Style="{StaticResource CaptionTextBlockStyle}" />
+                                <TextBlock x:Uid="ResultsColumnLength" Grid.Column="1" Style="{StaticResource CaptionTextBlockStyle}" />
+                                <TextBlock x:Uid="ResultsColumnMean" Grid.Column="2" Style="{StaticResource CaptionTextBlockStyle}" />
+                                <TextBlock x:Uid="ResultsColumnMin" Grid.Column="3" Style="{StaticResource CaptionTextBlockStyle}" />
+                                <TextBlock x:Uid="ResultsColumnMax" Grid.Column="4" Style="{StaticResource CaptionTextBlockStyle}" />
+                                <TextBlock x:Uid="ResultsColumnDirection" Grid.Column="5" Style="{StaticResource CaptionTextBlockStyle}" />
+                            </Grid>
+                            <ItemsControl ItemsSource="{x:Bind Contigs}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ResultsContigRow">
+                                        <Grid ColumnSpacing="16">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="2*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind LengthText}" />
+                                            <TextBlock Grid.Column="2" Text="{x:Bind MeanText}" />
+                                            <TextBlock Grid.Column="3" Text="{x:Bind MinText}" />
+                                            <TextBlock Grid.Column="4" Text="{x:Bind MaxText}" />
+                                            <TextBlock Grid.Column="5" Text="{x:Bind DirectionText}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock
+                x:Uid="ResultsFilesHeading"
+                Style="{StaticResource SubtitleTextBlockStyle}"
+                Visibility="{x:Bind ViewModel.HasFiles, Mode=OneWay}" />
+
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Files}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ResultsFileItem">
+                        <Grid ColumnSpacing="12" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" Text="{x:Bind SizeText}" Opacity="0.7" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                                <Button x:Uid="ResultsFileOpenButton" Command="{x:Bind OpenCommand}" />
+                                <Button x:Uid="ResultsFileShowButton" Command="{x:Bind ShowInFolderCommand}" />
+                                <Button x:Uid="ResultsFileCopyButton" Command="{x:Bind CopyPathCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

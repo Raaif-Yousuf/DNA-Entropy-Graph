@@ -4,6 +4,7 @@ using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Cloud.Auth;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.LocalEngine;
@@ -110,7 +111,13 @@ public static class ServiceRegistration
         // CloudRetryOptions after calling this method (the last one wins).
         services.AddSingleton<CloudRetryOptions>(_ => new CloudRetryOptions());
         services.AddSingleton<CloudRetryLog>();
-        services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<CloudRetryLog>());
+        // Issue #530: the pipeline reports to this wrapper, which forwards to the log (the offline banner) and runs the reconciler again when the
+        // connection comes back. The reconciler is resolved lazily, on the first reconnect: it needs the gateways, which need this observer.
+        services.AddSingleton<ReconcileOnReconnect>(sp => new ReconcileOnReconnect(
+            sp.GetRequiredService<CloudRetryLog>(),
+            () => sp.GetRequiredService<JobReconciler>(),
+            sp.GetRequiredService<IDiagnosticsLog>()));
+        services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<ReconcileOnReconnect>());
         // SWITCH POINT (#56): while every gateway is FakeGcp the refresher is FakeGcp too, because a 401 from a fake
         // must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked
         // about). When the first real gateway is wrapped, register GoogleAccountService here instead.
@@ -138,6 +145,9 @@ public static class ServiceRegistration
         // database and settings (Hard Rule 14).
         services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(Path.GetDirectoryName(settingsPath)!));
 
+        // Issue #530: where the reconciler records an error it did not expect (job id and error class only), under the same app data folder.
+        services.AddSingleton<IDiagnosticsLog>(_ => new FileDiagnosticsLog(Path.GetDirectoryName(settingsPath)!));
+
         // Issue #63: a pasted sequence is saved under app data too, never next to anything of the user's.
         services.AddSingleton<IPastedInputStore>(_ => new LocalPastedInputStore(Path.GetDirectoryName(settingsPath)!));
 
@@ -150,12 +160,24 @@ public static class ServiceRegistration
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
             [Path.GetDirectoryName(settingsPath)!]));
         services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
+
+        // Issue #102: the Results page reads a run's own output folder and opens its files through Windows.
+        services.AddSingleton<IRunOutputReader, RunOutputReader>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IShellLauncher, Services.ShellLauncher>();
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),
             sp.GetRequiredService<IRunRepository>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
             sp.GetRequiredService<TimeProvider>()));
+
+        // Issue #106: the support zip. The source only ever lists settings.json, logs and runs under the app data
+        // folder (never auth, inputs or the database); the machine facts are read when the button is pressed.
+        services.AddSingleton<IFolderLauncher, FolderLauncher>();
+        services.AddSingleton<IDiagnosticsExporter>(sp => new DiagnosticsExporter(
+            new FolderDiagnosticsSource(Path.GetDirectoryName(settingsPath)!),
+            sp.GetRequiredService<IRunRepository>(),
+            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>())));
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
@@ -205,8 +227,10 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunInputStore>(),
                 sp.GetRequiredService<IWorkerImageProvider>(),
                 sp.GetRequiredService<ActiveRuns>(),
+                sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
-                Services.KnownFolders.Downloads);
+                Services.KnownFolders.Downloads,
+                log: sp.GetRequiredService<IDiagnosticsLog>());
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());

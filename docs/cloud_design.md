@@ -616,6 +616,17 @@ non-terminal. It reads the VM by label and `result.json`, decides (architecture.
 `FindByJobIdAsync` throw `CLOUD_NOT_CONNECTED`, because a listing cannot succeed with no connection: the reconciler reads that, and a network
 error, as "no answer" and leaves the row alone instead of calling the run lost.
 
+**Lifecycle enforcement and idle VMs (issue #530)**: the same `JobReconciler` pass also revisits runs that already ended. A finished run's VM
+found by job-id label in a state its `lifecycle` label forbids is deleted (`delete`), stopped when still running (`stop`), or ended per
+`afterKeepAlive` once its keep-alive expiry has passed (Hard Rule 11); the expiry mirrors `startup.sh` `keep_hold`: only a run the worker finished with exit 0 (Completed, PartiallyCompleted) is held for its window, Failed (exit 2) and Cancelled (exit 3) end at once. Lookups have a 30 s deadline, delete and stop their own 5 minute one (they are operations), and a Deferred, refused or throwing row or VM never ends the pass: the rest are still handled. Separately, `IComputeGateway.ListByInstallationAsync` (real gateway:
+`instances.aggregatedList` filtered on `labels.app` and `labels.installation-id`) feeds an idle sweep: a stopped VM of this installation older
+than `idle_stopped_vm_hours` is deleted (default 72, range 1 to 720, no off switch: 0, a negative or an unreadable value is 72, above 720 is clamped to 720; DECISION #555). `VmDescriptor` now carries `Labels` and `StoppedAt` (the instance's
+`lastStopTimestamp`; a gateway that cannot fill it makes the sweep skip the VM, never delete it). Only VMs with our app label AND this
+installation's id are touched (two users may share one account). The pass runs at launch and again when the pipeline reports the
+connection is back (`ReconcileOnReconnect`, single-flight: reconnects while a pass runs coalesce into at most one follow-up pass, and a pass ends once the lifecycle and the sweep have run and the reattached runs are handed to their own drivers, not when those runs end (`JobReconciler.BeginReconcileAsync`; launch still awaits them through `ReconcileAsync`); the observer
+is rarely invoked today because reconciler calls bypass the breaker, #559). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
+and its label filter matches as `FakeGcp` models it; nothing here has touched a real project (docs/ToTest.md).
+
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a
@@ -795,6 +806,196 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `Guards.Tests/AuthErrorResourceTests`.
 - **Testing.** `Cloud.Tests/Auth` runs the whole flow with no network and no browser: a fake that answers Google's
   real token and revoke URLs and checks the PKCE proof, and a fake browser that calls the real loopback listener back.
+## 16. The real Google gateways (issues #50 to #52)
+
+**Library decision (agent-made, reversible; filed as a DECISION issue).** The real gateways use the REST discovery
+clients `Google.Apis.CloudResourceManager.v3` (#50), `Google.Apis.Cloudbilling.v1` (#51) and `Google.Apis.ServiceUsage.v1` (#52),
+not the `Google.Cloud.*` gRPC-first packages the CLAUDE.md stack row names. Evidence (inspected 2026-10-02 in the
+restored `Google.Cloud.ResourceManager.V3` 2.6.0 and `Google.Api.Gax.Grpc` 4.12.1 packages): the only REST transport in
+that stack is `RestGrpcAdapter.Default`, which builds its own `HttpClient` and exposes no `HttpMessageHandler` or
+`HttpClient` seam, so a unit test cannot intercept a request. The discovery clients take
+`BaseClientService.Initializer.HttpClientFactory`, so the tests script an `HttpMessageHandler` and assert the method, the
+URL, the body and the bearer token. All are Apache-2.0 and share `Google.Apis.Core` with `Google.Apis.Auth`, which moved
+from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CLAUDE.md stack row.
+
+- **Where it lives.** `DnaEntropyGraph.Cloud/Rest/`. `GoogleCloudGateways.Create(IGcpAccessTokenSource, CloudCallPipeline,
+  GoogleCloudOptions?)` is the one construction point: it builds each client with a bearer-token interceptor that reads
+  the token source on every request (so a refreshed token is used by the replayed call) and puts each gateway behind the
+  pipeline: single-call gateways (billing) in their `Resilient*` decorator, the two that are a POST plus polled reads
+  (project catalog, service enablement) by sending each HTTP call through the pipeline themselves. Google.Apis's own 503 retry is switched off (`ExponentialBackOffPolicy.None`) so
+  `CloudCallPipeline` is the only retry. MEASURED 2026-10-02: with the library default, three scripted 503s were all
+  consumed inside one gateway call and the pipeline's retry saw a different error; with `None` the pipeline retried
+  twice and gave up as `network` (THEORY, unverified: that the default is the cause of that, not the scripted handler).
+- **The production switch.** Production DI still resolves every gateway to `FakeGcp.WithCloudNotConnected()`
+  (`ServiceRegistration.cs`, "SWITCH POINT (#56)"). The switch is one call to `GoogleCloudGateways.Create(...)`, made when
+  every preflight step has a real implementation (#56) and the placeholder project id is gone (#520). Until then the
+  real gateways are built and exercised only by `Cloud.Tests/Rest`.
+- **Errors.** `GoogleApiErrors` reads Google's `google.rpc.Status` (an HTTP error body, or the `error` of a polled
+  operation) and throws `CloudOperationException`. A `QuotaFailure` detail, or "quota" in a `RESOURCE_EXHAUSTED`
+  message, is `Quota`; an `ORG_POLICY` reason, a `constraints/` id or the words "organization policy" is `OrgPolicy`;
+  everything else goes through `CloudErrorClassifier`. A setup step may give those kinds its own code
+  (`SetupErrorCodes`, below). THEORY (unverified, no live project): the exact markers Resource Manager uses for a
+  project-limit and an organization-policy refusal. The test fixtures are Google's documented shapes, not captures.
+- **Roster.** `SetupErrorCodes.All`, `docs/copy_catalog.md` and `scripts/triage_diagnostics.py` agree, enforced by
+  `Guards.Tests/SetupErrorResourceTests`. The English is `SetupError_<code>` in `Resources.resw`.
+- **Wizard wiring.** No wizard page exists yet (#99). The interfaces are in Core, `FakeGcp` implements them, and the
+  ViewModels that call them arrive with the page.
+
+### Project list and create (issue #50, wizard step 3)
+
+`IProjectCatalogGateway`: `ListActiveProjectsAsync`, `GetProjectAsync`, `CreateProjectAsync`. It has no production
+consumer and no DI registration until the wizard (#99) and its ViewModel (#56) arrive; it is not wired here on purpose.
+
+- **List.** `GET /v3/projects:search?query=state:ACTIVE`, following `nextPageToken`. Projects labelled
+  `app=dna-entropy-graph` sort first (`ProjectCatalogOrder`), then by name. An account with no projects gets an empty
+  list, which the wizard answers with one click on Create.
+- **Create.** `POST /v3/projects` with `projectId` `dna-entropy-<8 random lowercase alphanumerics>`
+  (`ProjectIdGenerator`), display name "DNA Entropy Graph", labels `app=dna-entropy-graph` and `installation-id`
+  (the VM-only labels `job-id`, `model`, `app-version` and `lifecycle` do not apply to a project). The response is a
+  long-running operation, polled with `OperationPoller` (1 s doubling to 10 s, 5 minute deadline); a timeout is
+  `OPERATION_POLL_TIMEOUT`, classed `network`.
+- **One retry per HTTP call, never per composite.** `GoogleProjectCatalogGateway` is not wrapped in
+  a `Resilient*` decorator (none exists; `ResilientGatewayTests` fails if one is added): it sends every call through `CloudCallPipeline` itself. The mutating
+  `POST /v3/projects` is retried alone; each `operations.get` is its own retried idempotent read. A 429 or 5xx on a
+  poll read therefore re-reads and never re-POSTs. The poll deadline is wall-clock (`GoogleCloudOptions.TimeProvider`)
+  and covers the time inside each read: `OperationPoller` hands every read a token that ends at the deadline, so a hung
+  GET (the HTTP client would wait about 100 s) ends at the deadline as `OPERATION_POLL_TIMEOUT`, not at the client's
+  timeout. The caller's own cancel still surfaces as a cancel. `CloudCallPipeline.IsTransient` also never replays a
+  spent poll deadline (defence in depth: no caller runs `PollAsync` inside the pipeline today; pinned by a direct
+  pipeline test). The last read is never given a fresh deadline: once the waits have spent the deadline the poll ends
+  as `OPERATION_POLL_TIMEOUT` without another read. A finished operation with no error and no project in its response is read back with
+  `projects.get` for the requested id; if that finds nothing the error is `OPERATION_NO_RESULT`, never a success with
+  an empty id.
+- **Replay safety.** The POST is replayed after a dropped connection. A `409 ALREADY_EXISTS`
+  is followed by a `projects.get`: a project of ours (it carries the app label) is returned, anyone else's is an
+  error. One wizard click therefore never makes two projects.
+- **Errors.** A project-limit refusal is `PROJECT_QUOTA` (kind `quota`, never retried; action: pick an existing
+  project); an organization-policy refusal is `ORG_POLICY_BLOCK` (kind `org_policy`; action: copy the message for IT).
+  A permanent create failure carries a setup code whose button fits (never the Try again catch-all): `PERMISSION`
+  (kind `permission`; Copy request for the project owner), `API_DISABLED` (Turn it on), `NO_BILLING` (Link billing).
+  A per-minute rate limit is retried and never `PROJECT_QUOTA`, whether it carries the ErrorInfo reason
+  `RATE_LIMIT_EXCEEDED` or only says so in a RESOURCE_EXHAUSTED message ("Quota exceeded for quota metric 'Requests' ...
+  Requests per minute", no details); THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word
+  "quota" without per-minute or per-second wording. A PERMISSION_DENIED 403 that merely quotes a `constraints/` id is a
+  permission error, not an organization-policy one, so `GetProjectAsync` still answers "not visible"; only an
+  ORG_POLICY reason, a 412, or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
+  null, with no request, for an id outside Google's project-id grammar.
+- **Not proven without a real account:** `docs/ToTest.md`.
+### Billing check and link (issue #51, wizard step 4)
+
+`IBillingGateway`: `GetBillingStatusAsync`, `ListOpenBillingAccountsAsync`, `LinkProjectAsync`; `BillingSetup` (Core) is the policy over it.
+
+- **Requests.** `GET /v1/projects/{id}/billingInfo`; `GET /v1/billingAccounts?filter=open=true` (paged; a closed account is
+  also dropped client-side); `PUT /v1/projects/{id}/billingInfo` with `{"billingAccountName": "billingAccounts/..."}`.
+  Google omits `billingEnabled` when it is false, so an absent value reads as off. Billing is "enabled" only when an
+  account is linked and `billingEnabled` is true.
+- **Policy.** On: nothing is linked. Off with one open account: linked for the user, then the status is read back
+  (a link Google accepted that did not turn billing on is `LinkedButStillOff`, code `BILLING_STILL_OFF`, action Pick another billing account, with exactly the other open accounts in `Accounts`; never `NO_BILLING`, which would loop the user back to Link). When there is no other open account to pick the outcome is `FixLinkedAccount`, code `BILLING_ACCOUNT_OFF`, action Fix billing account (`BillingLinks.ForProject`), never "pick another" with nothing to pick. A project that already has an account linked while billing is off is never linked over unasked: `EnsureAsync` answers `ChooseAccount` (the other open accounts) or `FixLinkedAccount`, so a re-check cannot loop on `LinkProjectAsync`. Several: `ChooseAccount`,
+  and `LinkAsync` links the one the user picked. None: `NeedsAccount` with `BillingLinks.ForProject(projectId)`, the
+  console page for that project; calling `EnsureAsync` again after the user adds a payment method is the re-check.
+  The wizard action for the code `NO_BILLING` is that link (`SetupAction_LinkBilling`).
+- **No permission.** The error reason and kind decide first (a Billing API that is off is `api_disabled`, a billing quota 403 is `quota`, billing off is `billing`, a 403 naming a non-billing permission such as `resourcemanager.projects.createBillingAssignment` is a plain `permission`); only a remaining permission 403 on the link is `BILLING_NO_PERMISSION` (kind `permission`). The classifier (issue #539) no longer reads the word "billing" in a permission denial as billing-off, only reads a permission-denial wording on a 403 or an error with no status (a 412 or 409 that happens to say "does not have permission" keeps its org-policy or already-exists meaning), and a 403 counts as quota only when it says a quota was *exceeded* and does not read as a permission denial: Google's standard USER_PROJECT_DENIED 403 ("Caller does not have required permission to use project ... or use another project to pass your quota and billing") is `permission`, never quota, and on a create never `PROJECT_QUOTA`. The action is a copyable request:
+  `SetupBillingRequestText` (with `{project}` and `{account}`) filled by `BillingRequestText.Fill`.
+- **Not here yet.** The wizard page (#99) and the health row that must go green on its own after a link: nothing in
+  the shipped UI calls this until then. `ResilientProjectSetupGateway.IsBillingEnabledAsync` (the preflight step) is
+  still backed by the fake; the composite real `IProjectSetupGateway` that delegates it to `GetBillingStatusAsync`
+  lands with #52.
+- **Proven only by a real account:** `docs/ToTest.md`.
+### Enable services (issue #52, wizard step 5) and the real preflight gateway
+
+`IServiceEnablementGateway`: `IsServiceEnabledAsync`, `EnableServicesAsync`. `RequiredServices.Ids` is
+`compute.googleapis.com`, `storage.googleapis.com`, `cloudquotas.googleapis.com` in that order (enabling Compute also
+creates the project's default network).
+
+- **Requests.** `POST /v1/projects/{id}/services:batchEnable` with `{"serviceIds": [...]}` returns an operation;
+  `GET /v1/operations/{name}` is polled every 5 s (`OperationPoller` with its new `fixedInterval`, the doubling
+  backoff would be wrong for a documented cadence); once the operation is done,
+  `GET /v1/projects/{id}/services/{service}` is asked every 5 s until each reads `ENABLED`. A finished operation is not
+  a ready service, so each service is checked after the operation, but both phases share ONE 5 minute deadline for the
+  whole call (two separate polls could wait twice that), and the deadline starts BEFORE the `batchEnable` POST, so the
+  POST, its retries and their HTTP timeouts share it too: the whole call waits at most one deadline. A deadline that
+  ends the POST is the same `OPERATION_POLL_TIMEOUT`; the caller's own cancel stays a cancel. The deadline is
+  wall-clock and covers the time inside each read (a hung GET ends at the deadline, not at the HTTP client's 100 s).
+  A timeout in either is `OPERATION_POLL_TIMEOUT`, classed `network`.
+- **One retry per HTTP call, never per composite.** `GoogleServiceUsageGateway` is not wrapped in
+  a `Resilient*` decorator (none exists; `ResilientGatewayTests` fails if one is added): the `batchEnable` POST is retried alone, and each `operations.get` and
+  `services.get` is its own retried idempotent read. A 429 or 5xx while polling re-reads and never re-POSTs; a poll
+  read that keeps failing ends the call as `network` after one POST. The caller's own cancel still surfaces as a cancel.
+- **Errors.** The reason and kind decide first: a 403 that says Service Usage is off is `api_disabled`, billing off is `billing`, an organization policy is `org_policy`. A remaining plain permission 403, on the call or as `PERMISSION_DENIED` inside the operation, is `NOT_PROJECT_OWNER` (kind
+  `permission`; action: create a project of your own). Enabling Compute on a project with no billing keeps the billing
+  kind (Google answers a precondition failure that names billing), so the wizard sends the user back to step 4 rather
+  than to "ask the owner". A Service Usage API that is itself off reads as `api_disabled`.
+- **The preflight gateway.** `GoogleProjectSetupGateway` implements the existing `IProjectSetupGateway` from the
+  three real gateways (project state from Resource Manager, billing from Cloud Billing, the Compute API from Service
+  Usage). It is not wrapped in `ResilientProjectSetupGateway` (the catalog and service gateways it is built from
+  already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
+  already wrapped). `GoogleCloudGateways.Create(...)` returns it as
+  `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute gateway
+  and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
+- **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
+- **Proven only by a real project:** `docs/ToTest.md`.
+### The results bucket (issue #53, wizard step 5)
+
+`IStorageGateway` (`EnsureBucketAsync`, `UploadAsync`, `DownloadAsync`, `TryDownloadAsync`); the real one is
+`GoogleStorageGateway` over `Google.Apis.Storage.v1` (Apache-2.0), returned as `GoogleCloudGatewaySet.Storage`. Production
+still resolves the fake until #56 switches DI. It is never wrapped in `ResilientStorageGateway` (the ordinary decorator for a
+single-call gateway): `EnsureBucketAsync` is a list, a create, a read-back and possibly a patch, and a whole-method retry would
+replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, as the project and service gateways do.
+
+- **Name and place.** `deg-<projectNumber>-<rand6>` (6 lowercase base32 characters), in the region-group multi-region
+  (`GoogleCloudOptions.BucketLocation`, default `US`; data residency #149 changes it). The project NUMBER comes from
+  `projects.get` (`name: projects/<number>`), via `GoogleProjectCatalogGateway.GetProjectNumberAsync`; a project the account
+  cannot see is a `permission` error and nothing is sent to Storage.
+- **Settings asked for.** Uniform bucket-level access on, `publicAccessPrevention=enforced`, and two lifecycle rules:
+  Delete when age >= the retention (`GoogleCloudOptions.ResultsRetentionDays`, the user's "Cloud results retention",
+  `RunOptions.CloudResultsRetentionDays`, default 90) for objects matching prefix `jobs/`, and Delete at age 365 for `cache/`.
+- **Labels.** `app=dna-entropy-graph`, `installation-id`, `app-version` (sanitized), `lifecycle=results`. `job-id` and `model`
+  are left off: a bucket serves every run and every model, the same exemption a project has. DECISION (agent-made,
+  reversible): see #582; the carve-out is recorded under Rules 9 and 10 in `hard_rules.md`. A missing installation id fails before any request (Hard Rule 10).
+- **Applied is not present.** After an insert, and after a patch, the bucket is read back and compared: UBLA, PAP, and both
+  rules with the configured ages. A difference fails with `BUCKET_CONFIG_NOT_APPLIED` (kind `other`) naming what differs; the
+  name is not returned and no `app-config.json` is written. The next call finds the labelled bucket, sees it drifted, and patches it.
+- **Discovery by label, adoption.** `buckets.list` with prefix `deg-` for the project, keep the ones labelled
+  `app=dna-entropy-graph`, prefer this installation's, then the oldest, then by name. A second PC of the same installation, or
+  another installation in the same project, adopts it: no insert. An adopted bucket that reads back drifted (for instance the
+  user changed the retention on the other PC) is patched and read back; one that reads back right is left alone. The patch
+  keeps every lifecycle rule that is not ours (see the next point for what counts as ours) and
+  replaces only ours. Two installations with different retention settings never shorten each other: see the next point.
+- **Never shorten the `jobs/` or `cache/` age.** DECISION (agent-made, reversible; issue #597): an adopting installation may LENGTHEN the shared
+  bucket's `jobs/` and `cache/` ages, never shorten them, because shortening makes Cloud Storage delete other installations' files
+  (results, the weights cache) early (Hard Rule 14). A Delete rule at or above the configured age (`jobs/`: the retention; `cache/`: 365) is not
+  drift (no patch); a shorter one is lengthened to the configured age; a patch made for any other reason keeps the longest own age it found for
+  each prefix. So the bucket holds the longest age any installation asked for. A rule counts as ours only if its condition is exactly an age and
+  the one prefix with a Delete action; a user's `jobs/` rule with any extra condition (storage class, live state, noncurrent time, suffix...)
+  is neither counted toward our age nor replaced.
+  Consequence: lowering retention in Settings against a longer bucket is silently ignored today. #598 owns the fix: an explicit, user-confirmed
+  shortening, and the user seeing that the bucket keeps the longer age (copy names the action).
+- **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference
+  order); if the preferred bucket is not the one it just made, it deletes its own (still empty: the config is written after this
+  check) and adopts the preferred one. A delete Google refuses (not empty, because the other PC adopted it meanwhile) is
+  swallowed and the bucket stays labelled. A bucket this call did not create is never deleted. Two installations in one project
+  each prefer their own bucket, so they may keep one each; that is the same accepted behaviour as before.
+- **409 on insert.** Our own insert replayed after a dropped connection also answers 409: if the named bucket reads back as
+  ours it is kept (its read is the read-back); otherwise (403 or not ours) a new suffix is drawn. Five names at most, then
+  `BUCKET_NAME_TAKEN` (kind `already_exists`).
+- **`app-config.json`** at the bucket root: schema, installation id, app version, both retentions, creation time (built with
+  `System.Text.Json`, so ids are escaped). Written on create and again on every adopt or repair, always with
+  `ifGenerationMatch=0` ("only if absent"): a 412 means the file is already there and stands, so a first write that failed is
+  made good by the next call. THEORY (unverified): Cloud Storage answers a failed precondition (`ifGenerationMatch`, `ifMetagenerationMatch`)
+  with 412, and an organization-policy denial is also a 412 whose message carries `constraints/`, so only a 412 without `constraints/`
+  is swallowed and the other surfaces as `org_policy`; the documented shapes are not captured from a real project (a ToTest row covers it). It is not
+  rewritten when a retention changes (the lifecycle rule on the bucket is the truth; a `retention change patches the rule` flow is #114).
+- **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
+  tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (results and manifests are
+  small; the multi-GB weights cache is the worker's, #496). `TryDownloadAsync` answers null for a 404 only; every other failure
+  throws, so a transport error never reads as "the worker has not finished".
+- **Error roster.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are `SetupErrorCodes.BucketConfigNotApplied` and
+  `BucketNameTaken` (in `SetupErrorCodes.All`, `Resources.resw`, `copy_catalog.md` and `triage_diagnostics.py`); both name Try
+  again. A project the account cannot see is `PERMISSION`, whose message names Copy request for owner.
+- **Retention is validated.** `ResultsRetentionDays` outside 1 to 3650 throws `ArgumentOutOfRangeException` before any request
+  (0 would delete job results at once). The default is `ResultsBucket.DefaultRetentionDays`, which `RunOptions.CloudResultsRetentionDays` reuses.
+- **Proven only by a real project:** `docs/ToTest.md`.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

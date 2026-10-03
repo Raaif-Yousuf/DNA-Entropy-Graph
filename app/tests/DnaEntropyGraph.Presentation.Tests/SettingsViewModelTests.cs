@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 using NSubstitute;
@@ -14,7 +15,7 @@ public class SettingsViewModelTests
         toastService = Substitute.For<IToastService>();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
-        return new SettingsViewModel(settingsStore, toastService, strings);
+        return new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System);
     }
 
     [Fact]
@@ -25,6 +26,34 @@ public class SettingsViewModelTests
         var viewModel = CreateViewModel(settingsStore, out _);
 
         viewModel.Theme.ShouldBe("System");
+    }
+
+    [Fact]
+    public void A_locked_settings_file_neither_crashes_opening_settings_nor_changing_the_theme()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.GetString("Theme").Returns(_ => throw new SettingsUnavailableException("locked"));
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
+
+        var viewModel = CreateViewModel(settingsStore, out _);
+        viewModel.Theme.ShouldBe("System");
+
+        Should.NotThrow(() => viewModel.SetThemeCommand.Execute("Dark"));
+        viewModel.Theme.ShouldBe("Dark");
+    }
+
+    [Fact]
+    public void A_failed_theme_save_shows_the_failure_toast_not_theme_updated()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
+        var viewModel = CreateViewModel(settingsStore, out var toastService);
+
+        viewModel.SetThemeCommand.Execute("Dark");
+
+        viewModel.Theme.ShouldBe("Dark");
+        toastService.Received(1).ShowToast("ThemeNotSaved_Title", "ThemeNotSaved_Body");
+        toastService.DidNotReceive().ShowToast("ThemeUpdated_Title", Arg.Any<string>());
     }
 
     [Fact]
@@ -51,7 +80,7 @@ public class SettingsViewModelTests
         var toastService = Substitute.For<IToastService>();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("ThemeUpdated_Title").Returns("Theme updated (from resw)");
-        var viewModel = new SettingsViewModel(settingsStore, toastService, strings);
+        var viewModel = new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System);
 
         viewModel.SetThemeCommand.Execute("Dark");
 

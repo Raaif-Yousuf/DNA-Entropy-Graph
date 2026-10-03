@@ -35,6 +35,9 @@ public sealed class ResilientComputeGateway : IComputeGateway
 
     public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.FindByJobId", token => _inner.FindByJobIdAsync(jobId, token), cancellationToken, bypassBreaker: true);
+
+    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.ListByInstallation", token => _inner.ListByInstallationAsync(installationId, token), cancellationToken, bypassBreaker: true);
 }
 
 public sealed class ResilientStorageGateway : IStorageGateway
@@ -100,6 +103,27 @@ public sealed class ResilientProjectSetupGateway : IProjectSetupGateway
 
     public Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("ProjectSetup.EnableComputeApi", token => _inner.EnableComputeApiAsync(projectId, token), cancellationToken);
+}
+
+public sealed class ResilientBillingGateway : IBillingGateway
+{
+    private readonly IBillingGateway _inner;
+    private readonly CloudCallPipeline _pipeline;
+
+    public ResilientBillingGateway(IBillingGateway inner, CloudCallPipeline pipeline)
+    {
+        _inner = inner;
+        _pipeline = pipeline;
+    }
+
+    public Task<BillingStatus> GetBillingStatusAsync(string projectId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Billing.GetBillingStatus", token => _inner.GetBillingStatusAsync(projectId, token), cancellationToken);
+
+    public Task<IReadOnlyList<BillingAccountSummary>> ListOpenBillingAccountsAsync(CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Billing.ListOpenBillingAccounts", token => _inner.ListOpenBillingAccountsAsync(token), cancellationToken);
+
+    public Task LinkProjectAsync(string projectId, string billingAccountId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Billing.LinkProject", token => _inner.LinkProjectAsync(projectId, billingAccountId, token), cancellationToken);
 }
 
 public sealed class ResilientQuotaGateway : IQuotaGateway

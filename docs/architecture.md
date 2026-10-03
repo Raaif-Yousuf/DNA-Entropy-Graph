@@ -208,13 +208,46 @@ sharing is possible or attempted):
 app.db  app.db-wal            SQLite (run history, cloud resource inventory, settings mirror)
 settings.json                  RunOptions defaults + UI prefs + theme
 auth\<sub>.tok                 DPAPI (CurrentUser) encrypted OAuth token; accounts.json lists known accounts
-install.json                   installationId, createdAt
+installation_id                write-once installation id (#558); never in settings.json
 logs\app-YYYYMMDD.log          Serilog, 14-day retention
 cache\inputs\<jobId>\          exact copy of every input as uploaded, so a re-run works even if the original moved
 runs\<jobId>\                  local-run manifest copy, status history, worker.log
 engine\                        local engine (uv-managed venv, hf-cache, engine.json, install.log)
 ```
 
+`settings.json` is never destroyed by a read problem (#558). It is read as JSON of any value
+type (`GetString` returns a number or bool as its invariant text) and every key a `SetString`
+does not touch is rewritten with its original JSON type. A file that does not parse is copied
+to `settings.json.unreadable-<yyyyMMdd-HHmmss>` before the first write, the scalar depth-1
+pairs that completed before the error are salvaged with `Utf8JsonReader` (types kept, nested
+values skipped, a number cut off at end of input never emitted), and
+`SettingsStore.RecoveredFromUnreadableFile` is set (sticky for the instance; the recovery UX
+is DECISION #404). Every IO, ACL or lock failure inside the store (temp file, directory,
+keep-aside copy, mutex, move) surfaces as `SettingsUnavailableException` with the cause kept
+as the inner exception, with nothing changed and the flag untouched; callers on close or at
+launch catch only that. One public call has a total wait budget of about 300 ms (lock wait and
+retries share it, at most 5 read attempts), because the callers run on the UI thread; the
+window-placement save on close is best-effort on top of that. Writes are a FileStream temp
+file with `Flush(true)` then `File.Move(overwrite)`, and every read-modify-write holds a named
+`Local\` mutex derived from the full path, so two instances or processes never drop each
+other's keys.
+
+The installation id is NOT in `settings.json`. It is the write-once file `installation_id`
+beside it, published by writing `installation_id.tmp-<guid>` with `Flush(true)` and moving it
+into place with no overwrite, so a crash never leaves a torn prefix and the loser of a race
+reads the winner's file. The id format is not validated more strictly than the label rule
+(`^[a-z0-9_-]{1,63}$`): a legacy id migrated from settings.json can be any such value, and the
+atomic write makes a torn minted id impossible, so a stricter check would only reject real
+ids. If the file is absent (or holds only whitespace or a BOM, which is replaced by an
+overwrite move under the mutex), a complete valid string id is migrated from settings.json
+(parse, salvage, or a lenient scan of the raw text for `"installation_id": "<valid id>"` after
+the corruption point). If the raw text mentions `installation_id` but no complete valid value
+can be recovered, no id is minted: the settings copy is kept aside and
+`InstallationIdUnusableException` is raised. A new id is minted only when the text genuinely
+has none. A non-empty id file with an invalid id is kept aside as
+`installation_id.invalid-<stamp>`, never overwritten and never replaced, with the same
+exception. The run then fails before any cloud resource exists with the code
+`installation_id_unusable` (minimal copy; full recovery UX is DECISION #404).
 The full SQLite DDL (`Accounts`, `Projects`, `Runs`, `RunInputs`, `RunOutputs`,
 `RunEvents`, `CloudResources`, `CostLedger`, `MonthlySpend`, `LocalEngine`) is in
 [Appendix A, section 3](superpowers/specs/2026-09-18-appendix-a-app-design.md#3-local-state-model);
@@ -254,11 +287,24 @@ regardless:
 
 The entry is `AppStartup.BeginAsync` (App/Startup), called once from `App.OnLaunched` and not awaited. Guards.Tests
  `ReattachOnStartupTests` drives it on the production container with a real SQLite file.
-4. The reconciler is also meant to **enforce** the after-task lifecycle policy retroactively - a VM
- that should have been deleted but was only stopped (because the app died before
- verifying) gets deleted now, not silently left as a stopped-disk cost leak - to delete idle stopped VMs past a
- setting, enforce keep-alive expiry, and to run again on network reconnect. **Not built yet** (the follow-up to #59): until then a
- run that already ended its VM is not revisited, and the reconciler runs at launch only.
+4. The reconciler also **enforces** the after-task lifecycle policy retroactively (issue #530, `JobReconciler.EnforceLifecycleAsync`),
+ in the same pass as the reattach (`ReconcileAsync`, which `AppStartup.BeginAsync` calls):
+ - A finished (terminal) cloud run of this installation, finished in the last 14 days, has its VM looked up **by job-id label**
+ (`FindByJobIdAsync`, Hard Rule 9). Lifecycle `delete` with the VM still there (stopped or running) deletes it; `stop` with the VM
+ still RUNNING stops it; `keep` past its expiry (the run's finish plus `keepAliveMinutes`; at once for a run that did not complete,
+ as `startup.sh` does) ends per `afterKeepAlive` (Hard Rule 11). A VM whose labels were read must carry our app label and this
+ installation's id, or it is left alone.
+ - **Idle stopped VMs**: `IComputeGateway.ListByInstallationAsync` lists this installation's VMs (app label AND installation-id label);
+ one stopped longer than the `idle_stopped_vm_hours` setting (`CloudHousekeepingSettings`, default 72, 0 turns it off) is deleted, after a
+ fresh `GetVm` confirms it is still stopped. A VM with no recorded stop time is never called idle; a VM whose run row is not terminal is
+ left to that run; one with no history row is deleted. Older leaks than the 14-day lookup are caught here.
+ - **Reconnect**: `ReconcileOnReconnect` wraps the observer the resilience pipeline reports to (it forwards to `CloudRetryLog`, the
+ offline banner's source) and runs `ReconcileAsync` again on `OnConnectivityChanged(offline: false)`, so a row deferred while offline is
+ judged when the connection returns. Every job a pass touches is registered in `ActiveRuns` first, so a run the engine or an earlier
+ pass owns is skipped, never driven twice (Guards.Tests `ReattachOnStartupTests` drives both on the production container).
+ - No answer from the cloud ends the pass as `Deferred`; a refusal (permission, org policy) is that VM's `Failed` outcome. Nothing is
+ written to the run row: the VM is the thing fixed, the row already says how the run ended. The Settings page control for the idle
+ limit is #556.
 
 ## The embedded viewer (igv.js in WebView2), issues #72 and #73
 

@@ -45,6 +45,27 @@ value instead of an artificial "unknown" at the start. If you specifically want 
 forward-only behaviour (for comparing against a result made with the old prototype, for
 example), it is available as an Advanced option.
 
+## The Results page
+
+When a run finishes, choose **View results** on the run page. You can also open any
+finished run later with **Open** on its row of the Runs page. The Results page shows:
+
+- **Entropy by sequence.** One line per sequence in your file: its length, its mean,
+  lowest and highest entropy in bits, and the reading direction used. These numbers are
+  read from the summary file the run wrote into your results folder, so they are exactly
+  what is in that file. If the run did not write a summary file, or it cannot be read,
+  the page says so instead of showing blanks, and **Open folder** shows you what the run
+  did write.
+- **Files.** Every file in the run's results folder, with its size. For each one,
+  **Open** opens it in the program Windows uses for that kind of file (only the kinds of
+  file this app writes are opened from here; use Show in folder for anything else), **Show in folder** selects it in File Explorer, and
+  **Copy path** puts its full path on the clipboard.
+- **Open folder** opens the whole results folder, and **Open in viewer** takes you to the
+  genome viewer for this run.
+
+Nothing on this page changes your files. If the folder was moved or deleted, the page
+tells you to use **Download again** on the Runs page.
+
 ## What you get back
 
 Depending on what your input was and which output files you kept turned on:

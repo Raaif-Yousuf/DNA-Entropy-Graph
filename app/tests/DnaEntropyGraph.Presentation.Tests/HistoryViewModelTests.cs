@@ -450,7 +450,7 @@ public sealed class HistoryViewModelTests
         opening.IsCompleted.ShouldBeFalse("the folder probe ran on the calling thread");
         gate.Set();
         await opening;
-        _navigator.Received(1).NavigateTo(ViewerViewModel.PageKey, @"C:\out\a");
+        _navigator.Received(1).NavigateTo(ResultsViewModel.PageKey, "a");
     }
 
     [Fact]
@@ -495,14 +495,14 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
-    public async Task Open_navigates_to_the_viewer_with_the_output_folder_when_it_exists()
+    public async Task Open_navigates_to_the_results_page_for_the_run_when_its_folder_exists()
     {
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
         var vm = await Loaded(Row("a", outputDir: @"C:\out\a"));
 
         await Item(vm, "a").OpenCommand.ExecuteAsync(null);
 
-        _navigator.Received(1).NavigateTo(ViewerViewModel.PageKey, @"C:\out\a");
+        _navigator.Received(1).NavigateTo(ResultsViewModel.PageKey, "a");
     }
 
     [Fact]
