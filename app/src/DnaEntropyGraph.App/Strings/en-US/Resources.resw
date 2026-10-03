@@ -828,6 +828,12 @@
   <data name="AuthError_PROJECT_SAVE_FAILED" xml:space="preserve">
     <value>The app could not save your project choice in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Try again.</value>
   </data>
+  <data name="AuthError_ACCOUNTS_FILE_UNREADABLE" xml:space="preserve">
+    <value>The app could not read its saved list of accounts, so it kept the damaged file as accounts.json.bad in the folder %LOCALAPPDATA%\DNAEntropyGraph and started a new list. Choose Sign in again to add your account back.</value>
+  </data>
+  <data name="AuthError_ACCOUNTS_FILE_LOCKED" xml:space="preserve">
+    <value>The app could not open its saved list of accounts because another program or another copy of the app is using it. Nothing was changed. Close other copies of the app, then choose Try again.</value>
+  </data>
   <data name="Results_NoRun" xml:space="preserve">
     <value>This run is not in your history. Choose Show runs, then pick a run from the list.</value>
   </data>

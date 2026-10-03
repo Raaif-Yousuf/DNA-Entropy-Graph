@@ -39,12 +39,17 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     private readonly SemaphoreSlim _signInGate = new(1, 1);
     private readonly object _loadLock = new();
     private AccountsFile? _state;
+    private bool _accountsFileSetAside;
+    private bool _accountsFileLocked;
+    private bool _accountsFileFolderProblem;
+    private DateTimeOffset _retryLoadAfter;
+    private static readonly TimeSpan LockedRetryWindow = TimeSpan.FromSeconds(2);
 
     public GoogleAccountService(GoogleAccountOptions options)
     {
         _options = options;
         _store = new DpapiTokenStore(options.AuthDirectory, options.Protector);
-        _registry = new AccountRegistry(options.AuthDirectory);
+        _registry = new AccountRegistry(options.AuthDirectory, name => new Mutex(false, name), options.SaveLockWait);
     }
 
     public event EventHandler? AccountChanged;
@@ -68,9 +73,75 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             lock (_loadLock)
             {
-                return _state ??= Reconcile(_registry.Load());
+                if (_state is not null)
+                {
+                    return _state;
+                }
+
+                var now = _options.TimeProvider.GetUtcNow();
+                if (_accountsFileLocked && now < _retryLoadAfter)
+                {
+                    // The file was just found held: do not touch it (and wait on the mutex) again on every read, which may be the UI thread.
+                    return AccountsFile.Empty;
+                }
+
+                var loaded = Reconcile(_registry.Load());
+                _accountsFileSetAside = _registry.QuarantinedTo is not null;
+                // An unreadable file (locked) gives an empty list that is not the truth: do not keep it as the state, read the file again after the window.
+                _accountsFileLocked = _registry.Unreadable;
+                _accountsFileFolderProblem = _registry.QuarantineFailed;
+                if (_accountsFileLocked)
+                {
+                    _retryLoadAfter = now + LockedRetryWindow;
+                }
+                else
+                {
+                    _state = loaded;
+                }
+
+                return loaded;
             }
         }
+    }
+
+    /// <summary>
+    /// Anything that would act on the account list while it could not be read (a token request, a sign-out) fails with
+    /// <see cref="AuthErrorCodes.AccountsFileLocked"/> instead of acting on the empty stand-in, which would read as "signed out" or "sign in again".
+    /// </summary>
+    private void ThrowIfAccountsFileLocked()
+    {
+        _ = State;
+        lock (_loadLock)
+        {
+            if (_accountsFileLocked)
+            {
+                // A damaged file the folder would not let us move aside is a folder problem (Try again never fixes it); anything else is a hold that can clear.
+                throw _accountsFileFolderProblem
+                    ? new AccountAuthException(AuthErrorCodes.StorageFailed, "accounts.json is damaged and could not be set aside (the folder is not writable)")
+                    : new AccountAuthException(AuthErrorCodes.AccountsFileLocked, "accounts.json exists but could not be read (held open elsewhere)");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #616: when <c>accounts.json</c> could not be parsed, <see cref="AccountRegistry"/> set it aside as <c>accounts.json.bad</c> and the list starts empty.
+    /// The first change to the list (sign-in, project choice, switch) says so once, with <see cref="AuthErrorCodes.AccountsFileUnreadable"/>, before anything is written
+    /// or any browser opened; the user then signs in again against the empty list. Reads never throw it.
+    /// </summary>
+    private void ThrowIfAccountsFileWasSetAside()
+    {
+        ThrowIfAccountsFileLocked();
+        lock (_loadLock)
+        {
+            if (!_accountsFileSetAside)
+            {
+                return;
+            }
+
+            _accountsFileSetAside = false;
+        }
+
+        throw new AccountAuthException(AuthErrorCodes.AccountsFileUnreadable, "accounts.json could not be parsed and was set aside as accounts.json.bad");
     }
 
     public async Task SignInAsync(CancellationToken cancellationToken)
@@ -78,6 +149,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _signInGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileWasSetAside();
             var client = _options.ClientLoader.Load();
             var token = await AuthorizeInBrowserAsync(client, cancellationToken).ConfigureAwait(false);
 
@@ -101,7 +173,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                     var current = State;
                     // An account that signs in again (its token expired) keeps the project it chose; a signed-out one was dropped with its record.
                     var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false, current.Accounts.FirstOrDefault(a => a.Sub == identity.Sub)?.ProjectId);
-                    Commit(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record]));
+                    await CommitAsync(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record])).ConfigureAwait(false);
                 }
                 catch (TokenStorageException ex)
                 {
@@ -129,19 +201,21 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileLocked();
             var active = State.Active;
             if (active is null)
             {
                 return true;
             }
 
-            revoked = await RevokeAsync(active, cancellationToken).ConfigureAwait(false);
-
-            // Local deletion happens whatever Google said: the user asked to be signed out.
-            await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
+            // The list goes first, then the revoke (Google's flow also deletes the stored token when it revokes), then the local deletion,
+            // which happens whatever Google said: the user asked to be signed out. If the list cannot be saved (a lock, a full disk) the
+            // account stays listed, signed in, with its token and still valid at Google, rather than listed signed-in with no token.
             var remaining = State.Accounts.Where(a => a.Sub != active.Sub).ToList();
             var next = remaining.FirstOrDefault(a => !a.NeedsSignIn) ?? remaining.FirstOrDefault();
-            Commit(new AccountsFile(next?.Sub, remaining));
+            await CommitAsync(new AccountsFile(next?.Sub, remaining)).ConfigureAwait(false);
+            revoked = await RevokeAsync(active, cancellationToken).ConfigureAwait(false);
+            await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -166,18 +240,19 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileWasSetAside();
             var current = State;
             if (current.Active is not { NeedsSignIn: false } active)
             {
                 throw new AccountAuthException(AuthErrorCodes.SigninExpired, "no signed-in account");
             }
 
-            Commit(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] });
+            await CommitAsync(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] }).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
-            // Not StorageFailure: its code says "your sign-in could not be saved" and offers Sign in again, wrong for a project choice.
-            throw new AccountAuthException(AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
+            // Not StorageFailure: its code says "your sign-in could not be saved" and offers Sign in again, wrong for a project choice. A lock is still a lock.
+            throw new AccountAuthException(ex is AccountsFileLockedException ? AuthErrorCodes.AccountsFileLocked : AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
         }
         finally
         {
@@ -192,13 +267,14 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileWasSetAside();
             var current = State;
             if (current.Accounts.All(a => a.Sub != sub))
             {
                 throw new AccountAuthException(AuthErrorCodes.AccountNotFound);
             }
 
-            Commit(current with { ActiveSub = sub });
+            await CommitAsync(current with { ActiveSub = sub }).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -223,6 +299,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileLocked();
             var active = State.Active;
             if (active is null || active.NeedsSignIn)
             {
@@ -354,12 +431,13 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     {
         await _store.DeleteAsync<TokenResponse>(account.Sub).ConfigureAwait(false);
         var current = State;
-        Commit(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] });
+        await CommitAsync(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] }).ConfigureAwait(false);
     }
 
-    private void Commit(AccountsFile file)
+    /// <summary>The save runs on a pool thread: it can wait up to 10 s for another copy's lock, and the caller may be a dispatcher.</summary>
+    private async Task CommitAsync(AccountsFile file)
     {
-        _registry.Save(file);
+        await Task.Run(() => _registry.Save(file)).ConfigureAwait(false);
         lock (_loadLock)
         {
             _state = file;
@@ -389,7 +467,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     }
 
     /// <summary>Only the exception type is kept: its message can carry a path with the user's name in it.</summary>
-    private static AccountAuthException StorageFailure(TokenStorageException ex) => new(AuthErrorCodes.StorageFailed, ex.Message, ex);
+    private static AccountAuthException StorageFailure(TokenStorageException ex)
+        => new(ex is AccountsFileLockedException ? AuthErrorCodes.AccountsFileLocked : AuthErrorCodes.StorageFailed, ex.Message, ex);
 
     private static AccountInfo ToInfo(AccountRecord record) => new(record.Sub, record.Email, record.NeedsSignIn);
 
