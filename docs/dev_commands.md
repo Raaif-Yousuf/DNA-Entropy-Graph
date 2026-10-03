@@ -185,6 +185,48 @@ worker\.venv\Scripts\python.exe scripts\land_pr.py --branch fix/412-x --hunks wo
   `pwsh -Array @(...)` flattening pitfall; list several files after `--paths` separated by spaces.
 - Its tests build a bare remote and a clone under a temp dir with a stub `gh`; nothing touches GitHub.
 
+## Heavy commands: `scripts/heavy.py` (#487)
+
+Route every `dotnet build|test`, every full or multi-file `pytest`, and anything else that takes
+gigabytes or minutes through it. It takes one of N machine-wide slots before running the command,
+prints one `heavy: waiting` line while all are busy (naming each holder's pid and lane, and how to free a
+stuck one: stop that PID), passes the child's exit code through, and on Ctrl-C kills the child and exits
+130 (the Ctrl-C path has no automated test). Slots are OS-held file locks under `%TEMP%\deg-heavy\`
+(`--lock-dir` or `$HEAVY_LOCK_DIR` to move them), so a killed agent frees its slot; each holder also writes
+`slot-N.info` (pid, lane, start, first 80 characters of the command), and a leftover info file next to a free
+slot is ignored. The lock is **per user**: it lives in that user's `%TEMP%`, so two Windows accounts on one
+machine do not share slots.
+
+The machine limit lives in one place, `<lock dir>\slots.txt`, set with `heavy.py --set-slots N`. Precedence:
+`--slots` flag (for tests and one-offs only) > `slots.txt` > `$HEAVY_SLOTS` > 2. Callers that disagree on
+`$HEAVY_SLOTS` therefore cannot exceed the file's limit.
+
+For `dotnet build|test|run|pack|publish` it adds `--artifacts-path <repo>\app\.artifacts\<lane>` unless one is
+given (not for `dotnet format`), so concurrent lanes never share `obj/`. `--lane <name>` is **required** for
+those commands (exit 2 without it; a shared default lane would put two agents back in one `obj/`).
+The folder is inside the repo on purpose: Cloud.Tests `FixturePaths` and Core.Tests `StartupMetadataTests`
+find the repo by walking up from the test binary, which fails under `%TEMP%`. `bin/`, `obj/` and `publish/`
+under it are gitignored; `dotnet pack` would also create `package/`, which is not. `dotnet test` still needs
+`app\` as the working directory (see above).
+
+```powershell
+# from the repo root
+worker\.venv\Scripts\python.exe scripts\heavy.py -- worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu"
+worker\.venv\Scripts\python.exe scripts\heavy.py --set-slots 3   # the orchestrator raises the machine limit, once
+# dotnet: from app\ as the working directory
+cd app
+..\worker\.venv\Scripts\python.exe ..\scripts\heavy.py --lane mylane -- dotnet test tests\DnaEntropyGraph.Core.Tests\DnaEntropyGraph.Core.Tests.csproj
+```
+
+On Windows the wrapper joins a kill-on-close job object first, so a hard-killed wrapper (`taskkill /F`, a
+tool timeout) takes its child with it; if the job cannot be set up it prints one `heavy: note:` line and
+carries on. On other platforms a SIGKILLed wrapper frees the slot while its child may keep running
+uncounted. The job also ends processes the command left behind when the wrapper exits, so for any `dotnet`
+command the child env defaults `MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0` and
+`UseSharedCompilation=false` (a value you set yourself wins). No MSBuild node or compiler server then outlives
+a build for another lane to connect to and lose mid-build. THEORY (unverified): that cross-lane failure was
+never reproduced; the defaults make it impossible. Cost: no node reuse, so each build starts its own nodes.
+
 ## Repo-wide scripts (exist today)
 
 ```powershell
