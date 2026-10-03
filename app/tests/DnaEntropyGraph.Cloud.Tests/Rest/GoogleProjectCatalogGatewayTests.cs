@@ -630,8 +630,11 @@ public class GoogleProjectCatalogGatewayTests
     }
 
     [Fact]
-    public async Task A_poll_timeout_is_never_replayed_by_the_pipeline_so_exactly_one_create_is_posted()
+    public async Task A_create_whose_poll_times_out_posts_exactly_one_create_and_retries_nothing()
     {
+        // This proves the gateway makes one POST and never replays it. It does NOT exercise the pipeline's
+        // IsTransient guard for the timeout code (no caller runs PollAsync inside the pipeline): that guard is
+        // pinned directly in ResilienceRegressionTests.
         var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromSeconds(3), retries: 3);
         rig.Handler.Returns(Post, "/v3/projects", 200, CreateOperationPending);
         for (var i = 0; i < 40; i++)
