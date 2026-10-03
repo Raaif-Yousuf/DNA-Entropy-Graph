@@ -5,6 +5,7 @@ from .bedgraph import BedGraphWriter
 from .fasta import FastaWriter
 from .geneious import GeneiousWriter
 from .gff import GffWriter
+from .probs import ProbsWriter
 from .provenance import ProvenanceWriter, build_run_provenance, contig_provenance
 from .summary import SummaryWriter
 from .tsv import TsvWriter
@@ -17,6 +18,7 @@ __all__ = [
     "FastaWriter",
     "GeneiousWriter",
     "GffWriter",
+    "ProbsWriter",
     "ProvenanceWriter",
     "build_run_provenance",
     "contig_provenance",

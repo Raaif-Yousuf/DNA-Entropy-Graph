@@ -159,6 +159,17 @@ def run(
         "written to the bedgraph/wig/geneious tracks, an extra TSV column, and stats.txt "
         "(docs/science_and_formats.md; issue #123). Zero extra GPU cost.",
     ),
+    probs: bool = typer.Option(
+        False,
+        "--probs/--no-probs",
+        help="Also write <name>.probs.tsv.gz: the per-base A/C/G/T probabilities behind the entropy "
+        "(large; off by default; issue #127).",
+    ),
+    probs_npy: bool = typer.Option(
+        False,
+        "--probs-npy/--no-probs-npy",
+        help="Also write <name>.probs.npy: the same matrix as a float32 NumPy array (issue #127).",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -195,6 +206,8 @@ def run(
             genes=genes,
             include_tsv=tsv,
             include_surprisal=surprisal,
+            include_probs=probs,
+            include_probs_npy=probs_npy,
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value
