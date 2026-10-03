@@ -10,6 +10,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 public sealed class ActiveRuns
 {
     private readonly ConcurrentDictionary<string, Entry> _runs = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource> _cancels = new();
 
     /// <summary>
     /// Starts <paramref name="body"/> on a background task registered under <paramref name="jobId"/>, and returns a task that ends when the
@@ -58,6 +59,35 @@ public sealed class ActiveRuns
     }
 
     public bool IsActive(string jobId) => _runs.ContainsKey(jobId);
+
+    /// <summary>
+    /// A user cancel: stops the job's driver (if any) and waits for it to end, then runs <paramref name="cancel"/>, the code that writes the
+    /// cancel's own phases. Until <paramref name="cancel"/> has ended, successfully or not, <see cref="WhenCancelSettledAsync"/> for the job does
+    /// not complete, so whoever was driving the run can wait for the cancel without polling and without waiting on one that already failed.
+    /// An exception from <paramref name="cancel"/> reaches the caller.
+    /// </summary>
+    public async Task CancelAsync(string jobId, Func<Task> cancel)
+    {
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var owner = _cancels.TryAdd(jobId, settled);
+        try
+        {
+            // The marker is in place BEFORE the driver is stopped, so a driver that sees itself stopped always finds it.
+            await CancelAndWaitAsync(jobId).ConfigureAwait(false);
+            await cancel().ConfigureAwait(false);
+        }
+        finally
+        {
+            if (owner)
+            {
+                _cancels.TryRemove(jobId, out _);
+                settled.TrySetResult();
+            }
+        }
+    }
+
+    /// <summary>Completes when the user cancel in progress for the job (<see cref="CancelAsync"/>) has ended; already complete when there is none.</summary>
+    public Task WhenCancelSettledAsync(string jobId) => _cancels.TryGetValue(jobId, out var settled) ? settled.Task : Task.CompletedTask;
 
     /// <summary>Cancels the job's driver and waits for it to end. False when the job has none (the caller then cancels the run itself).</summary>
     public async Task<bool> CancelAndWaitAsync(string jobId)

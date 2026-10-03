@@ -111,10 +111,11 @@ public sealed class JobReconciler
             // Registered BEFORE the first look at the cloud, and covering every write the reattach can make (the look, a failure it records,
             // a cancel it finishes, the run itself): a cancel at any moment finds the driver, stops it and waits for it, so one writer at a time.
             ReattachOutcome? outcome = null;
+            var underway = new Underway();
             var driver = _active.TryStart(row.JobId, async token =>
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
-                outcome = await DecideAndActAsync(row, linked.Token).ConfigureAwait(false);
+                outcome = await DecideAndActAsync(row, underway, linked.Token).ConfigureAwait(false);
             });
             if (driver is null)
             {
@@ -122,7 +123,7 @@ public sealed class JobReconciler
             }
 
             await driver.ConfigureAwait(false);
-            return outcome ?? await OutcomeOfCancelledAsync(row.JobId).ConfigureAwait(false);
+            return outcome ?? await OutcomeOfCancelledAsync(row.JobId, underway.Action, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -132,7 +133,7 @@ public sealed class JobReconciler
         }
     }
 
-    private async Task<ReattachOutcome> DecideAndActAsync(RunRecord row, CancellationToken cancellationToken)
+    private async Task<ReattachOutcome> DecideAndActAsync(RunRecord row, Underway underway, CancellationToken cancellationToken)
     {
         if (!string.Equals(row.Target, "cloud", StringComparison.OrdinalIgnoreCase))
         {
@@ -141,18 +142,19 @@ public sealed class JobReconciler
 
         if (row.Phase == JobPhase.Cancelling)
         {
+            underway.Action = ReattachAction.CancelFinished;
             return await FinishCancelAsync(row, cancellationToken).ConfigureAwait(false);
         }
 
         if (string.IsNullOrWhiteSpace(row.ProjectId))
         {
-            return await FailAsync(row, ReattachAction.FailedUnrecoverable, RunErrorCodes.NoProject, "The run row names no project.", cancellationToken).ConfigureAwait(false);
+            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.NoProject, "The run row names no project.", cancellationToken).ConfigureAwait(false);
         }
 
         var options = RunOptionsJson.TryDeserialize(row.OptionsJson);
         if (options is null || string.IsNullOrWhiteSpace(row.InstallationId))
         {
-            return await FailAsync(row, ReattachAction.FailedUnrecoverable, RunErrorCodes.Other, "The run row does not hold the options or installation id needed to resume it.", cancellationToken).ConfigureAwait(false);
+            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.Other, "The run row does not hold the options or installation id needed to resume it.", cancellationToken).ConfigureAwait(false);
         }
 
         var vmMayExist = row.Phase == JobPhase.Provisioning || JobStateMachine.HasAlreadyPassed(row.Phase, JobPhase.Provisioning);
@@ -175,7 +177,7 @@ public sealed class JobReconciler
 
             if (evidence == Evidence.Nothing && row.Phase != JobPhase.Provisioning)
             {
-                return await FailAsync(row, ReattachAction.FailedVmMissing, RunErrorCodes.VmUnhealthy, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
+                return await FailAsync(row, underway, ReattachAction.FailedVmMissing, RunErrorCodes.VmUnhealthy, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
             }
 
             // Only a VM or a result actually SEEN means the run is not provisioned again, so the worker image (which only a new
@@ -188,7 +190,7 @@ public sealed class JobReconciler
         var staged = await FindInputAsync(row, options, cancellationToken).ConfigureAwait(false);
         if (staged is null && !vmMayExist)
         {
-            return await FailAsync(row, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputMissing, "No copy of the input remains under app data and the original is gone.", cancellationToken).ConfigureAwait(false);
+            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputMissing, "No copy of the input remains under app data and the original is gone.", cancellationToken).ConfigureAwait(false);
         }
 
         var appVersion = row.AppVersion ?? "0.0.0";
@@ -196,7 +198,7 @@ public sealed class JobReconciler
         if (imageRequired && (image.Status != WorkerImageStatus.Available || image.Reference is null))
         {
             var code = image.Status == WorkerImageStatus.OverrideRefused ? RunErrorCodes.WorkerImageRefused : RunErrorCodes.WorkerImageUnavailable;
-            return await FailAsync(row, ReattachAction.FailedUnrecoverable, code, "No pinned worker image is available for this run's app version.", cancellationToken).ConfigureAwait(false);
+            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, code, "No pinned worker image is available for this run's app version.", cancellationToken).ConfigureAwait(false);
         }
 
         var request = CloudJobRequestFactory.Create(
@@ -209,29 +211,28 @@ public sealed class JobReconciler
             [staged ?? new StagedInput(options.InputPath ?? string.Empty, Path.GetFileName(options.InputPath) is { Length: > 0 } name ? name : "input")],
             OutputParent(row, options));
 
+        underway.Action = ReattachAction.Resumed;
         var result = await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
         return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
     }
 
+    /// <summary>What the reattach of one run was doing; read when a user cancel stopped it before it could say.</summary>
+    private sealed class Underway
+    {
+        /// <summary>Resumed until a branch says otherwise: a cancel during the first look stops a run that was about to be resumed.</summary>
+        public ReattachAction Action { get; set; } = ReattachAction.Resumed;
+    }
+
     /// <summary>
     /// The user cancelled the run while the reattach was driving it. The driver has stopped, but the canceller writes its phases after that,
-    /// so wait (bounded) for the row to reach a terminal phase instead of reporting whatever it said before.
+    /// so wait for that cancel to end (it signals through <see cref="ActiveRuns"/>, success or failure; no polling) and report the row as it
+    /// then is. A cancel that failed leaves the row non-terminal, and says so. The wait ends with the app's shutdown.
     /// </summary>
-    private async Task<ReattachOutcome> OutcomeOfCancelledAsync(string jobId)
+    private async Task<ReattachOutcome> OutcomeOfCancelledAsync(string jobId, ReattachAction underway, CancellationToken cancellationToken)
     {
-        RunRecord? settled = null;
-        for (var waited = 0; waited < 1200; waited++)
-        {
-            settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
-            if (settled is not null && JobStateMachine.IsTerminal(settled.Phase))
-            {
-                break;
-            }
-
-            await Task.Delay(25).ConfigureAwait(false);
-        }
-
-        return new ReattachOutcome(jobId, ReattachAction.Resumed, settled?.Phase, settled?.ErrorCode);
+        await _active.WhenCancelSettledAsync(jobId).WaitAsync(cancellationToken).ConfigureAwait(false);
+        var settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
+        return new ReattachOutcome(jobId, underway, settled?.Phase, settled?.ErrorCode);
     }
 
     private enum Evidence
@@ -347,8 +348,9 @@ public sealed class JobReconciler
         return new ReattachOutcome(row.JobId, ReattachAction.CancelFinished, after?.Phase, after?.ErrorCode);
     }
 
-    private async Task<ReattachOutcome> FailAsync(RunRecord row, ReattachAction action, string code, string detail, CancellationToken cancellationToken)
+    private async Task<ReattachOutcome> FailAsync(RunRecord row, Underway underway, ReattachAction action, string code, string detail, CancellationToken cancellationToken)
     {
+        underway.Action = action;
         await _rows.SetPhaseAsync(row.JobId, JobPhase.Failed, cancellationToken, code, detail).ConfigureAwait(false);
         return new ReattachOutcome(row.JobId, action, JobPhase.Failed, code);
     }

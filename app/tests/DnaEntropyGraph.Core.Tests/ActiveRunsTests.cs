@@ -57,4 +57,31 @@ public sealed class ActiveRunsTests
         runs.IsActive("job-1").ShouldBeFalse("a finished driver is removed");
         (runs.TryStart("job-1", _ => Task.CompletedTask) is null).ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task A_cancel_that_throws_still_settles_so_nothing_waits_on_it_and_the_exception_reaches_the_caller()
+    {
+        var runs = new ActiveRuns();
+        var started = new TaskCompletionSource();
+        _ = runs.TryStart("job-1", async token =>
+        {
+            started.SetResult();
+            await Task.Delay(Timeout.Infinite, token);
+        });
+        await started.Task;
+        var release = new TaskCompletionSource();
+
+        var cancel = runs.CancelAsync("job-1", async () =>
+        {
+            await release.Task;
+            throw new InvalidOperationException("no route");
+        });
+        var settled = runs.WhenCancelSettledAsync("job-1");
+        settled.IsCompleted.ShouldBeFalse("the cancel has not ended yet");
+        release.SetResult();
+
+        await Should.ThrowAsync<InvalidOperationException>(() => cancel);
+        settled.IsCompletedSuccessfully.ShouldBeTrue("a failed cancel still ends the wait");
+        runs.WhenCancelSettledAsync("job-1").IsCompletedSuccessfully.ShouldBeTrue("no cancel in progress is not something to wait for");
+    }
 }

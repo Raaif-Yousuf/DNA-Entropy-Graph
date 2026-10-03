@@ -144,9 +144,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     {
         // Stop and await whatever drives this run (one the engine started or one the reconciler reattached) before the
         // cancel writes its own phase, so there is one writer at a time.
-        await _activeRuns.CancelAndWaitAsync(jobId).ConfigureAwait(false);
-
-        await _runner.CancelAsync(jobId, cancellationToken).ConfigureAwait(false);
+        await _activeRuns.CancelAsync(jobId, () => _runner.CancelAsync(jobId, cancellationToken)).ConfigureAwait(false);
     }
 
     public Task StopVmAsync(string jobId, CancellationToken cancellationToken) => _runner.StopVmAsync(jobId, cancellationToken);

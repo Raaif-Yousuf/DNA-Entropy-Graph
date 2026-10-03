@@ -50,6 +50,8 @@ public class JobReconcilerTests
 
         public List<(string JobId, JobPhase Phase)> Notified { get; } = [];
 
+        public ActiveRuns Active { get; } = new();
+
         public CloudJobRunner Runner => new(Gcp, Gcp, Gcp, Gcp, Repo, (id, phase) => Notified.Add((id, phase)))
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
@@ -66,7 +68,7 @@ public class JobReconcilerTests
             Repo,
             Inputs,
             Images,
-            new ActiveRuns(),
+            Active,
             (id, phase) => Notified.Add((id, phase)),
             () => Path.Combine(AppData, "downloads"),
             new FixedClock(Launch));
@@ -425,5 +427,69 @@ public class JobReconcilerTests
 
         outcome.Action.ShouldBe(ReattachAction.FailedVmMissing);
         env.Gcp.EnsureBucketCalls.ShouldBe(0, "a read-only look must not create a bucket");
+    }
+
+    // ---- a user cancel that lands while the reattach is driving the run (cold review of #59) ----
+
+    private static async Task<Task<IReadOnlyList<ReattachOutcome>>> ReattachParkedInItsLookAsync(Env env, string jobId, CancellationToken shutdown)
+    {
+        env.Gcp.WithHungCalls(1);
+        var launch = env.Reconciler().ReattachAsync(shutdown);
+        for (var waited = 0; (env.Gcp.HungCalls == 0 || !env.Active.IsActive(jobId)) && waited < 500; waited++)
+        {
+            await Task.Delay(10, CancellationToken.None);
+        }
+
+        env.Gcp.HungCalls.ShouldBe(1, "precondition: the reattach is parked inside its look at the cloud");
+        return launch;
+    }
+
+    [Fact]
+    public async Task A_cancel_that_fails_after_it_stopped_the_reattach_ends_the_wait_at_once_and_leaves_the_row_for_the_next_launch()
+    {
+        var env = new Env(new FakeGcp().WithWorker(FakeWorkerMode.Never));
+        await env.SeedAsync("job-cf", JobPhase.Running, vm: true);
+        var launch = await ReattachParkedInItsLookAsync(env, "job-cf", CancellationToken.None);
+
+        var network = new CloudOperationException(new CloudError(null, null, "no route"), CloudErrorKind.Network);
+        await Should.ThrowAsync<CloudOperationException>(() => env.Active.CancelAsync("job-cf", () => throw network));
+        var outcomes = await launch.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        outcomes.Single().FinalPhase.ShouldBe(JobPhase.Running, "the cancel wrote nothing, so the outcome says what the row still is");
+        JobStateMachine.IsTerminal(env.Row("job-cf").Phase).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_cancel_still_working_when_the_app_shuts_down_does_not_hold_the_reattach_up()
+    {
+        var env = new Env(new FakeGcp().WithWorker(FakeWorkerMode.Never));
+        await env.SeedAsync("job-sd", JobPhase.Running, vm: true);
+        using var shutdown = new CancellationTokenSource();
+        var launch = await ReattachParkedInItsLookAsync(env, "job-sd", shutdown.Token);
+        var cancel = env.Active.CancelAsync("job-sd", () => Task.Delay(Timeout.Infinite));
+        for (var waited = 0; env.Active.IsActive("job-sd") && waited < 500; waited++)
+        {
+            await Task.Delay(10, CancellationToken.None);
+        }
+
+        env.Active.IsActive("job-sd").ShouldBeFalse("precondition: the cancel has stopped the driver");
+        await shutdown.CancelAsync();
+
+        var ended = await Record.ExceptionAsync(() => launch.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        ended.ShouldBeAssignableTo<OperationCanceledException>("shutdown ends the wait; a timeout here means the reattach was held up");
+        GC.KeepAlive(cancel);
+    }
+
+    [Fact]
+    public async Task A_user_cancel_of_a_reattach_that_was_finishing_a_cancel_reports_CancelFinished_not_Resumed()
+    {
+        var env = new Env(new FakeGcp().WithWorker(FakeWorkerMode.Never));
+        await env.SeedAsync("job-cc", JobPhase.Cancelling, vm: true);
+        var launch = await ReattachParkedInItsLookAsync(env, "job-cc", CancellationToken.None);
+
+        await env.Active.CancelAsync("job-cc", () => Task.CompletedTask);
+        var outcomes = await launch.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        outcomes.Single().Action.ShouldBe(ReattachAction.CancelFinished, "the reattach was finishing a cancel, not resuming a run (the runner's cancel ends on its own token, so this holds whether or not the driver was stopped mid-way)");
     }
 }

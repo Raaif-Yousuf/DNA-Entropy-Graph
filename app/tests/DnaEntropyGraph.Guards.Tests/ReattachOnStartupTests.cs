@@ -129,4 +129,14 @@ public class ReattachOnStartupTests : IDisposable
         row.Phase.ShouldBe(JobPhase.Running);
         row.ErrorCode.ShouldBeNull();
     }
+
+    [Fact]
+    public void OnLaunched_calls_the_startup_entry_the_tests_above_drive()
+    {
+        // The tests above call AppStartup.BeginAsync directly; only this proves the app's own launch does too (a removed line in
+        // OnLaunched would leave every one of them green, and the reconciler registered and never run).
+        var launched = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "App.xaml.cs"));
+
+        launched.ShouldContain("AppStartup.BeginAsync(Services", Case.Sensitive, "App.OnLaunched must start the reconciler through AppStartup.BeginAsync");
+    }
 }
