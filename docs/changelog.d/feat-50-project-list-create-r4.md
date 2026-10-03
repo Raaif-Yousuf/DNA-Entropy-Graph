@@ -1,1 +1,0 @@
-- Review fixes, round 4, for the project step (issue #50): once the waits for Google to finish making a project have used up the 5 minute limit, no further check is started, so a hung last check can no longer stretch the wait to 10 minutes; the rule that a spent wait is never replayed is now tested directly; and the VM create timeout and its wait deadline come from one value.
