@@ -86,6 +86,9 @@ public class CloudJobRunnerGuaranteesTests
 
         public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
             => OnFind is null ? inner.FindByJobIdAsync(jobId, cancellationToken) : OnFind(jobId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
+            => inner.ListByInstallationAsync(installationId, cancellationToken);
     }
 
     // ---- M1: a gateway's own deadline (an OCE with the caller's token live) is not the caller cancelling ----

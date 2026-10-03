@@ -1,0 +1,39 @@
+DNA-Entropy summary
+name:               two
+records:            2
+total length:       64 nt
+entropy mean (all): 1.6341 bits
+entropy min (all):  0.8985 bits
+entropy max (all):  1.9810 bits
+
+[two_1]
+  length:           32 nt
+  coordinate start: 1
+  entropy mean:     1.6898 bits
+  entropy min:      0.8985 bits (position 14)
+  entropy max:      1.9810 bits (position 10)
+  surprisal mean:     2.7062 bits
+  log-likelihood:     -86.5995 bits (32 defined position(s))
+  context length (K): 4096
+  window (W):         8192
+  stride (S):         4096
+  ceiling:            8192
+  direction:          both-combined
+  seam:               n/a
+  reduced-context positions: 32
+
+[two_2]
+  length:           32 nt
+  coordinate start: 1
+  entropy mean:     1.5784 bits
+  entropy min:      1.0044 bits (position 12)
+  entropy max:      1.8709 bits (position 13)
+  surprisal mean:     2.7797 bits
+  log-likelihood:     -88.9516 bits (32 defined position(s))
+  context length (K): 4096
+  window (W):         8192
+  stride (S):         4096
+  ceiling:            8192
+  direction:          both-combined
+  seam:               n/a
+  reduced-context positions: 32

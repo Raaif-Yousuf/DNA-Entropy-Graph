@@ -24,12 +24,6 @@
   <data name="ConfirmDeleteResource_Body" xml:space="preserve">
     <value>This stops billing for it. This cannot be undone.</value>
   </data>
-  <data name="NoRunsYet_Title" xml:space="preserve">
-    <value>No runs yet</value>
-  </data>
-  <data name="NoRunsYet_Body" xml:space="preserve">
-    <value>Start a run to see results here.</value>
-  </data>
   <data name="ThemeUpdated_Title" xml:space="preserve">
     <value>Theme updated</value>
   </data>
@@ -828,6 +822,167 @@
   <data name="AuthError_SIGNIN_STORAGE" xml:space="preserve">
     <value>The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Sign in again.</value>
   </data>
+  <data name="Results_NoRun" xml:space="preserve">
+    <value>This run is not in your history. Choose Show runs, then pick a run from the list.</value>
+  </data>
+  <data name="Results_FolderMissing" xml:space="preserve">
+    <value>The folder that held this run's results was moved or deleted. Choose Show runs, then choose Download again on this run to fetch the results again.</value>
+  </data>
+  <data name="Results_ReadFailed" xml:space="preserve">
+    <value>The results folder could not be read. Check that the drive it is on is connected, then choose Show runs and open this run again.</value>
+  </data>
+  <data name="Results_StatsNone" xml:space="preserve">
+    <value>This run did not write a summary file, so there are no numbers to show. Choose Open folder to see which files it did write.</value>
+  </data>
+  <data name="Results_StatsUnreadable" xml:space="preserve">
+    <value>The summary file {0} could not be read, so its numbers are not shown. Choose Open next to it in the file list to look at it yourself.</value>
+  </data>
+  <data name="Results_FileActionFailed" xml:space="preserve">
+    <value>That file could not be opened. It may have been moved or deleted, or Windows has no program for it. Choose Show in folder to find it.</value>
+  </data>
+  <data name="Results_OpenFolderFailed" xml:space="preserve">
+    <value>The results folder could not be opened. It may have been moved or deleted. Choose Show runs, then Download again on this run.</value>
+  </data>
+  <data name="Results_CopyFailed" xml:space="preserve">
+    <value>The path could not be copied because Windows would not let the app use the clipboard. Close other programs that copy text, then choose Copy path again.</value>
+  </data>
+  <data name="Results_Direction_BothCombined" xml:space="preserve">
+    <value>Both directions, combined</value>
+  </data>
+  <data name="Results_Direction_BothAveraged" xml:space="preserve">
+    <value>Both directions, averaged</value>
+  </data>
+  <data name="Results_Direction_BothSeparate" xml:space="preserve">
+    <value>Both directions, kept separate</value>
+  </data>
+  <data name="Results_Direction_ForwardOnly" xml:space="preserve">
+    <value>Forward only</value>
+  </data>
+  <data name="Results_Direction_ReverseOnly" xml:space="preserve">
+    <value>Reverse only</value>
+  </data>
+  <data name="Results_Direction_Unknown" xml:space="preserve">
+    <value>Other ({0})</value>
+  </data>
+  <data name="Results_Headline" xml:space="preserve">
+    <value>Mean entropy {0:F3} bits (lowest {1:F3}, highest {2:F3}). Total length {3:N0} bases. Sequences: {4}.</value>
+  </data>
+  <data name="Results_Bits" xml:space="preserve">
+    <value>{0:F3} bits</value>
+  </data>
+  <data name="Results_Length" xml:space="preserve">
+    <value>{0:N0} bases</value>
+  </data>
+  <data name="Results_Size_Bytes" xml:space="preserve">
+    <value>{0:N0} bytes</value>
+  </data>
+  <data name="Results_Size_Kilobytes" xml:space="preserve">
+    <value>{0:N1} KB</value>
+  </data>
+  <data name="Results_Size_Megabytes" xml:space="preserve">
+    <value>{0:N1} MB</value>
+  </data>
+  <data name="Results_Size_Unknown" xml:space="preserve">
+    <value>size unknown</value>
+  </data>
+  <data name="ResultsShowRunsButton.Content" xml:space="preserve">
+    <value>Show runs</value>
+  </data>
+  <data name="ResultsOpenFolderButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="ResultsOpenInViewerButton.Content" xml:space="preserve">
+    <value>Open in viewer</value>
+  </data>
+  <data name="ResultsStatsHeading.Text" xml:space="preserve">
+    <value>Entropy by sequence</value>
+  </data>
+  <data name="ResultsColumnContig.Text" xml:space="preserve">
+    <value>Sequence</value>
+  </data>
+  <data name="ResultsColumnLength.Text" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="ResultsColumnMean.Text" xml:space="preserve">
+    <value>Mean</value>
+  </data>
+  <data name="ResultsColumnMin.Text" xml:space="preserve">
+    <value>Lowest</value>
+  </data>
+  <data name="ResultsColumnMax.Text" xml:space="preserve">
+    <value>Highest</value>
+  </data>
+  <data name="ResultsColumnDirection.Text" xml:space="preserve">
+    <value>Direction</value>
+  </data>
+  <data name="ResultsFilesHeading.Text" xml:space="preserve">
+    <value>Files</value>
+  </data>
+  <data name="ResultsFileOpenButton.Content" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="ResultsFileShowButton.Content" xml:space="preserve">
+    <value>Show in folder</value>
+  </data>
+  <data name="ResultsFileCopyButton.Content" xml:space="preserve">
+    <value>Copy path</value>
+  </data>
+  <data name="RunProgressOpenResults.Content" xml:space="preserve">
+    <value>View results</value>
+  </data>
+  <data name="SettingsPageTitle.Text" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="SettingsDiagnosticsHeader.Text" xml:space="preserve">
+    <value>Diagnostics</value>
+  </data>
+  <data name="SettingsDiagnosticsExplainer.Text" xml:space="preserve">
+    <value>Saves one file you can send to support. It includes the logs from your runs, your run history (ids, states and error codes), settings that are safe to share, version numbers and this installation's id. It never includes your sequences, file names, results, email address or sign-in.</value>
+  </data>
+  <data name="DiagnosticsReadme" xml:space="preserve">
+    <value>DNA Entropy Graph diagnostics
+
+Included: worker and run logs, run history (ids, states, error codes, times), the status, progress and result files the app keeps for each run, settings with private values left out, version numbers and the installation id. Logs are renamed log-01.log, log-02.log and so on, so a file name never reveals who or what a run was about. Logs written by the app itself are included once the app writes them.
+
+Never included: sequences, input file names, output files, your email, sign-in tokens, your Windows user name. Paths inside your Windows profile are shown as &lt;user&gt;, any other path as &lt;path&gt;.
+</value>
+  </data>
+  <data name="SaveDiagnosticsButton.Content" xml:space="preserve">
+    <value>Save diagnostics</value>
+  </data>
+  <data name="DiagnosticsOpenFolderButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="DiagnosticsSaved_Title" xml:space="preserve">
+    <value>Diagnostics saved</value>
+  </data>
+  <data name="DiagnosticsSaved_Body" xml:space="preserve">
+    <value>Saved to {0}. Choose Open folder to find it, then send the file to support.</value>
+  </data>
+  <data name="DiagnosticsSaveFailed_Title" xml:space="preserve">
+    <value>Diagnostics not saved</value>
+  </data>
+  <data name="DiagnosticsSaveFailed_Write" xml:space="preserve">
+    <value>The file could not be written there. Choose Save diagnostics again and pick a different folder.</value>
+  </data>
+  <data name="DiagnosticsSaveFailed_Refused" xml:space="preserve">
+    <value>The file was not saved because the app could not make it safe to send. Choose Save diagnostics again, and if it stops again, describe the problem in a bug report without a file.</value>
+  </data>
+  <data name="DiagnosticsSaveFailed_Other" xml:space="preserve">
+    <value>Something went wrong while saving the file. Choose Save diagnostics again, and if it stops again, describe the problem in a bug report without a file.</value>
+  </data>
+  <data name="DiagnosticsOpenFailed_Title" xml:space="preserve">
+    <value>Folder not opened</value>
+  </data>
+  <data name="DiagnosticsOpenFailed_Body" xml:space="preserve">
+    <value>Windows could not open the folder. Open File Explorer yourself and look for the file at {0}.</value>
+  </data>
+  <data name="DiagnosticsFileNamePrefix" xml:space="preserve">
+    <value>dna-entropy-diagnostics</value>
+  </data>
+  <data name="DiagnosticsFileTypeLabel" xml:space="preserve">
+    <value>Zip file</value>
+  </data>
   <data name="SetupError_PROJECT_QUOTA" xml:space="preserve">
     <value>Google says this account has reached its limit on Google Cloud projects, so a new one cannot be made. Choose Pick an existing project and use one you already have.</value>
   </data>
@@ -916,6 +1071,5 @@
     <value>Create project</value>
   </data>
 </root>
-
 
 
