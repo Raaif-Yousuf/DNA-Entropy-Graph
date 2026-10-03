@@ -39,6 +39,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     private readonly SemaphoreSlim _signInGate = new(1, 1);
     private readonly object _loadLock = new();
     private AccountsFile? _state;
+    private bool _accountsFileSetAside;
 
     public GoogleAccountService(GoogleAccountOptions options)
     {
@@ -68,9 +69,37 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             lock (_loadLock)
             {
-                return _state ??= Reconcile(_registry.Load());
+                if (_state is null)
+                {
+                    var loaded = _registry.Load();
+                    _accountsFileSetAside = _registry.QuarantinedTo is not null;
+                    _state = Reconcile(loaded);
+                }
+
+                return _state;
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #616: when <c>accounts.json</c> could not be parsed, <see cref="AccountRegistry"/> set it aside as <c>accounts.json.bad</c> and the list starts empty.
+    /// The first change to the list (sign-in, project choice, switch) says so once, with <see cref="AuthErrorCodes.AccountsFileUnreadable"/>, before anything is written
+    /// or any browser opened; the user then signs in again against the empty list. Reads never throw it.
+    /// </summary>
+    private void ThrowIfAccountsFileWasSetAside()
+    {
+        _ = State;
+        lock (_loadLock)
+        {
+            if (!_accountsFileSetAside)
+            {
+                return;
+            }
+
+            _accountsFileSetAside = false;
+        }
+
+        throw new AccountAuthException(AuthErrorCodes.AccountsFileUnreadable, "accounts.json could not be parsed and was set aside as accounts.json.bad");
     }
 
     public async Task SignInAsync(CancellationToken cancellationToken)
@@ -78,6 +107,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _signInGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileWasSetAside();
             var client = _options.ClientLoader.Load();
             var token = await AuthorizeInBrowserAsync(client, cancellationToken).ConfigureAwait(false);
 
@@ -166,6 +196,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileWasSetAside();
             var current = State;
             if (current.Active is not { NeedsSignIn: false } active)
             {
@@ -192,6 +223,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileWasSetAside();
             var current = State;
             if (current.Accounts.All(a => a.Sub != sub))
             {

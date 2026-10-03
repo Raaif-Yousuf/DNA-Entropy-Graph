@@ -792,6 +792,13 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `FakeGcp`, a signed-in account with no chosen project still answers `GoogleAccountOptions.ProjectIdUntilSelectionExists`
   (`"fake-project"`); a chosen project always wins, and the fallback goes with the real gateways (#609). Token refresh is done by Google's `UserCredential` and written back through
   the same store, so a restart needs no browser.
+  `AccountRegistry` (issue #616) writes `accounts.json` under a machine-wide named mutex (`Local\DnaEntropyGraph.accounts.<hash of the path>`,
+  10 s wait) to a unique temp name, so two saves at once serialise; the lock is cross-process by construction, the test drives two
+  instances on two threads. A missing file is a normal empty list. A file that does not parse is moved to `accounts.json.bad` (`.bad.1`,
+  `.bad.2`, never over an earlier one) before anything can overwrite it, and the first sign-in, project choice or switch afterwards fails
+  once with `ACCOUNTS_FILE_UNREADABLE` (action Sign in again) before a browser opens. A file that cannot be read at all (locked) is left alone.
+  THEORY (unverified): a virus scanner or a second app instance is what damaged the file in the field. Not covered: two processes doing
+  load-modify-save can still lose one update (last writer wins); only corruption is prevented.
 - **Errors** are `AccountAuthException` with a code from `AuthErrorCodes`; the English is `AuthError_<code>` in
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
   on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
