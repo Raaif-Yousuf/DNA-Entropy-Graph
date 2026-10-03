@@ -19,6 +19,11 @@
     <!-- Cloud: retry, jitter and circuit breaker for every gateway call (issue #258). Polly is BSD-3-Clause. -->
     <PackageVersion Include="Polly.Core" Version="8.6.5" />
 
+    <!-- Cloud: Google OAuth for the desktop sign-in (issue #48). Apache-2.0. Only DnaEntropyGraph.Cloud references it (Hard Rule 7). -->
+    <PackageVersion Include="Google.Apis.Auth" Version="1.67.0" />
+    <!-- Cloud: DPAPI (CurrentUser) for the token files (issue #48). MIT. -->
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+
     <!-- Tests: xUnit v3, Shouldly, NSubstitute (Hard Rule 21 - not FluentAssertions 8+, not Moq) -->
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
