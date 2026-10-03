@@ -131,6 +131,7 @@ public static class ServiceRegistration
         // the rest of this method uses.
         services.AddSingleton(_ => new SqliteDatabase(databasePath));
         services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
+        services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<ISettingsStore>(_ => new SettingsStore(settingsPath));
 
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the

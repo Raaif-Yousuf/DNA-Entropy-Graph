@@ -59,6 +59,7 @@ def test_top_level_shape_has_the_expected_keys() -> None:
         "direction": "both-combined",
         "ambiguity_policy": "keep",
         "rna": False,
+        "topology": "auto",
     }
     assert data["predictor"] == {"kind": "mock", "model": "evo2_7b", "device": "cuda", "seed": 0}
     assert len(data["contigs"]) == 1
@@ -167,3 +168,27 @@ def test_writer_output_is_deterministic_key_order(tmp_path: Path) -> None:
     path_b = ProvenanceWriter().write(out_dir=str(tmp_path), data=data)
     text_b = Path(path_b).read_text(encoding="utf-8")
     assert text_a == text_b  # sort_keys=True: byte-identical for byte-identical input
+
+
+# --- issue #79: provenance records the reduced-context POSITIONS ------------------------
+
+
+def test_reduced_context_range_is_recorded_as_a_zero_based_half_open_span() -> None:
+    c = _contig(reduced_context_count=80, reduced_context_range=(20, 100))
+    assert c["reduced_context_range"] == [20, 100]
+
+
+def test_reduced_context_range_defaults_to_null() -> None:
+    assert _contig()["reduced_context_range"] is None
+
+
+# --- issue #128: topology --------------------------------------------------------------
+
+
+def test_contig_topology_defaults_to_linear_and_records_circular() -> None:
+    assert _contig()["topology"] == "linear"
+    assert _contig(topology="circular", seam=None)["topology"] == "circular"
+
+
+def test_run_topology_records_the_requested_option() -> None:
+    assert _run(topology="circular")["run"]["topology"] == "circular"

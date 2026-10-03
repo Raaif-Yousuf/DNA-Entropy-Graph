@@ -5,6 +5,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
 using Shouldly;
 using Xunit;
@@ -87,6 +88,16 @@ public class JobEngineTests
         }
     }
 
+    private sealed class MemoryProjects : IProjectRepository
+    {
+        public Task<IReadOnlyList<ProjectRecord>> GetAllAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ProjectRecord>>([]);
+
+        public Task UpsertAsync(ProjectRecord project, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task EnsureAsync(string projectId, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     private sealed class Harness
     {
         public Harness(FakeGcp gcp, WorkerImageResolution? image = null, Func<string?>? downloads = null)
@@ -110,7 +121,7 @@ public class JobEngineTests
                 ResultPollInterval = TimeSpan.FromMilliseconds(1),
                 ResultTimeout = TimeSpan.FromSeconds(5),
             };
-            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new LocalRunInputStore(AppData), ImageProvider, new ActiveRuns(), downloads);
+            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), new LocalRunInputStore(AppData), ImageProvider, new ActiveRuns(), downloads);
         }
 
         public StaticImageProvider ImageProvider { get; }
