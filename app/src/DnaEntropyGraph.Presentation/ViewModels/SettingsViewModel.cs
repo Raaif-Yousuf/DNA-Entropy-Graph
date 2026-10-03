@@ -70,7 +70,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         _time = time;
         _themeApplier = themeApplier;
         // The field, not the property: opening the page must not re-apply or re-save what was just read.
-        _themeIndex = Array.IndexOf(ThemeNames, ReadTheme(settingsStore)) is var i and >= 0 ? i : SystemThemeIndex;
+        // What is on screen wins over what is saved: a choice that could not be saved (#558) is still applied, and the radio must say so.
+        var shown = Array.IndexOf(ThemeNames, themeApplier.CurrentTheme);
+        _themeIndex = shown >= 0 ? shown : Array.IndexOf(ThemeNames, ReadTheme(settingsStore)) is var i and >= 0 ? i : SystemThemeIndex;
     }
 
     private static string? ReadTheme(ISettingsStore settingsStore)

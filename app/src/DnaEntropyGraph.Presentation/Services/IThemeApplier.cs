@@ -7,5 +7,8 @@ namespace DnaEntropyGraph.Presentation.Services;
 /// </summary>
 public interface IThemeApplier
 {
+    /// <summary>The theme last applied to the window, or null before the first <see cref="Apply"/>. Settings reads it so its radio shows what is on screen even when the choice could not be saved (#558).</summary>
+    string? CurrentTheme { get; }
+
     void Apply(string theme);
 }

@@ -21,9 +21,11 @@ public sealed class WindowThemeApplier : IThemeApplier
         _titleBar = appWindow.TitleBar;
     }
 
+    public string? CurrentTheme { get; private set; }
+
     public void Apply(string theme)
     {
-        var resolved = ThemeApplier.Resolve(theme);
+        CurrentTheme = theme; var resolved = ThemeApplier.Resolve(theme);
         if (_root is not null)
         {
             _root.RequestedTheme = resolved;

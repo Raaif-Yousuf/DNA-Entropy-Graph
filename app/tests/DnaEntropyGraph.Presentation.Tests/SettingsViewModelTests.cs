@@ -162,6 +162,28 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public void A_theme_that_could_not_be_saved_is_still_what_the_radio_shows_when_settings_is_opened_again()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.GetString("Theme").Returns((string?)null);
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
+        var applier = new RecordingThemeApplier();
+        var first = CreateViewModel(settingsStore, out _, applier);
+
+        first.ThemeIndex = Dark;
+        var reopened = CreateViewModel(settingsStore, out _, applier);
+
+        applier.CurrentTheme.ShouldBe("Dark");
+        reopened.ThemeIndex.ShouldBe(Dark);
+    }
+
+    private sealed class RecordingThemeApplier : IThemeApplier
+    {
+        public string? CurrentTheme { get; private set; }
+
+        public void Apply(string theme) => CurrentTheme = theme;
+    }
+    [Fact]
     public void No_selection_is_not_a_theme()
     {
         var settingsStore = Substitute.For<ISettingsStore>();
