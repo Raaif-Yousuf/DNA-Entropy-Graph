@@ -1,5 +1,6 @@
 using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Cloud;
+using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
@@ -38,7 +39,7 @@ public class ReattachOnStartupTests : IDisposable
         }
     }
 
-    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done, TimeProvider? time = null)
+    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done, TimeProvider? time = null, Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root);
@@ -46,6 +47,8 @@ public class ReattachOnStartupTests : IDisposable
         {
             services.AddSingleton(time);
         }
+
+        configure?.Invoke(services);
 
         if (connected)
         {
@@ -186,12 +189,54 @@ public class ReattachOnStartupTests : IDisposable
         await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
         (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "precondition: offline at launch, the row is deferred");
 
+        // Still offline when the first probe (30 s) fires: it must re-arm on the doubled wait (60 s) rather than stop, and only that second probe,
+        // after the network is back, judges the run.
+        var observer = (ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>();
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+        await WaitForPendingTimersAsync(time, 1);
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the first probe pass found the network still down");
+
         gcp.WithCloudConnected();
-        time.Advance(TimeSpan.FromMinutes(10));
-        await ((ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>()).WhenIdleAsync();
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the re-armed probe waits twice as long: 30 s is not enough");
+        await WaitForPendingTimersAsync(time, 1);
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
 
         var row = await RowAsync(provider, "job-probe");
         row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_launch_pass_that_throws_a_network_error_still_starts_the_probe()
+    {
+        // Issue #559 review F1: BeginReconcileAsync throwing (the run table unreadable because the network-backed store timed out) must not skip
+        // the probe; the pass records the failure as deferred and the probe is armed from a finally.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: false, time: time, configure: services => services.AddSingleton<IRunRepository>(_ => new TimingOutRepository()));
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        time.PendingTimers.ShouldBe(1, "the probe is armed even though the launch pass threw");
+    }
+
+    private static async Task WaitForPendingTimersAsync(VirtualTimeProvider time, int expected)
+    {
+        for (var i = 0; i < 500 && time.PendingTimers != expected; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        time.PendingTimers.ShouldBe(expected);
+    }
+
+    private sealed class TimingOutRepository : IRunRepository
+    {
+        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => throw new TimeoutException();
+
+        public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => throw new TimeoutException();
     }
 
     [Fact]

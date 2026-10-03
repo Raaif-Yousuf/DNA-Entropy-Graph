@@ -110,6 +110,66 @@ public sealed class JobReconciler
     private volatile bool _lifecycleDeferred;
 
     /// <summary>
+    /// Passes can overlap (the launch pass runs outside <see cref="ReconcileOnReconnect"/>'s single flight), and the older may end last. Each pass
+    /// takes a generation when it starts and only the latest-started one may write the deferred state, so an older pass finishing late never
+    /// overwrites what a newer one found. One counter per kind of state, because a lone <see cref="ReattachAsync"/> and a lone
+    /// <see cref="EnforceLifecycleAsync"/> are different passes over different state.
+    /// </summary>
+    private readonly object _generationGate = new();
+
+    private long _lifecycleGeneration;
+    private long _reattachGeneration;
+
+    private long NextLifecycleGeneration()
+    {
+        lock (_generationGate)
+        {
+            return ++_lifecycleGeneration;
+        }
+    }
+
+    private long NextReattachGeneration()
+    {
+        lock (_generationGate)
+        {
+            return ++_reattachGeneration;
+        }
+    }
+
+    /// <summary>Writes <see cref="_lifecycleDeferred"/> unless a newer lifecycle pass has started since <paramref name="generation"/> began.</summary>
+    private void SetLifecycleDeferred(long generation, bool value)
+    {
+        lock (_generationGate)
+        {
+            if (generation == _lifecycleGeneration)
+            {
+                _lifecycleDeferred = value;
+            }
+        }
+    }
+
+    /// <summary>Records or clears a run's deferred mark unless a newer reattach pass has started since <paramref name="generation"/> began.</summary>
+    private void SetRunDeferred(long generation, string jobId, bool deferred)
+    {
+        lock (_generationGate)
+        {
+            if (generation != _reattachGeneration)
+            {
+                return;
+            }
+
+            if (deferred)
+            {
+                _deferredRuns[jobId] = 0;
+            }
+            else
+            {
+                _deferredRuns.TryRemove(jobId, out _);
+            }
+        }
+    }
+
+    /// <summary>
     /// How far back a finished run's VM is looked up by its job-id label. Older leaks are caught by the idle sweep, which lists by installation and
     /// so costs one call however long the history is; this keeps a launch from making one lookup per run row ever recorded.
     /// </summary>
@@ -175,8 +235,8 @@ public sealed class JobReconciler
     /// </summary>
     public async Task<Task> BeginReconcileAsync(CancellationToken cancellationToken)
     {
-        var started = StartReattachAsync(cancellationToken);
-        await EnforceLifecycleAsync(cancellationToken).ConfigureAwait(false);
+        var started = StartReattachAsync(NextReattachGeneration(), cancellationToken);
+        await EnforceLifecycleAsync(NextLifecycleGeneration(), cancellationToken).ConfigureAwait(false);
         var (judged, outcomes) = await started.ConfigureAwait(false);
         await judged.ConfigureAwait(false);
         return outcomes;
@@ -190,22 +250,25 @@ public sealed class JobReconciler
     /// touched; a VM whose labels were not read is judged only by its job id and the run row's own installation id.
     /// Returns what it did. Never throws for a cloud failure or an error in one row: that row or VM gets a <see cref="LifecycleAction.Deferred"/> or <see cref="LifecycleAction.Failed"/> outcome and the pass goes on with the rest.
     /// </summary>
-    public async Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleAsync(CancellationToken cancellationToken)
+        => EnforceLifecycleAsync(NextLifecycleGeneration(), cancellationToken);
+
+    private async Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleAsync(long generation, CancellationToken cancellationToken)
     {
         try
         {
-            return await EnforceLifecycleCoreAsync(cancellationToken).ConfigureAwait(false);
+            return await EnforceLifecycleCoreAsync(generation, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // The pass itself failed (a failing repository): deferred if and only if it is a network class, so a non-network failure
             // cannot keep the reconnect probe alive (issue #559). The caller still sees the exception.
-            _lifecycleDeferred = IsNoAnswerException(ex);
+            SetLifecycleDeferred(generation, IsNoAnswerException(ex));
             throw;
         }
     }
 
-    private async Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleCoreAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleCoreAsync(long generation, CancellationToken cancellationToken)
     {
         var outcomes = new List<LifecycleOutcome>();
         var installation = InstallationId.GetOrCreate(_settings);
@@ -227,10 +290,13 @@ public sealed class JobReconciler
         }
 
         await SweepIdleAsync(installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        bool deferred;
         lock (outcomes)
         {
-            _lifecycleDeferred = outcomes.Any(o => o.Action == LifecycleAction.Deferred);
+            deferred = outcomes.Any(o => o.Action == LifecycleAction.Deferred);
         }
+
+        SetLifecycleDeferred(generation, deferred);
 
         return outcomes;
     }
@@ -449,7 +515,7 @@ public sealed class JobReconciler
     /// <summary>Reattaches every non-terminal cloud run created before this reconciler existed, concurrently, and returns what happened to each once they have all ended.</summary>
     public async Task<IReadOnlyList<ReattachOutcome>> ReattachAsync(CancellationToken cancellationToken)
     {
-        var (_, outcomes) = await StartReattachAsync(cancellationToken).ConfigureAwait(false);
+        var (_, outcomes) = await StartReattachAsync(NextReattachGeneration(), cancellationToken).ConfigureAwait(false);
         return await outcomes.ConfigureAwait(false);
     }
 
@@ -457,7 +523,7 @@ public sealed class JobReconciler
     /// Starts every reattach. <c>Judged</c> ends when each run has been judged: looked at in the cloud and either left deferred or on its way to a
     /// driver (<see cref="HasDeferred"/> is then settled for this pass). <c>Outcomes</c> ends when every run has ended.
     /// </summary>
-    private async Task<(Task Judged, Task<IReadOnlyList<ReattachOutcome>> Outcomes)> StartReattachAsync(CancellationToken cancellationToken)
+    private async Task<(Task Judged, Task<IReadOnlyList<ReattachOutcome>> Outcomes)> StartReattachAsync(long generation, CancellationToken cancellationToken)
     {
         var all = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
         var candidates = all
@@ -470,31 +536,23 @@ public sealed class JobReconciler
         foreach (var stale in _deferredRuns.Keys.Where(id => !candidateIds.Contains(id)))
         {
             // A run deferred offline that has since ended (cancelled, deleted) is no longer anyone's to look at: it must not keep the probe alive.
-            _deferredRuns.TryRemove(stale, out _);
+            SetRunDeferred(generation, stale, deferred: false);
         }
 
         var judgements = candidates.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToList();
-        var tasks = candidates.Select((row, i) => ReattachOneAsync(row, judgements[i], cancellationToken)).ToList();
+        var tasks = candidates.Select((row, i) => ReattachOneAsync(row, judgements[i], generation, cancellationToken)).ToList();
         return (Task.WhenAll(judgements.Select(j => j.Task)), WhenAllOutcomesAsync(tasks));
     }
 
     private static async Task<IReadOnlyList<ReattachOutcome>> WhenAllOutcomesAsync(List<Task<ReattachOutcome>> tasks)
         => await Task.WhenAll(tasks).ConfigureAwait(false);
 
-    private async Task<ReattachOutcome> ReattachOneAsync(RunRecord row, TaskCompletionSource judged, CancellationToken cancellationToken)
+    private async Task<ReattachOutcome> ReattachOneAsync(RunRecord row, TaskCompletionSource judged, long generation, CancellationToken cancellationToken)
     {
         try
         {
-            var outcome = await ReattachCoreAsync(row, judged, cancellationToken).ConfigureAwait(false);
-            if (outcome.Action == ReattachAction.Deferred)
-            {
-                _deferredRuns[row.JobId] = 0;
-            }
-            else
-            {
-                _deferredRuns.TryRemove(row.JobId, out _);
-            }
-
+            var outcome = await ReattachCoreAsync(row, judged, generation, cancellationToken).ConfigureAwait(false);
+            SetRunDeferred(generation, row.JobId, outcome.Action == ReattachAction.Deferred);
             return outcome;
         }
         finally
@@ -503,7 +561,7 @@ public sealed class JobReconciler
         }
     }
 
-    private async Task<ReattachOutcome> ReattachCoreAsync(RunRecord row, TaskCompletionSource judged, CancellationToken cancellationToken)
+    private async Task<ReattachOutcome> ReattachCoreAsync(RunRecord row, TaskCompletionSource judged, long generation, CancellationToken cancellationToken)
     {
         try
         {
@@ -512,7 +570,7 @@ public sealed class JobReconciler
             ReattachOutcome? outcome = null;
             var underway = new Underway(() =>
             {
-                _deferredRuns.TryRemove(row.JobId, out _);
+                SetRunDeferred(generation, row.JobId, deferred: false);
                 judged.TrySetResult();
             });
             var driver = _active.TryStart(row.JobId, async token =>
@@ -553,6 +611,11 @@ public sealed class JobReconciler
         if (row.Phase == JobPhase.Cancelling)
         {
             underway.Action = ReattachAction.CancelFinished;
+
+            // Judged at the start: finishing a cancel deletes VMs (operations of tens of seconds, or a call that never returns), and the pass, and
+            // behind it ReconcileOnReconnect's single-flight slot, must not wait on that. A cancel that then finds no connection is recorded as
+            // Deferred by ReattachOneAsync, and the probe is armed again when the reattached runs end (ReconcileOnReconnect.Track).
+            underway.Judged();
             return await FinishCancelAsync(row, cancellationToken).ConfigureAwait(false);
         }
 
