@@ -37,6 +37,7 @@ public partial class App : Application
         navigationService.Initialize(window.RootFrame);
         Startup.NavigationRoutes.RegisterAll(navigationService);
         Services.GetRequiredService<Services.WindowHandleProvider>().Hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        Services.GetRequiredService<DialogService>().Attach(window);
         window.Activate();
         _window = window;
     }
