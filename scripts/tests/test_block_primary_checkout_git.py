@@ -678,7 +678,7 @@ def _run_hook_budget() -> float:
 
 
 def test_629_budget_mirrors_the_dispatcher_kill():
-    assert agent_hook.DISPATCHER_BUDGET_SECONDS == _run_hook_budget()
+    assert _run_hook_budget() == agent_hook.DISPATCHER_BUDGET_SECONDS
 
 
 def test_629_worst_case_of_one_bounded_git_includes_the_kill_tail():
