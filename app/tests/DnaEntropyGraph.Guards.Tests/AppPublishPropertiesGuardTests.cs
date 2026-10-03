@@ -13,29 +13,52 @@ namespace DnaEntropyGraph.Guards.Tests;
 /// </summary>
 public class AppPublishPropertiesGuardTests
 {
+    /// <summary>The only condition under which the value may apply: `dotnet publish` sets _IsPublishing. A different (or never-true) condition would pass a value-only check and ship nothing.</summary>
+    private const string PublishOnlyCondition = "'$(_IsPublishing)' == 'true'";
+
+    private const string NeverTrue = "<Project><PropertyGroup><WindowsAppSDKSelfContained Condition=\"'$(Never)' == 'x'\">true</WindowsAppSDKSelfContained></PropertyGroup></Project>";
+
     private static string AppCsproj => Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "DnaEntropyGraph.App.csproj");
 
     [Fact]
     public void The_real_App_csproj_publishes_the_Windows_App_SDK_runtime_with_the_app()
     {
         File.Exists(AppCsproj).ShouldBeTrue("the guard must find the real App project, or it checks nothing.");
+        var text = File.ReadAllText(AppCsproj);
 
-        PropertyValue(File.ReadAllText(AppCsproj), "WindowsAppSDKSelfContained").ShouldBe(
-            "true",
-            "WindowsAppSDKSelfContained must be true in DnaEntropyGraph.App.csproj, otherwise the installer needs the Windows App SDK " +
-            "runtime already installed on the user's PC (#475).");
-        PropertyValue(File.ReadAllText(AppCsproj), "WindowsPackageType").ShouldBe("None");
+        Property(text, "WindowsAppSDKSelfContained").ShouldBe(
+            ("true", PublishOnlyCondition),
+            "WindowsAppSDKSelfContained must be true exactly under the _IsPublishing condition in DnaEntropyGraph.App.csproj; " +
+            "otherwise the installer needs the Windows App SDK runtime already installed on the user's PC (#475).");
+        Property(text, "WindowsPackageType")!.Value.Value.ShouldBe("None");
     }
 
     [Theory]
-    [InlineData("<Project><PropertyGroup><SelfContained>true</SelfContained></PropertyGroup></Project>", null)]
-    [InlineData("<Project><PropertyGroup><WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained></PropertyGroup></Project>", "false")]
-    [InlineData("<Project><PropertyGroup><WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained></PropertyGroup></Project>", "true")]
-    public void The_scanner_reads_the_property_value_or_reports_it_absent(string csproj, string? expected)
+    [InlineData("<Project><PropertyGroup><SelfContained>true</SelfContained></PropertyGroup></Project>", null, null)]
+    [InlineData("<Project><PropertyGroup><WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained></PropertyGroup></Project>", "false", null)]
+    [InlineData("<Project><PropertyGroup><WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained></PropertyGroup></Project>", "true", null)]
+    [InlineData(NeverTrue, "true", "'$(Never)' == 'x'")]
+    public void The_scanner_reads_the_value_and_the_condition_or_reports_the_property_absent(string csproj, string? value, string? condition)
     {
-        PropertyValue(csproj, "WindowsAppSDKSelfContained").ShouldBe(expected);
+        var read = Property(csproj, "WindowsAppSDKSelfContained");
+        if (value is null)
+        {
+            read.ShouldBeNull();
+            return;
+        }
+
+        read.ShouldBe((value, condition));
     }
 
-    private static string? PropertyValue(string csprojText, string name)
-        => XDocument.Parse(csprojText).Descendants(name).Select(e => e.Value.Trim()).LastOrDefault();
+    [Fact]
+    public void A_never_true_condition_is_not_the_publish_condition()
+    {
+        Property(NeverTrue, "WindowsAppSDKSelfContained").ShouldNotBe(("true", PublishOnlyCondition));
+    }
+
+    private static (string Value, string? Condition)? Property(string csprojText, string name)
+    {
+        var e = XDocument.Parse(csprojText).Descendants(name).LastOrDefault();
+        return e is null ? null : (e.Value.Trim(), e.Attribute("Condition")?.Value);
+    }
 }
