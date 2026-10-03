@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core;
+using DnaEntropyGraph.Core.Abstractions;
 using Shouldly;
 using Xunit;
 
@@ -34,6 +36,49 @@ public class ProjectRepositoryTests
 
         all.Count(p => p.ProjectId == "proj-2").ShouldBe(1);
         all.Single(p => p.ProjectId == "proj-2").LastGoodZone.ShouldBe("us-central1-b");
+    }
+
+    [Fact]
+    public async Task Ensure_inserts_a_bare_row_for_an_unknown_project_id()
+    {
+        using var paths = new TempPaths();
+        var repository = new ProjectRepository(new SqliteDatabase(paths.DatabasePath));
+
+        await repository.EnsureAsync("proj-new", CancellationToken.None);
+
+        var row = (await repository.GetAllAsync(CancellationToken.None)).ShouldHaveSingleItem();
+        row.ProjectId.ShouldBe("proj-new");
+        row.DisplayName.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Ensure_never_overwrites_a_richer_existing_row()
+    {
+        using var paths = new TempPaths();
+        var repository = new ProjectRepository(new SqliteDatabase(paths.DatabasePath));
+        await repository.UpsertAsync(new ProjectRecord("proj-rich", DisplayName: "Lab project", Bucket: "b-1", BillingEnabled: true), CancellationToken.None);
+
+        await repository.EnsureAsync("proj-rich", CancellationToken.None);
+        await repository.EnsureAsync("proj-rich", CancellationToken.None);
+
+        var row = (await repository.GetAllAsync(CancellationToken.None)).ShouldHaveSingleItem();
+        row.DisplayName.ShouldBe("Lab project");
+        row.Bucket.ShouldBe("b-1");
+        row.BillingEnabled.ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Ensure_makes_a_run_row_for_that_project_insertable_under_foreign_keys()
+    {
+        using var paths = new TempPaths();
+        var database = new SqliteDatabase(paths.DatabasePath);
+        await new ProjectRepository(database).EnsureAsync("proj-fk", CancellationToken.None);
+
+        await new RunRepository(database).UpsertAsync(
+            new RunRecord("20260101-000000-abcdef", JobPhase.Draft, DateTimeOffset.UtcNow, ProjectId: "proj-fk"),
+            CancellationToken.None);
+
+        (await new RunRepository(database).GetAllAsync(CancellationToken.None)).ShouldHaveSingleItem().ProjectId.ShouldBe("proj-fk");
     }
 
     [Fact]
