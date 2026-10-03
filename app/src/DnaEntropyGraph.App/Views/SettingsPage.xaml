@@ -26,17 +26,12 @@
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock x:Uid="SettingsAppearanceExplainer" TextWrapping="Wrap" />
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <RadioButton x:Uid="ThemeLightRadio" GroupName="Theme" CommandParameter="Light"
-                                         Command="{x:Bind ViewModel.SetThemeCommand}"
-                                         IsChecked="{x:Bind ViewModel.IsLightTheme, Mode=OneWay}" />
-                            <RadioButton x:Uid="ThemeDarkRadio" GroupName="Theme" CommandParameter="Dark"
-                                         Command="{x:Bind ViewModel.SetThemeCommand}"
-                                         IsChecked="{x:Bind ViewModel.IsDarkTheme, Mode=OneWay}" />
-                            <RadioButton x:Uid="ThemeSystemRadio" GroupName="Theme" CommandParameter="System"
-                                         Command="{x:Bind ViewModel.SetThemeCommand}"
-                                         IsChecked="{x:Bind ViewModel.IsSystemTheme, Mode=OneWay}" />
-                        </StackPanel>
+                        <!-- One selection source: click, arrow keys and touch all change SelectedIndex, which the view model applies and saves. -->
+                        <RadioButtons x:Uid="ThemeChoices" MaxColumns="3" SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}">
+                            <RadioButton x:Uid="ThemeLightRadio" />
+                            <RadioButton x:Uid="ThemeDarkRadio" />
+                            <RadioButton x:Uid="ThemeSystemRadio" />
+                        </RadioButtons>
                     </StackPanel>
                 </Border>
             </StackPanel>

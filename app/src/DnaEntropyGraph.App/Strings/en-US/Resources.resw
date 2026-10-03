@@ -936,6 +936,9 @@
   <data name="SettingsAppearanceExplainer.Text" xml:space="preserve">
     <value>Choose how the app looks. The change applies right away and is remembered the next time you open the app.</value>
   </data>
+  <data name="ThemeChoices.Header" xml:space="preserve">
+    <value>Theme</value>
+  </data>
   <data name="ThemeLightRadio.Content" xml:space="preserve">
     <value>Light</value>
   </data>
@@ -944,7 +947,8 @@
   </data>
   <data name="ThemeSystemRadio.Content" xml:space="preserve">
     <value>Use system</value>
-  </data>  <data name="SettingsDiagnosticsHeader.Text" xml:space="preserve">
+  </data>
+  <data name="SettingsDiagnosticsHeader.Text" xml:space="preserve">
     <value>Diagnostics</value>
   </data>
   <data name="SettingsDiagnosticsExplainer.Text" xml:space="preserve">

@@ -10,6 +10,11 @@ namespace DnaEntropyGraph.Presentation.Tests;
 
 public class SettingsViewModelTests
 {
+    // The Appearance radio buttons' positions: Light, Dark, Use system.
+    private const int Light = 0;
+    private const int Dark = 1;
+    private const int System = 2;
+
     private static SettingsViewModel CreateViewModel(ISettingsStore settingsStore, out IToastService toastService, IThemeApplier? themeApplier = null)
     {
         toastService = Substitute.For<IToastService>();
@@ -25,7 +30,7 @@ public class SettingsViewModelTests
         settingsStore.GetString("Theme").Returns((string?)null);
         var viewModel = CreateViewModel(settingsStore, out _);
 
-        viewModel.Theme.ShouldBe("System");
+        viewModel.ThemeIndex.ShouldBe(System);
     }
 
     [Fact]
@@ -36,10 +41,10 @@ public class SettingsViewModelTests
         settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
 
         var viewModel = CreateViewModel(settingsStore, out _);
-        viewModel.Theme.ShouldBe("System");
+        viewModel.ThemeIndex.ShouldBe(System);
 
-        Should.NotThrow(() => viewModel.SetThemeCommand.Execute("Dark"));
-        viewModel.Theme.ShouldBe("Dark");
+        Should.NotThrow(() => viewModel.ThemeIndex = Dark);
+        viewModel.ThemeIndex.ShouldBe(Dark);
     }
 
     [Fact]
@@ -49,9 +54,9 @@ public class SettingsViewModelTests
         settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
         var viewModel = CreateViewModel(settingsStore, out var toastService);
 
-        viewModel.SetThemeCommand.Execute("Dark");
+        viewModel.ThemeIndex = Dark;
 
-        viewModel.Theme.ShouldBe("Dark");
+        viewModel.ThemeIndex.ShouldBe(Dark);
         toastService.Received(1).ShowToast("ThemeNotSaved_Title", "ThemeNotSaved_Body");
         toastService.DidNotReceive().ShowToast("ThemeUpdated_Title", Arg.Any<string>());
     }
@@ -62,10 +67,10 @@ public class SettingsViewModelTests
         var settingsStore = Substitute.For<ISettingsStore>();
         var viewModel = CreateViewModel(settingsStore, out _);
 
-        viewModel.SetThemeCommand.Execute("Dark");
+        viewModel.ThemeIndex = Dark;
 
         settingsStore.Received(1).SetString("Theme", "Dark");
-        viewModel.Theme.ShouldBe("Dark");
+        viewModel.ThemeIndex.ShouldBe(Dark);
     }
 
     [Fact]
@@ -82,7 +87,7 @@ public class SettingsViewModelTests
         strings.GetString("ThemeUpdated_Title").Returns("Theme updated (from resw)");
         var viewModel = new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System, Substitute.For<IThemeApplier>());
 
-        viewModel.SetThemeCommand.Execute("Dark");
+        viewModel.ThemeIndex = Dark;
 
         toastService.Received(1).ShowToast("Theme updated (from resw)", "Dark");
     }
@@ -93,7 +98,7 @@ public class SettingsViewModelTests
         var applier = Substitute.For<IThemeApplier>();
         var viewModel = CreateViewModel(Substitute.For<ISettingsStore>(), out _, applier);
 
-        viewModel.SetThemeCommand.Execute("Dark");
+        viewModel.ThemeIndex = Dark;
 
         applier.Received(1).Apply("Dark");
     }
@@ -106,37 +111,66 @@ public class SettingsViewModelTests
         var applier = Substitute.For<IThemeApplier>();
         var viewModel = CreateViewModel(settingsStore, out _, applier);
 
-        viewModel.SetThemeCommand.Execute("Light");
+        viewModel.ThemeIndex = Light;
 
         applier.Received(1).Apply("Light");
     }
 
     [Theory]
-    [InlineData("Light", true, false, false)]
-    [InlineData("Dark", false, true, false)]
-    [InlineData("System", false, false, true)]
-    [InlineData("garbage", false, false, true)]
-    public void Exactly_one_choice_is_marked_and_it_follows_the_saved_theme(string saved, bool light, bool dark, bool system)
+    [InlineData("Light", Light)]
+    [InlineData("Dark", Dark)]
+    [InlineData("System", System)]
+    [InlineData("garbage", System)]
+    public void The_marked_choice_follows_the_saved_theme(string saved, int expected)
     {
         var settingsStore = Substitute.For<ISettingsStore>();
         settingsStore.GetString("Theme").Returns(saved);
         var viewModel = CreateViewModel(settingsStore, out _);
 
-        (viewModel.IsLightTheme, viewModel.IsDarkTheme, viewModel.IsSystemTheme).ShouldBe((light, dark, system));
+        viewModel.ThemeIndex.ShouldBe(expected);
     }
 
     [Fact]
-    public void The_marked_choice_and_its_change_notification_follow_a_new_choice()
+    public void Opening_the_page_neither_applies_nor_saves_the_theme_it_just_read()
     {
-        var viewModel = CreateViewModel(Substitute.For<ISettingsStore>(), out _);
-        var changed = new List<string?>();
-        viewModel.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.GetString("Theme").Returns("Dark");
+        var applier = Substitute.For<IThemeApplier>();
 
-        viewModel.SetThemeCommand.Execute("Dark");
+        CreateViewModel(settingsStore, out _, applier);
 
-        viewModel.IsDarkTheme.ShouldBeTrue();
-        viewModel.IsSystemTheme.ShouldBeFalse();
-        changed.ShouldContain(nameof(SettingsViewModel.IsDarkTheme));
-        changed.ShouldContain(nameof(SettingsViewModel.IsSystemTheme));
+        applier.DidNotReceive().Apply(Arg.Any<string>());
+        settingsStore.DidNotReceive().SetString(Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    [Theory]
+    [InlineData(Light, "Light")]
+    [InlineData(Dark, "Dark")]
+    [InlineData(System, "System")]
+    public void A_selection_change_applies_and_saves_the_matching_theme(int index, string expected)
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        // Start on a different choice so setting the index is always a real change.
+        settingsStore.GetString("Theme").Returns(index == Dark ? "Light" : "Dark");
+        var applier = Substitute.For<IThemeApplier>();
+        var viewModel = CreateViewModel(settingsStore, out _, applier);
+
+        viewModel.ThemeIndex = index;
+
+        applier.Received(1).Apply(expected);
+        settingsStore.Received(1).SetString("Theme", expected);
+    }
+
+    [Fact]
+    public void No_selection_is_not_a_theme()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        var applier = Substitute.For<IThemeApplier>();
+        var viewModel = CreateViewModel(settingsStore, out _, applier);
+
+        viewModel.ThemeIndex = -1;
+
+        applier.DidNotReceive().Apply(Arg.Any<string>());
+        settingsStore.DidNotReceive().SetString(Arg.Any<string>(), Arg.Any<string>());
     }
 }

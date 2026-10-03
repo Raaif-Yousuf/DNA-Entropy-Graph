@@ -16,6 +16,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     public const string SaveDiagnosticsLabel = "Save diagnostics";
 
     private const string ThemeKey = "Theme";
+    private const int SystemThemeIndex = 2;
+
+    // The saved strings, in the order the Appearance radio buttons list them.
+    private static readonly string[] ThemeNames = ["Light", "Dark", "System"];
 
     private readonly ISettingsStore _settingsStore;
     private readonly IToastService _toastService;
@@ -26,19 +30,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly TimeProvider _time;
     private readonly IThemeApplier _themeApplier;
 
+    /// <summary>
+    /// The chosen theme as the position of the Appearance RadioButtons item (0 Light, 1 Dark, 2 Use system). The control's
+    /// selection is the single source: a click, an arrow key or a touch all arrive as this property changing, which applies
+    /// the theme at once and saves it (#639). Anything saved that is not "Light" or "Dark" reads as Use system.
+    /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsLightTheme))]
-    [NotifyPropertyChangedFor(nameof(IsDarkTheme))]
-    [NotifyPropertyChangedFor(nameof(IsSystemTheme))]
-    private string _theme;
-
-    /// <summary>Which radio button is marked. Anything that is not "Light" or "Dark" (nothing saved, an unknown value) is "Use system".</summary>
-    public bool IsLightTheme => Theme == "Light";
-
-    public bool IsDarkTheme => Theme == "Dark";
-
-    public bool IsSystemTheme => !IsLightTheme && !IsDarkTheme;
-
+    private int _themeIndex;
     /// <summary>The plain-words result of the last Save diagnostics, shown under the button. Empty before the first one.</summary>
     [ObservableProperty]
     private string _diagnosticsStatus = string.Empty;
@@ -68,7 +66,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         _folderLauncher = folderLauncher;
         _time = time;
         _themeApplier = themeApplier;
-        _theme = ReadTheme(settingsStore) ?? "System";
+        // The field, not the property: opening the page must not re-apply or re-save what was just read.
+        _themeIndex = Array.IndexOf(ThemeNames, ReadTheme(settingsStore)) is var i and >= 0 ? i : SystemThemeIndex;
     }
 
     private static string? ReadTheme(ISettingsStore settingsStore)
@@ -85,10 +84,15 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private void SetTheme(string theme)
+    partial void OnThemeIndexChanged(int value)
     {
-        Theme = theme;
+        if (value < 0 || value >= ThemeNames.Length)
+        {
+            // A RadioButtons control reports -1 when nothing is selected; there is no theme to apply.
+            return;
+        }
+
+        var theme = ThemeNames[value];
         // Applied before the save: a locked settings file (#558) must not stop the window changing for this session.
         _themeApplier.Apply(theme);
         try
