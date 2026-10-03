@@ -544,6 +544,8 @@ public class GoogleStorageGatewayTests
         ScriptUpload(rig.Handler, older);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(older);
+
+        rig.Handler.To(HttpMethod.Delete, BucketPath(mine)).Count.ShouldBe(1, "the losing bucket is deleted once, not retried and not skipped");
     }
 
     [Theory]
@@ -715,6 +717,58 @@ public class GoogleStorageGatewayTests
         var puts = rig.Handler.To(Put, UploadPath("deg-b"));
         puts[0].Body.ShouldBe("0123");
         puts[^1].Body.ShouldBe("0123456789");
+    }
+
+    [Fact]
+    public async Task A_longer_cache_age_on_the_bucket_is_not_drift_and_is_not_patched()
+    {
+        var rig = NewRig(retentionDays: 30);
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 30, cacheAge: 400)));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(existing);
+
+        rig.Handler.To(Patch, BucketPath(existing)).ShouldBeEmpty("a cache/ rule at 400 days is another installation's choice; shortening it to 365 would delete its cache early");
+    }
+
+    [Fact]
+    public async Task A_patch_for_another_reason_keeps_the_longer_cache_age_it_found()
+    {
+        var rig = NewRig(retentionDays: 30);
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 7, cacheAge: 400)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30, cacheAge: 400));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        RuleAge(body.RootElement, "jobs/").ShouldBe(30);
+        RuleAge(body.RootElement, "cache/").ShouldBe(400);
+    }
+
+    [Fact]
+    public async Task A_jobs_rule_with_extra_conditions_is_the_users_own_so_it_is_neither_counted_toward_our_age_nor_replaced()
+    {
+        var rig = NewRig(retentionDays: 30);
+        var existing = "deg-" + Number + "-abcdef";
+        const string users = "{\"action\":{\"type\":\"Delete\"},\"condition\":{\"age\":90,\"matchesPrefix\":[\"jobs/\"],\"matchesStorageClass\":[\"NEARLINE\"]}}";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: null, extraRules: users)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30, extraRules: users));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        var jobsDeletes = body.RootElement.GetProperty("lifecycle").GetProperty("rule").EnumerateArray()
+            .Where(r => r.GetProperty("action").GetProperty("type").GetString() == "Delete" && r.GetProperty("condition").GetProperty("matchesPrefix")[0].GetString() == "jobs/")
+            .ToList();
+        jobsDeletes.Count.ShouldBe(2, "ours is added and the user's stays");
+        jobsDeletes.Any(r => r.GetProperty("condition").TryGetProperty("matchesStorageClass", out var _) && r.GetProperty("condition").GetProperty("age").GetInt32() == 90).ShouldBeTrue();
+        jobsDeletes.Any(r => !r.GetProperty("condition").TryGetProperty("matchesStorageClass", out var _) && r.GetProperty("condition").GetProperty("age").GetInt32() == 30).ShouldBeTrue();
     }
 
     [Fact]

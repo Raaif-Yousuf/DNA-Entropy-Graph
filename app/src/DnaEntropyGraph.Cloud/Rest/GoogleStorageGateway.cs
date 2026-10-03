@@ -358,20 +358,28 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         Rule =
         [
             .. (existing ?? []).Where(r => !IsOurRule(r)),
-            DeleteRule(ResultsBucket.JobsPrefix, Math.Max(_options.ResultsRetentionDays, LongestOwnJobsAge(existing))),
-            DeleteRule(ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays),
+            DeleteRule(ResultsBucket.JobsPrefix, Math.Max(_options.ResultsRetentionDays, LongestOwnAge(existing, ResultsBucket.JobsPrefix))),
+            DeleteRule(ResultsBucket.CachePrefix, Math.Max(ResultsBucket.CacheRetentionDays, LongestOwnAge(existing, ResultsBucket.CachePrefix))),
         ],
     };
 
-    /// <summary>The longest age among the bucket's own jobs/ Delete rules (0 when none): a patch never shortens it.</summary>
-    private static int LongestOwnJobsAge(IEnumerable<StorageData.Bucket.LifecycleData.RuleData>? existing)
-        => (existing ?? []).Where(r => IsOurRule(r) && r.Condition!.MatchesPrefix![0] == ResultsBucket.JobsPrefix).Select(r => r.Condition!.Age ?? 0).DefaultIfEmpty(0).Max();
+    /// <summary>The longest age among the bucket's own Delete rules for <paramref name="prefix"/> (0 when none): a patch never shortens it.</summary>
+    private static int LongestOwnAge(IEnumerable<StorageData.Bucket.LifecycleData.RuleData>? existing, string prefix)
+        => (existing ?? []).Where(r => IsOurRule(r) && r.Condition!.MatchesPrefix![0] == prefix).Select(r => r.Condition!.Age ?? 0).DefaultIfEmpty(0).Max();
 
-    /// <summary>A Delete rule whose only prefix is <c>jobs/</c> or <c>cache/</c>: the two the app owns.</summary>
+    /// <summary>
+    /// A Delete rule whose condition is exactly an age and the one prefix <c>jobs/</c> or <c>cache/</c>: the two the app owns.
+    /// A user's rule on the same prefix with any extra condition (storage class, live state, noncurrent time, a suffix...) is
+    /// theirs: it is neither counted toward our age nor replaced.
+    /// </summary>
     private static bool IsOurRule(StorageData.Bucket.LifecycleData.RuleData rule)
         => string.Equals(rule.Action?.Type, DeleteAction, StringComparison.Ordinal)
-            && rule.Condition?.MatchesPrefix is { Count: 1 } prefixes
-            && (prefixes[0] == ResultsBucket.JobsPrefix || prefixes[0] == ResultsBucket.CachePrefix);
+            && rule.Condition is { MatchesPrefix: { Count: 1 } prefixes } c
+            && (prefixes[0] == ResultsBucket.JobsPrefix || prefixes[0] == ResultsBucket.CachePrefix)
+            && c.Age is not null
+            && c.CreatedBefore is null && c.CustomTimeBefore is null && c.NoncurrentTimeBefore is null
+            && c.DaysSinceCustomTime is null && c.DaysSinceNoncurrentTime is null && c.IsLive is null && c.NumNewerVersions is null
+            && c.MatchesPattern is null && c.MatchesStorageClass is null && c.MatchesSuffix is null;
 
     private static StorageData.Bucket.LifecycleData.RuleData DeleteRule(string prefix, int ageDays) => new()
     {
@@ -409,16 +417,16 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             problems.Add("public access prevention is not enforced");
         }
 
-        // A jobs/ age LONGER than asked for is not drift: the bucket is shared, and shortening it would delete another
-        // installation's results early (Hard Rule 14). Only a missing rule or a shorter age is repaired.
+        // A jobs/ or cache/ age LONGER than asked for is not drift: the bucket is shared, and shortening it would delete another
+        // installation's files early (Hard Rule 14, #597). Only a missing rule or a shorter age is repaired.
         if (!HasDeleteRule(bucket, ResultsBucket.JobsPrefix, _options.ResultsRetentionDays, orLonger: true))
         {
             problems.Add($"no rule deletes {ResultsBucket.JobsPrefix} objects after {_options.ResultsRetentionDays} days or more");
         }
 
-        if (!HasDeleteRule(bucket, ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays))
+        if (!HasDeleteRule(bucket, ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays, orLonger: true))
         {
-            problems.Add($"no rule deletes {ResultsBucket.CachePrefix} objects after {ResultsBucket.CacheRetentionDays} days");
+            problems.Add($"no rule deletes {ResultsBucket.CachePrefix} objects after {ResultsBucket.CacheRetentionDays} days or more");
         }
 
         return problems;
@@ -426,9 +434,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     private static bool HasDeleteRule(StorageData.Bucket bucket, string prefix, int ageDays, bool orLonger = false)
         => bucket.Lifecycle?.Rule?.Any(r =>
-            string.Equals(r.Action?.Type, DeleteAction, StringComparison.Ordinal)
-            && (orLonger ? r.Condition?.Age >= ageDays : r.Condition?.Age == ageDays)
-            && r.Condition.MatchesPrefix?.Contains(prefix) == true) == true;
+            IsOurRule(r)
+            && r.Condition!.MatchesPrefix![0] == prefix
+            && (orLonger ? r.Condition.Age >= ageDays : r.Condition.Age == ageDays)) == true;
 
     // ------------------------------------------------------------------ objects
 

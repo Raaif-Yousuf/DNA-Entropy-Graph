@@ -949,13 +949,17 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
   `app=dna-entropy-graph`, prefer this installation's, then the oldest, then by name. A second PC of the same installation, or
   another installation in the same project, adopts it: no insert. An adopted bucket that reads back drifted (for instance the
   user changed the retention on the other PC) is patched and read back; one that reads back right is left alone. The patch
-  keeps every lifecycle rule that is not ours (anything other than a Delete rule whose only prefix is `jobs/` or `cache/`) and
+  keeps every lifecycle rule that is not ours (see the next point for what counts as ours) and
   replaces only ours. Two installations with different retention settings never shorten each other: see the next point.
-- **Never shorten the `jobs/` age.** DECISION (agent-made, reversible; issue #597): an adopting installation may LENGTHEN the shared
-  bucket's `jobs/` age, never shorten it, because shortening makes Cloud Storage delete other installations' results (Hard Rule 14).
-  A `jobs/` Delete rule at or above the configured age is not drift (no patch); a shorter one is lengthened to the configured age; a patch made
-  for any other reason keeps the longest own `jobs/` age it found. So the bucket holds the longest age any installation asked for.
-  Lowering retention in Settings therefore does not shorten an existing bucket; an explicit, user-confirmed shortening is #598 (refs #114).
+- **Never shorten the `jobs/` or `cache/` age.** DECISION (agent-made, reversible; issue #597): an adopting installation may LENGTHEN the shared
+  bucket's `jobs/` and `cache/` ages, never shorten them, because shortening makes Cloud Storage delete other installations' files
+  (results, the weights cache) early (Hard Rule 14). A Delete rule at or above the configured age (`jobs/`: the retention; `cache/`: 365) is not
+  drift (no patch); a shorter one is lengthened to the configured age; a patch made for any other reason keeps the longest own age it found for
+  each prefix. So the bucket holds the longest age any installation asked for. A rule counts as ours only if its condition is exactly an age and
+  the one prefix with a Delete action; a user's `jobs/` rule with any extra condition (storage class, live state, noncurrent time, suffix...)
+  is neither counted toward our age nor replaced.
+  Consequence: lowering retention in Settings against a longer bucket is silently ignored today. #598 owns the fix: an explicit, user-confirmed
+  shortening, and the user seeing that the bucket keeps the longer age (copy names the action).
 - **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference
   order); if the preferred bucket is not the one it just made, it deletes its own (still empty: the config is written after this
   check) and adopts the preferred one. A delete Google refuses (not empty, because the other PC adopted it meanwhile) is
