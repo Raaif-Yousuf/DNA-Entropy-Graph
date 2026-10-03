@@ -62,6 +62,8 @@ finished run later with **Open** on its row of the Runs page. The Results page s
   **Copy path** puts its full path on the clipboard.
 - **Open folder** opens the whole results folder, and **Open in viewer** takes you to the
   genome viewer for this run.
+- **Open in IGV** and **Open in Geneious** send this run's files to the desktop programs.
+  They are described under Viewing your results below.
 
 Nothing on this page changes your files. If the folder was moved or deleted, the page
 tells you to use **Download again** on the Runs page.
@@ -113,10 +115,26 @@ results folder was moved or deleted; download the results again from the run.
 
 You can also open your results in other tools you may already have:
 
-- **IGV (desktop)**: use **Open in IGV** if you have IGV installed and running; the app
-  sends your files to it directly. Otherwise, open IGV yourself and load the FASTA file as
-  your genome, then load the entropy track and gene files as tracks.
-- **Geneious Prime**: open the GenBank file for your sequence and its genes with their
+- **IGV (desktop)**: choose **Open in IGV** on the Results page. If IGV is already running
+  with its batch port on (the default, port 60151), the app starts a fresh session in it
+  and loads the FASTA file as the genome, then the entropy track and the gene file. If IGV
+  is not running, the app starts it with those files. The first time, the app looks for IGV
+  where Windows installers put it; if it cannot find it, it asks you to pick IGV's program
+  file, and remembers your choice. If IGV is open but does not answer, wait for it to finish
+  what it is doing (a large sequence can take a while to load) and choose the button again;
+  the app never starts a second IGV while one is already there. IGV shows one sequence at a
+  time, so if your run had several input files, the first one opens and the page tells you
+  so. A run that did not save a FASTA file cannot be opened this way, because the tracks
+  need a sequence to sit on. If the app was pointed at a `.bat` file for IGV and your
+  output folder's name contains one of `& | ^ % < > ( ) !` or a quote, the app will not
+  start it (Windows would read those characters as commands); pick `igv.exe` instead, or
+  move the folder. The port is IGV's default; changing it from this app comes with the
+  Settings page and is not available yet. You can always load the files by hand instead:
+  open IGV, load the FASTA file as your genome, then the track and gene files.
+- **Geneious Prime**: choose **Open in Geneious**; the app starts Geneious with the run's
+  GenBank file and GFF3 files (finding Geneious, or asking you to pick it once, the same
+  way as for IGV). Or open the GenBank file yourself: open the GenBank file for your
+  sequence and its genes with their
   entropy notes. Geneious does not load the bedGraph/WIG track format as a graph, so this
   app also produces a separate, Geneious-specific version of the entropy track (a GFF3
   file); load that one and use Geneious's **Color by / Heatmap** feature to shade it.
