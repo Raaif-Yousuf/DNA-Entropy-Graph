@@ -110,7 +110,7 @@ public static partial class DiagnosticsBundleBuilder
 
         // The scan backstops the redactor on the user's own identifiers (the same list the redactor used, plus the profile
         // path, so the Windows user name is covered even when the caller left it out of SensitiveValues).
-        var leak = DiagnosticsLeakScan.FindLeak(entries, [.. scrub, info.UserProfilePath]);
+        var leak = DiagnosticsLeakScan.Find(entries, [.. scrub, info.UserProfilePath]);
         if (leak is not null)
         {
             throw new DiagnosticsLeakException(leak);
@@ -162,7 +162,7 @@ public static partial class DiagnosticsBundleBuilder
     {
         foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix, run.Notes })
         {
-            if (!string.IsNullOrWhiteSpace(text))
+            if (!string.IsNullOrWhiteSpace(text) && !IsOnlyTheJobId(text, run.JobId))
             {
                 scrub.Add(text.TrimEnd('\\', '/'));
             }
@@ -186,6 +186,17 @@ public static partial class DiagnosticsBundleBuilder
             }
         }
     }
+
+    // A run's name (or its bucket prefix, "jobs/<id>/") that is nothing but its own job id adds no information: the history
+    // copies the job id verbatim on purpose, so scrubbing it would make the final scan refuse the bundle for the very field
+    // it allows (MEASURED 2026-10-03, issue #626). Anything else in the value, or a different value, stays on the scrub list,
+    // and a job id that itself holds the user's name is still caught through that name's own entry.
+    // Exactly "<id>" or "jobs/<id>" (the bucket prefix shape): a longer path ending in the id (an output folder under the
+    // user's profile) is not exempt.
+    private static bool IsOnlyTheJobId(string text, string jobId) =>
+        text.Trim().Trim('\\', '/').Replace('\\', '/') is var value
+        && (string.Equals(value, jobId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "jobs/" + jobId, StringComparison.OrdinalIgnoreCase));
 
     private static void HarvestNames(FileKind kind, string text, bool truncated, HashSet<string> scrub)
     {

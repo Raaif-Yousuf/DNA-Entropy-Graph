@@ -501,6 +501,59 @@ public class DiagnosticsBundleBuilderTests
             .EntryName.ShouldBe("run-history.json");
     }
 
+    // ---- Issue #626: the owner's real profile refused with "identifier" on run-history.json ----
+
+    [Theory]
+    [InlineData("demo-run", "demo-run", null)]
+    [InlineData("20261003-120000-abcdef", "20261003-120000-abcdef", null)]
+    [InlineData("Patient run", "20261003-120000-abcdef", "jobs/20261003-120000-abcdef/")]
+    [InlineData("Patient run", "20261003-120000-abcdef", @"jobs\20261003-120000-abcdef")]
+    public void A_run_name_or_prefix_that_is_only_the_runs_own_job_id_does_not_refuse_the_bundle(string name, string jobId, string? jobPrefix)
+    {
+        // MEASURED 2026-10-03 on the owner's profile: a run whose Name was its own JobId made the final scan refuse (rule
+        // "identifier", entry run-history.json) because the scrub list held a value that the history copies verbatim as jobId.
+        // A value equal to a field the bundle deliberately carries tells the reader nothing the field does not.
+        var run = Run with { JobId = jobId, Name = name, JobPrefix = jobPrefix };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+
+        entries["run-history.json"].ShouldContain(jobId);
+    }
+
+    [Fact]
+    public void A_run_named_by_its_job_id_still_refuses_when_the_job_id_holds_the_windows_user_name()
+    {
+        var info = Info with { SensitiveValues = ["jsmith"] };
+        var run = Run with { JobId = "jsmith-1", Name = "jsmith-1" };
+
+        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], info));
+
+        ex.EntryName.ShouldBe("run-history.json");
+        ex.Rule.ShouldBe(LeakRules.Identifier);
+    }
+
+    [Fact]
+    public void A_user_typed_run_name_that_is_not_the_job_id_is_still_scrubbed_and_still_refused_when_it_reaches_the_history()
+    {
+        // The exemption is for equality with the job id only: a different name holds user text and stays on the scrub list.
+        var run = Run with { JobId = "demo-run", Name = "Patient 42 run", ErrorCode = "Patient 42 run" };
+
+        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+
+        ex.Rule.ShouldBe(LeakRules.Identifier);
+    }
+
+    [Fact]
+    public void The_scan_names_which_check_fired_for_each_class_of_leak()
+    {
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "refresh_token=abcdefghijkl1234" })!.Rule.ShouldBe(LeakRules.Credential);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = @"in D:\Lab\run" })!.Rule.ShouldBe(LeakRules.Path);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "mail bob@x.org" })!.Rule.ShouldBe(LeakRules.Email);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "opened by jsmith" }, ["jsmith"])!.Rule.ShouldBe(LeakRules.Identifier);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = Sequence })!.Rule.ShouldBe(LeakRules.Sequence);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "clean" }).ShouldBeNull();
+    }
+
     [Fact]
     public void A_short_user_name_is_redacted_from_logs_as_a_whole_word_and_the_bundle_is_still_built()
     {

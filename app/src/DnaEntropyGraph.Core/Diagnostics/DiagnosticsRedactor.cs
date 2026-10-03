@@ -449,36 +449,49 @@ public static partial class DiagnosticsLeakScan
     /// would match ordinary text and numbers). A file name or path given as an identifier also matches by its leaf and
     /// stem, and those match as whole words only, so the folder "out" does not refuse a bundle that says "timeout".
     /// </summary>
-    public static string? FindLeak(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null)
+    public static string? FindLeak(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null) =>
+        Find(entries, sensitiveValues)?.EntryName;
+
+    /// <summary>
+    /// Like <see cref="FindLeak"/>, but also names the check that fired (a fixed word, never user text), so a refusal
+    /// can be diagnosed without the data that caused it.
+    /// </summary>
+    public static LeakFinding? Find(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null)
     {
         var sensitive = SensitiveValue.Normalize(sensitiveValues ?? []);
         foreach (var (name, text) in entries)
         {
-            if (LooksLeaky(name, sensitive) || LooksLeaky(text, sensitive))
+            var rule = Leaky(name, sensitive) ?? Leaky(text, sensitive);
+            if (rule is not null)
             {
-                return name;
+                return new LeakFinding(name, rule);
             }
         }
 
         return null;
     }
 
-    private static bool LooksLeaky(string text, IReadOnlyList<SensitiveValue> sensitive)
+    private static string? Leaky(string text, IReadOnlyList<SensitiveValue> sensitive)
     {
-        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text) || DriveOrUncPath().IsMatch(text))
+        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text))
         {
-            return true;
+            return LeakRules.Credential;
+        }
+
+        if (DriveOrUncPath().IsMatch(text))
+        {
+            return LeakRules.Path;
         }
 
         if (EmailShape().Matches(text).Any(match => !AllowedEmails.Contains(match.Value)))
         {
-            return true;
+            return LeakRules.Email;
         }
 
         var plain = Placeholder().Replace(text, " ");
         if (sensitive.Any(value => value.IsIn(plain)))
         {
-            return true;
+            return LeakRules.Identifier;
         }
 
         text = HexDigest().Replace(text, match => match.Value.Any(char.IsDigit) ? "|" : match.Value);
@@ -502,7 +515,7 @@ public static partial class DiagnosticsLeakScan
 
                 if (run >= 20 && letters >= 16)
                 {
-                    return true;
+                    return LeakRules.Sequence;
                 }
             }
             else
@@ -512,6 +525,19 @@ public static partial class DiagnosticsLeakScan
             }
         }
 
-        return false;
+        return null;
     }
 }
+
+/// <summary>The check that refused a bundle: fixed words only, safe to log.</summary>
+public static class LeakRules
+{
+    public const string Credential = "credential";
+    public const string Path = "path";
+    public const string Email = "email";
+    public const string Identifier = "identifier";
+    public const string Sequence = "sequence";
+}
+
+/// <summary>Which bundle entry tripped the final scan, and which check fired.</summary>
+public sealed record LeakFinding(string EntryName, string Rule);

@@ -134,7 +134,7 @@ public class SettingsDiagnosticsTests
     public async Task A_refused_bundle_toasts_the_refusal_copy_and_does_not_offer_open_folder()
     {
         _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(@"C:\Out\d.zip");
-        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromException(new DiagnosticsLeakException("run-history.json")));
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromException(new DiagnosticsLeakException(new LeakFinding("run-history.json", LeakRules.Identifier))));
 
         await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
 
