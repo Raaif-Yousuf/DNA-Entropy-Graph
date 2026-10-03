@@ -144,6 +144,11 @@ once `app/`'s test surface is large enough to need one — see the
 future parallel-then-isolate-failures runner could take if this repo's
 suite grows to need it.
 
+## Runner tests run on test time
+
+MEASURED 2026-10-03 (#525): `CloudJobRunnerOutageTests` failed about 9 runs in 100 when the machine was loaded (64 busy loops), never when idle. Cause: `GatewayCalls.CallAsync` cut each gateway call at `CallTimeout` (50 ms in those tests) on the wall clock, so a healthy call stretched past 50 ms by a starved thread became `TIMEOUT` / "request timed out"; `ResultWaiter` and `VmTerminator` also measured their waits with `Stopwatch`. The fix is not a longer timeout or a retry. Every deadline, elapsed check and poll sleep of a run now reads `CloudRunSettings.TimeProvider` (the runner's `TimeProvider` property, `TimeProvider.System` in production), and the sleep between polls is `PollDelay` when set.
+
+For a runner test that scripts an outage or a timeout: use `Clocks` in `CloudJobRunnerOutageTests` (a `VirtualTimeProvider` for the runner that moves only when the runner sleeps between polls, one for the retry pipeline's `CloudRetryOptions.TimeProvider` that fires backoff at once). Time never passes while a call is in flight, so load cannot cut a call. The one exception is a test whose subject is a call that never answers (`One_hung_call_does_not_hang_the_run`): nothing advances the clock for a hung call, so it stays on real time. Other runner test files still use short real-time timeouts (see issue #525's follow-up list).
 ## Related
 
 [`dev_commands.md`](dev_commands.md) (exact commands),

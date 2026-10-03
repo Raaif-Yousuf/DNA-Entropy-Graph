@@ -4,11 +4,16 @@
 
 On the **New run** page, either:
 
-- Drag a file onto the window (a GenBank file, a FASTA file, or a plain text file), or
-- Click **Add files...**, or
-- Click **Paste sequence...** and type or paste letters directly.
+- Drag files, or a folder of them, onto the drop area (GenBank, FASTA, or plain text; from a
+  folder the app takes the sequence files directly inside it, not those in sub-folders; a `.txt` file in a folder is taken only when its first line starts with `>` or `LOCUS`, so notes and logs are left alone. To add a plain-letters `.txt` file, use **Add files**), or
+- Click **Add files** (or press Ctrl+O), or
+- Open **Paste a sequence**, type or paste letters, a FASTA record, or the path of a file, and
+  click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
+  letters are saved in the app's own folder, never next to your files.
 
-You can add more than one file at once; the app runs them as a batch and gives you
+You can add more than one file at once. For now each press of **Run** runs the file you
+have selected in the list (running several files together as one batch is not built yet),
+and the batch limits below describe where that work is heading. When it arrives it gives you
 results for each, up to a limit on how many files or how many total letters one batch can
 hold (50 files or 20 million letters, by default). That ceiling is there for cost, not
 policy: a batch large enough to matter for your bill should be caught before you press
@@ -18,10 +23,12 @@ see [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for why the ceiling is se
 is. GenBank and FASTA files are detected automatically by their contents, not just their
 file extension, so a renamed file still works.
 
+Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
+
 Each file you add gets its own small summary: how many records it contains, how many
 letters (nucleotides), how many genes it found, and any notices. A green check means it
-is ready to run. A yellow notice is something worth knowing but not a problem, for
-example, "found a header line, ignoring it," or that a real GenBank/FASTA file contained
+is ready to run. A grey note is something worth knowing but not a problem, for
+example, "the first line starts with > so it was treated as a name and ignored," or that a real GenBank/FASTA file contained
 a handful of `N`s or other ambiguous letters, which by default this app keeps and runs
 with rather than rejecting (see [04-view.md](04-view.md) for what that means for the
 entropy track). A red message is something you need to fix before the file can run, and
@@ -31,9 +38,7 @@ if that is what you meant.
 
 ## Name your run
 
-If you added one file, the run is named after it by default. If you added several, give
-the batch a name (there is a sensible default already filled in). This name becomes the
-folder your results are saved into.
+The results folder is named after your input file for now. Choosing your own name for a run is coming; the app does not offer it yet.
 
 ## The basic options
 
@@ -52,9 +57,16 @@ reasonable for most sequences.
 - **Where to run**: in the cloud (the normal choice) or on this computer, if you installed
   the local engine in [02-connect-google-cloud.md](02-connect-google-cloud.md)'s Step 8.
 
-Below the options, the app shows an estimated cost and time before you commit to
-anything. See [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for what those numbers
-actually mean and some worked examples.
+Under the file list, once the selected file has passed its check, the app shows one
+**Estimate** line before you commit to anything, for example "Estimate: about $0.13,
+about 9 minutes, based on your earlier runs." With no earlier runs on this PC it shows a
+range instead ("about $0.08 to $0.18, about 5 to 12 minutes"), because a computer that is
+already warm is much quicker than one that has to start from nothing. It is a guess, not
+a bill, and it never shows a number the app does not have: while a file is still being
+checked, or has a problem, there is no estimate line. If the line says the price list
+could not be read, reinstall the app; you can still press Run. See
+[06-costs-and-cleanup.md](06-costs-and-cleanup.md) for what those numbers actually mean
+and some worked examples.
 
 ## Advanced options (most people can skip this section)
 

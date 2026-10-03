@@ -17,7 +17,11 @@ public sealed class GenBankReadException(string message) : Exception(message)
 public sealed record GenBankLiteRecord(string LocusName, string Seq, int GeneCount, int CdsCount, int SourceIndex = 0);
 
 /// <summary>Result of a light GenBank read: every record found plus any non-fatal notices.</summary>
-public sealed record GenBankLiteResult(IReadOnlyList<GenBankLiteRecord> Records, IReadOnlyList<string> Notices);
+public sealed record GenBankLiteResult(IReadOnlyList<GenBankLiteRecord> Records, IReadOnlyList<string> Notices)
+{
+    /// <summary>The same notices as <see cref="Notices"/>, as machine codes with their numbers (built side by side).</summary>
+    public IReadOnlyList<InputNotice> NoticeCodes { get; init; } = [];
+}
 
 /// <summary>
 /// C# port (deliberately partial - see <see cref="GenBankLiteRecord" />'s docs) of the
@@ -43,6 +47,7 @@ public static class GenBankLite
 
         var records = new List<GenBankLiteRecord>();
         var notices = new List<string>();
+        var coded = new List<InputNotice>();
 
         string? locusName = null;
         var geneCount = 0;
@@ -64,6 +69,7 @@ public static class GenBankLite
             if (recSeq.Length == 0 || recSeq.All(c => c == 'N'))
             {
                 notices.Add($"Skipped GenBank record {recordIndex} (locus {PrivacySafeText.DescribeLen(locusName)}): no nucleotide sequence.");
+                coded.Add(new InputNotice(InputNoticeCode.GenBankRecordSkippedNoSequence, recordIndex));
             }
             else
             {
@@ -170,8 +176,9 @@ public static class GenBankLite
         {
             var totalFeatures = records.Sum(r => r.GeneCount + r.CdsCount);
             notices.Add($"Read {records.Count} record(s) with {totalFeatures} gene/CDS feature(s) from the GenBank (not re-annotated).");
+            coded.Add(new InputNotice(InputNoticeCode.GenBankRead, records.Count, totalFeatures));
         }
 
-        return new GenBankLiteResult(records, notices);
+        return new GenBankLiteResult(records, notices) { NoticeCodes = coded };
     }
 }

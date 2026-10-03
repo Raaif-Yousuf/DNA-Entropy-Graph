@@ -195,6 +195,16 @@ jobs:
             exit 1
           }
 
+      # #98: the pre-run estimate reads Assets\pricing.json from the app's own folder, and the guard test only sees the
+      # BUILD output. A publish that drops the file would ship an app that tells every user to reinstall, so assert it here.
+      - name: publish carries the price list
+        working-directory: app
+        run: |
+          if (-not (Test-Path publish/Assets/pricing.json)) {
+            Write-Host "::error title=Price list missing::publish/Assets/pricing.json is absent; the New run estimate would say to reinstall the app (#98)."
+            exit 1
+          }
+
       # Unsigned. Signing happens only in release.yml, which asserts its secrets exist.
       #
       # MEASURED 2026-09-20 (run 35528077325, the first pull-request run of this
