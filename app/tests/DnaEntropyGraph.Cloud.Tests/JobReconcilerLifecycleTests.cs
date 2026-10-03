@@ -4,6 +4,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Runs;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -436,6 +437,242 @@ public class JobReconcilerLifecycleTests
         await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
 
         (await rig.VmsAsync("job-orphan")).ShouldBeEmpty();
+    }
+
+    // ---- 3a. what the reconnect probe asks: is anything still deferred (issue #559) ----
+
+    [Fact]
+    public async Task HasDeferred_is_false_before_any_pass_true_after_an_offline_reattach_and_false_once_a_later_pass_judges_the_run()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-hd", JobPhase.Running, vm: true);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+        reconciler.HasDeferred.ShouldBeFalse("nothing has been asked yet");
+
+        await reconciler.BeginReconcileAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeTrue("the run could not be judged offline");
+
+        rig.Gcp.WithCloudConnected();
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None));
+        rig.Env.Row("job-hd").Phase.ShouldBe(JobPhase.Completed, rig.Env.Row("job-hd").ErrorCode);
+        reconciler.HasDeferred.ShouldBeFalse("judged now");
+    }
+
+    [Fact]
+    public async Task HasDeferred_is_true_when_the_lifecycle_pass_could_not_ask_the_cloud_and_false_after_it_can()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-hl", AfterTaskAction.Delete);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+
+        (await reconciler.EnforceLifecycleAsync(CancellationToken.None)).ShouldContain(o => o.Action == LifecycleAction.Deferred);
+        reconciler.HasDeferred.ShouldBeTrue();
+
+        rig.Gcp.WithCloudConnected();
+        await reconciler.EnforceLifecycleAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_deferred_run_that_became_terminal_leaves_HasDeferred_at_the_next_pass()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-gone", JobPhase.Running, vm: true);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+        await reconciler.BeginReconcileAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeTrue("deferred offline");
+
+        // The user cancels it while offline: the row is terminal and is no longer a candidate for any pass.
+        await rig.Env.Repo.UpsertAsync(rig.Env.Row("job-gone") with { Phase = JobPhase.Cancelled, CreatedUtc = Launch.AddMinutes(-4) }, CancellationToken.None);
+        rig.Gcp.WithCloudConnected();
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None));
+
+        reconciler.HasDeferred.ShouldBeFalse("a run that ended is nothing to look at again");
+    }
+
+    [Fact]
+    public async Task A_non_network_failure_judging_a_run_is_logged_and_is_not_deferred()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-403", JobPhase.Running, vm: true);
+        rig.Env.Images.Resolve(Arg.Any<string>(), Arg.Any<bool>()).Returns(_ => throw new InvalidOperationException("boom: secret-file-name.gb"));
+        var reconciler = rig.Reconciler();
+
+        var outcome = (await reconciler.ReattachAsync(CancellationToken.None)).Single();
+
+        outcome.Action.ShouldBe(ReattachAction.Errored);
+        outcome.ErrorCode.ShouldBe(nameof(InvalidOperationException));
+        reconciler.HasDeferred.ShouldBeFalse("only a network failure keeps the reconnect probe alive");
+        rig.Env.Log.Entries.ShouldContain(e => e.JobId == "job-403");
+    }
+
+    [Fact]
+    public async Task A_lifecycle_pass_that_throws_a_non_network_error_clears_HasDeferred_and_still_throws()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-lc", AfterTaskAction.Delete);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+        await reconciler.EnforceLifecycleAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeTrue("offline lifecycle pass");
+
+        rig.Env.Repo.BeforeGetAll = (_, _) => throw new InvalidOperationException("database is busy");
+        await Should.ThrowAsync<InvalidOperationException>(() => reconciler.EnforceLifecycleAsync(CancellationToken.None));
+
+        reconciler.HasDeferred.ShouldBeFalse("a non-network failure must not keep the reconnect probe alive");
+    }
+
+    [Fact]
+    public async Task Overlapping_passes_that_finish_out_of_order_leave_HasDeferred_as_the_latest_started_pass_found_it()
+    {
+        // Issue #559 review: the launch pass runs outside ReconcileOnReconnect's single-flight, so it can overlap an observer pass. The older pass,
+        // finishing last with a network error, must not overwrite what the newer pass (which could ask the cloud) found.
+        var rig = new Rig();
+        var reconciler = rig.Reconciler();
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Counting from here: the older pass's reattach read is 1 and its lifecycle read is 2 (parked, then times out).
+        rig.Env.Repo.BeforeGetAll = async (call, _) =>
+        {
+            if (call == 2)
+            {
+                parked.TrySetResult();
+                await release.Task;
+                throw new TimeoutException();
+            }
+        };
+        var older = reconciler.BeginReconcileAsync(CancellationToken.None);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        reconciler.HasDeferred.ShouldBeFalse("precondition: the newer pass found nothing deferred");
+        release.SetResult();
+        await older;
+
+        reconciler.HasDeferred.ShouldBeFalse("the older pass ended last but only the latest-started pass may write the flag");
+    }
+
+    [Fact]
+    public async Task A_cancel_finish_that_never_returns_does_not_hold_the_pass_or_the_next_pass_back()
+    {
+        // Issue #559 review: FinishCancelAsync never marked its run judged, so one stuck cancel held the outer pass task (and, behind
+        // ReconcileOnReconnect, the single-flight slot, so no later reconnect ran a pass).
+        var rig = new Rig();
+        await rig.Env.SeedAsync("job-stuck", JobPhase.Cancelling, vm: true);
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var shutdown = new CancellationTokenSource();
+        var shutdownToken = shutdown.Token;
+        // The pass's own reads (the reattach listing and the lifecycle pass) use the shutdown token itself; the runner's cancel looks at the row with
+        // the reattach driver's linked token, a different one. Parking by that, not by the read's number: the two run on different threads.
+        rig.Env.Repo.BeforeGetAll = async (_, token) =>
+        {
+            if (token != shutdownToken && token.CanBeCanceled)
+            {
+                parked.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+            }
+        };
+        var reconciler = rig.Reconciler();
+
+        var inner = await reconciler.BeginReconcileAsync(shutdown.Token).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        inner.IsCompleted.ShouldBeFalse("the cancel finish is still stuck");
+        var second = await reconciler.BeginReconcileAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        second.IsCompleted.ShouldBeTrue("the next pass skips the run something already drives and ends");
+        await shutdown.CancelAsync();
+        var ended = await Record.ExceptionAsync(() => inner.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        ended.ShouldBeAssignableTo<OperationCanceledException>("a shutdown ends the stuck cancel finish; it is neither a timeout nor a hang");
+        reconciler.HasDeferred.ShouldBeFalse("a shutdown is not a missing connection: it must not arm the probe");
+    }
+
+    [Fact]
+    public async Task A_network_failure_reading_the_run_table_for_the_reattach_alone_is_deferred()
+    {
+        // Issue #559 review r4 F1: only the reattach's own listing read times out (the lifecycle read succeeds), so neither a per-run nor a
+        // lifecycle flag exists; the probe would never arm.
+        var rig = new Rig();
+        rig.Env.Repo.BeforeGetAll = (call, _) =>
+        {
+            if (call == 1)
+            {
+                throw new TimeoutException();
+            }
+
+            return Task.CompletedTask;
+        };
+        var reconciler = rig.Reconciler();
+
+        await Should.ThrowAsync<TimeoutException>(async () => await reconciler.BeginReconcileAsync(CancellationToken.None));
+
+        reconciler.HasDeferred.ShouldBeTrue("the reattach could not read the run table");
+
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None));
+        reconciler.HasDeferred.ShouldBeFalse("a later pass read it");
+    }
+
+    [Fact]
+    public async Task A_run_whose_cancel_finish_ends_deferred_stays_deferred_while_a_newer_pass_skips_it()
+    {
+        // Issue #559 review r4 F2: the newer pass is Skipped (the older pass drives the run); it must not clear the mark, and the older
+        // pass's late Deferred must not be rejected for being older.
+        var rig = new Rig();
+        await rig.Env.SeedAsync("job-ow", JobPhase.Cancelling, vm: true);
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var shutdown = new CancellationTokenSource();
+        var shutdownToken = shutdown.Token;
+        rig.Env.Repo.BeforeGetAll = async (_, token) =>
+        {
+            if (token != shutdownToken && token.CanBeCanceled)
+            {
+                parked.TrySetResult();
+                await release.Task;
+                throw new TimeoutException();
+            }
+        };
+        var reconciler = rig.Reconciler();
+        var older = await reconciler.BeginReconcileAsync(shutdown.Token).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var newer = await reconciler.BeginReconcileAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await newer.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        release.SetResult();
+        await older.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        reconciler.HasDeferred.ShouldBeTrue("the run that drove the cancel finish ended Deferred; the pass that skipped it changes nothing");
+    }
+
+    [Fact]
+    public async Task A_lifecycle_read_that_throws_does_not_orphan_the_runs_the_reattach_started()
+    {
+        // Issue #559 review r4 F3: the lifecycle step throws; the run the reattach already handed to a driver must still be tracked and waited for.
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-orph", JobPhase.Running, vm: true);
+        rig.Env.Repo.BeforeGetAll = (call, _) => call == 2 ? throw new InvalidOperationException("database is busy") : Task.CompletedTask;
+        var reconciler = rig.Reconciler();
+        using var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
+
+        observer.OnConnectivityChanged(offline: false);
+        await observer.WhenIdleAsync();
+
+        var row = rig.Env.Row("job-orph");
+        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_network_failure_judging_a_run_still_counts_as_deferred()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-net", JobPhase.Running, vm: true);
+        rig.Gcp.WithFindByJobIdFailure(new CloudError(null, null, "could not reach the service"), 1);
+        var reconciler = rig.Reconciler();
+
+        (await reconciler.ReattachAsync(CancellationToken.None)).Single().Action.ShouldBe(ReattachAction.Deferred);
+        reconciler.HasDeferred.ShouldBeTrue();
     }
 
     // ---- 3. the reconnect trigger ----
