@@ -1,6 +1,6 @@
 # scripts/hooks/ — testing these by hand
 
-Five hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.json`:
+Six hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.json`:
 
 - `block_git_stash.py` -- refuses a mutating `git stash` (the stash stack is shared
   across every worktree of this repo and every concurrent Claude session).
@@ -14,6 +14,10 @@ Five hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.
   `--max-run-duration`, per `docs/superpowers/specs/2026-09-18-appendix-c-repo-conventions.md`
   §4.
 
+- `block_primary_checkout_git.py` -- refuses history-changing git (`checkout`/`switch`,
+  `merge` other than `--ff-only`, `commit`, `reset --hard|--soft|--mixed|<commit>`, `rebase`,
+  `cherry-pick`, `revert`, `am`, `pull` other than `--ff-only`) when the effective directory
+  is the PRIMARY checkout (issue #542). Registered for both `Bash` and `PowerShell`.
 - `require_premerge_before_pr.py` -- refuses `gh pr create` and `gh pr merge` unless
   `scripts/premerge.py` passed (green, unfiltered) on the CURRENT HEAD, recorded by
   `scripts/premerge_stamp.py` in `<git-dir>/premerge-stamp.json` (12 hour expiry). Escape hatch, logged to
@@ -21,7 +25,7 @@ Five hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.
   environment. Register it in `.claude/settings.json` exactly like the others, with matcher `Bash` and
   `run_hook.py require_premerge_before_pr`.
 
-All five read a `PreToolUse` JSON payload on stdin and answer with silence (exit 0,
+All six read a `PreToolUse` JSON payload on stdin and answer with silence (exit 0,
 no stdout) or a deny decision. They never block on their own failure: a malformed
 payload or an unexpected exception exits 0 quietly, because a hook that breaks the
 session when IT has a bug is worse than the bug it guards. `scripts/tests/` holds the
@@ -99,3 +103,22 @@ exists for the day a `CloudCli vm create` (or an app-side wrapper) reaches the
 Compute API without going through `gcloud` at all, and to catch a `gcloud`
 invocation typed directly into a scratch/debug session before that deny-list
 check runs.
+
+## Probing `block_primary_checkout_git.py`
+
+Primary vs linked worktree is decided by git (`--git-dir` vs `--git-common-dir`, via
+`classify()` imported from `block_agent_dispatch_in_worktree.py`), never by a path. The
+effective directory is the session `cwd`, moved by a `cd`/`Set-Location`/`Push-Location`
+prefix in the same command and by `git -C <path>`. Backslashes are taken literally, so an
+unquoted `C:\...` path survives (the trap above). Unresolvable means allow.
+
+```
+printf '{"tool_name":"Bash","tool_input":{"command":"git switch -c x origin/main"},"cwd":"C:/path/to/a/primary/checkout"}' > .scratch/probe.json
+python scripts/hooks/block_primary_checkout_git.py < .scratch/probe.json
+```
+
+denies; the same file with `git merge --ff-only origin/main` is silent, and so is any
+command with a linked worktree as `cwd`. Point `cwd` at a throwaway repo, not at this
+repo's real primary checkout. `python scripts/hooks/block_primary_checkout_git.py --self-test`
+builds its own throwaway repo and worktree and covers every denied and allowed shape in both,
+for both tool names. `git stash` is not handled here (`block_git_stash.py` owns it).
