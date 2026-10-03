@@ -1,0 +1,2 @@
+- Sign in with Google is real (issue #48): the system browser opens Google's page (PKCE, loopback redirect), the token is kept encrypted per account in %LOCALAPPDATA%\DNAEntropyGraph\auth\, several accounts can be signed in and switched, a refused token reads as SIGNIN_EXPIRED with a Sign in again action, and signing out revokes the token at Google then deletes it. Needs `app/secrets/oauth_client.local.json` (owner task #21); without it sign-in says so by name. The cloud gateways are still the fake.
+

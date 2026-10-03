@@ -695,6 +695,32 @@ are best effort: a failure is a progress notice and the job continues. Symlinks 
 in the marker, not uploaded. Cost: about 14 GB of bucket storage per model. Until #496 the
 GCS blobstore reads each shard fully into memory.
 
+## 15. Sign-in, the token store and account switching (issue #48)
+
+`GoogleAccountService` (`DnaEntropyGraph.Cloud/Auth/`) is the one implementation of Core's `IGcpAccount`,
+`IGcpAccessTokenSource` and `ICloudTokenRefresher`. Production DI registers it as all three. The gateways are
+still `FakeGcp` until the real ones land, so who is signed in is real while what the gateways do is not.
+
+- **Flow.** `PkceGoogleAuthorizationCodeFlow` from Google.Apis.Auth (it sends `code_challenge`,
+  `code_challenge_method=S256` and the matching `code_verifier`) driven by `AuthorizationCodeInstalledApp`, with our
+  own `LoopbackCodeReceiver` instead of Google's `LocalServerCodeReceiver`, because that one opens the browser itself
+  (nothing to inject in a test) and does not check `state`. Scopes `openid email https://www.googleapis.com/auth/cloud-platform`,
+  `access_type=offline`, prompt `select_account consent`.
+- **Files** under `%LOCALAPPDATA%\DNAEntropyGraph\auth\`: `<sub>.tok` (DPAPI, one per account, key = the id token's
+  `sub`, held to `[A-Za-z0-9_-]` because it becomes a file name) and `accounts.json` (`activeSub` and a list of
+  `{sub, email, needsSignIn}`, no token). Token refresh is done by Google's `UserCredential` and written back through
+  the same store, so a restart needs no browser.
+- **Errors** are `AccountAuthException` with a code from `AuthErrorCodes`; the English is `AuthError_<code>` in
+  `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
+  on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
+  `OAUTH_CLIENT_INVALID` name the installer as the action: the user never has this file, the build does.
+- **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
+  and the account entry whatever Google said, and makes the next remaining account current.
+- **Not here yet:** the selected project (`IGcpAccount.SelectedProjectId` is null until the wizard's project step
+  stores one per account), and any page that lists accounts, switches or signs out (the commands exist on
+  `IGcpAccount`; the wizard's Sign in button and the shell's status pill are wired).
+- **Testing.** `Cloud.Tests/Auth` runs the whole flow with no network and no browser: a fake that answers Google's
+  real token and revoke URLs and checks the PKCE proof, and a fake browser that calls the real loopback listener back.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

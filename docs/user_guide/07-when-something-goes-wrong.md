@@ -18,6 +18,25 @@ on the project's GitHub page.
 the app's Google approval is still in its early "testing" phase; it is expected, not a
 sign anything is broken. Click **Sign in again**. *(`SIGNIN_EXPIRED`)*
 
+It can also happen if you removed this app's access in your Google account settings
+(myaccount.google.com, Security, third-party access), or after a long time unused. The fix
+is the same: click **Sign in again**.
+
+**"The Google page in your browser was not finished in time"** or **"The sign-in was cancelled
+on the Google page"**, nothing changed. Click **Sign in again** and finish the steps in the
+browser window that opens. *(`SIGNIN_TIMEOUT`, `SIGNIN_CANCELLED`)*
+
+**"Google could not be reached"**, your sign-in is unchanged. Check that the computer is
+online, then click **Try again**. *(`SIGNIN_NETWORK`)*
+
+**"This copy of the app was built without its Google sign-in details"**, download the
+latest installer from the app's download page and install it over this copy.
+*(`OAUTH_CLIENT_MISSING`, `OAUTH_CLIENT_INVALID`)*
+
+**Using more than one Google account:** each account you sign in with is remembered
+separately on this computer, so you can switch between them without signing in again.
+Signing out removes the sign-in from this computer and also tells Google to cancel it.
+
 ## The app can't finish setting up your project
 
 **"You can use this project but not set it up"**, you are a member of this Google Cloud

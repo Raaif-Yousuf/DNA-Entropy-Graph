@@ -155,6 +155,24 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public async Task The_account_is_the_real_Google_sign_in_and_a_build_with_no_client_file_says_so_by_code()
+    {
+        // Issue #48's wired-to-nothing observable. With FakeGcp registered as IGcpAccount this resolves fine and
+        // SignInAsync "succeeds"; only the real service reads oauth_client.local.json and refuses by name.
+        using var provider = BuildRealServiceProvider();
+
+        var account = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IGcpAccount>();
+
+        account.ShouldBeOfType<DnaEntropyGraph.Cloud.Auth.GoogleAccountService>();
+        account.IsSignedIn.ShouldBeFalse();
+        var failure = await Should.ThrowAsync<DnaEntropyGraph.Core.Cloud.AccountAuthException>(() => account.SignInAsync(CancellationToken.None));
+        failure.Code.ShouldBe(DnaEntropyGraph.Core.Cloud.AuthErrorCodes.OAuthClientMissing);
+
+        // The same instance answers the token refresh and the access-token source, or a 401 would refresh nobody's token.
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.ICloudTokenRefresher>().ShouldBeSameAs(account);
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IGcpAccessTokenSource>().ShouldBeSameAs(account);
+    }
+    [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {
         Should.NotThrow(() =>

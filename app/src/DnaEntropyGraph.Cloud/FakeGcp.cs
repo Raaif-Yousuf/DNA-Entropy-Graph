@@ -147,8 +147,50 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     /// </summary>
     public Task SignInAsync(CancellationToken cancellationToken)
     {
+        if (_signInErrorCode is not null)
+        {
+            throw new AccountAuthException(_signInErrorCode);
+        }
+
         _signedIn = true;
         _selectedProjectId = "fake-project";
+        AccountChanged?.Invoke(this, EventArgs.Empty);
+        return Task.CompletedTask;
+    }
+
+    private static readonly AccountInfo FakeAccount = new("fake-sub", "fake-user@example.test");
+
+    private string? _signInErrorCode;
+
+    public AccountInfo? CurrentAccount => _signedIn ? FakeAccount : null;
+
+    public IReadOnlyList<AccountInfo> Accounts => _signedIn ? [FakeAccount] : [];
+
+    public event EventHandler? AccountChanged;
+
+    /// <summary>Every <see cref="SignInAsync"/> fails with this <see cref="AuthErrorCodes"/> code, as the real account service does for a missing client file or a declined consent page.</summary>
+    public FakeGcp WithSignInError(string code)
+    {
+        _signInErrorCode = code;
+        return this;
+    }
+
+    public Task<bool> SignOutAsync(CancellationToken cancellationToken)
+    {
+        _signedIn = false;
+        _selectedProjectId = null;
+        AccountChanged?.Invoke(this, EventArgs.Empty);
+        return Task.FromResult(true);
+    }
+
+    public Task SwitchAccountAsync(string sub, CancellationToken cancellationToken)
+    {
+        if (!_signedIn || sub != FakeAccount.Sub)
+        {
+            throw new AccountAuthException(AuthErrorCodes.AccountNotFound);
+        }
+
+        AccountChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 

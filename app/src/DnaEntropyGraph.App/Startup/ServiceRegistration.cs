@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.App.Services;
 using DnaEntropyGraph.Cloud;
+using DnaEntropyGraph.Cloud.Auth;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Inputs;
@@ -70,7 +71,24 @@ public static class ServiceRegistration
         // cloud_not_connected rather than "complete" with simulated results in the user's output folder
         // (cold review finding 12). The switch that turns the full simulation back on is issue #69.
         services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithCloudNotConnected());
-        services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
+        // Issue #48: the account is the real Google sign-in (loopback + PKCE, DPAPI token files keyed by sub). The
+        // gateways below stay FakeGcp until the real ones land, but who is signed in is already real. A build with no
+        // oauth_client.local.json cannot sign in and says so by code (OAUTH_CLIENT_MISSING), never by crashing.
+        // Every path is resolved lazily on first use, so building this graph (Guards.Tests) touches no disk.
+        services.AddSingleton<GoogleAccountOptions>(sp => new GoogleAccountOptions
+        {
+            AuthDirectory = Path.Combine(Path.GetDirectoryName(settingsPath)!, "auth"),
+            ClientLoader = new OAuthClientLoader(appDataRoot is null
+                ? OAuthClientLoader.DefaultCandidates(Path.GetDirectoryName(settingsPath)!, AppContext.BaseDirectory)
+                : [Path.Combine(appDataRoot, OAuthClientLoader.FileName)]),
+            Browser = new SystemBrowserLauncher(),
+            Pages = new LoopbackPages(
+                () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserSuccess"),
+                () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserFailure")),
+        });
+        services.AddSingleton<GoogleAccountService>();
+        services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<GoogleAccountService>());
+        services.AddSingleton<IGcpAccessTokenSource>(sp => sp.GetRequiredService<GoogleAccountService>());
 
         // Issue #258: every gateway the app resolves is wrapped in the one
         // resilience pipeline (retry with jitter on 429/5xx/transport, a
@@ -81,7 +99,9 @@ public static class ServiceRegistration
         services.AddSingleton<CloudRetryOptions>(_ => new CloudRetryOptions());
         services.AddSingleton<CloudRetryLog>();
         services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<CloudRetryLog>());
-        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<FakeGcp>());
+        // The real account refreshes the real token on a 401. Inert while the gateways are FakeGcp (it never answers a
+        // real 401), correct the moment a real gateway is wrapped, so the swap in #56 touches only the gateways.
+        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<GoogleAccountService>());
         services.AddSingleton<CloudCallPipeline>(sp => new CloudCallPipeline(
             sp.GetRequiredService<CloudRetryOptions>(),
             sp.GetRequiredService<ICloudTokenRefresher>(),
