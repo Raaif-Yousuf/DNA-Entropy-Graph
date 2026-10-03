@@ -928,3 +928,23 @@ def test_a_second_oom_fails_the_run_instead_of_retrying_forever(tmp_path: Path) 
     cfg = RunConfig(name="oom2", out_dir=str(tmp_path), context_length=128, direction=Direction.FORWARD_ONLY)
     with pytest.raises(PredictorOOMError):
         pipeline.run(cfg, raw="ACGT" * 100, predictor=_AlwaysOOM())
+
+
+def test_a_refused_later_record_never_builds_the_predictor(tmp_path: Path, monkeypatch) -> None:
+    """issue #80: validation runs BEFORE the predictor is built, so a real Evo model is never
+    loaded just to refuse a 5 nt second record."""
+    built: list[RunConfig] = []
+    monkeypatch.setattr(pipeline, "build_predictor", lambda cfg: built.append(cfg) or MockPredictor(seed=0))
+    src = tmp_path / "in.fasta"
+    src.write_text(">one\n" + "ACGT" * 100 + "\n>two\nACGTA\n", encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="spy", out_dir=str(tmp_path / "o"), context_length=128, input_path=str(src))
+    with pytest.raises(WindowingError, match="10"):
+        pipeline.run(cfg)
+    assert built == []
+
+
+def test_the_predictor_is_still_built_once_validation_passes(tmp_path: Path, monkeypatch) -> None:
+    built: list[RunConfig] = []
+    monkeypatch.setattr(pipeline, "build_predictor", lambda cfg: built.append(cfg) or MockPredictor(seed=0))
+    pipeline.run(RunConfig(name="spy2", out_dir=str(tmp_path), context_length=128), raw="ACGT" * 100)
+    assert len(built) == 1
