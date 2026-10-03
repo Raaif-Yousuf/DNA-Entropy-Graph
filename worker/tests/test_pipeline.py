@@ -13,7 +13,7 @@ from dna_entropy.analysis import MAX_ENTROPY_BITS
 from dna_entropy.analysis.entropy import shannon_entropy
 from dna_entropy.analysis.windowing import WindowingError
 from dna_entropy.config import Direction, PredictorKind, RunConfig, TrackFormat
-from dna_entropy.predictors.base import PredictorError
+from dna_entropy.predictors.base import PredictorError, PredictorOOMError
 from dna_entropy.predictors.mock import MockPredictor
 
 RAW = ">demo header\nATGC ATGC ATGC\nACGTACGTACGT"
@@ -848,3 +848,103 @@ def test_both_separate_geneious_tracks_are_not_written_when_geneious_is_off(tmp_
     )
     pipeline.run(cfg, raw="ACGT" * 70)
     assert not list(tmp_path.glob("*.geneious.gff3"))
+
+
+# --- issue #80: a context-length refusal happens before ANY prediction ------------------
+
+
+class _CountingPredictor:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def predict(self, seq: str):  # pragma: no cover - must not run in these tests
+        self.calls += 1
+        return MockPredictor(seed=0).predict(seq)
+
+
+def test_k_below_the_minimum_is_refused_naming_the_threshold_before_the_predictor_is_called(
+    tmp_path: Path,
+) -> None:
+    predictor = _CountingPredictor()
+    cfg = RunConfig(name="k64", out_dir=str(tmp_path), context_length=64)
+    with pytest.raises(WindowingError, match="128"):
+        pipeline.run(cfg, raw="ACGT" * 100, predictor=predictor)
+    assert predictor.calls == 0
+
+
+def test_a_later_too_short_record_is_refused_before_the_first_record_is_predicted(tmp_path: Path) -> None:
+    """Every contig is validated up front: record 2 (5 nt) must not cost record 1's GPU time."""
+    predictor = _CountingPredictor()
+    src = tmp_path / "in.fasta"
+    src.write_text(">one\n" + "ACGT" * 100 + "\n>two\nACGTA\n", encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="multi", out_dir=str(tmp_path / "o"), context_length=128, input_path=str(src))
+    with pytest.raises(WindowingError, match="10"):
+        pipeline.run(cfg, predictor=predictor)
+    assert predictor.calls == 0
+
+
+def test_a_short_input_notice_is_still_raised_per_record_and_the_run_completes(tmp_path: Path) -> None:
+    src = tmp_path / "in.fasta"
+    src.write_text(">a\n" + "ACGT" * 20 + "\n>b\n" + "ACGT" * 30 + "\n", encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="shortok", out_dir=str(tmp_path / "o"), context_length=4096, input_path=str(src))
+    result = pipeline.run(cfg)
+    assert result.contigs == 2
+    assert sum("shorter than the context length" in n for n in result.notices) == 2
+
+
+# --- issue #81: an OOM once yields a COMPLETED run whose provenance shows the halved W/S ---
+
+
+class _OOMOnce:
+    def __init__(self) -> None:
+        self.calls = 0
+        self._inner = MockPredictor(seed=4)
+
+    def predict(self, seq: str):
+        self.calls += 1
+        if self.calls == 1:
+            raise PredictorOOMError("simulated CUDA out of memory")
+        return self._inner.predict(seq)
+
+
+def test_an_oom_once_still_completes_and_provenance_records_the_halved_window_and_stride(
+    tmp_path: Path,
+) -> None:
+    cfg = RunConfig(name="oom", out_dir=str(tmp_path), context_length=128, direction=Direction.FORWARD_ONLY)
+    result = pipeline.run(cfg, raw="ACGT" * 100, predictor=_OOMOnce())
+    contig = json.loads((tmp_path / "provenance.json").read_text(encoding="utf-8"))["contigs"][0]
+    assert (contig["window"], contig["stride"]) == (128, 64), "the HALVED plan, not the configured 256/128"
+    assert contig["k_used"] == 64
+    assert result.window == 128 and result.stride == 64
+    assert any("Out of GPU memory" in n for n in result.notices)
+    assert len(result.values) == 400
+
+
+def test_a_second_oom_fails_the_run_instead_of_retrying_forever(tmp_path: Path) -> None:
+    class _AlwaysOOM:
+        def predict(self, seq: str):
+            raise PredictorOOMError("simulated CUDA out of memory")
+
+    cfg = RunConfig(name="oom2", out_dir=str(tmp_path), context_length=128, direction=Direction.FORWARD_ONLY)
+    with pytest.raises(PredictorOOMError):
+        pipeline.run(cfg, raw="ACGT" * 100, predictor=_AlwaysOOM())
+
+
+def test_a_refused_later_record_never_builds_the_predictor(tmp_path: Path, monkeypatch) -> None:
+    """issue #80: validation runs BEFORE the predictor is built, so a real Evo model is never
+    loaded just to refuse a 5 nt second record."""
+    built: list[RunConfig] = []
+    monkeypatch.setattr(pipeline, "build_predictor", lambda cfg: built.append(cfg) or MockPredictor(seed=0))
+    src = tmp_path / "in.fasta"
+    src.write_text(">one\n" + "ACGT" * 100 + "\n>two\nACGTA\n", encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="spy", out_dir=str(tmp_path / "o"), context_length=128, input_path=str(src))
+    with pytest.raises(WindowingError, match="10"):
+        pipeline.run(cfg)
+    assert built == []
+
+
+def test_the_predictor_is_still_built_once_validation_passes(tmp_path: Path, monkeypatch) -> None:
+    built: list[RunConfig] = []
+    monkeypatch.setattr(pipeline, "build_predictor", lambda cfg: built.append(cfg) or MockPredictor(seed=0))
+    pipeline.run(RunConfig(name="spy2", out_dir=str(tmp_path), context_length=128), raw="ACGT" * 100)
+    assert len(built) == 1
