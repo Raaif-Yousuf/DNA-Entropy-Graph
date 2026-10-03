@@ -65,6 +65,7 @@ public sealed class CloudJobRunner
     private readonly GatewayCalls _calls;
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;
+    private readonly IWorkerIdentityGateway _workerIdentity;
     private readonly PreflightChecks _preflight;
     private readonly RunTransfer _transfer;
     private readonly VmTerminator _terminator;
@@ -126,8 +127,9 @@ public sealed class CloudJobRunner
         IStorageGateway storageGateway,
         IProjectSetupGateway projectSetupGateway,
         IQuotaGateway quotaGateway,
+        IWorkerIdentityGateway workerIdentityGateway,
         IRunRepository runRepository)
-        : this(computeGateway, storageGateway, projectSetupGateway, quotaGateway, runRepository, null)
+        : this(computeGateway, storageGateway, projectSetupGateway, quotaGateway, workerIdentityGateway, runRepository, null)
     {
     }
 
@@ -137,9 +139,11 @@ public sealed class CloudJobRunner
         IStorageGateway storageGateway,
         IProjectSetupGateway projectSetupGateway,
         IQuotaGateway quotaGateway,
+        IWorkerIdentityGateway workerIdentityGateway,
         IRunRepository runRepository,
         Action<string, JobPhase>? onPhaseChanged)
     {
+        _workerIdentity = workerIdentityGateway;
         // The collaborators share one settings object, so a timeout set by an object initializer after this constructor is
         // what every one of them reads. The in-flight create state has exactly one owner: _provisioner.
         _compute = computeGateway;
@@ -316,8 +320,20 @@ public sealed class CloudJobRunner
             }
         }
 
+        // Issue #606: the account the VM runs as exists (and may delete itself and write the bucket) before any create. It is
+        // idempotent, so a resumed run asks again; a refusal throws a classified CloudOperationException and no VM is made.
+        var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken).ConfigureAwait(false);
+        if (identity.NoteCode == SetupErrorCodes.WorkerDefaultAccount)
+        {
+            // A yellow note, not a failure: the run carries on as the project's default account and its row says so.
+            await _rows.UpdateRowAsync(
+                request.JobId,
+                row => row with { ErrorCode = RunErrorCodes.WorkerDefaultAccount, ErrorDetail = SetupErrorCodes.WorkerDefaultAccount },
+                cancellationToken).ConfigureAwait(false);
+        }
+
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
-        var spec = VmProvisioner.WithStartupMetadata(request, bucket);
+        var spec = VmProvisioner.WithStartupMetadata(request, bucket) with { ServiceAccountEmail = identity.ServiceAccountEmail };
         var provisioned = await _provisioner.ProvisionAsync(request, spec, progress, cancellationToken).ConfigureAwait(false);
         if (!provisioned.Success)
         {

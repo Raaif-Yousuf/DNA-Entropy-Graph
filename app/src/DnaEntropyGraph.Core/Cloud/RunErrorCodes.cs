@@ -47,6 +47,9 @@ public static class RunErrorCodes
     public const string InstallationIdUnusable = "installation_id_unusable";
 
     /// <summary>The <c>CloudError.Code</c> a gateway with no real cloud behind it throws; the runner records it as <see cref="CloudNotConnected"/>.</summary>
+    /// <summary>A note, not a failure (#606): the run went ahead as the project's default Compute Engine account because an organization policy refused the app's own worker identity. Recorded on the row of a run that still completes.</summary>
+    public const string WorkerDefaultAccount = "worker_default_account";
+
     public const string NotConnectedGatewayCode = "CLOUD_NOT_CONNECTED";
     public const string Other = "other";
 
@@ -57,7 +60,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -137,6 +140,7 @@ public static class RunErrorCodes
         InputEmpty => "RunError_input_empty",
         InputTooLong => "RunError_input_too_long",
         InstallationIdUnusable => "RunError_installation_id_unusable",
+        WorkerDefaultAccount => "RunError_worker_default_account",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",
         "quota" => "RunError_quota",

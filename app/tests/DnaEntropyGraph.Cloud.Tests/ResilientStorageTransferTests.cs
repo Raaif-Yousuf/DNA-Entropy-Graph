@@ -54,6 +54,7 @@ public class ResilientStorageTransferTests
             new ResilientStorageGateway(new FlakyFirstUpload(gcp), pipeline),
             new ResilientProjectSetupGateway(gcp, pipeline),
             new ResilientQuotaGateway(gcp, pipeline),
+            gcp,
             repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),

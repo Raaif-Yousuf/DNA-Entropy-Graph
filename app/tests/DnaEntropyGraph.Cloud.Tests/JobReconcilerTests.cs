@@ -72,7 +72,7 @@ public class JobReconcilerTests
 
         public MemorySettingsStore Settings { get; } = new() { Values = { [InstallationId.SettingsKey] = "install-1" } };
 
-        public CloudJobRunner Runner => new(Gcp, Gcp, Gcp, Gcp, Repo, (id, phase) => Notified.Add((id, phase)))
+        public CloudJobRunner Runner => new(Gcp, Gcp, Gcp, Gcp, Gcp, Repo, (id, phase) => Notified.Add((id, phase)))
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = ResultTimeout,

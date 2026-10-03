@@ -38,7 +38,7 @@ public class CloudJobRunnerGuaranteesTests
         FakeGcp gcp,
         IRunRepository repo,
         Action<string, JobPhase>? onPhase = null)
-        => new(compute, gcp, gcp, gcp, repo, onPhase)
+        => new(compute, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
@@ -286,7 +286,7 @@ public class CloudJobRunnerGuaranteesTests
             },
         };
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, repo)
+        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, gcp, repo)
         {
             TimeProvider = time,
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
