@@ -546,3 +546,27 @@ def test_precision_is_not_cross_checked_for_an_unrecognized_model() -> None:
         _manifest(predictor={"kind": "evo", "model": "not_a_real_model", "precision": "fp8"})
     )
     assert m.predictor.model == "not_a_real_model"
+
+
+# --- issue #128: analysis.topology -------------------------------------------------------
+
+
+@pytest.mark.parametrize("spelling", ["auto", "linear", "circular"])
+def test_topology_spellings_parse_and_reach_the_run_config(spelling: str) -> None:
+    from dna_entropy.config import Topology
+
+    m = JobManifest.parse(_manifest(analysis={"topology": spelling}))
+    assert m.analysis.topology is Topology(spelling)
+    cfg = m.build_run_config(m.inputs[0], local_input_path="/tmp/in", local_out_dir="/tmp/out")
+    assert cfg.topology is Topology(spelling)
+
+
+def test_topology_defaults_to_auto_when_the_manifest_omits_it() -> None:
+    from dna_entropy.config import Topology
+
+    assert JobManifest.parse(_manifest()).analysis.topology is Topology.AUTO
+
+
+def test_an_unknown_topology_is_rejected_naming_the_valid_values() -> None:
+    with pytest.raises(ManifestError, match="circular"):
+        JobManifest.parse(_manifest(analysis={"topology": "ring"}))
