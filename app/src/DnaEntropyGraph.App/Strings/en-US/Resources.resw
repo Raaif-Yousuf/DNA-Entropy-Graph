@@ -891,6 +891,36 @@
   <data name="ResultsOpenFolderButton.Content" xml:space="preserve">
     <value>Open folder</value>
   </data>
+  <data name="Results_IgvNoFiles" xml:space="preserve">
+    <value>This run has no entropy track or gene file to show in IGV. Choose Open folder to see which files it did write.</value>
+  </data>
+  <data name="Results_IgvNotFound" xml:space="preserve">
+    <value>IGV was not found on this computer. Install IGV from igv.org, then choose Open in IGV again and pick its program file when asked.</value>
+  </data>
+  <data name="Results_IgvLaunchFailed" xml:space="preserve">
+    <value>IGV would not start. Check that it opens from the Start menu, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_IgvRejected" xml:space="preserve">
+    <value>IGV is open but refused to load these files. Close any message box in IGV, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_IgvNoReply" xml:space="preserve">
+    <value>IGV is open but did not answer in time. Wait for IGV to finish what it is doing, then choose Open in IGV again.</value>
+  </data>
+  <data name="Results_GeneiousNoFiles" xml:space="preserve">
+    <value>This run has no GenBank or GFF3 file to open in Geneious. Choose Open folder to see which files it did write.</value>
+  </data>
+  <data name="Results_GeneiousNotFound" xml:space="preserve">
+    <value>Geneious was not found on this computer. Install Geneious Prime, then choose Open in Geneious again and pick its program file when asked.</value>
+  </data>
+  <data name="Results_GeneiousLaunchFailed" xml:space="preserve">
+    <value>Geneious would not start. Check that it opens from the Start menu, then choose Open in Geneious again.</value>
+  </data>
+  <data name="ResultsOpenInIgvButton.Content" xml:space="preserve">
+    <value>Open in IGV</value>
+  </data>
+  <data name="ResultsOpenInGeneiousButton.Content" xml:space="preserve">
+    <value>Open in Geneious</value>
+  </data>
   <data name="ResultsOpenInViewerButton.Content" xml:space="preserve">
     <value>Open in viewer</value>
   </data>
