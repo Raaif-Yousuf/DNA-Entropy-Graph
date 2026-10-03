@@ -19,6 +19,15 @@
     <WindowsPackageType>None</WindowsPackageType>
     <SelfContained>true</SelfContained>
     <!--
+      #438. MEASURED 2026-10-03 (minidump of a hung CI run): the Windows App SDK's generated module initializer in this assembly
+      calls MddBootstrapInitialize2 with OnNoMatch_ShowUI, which with no Windows App Runtime installed opens a modal dialog; a
+      CI runner has no desktop, so the first test to touch an App type waited forever. None makes a missing runtime exit with its
+      HRESULT instead. Unconditional: the shipped app is self-contained and has no auto-initializer, so the dialog only exists in dev/test builds,
+      and local must equal CI. The runtime must still be installed where tests run (the bootstrap cannot be turned off, see the guard).
+      Pinned by Guards.Tests/BootstrapNeverShowsUiGuardTests.
+    -->
+    <WindowsAppSDKBootstrapAutoInitializeOptions_None>true</WindowsAppSDKBootstrapAutoInitializeOptions_None>
+    <!--
       #475. SelfContained covers the .NET runtime only. MEASURED 2026-10-03: publishing without this property gave 252 files and no
       Microsoft.ui.xaml.dll (the app then needs the Windows App SDK runtime installed on the PC); with it, 441 files including
       Microsoft.ui.xaml.dll. Set here, not only as a CLI flag, so `dotnet publish` carries it without one (it sets _IsPublishing; `msbuild -t:Publish` and VS publish profiles do not, and must pass -p:WindowsAppSDKSelfContained=true themselves); pinned by
@@ -33,11 +42,14 @@
     <OutputType>WinExe</OutputType>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+    <!-- #513: Program.cs is the entry point (VelopackApp must run first); the XAML-generated Main is turned off. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Velopack" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>
 

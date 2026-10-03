@@ -155,6 +155,70 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public async Task The_account_is_the_real_Google_sign_in_and_a_build_with_no_client_file_says_so_by_code()
+    {
+        // Issue #48's wired-to-nothing observable. With FakeGcp registered as IGcpAccount this resolves fine and
+        // SignInAsync "succeeds"; only the real service reads oauth_client.local.json and refuses by name.
+        using var provider = BuildRealServiceProvider();
+
+        var account = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IGcpAccount>();
+
+        account.ShouldBeOfType<DnaEntropyGraph.Cloud.Auth.GoogleAccountService>();
+        account.IsSignedIn.ShouldBeFalse();
+        var failure = await Should.ThrowAsync<DnaEntropyGraph.Core.Cloud.AccountAuthException>(() => account.SignInAsync(CancellationToken.None));
+        failure.Code.ShouldBe(DnaEntropyGraph.Core.Cloud.AuthErrorCodes.OAuthClientMissing);
+
+        // The access-token source is the real account (the real gateways, #56, will read it). The refresher stays the
+        // fake while every gateway is the fake: a fake 401 must not call Google's real token endpoint.
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IGcpAccessTokenSource>().ShouldBeSameAs(account);
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.ICloudTokenRefresher>().ShouldBeOfType<DnaEntropyGraph.Cloud.FakeGcp>();
+    }
+
+    [Fact]
+    public async Task A_signed_in_production_run_gets_past_the_project_check()
+    {
+        // Cold review of #48: replacing the fake account made SelectedProjectId null, so every run failed no_project
+        // ("choose a project in Settings", a control that does not exist) instead of reaching the not-connected gateways.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the seeded token file is DPAPI-protected");
+        var root = Path.Combine(Path.GetTempPath(), $"deg-guard-signedin-{Guid.NewGuid():n}");
+        var auth = Path.Combine(root, "auth");
+        Directory.CreateDirectory(auth);
+        try
+        {
+            File.WriteAllBytes(
+                Path.Combine(auth, "1001.tok"),
+                new DnaEntropyGraph.Cloud.Auth.DpapiSecretProtector().Protect(System.Text.Encoding.UTF8.GetBytes("{\"access_token\":\"a\",\"refresh_token\":\"r\"}")));
+            File.WriteAllText(
+                Path.Combine(auth, "accounts.json"),
+                "{\"activeSub\":\"1001\",\"accounts\":[{\"sub\":\"1001\",\"email\":\"user@example.test\",\"needsSignIn\":false}]}");
+            var input = Path.Combine(root, "seq.fa");
+            File.WriteAllText(input, ">s\nACGTACGTACGTACGTACGT\n");
+
+            var services = new ServiceCollection();
+            services.AddDnaEntropyGraph(appDataRoot: root);
+            await using var provider = services.BuildServiceProvider();
+            var account = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IGcpAccount>();
+            account.IsSignedIn.ShouldBeTrue();
+            account.SelectedProjectId.ShouldNotBeNullOrWhiteSpace();
+
+            var jobId = await provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IJobEngine>().StartRunAsync(
+                new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = input },
+                CancellationToken.None);
+
+            var run = (await provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IRunRepository>().GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+            run.ErrorCode.ShouldNotBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.NoProject);
+            // MEASURED 2026-10-02: the shipped image list pins no digest, so the image check, which follows the
+            // project check, answers first. When an image is pinned the next stop is the not-connected gateways
+            // (cloud_not_connected): change this assertion deliberately then. no_project is the false answer.
+            // StartRunAsync awaits the repository write before it returns, so reading here is not a race.
+            run.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.WorkerImageUnavailable);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+    [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {
         Should.NotThrow(() =>

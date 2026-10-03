@@ -144,6 +144,7 @@ SCHEMA_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "analysis_window": ("manifest", ("analysis", "window")),
     "analysis_stride": ("manifest", ("analysis", "stride")),
     "analysis_direction": ("manifest", ("analysis", "direction")),
+    "analysis_topology": ("manifest", ("analysis", "topology")),
     "analysis_format": ("manifest", ("analysis", "format")),
     "max_run_seconds": ("manifest", ("limits", "maxRunSeconds")),
     "limits_cancel_poll_seconds": ("manifest", ("limits", "cancelPollSeconds")),
@@ -255,6 +256,9 @@ KNOWN_CLOUD_ERROR_CODES: frozenset[str] = frozenset((
     "HEARTBEAT_LOST", "VM_DIED", "SPOT_PREEMPTED", "WORKER_CRASH",
     "RUN_TIME_LIMIT", "CANCELLED", "RETENTION_EXPIRED", "BUCKET_MISSING",
     "DOWNLOAD_FAILED", "NETWORK", "SPEND_CAP",
+    "SIGNIN_CANCELLED", "SIGNIN_TIMEOUT", "SIGNIN_FAILED", "SIGNIN_NETWORK", "SIGNIN_BROWSER",
+    "SIGNIN_LOOPBACK", "SIGNIN_STORAGE", "OAUTH_CLIENT_MISSING", "OAUTH_CLIENT_INVALID",
+    "ACCOUNT_NOT_FOUND",
 ))
 
 # `--data-dir`'s target: the local run-history directory (Appendix B section
