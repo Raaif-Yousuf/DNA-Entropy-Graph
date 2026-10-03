@@ -6,7 +6,7 @@ namespace DnaEntropyGraph.Core.Viewers;
 
 /// <summary>
 /// The real IGV batch client (issue #586). Loopback only. A <c>genome</c> command on a big FASTA can take a while, so it gets
-/// a longer reply wait than <c>new</c> and <c>load</c>. Only a refused connection means "IGV is not running"; a connect that
+/// a longer reply wait than <c>new</c>, and so does <c>load</c> (a big track). Only a refused connection means "IGV is not running"; a connect that
 /// times out or fails otherwise is <see cref="IgvBatchOutcome.NoConnection"/> so the caller never starts a second IGV.
 /// </summary>
 public sealed class TcpIgvBatchClient : IIgvBatchClient
@@ -18,7 +18,7 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
 
     private readonly TimeSpan _connectTimeout;
     private readonly TimeSpan _replyTimeout;
-    private readonly TimeSpan _genomeReplyTimeout;
+    private readonly TimeSpan _loadReplyTimeout;
 
     public TcpIgvBatchClient()
         : this(DefaultConnectTimeout, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(60))
@@ -30,11 +30,11 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
     {
     }
 
-    public TcpIgvBatchClient(TimeSpan connectTimeout, TimeSpan replyTimeout, TimeSpan genomeReplyTimeout)
+    public TcpIgvBatchClient(TimeSpan connectTimeout, TimeSpan replyTimeout, TimeSpan loadReplyTimeout)
     {
         _connectTimeout = connectTimeout;
         _replyTimeout = replyTimeout;
-        _genomeReplyTimeout = genomeReplyTimeout;
+        _loadReplyTimeout = loadReplyTimeout;
     }
 
     /// <summary>
@@ -43,6 +43,11 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
     /// </summary>
     public static IgvBatchOutcome ClassifyConnectFailure(Exception failure)
         => failure is SocketException { SocketErrorCode: SocketError.ConnectionRefused } ? IgvBatchOutcome.NotListening : IgvBatchOutcome.NoConnection;
+
+    // new is instant; genome and load read the whole file, and a big bedGraph or GFF3 can take as long as a genome. A retry resends the
+    // same commands, so a wait too short for the load would make that run unopenable.
+    private static bool IsLoad(string command)
+        => command.StartsWith("genome", StringComparison.Ordinal) || command.StartsWith("load", StringComparison.Ordinal);
 
     public async Task<IgvBatchOutcome> SendAsync(int port, IReadOnlyList<string> commands, CancellationToken cancellationToken)
     {
@@ -68,7 +73,7 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
                 await writer.WriteLineAsync(command.AsMemory(), cancellationToken);
 
                 using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                wait.CancelAfter(command.StartsWith("genome", StringComparison.Ordinal) ? _genomeReplyTimeout : _replyTimeout);
+                wait.CancelAfter(IsLoad(command) ? _loadReplyTimeout : _replyTimeout);
                 string? reply;
                 try
                 {

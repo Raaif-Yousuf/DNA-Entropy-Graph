@@ -10,7 +10,6 @@ namespace DnaEntropyGraph.Core.Tests.Viewers;
 /// </summary>
 public sealed class ViewerLaunchSafetyTests
 {
-    private const string Metacharacters = "&|^%<>()!\"";
 
     [Theory]
     [InlineData(@"C:\IGV\igv.bat")]
@@ -24,8 +23,9 @@ public sealed class ViewerLaunchSafetyTests
     [Fact]
     public void Every_cmd_metacharacter_is_refused_for_a_batch_file()
     {
-        Metacharacters.Length.ShouldBe(10);
-        foreach (var c in Metacharacters)
+        // Pinned: removing one from the production list must go red here, not silently shrink the guard.
+        ViewerLaunchSafety.Metacharacters.OrderBy(c => c).ShouldBe("&|^%<>()!\"".OrderBy(c => c));
+        foreach (var c in ViewerLaunchSafety.Metacharacters)
         {
             ViewerLaunchSafety.RefusesArguments(@"C:\IGV\igv.bat", ["C:\\Lab\\a" + c + "b\\a.fasta"]).ShouldBeTrue($"'{c}' must be refused");
         }
@@ -40,7 +40,7 @@ public sealed class ViewerLaunchSafetyTests
     [Fact]
     public void An_exe_takes_any_argument()
     {
-        foreach (var c in Metacharacters)
+        foreach (var c in ViewerLaunchSafety.Metacharacters)
         {
             ViewerLaunchSafety.RefusesArguments(@"C:\IGV\igv.exe", ["C:\\Lab\\a" + c + "b\\a.fasta"]).ShouldBeFalse($"'{c}' is fine for an exe");
         }

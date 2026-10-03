@@ -117,14 +117,14 @@ public sealed class TcpIgvBatchClientTests
         TcpIgvBatchClient.ClassifyConnectFailure(new SocketException((int)SocketError.NetworkUnreachable)).ShouldBe(IgvBatchOutcome.NoConnection);
     }
     [Fact]
-    public async Task A_slow_load_gets_the_short_wait_but_a_slow_genome_gets_the_long_one()
+    public async Task A_slow_genome_or_load_gets_the_long_wait_but_a_slow_new_gets_the_short_one()
     {
         var ct = TestContext.Current.CancellationToken;
         var (listener, port) = Listen();
         try
         {
-            // The genome answer takes 700 ms: longer than the 250 ms wait for new and load, shorter than the genome wait.
-            var server = Serve(listener, line => line.StartsWith("genome", StringComparison.Ordinal) ? SlowOk(700) : "OK", ct);
+            // genome and load answer after 700 ms: longer than the 250 ms wait for new, shorter than the long wait.
+            var server = Serve(listener, line => line.StartsWith("new", StringComparison.Ordinal) ? "OK" : SlowOk(700), ct);
             var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
 
             (await client.SendAsync(port, ["new", "genome \"a\"", "load \"b\""], ct)).ShouldBe(IgvBatchOutcome.Done);
@@ -137,23 +137,22 @@ public sealed class TcpIgvBatchClientTests
     }
 
     [Fact]
-    public async Task A_load_that_takes_longer_than_the_short_wait_is_no_reply()
+    public async Task A_new_that_takes_longer_than_the_short_wait_is_no_reply()
     {
         var ct = TestContext.Current.CancellationToken;
         var (listener, port) = Listen();
         try
         {
-            _ = Serve(listener, line => line.StartsWith("load", StringComparison.Ordinal) ? SlowOk(700) : "OK", ct);
+            _ = Serve(listener, _ => SlowOk(700), ct);
             var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
 
-            (await client.SendAsync(port, ["new", "load \"b\""], ct)).ShouldBe(IgvBatchOutcome.NoReply);
+            (await client.SendAsync(port, ["new"], ct)).ShouldBe(IgvBatchOutcome.NoReply);
         }
         finally
         {
             listener.Stop();
         }
     }
-
     [Fact]
     public async Task Cancelling_while_waiting_for_a_reply_cancels_the_send()
     {

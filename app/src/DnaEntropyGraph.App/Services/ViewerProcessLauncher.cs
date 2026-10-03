@@ -10,6 +10,16 @@ namespace DnaEntropyGraph.App.Services;
 /// </summary>
 public sealed class ViewerProcessLauncher : IViewerProcessLauncher
 {
+    private readonly Action<ProcessStartInfo> _start;
+
+    public ViewerProcessLauncher()
+        : this(info => Process.Start(info)?.Dispose())
+    {
+    }
+
+    /// <summary>Takes the start step so a test can prove a refusal without a process ever being created.</summary>
+    public ViewerProcessLauncher(Action<ProcessStartInfo> start) => _start = start;
+
     public bool Launch(string programPath, IReadOnlyList<string> arguments)
     {
         // The opener refuses first and says why; this is the backstop for any other caller.
@@ -30,7 +40,7 @@ public sealed class ViewerProcessLauncher : IViewerProcessLauncher
 
         try
         {
-            Process.Start(info)?.Dispose();
+            _start(info);
             return true;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException)

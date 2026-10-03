@@ -8,7 +8,8 @@ namespace DnaEntropyGraph.Core.Viewers;
 /// </summary>
 public static class ViewerLaunchSafety
 {
-    private const string Metacharacters = "&|^%<>()!\"";
+    /// <summary>Every character cmd.exe reads as syntax inside an argument; the message and the tests read this one list.</summary>
+    public const string Metacharacters = "&|^%<>()!\"";
 
     /// <summary>True when <paramref name="programPath"/> is a batch file and an argument holds a cmd.exe metacharacter.</summary>
     public static bool RefusesArguments(string programPath, IReadOnlyList<string> arguments)
