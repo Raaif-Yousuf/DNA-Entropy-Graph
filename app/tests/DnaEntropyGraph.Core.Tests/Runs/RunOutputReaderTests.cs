@@ -275,6 +275,121 @@ public sealed class RunOutputReaderTests : IDisposable
         new RunOutputReader().Read(_folder)!.Files.Single().Bytes.ShouldBe(5);
     }
 
+    // Real-disk checks of the production constructor: every test above injects the link seam, so none of them
+    // proves the real FileInfo/ResolveLinkTarget call reports a junction or symlink as a link.
+    private string MakeRunBesideAnOutsideFolder(out string outsideFile)
+    {
+        var run = Path.Combine(_folder, "run");
+        Directory.CreateDirectory(run);
+        File.WriteAllText(Path.Combine(run, "keep.gb"), "LOCUS");
+        var outside = Path.Combine(_folder, "outside");
+        Directory.CreateDirectory(outside);
+        outsideFile = Path.Combine(outside, "secret.gb");
+        File.WriteAllText(outsideFile, "LOCUS");
+        return run;
+    }
+
+    private static void MakeJunction(string link, string target)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "junctions are Windows only");
+        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+        {
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        using var process = System.Diagnostics.Process.Start(start)!;
+        process.StandardOutput.ReadToEnd();
+        process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Directory.Exists(link).ShouldBeTrue("mklink /J did not create the junction");
+        new DirectoryInfo(link).Attributes.HasFlag(FileAttributes.ReparsePoint).ShouldBeTrue();
+    }
+
+    // Removes the link itself, never what it points at.
+    private static void DropLink(string link)
+    {
+        if (Directory.Exists(link) || File.Exists(link))
+        {
+            if (Directory.Exists(link))
+            {
+                Directory.Delete(link, recursive: false);
+            }
+            else
+            {
+                File.Delete(link);
+            }
+        }
+    }
+
+    [Fact]
+    public void A_real_junction_to_the_run_folders_parent_is_not_entered_and_the_read_terminates()
+    {
+        var run = MakeRunBesideAnOutsideFolder(out _);
+        var loop = Path.Combine(run, "loop");
+        try
+        {
+            MakeJunction(loop, _folder);
+
+            var files = new RunOutputReader().Read(run)!.Files.Select(f => f.RelativePath).ToList();
+
+            files.ShouldBe(["keep.gb"]);
+        }
+        finally
+        {
+            DropLink(loop);
+        }
+    }
+
+    [Fact]
+    public void A_real_junction_to_a_folder_outside_the_run_lists_nothing_from_it()
+    {
+        var run = MakeRunBesideAnOutsideFolder(out _);
+        var outside = Path.Combine(_folder, "outside");
+        var link = Path.Combine(run, "out");
+        try
+        {
+            MakeJunction(link, outside);
+
+            var files = new RunOutputReader().Read(run)!.Files.Select(f => f.RelativePath).ToList();
+
+            files.ShouldBe(["keep.gb"]);
+        }
+        finally
+        {
+            DropLink(link);
+        }
+    }
+
+    [Fact]
+    public void A_real_file_symlink_to_an_outside_file_is_not_listed_but_one_to_an_inside_file_is()
+    {
+        var run = MakeRunBesideAnOutsideFolder(out var outsideFile);
+        var toOutside = Path.Combine(run, "leak.gb");
+        var toInside = Path.Combine(run, "alias.gb");
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(toOutside, outsideFile);
+                File.CreateSymbolicLink(toInside, Path.Combine(run, "keep.gb"));
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                Assert.Skip("creating a file symlink needs Developer Mode or an elevated session: " + ex.GetType().Name);
+            }
+
+            var files = new RunOutputReader().Read(run)!.Files.Select(f => f.RelativePath).ToList();
+
+            files.ShouldBe(["alias.gb", "keep.gb"]);
+        }
+        finally
+        {
+            DropLink(toOutside);
+            DropLink(toInside);
+        }
+    }
+
     [Fact]
     public void Never_writes_anything_into_the_folder()
     {

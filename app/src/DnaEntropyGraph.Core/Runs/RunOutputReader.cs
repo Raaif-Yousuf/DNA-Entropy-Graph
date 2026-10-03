@@ -132,6 +132,7 @@ public sealed class RunOutputReader : IRunOutputReader
             return UnresolvableLink;
         }
     }
+
     private static bool IsSummary(string relativePath)
     {
         var name = relativePath[(relativePath.LastIndexOf('/') + 1)..];
