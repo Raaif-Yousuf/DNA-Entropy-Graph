@@ -29,6 +29,8 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly IShellLauncher _launcher;
     private readonly INavigator _navigator;
     private readonly IStringResourceProvider _strings;
+    private readonly IExternalViewerOpener _viewers;
+    private IReadOnlyList<RunOutputFile> _outputFiles = [];
     private string? _folder;
     private int _loadGeneration;
 
@@ -55,13 +57,15 @@ public sealed partial class ResultsViewModel : ObservableObject
         IRunOutputReader outputReader,
         IShellLauncher launcher,
         INavigator navigator,
-        IStringResourceProvider strings)
+        IStringResourceProvider strings,
+        IExternalViewerOpener viewers)
     {
         _runRepository = runRepository;
         _outputReader = outputReader;
         _launcher = launcher;
         _navigator = navigator;
         _strings = strings;
+        _viewers = viewers;
     }
 
     public ObservableCollection<ResultsStatsGroup> Groups { get; } = [];
@@ -84,6 +88,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         // Only the newest load may write the page, so a slow older one finishing last cannot put its run back.
         var generation = Interlocked.Increment(ref _loadGeneration);
+        CancelViewerOpen();
         Reset();
         try
         {
@@ -135,6 +140,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     private void Reset()
     {
         _folder = null;
+        _outputFiles = [];
         Title = string.Empty;
         NoticeText = string.Empty;
         StatsNoticeText = string.Empty;
@@ -144,11 +150,14 @@ public sealed partial class ResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(HasFiles));
         OpenFolderCommand.NotifyCanExecuteChanged();
         OpenInViewerCommand.NotifyCanExecuteChanged();
+        OpenInIgvCommand.NotifyCanExecuteChanged();
+        OpenInGeneiousCommand.NotifyCanExecuteChanged();
     }
 
     private void Show(string folder, RunOutputSnapshot snapshot)
     {
         _folder = folder;
+        _outputFiles = snapshot.Files;
         foreach (var file in snapshot.Files)
         {
             Files.Add(new ResultsFileItem(
@@ -173,6 +182,8 @@ public sealed partial class ResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(HasFiles));
         OpenFolderCommand.NotifyCanExecuteChanged();
         OpenInViewerCommand.NotifyCanExecuteChanged();
+        OpenInIgvCommand.NotifyCanExecuteChanged();
+        OpenInGeneiousCommand.NotifyCanExecuteChanged();
     }
 
     private ResultsStatsGroup BuildGroup(string title, RunSummary summary)
@@ -219,6 +230,67 @@ public sealed partial class ResultsViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(HasFolder))]
     private void OpenInViewer() => _navigator.NavigateTo(ViewerViewModel.PageKey, _folder);
 
+    // Issue #586. The viewer opener never throws for an expected failure; anything else is shown as "would not start" rather
+    // than escaping into a task nobody observes. A success clears the last failure.
+    [RelayCommand(CanExecute = nameof(HasFolder))]
+    private Task OpenInIgvAsync(CancellationToken cancellationToken)
+        => OpenViewerAsync(ct => _viewers.OpenInIgvAsync(_outputFiles, ct), ViewerKeys.Igv, cancellationToken);
+
+    [RelayCommand(CanExecute = nameof(HasFolder))]
+    private Task OpenInGeneiousAsync(CancellationToken cancellationToken)
+        => OpenViewerAsync(ct => _viewers.OpenInGeneiousAsync(_outputFiles, ct), ViewerKeys.Geneious, cancellationToken);
+
+    /// <summary>
+    /// Stops an Open in IGV or Open in Geneious that is still waiting (IGV can take up to a minute to answer). The page calls it
+    /// when it is left; a run loaded in its place does the same, so a late answer never writes onto another run's page.
+    /// </summary>
+    public void CancelViewerOpen()
+    {
+        OpenInIgvCommand.Cancel();
+        OpenInGeneiousCommand.Cancel();
+    }
+
+    private async Task OpenViewerAsync(Func<CancellationToken, Task<ExternalViewerOutcome>> open, ViewerKeys keys, CancellationToken cancellationToken)
+    {
+        ExternalViewerOutcome outcome;
+        try
+        {
+            outcome = await open(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception)
+        {
+            outcome = ExternalViewerOutcome.LaunchFailed;
+        }
+
+        var key = outcome switch
+        {
+            ExternalViewerOutcome.Opened => null,
+            ExternalViewerOutcome.NoFiles => keys.NoFiles,
+            ExternalViewerOutcome.NotFound => keys.NotFound,
+            ExternalViewerOutcome.IgvRejected => ResultsCopy.IgvRejected,
+            ExternalViewerOutcome.IgvNoReply => ResultsCopy.IgvNoReply,
+            ExternalViewerOutcome.IgvNoAnswer => ResultsCopy.IgvNoAnswer,
+            ExternalViewerOutcome.UnsafeProgramArguments => ResultsCopy.ViewerUnsafePath,
+            ExternalViewerOutcome.IgvPathUnsendable => ResultsCopy.IgvPathUnsendable,
+            ExternalViewerOutcome.NoGenome => ResultsCopy.IgvNoGenome,
+            ExternalViewerOutcome.OpenedFirstInputOnly => ResultsCopy.IgvFirstInputOnly,
+            _ => keys.LaunchFailed,
+        };
+        ActionNoticeText = key is null ? string.Empty : _strings.GetString(key);
+    }
+
+    private sealed record ViewerKeys(string NoFiles, string NotFound, string LaunchFailed)
+    {
+        public static readonly ViewerKeys Igv = new(ResultsCopy.IgvNoFiles, ResultsCopy.IgvNotFound, ResultsCopy.IgvLaunchFailed);
+        public static readonly ViewerKeys Geneious = new(ResultsCopy.GeneiousNoFiles, ResultsCopy.GeneiousNotFound, ResultsCopy.GeneiousLaunchFailed);
+    }
+
     [RelayCommand]
     private void ShowRuns() => _navigator.NavigateTo("Runs");
 }
+
+

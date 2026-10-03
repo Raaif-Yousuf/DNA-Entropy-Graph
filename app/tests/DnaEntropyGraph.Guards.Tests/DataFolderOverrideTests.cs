@@ -88,7 +88,8 @@ public sealed class DataFolderOverrideTests : IDisposable
 
     private static string[] FilesUsingTheLocalDataFolder(IEnumerable<string> files)
         => files
-            .Where(p => !Path.GetFileName(p).Equals("AppDataRoot.cs", StringComparison.Ordinal))
+            // ViewerLocator only reads the per-user "Programs" install folder to find IGV/Geneious; it is not app state (docs/hard_rules.md rule 14).
+            .Where(p => !Path.GetFileName(p).Equals("AppDataRoot.cs", StringComparison.Ordinal) && !Path.GetFileName(p).Equals("ViewerLocator.cs", StringComparison.Ordinal))
             .Where(p => File.ReadAllText(p).Contains("SpecialFolder.LocalApplicationData", StringComparison.Ordinal))
             .ToArray();
 

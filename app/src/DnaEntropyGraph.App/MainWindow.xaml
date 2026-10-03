@@ -96,5 +96,23 @@
 
             <Frame x:Name="RootFrame" x:FieldModifier="public" />
         </NavigationView>
+
+        <!--
+            Issue #585: the in-app message bar behind IToastService. One message at a time, floating over the
+            page at the bottom; info and success close themselves, errors stay until the user closes the bar.
+            IsOpen is TwoWay so the close button clears the ViewModel state too.
+        -->
+        <InfoBar
+            x:Name="MessageBar"
+            Grid.Row="1"
+            VerticalAlignment="Bottom"
+            HorizontalAlignment="Center"
+            MaxWidth="640"
+            Margin="16"
+            IsClosable="True"
+            Title="{x:Bind ViewModel.Messages.Title, Mode=OneWay}"
+            Message="{x:Bind ViewModel.Messages.Message, Mode=OneWay}"
+            Severity="{x:Bind converters:InfoBarSeverityHelper.From(ViewModel.Messages.Severity), Mode=OneWay}"
+            IsOpen="{x:Bind ViewModel.Messages.IsOpen, Mode=TwoWay}" />
     </Grid>
 </Window>
