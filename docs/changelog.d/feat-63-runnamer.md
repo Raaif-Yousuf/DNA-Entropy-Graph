@@ -1,1 +1,0 @@
-- RunNamer in Core turns the run name template into a safe folder name (tokens, Windows reserved names, 100 character cap, _2 on collision) (#63).

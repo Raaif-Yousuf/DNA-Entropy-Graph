@@ -969,8 +969,11 @@ def _codes(root: Path) -> set[str]:
 
 def self_test() -> int:
     failures: list[str] = []
+    ran = 0
 
     def check(label: str, condition: bool, detail: str = "") -> None:
+        nonlocal ran
+        ran += 1
         if condition:
             print(f"  PASS  {label}")
         else:
@@ -1184,7 +1187,7 @@ def self_test() -> int:
     if failures:
         print(f"SELF-TEST FAILED: {len(failures)} check(s): {', '.join(failures)}")
         return 1
-    print(f"SELF-TEST PASSED: {len(cases) + 7} checks.")
+    print(f"SELF-TEST PASSED: {ran} checks.")
     return 0
 
 

@@ -26,6 +26,7 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IStringResourceProvider _strings;
     private readonly IPastedInputStore _pastedStore;
+    private readonly IInputFileSystem _files;
     private readonly TimeProvider _time;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
 
@@ -61,7 +62,8 @@ public sealed partial class NewRunViewModel : ObservableObject
         IStringResourceProvider strings,
         IPastedInputStore pastedStore,
         TimeProvider time,
-        Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null)
+        Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
+        IInputFileSystem? files = null)
     {
         _filePicker = filePicker;
         _settingsStore = settingsStore;
@@ -69,6 +71,7 @@ public sealed partial class NewRunViewModel : ObservableObject
         _navigator = navigator;
         _strings = strings;
         _pastedStore = pastedStore;
+        _files = files ?? new LocalInputFileSystem();
         _time = time;
         _validate = validate ?? ((path, format, policy, rna) => InputFileValidator.Validate(path, format, policy, rna));
         var saved = settingsStore.GetString(NameTemplateSettingKey);
@@ -124,22 +127,20 @@ public sealed partial class NewRunViewModel : ObservableObject
 
     /// <summary>
     /// Adds dropped or picked paths: a file becomes a pill, a folder contributes the sequence files directly inside it.
-    /// Concurrent runs are allowed on purpose, and the command takes no <see cref="CancellationToken"/>: MEASURED
-    /// 2026-10-03, a cancelable async command cancels its running execution when it is invoked again, which stopped
-    /// the checks still queued behind the first file of an earlier drop (they showed "stopped"). A second drop while
-    /// the first is still being checked must be added next to it.
+    /// The disk questions (is it a folder, what is inside it) are asked off the UI thread. A drop is the only caller
+    /// that can be invoked again while an earlier one is still being checked, and its command takes no
+    /// <see cref="CancellationToken"/>: MEASURED 2026-10-03, a cancelable async command cancels its running execution
+    /// when it is invoked again, which stopped the checks still queued behind the first file of an earlier drop (they
+    /// showed "stopped"). A second drop while the first is still being checked must be added next to it.
     /// </summary>
-    [RelayCommand(AllowConcurrentExecutions = true)]
-    private Task AddPathsAsync(IReadOnlyList<string>? paths) => AddPathsCoreAsync(paths, CancellationToken.None);
-
-    private async Task AddPathsCoreAsync(IReadOnlyList<string>? paths, CancellationToken cancellationToken)
+    private async Task AddPathsAsync(IReadOnlyList<string>? paths, CancellationToken cancellationToken)
     {
         StatusMessage = string.Empty;
         foreach (var path in paths ?? [])
         {
-            if (Directory.Exists(path))
+            if (await Task.Run(() => _files.DirectoryExists(path), CancellationToken.None))
             {
-                var files = InputFolderScanner.SequenceFiles(path);
+                var files = await Task.Run(() => _files.SequenceFiles(path), CancellationToken.None);
                 if (files.Count == 0)
                 {
                     StatusMessage = Format("NewRunStatusFolderEmpty", path);
@@ -166,7 +167,7 @@ public sealed partial class NewRunViewModel : ObservableObject
             return;
         }
 
-        await AddPathsCoreAsync(dropped.Paths, CancellationToken.None);
+        await AddPathsAsync(dropped.Paths, CancellationToken.None);
         if (dropped.Failed)
         {
             StatusMessage = _strings.GetString("NewRunStatusDropFailed");
@@ -181,7 +182,7 @@ public sealed partial class NewRunViewModel : ObservableObject
     private async Task BrowseAsync(CancellationToken cancellationToken)
     {
         var picked = await _filePicker.PickInputFilesAsync(cancellationToken);
-        await AddPathsCoreAsync(picked, cancellationToken);
+        await AddPathsAsync(picked, cancellationToken);
     }
 
     /// <summary>
@@ -194,7 +195,7 @@ public sealed partial class NewRunViewModel : ObservableObject
     {
         StatusMessage = string.Empty;
         var text = PasteText;
-        var resolution = InputResolver.Resolve(text);
+        var resolution = await Task.Run(() => _files.Resolve(text), CancellationToken.None);
         switch (resolution.Kind)
         {
             case InputResolutionKind.ExistingFile:
@@ -230,21 +231,24 @@ public sealed partial class NewRunViewModel : ObservableObject
             return false;
         }
 
-        var pill = await AddFileAsync(path, isPasted: true, cancellationToken);
-        if (pill is null || pill.IsValid || pill.NeedsRnaChoice)
+        var (pill, applied) = await AddFileAsync(path, isPasted: true, cancellationToken);
+        if (pill is null || !applied || pill.IsValid || pill.NeedsRnaChoice)
         {
+            // Not applied: a newer check of this pill replaced ours (or ours was cancelled), so we do not know it is
+            // bad and the pill stays in the list with its saved copy. The newer check, or the user's Remove, decides.
             return true;
         }
 
-        // Nothing the user can use came of it: take the pill and its saved copy away, keep the text, say what is wrong.
+        // Our own check found nothing the user can use: take the pill and its saved copy away, keep the text, say what is wrong.
         StatusMessage = pill.ErrorText;
-        RemoveItem(pill);
+        await RemoveItemAsync(pill);
         return false;
     }
+
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 
-    [RelayCommand(CanExecute = nameof(CanRemoveItem))]
-    private void RemoveItem(InputPillItem? item)
+    [RelayCommand(CanExecute = nameof(CanRemoveItem), AllowConcurrentExecutions = true)]
+    private async Task RemoveItemAsync(InputPillItem? item)
     {
         if (item is null)
         {
@@ -258,13 +262,13 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
 
         Items.RemoveAt(index);
-        DeleteSavedPaste(item);
         if (ReferenceEquals(SelectedItem, item))
         {
             SelectedItem = Items.Count == 0 ? null : Items[Math.Min(index, Items.Count - 1)];
         }
 
         OnPropertyChanged(nameof(OfferTreatAsRna));
+        await DeleteSavedPasteAsync(item);
     }
 
     private static bool CanRemoveItem(InputPillItem? item) => item is not null;
@@ -300,51 +304,62 @@ public sealed partial class NewRunViewModel : ObservableObject
         IsTreatingAsRna = value;
         foreach (var item in Items.ToList())
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                // A newer Treat as RNA click (or the user) took over: it checks every file itself.
+                return;
+            }
+
             await ValidateAsync(item, cancellationToken);
         }
     }
 
-    /// <summary>The new pill, or null when the file is already on the page.</summary>
-    private async Task<InputPillItem?> AddFileAsync(string path, bool isPasted, CancellationToken cancellationToken)
+    /// <summary>The new pill (null when the file is already on the page) and whether this call's own check was the one that reported.</summary>
+    private async Task<(InputPillItem? Pill, bool Applied)> AddFileAsync(string path, bool isPasted, CancellationToken cancellationToken)
     {
         if (Items.Any(existing => string.Equals(existing.Path, path, StringComparison.OrdinalIgnoreCase)))
         {
-            return null;
+            return (null, false);
         }
 
         var pill = new InputPillItem(path, isPasted, _strings);
         Items.Add(pill);
         SelectedItem ??= pill;
-        await ValidateAsync(pill, cancellationToken);
-        return pill;
+        var applied = await ValidateAsync(pill, cancellationToken);
+        return (pill, applied);
     }
 
     /// <summary>A pasted sequence is our own copy under app data, so removing its pill removes it. A user's file is never touched (Hard Rule 14).</summary>
-    private static void DeleteSavedPaste(InputPillItem item)
+    private async Task DeleteSavedPasteAsync(InputPillItem item)
     {
-        if (!item.IsPasted)
+        if (item.IsPasted)
         {
-            return;
-        }
-
-        try
-        {
-            File.Delete(item.Path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // best effort: a leftover pasted copy is harmless
+            await Task.Run(() => _pastedStore.Delete(item.Path), CancellationToken.None);
         }
     }
 
-    private async Task ValidateAsync(InputPillItem pill, CancellationToken cancellationToken)
+    /// <summary>
+    /// Checks one pill. True when this check's result is the one the pill shows. A check whose token was cancelled before
+    /// it began starts nothing (it would only take a newer generation than the check that replaced it and then abandon
+    /// it), and a cancelled or superseded check writes nothing the pill's newest check does not already own.
+    /// </summary>
+    private async Task<bool> ValidateAsync(InputPillItem pill, CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
         var generation = pill.BeginChecking();
         var treatAsRna = IsTreatingAsRna;
+        var applied = false;
         try
         {
-            var result = await Task.Run(() => _validate(pill.Path, InputFormat.Auto, AmbiguityPolicy.Keep, treatAsRna), cancellationToken);
-            pill.Apply(result, generation);
+            // Task.Run honours a token only before the delegate starts; WaitAsync is what lets a cancel end the wait for a check
+            // already reading the file (the abandoned read finishes on its own and its result is dropped).
+            var result = await Task.Run(() => _validate(pill.Path, InputFormat.Auto, AmbiguityPolicy.Keep, treatAsRna), cancellationToken)
+                .WaitAsync(cancellationToken);
+            applied = pill.Apply(result, generation);
         }
         catch (OperationCanceledException)
         {
@@ -353,6 +368,7 @@ public sealed partial class NewRunViewModel : ObservableObject
 
         OnPropertyChanged(nameof(OfferTreatAsRna));
         StartRunCommand.NotifyCanExecuteChanged();
+        return applied;
     }
 
     private string Format(string key, params object[] args)

@@ -1,1 +1,0 @@
-- New run state and behaviour: per-file validation pills (kind, records, bases, genes, the validator's notices, problems named in plain copy), folders and pasted sequences, the Treat as RNA offer, run name preview; the file picker now opens a real multi-select dialog (#63).

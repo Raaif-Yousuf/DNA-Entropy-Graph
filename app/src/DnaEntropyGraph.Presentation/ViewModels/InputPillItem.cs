@@ -133,7 +133,7 @@ public sealed partial class InputPillItem : ObservableObject
 
     private string? NoticeText(InputNotice notice)
     {
-        var key = InputNoticeCopy.KeyFor(notice.Code);
+        var key = InputNoticeCopy.KeyFor(notice.Code, notice.Count);
         return key is null ? null : Format(key, notice.Count, notice.Other);
     }
 

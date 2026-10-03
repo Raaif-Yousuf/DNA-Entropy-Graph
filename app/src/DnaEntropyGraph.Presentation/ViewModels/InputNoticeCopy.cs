@@ -5,6 +5,21 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// <summary>Which <c>Resources.resw</c> string tells the user about a validation notice (Hard Rule 13). A Guards test checks every code.</summary>
 public static class InputNoticeCopy
 {
+    /// <summary>The key to show for a notice that mentions <paramref name="count"/> things: the singular copy (<c>..._One</c>) when it is exactly one and the copy counts something, else <see cref="KeyFor(InputNoticeCode)"/>.</summary>
+    public static string? KeyFor(InputNoticeCode code, long count) => count == 1
+        ? code switch
+        {
+            InputNoticeCode.EmptyHeaders => "NewRunNotice_EmptyHeaders_One",
+            InputNoticeCode.RepeatedIds => "NewRunNotice_RepeatedIds_One",
+            InputNoticeCode.RnaConverted => "NewRunNotice_RnaConverted_One",
+            InputNoticeCode.AmbiguityMasked => "NewRunNotice_AmbiguityMasked_One",
+            InputNoticeCode.AmbiguityKept => "NewRunNotice_AmbiguityKept_One",
+            InputNoticeCode.ShortSequence => "NewRunNotice_ShortSequence_One",
+            InputNoticeCode.DigitsRemoved => "NewRunNotice_DigitsRemoved_One",
+            _ => KeyFor(code),
+        }
+        : KeyFor(code);
+
     /// <summary>The resource key for <paramref name="code"/>, or null when the pill already says it (the record and gene counts).</summary>
     public static string? KeyFor(InputNoticeCode code) => code switch
     {

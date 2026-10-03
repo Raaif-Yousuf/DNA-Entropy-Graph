@@ -25,4 +25,24 @@ public sealed class LocalPastedInputStore : IPastedInputStore
         File.WriteAllText(path, text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'), new UTF8Encoding(false));
         return path;
     }
+
+    public void Delete(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var directory = Path.GetFullPath(Path.Combine(_root, "pasted")) + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(path);
+        if (!full.StartsWith(directory, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(full);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // best effort: a leftover pasted copy is harmless
+        }
+    }
 }

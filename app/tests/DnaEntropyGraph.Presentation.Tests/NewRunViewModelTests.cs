@@ -46,7 +46,7 @@ public sealed class NewRunViewModelTests : IDisposable
         }
     }
 
-    private NewRunViewModel NewViewModel(IPastedInputStore? store = null, Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null) => new(
+    private NewRunViewModel NewViewModel(IPastedInputStore? store = null, Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null, IInputFileSystem? files = null) => new(
         _picker,
         _settings,
         _jobEngine,
@@ -54,7 +54,8 @@ public sealed class NewRunViewModelTests : IDisposable
         _strings,
         store ?? new LocalPastedInputStore(_appData),
         new FixedTimeProvider(new DateTimeOffset(2026, 10, 3, 14, 7, 0, TimeSpan.Zero)),
-        validate);
+        validate,
+        files);
 
     private string Write(string name, string content)
     {
@@ -64,9 +65,11 @@ public sealed class NewRunViewModelTests : IDisposable
         return path;
     }
 
+    private static DroppedItems Drop(params string[] paths) => new(paths, 0, false);
+
     private async Task<InputPillItem> AddOne(string path)
     {
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { path });
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
         return _viewModel.Items.Last();
     }
 
@@ -104,7 +107,7 @@ public sealed class NewRunViewModelTests : IDisposable
     public async Task Starting_a_run_sends_the_selected_file_and_options_and_opens_run_progress()
     {
         var path = Write("SetTnpB.fasta", ">x\n" + Dna + "\n");
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { path });
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
         _viewModel.NameTemplate = "{file}_{model}";
 
         await _viewModel.StartRunCommand.ExecuteAsync(null);
@@ -165,7 +168,15 @@ public sealed class NewRunViewModelTests : IDisposable
         var pill = await AddOne(Write("dup.fasta", ">a\n" + Dna + "\n>a\n" + Dna + "\n"));
 
         pill.HasNotices.ShouldBeTrue();
-        pill.NoticesText.ShouldBe("NewRunNotice_RepeatedIds:1");
+        pill.NoticesText.ShouldBe("NewRunNotice_RepeatedIds_One");
+    }
+
+    [Fact]
+    public async Task A_notice_about_two_repeated_ids_uses_the_plural_copy()
+    {
+        var pill = await AddOne(Write("dup2.fasta", ">a\n" + Dna + "\n>a\n" + Dna + "\n>b\n" + Dna + "\n>b\n" + Dna + "\n"));
+
+        pill.NoticesText.ShouldBe("NewRunNotice_RepeatedIds:2");
     }
 
     [Fact]
@@ -192,8 +203,8 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         var path = Write("a.fasta", ">a\n" + Dna + "\n");
 
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { path });
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { path });
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
 
         _viewModel.Items.Count.ShouldBe(1);
     }
@@ -205,7 +216,7 @@ public sealed class NewRunViewModelTests : IDisposable
         Write(Path.Combine("folder", "b.fa"), ">b\n" + Dna + "\n");
         Write(Path.Combine("folder", "notes.docx"), "not a sequence");
 
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { Path.Combine(_dir, "folder") });
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(Path.Combine(_dir, "folder")));
 
         _viewModel.Items.Select(i => i.DisplayName).ShouldBe(["a.fasta", "b.fa"]);
     }
@@ -215,7 +226,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         Directory.CreateDirectory(Path.Combine(_dir, "empty"));
 
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { Path.Combine(_dir, "empty") });
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(Path.Combine(_dir, "empty")));
 
         _viewModel.Items.ShouldBeEmpty();
         _viewModel.StatusMessage.ShouldBe("NewRunStatusFolderEmpty:" + Path.Combine(_dir, "empty"));
@@ -227,7 +238,7 @@ public sealed class NewRunViewModelTests : IDisposable
         var path = Write(Path.Combine("lab", "a.fasta"), ">a\n" + Dna + "\n");
         var before = Directory.GetFileSystemEntries(Path.GetDirectoryName(path)!);
 
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { path });
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
 
         Directory.GetFileSystemEntries(Path.GetDirectoryName(path)!).ShouldBe(before);
         File.ReadAllText(path).ShouldBe(">a\n" + Dna + "\n");
@@ -239,10 +250,10 @@ public sealed class NewRunViewModelTests : IDisposable
         var a = await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
         var b = await AddOne(Write("b.fasta", ">b\n" + Dna + "\n"));
 
-        _viewModel.RemoveItemCommand.Execute(a);
+        await _viewModel.RemoveItemCommand.ExecuteAsync(a);
         _viewModel.SelectedItem.ShouldBeSameAs(b);
 
-        _viewModel.RemoveItemCommand.Execute(b);
+        await _viewModel.RemoveItemCommand.ExecuteAsync(b);
         _viewModel.SelectedItem.ShouldBeNull();
         _viewModel.StartRunCommand.CanExecute(null).ShouldBeFalse();
     }
@@ -265,7 +276,7 @@ public sealed class NewRunViewModelTests : IDisposable
         var raised = new List<string?>();
         _viewModel.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
 
-        _viewModel.RemoveItemCommand.Execute(a);
+        await _viewModel.RemoveItemCommand.ExecuteAsync(a);
         _viewModel.SelectedItem = null;
 
         _viewModel.SelectedItem.ShouldBeSameAs(b);
@@ -466,7 +477,7 @@ public sealed class NewRunViewModelTests : IDisposable
         _viewModel = NewViewModel(validate: gated.Validate);
         var path = Write("rna.fasta", ">r\n" + Rna + "\n");
 
-        var adding = _viewModel.AddPathsCommand.ExecuteAsync(new[] { path });
+        var adding = _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
         gated.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
         await _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
         var pill = _viewModel.Items.Single();
@@ -486,7 +497,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         _viewModel = NewViewModel(validate: (_, _, _, _) => throw new OperationCanceledException());
 
-        await _viewModel.AddPathsCommand.ExecuteAsync(new[] { Write("a.fasta", ">a\n" + Dna + "\n") });
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(Write("a.fasta", ">a\n" + Dna + "\n")));
 
         var pill = _viewModel.Items.Single();
         pill.IsChecking.ShouldBeFalse();
@@ -556,7 +567,7 @@ public sealed class NewRunViewModelTests : IDisposable
         await AddOne(Write("b.fasta", ">b\n" + Dna + "\n"));
         _viewModel.HasSeveralItems.ShouldBeTrue();
 
-        _viewModel.RemoveItemCommand.Execute(_viewModel.Items[0]);
+        await _viewModel.RemoveItemCommand.ExecuteAsync(_viewModel.Items[0]);
         _viewModel.HasSeveralItems.ShouldBeFalse();
     }
 
@@ -576,6 +587,14 @@ public sealed class NewRunViewModelTests : IDisposable
         {
             SaveThread = Environment.CurrentManagedThreadId;
             return new LocalPastedInputStore(root).Save(text);
+        }
+
+        public int DeleteThread { get; private set; }
+
+        public void Delete(string path)
+        {
+            DeleteThread = Environment.CurrentManagedThreadId;
+            new LocalPastedInputStore(root).Delete(path);
         }
     }
 
@@ -626,6 +645,10 @@ public sealed class NewRunViewModelTests : IDisposable
     private sealed class FailingStore : IPastedInputStore
     {
         public string Save(string text) => throw new IOException("disk full");
+
+        public void Delete(string path)
+        {
+        }
     }
 
     [Fact]
@@ -649,8 +672,8 @@ public sealed class NewRunViewModelTests : IDisposable
         var pasted = _viewModel.Items.Single();
         var users = await AddOne(Write("mine.fasta", ">a\n" + Dna + "\n"));
 
-        _viewModel.RemoveItemCommand.Execute(pasted);
-        _viewModel.RemoveItemCommand.Execute(users);
+        await _viewModel.RemoveItemCommand.ExecuteAsync(pasted);
+        await _viewModel.RemoveItemCommand.ExecuteAsync(users);
 
         File.Exists(pasted.Path).ShouldBeFalse();
         File.Exists(users.Path).ShouldBeTrue();
@@ -673,6 +696,248 @@ public sealed class NewRunViewModelTests : IDisposable
 
         pill.HasNotices.ShouldBeFalse();
     }
+    // ---- Round 2 of #63 ----
+
+    /// <summary>Blocks the validator on one file until released, so a test decides when that check finishes.</summary>
+    private sealed class BlockableValidator
+    {
+        private readonly ManualResetEventSlim _gate = new(false);
+
+        public volatile string? BlockSuffix;
+
+        public ManualResetEventSlim Entered { get; } = new(false);
+
+        public void Release() => _gate.Set();
+
+        public InputValidationResult Validate(string path, InputFormat format, AmbiguityPolicy policy, bool treatAsRna)
+        {
+            if (BlockSuffix is { } suffix && path.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                Entered.Set();
+                _gate.Wait(TimeSpan.FromSeconds(20));
+            }
+
+            return InputFileValidator.Validate(path, format, policy, treatAsRna);
+        }
+    }
+
+    [Fact]
+    public async Task A_cancelled_Treat_as_RNA_stops_the_file_it_was_on_and_never_starts_a_check_on_the_next_one()
+    {
+        var blockable = new BlockableValidator();
+        _viewModel = NewViewModel(validate: blockable.Validate);
+        var a = await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        var b = await AddOne(Write("b.fasta", ">b\n" + Dna + "\n"));
+        blockable.BlockSuffix = "a.fasta";
+
+        var treating = _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+        blockable.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        _viewModel.TreatAsRnaCommand.Cancel();
+        try
+        {
+            await treating;
+        }
+        catch (OperationCanceledException)
+        {
+            // the command may report its own cancellation
+        }
+
+        // A cancelled check must never write state, and a cancelled command must not begin checks it cannot finish:
+        // b keeps its result instead of showing "stopped".
+        b.IsValid.ShouldBeTrue();
+        b.ErrorText.ShouldBe(string.Empty);
+        a.ErrorText.ShouldBe("NewRunPillCheckStopped");
+        blockable.Release();
+    }
+
+    [Fact]
+    public async Task A_cancelled_check_that_a_newer_one_replaced_leaves_the_newer_result()
+    {
+        var blockable = new BlockableValidator();
+        _viewModel = NewViewModel(validate: blockable.Validate);
+        var a = await AddOne(Write("a.fasta", ">a\n" + Rna + "\n"));
+        a.NeedsRnaChoice.ShouldBeTrue();
+        blockable.BlockSuffix = "a.fasta";
+
+        var treating = _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+        blockable.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        blockable.BlockSuffix = null;
+        var stopping = _viewModel.StopTreatingAsRnaCommand.ExecuteAsync(null);
+        await stopping;
+        try
+        {
+            await treating;
+        }
+        catch (OperationCanceledException)
+        {
+            // the superseded command may report its own cancellation
+        }
+
+        a.ErrorText.ShouldNotBe("NewRunPillCheckStopped");
+        a.NeedsRnaChoice.ShouldBeTrue();
+        _viewModel.IsTreatingAsRna.ShouldBeFalse();
+        blockable.Release();
+    }
+
+    [Fact]
+    public async Task Run_follows_the_selected_pill_not_the_first_one()
+    {
+        var a = await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        var b = await AddOne(Write("b.fasta", ">b\n" + Dna + "\n"));
+        var bad = await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));
+        _viewModel.SelectedItem.ShouldBeSameAs(a);
+
+        _viewModel.SelectedItem = b;
+        _viewModel.RunNamePreview.ShouldBe("b");
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+        await _jobEngine.Received(1).StartRunAsync(Arg.Is<RunOptions>(o => o.InputPath == b.Path), Arg.Any<CancellationToken>());
+
+        _viewModel.SelectedItem = bad;
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeFalse();
+        _viewModel.RunNamePreview.ShouldBe("bad");
+
+        _viewModel.SelectedItem = a;
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    /// <summary>Validator calls whose first N calls each wait at their own gate.</summary>
+    private sealed class CallGates(int gatedCalls)
+    {
+        private int _calls;
+
+        public ManualResetEventSlim[] Entered { get; } = Enumerable.Range(0, gatedCalls).Select(_ => new ManualResetEventSlim(false)).ToArray();
+
+        public ManualResetEventSlim[] Gate { get; } = Enumerable.Range(0, gatedCalls).Select(_ => new ManualResetEventSlim(false)).ToArray();
+
+        public InputValidationResult Validate(string path, InputFormat format, AmbiguityPolicy policy, bool treatAsRna)
+        {
+            var call = Interlocked.Increment(ref _calls) - 1;
+            if (call < Gate.Length)
+            {
+                Entered[call].Set();
+                Gate[call].Wait(TimeSpan.FromSeconds(20));
+            }
+
+            return InputFileValidator.Validate(path, format, policy, treatAsRna);
+        }
+    }
+
+    [Fact]
+    public async Task A_pasted_sequence_is_kept_when_its_check_is_replaced_by_a_newer_one()
+    {
+        var gates = new CallGates(2);
+        _viewModel = NewViewModel(validate: gates.Validate);
+        _viewModel.PasteText = "ACGTXACGTACGTAC";
+
+        var adding = _viewModel.AddPastedCommand.ExecuteAsync(null);
+        gates.Entered[0].Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        var treating = _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+        gates.Entered[1].Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+
+        // The first check reports last-but-one: its answer is already out of date, so it may not remove the pill or its saved copy.
+        gates.Gate[0].Set();
+        await adding;
+
+        var pill = _viewModel.Items.ShouldHaveSingleItem();
+        File.Exists(pill.Path).ShouldBeTrue();
+        gates.Gate[1].Set();
+        await treating;
+        File.Exists(pill.Path).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_pasted_sequence_whose_own_check_failed_is_still_removed_with_its_saved_copy()
+    {
+        _viewModel.PasteText = "ACGTXACGTACGTAC";
+
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        Directory.GetFiles(Path.Combine(_appData, "pasted")).ShouldBeEmpty();
+    }
+
+    /// <summary>Records the thread of every disk question the page asks.</summary>
+    private sealed class RecordingFiles : IInputFileSystem
+    {
+        private readonly LocalInputFileSystem _inner = new();
+
+        public List<(string Call, int Thread)> Calls { get; } = [];
+
+        public bool DirectoryExists(string path)
+        {
+            Calls.Add((nameof(DirectoryExists), Environment.CurrentManagedThreadId));
+            return _inner.DirectoryExists(path);
+        }
+
+        public IReadOnlyList<string> SequenceFiles(string folder)
+        {
+            Calls.Add((nameof(SequenceFiles), Environment.CurrentManagedThreadId));
+            return _inner.SequenceFiles(folder);
+        }
+
+        public InputResolution Resolve(string? text)
+        {
+            Calls.Add((nameof(Resolve), Environment.CurrentManagedThreadId));
+            return _inner.Resolve(text);
+        }
+    }
+
+    private static void RunOnAnotherThread(Func<Task> action, out int callerThread)
+    {
+        var id = 0;
+        var thread = new Thread(() =>
+        {
+            id = Environment.CurrentManagedThreadId;
+            action().GetAwaiter().GetResult();
+        });
+        thread.Start();
+        thread.Join();
+        callerThread = id;
+    }
+
+    [Fact]
+    public void A_dropped_folder_is_listed_off_the_thread_that_called_the_command()
+    {
+        var files = new RecordingFiles();
+        _viewModel = NewViewModel(files: files);
+        Write(Path.Combine("folder", "a.fasta"), ">a\n" + Dna + "\n");
+
+        RunOnAnotherThread(() => _viewModel.AddDroppedCommand.ExecuteAsync(Drop(Path.Combine(_dir, "folder"))), out var caller);
+
+        files.Calls.Select(c => c.Call).ShouldBe([nameof(RecordingFiles.DirectoryExists), nameof(RecordingFiles.SequenceFiles)]);
+        files.Calls.ShouldAllBe(c => c.Thread != caller);
+        _viewModel.Items.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void What_a_paste_means_is_decided_off_the_thread_that_called_the_command()
+    {
+        var files = new RecordingFiles();
+        _viewModel = NewViewModel(files: files);
+        _viewModel.PasteText = Dna;
+
+        RunOnAnotherThread(() => _viewModel.AddPastedCommand.ExecuteAsync(null), out var caller);
+
+        files.Calls.Select(c => c.Call).ShouldBe([nameof(RecordingFiles.Resolve)]);
+        files.Calls.ShouldAllBe(c => c.Thread != caller);
+    }
+
+    [Fact]
+    public async Task Removing_a_pasted_pill_deletes_its_saved_copy_off_the_thread_that_called_the_command()
+    {
+        var store = new ThreadRecordingStore(_appData);
+        _viewModel = NewViewModel(store);
+        _viewModel.PasteText = Dna;
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        var pasted = _viewModel.Items.Single();
+
+        RunOnAnotherThread(() => _viewModel.RemoveItemCommand.ExecuteAsync(pasted), out var caller);
+
+        store.DeleteThread.ShouldNotBe(0);
+        store.DeleteThread.ShouldNotBe(caller);
+        File.Exists(pasted.Path).ShouldBeFalse();
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;

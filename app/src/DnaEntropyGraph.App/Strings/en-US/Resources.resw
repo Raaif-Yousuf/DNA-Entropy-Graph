@@ -414,8 +414,14 @@
   <data name="NewRunNotice_EmptyHeaders" xml:space="preserve">
     <value>{0} records have no name after the &gt; sign. They still run.</value>
   </data>
+  <data name="NewRunNotice_EmptyHeaders_One" xml:space="preserve">
+    <value>1 record has no name after the &gt; sign. It still runs.</value>
+  </data>
   <data name="NewRunNotice_RepeatedIds" xml:space="preserve">
     <value>{0} record names appear more than once. Every record still runs and is numbered separately.</value>
+  </data>
+  <data name="NewRunNotice_RepeatedIds_One" xml:space="preserve">
+    <value>1 record name appears more than once. Every record still runs and is numbered separately.</value>
   </data>
   <data name="NewRunNotice_GenBankRecordSkippedNoSequence" xml:space="preserve">
     <value>Record {0} has no sequence, so it was left out.</value>
@@ -423,20 +429,35 @@
   <data name="NewRunNotice_RnaConverted" xml:space="preserve">
     <value>Read {0} U letters as T, because this input is treated as RNA.</value>
   </data>
+  <data name="NewRunNotice_RnaConverted_One" xml:space="preserve">
+    <value>Read 1 U letter as T, because this input is treated as RNA.</value>
+  </data>
   <data name="NewRunNotice_AmbiguityMasked" xml:space="preserve">
     <value>{0} letters that stand for more than one base (such as N or R) were replaced with N. The entropy there reflects the model&apos;s guess for N.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityMasked_One" xml:space="preserve">
+    <value>1 letter that stands for more than one base (such as N or R) was replaced with N. The entropy there reflects the model&apos;s guess for N.</value>
   </data>
   <data name="NewRunNotice_AmbiguityKept" xml:space="preserve">
     <value>{0} letters stand for more than one base (such as N or R). They are kept, and the entropy there reflects the model&apos;s guess for that letter.</value>
   </data>
+  <data name="NewRunNotice_AmbiguityKept_One" xml:space="preserve">
+    <value>1 letter stands for more than one base (such as N or R). It is kept, and the entropy there reflects the model&apos;s guess for that letter.</value>
+  </data>
   <data name="NewRunNotice_ShortSequence" xml:space="preserve">
     <value>This sequence is only {0} bases long, so the entropy near its start mostly reflects the model&apos;s prior. Add more sequence if you can.</value>
+  </data>
+  <data name="NewRunNotice_ShortSequence_One" xml:space="preserve">
+    <value>This sequence is only 1 base long, so the entropy near its start mostly reflects the model&apos;s prior. Add more sequence if you can.</value>
   </data>
   <data name="NewRunNotice_LeadingHeaderIgnored" xml:space="preserve">
     <value>The first line starts with &gt; so it was treated as a name and ignored.</value>
   </data>
   <data name="NewRunNotice_DigitsRemoved" xml:space="preserve">
     <value>Removed {0} digits (such as line numbers) from the sequence.</value>
+  </data>
+  <data name="NewRunNotice_DigitsRemoved_One" xml:space="preserve">
+    <value>Removed 1 digit (such as a line number) from the sequence.</value>
   </data>
   <data name="NewRunPillCheckStopped" xml:space="preserve">
     <value>The check of this file was stopped. Remove it and add it again.</value>
@@ -452,6 +473,7 @@
   </data>
   <data name="NewRunRunsSelectedOnly.Text" xml:space="preserve">
     <value>Run starts only the file selected in the list. Running several files together is coming.</value>
+  </data>
   <data name="AuthError_SIGNIN_EXPIRED" xml:space="preserve">
     <value>Your sign-in expired. This happens on its own, roughly once a week, while the app's Google approval is still in its early testing phase. It also happens if you removed this app's access in your Google account settings. Choose Sign in again.</value>
   </data>

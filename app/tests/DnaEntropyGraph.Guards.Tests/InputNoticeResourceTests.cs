@@ -42,6 +42,40 @@ public class InputNoticeResourceTests
     }
 
     [Fact]
+    public void Every_notice_that_counts_something_has_singular_copy_for_a_count_of_one()
+    {
+        var resw = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in RepoPaths.AllReswFiles)
+        {
+            foreach (var data in XDocument.Load(file).Descendants("data"))
+            {
+                resw[data.Attribute("name")!.Value] = data.Element("value")?.Value ?? string.Empty;
+            }
+        }
+
+        var counted = Enum.GetValues<InputNoticeCode>().Where(code => InputNoticeCopy.KeyFor(code, 1) != InputNoticeCopy.KeyFor(code)).ToList();
+        counted.ShouldBe(
+            [
+                InputNoticeCode.EmptyHeaders,
+                InputNoticeCode.RepeatedIds,
+                InputNoticeCode.RnaConverted,
+                InputNoticeCode.AmbiguityMasked,
+                InputNoticeCode.AmbiguityKept,
+                InputNoticeCode.ShortSequence,
+                InputNoticeCode.DigitsRemoved,
+            ],
+            ignoreOrder: true);
+        foreach (var code in counted)
+        {
+            var key = InputNoticeCopy.KeyFor(code, 1)!;
+            resw.ShouldContainKey(key, $"notice code {code} has no singular copy {key}");
+            resw[key].Trim().ShouldNotBeEmpty();
+            resw[key].ShouldNotContain("—");
+            InputNoticeCopy.KeyFor(code, 2).ShouldBe(InputNoticeCopy.KeyFor(code));
+        }
+    }
+
+    [Fact]
     public void Only_the_two_summary_notices_are_left_out_of_the_pill()
         => Enum.GetValues<InputNoticeCode>().Where(code => InputNoticeCopy.KeyFor(code) is null)
             .ShouldBe([InputNoticeCode.RecordsRead, InputNoticeCode.GenBankRead], ignoreOrder: true);

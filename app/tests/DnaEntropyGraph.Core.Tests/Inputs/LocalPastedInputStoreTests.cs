@@ -50,6 +50,40 @@ public sealed class LocalPastedInputStoreTests : IDisposable
     }
 
     [Fact]
+    public void Delete_removes_a_saved_paste()
+    {
+        var store = new LocalPastedInputStore(_root);
+        var path = store.Save("ACGTACGTAC");
+
+        store.Delete(path);
+
+        File.Exists(path).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Delete_never_touches_a_file_outside_the_pasted_folder()
+    {
+        var store = new LocalPastedInputStore(_root);
+        store.Save("ACGTACGTAC");
+        var users = Path.Combine(_root, "mine.fasta");
+        File.WriteAllText(users, ">a\nACGT\n");
+        var sibling = Path.Combine(_root, "pasted-not", "x.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(sibling)!);
+        File.WriteAllText(sibling, "ACGT");
+
+        store.Delete(users);
+        store.Delete(sibling);
+        store.Delete(Path.Combine(_root, "pasted", "..", "mine.fasta"));
+
+        File.Exists(users).ShouldBeTrue();
+        File.Exists(sibling).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Delete_of_a_file_that_is_already_gone_is_not_an_error()
+        => Should.NotThrow(() => new LocalPastedInputStore(_root).Delete(Path.Combine(_root, "pasted", "gone.txt")));
+
+    [Fact]
     public void The_saved_file_is_one_the_validator_accepts_with_the_content_sniffed()
     {
         var path = new LocalPastedInputStore(_root).Save("ACGTACGTACGTACGT");

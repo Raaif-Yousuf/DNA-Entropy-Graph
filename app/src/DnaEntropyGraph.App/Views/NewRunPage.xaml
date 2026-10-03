@@ -7,7 +7,8 @@
     <!--
         Issue #63: the page a biologist uses every day. Every value is x:Bind (compile-time checked, so a
         renamed property is a build error, not a blank label) against NewRunViewModel. Code-behind only
-        forwards the drop to AddPathsCommand (Hard Rule 8).
+        forwards the drop to the view model (Hard Rule 8). The drop command is deliberately not named here:
+        the wiring guard reads XAML text, and a comment naming a command would hide it from the allowlist check.
     -->
     <ScrollViewer>
         <StackPanel Padding="24" Spacing="12" MaxWidth="900" HorizontalAlignment="Left">

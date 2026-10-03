@@ -23,11 +23,11 @@ public sealed class InputFolderScannerTests : IDisposable
         }
     }
 
-    private string Touch(string relative)
+    private string Touch(string relative, string content = "ACGT")
     {
         var path = Path.Combine(_dir, relative);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, "ACGT");
+        File.WriteAllText(path, content);
         return path;
     }
 
@@ -36,7 +36,7 @@ public sealed class InputFolderScannerTests : IDisposable
     {
         var b = Touch("b.fasta");
         var a = Touch("a.GB");
-        var c = Touch("plain.txt");
+        var c = Touch("plain.txt", ">plain\nACGT\n");
         Touch("notes.docx");
 
         InputFolderScanner.SequenceFiles(_dir).ShouldBe([a, b, c]);
@@ -58,4 +58,28 @@ public sealed class InputFolderScannerTests : IDisposable
     [Fact]
     public void A_folder_that_does_not_exist_gives_an_empty_list_not_an_exception()
         => InputFolderScanner.SequenceFiles(Path.Combine(_dir, "missing")).ShouldBeEmpty();
+
+    // DECISION (agent-made, reversible): a .txt in a dropped folder is taken only when its first line is a FASTA or GenBank header,
+    // so a folder of notes and logs does not become a pile of error pills. A headerless sequence file is still added with Add files.
+    [Fact]
+    public void A_txt_file_is_taken_only_when_it_starts_with_a_FASTA_or_GenBank_header()
+    {
+        var fasta = Touch("a.txt", "\n>a\nACGT\n");
+        var genbank = Touch("b.txt", "LOCUS       T1   4 bp\n");
+        Touch("notes.txt", "Meeting notes\nbuy primers\n");
+        Touch("bare.txt", "ACGTACGT\n");
+        Touch("empty.txt", string.Empty);
+        var withBom = Path.Combine(_dir, "c.txt");
+        File.WriteAllBytes(withBom, [0xEF, 0xBB, 0xBF, .. "> c\nACGT\n"u8.ToArray()]);
+
+        InputFolderScanner.SequenceFiles(_dir).ShouldBe([fasta, genbank, withBom]);
+    }
+
+    [Fact]
+    public void A_file_with_a_sequence_extension_is_taken_without_looking_inside()
+    {
+        var fa = Touch("odd.fa", "not a header at all");
+
+        InputFolderScanner.SequenceFiles(_dir).ShouldBe([fa]);
+    }
 }
