@@ -180,6 +180,12 @@
   <data name="RunError_result_timeout" xml:space="preserve">
     <value>The rented computer did not finish in time, so we shut it down. Start the run again.</value>
   </data>
+  <data name="RunError_worker_no_heartbeat" xml:space="preserve">
+    <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
+  </data>
+  <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
+    <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
+  </data>
   <data name="RunError_vm_end_unconfirmed" xml:space="preserve">
     <value>The run stopped, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>
