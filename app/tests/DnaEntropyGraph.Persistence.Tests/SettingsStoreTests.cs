@@ -273,12 +273,14 @@ public class SettingsStoreTests
         using var paths = new TempPaths();
         const string Original = """{"Theme":"Dark"}""";
         File.WriteAllText(paths.SettingsPath, Original);
-        var store = new SettingsStore(paths.SettingsPath);
+        var time = new ManualTimeProvider();
+        var store = new SettingsStore(paths.SettingsPath) { Clock = time, Pause = time.Advance };
 
         using (new FileStream(paths.SettingsPath, FileMode.Open, FileAccess.Read, FileShare.None))
         {
+            // Virtual time (#625): five 40 ms pauses (160 ms) fit the 300 ms budget, so the count is the attempt limit, not a race.
             Should.Throw<SettingsUnavailableException>(() => store.GetString("Theme"));
-            store.LastReadAttempts.ShouldBe(5);
+            store.LastReadAttempts.ShouldBe(SettingsStore.ReadAttemptLimit);
             Should.Throw<SettingsUnavailableException>(() => store.SetString("Theme", "Light"));
         }
 
@@ -286,6 +288,32 @@ public class SettingsStoreTests
         File.ReadAllText(paths.SettingsPath).ShouldBe(Original);
         Directory.GetFiles(paths.Directory, "settings.json.unreadable-*").ShouldBeEmpty();
         store.GetString("Theme").ShouldBe("Dark");
+    }
+
+    [Fact]
+    public void A_persistent_lock_gives_up_when_the_wait_budget_is_spent_before_the_attempt_limit()
+    {
+        using var paths = new TempPaths();
+        File.WriteAllText(paths.SettingsPath, """{"Theme":"Dark"}""");
+        var time = new ManualTimeProvider();
+        // Each pause costs 150 ms of the 300 ms budget: attempt 1, pause, attempt 2, pause, attempt 3 finds the budget spent.
+        var store = new SettingsStore(paths.SettingsPath) { Clock = time, Pause = _ => time.Advance(TimeSpan.FromMilliseconds(150)) };
+
+        using var held = new FileStream(paths.SettingsPath, FileMode.Open, FileAccess.Read, FileShare.None);
+        Should.Throw<SettingsUnavailableException>(() => store.GetString("Theme"));
+
+        store.LastReadAttempts.ShouldBe(3);
+        store.LastReadAttempts.ShouldBeLessThan(SettingsStore.ReadAttemptLimit);
+    }
+
+    /// <summary>A clock that moves only when the test (or the store's pause) moves it.</summary>
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 10, 3, 8, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
     }
 
     [Fact]
