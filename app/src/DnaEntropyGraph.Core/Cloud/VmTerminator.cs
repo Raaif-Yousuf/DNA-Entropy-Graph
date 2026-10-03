@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -129,7 +128,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     cancellationToken).ConfigureAwait(false);
             }
 
-            var clock = Stopwatch.StartNew();
+            var clockStart = settings.StartClock();
             while (true)
             {
                 vm = await calls.CallAsync(token => compute.GetVmAsync(name, zone, token), cancellationToken).ConfigureAwait(false);
@@ -138,14 +137,14 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     return null;
                 }
 
-                if (clock.Elapsed >= settings.LifecycleTimeout)
+                if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
                 {
                     return action == AfterTaskAction.Delete
                         ? $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete."
                         : $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Stop (Hard Rule 11).";
                 }
 
-                await Task.Delay(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
+                await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
@@ -195,7 +194,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             return deleteError;
         }
 
-        var clock = Stopwatch.StartNew();
+        var clockStart = settings.StartClock();
         while (true)
         {
             var remaining = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
@@ -204,12 +203,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 break;
             }
 
-            if (clock.Elapsed >= settings.LifecycleTimeout)
+            if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
             {
                 return $"{remaining.Count} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete.";
             }
 
-            await Task.Delay(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
+            await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
         }
 
         return createsSettled

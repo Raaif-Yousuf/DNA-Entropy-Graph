@@ -333,6 +333,192 @@
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
   </data>
+  <data name="NewRunPastedName" xml:space="preserve">
+    <value>Pasted sequence</value>
+  </data>
+  <data name="NewRunPillKind_Fasta" xml:space="preserve">
+    <value>FASTA</value>
+  </data>
+  <data name="NewRunPillKind_GenBank" xml:space="preserve">
+    <value>GenBank</value>
+  </data>
+  <data name="NewRunPillKind_Paste" xml:space="preserve">
+    <value>Plain sequence</value>
+  </data>
+  <data name="NewRunPillRecordsOne" xml:space="preserve">
+    <value>1 record</value>
+  </data>
+  <data name="NewRunPillRecordsMany" xml:space="preserve">
+    <value>{0} records</value>
+  </data>
+  <data name="NewRunPillBases" xml:space="preserve">
+    <value>{0} bases</value>
+  </data>
+  <data name="NewRunPillGenesOne" xml:space="preserve">
+    <value>1 gene</value>
+  </data>
+  <data name="NewRunPillGenesMany" xml:space="preserve">
+    <value>{0} genes</value>
+  </data>
+  <data name="NewRunPillWhereRecordBase" xml:space="preserve">
+    <value>(record {0}, base {1})</value>
+  </data>
+  <data name="NewRunPillWhereRecord" xml:space="preserve">
+    <value>(record {0})</value>
+  </data>
+  <data name="NewRunPillRnaNotice" xml:space="preserve">
+    <value>This file has the letter U, which means it is RNA. Choose Treat as RNA below to read each U as T and run it.</value>
+  </data>
+  <data name="NewRunPasteCount" xml:space="preserve">
+    <value>{0} bases</value>
+  </data>
+  <data name="NewRunStatusPathNotFound" xml:space="preserve">
+    <value>We could not find the file {0}. Check the path, or drop the file onto this page instead.</value>
+  </data>
+  <data name="NewRunStatusFolderEmpty" xml:space="preserve">
+    <value>There are no FASTA or GenBank files directly inside {0}. Drop the files themselves, or a folder that holds them.</value>
+  </data>
+  <data name="NewRunPillChecking.Text" xml:space="preserve">
+    <value>Checking this file...</value>
+  </data>
+  <data name="NewRunDropTitle.Text" xml:space="preserve">
+    <value>Drop FASTA or GenBank files, or a folder of them, here</value>
+  </data>
+  <data name="NewRunDropHint.Text" xml:space="preserve">
+    <value>Each file is checked on this PC before anything is rented from Google Cloud.</value>
+  </data>
+  <data name="NewRunAddFiles.Content" xml:space="preserve">
+    <value>Add files</value>
+  </data>
+  <data name="NewRunAddFiles.ToolTipService.ToolTip" xml:space="preserve">
+    <value>Add files (Ctrl+O)</value>
+  </data>
+  <data name="NewRunPasteExpander.Header" xml:space="preserve">
+    <value>Paste a sequence</value>
+  </data>
+  <data name="NewRunPasteBox.PlaceholderText" xml:space="preserve">
+    <value>Paste bases here, or a FASTA record, or the path of a file</value>
+  </data>
+  <data name="NewRunPasteAdd.Content" xml:space="preserve">
+    <value>Add sequence</value>
+  </data>
+  <data name="NewRunRemoveItem.Content" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="NewRunTreatAsRna.Content" xml:space="preserve">
+    <value>Treat as RNA</value>
+  </data>
+  <data name="NewRunStopTreatAsRna.Content" xml:space="preserve">
+    <value>Stop treating as RNA</value>
+  </data>
+  <data name="NewRunRnaTreatedNote.Text" xml:space="preserve">
+    <value>Treating the input as RNA: each U is read as T.</value>
+  </data>
+  <data name="NewRunRun.Content" xml:space="preserve">
+    <value>Run</value>
+  </data>
+  <data name="NewRunNotice_RecordSkippedNoSequence" xml:space="preserve">
+    <value>Record {0} has a name but no sequence, so it was left out.</value>
+  </data>
+  <data name="NewRunNotice_EmptyHeaders" xml:space="preserve">
+    <value>{0} records have no name after the &gt; sign. They still run.</value>
+  </data>
+  <data name="NewRunNotice_EmptyHeaders_One" xml:space="preserve">
+    <value>1 record has no name after the &gt; sign. It still runs.</value>
+  </data>
+  <data name="NewRunNotice_RepeatedIds" xml:space="preserve">
+    <value>{0} record names appear more than once. Every record still runs and is numbered separately.</value>
+  </data>
+  <data name="NewRunNotice_RepeatedIds_One" xml:space="preserve">
+    <value>1 record name appears more than once. Every record still runs and is numbered separately.</value>
+  </data>
+  <data name="NewRunNotice_GenBankRecordSkippedNoSequence" xml:space="preserve">
+    <value>Record {0} has no sequence, so it was left out.</value>
+  </data>
+  <data name="NewRunNotice_RnaConverted" xml:space="preserve">
+    <value>Read {0} U letters as T, because this input is treated as RNA.</value>
+  </data>
+  <data name="NewRunNotice_RnaConverted_One" xml:space="preserve">
+    <value>Read 1 U letter as T, because this input is treated as RNA.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityMasked" xml:space="preserve">
+    <value>{0} letters that stand for more than one base (such as N or R) were replaced with N. The entropy there reflects the model&apos;s guess for N.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityMasked_One" xml:space="preserve">
+    <value>1 letter that stands for more than one base (such as N or R) was replaced with N. The entropy there reflects the model&apos;s guess for N.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityKept" xml:space="preserve">
+    <value>{0} letters stand for more than one base (such as N or R). They are kept, and the entropy there reflects the model&apos;s guess for that letter.</value>
+  </data>
+  <data name="NewRunNotice_AmbiguityKept_One" xml:space="preserve">
+    <value>1 letter stands for more than one base (such as N or R). It is kept, and the entropy there reflects the model&apos;s guess for that letter.</value>
+  </data>
+  <data name="NewRunNotice_ShortSequence" xml:space="preserve">
+    <value>This sequence is only {0} bases long, so the entropy near its start mostly reflects the model&apos;s prior. Add more sequence if you can.</value>
+  </data>
+  <data name="NewRunNotice_ShortSequence_One" xml:space="preserve">
+    <value>This sequence is only 1 base long, so the entropy near its start mostly reflects the model&apos;s prior. Add more sequence if you can.</value>
+  </data>
+  <data name="NewRunNotice_LeadingHeaderIgnored" xml:space="preserve">
+    <value>The first line starts with &gt; so it was treated as a name and ignored.</value>
+  </data>
+  <data name="NewRunNotice_DigitsRemoved" xml:space="preserve">
+    <value>Removed {0} digits (such as line numbers) from the sequence.</value>
+  </data>
+  <data name="NewRunNotice_DigitsRemoved_One" xml:space="preserve">
+    <value>Removed 1 digit (such as a line number) from the sequence.</value>
+  </data>
+  <data name="NewRunPillCheckStopped" xml:space="preserve">
+    <value>The check of this file was stopped. Remove it and add it again.</value>
+  </data>
+  <data name="NewRunStatusDropFailed" xml:space="preserve">
+    <value>We could not read what you dropped. Drop the files again, or use Add files.</value>
+  </data>
+  <data name="NewRunStatusDropVirtual" xml:space="preserve">
+    <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
+  </data>
+  <data name="NewRunStatusStartFailed" xml:space="preserve">
+    <value>We could not start the run. Check your Google Cloud connection on the Cloud page, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusBrowseFailed" xml:space="preserve">
+    <value>The file chooser could not open. Drag your files onto the drop area instead, or choose Add files again.</value>
+  </data>
+  <data name="NewRunStatusPasteFailed" xml:space="preserve">
+    <value>We could not save the pasted sequence. Check that your disk has free space, then choose Add sequence again.</value>
+  </data>
+  <data name="NewRunRunsSelectedOnly.Text" xml:space="preserve">
+    <value>Run starts only the file selected in the list. Running several files together is coming.</value>
+  </data>
+  <data name="NewRunEstimateHistory" xml:space="preserve">
+    <value>Estimate: about {0}, about {1}, based on your earlier runs. This is a guess, not a bill.</value>
+  </data>
+  <data name="NewRunEstimateRange" xml:space="preserve">
+    <value>Estimate: about {0} to {1}, about {2} to {3} minutes, because you have no earlier runs on this PC yet. This is a guess, not a bill.</value>
+  </data>
+  <data name="NewRunEstimateMoney" xml:space="preserve">
+    <value>${0}</value>
+  </data>
+  <data name="NewRunEstimateMinutesOne" xml:space="preserve">
+    <value>1 minute</value>
+  </data>
+  <data name="NewRunEstimateMinutesMany" xml:space="preserve">
+    <value>{0} minutes</value>
+  </data>
+  <data name="NewRunEstimateUnavailable" xml:space="preserve">
+    <value>There is no cost estimate because the price list that comes with this app could not be read. Reinstall the app to bring it back. You can still press Run.</value>
+  </data>
+  <data name="NewRunEstimateNoPrice" xml:space="preserve">
+    <value>There is no cost estimate for this kind of computer yet, because the price list that comes with this app has no price for it. You can still press Run.</value>
+  </data>
+  <data name="NewRunEstimateNoSpotPrice" xml:space="preserve">
+    <value>There is no cost estimate for a discounted (Spot) computer of this kind yet, because the price list that comes with this app has no Spot price for it. You can still press Run.</value>
+  </data>
+  <data name="NewRunEstimateModelPoint" xml:space="preserve">
+    <value>Estimate: about {0}, about {1}, because you have no earlier runs on this PC yet. This is a guess, not a bill.</value>
+  </data>
+  <data name="NewRunEstimateStoppedDisk" xml:space="preserve">
+    <value>If the computer is left stopped after the run (the default), its disk costs about {0} a day, an estimate, until you delete the computer on the Cloud page.</value>
+  </data>
   <data name="Runs_Empty_None" xml:space="preserve">
     <value>No runs yet. Choose New run to start your first one.</value>
   </data>

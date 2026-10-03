@@ -97,6 +97,9 @@ public sealed class CloudJobRunner
     /// <summary>The clock the VM's age is read from (its <see cref="VmDescriptor.CreatedAt"/> is on the platform's clock).</summary>
     public TimeProvider TimeProvider { get => _settings.TimeProvider; init => _settings.TimeProvider = value; }
 
+    /// <summary>Replaces the sleep between polls (tests only); see <see cref="CloudRunSettings.PollDelay"/>.</summary>
+    public Func<TimeSpan, CancellationToken, Task>? PollDelay { get => _settings.PollDelay; init => _settings.PollDelay = value; }
+
     /// <summary>How long the worker's first heartbeat may take once the wait for the result begins (default 25 minutes: boot plus image pull).</summary>
     public TimeSpan FirstHeartbeatTimeout { get => _settings.FirstHeartbeatTimeout; init => _settings.FirstHeartbeatTimeout = value; }
 

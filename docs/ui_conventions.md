@@ -174,6 +174,41 @@ If a future Windows App SDK bump fixes either of these upstream, this section (a
 workaround it documents) should be removed in the same commit as the version bump, not
 left as unnecessary caution.
 
+## 9. The New run page (issue #63)
+
+`Views/NewRunPage.xaml` binds `NewRunViewModel` only; its code-behind forwards the two drag events to
+`Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
+`*.xaml.cs`) and the drop to `AddDroppedCommand`.
+
+- **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
+  The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
+  `WindowHandleProvider` singleton. The picker and a dropped folder share one extension list,
+  `SequenceFileTypes` (FASTA, GenBank, `.txt`); a dropped folder contributes the files directly inside it.
+- **Paste a sequence** is an inline `Expander`, not a `ContentDialog` (decision #516): a dialog needs a
+  `XamlRoot` and a click handler, both of which would put logic in code-behind. The live counter is
+  `PastedSequenceCounter`. The pasted text is saved off the UI thread under app data. The box is cleared only
+  when the paste became a usable pill (or one `Treat as RNA` fixes); a paste with a problem stays in the box,
+  leaves no pill, and the problem is said in the status line.
+- **Pills** are `InputPillItem`s in a `ListView` whose `DataTemplate` has an `x:DataType`. Kind, records,
+  bases and genes are `NewRunPill*` resources. **Notices are copy chosen by code** (`InputNoticeCode`, kept
+  beside the validator's English text, which stays a log and worker-parity detail): `InputNoticeCopy` maps each
+  code to a `NewRunNotice_*` resource, and a Guards test checks every code has plain copy. A problem is the
+  existing `RunError_input_*` copy plus "(record N, base M)". A U is shown as `NewRunPillRnaNotice` with a
+  **Treat as RNA** button (`TreatAsRnaCommand`), which re-checks every pill with the RNA flag.
+- **Checks never overwrite a newer check.** Each check of a pill takes a number from `BeginChecking`; only the
+  latest may `Apply` or `Abandon` (a cancelled check leaves the checking state with `NewRunPillCheckStopped`).
+- **A drop never throws.** `DropPaths.ReadAsync` runs in an `async void` handler, so it returns a
+  `DroppedItems` (paths, items with no path such as a file inside a zip, a failed flag); the VM turns the last
+  two into one status line with one action. `AddPathsCommand`/`AddDroppedCommand` take no cancellation token and
+  allow concurrent runs: MEASURED 2026-10-03, a cancelable async command cancels its running execution when it
+  is invoked again, which stopped the queued checks of an earlier drop.
+- `scripts/check_app_wiring.py` does not resolve `{x:Bind}` inside a typed `DataTemplate` against the page
+  ViewModel (the XAML compiler checks it against the `x:DataType`); a plain `{Binding}` there is still checked.
+- **Run name** (`RunNamer`, `NameTemplate`, `RunNamePreview`) is built and tested but **not on the page**: the
+  runner names the result folder from the input file (MEASURED 2026-10-03, `CloudJobRunner.cs:1286`, #514), so
+  a name box would promise something false. The XAML to restore is on #514.
+- `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
+  next to Run once there is more than one pill.
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text
