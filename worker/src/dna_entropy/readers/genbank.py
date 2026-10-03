@@ -31,6 +31,26 @@ class GenBankReadError(ValidationError):
     """
 
 
+def _record_sequence(rec) -> str:
+    """The record's bases, or ``""`` when it has none to read.
+
+    Issue #536, MEASURED 2026-10-03: a truncated file (a LOCUS line declaring a length, an
+    ORIGIN header, and no sequence lines) parses into a record whose ``seq`` is an
+    UNDEFINED-content sequence of the declared length, and ``str()`` on it raises Biopython's
+    own ``UndefinedSequenceError`` (a ``ValueError``) OUTSIDE the parse try-block above, so it
+    used to escape as a raw exception. It is the same situation as an empty ORIGIN: no
+    nucleotides, so the caller skips the record with a notice, and a file with no readable
+    record at all is then refused with :class:`GenBankReadError` (``INPUT_INVALID``), exactly
+    like the app's ``GenBankLite`` (skip, then refuse when nothing is left).
+    """
+    from Bio.Seq import UndefinedSequenceError
+
+    try:
+        return str(rec.seq)
+    except UndefinedSequenceError:
+        return ""
+
+
 def _describe_bare_assertion(exc: AssertionError) -> str:
     """Recover a true, non-empty reason from a bare (message-less) `AssertionError`.
 
@@ -242,7 +262,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     records: list[GenBankRecord] = []
     total_features = 0
     for idx, rec in enumerate(parsed, start=1):
-        seq = str(rec.seq)
+        seq = _record_sequence(rec)
         if not seq or set(seq.upper()) <= {"N"}:
             # Never the record id itself (issue #253) — a GenBank LOCUS/ACCESSION id is
             # free text a user or their sequencing core chose, same privacy class as a
@@ -265,7 +285,11 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         )
 
     if not records:
-        raise GenBankReadError("The GenBank file has no records with a nucleotide sequence.")
+        raise GenBankReadError(
+            "The GenBank file has no records with a nucleotide sequence (a truncated or "
+            "sequence-less export). Re-export the file from the tool that made it, with its "
+            "sequence included."
+        )
 
     # issue #352: `total_features` being 0 already says "no gene features were found" on
     # its own -- a separate "no gene" word produced "0 no gene feature(s)", which reads
