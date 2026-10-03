@@ -53,9 +53,17 @@ public class GoogleProjectCatalogGatewayTests
     }
 
     private const string QuotaDetails = """
-        [{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","domain":"googleapis.com"},
-         {"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"project:dna-entropy-abcd1234","description":"Project creation quota exceeded"}]}]
+        [{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"project:dna-entropy-abcd1234","description":"Project creation quota exceeded"}]}]
         """;
+
+    // A per-minute rate limit (documented ErrorInfo reason RATE_LIMIT_EXCEEDED): it also carries a QuotaFailure, and it
+    // must still be retried, never reported as "you reached your project limit".
+    private const string RateLimitDetails = """
+        [{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","domain":"googleapis.com","metadata":{"quota_limit":"RequestsPerMinutePerProject"}},
+         {"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"project:123","description":"Requests per minute exceeded"}]}]
+        """;
+
+    private const string OurProjectJson = """{"name":"projects/555","projectId":"dna-entropy-abcd1234","state":"ACTIVE","displayName":"DNA Entropy Graph","labels":{"app":"dna-entropy-graph","installation-id":"inst-1"}}""";
 
     // ------------------------------------------------------------------ list
 
@@ -121,6 +129,24 @@ public class GoogleProjectCatalogGatewayTests
         rig.Handler.Returns(Get, "/v3/projects/ghost", http, RpcError(http, status, "The caller does not have permission"));
 
         (await rig.Gateways.ProjectCatalog.GetProjectAsync("ghost", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("SERVICE_DISABLED", "Cloud Resource Manager API has not been used in project 123 before or it is disabled.")]
+    [InlineData("SERVICE_DISABLED", "The API is turned off for this project.")]
+    [InlineData("BILLING_DISABLED", "This API method requires billing to be enabled.")]
+    public async Task A_403_that_is_an_api_off_or_billing_error_surfaces_its_kind_instead_of_pick_another_project(string reason, string message)
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(
+            Get,
+            "/v3/projects/my-lab",
+            403,
+            RpcError(403, "PERMISSION_DENIED", message, $$"""[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"{{reason}}","domain":"googleapis.com"}]"""));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.ProjectCatalog.GetProjectAsync("my-lab", CancellationToken.None));
+
+        ex.Kind.ShouldBe(reason == "SERVICE_DISABLED" ? CloudErrorKind.ApiDisabled : CloudErrorKind.Billing);
     }
 
     // ------------------------------------------------------------------ create
@@ -274,6 +300,51 @@ public class GoogleProjectCatalogGatewayTests
     }
 
     [Fact]
+    public async Task A_per_minute_rate_limit_is_retried_and_never_reported_as_the_project_limit()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, "/v3/projects", 429, RpcError(429, "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute'.", RateLimitDetails))
+            .Returns(Post, "/v3/projects", 200, CreateOperationDone);
+
+        var project = await rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None);
+
+        project.ProjectId.ShouldBe("dna-entropy-abcd1234");
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(2);
+        rig.Log.Retries.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_rate_limit_that_never_clears_ends_as_a_network_error_not_PROJECT_QUOTA()
+    {
+        var rig = new GoogleGatewayHarness(retries: 2);
+        for (var i = 0; i < 3; i++)
+        {
+            rig.Handler.Returns(Post, "/v3/projects", 429, RpcError(429, "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute'.", RateLimitDetails));
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Error.Code.ShouldNotBe(SetupErrorCodes.ProjectQuota);
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+    }
+
+    [Fact]
+    public async Task A_409_for_our_own_project_that_is_being_deleted_is_not_adopted()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, "/v3/projects", 409, RpcError(409, "ALREADY_EXISTS", "Requested entity already exists"))
+            .Returns(Get, "/v3/projects/dna-entropy-abcd1234", 200, OurProjectJson.Replace("\"ACTIVE\"", "\"DELETE_REQUESTED\"", StringComparison.Ordinal));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.AlreadyExists);
+    }
+
+    [Fact]
     public async Task A_409_for_a_project_that_is_not_ours_is_surfaced_not_adopted()
     {
         var rig = new GoogleGatewayHarness();
@@ -303,6 +374,25 @@ public class GoogleProjectCatalogGatewayTests
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
         ex.Kind.ShouldBe(CloudErrorKind.Network);
         rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_poll_timeout_is_never_replayed_by_the_pipeline_so_exactly_one_create_is_posted()
+    {
+        var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromSeconds(3), retries: 3);
+        rig.Handler.Returns(Post, "/v3/projects", 200, CreateOperationPending);
+        for (var i = 0; i < 40; i++)
+        {
+            rig.Handler.Returns(Get, "/v3/operations/cp.7001", 200, CreateOperationPending);
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
+        rig.Log.Retries.ShouldBeEmpty();
     }
 
     // ------------------------------------------------------------------ the pipeline and the token source

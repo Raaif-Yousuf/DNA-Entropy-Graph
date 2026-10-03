@@ -90,7 +90,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                     {
                         createTimedOut = true;
                         thrownKind = CloudErrorKind.Network;
-                        return new OperationPoll<VmDescriptor>(true, null, new CloudError("OPERATION_POLL_TIMEOUT", null, "Creating the VM timed out."));
+                        return new OperationPoll<VmDescriptor>(true, null, new CloudError(OperationPoller.TimeoutCode, null, "Creating the VM timed out."));
                     }
                     catch (CloudOperationException ex)
                     {

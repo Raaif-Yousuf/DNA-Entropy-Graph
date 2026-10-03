@@ -72,8 +72,14 @@ public sealed partial class FakeGcp : IProjectCatalogGateway
 
         lock (_catalogGate)
         {
-            if (_catalog.ContainsKey(projectId))
+            if (_catalog.TryGetValue(projectId, out var existing))
             {
+                // IProjectCatalogGateway.CreateProjectAsync: a replay (the first attempt made it) returns the app's own project.
+                if (existing is { IsAppProject: true, State: ProjectLifecycleState.Active })
+                {
+                    return Task.FromResult(existing);
+                }
+
                 throw Build(CloudErrorKind.AlreadyExists, "ALREADY_EXISTS", 409, "Requested entity already exists.");
             }
 
