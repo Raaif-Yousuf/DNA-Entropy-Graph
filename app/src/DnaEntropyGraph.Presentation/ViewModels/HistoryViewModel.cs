@@ -29,6 +29,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly IToastService _toasts;
     private readonly IStringResourceProvider _strings;
     private readonly IShellLauncher _launcher;
+    private readonly IGcpAccount _account;
     private readonly TimeProvider _time;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
@@ -57,6 +58,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         IToastService toasts,
         IStringResourceProvider strings,
         IShellLauncher launcher,
+        IGcpAccount account,
         TimeProvider time)
     {
         _runRepository = runRepository;
@@ -69,6 +71,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         _toasts = toasts;
         _strings = strings;
         _launcher = launcher;
+        _account = account;
         _time = time;
         StatusFilters =
         [
@@ -212,13 +215,20 @@ public sealed partial class HistoryViewModel : ObservableObject
     /// </summary>
     private RelayCommand? OwnerRequestFor(RunRecord run)
         => run.ErrorCode == RunErrorCodes.PermissionActAs && !string.IsNullOrWhiteSpace(run.ProjectId)
-            ? new RelayCommand(() => CopyOwnerRequest(run.ProjectId))
+            ? new RelayCommand(() => CopyOwnerRequest(run.ProjectId, WorkerAccountDetail.TryRead(run.ErrorDetail)))
             : null;
 
-    private void CopyOwnerRequest(string projectId)
+    /// <summary>
+    /// Copies the owner request for the account the refused VM was to run as (<paramref name="vmAccount"/>, read from the row;
+    /// the app's worker account when the row does not say), naming the signed-in user as the grantee when there is one. The
+    /// user's email goes to the clipboard only, never to a log.
+    /// </summary>
+    private void CopyOwnerRequest(string projectId, string? vmAccount)
     {
+        var email = _account.CurrentAccount?.Email;
+        var grantee = string.IsNullOrWhiteSpace(email) ? string.Empty : string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.OwnerRequestGrantee), email);
         var template = _strings.GetString(RunsCopy.OwnerRequestActAs);
-        var text = string.Format(CultureInfo.CurrentCulture, template, WorkerIdentityNames.ActAsRole, WorkerIdentityNames.ServiceAccountEmail(projectId), projectId);
+        var text = string.Format(CultureInfo.CurrentCulture, template, WorkerIdentityNames.ActAsRole, vmAccount ?? WorkerIdentityNames.ServiceAccountEmail(projectId), projectId, grantee);
         Toast(_launcher.CopyText(text) ? RunsCopy.OwnerRequestCopied : RunsCopy.OwnerRequestCopyFailed);
     }
 

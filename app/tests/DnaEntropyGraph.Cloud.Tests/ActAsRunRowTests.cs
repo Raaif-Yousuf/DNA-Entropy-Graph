@@ -32,7 +32,7 @@ public class ActAsRunRowTests
 
     private static CloudRunSettings Settings() => new()
     {
-        CreateTimeout = TimeSpan.FromSeconds(5),
+        CreateTimeout = TimeSpan.FromSeconds(30),
         CreateSettleTimeout = TimeSpan.FromMilliseconds(100),
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         LifecycleTimeout = TimeSpan.FromMilliseconds(50),
@@ -43,11 +43,13 @@ public class ActAsRunRowTests
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
-            CallTimeout = TimeSpan.FromSeconds(1),
-            CreateTimeout = TimeSpan.FromSeconds(1),
+            // Generous safety values: no assertion here depends on a real-time window, so a stalled CI machine must not turn a
+            // refusal into a `network` timeout.
+            CallTimeout = TimeSpan.FromSeconds(30),
+            CreateTimeout = TimeSpan.FromSeconds(30),
             CreateSettleTimeout = TimeSpan.FromMilliseconds(100),
-            UploadTimeout = TimeSpan.FromSeconds(1),
-            BootTimeout = TimeSpan.FromSeconds(1),
+            UploadTimeout = TimeSpan.FromSeconds(30),
+            BootTimeout = TimeSpan.FromSeconds(30),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         };
@@ -166,6 +168,58 @@ public class ActAsRunRowTests
         repo.AllRecordedInOrder.Last(r => r.JobId == "job-a5").ErrorCode.ShouldBe(RunErrorCodes.WorkerDefaultAccountMissing);
         gcp.CreatedSpecs.ShouldBeEmpty();
     }
+
+    [Fact]
+    public async Task The_row_names_the_worker_account_the_VM_was_to_run_as()
+    {
+        var gcp = new FakeGcp();
+        var compute = new RefusingCreate(gcp, new CloudOperationException(new CloudError("IAM_PERMISSION_DENIED", 403, ActAsMessage), CloudErrorKind.Permission));
+        var repo = new InMemoryRunRepository();
+
+        await Runner(compute, gcp, repo).RunAsync(TestInputs.Request("job-a6", Spec("job-a6")), CancellationToken.None);
+
+        WorkerAccountDetail.TryRead(repo.AllRecordedInOrder.Last(r => r.JobId == "job-a6").ErrorDetail).ShouldBe(WorkerIdentityNames.ServiceAccountEmail(Project));
+    }
+
+    [Fact]
+    public async Task When_an_org_policy_made_the_VM_run_as_the_default_compute_account_the_row_names_that_account()
+    {
+        var gcp = new FakeGcp().WithServiceAccountCreationBlockedByOrgPolicy();
+        var compute = new RefusingCreate(gcp, new CloudOperationException(new CloudError("IAM_PERMISSION_DENIED", 403, ActAsMessage), CloudErrorKind.Permission));
+        var repo = new InMemoryRunRepository();
+
+        await Runner(compute, gcp, repo).RunAsync(TestInputs.Request("job-a7", Spec("job-a7")), CancellationToken.None);
+
+        var row = repo.AllRecordedInOrder.Last(r => r.JobId == "job-a7");
+        row.ErrorCode.ShouldBe(RunErrorCodes.PermissionActAs);
+        WorkerAccountDetail.TryRead(row.ErrorDetail).ShouldBe(WorkerIdentityNames.DefaultComputeAccountEmail(FakeGcp.ProjectNumberFor(Project)));
+    }
+
+    [Fact]
+    public void An_unconfirmed_VM_end_keeps_the_specific_original_code_in_its_detail()
+    {
+        var refusal = new CloudOperationException(new CloudError("IAM_PERMISSION_DENIED", 403, ActAsMessage), CloudErrorKind.Permission);
+
+        var ex = VmEndNotes.Apply(refusal, " (VM end not confirmed)");
+
+        ex.Message.ShouldContain("Original code: permission_actas.");
+    }
+
+    [Theory]
+    [InlineData("denied", "a@b.iam.gserviceaccount.com", "denied [vm-account=a@b.iam.gserviceaccount.com]")]
+    [InlineData(null, "a@b.c", "[vm-account=a@b.c]")]
+    [InlineData("denied", null, "denied")]
+    [InlineData("denied", " ", "denied")]
+    public void The_account_mark_is_appended_only_when_known(string? detail, string? email, string expected)
+        => WorkerAccountDetail.Append(detail, email).ShouldBe(expected);
+
+    [Theory]
+    [InlineData("denied [vm-account=a@b.iam.gserviceaccount.com]", "a@b.iam.gserviceaccount.com")]
+    [InlineData("no mark here", null)]
+    [InlineData("[vm-account=not an email]", null)]
+    [InlineData(null, null)]
+    public void The_account_mark_reads_back_only_when_well_formed(string? detail, string? expected)
+        => WorkerAccountDetail.TryRead(detail).ShouldBe(expected);
 
     /// <summary>Compute whose create always fails with the scripted error; everything else is the fake's.</summary>
     private sealed class RefusingCreate(FakeGcp inner, CloudOperationException refusal) : IComputeGateway

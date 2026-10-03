@@ -76,11 +76,12 @@ public class RunErrorResourceTests
     public void The_actAs_owner_request_names_the_role_and_the_worker_account_and_the_actAs_run_message_names_the_copy_action()
     {
         var resw = ReswValues();
-        var request = string.Format(System.Globalization.CultureInfo.InvariantCulture, resw["Runs_OwnerRequest_ActAs"], WorkerIdentityNames.ActAsRole, WorkerIdentityNames.ServiceAccountEmail("my-lab"), "my-lab");
+        var request = string.Format(System.Globalization.CultureInfo.InvariantCulture, resw["Runs_OwnerRequest_ActAs"], WorkerIdentityNames.ActAsRole, WorkerIdentityNames.ServiceAccountEmail("my-lab"), "my-lab", string.Format(System.Globalization.CultureInfo.InvariantCulture, resw["Runs_OwnerRequest_Grantee"], "ann@lab.edu"));
 
         request.ShouldContain("roles/iam.serviceAccountUser");
         request.ShouldContain("dna-entropy-worker@my-lab.iam.gserviceaccount.com");
         request.ShouldContain("my-lab");
+        request.ShouldContain("ann@lab.edu");
         resw[RunErrorCodes.ResourceKey(RunErrorCodes.PermissionActAs)].ShouldContain(resw["RunsCopyOwnerRequestButton.Content"]);
     }
 }

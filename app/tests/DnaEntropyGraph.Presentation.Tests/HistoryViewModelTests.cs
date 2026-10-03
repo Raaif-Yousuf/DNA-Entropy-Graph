@@ -32,6 +32,7 @@ public sealed class HistoryViewModelTests
     private readonly IToastService _toasts = Substitute.For<IToastService>();
     private readonly IStringResourceProvider _strings = Substitute.For<IStringResourceProvider>();
     private readonly IShellLauncher _launcher = Substitute.For<IShellLauncher>();
+    private readonly IGcpAccount _account = Substitute.For<IGcpAccount>();
     private List<RunRecord> _rows = [];
 
     public HistoryViewModelTests()
@@ -43,7 +44,7 @@ public sealed class HistoryViewModelTests
         _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(true);
     }
 
-    private HistoryViewModel Make() => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, new UtcClock());
+    private HistoryViewModel Make() => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock());
 
     private static RunRecord Row(string id, JobPhase phase = JobPhase.Completed, DateTimeOffset? created = null, string? name = null, string? outputDir = null, string? options = null, string? notes = null)
         => new(id, phase, created ?? Now.AddHours(-1), Name: name, OutputDir: outputDir, OptionsJson: options ?? "{}", Notes: notes, Bucket: "b", JobPrefix: $"jobs/{id}/");
@@ -702,7 +703,9 @@ public sealed class HistoryViewModelTests
     [Fact]
     public async Task A_run_that_failed_for_actAs_offers_a_copy_request_naming_the_role_the_worker_email_and_the_project()
     {
-        _strings.GetString(RunsCopy.OwnerRequestActAs).Returns("{0}|{1}|{2}");
+        _strings.GetString(RunsCopy.OwnerRequestActAs).Returns("{0}|{1}|{2}|{3}");
+        _strings.GetString(RunsCopy.OwnerRequestGrantee).Returns("<{0}>");
+        _account.CurrentAccount.Returns(new AccountInfo("sub", "ann@lab.edu"));
         _launcher.CopyText(Arg.Any<string>()).Returns(true);
         var vm = await Loaded(Row("denied", JobPhase.Failed) with { ErrorCode = RunErrorCodes.PermissionActAs, ProjectId = "my-lab" });
         var item = Item(vm, "denied");
@@ -710,8 +713,26 @@ public sealed class HistoryViewModelTests
         item.HasOwnerRequest.ShouldBeTrue();
         item.CopyOwnerRequestCommand!.Execute(null);
 
-        _launcher.Received(1).CopyText("roles/iam.serviceAccountUser|dna-entropy-worker@my-lab.iam.gserviceaccount.com|my-lab");
+        _launcher.Received(1).CopyText("roles/iam.serviceAccountUser|dna-entropy-worker@my-lab.iam.gserviceaccount.com|my-lab|<ann@lab.edu>");
         _toasts.Received(1).ShowToast(RunsCopy.OwnerRequestCopied.Title, RunsCopy.OwnerRequestCopied.Body);
+    }
+
+    [Fact]
+    public async Task The_request_names_the_account_the_row_says_the_VM_ran_as_and_leaves_the_grantee_out_when_nobody_is_signed_in()
+    {
+        _strings.GetString(RunsCopy.OwnerRequestActAs).Returns("{0}|{1}|{2}|{3}");
+        _launcher.CopyText(Arg.Any<string>()).Returns(true);
+        _account.CurrentAccount.Returns((AccountInfo?)null);
+        var vm = await Loaded(Row("denied", JobPhase.Failed) with
+        {
+            ErrorCode = RunErrorCodes.PermissionActAs,
+            ProjectId = "my-lab",
+            ErrorDetail = "refused [vm-account=123456789012-compute@developer.gserviceaccount.com]",
+        });
+
+        Item(vm, "denied").CopyOwnerRequestCommand!.Execute(null);
+
+        _launcher.Received(1).CopyText("roles/iam.serviceAccountUser|123456789012-compute@developer.gserviceaccount.com|my-lab|");
     }
 
     [Fact]

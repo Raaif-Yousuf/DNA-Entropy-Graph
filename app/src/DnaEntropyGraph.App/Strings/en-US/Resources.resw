@@ -715,7 +715,10 @@
     <value>Copy request for the project owner</value>
   </data>
   <data name="Runs_OwnerRequest_ActAs" xml:space="preserve">
-    <value>Hello, please grant the role {0} (Service Account User) on the service account {1} in the Google Cloud project {2} to my Google account. Without it, DNA Entropy Graph cannot start a run for me. In the Google Cloud console: IAM and Admin, Service Accounts, choose {1}, Permissions, Grant access.</value>
+    <value>Hello, please grant the role {0} (Service Account User) on the service account {1} in the Google Cloud project {2} to my Google account{3}. Without it, DNA Entropy Graph cannot start a run for me. In the Google Cloud console: IAM and Admin, Service Accounts, choose {1}, Permissions, Grant access.</value>
+  </data>
+  <data name="Runs_OwnerRequest_Grantee" xml:space="preserve">
+    <value> ({0})</value>
   </data>
   <data name="Runs_OwnerRequest_Copied_Title" xml:space="preserve">
     <value>Request copied</value>
