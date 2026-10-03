@@ -12,6 +12,8 @@ from pathlib import Path
 import typer
 
 from . import __version__, pipeline
+from .analysis.regions import DEFAULT_MERGE_GAP, DEFAULT_MIN_LENGTH, DEFAULT_THRESHOLD_BITS
+from .analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS
 from .analysis.windowing import WindowingError
 from .annotators.base import AnnotatorError
 from .config import (
@@ -159,6 +161,55 @@ def run(
         "written to the bedgraph/wig/geneious tracks, an extra TSV column, and stats.txt "
         "(docs/science_and_formats.md; issue #123). Zero extra GPU cost.",
     ),
+    probs: bool = typer.Option(
+        False,
+        "--probs/--no-probs",
+        help="Also write <name>.probs.tsv.gz: the per-base A/C/G/T probabilities behind the entropy "
+        "(large; off by default; issue #127).",
+    ),
+    probs_npy: bool = typer.Option(
+        False,
+        "--probs-npy/--no-probs-npy",
+        help="Also write <name>.probs.npy: the same matrix as a float32 NumPy array (issue #127).",
+    ),
+    smoothed: bool = typer.Option(
+        True,
+        "--smoothed/--no-smoothed",
+        help="Also write <name>.entropy.smooth<W>.bedgraph (or .wig): a rolling mean of the entropy "
+        "track per --smoothing-window. The raw track is always written too (issue #126).",
+    ),
+    smoothing_window: list[int] | None = typer.Option(
+        None,
+        "--smoothing-window",
+        help="Smoothing window in bases, an odd number; repeat for several "
+        f"(default {', '.join(map(str, DEFAULT_SMOOTHING_WINDOWS))}).",
+    ),
+    regions: bool = typer.Option(
+        True,
+        "--regions/--no-regions",
+        help="Also write <name>.regions.bed and <name>.regions.gff3: stretches of low and high "
+        "entropy as a feature track (issue #125).",
+    ),
+    region_threshold: float = typer.Option(
+        DEFAULT_THRESHOLD_BITS,
+        "--region-threshold",
+        help="Region caller: bases below this many bits are low-entropy (and above 2 minus this, "
+        "high-entropy). Above 0, at most 1.",
+    ),
+    region_min_length: int = typer.Option(
+        DEFAULT_MIN_LENGTH, "--region-min-length", help="Region caller: shortest region to report (bases)."
+    ),
+    region_merge_gap: int = typer.Option(
+        DEFAULT_MERGE_GAP,
+        "--region-merge-gap",
+        help="Region caller: merge regions at most this many bases apart.",
+    ),
+    gene_summary: bool = typer.Option(
+        True,
+        "--gene-summary/--no-gene-summary",
+        help="Also write <name>.genes.tsv and <name>.genes.csv: one row per gene with its mean, "
+        "min and max entropy (needs genes: a GenBank input, or --genes; issue #124).",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -195,6 +246,17 @@ def run(
             genes=genes,
             include_tsv=tsv,
             include_surprisal=surprisal,
+            include_probs=probs,
+            include_probs_npy=probs_npy,
+            include_smoothed=smoothed,
+            smoothing_windows=(
+                tuple(smoothing_window) if smoothing_window is not None else DEFAULT_SMOOTHING_WINDOWS
+            ),
+            include_regions=regions,
+            region_threshold=region_threshold,
+            region_min_length=region_min_length,
+            region_merge_gap=region_merge_gap,
+            include_gene_summary=gene_summary,
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value

@@ -404,6 +404,19 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   is to send diagnostics, not to free up space); a size or checksum mismatch is `download_corrupt`. In both the results
   are still in the bucket, so the copy says download again (Hard Rule 14), not start again.
 
+### The consumer side: the Runs page reason line (#459)
+
+- `HistoryViewModel.ReasonFor` turns `RunRecord.ErrorCode` into `RunListItem.ReasonText` through
+  `RunErrorCodes.ResourceKey` and `IStringResourceProvider`; `RunsPage.xaml` binds it under the status line.
+  A Failed run always shows one (a null, blank or unknown code gets `RunError_other`). Any other finished run
+  shows one only when it carries a code, so a Completed run recorded as `lifecycle_unverified` or
+  `vm_end_unconfirmed` shows its warning. A run still going shows none.
+- `ErrorDetail` is never shown: it is raw exception or API text for the diagnostics zip. The copy names the
+  action; the Runs row already has Run again and Download again buttons for the ones that name them.
+- Not yet true: `Save diagnostics in Settings` (#106) has no button, so the copy of `RunError_other` and four
+  others names a control that does not exist until #106 lands. The run progress and results pages do not
+  show the reason yet.
+
 ### The wait, the download and the lifecycle check (cold review of #460, 2026-10-02)
 
 - **A transient failure never ends the wait.** The poll loop catches every `CloudOperationException`
@@ -596,6 +609,12 @@ instance - already-passed happy-path phases are silently skipped
 (`JobStateMachine.HasAlreadyPassed`), and `ProvisionAsync` always reconciles via
 `FindByJobIdAsync` first (section 3, issue #257) - so a second call after a crash *is* the
 resume path, not a distinct one someone has to remember to call.
+
+**On launch (issue #59)**: `JobReconciler` (Core/Cloud) is what calls that resume path for every run a killed app left
+non-terminal. It reads the VM by label and `result.json`, decides (architecture.md section 6 has the table), and hands the run to
+`RunAsync`; it never creates a VM for a run past `Provisioning` whose VM is gone. `FakeGcp.WithCloudNotConnected()` now also makes
+`FindByJobIdAsync` throw `CLOUD_NOT_CONNECTED`, because a listing cannot succeed with no connection: the reconciler reads that, and a network
+error, as "no answer" and leaves the row alone instead of calling the run lost.
 
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:

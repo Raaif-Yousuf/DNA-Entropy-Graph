@@ -188,6 +188,24 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
         });
+        // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
+        // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.
+        // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
+        services.AddSingleton<ActiveRuns>();
+        services.AddSingleton<JobReconciler>(sp =>
+        {
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new JobReconciler(
+                sp.GetRequiredService<CloudJobRunner>(),
+                sp.GetRequiredService<IComputeGateway>(),
+                sp.GetRequiredService<IStorageGateway>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<IRunInputStore>(),
+                sp.GetRequiredService<IWorkerImageProvider>(),
+                sp.GetRequiredService<ActiveRuns>(),
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
+                Services.KnownFolders.Downloads);
+        });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IRunVmActions>(sp => sp.GetRequiredService<JobEngine>());
