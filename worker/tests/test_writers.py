@@ -404,3 +404,13 @@ def test_genbank_writer_uses_lf_not_crlf(tmp_path: Path) -> None:
     raw = Path(path).read_bytes()
     assert b"\r\n" not in raw, "GenBankWriter must write LF newlines, never CRLF (Hard Rule 5)"
     assert b"\n" in raw
+
+
+def test_geneious_variant_names_the_file_and_keeps_the_default_name_unchanged(tmp_path: Path) -> None:
+    """issue #79: Both-separate also writes the fwd/rev tracks through the Geneious writer."""
+    plain = GeneiousWriter().write(name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path))
+    fwd = GeneiousWriter().write(
+        name="locus", values=VALUES, seq=SEQ, start=1, out_dir=str(tmp_path), variant="fwd"
+    )
+    assert Path(plain).name == "locus.entropy.geneious.gff3"
+    assert Path(fwd).name == "locus.entropy.fwd.geneious.gff3"
