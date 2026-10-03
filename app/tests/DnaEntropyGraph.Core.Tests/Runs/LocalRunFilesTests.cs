@@ -115,6 +115,29 @@ public sealed class LocalRunFilesTests : IDisposable
     }
 
     [Fact]
+    public void A_junction_inside_the_run_folder_is_removed_as_a_link_and_its_target_is_untouched()
+    {
+        var folder = MakeRunFolder();
+        var target = Path.Combine(_base, "Elsewhere");
+        Directory.CreateDirectory(target);
+        var precious = Path.Combine(target, "precious.txt");
+        File.WriteAllText(precious, "keep me");
+        var link = Path.Combine(folder, "link");
+        using (var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true }))
+        {
+            mk!.WaitForExit();
+            mk.ExitCode.ShouldBe(0, "could not create the test junction");
+        }
+
+        var result = Make().DeleteOutputFolder(Run(folder));
+
+        File.ReadAllText(precious).ShouldBe("keep me");
+        Directory.Exists(target).ShouldBeTrue();
+        result.Status.ShouldBe(LocalDeleteStatus.Deleted);
+        Directory.Exists(folder).ShouldBeFalse();
+    }
+
+    [Fact]
     public void Deleting_a_folder_that_is_already_gone_is_nothing_to_delete()
         => Make().DeleteOutputFolder(Run(Path.Combine(_root, "gone"))).Status.ShouldBe(LocalDeleteStatus.NothingToDelete);
 

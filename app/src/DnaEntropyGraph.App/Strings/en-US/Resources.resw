@@ -517,10 +517,16 @@
     <value>Cancel</value>
   </data>
   <data name="Runs_DeleteCloud_NotConnected_Title" xml:space="preserve">
-    <value>Cloud storage is not connected</value>
+    <value>Cloud copy not deleted</value>
   </data>
   <data name="Runs_DeleteCloud_NotConnected_Body" xml:space="preserve">
-    <value>Deleting a cloud copy needs a connection to your Google Cloud project. Open Settings to connect, then try again.</value>
+    <value>Deleting a cloud copy from this page comes in a later version, so nothing was deleted. The copy is removed on its own when its storage time ends; to remove it sooner, delete this run's folder in your Google Cloud storage from the Google Cloud console.</value>
+  </data>
+  <data name="Runs_Redownload_Changed_Title" xml:space="preserve">
+    <value>Changed files kept</value>
+  </data>
+  <data name="Runs_Redownload_Changed_Body" xml:space="preserve">
+    <value>{0} files in this folder differed from your cloud copy. Each was kept in the same folder under a name ending in "(changed" and the time, and the original was restored. Open the folder to compare them, and delete the ones you do not need.</value>
   </data>
   <data name="Runs_Redownload_Partial_Title" xml:space="preserve">
     <value>Some files restored</value>
@@ -571,7 +577,7 @@
     <value>This run has no cloud copy left to delete. Choose Run again if you need its results.</value>
   </data>
   <data name="Runs_DeleteCloud_Hint_NotConnected" xml:space="preserve">
-    <value>Cloud storage is not connected. Open Settings to connect, then choose Delete cloud copy.</value>
+    <value>Deleting a cloud copy from this page comes in a later version. The copy is removed on its own when its storage time ends; to remove it sooner, delete this run's folder in your Google Cloud storage from the Google Cloud console.</value>
   </data>
   <data name="AuthError_SIGNIN_EXPIRED" xml:space="preserve">
     <value>Your sign-in expired. This happens on its own, roughly once a week, while the app's Google approval is still in its early testing phase. It also happens if you removed this app's access in your Google account settings. Choose Sign in again.</value>

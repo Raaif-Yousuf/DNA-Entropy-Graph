@@ -38,7 +38,7 @@ public sealed class RunListItem
         bool hasLocalFiles,
         bool cloudAvailable,
         bool canDeleteCloud,
-        string deleteCloudHint,
+        string? deleteCloudHint,
         IAsyncRelayCommand openCommand,
         IAsyncRelayCommand rerunCommand,
         IAsyncRelayCommand redownloadCommand,
@@ -85,8 +85,8 @@ public sealed class RunListItem
 
     public bool CanRemove { get; }
 
-    /// <summary>Why Delete cloud copy is unavailable, or empty when it is available; shown as its tooltip.</summary>
-    public string DeleteCloudHint { get; }
+    /// <summary>Why Delete cloud copy is unavailable, or null when it is available; shown as its tooltip.</summary>
+    public string? DeleteCloudHint { get; }
 
     public IAsyncRelayCommand OpenCommand { get; }
 

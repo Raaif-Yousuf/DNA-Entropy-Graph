@@ -86,12 +86,12 @@ public sealed class LocalRunFiles : ILocalRunFiles
     /// </summary>
     private static LocalDeleteResult DeleteFilesThenFolders(string folder)
     {
-        string[] files;
-        string[] directories;
+        var files = new List<string>();
+        var links = new List<(string Path, bool IsDirectory)>();
+        var directories = new List<string>();
         try
         {
-            files = Directory.GetFiles(folder, "*", SearchOption.AllDirectories);
-            directories = Directory.GetDirectories(folder, "*", SearchOption.AllDirectories);
+            Walk(new DirectoryInfo(folder), files, directories, links);
         }
         catch (UnauthorizedAccessException)
         {
@@ -108,6 +108,32 @@ public sealed class LocalRunFiles : ILocalRunFiles
             try
             {
                 File.Delete(file);
+                deleted++;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                denied++;
+            }
+            catch (IOException)
+            {
+                inUse++;
+            }
+        }
+
+        // A junction or symlink is removed as the link it is: deleting through it would reach files outside the run's folder.
+        foreach (var (path, isDirectory) in links)
+        {
+            try
+            {
+                if (isDirectory)
+                {
+                    Directory.Delete(path, recursive: false);
+                }
+                else
+                {
+                    File.Delete(path);
+                }
+
                 deleted++;
             }
             catch (UnauthorizedAccessException)
@@ -137,6 +163,27 @@ public sealed class LocalRunFiles : ILocalRunFiles
         return deleted > 0
             ? new(LocalDeleteStatus.Partial, deleted, remaining)
             : new(inUse > 0 ? LocalDeleteStatus.InUse : LocalDeleteStatus.AccessDenied, 0, remaining);
+    }
+
+    /// <summary>Lists what lies under <paramref name="root"/> without ever stepping into a reparse point (junction, symlink): those are collected as links.</summary>
+    private static void Walk(DirectoryInfo root, List<string> files, List<string> directories, List<(string Path, bool IsDirectory)> links)
+    {
+        foreach (var entry in root.EnumerateFileSystemInfos())
+        {
+            if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                links.Add((entry.FullName, entry is DirectoryInfo));
+            }
+            else if (entry is DirectoryInfo directory)
+            {
+                directories.Add(directory.FullName);
+                Walk(directory, files, directories, links);
+            }
+            else
+            {
+                files.Add(entry.FullName);
+            }
+        }
     }
 
     private static bool TryDeleteEmptyFolder(string directory)

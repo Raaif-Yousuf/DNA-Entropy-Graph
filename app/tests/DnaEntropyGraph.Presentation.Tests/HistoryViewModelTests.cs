@@ -163,7 +163,7 @@ public sealed class HistoryViewModelTests
         var vm = await Loaded(Row("ok"), Row("live", JobPhase.Running), Row("nocopy"), Row("offline"));
 
         Item(vm, "ok").CanDeleteCloud.ShouldBeTrue();
-        Item(vm, "ok").DeleteCloudHint.ShouldBeEmpty();
+        Item(vm, "ok").DeleteCloudHint.ShouldBeNull();
         Item(vm, "live").CanDeleteCloud.ShouldBeFalse();
         Item(vm, "live").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Hint_Running");
         Item(vm, "nocopy").CanDeleteCloud.ShouldBeFalse();
@@ -260,6 +260,80 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task A_running_run_cannot_be_run_again_from_its_row()
+    {
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\in.gb");
+        var vm = await Loaded(Row("live", JobPhase.Running, options: RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud" })));
+
+        Item(vm, "live").RerunCommand.CanExecute(null).ShouldBeFalse();
+        await Item(vm, "live").RerunCommand.ExecuteAsync(null);
+
+        await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_finished_run_can_be_run_again()
+    {
+        var vm = await Loaded(Row("done"));
+
+        Item(vm, "done").RerunCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Clearing_the_status_filter_selection_shows_all_runs_instead_of_throwing()
+    {
+        var vm = await Loaded(Row("a"), Row("b", JobPhase.Failed));
+        vm.SelectedStatusFilter = vm.StatusFilters.Single(f => f.Value == RunStatusFilter.Failed);
+
+        vm.SelectedStatusFilter = null;
+
+        vm.Groups.SelectMany(g => g.Items).Select(i => i.JobId).OrderBy(x => x).ShouldBe(["a", "b"]);
+    }
+
+    [Fact]
+    public async Task An_older_slow_load_that_finishes_last_does_not_overwrite_the_newer_list()
+    {
+        var vm = await Loaded(Row("a"));
+        var slow = new TaskCompletionSource<IReadOnlyList<RunRecord>>();
+        var calls = 0;
+        _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => Interlocked.Increment(ref calls) == 1
+            ? slow.Task
+            : Task.FromResult<IReadOnlyList<RunRecord>>([Row("new")]));
+
+        // The page's Refresh is still reading when a row action finishes and reloads (that path does not go through the command).
+        var older = vm.RefreshCommand.ExecuteAsync(null);
+        await Item(vm, "a").RemoveCommand.ExecuteAsync(null);
+        slow.SetResult([Row("stale")]);
+        await older;
+
+        vm.Groups.SelectMany(g => g.Items).Select(i => i.JobId).ShouldBe(["new"]);
+    }
+
+    [Fact]
+    public async Task Redownload_that_kept_changed_files_aside_says_how_many_in_a_second_toast()
+    {
+        _strings.GetString("Runs_Redownload_Changed_Body").Returns("{0} kept");
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new RedownloadResult(CloudResultsStatus.Done, 2));
+        var vm = await Loaded(Row("a"));
+
+        await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_Redownload_Changed_Title", "2 kept");
+        _toasts.Received(1).ShowToast("Runs_Redownload_Done_Title", "Runs_Redownload_Done_Body");
+    }
+
+    [Fact]
+    public async Task Redownload_that_changed_nothing_shows_no_changed_files_toast()
+    {
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.Done);
+        var vm = await Loaded(Row("a"));
+
+        await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
+
+        _toasts.DidNotReceive().ShowToast("Runs_Redownload_Changed_Title", Arg.Any<string>());
+    }
+
+    [Fact]
     public async Task Open_probes_the_disk_off_the_calling_thread()
     {
         using var gate = new ManualResetEventSlim();
@@ -299,7 +373,7 @@ public sealed class HistoryViewModelTests
     [InlineData(typeof(InvalidOperationException))]
     public async Task A_redownload_or_cloud_delete_that_throws_toasts_the_failure_copy(Type exception)
     {
-        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudResultsStatus>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<RedownloadResult>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
         _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudResultsStatus>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
         var vm = await Loaded(Row("a"));
 

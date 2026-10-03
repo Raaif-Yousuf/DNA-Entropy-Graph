@@ -30,6 +30,15 @@ public enum CloudResultsStatus
     Failed,
 }
 
+/// <summary>
+/// What a re-download did. <see cref="ChangedKeptAside"/> counts local files that no longer matched the bucket copy and were
+/// renamed (never overwritten) before the original was fetched. A bare <see cref="CloudResultsStatus"/> converts to a result with none.
+/// </summary>
+public sealed record RedownloadResult(CloudResultsStatus Status, int ChangedKeptAside = 0)
+{
+    public static implicit operator RedownloadResult(CloudResultsStatus status) => new(status);
+}
+
 /// <summary>Thrown by an <see cref="IJobObjectDeleter"/> that has no real cloud behind it.</summary>
 public sealed class CloudNotConnectedException : Exception
 {
@@ -62,10 +71,11 @@ public interface IRunCloudResults
 
     /// <summary>
     /// Restores the run's output files from the bucket into its output folder (recreated if it was deleted).
-    /// A file already in the folder that matches the size and SHA-256 recorded in <c>result.json</c> is left exactly as it is;
-    /// a missing one, or one that no longer matches (cut off or damaged), is fetched again and replaced.
+    /// A file already in the folder that matches the size and SHA-256 recorded in <c>result.json</c> is left exactly as it is.
+    /// One that no longer matches (cut off, damaged or edited by the user) is renamed to <c>name (changed yyyy-MM-dd HHmmss).ext</c>
+    /// in the same folder and the original is fetched; nothing the user may have changed is ever overwritten (Hard Rule 14).
     /// </summary>
-    Task<CloudResultsStatus> RedownloadAsync(RunRecord run, CancellationToken cancellationToken);
+    Task<RedownloadResult> RedownloadAsync(RunRecord run, CancellationToken cancellationToken);
 
     /// <summary>Deletes the objects under this run's job-id prefix and records that the cloud copy is gone. Never anything outside that prefix (Hard Rule 11).</summary>
     Task<CloudResultsStatus> DeleteAsync(RunRecord run, CancellationToken cancellationToken);
@@ -94,7 +104,7 @@ public sealed class RunCloudResults : IRunCloudResults
     public bool CanDelete(RunRecord run)
         => _deleter.IsAvailable && !run.CloudResultsDeleted && !string.IsNullOrWhiteSpace(run.Bucket) && !string.IsNullOrWhiteSpace(run.JobPrefix);
 
-    public async Task<CloudResultsStatus> RedownloadAsync(RunRecord run, CancellationToken cancellationToken)
+    public async Task<RedownloadResult> RedownloadAsync(RunRecord run, CancellationToken cancellationToken)
     {
         if (Classify(run) is { } unavailable)
         {
@@ -126,15 +136,19 @@ public sealed class RunCloudResults : IRunCloudResults
                 return CloudResultsStatus.Refused;
             }
 
+            var changed = 0;
             foreach (var file in result.Inputs.SelectMany(i => i.Files))
             {
-                await DownloadFileAsync(run, folder, file, cancellationToken).ConfigureAwait(false);
+                if (await DownloadFileAsync(run, folder, file, cancellationToken).ConfigureAwait(false))
+                {
+                    changed++;
+                }
             }
 
 
             // Same rule as RunOutcomeRecorder: every input finished with files, else the history says "partly completed".
             var allInputsDone = result.Inputs.All(i => i.Status == "done" && i.Files.Count > 0);
-            return string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial;
+            return new(string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial, changed);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -197,6 +211,20 @@ public sealed class RunCloudResults : IRunCloudResults
         return RunOutputRoot.IsStrictlyInside(folder, root) ? folder : null;
     }
 
+    private string FreeAsideName(string path)
+    {
+        var stamp = _time.GetLocalNow().ToString("yyyy-MM-dd HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        var stem = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + " (changed " + stamp);
+        var ext = Path.GetExtension(path);
+        var candidate = stem + ")" + ext;
+        for (var n = 2; File.Exists(candidate); n++)
+        {
+            candidate = $"{stem} {n}){ext}";
+        }
+
+        return candidate;
+    }
+
     /// <summary>
     /// True when the file already on disk is the one the worker uploaded: same size, and same SHA-256 where <c>result.json</c> lists one.
     /// A file the result gives no size or hash for cannot be checked, so it is kept as it is.
@@ -218,7 +246,8 @@ public sealed class RunCloudResults : IRunCloudResults
         return string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task DownloadFileAsync(RunRecord run, string folder, WorkerResultFile file, CancellationToken cancellationToken)
+    /// <returns>True when a changed local file was kept aside to make room for the original.</returns>
+    private async Task<bool> DownloadFileAsync(RunRecord run, string folder, WorkerResultFile file, CancellationToken cancellationToken)
     {
         var relative = RunTransfer.SafeRelativeOutputPath(file.Path, "A result file");
         var destination = Path.GetFullPath(Path.Combine(folder, relative));
@@ -227,9 +256,10 @@ public sealed class RunCloudResults : IRunCloudResults
             throw new InvalidDataException("A result file leaves the output folder.");
         }
 
-        if (File.Exists(destination) && await IsKeptFileIntactAsync(destination, file, cancellationToken).ConfigureAwait(false))
+        var exists = File.Exists(destination);
+        if (exists && await IsKeptFileIntactAsync(destination, file, cancellationToken).ConfigureAwait(false))
         {
-            return;
+            return false;
         }
 
         await using var source = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + file.Path, cancellationToken).ConfigureAwait(false)
@@ -262,8 +292,15 @@ public sealed class RunCloudResults : IRunCloudResults
                 throw new InvalidDataException("A result file does not match its checksum.");
             }
 
-            // Reached for a missing file, or a kept one that failed its size or checksum (a cut-off or damaged copy).
-            File.Move(partial, destination, overwrite: true);
+            // Reached for a missing file, or a kept one that failed its size or checksum. The download is already verified, so a
+            // failure above leaves the user's file exactly where it was; only now is it moved aside, never overwritten.
+            if (exists)
+            {
+                File.Move(destination, FreeAsideName(destination), overwrite: false);
+            }
+
+            File.Move(partial, destination, overwrite: false);
+            return exists;
         }
         finally
         {

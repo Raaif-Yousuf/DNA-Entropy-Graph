@@ -32,6 +32,7 @@ public static class RunsCopy
     public static readonly (string Title, string Body) RerunNoInput = Pair("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body");
     public static readonly (string Title, string Body) RerunFailed = Pair("Runs_Rerun_Failed_Title", "Runs_Rerun_Failed_Body");
     public static readonly (string Title, string Body) RemoveFailed = Pair("Runs_Remove_Failed_Title", "Runs_Remove_Failed_Body");
+    public static readonly (string Title, string Body) RedownloadChangedKeptAside = Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body");
     public static readonly (string Title, string Body) RefreshFailed = Pair("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body");
 
     private static readonly string[] FilterKeys = ["Runs_Filter_All", "Runs_Filter_Active", "Runs_Filter_Completed", "Runs_Filter_Failed", "Runs_Filter_Cancelled"];
@@ -73,7 +74,7 @@ public static class RunsCopy
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         .. FilterKeys,
-        .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed),
+        .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),

@@ -29,12 +29,14 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly TimeProvider _time;
     private IReadOnlyList<RunListItem> _items = [];
+    private int _loadGeneration;
 
     [ObservableProperty]
     private string _searchText = string.Empty;
 
+    // Nullable because a TwoWay ComboBox binding writes null when its selection is cleared; null means "All".
     [ObservableProperty]
-    private RunStatusFilterOption _selectedStatusFilter;
+    private RunStatusFilterOption? _selectedStatusFilter;
 
     [ObservableProperty]
     private bool _isEmpty = true;
@@ -85,12 +87,20 @@ public sealed partial class HistoryViewModel : ObservableObject
     [RelayCommand]
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
+        // Every load (page open, Refresh, after an action) takes a number; only the newest may write the list, so a slow older
+        // load that finishes last cannot put stale rows back.
+        var generation = Interlocked.Increment(ref _loadGeneration);
         try
         {
             var runs = await _runRepository.GetAllAsync(cancellationToken);
 
             // One disk probe per row: off the UI thread.
             var rows = await Task.Run(() => runs.OrderByDescending(r => r.CreatedUtc).Select(r => (Run: r, HasFolder: _local.OutputFolderExists(r))).ToList(), cancellationToken);
+            if (generation != Volatile.Read(ref _loadGeneration))
+            {
+                return;
+            }
+
             _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder))];
             ApplyFilter();
         }
@@ -107,12 +117,12 @@ public sealed partial class HistoryViewModel : ObservableObject
 
     partial void OnSearchTextChanged(string value) => ApplyFilter();
 
-    partial void OnSelectedStatusFilterChanged(RunStatusFilterOption value) => ApplyFilter();
+    partial void OnSelectedStatusFilterChanged(RunStatusFilterOption? value) => ApplyFilter();
 
     private void ApplyFilter()
     {
         var text = SearchText.Trim();
-        var wanted = SelectedStatusFilter.Value;
+        var wanted = SelectedStatusFilter?.Value ?? RunStatusFilter.All;
         var visible = _items
             .Where(i => wanted == RunStatusFilter.All || i.Status == wanted)
             .Where(i => text.Length == 0 || Matches(i.Run, text))
@@ -160,7 +170,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             _cloud.CanDelete(run),
             DeleteCloudHint(run),
             new AsyncRelayCommand(() => OpenAsync(run)),
-            new AsyncRelayCommand(() => RerunAsync(run)),
+            new AsyncRelayCommand(() => RerunAsync(run), () => IsFinished(run.Phase)),
             new AsyncRelayCommand(() => RedownloadAsync(run)),
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
@@ -168,11 +178,12 @@ public sealed partial class HistoryViewModel : ObservableObject
     }
 
     /// <summary>Why Delete cloud copy is off for this run (one reason, one action), or empty when it is on.</summary>
-    private string DeleteCloudHint(RunRecord run)
+    private string? DeleteCloudHint(RunRecord run)
     {
         if (_cloud.CanDelete(run) && IsFinished(run.Phase))
         {
-            return string.Empty;
+            // Null, not "": an empty tooltip string still pops up an empty box in WinUI.
+            return null;
         }
 
         var key = !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
@@ -212,6 +223,12 @@ public sealed partial class HistoryViewModel : ObservableObject
     private Task RerunAsync(RunRecord run) => ActAsync(
         async () =>
         {
+            // A run still going owns its VM; starting another from its row would rent a second one.
+            if (!IsFinished(run.Phase))
+            {
+                return null;
+            }
+
             var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
             if (options is null)
             {
@@ -231,7 +248,17 @@ public sealed partial class HistoryViewModel : ObservableObject
         RunsCopy.RerunFailed);
 
     private Task RedownloadAsync(RunRecord run) => ActAsync(
-        async () => RunsCopy.Redownload(await _cloud.RedownloadAsync(run, CancellationToken.None)),
+        async () =>
+        {
+            var result = await _cloud.RedownloadAsync(run, CancellationToken.None);
+            if (result.ChangedKeptAside > 0)
+            {
+                // Files the user may have edited were renamed, not overwritten: say how many and where to look.
+                Toast(RunsCopy.RedownloadChangedKeptAside, result.ChangedKeptAside);
+            }
+
+            return RunsCopy.Redownload(result.Status);
+        },
         RunsCopy.Redownload(CloudResultsStatus.Failed));
 
     private Task DeleteCloudAsync(RunRecord run) => ActAsync(

@@ -185,8 +185,11 @@ public sealed class RunCloudResultsTests : IDisposable
         File.ReadAllBytes(kept).ShouldBe(BedGraph);
     }
 
+    private string AsideName(string stem = "sample", string ext = ".bedgraph")
+        => $"{stem} (changed {new FixedTime(_now).GetLocalNow():yyyy-MM-dd HHmmss}){ext}";
+
     [Fact]
-    public async Task A_kept_file_with_the_wrong_size_is_downloaded_again()
+    public async Task A_kept_file_with_the_wrong_size_is_moved_aside_never_overwritten_and_the_original_is_downloaded()
     {
         PutResult();
         var folder = Path.Combine(_root, "sample");
@@ -194,23 +197,58 @@ public sealed class RunCloudResultsTests : IDisposable
         var kept = Path.Combine(folder, "sample.bedgraph");
         File.WriteAllBytes(kept, BedGraph[..4]);
 
-        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+        var result = await Make().RedownloadAsync(Run(folder), CancellationToken.None);
 
+        result.ShouldBe(new RedownloadResult(CloudResultsStatus.Done, ChangedKeptAside: 1));
         File.ReadAllBytes(kept).ShouldBe(BedGraph);
+        File.ReadAllBytes(Path.Combine(folder, AsideName())).ShouldBe(BedGraph[..4]);
     }
 
     [Fact]
-    public async Task A_kept_file_of_the_right_size_but_the_wrong_hash_is_downloaded_again()
+    public async Task A_kept_file_of_the_right_size_but_the_wrong_hash_is_moved_aside_and_downloaded_again()
     {
         PutResult();
         var folder = Path.Combine(_root, "sample");
         Directory.CreateDirectory(folder);
         var kept = Path.Combine(folder, "sample.bedgraph");
-        File.WriteAllBytes(kept, new byte[BedGraph.Length]);
+        var edited = new byte[BedGraph.Length];
+        File.WriteAllBytes(kept, edited);
 
-        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ChangedKeptAside.ShouldBe(1);
 
         File.ReadAllBytes(kept).ShouldBe(BedGraph);
+        File.ReadAllBytes(Path.Combine(folder, AsideName())).ShouldBe(edited);
+    }
+
+    [Fact]
+    public async Task Two_changed_files_are_both_kept_aside_and_a_name_clash_gets_a_counter()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(Path.Combine(folder, AsideName()), "earlier aside");
+        File.WriteAllBytes(kept, new byte[3]);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ChangedKeptAside.ShouldBe(1);
+
+        File.ReadAllText(Path.Combine(folder, AsideName())).ShouldBe("earlier aside");
+        Directory.GetFiles(folder).Length.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_failed_download_leaves_the_changed_file_where_it_was()
+    {
+        PutResult(sha: new string('0', 64));
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllText(kept, "my edits");
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.Failed);
+
+        File.ReadAllText(kept).ShouldBe("my edits");
+        Directory.GetFiles(folder).Length.ShouldBe(1);
     }
 
     [Fact]
@@ -229,7 +267,7 @@ public sealed class RunCloudResultsTests : IDisposable
 
         File.ReadAllBytes(kept).ShouldBe(new byte[content.Length]);
         File.WriteAllBytes(kept, content[..3]);
-        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ChangedKeptAside.ShouldBe(1);
         File.ReadAllBytes(kept).ShouldBe(content);
     }
 
