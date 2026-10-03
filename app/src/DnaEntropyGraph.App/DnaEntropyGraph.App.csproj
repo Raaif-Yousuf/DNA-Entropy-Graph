@@ -18,6 +18,14 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
     <SelfContained>true</SelfContained>
+    <!--
+      #438. MEASURED 2026-10-03 (minidump of a hung CI run): the Windows App SDK's generated module initializer in this assembly
+      calls MddBootstrapInitialize2 with OnNoMatch_ShowUI, which with no Windows App Runtime installed opens a modal dialog; a
+      CI runner has no desktop, so the first test to touch an App type waited forever. None makes a missing runtime exit with its
+      HRESULT instead. CI only (GitHub Actions sets CI=true): a person at a desktop keeps the friendly dialog.
+      Pinned by Guards.Tests/BootstrapNeverShowsUiGuardTests.
+    -->
+    <WindowsAppSDKBootstrapAutoInitializeOptions_None Condition="'$(CI)' == 'true'">true</WindowsAppSDKBootstrapAutoInitializeOptions_None>
     <OutputType>WinExe</OutputType>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>

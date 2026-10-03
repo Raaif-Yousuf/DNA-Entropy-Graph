@@ -57,6 +57,19 @@ jobs:
         with:
           global-json-file: app/global.json
 
+      # #438. MEASURED 2026-10-03 (minidump of PR #529's run): the hung test was blocked in the Windows App SDK
+      # bootstrap (MddBootstrapInitialize2) because windows-latest has no Windows App Runtime, and the default
+      # bootstrap option opens a dialog nobody can answer. DnaEntropyGraph.App.csproj now sets option None when CI=true
+      # (a missing runtime exits with an HRESULT instead of hanging); this step installs the runtime so the tests that
+      # touch WinUI types (Guards DiResolutionTests) can pass. THEORY (unverified) until a run shows it: that the
+      # redistributable installs silently on windows-latest; see docs/ToTest.md.
+      - name: install Windows App Runtime
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe -OutFile "$env:RUNNER_TEMP/windowsappruntimeinstall.exe"
+          $p = Start-Process -FilePath "$env:RUNNER_TEMP/windowsappruntimeinstall.exe" -ArgumentList '--quiet' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Windows App Runtime install exited $($p.ExitCode)" }
+
       - name: restore
         working-directory: app
         run: dotnet restore
