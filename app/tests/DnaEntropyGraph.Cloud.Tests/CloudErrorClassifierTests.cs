@@ -152,6 +152,20 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
     }
 
+    // Round 4: an org-policy marker (a constraints/ id) beats the permission wording when no status says otherwise,
+    // and "billing is required" on a 403 is billing off, not Other.
+    [Theory]
+    [InlineData(null, "Constraint constraints/compute.vmExternalIpAccess violated; the caller does not have permission", CloudErrorKind.OrgPolicy)]
+    [InlineData(null, "Permission 'compute.instances.create' denied by constraints/compute.requireOsLogin", CloudErrorKind.OrgPolicy)]
+    [InlineData(403, "Billing is required for this project", CloudErrorKind.Billing)]
+    [InlineData(403, "This API method requires billing: billing is required", CloudErrorKind.Billing)]
+    [InlineData(403, "The caller does not have permission; billing is required on the billing account", CloudErrorKind.Permission)]
+    [InlineData(403, "Caller does not have required permission to use project 123. Use another project to pass your quota and billing.", CloudErrorKind.Permission)]
+    public void An_org_policy_marker_wins_without_a_status_and_billing_required_is_billing(int? status, string message, CloudErrorKind expected)
+    {
+        CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
+    }
+
     [Fact]
     public void Org_policy_has_no_substring_fallback_unlike_the_other_eight_buckets()
     {

@@ -784,7 +784,8 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
 
 ### Project list and create (issue #50, wizard step 3)
 
-`IProjectCatalogGateway`: `ListActiveProjectsAsync`, `GetProjectAsync`, `CreateProjectAsync`.
+`IProjectCatalogGateway`: `ListActiveProjectsAsync`, `GetProjectAsync`, `CreateProjectAsync`. It has no production
+consumer and no DI registration until the wizard (#99) and its ViewModel (#56) arrive; it is not wired here on purpose.
 
 - **List.** `GET /v3/projects:search?query=state:ACTIVE`, following `nextPageToken`. Projects labelled
   `app=dna-entropy-graph` sort first (`ProjectCatalogOrder`), then by name. An account with no projects gets an empty
@@ -801,7 +802,9 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   and covers the time inside each read: `OperationPoller` hands every read a token that ends at the deadline, so a hung
   GET (the HTTP client would wait about 100 s) ends at the deadline as `OPERATION_POLL_TIMEOUT`, not at the client's
   timeout. The caller's own cancel still surfaces as a cancel. `CloudCallPipeline.IsTransient` also never replays a
-  spent poll deadline. A finished operation with no error and no project in its response is read back with
+  spent poll deadline (defence in depth: no caller runs `PollAsync` inside the pipeline today; pinned by a direct
+  pipeline test). The last read is never given a fresh deadline: once the waits have spent the deadline the poll ends
+  as `OPERATION_POLL_TIMEOUT` without another read. A finished operation with no error and no project in its response is read back with
   `projects.get` for the requested id; if that finds nothing the error is `OPERATION_NO_RESULT`, never a success with
   an empty id.
 - **Replay safety.** The POST is replayed after a dropped connection. A `409 ALREADY_EXISTS`
@@ -828,7 +831,7 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   Google omits `billingEnabled` when it is false, so an absent value reads as off. Billing is "enabled" only when an
   account is linked and `billingEnabled` is true.
 - **Policy.** On: nothing is linked. Off with one open account: linked for the user, then the status is read back
-  (a link Google accepted that did not turn billing on is `LinkedButStillOff`, code `BILLING_STILL_OFF`, action Pick another billing account; never `NO_BILLING`, which would loop the user back to Link). Several: `ChooseAccount`,
+  (a link Google accepted that did not turn billing on is `LinkedButStillOff`, code `BILLING_STILL_OFF`, action Pick another billing account, with exactly the other open accounts in `Accounts`; never `NO_BILLING`, which would loop the user back to Link). When there is no other open account to pick the outcome is `FixLinkedAccount`, code `BILLING_ACCOUNT_OFF`, action Fix billing account (`BillingLinks.ForProject`), never "pick another" with nothing to pick. A project that already has an account linked while billing is off is never linked over unasked: `EnsureAsync` answers `ChooseAccount` (the other open accounts) or `FixLinkedAccount`, so a re-check cannot loop on `LinkProjectAsync`. Several: `ChooseAccount`,
   and `LinkAsync` links the one the user picked. None: `NeedsAccount` with `BillingLinks.ForProject(projectId)`, the
   console page for that project; calling `EnsureAsync` again after the user adds a payment method is the re-check.
   The wizard action for the code `NO_BILLING` is that link (`SetupAction_LinkBilling`).

@@ -63,6 +63,7 @@ public sealed class InputFileValidatorMeasuredParityTests : IDisposable
             Refuse("gb_contig_line_after_origin", "gb", Head + "        1 acgtacgt acgtacgt\nCONTIG      join(x:1..5)\n//\n", InputProblemCode.NoRecords),
             Refuse("gb_tab_in_coordinate_column", "gb", Gb("        1\tacgtacgt acgtacgt"), InputProblemCode.NoRecords),
             Ok("gb_blank_line_in_origin", "gb", Gb("        1 acgtacgt\n\n       11 acgtacgt"), InputKind.GenBank, 1, 16),
+            Refuse("gb_long_s_in_origin", "gb", Gb("        1 acgtacgtſacgtacg"), InputProblemCode.InvalidCharacter),
             Ok("gb_digit_inside_sequence_is_removed_by_validation", "gb", Gb("        1 acgt1cgt acgtacgt"), InputKind.GenBank, 1, 15),
 
             // Python str.splitlines splits on \v \f \x1c \x1d \x1e \x85 U+2028 U+2029 too.
@@ -119,38 +120,26 @@ public sealed class InputFileValidatorMeasuredParityTests : IDisposable
         }
     }
 
-    // ---- documented divergence, worker issue #492 ------------------------------------------------
+    // ---- worker issue #492, fixed: both sides refuse a non-ASCII ORIGIN letter at the same position ----
 
     /// <summary>
-    /// Worker bug #492: <c>read_genbank</c> hands back U+017F (long s) in an ORIGIN block as
-    /// ASCII 'S' (Biopython upper-cases Unicode before the worker normalises), so the worker
-    /// ACCEPTS a record that C# refuses. MEASURED 2026-10-02: Python load_input returned
-    /// 1 contig of 16 for this file. C# stays strict; this asserts it.
+    /// A long s (U+017F) in an ORIGIN block used to come back from the worker's <c>read_genbank</c>
+    /// as ASCII 'S' (Biopython upper-cases before the worker validates), so the worker accepted it.
+    /// Fixed in the worker (#492): <c>load_input</c> now raises a validation error reading
+    /// "Invalid character U+017F at position 9", measured by tests in worker/tests/test_genbank.py.
+    /// C# refuses with the same code and the same 1-based position. The verdict is also a corpus
+    /// case above (<c>gb_long_s_in_origin</c>).
     /// </summary>
     [Fact]
-    public void Divergence_492_a_long_s_in_a_GenBank_origin_is_refused_here_though_the_worker_accepts_it()
+    public void A_long_s_in_a_GenBank_origin_is_refused_at_position_9_like_the_worker()
     {
         var path = Path.Combine(_dir, "long_s.gb");
-        File.WriteAllBytes(path, U(Gb("        1 acgtacgt\u017facgtacg")));
+        File.WriteAllBytes(path, U(Gb("        1 acgtacgtſacgtacg")));
 
         var problem = InputFileValidator.Validate(path, InputFormat.Auto, AmbiguityPolicy.Keep, treatAsRna: false).Problem;
 
         problem.ShouldNotBeNull();
         problem.Code.ShouldBe(InputProblemCode.InvalidCharacter);
         problem.Position.ShouldBe(9);
-    }
-
-    /// <summary>
-    /// A heuristic tripwire, not a proof: when #492 is fixed in the worker's reader the source
-    /// will mention ASCII-only case handling. Then this goes red and the divergence above must
-    /// become a normal parity case (worker accepts nothing non-ASCII).
-    /// </summary>
-    [Fact]
-    public void Divergence_492_tripwire_goes_red_when_the_worker_reader_gains_ascii_only_handling()
-    {
-        var source = File.ReadAllText(Path.Combine(ContractFixtures.RepoRoot, "worker", "src", "dna_entropy", "readers", "genbank.py"));
-
-        source.ShouldNotContain("isascii", Shouldly.Case.Insensitive, "#492 looks fixed in worker/src/dna_entropy/readers/genbank.py: turn the divergence test into a parity case");
-        source.ShouldNotContain("_ASCII_UPPER", Shouldly.Case.Sensitive, "#492 looks fixed: turn the divergence test into a parity case");
     }
 }

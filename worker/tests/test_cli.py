@@ -255,6 +255,7 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--context-length",
         "-k",
         "--direction",
+        "--topology",
         "--rna",
         "--ambiguity",
         "--genes",
@@ -469,3 +470,29 @@ def test_validate_matches_the_recorded_ambiguity_cases() -> None:
         result = runner.invoke(app, case["args"], input=case["stdin"])
         assert result.exit_code == case["exit_code"], case["id"]
         assert result.output == case["output"], case["id"]
+
+
+def test_topology_flag_reaches_the_pipeline_and_provenance(tmp_path) -> None:
+    import json
+
+    out_dir = tmp_path / "out"
+    seq = "ACGTTGCAAGCT" * 30
+    for flag, expected in (("circular", "circular"), ("linear", "linear"), ("auto", "linear")):
+        result = runner.invoke(
+            app,
+            ["run", "--name", "clitopo", "--out", str(out_dir / flag), "-k", "128", "--topology", flag],
+            input=seq,
+        )
+        assert result.exit_code == 0, result.output
+        prov = json.loads((out_dir / flag / "clitopo" / "provenance.json").read_text(encoding="utf-8"))
+        assert prov["run"]["topology"] == flag
+        assert prov["contigs"][0]["topology"] == expected
+        assert (prov["contigs"][0]["seam"] is None) == (expected == "circular")
+
+
+def test_an_unknown_topology_flag_is_refused_with_one_ascii_error_line(tmp_path) -> None:
+    result = runner.invoke(
+        app, ["run", "--name", "clibad", "--out", str(tmp_path), "--topology", "ring"], input="ACGT" * 80
+    )
+    assert result.exit_code == 1
+    assert "ERROR:" in result.output

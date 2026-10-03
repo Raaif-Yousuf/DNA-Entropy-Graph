@@ -86,15 +86,72 @@ public class BillingSetupTests
     }
 
     [Fact]
-    public async Task A_link_that_did_not_turn_billing_on_is_reported_as_still_off_with_its_own_code_not_as_no_account_or_success()
+    public async Task A_link_that_did_not_turn_billing_on_with_no_other_account_says_to_fix_that_account_not_to_pick_another()
     {
         var gcp = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/AAA", "Lab card").WithBillingLinkThatDoesNotEnable();
 
         var outcome = await new BillingSetup(gcp).EnsureAsync(Project, CancellationToken.None);
 
+        outcome.Kind.ShouldBe(BillingOutcomeKind.FixLinkedAccount);
+        outcome.Code.ShouldBe(SetupErrorCodes.BillingAccountOff);
+        outcome.Code.ShouldNotBe(SetupErrorCodes.NoBilling);
+        outcome.Code.ShouldNotBe(SetupErrorCodes.BillingStillOff);
+        outcome.AccountId.ShouldBe("billingAccounts/AAA");
+        outcome.DeepLink.ShouldBe(BillingLinks.ForProject(Project));
+    }
+
+    [Fact]
+    public async Task A_link_that_did_not_turn_billing_on_with_other_accounts_offers_exactly_those_others()
+    {
+        var gcp = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/AAA", "Lab card").WithBillingAccount("billingAccounts/BBB", "Department").WithBillingLinkThatDoesNotEnable();
+
+        var outcome = await new BillingSetup(gcp).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None);
+
         outcome.Kind.ShouldBe(BillingOutcomeKind.LinkedButStillOff);
         outcome.Code.ShouldBe(SetupErrorCodes.BillingStillOff);
-        outcome.Code.ShouldNotBe(SetupErrorCodes.NoBilling);
-        outcome.DeepLink.ShouldBe(BillingLinks.ForProject(Project));
+        outcome.Accounts.Select(a => a.AccountId).ShouldBe(["billingAccounts/BBB"]);
+    }
+
+    [Fact]
+    public async Task Calling_again_with_one_suspended_account_never_links_it_again_and_keeps_naming_the_fix()
+    {
+        var gcp = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/AAA", "Lab card").WithBillingLinkThatDoesNotEnable();
+        var setup = new BillingSetup(gcp);
+
+        var first = await setup.EnsureAsync(Project, CancellationToken.None);
+        var second = await setup.EnsureAsync(Project, CancellationToken.None);
+        var third = await setup.EnsureAsync(Project, CancellationToken.None);
+
+        gcp.BillingLinkCalls.ShouldBe(1, "the same suspended account was linked again by every re-check");
+        new[] { first, second, third }.ShouldAllBe(o => o.Kind == BillingOutcomeKind.FixLinkedAccount && o.Code == SetupErrorCodes.BillingAccountOff && o.DeepLink == BillingLinks.ForProject(Project));
+    }
+
+    [Fact]
+    public async Task A_project_whose_linked_account_is_off_asks_before_replacing_it_when_other_accounts_exist()
+    {
+        var gcp = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/AAA", "Lab card").WithBillingAccount("billingAccounts/BBB", "Department").WithBillingLinkThatDoesNotEnable();
+        var setup = new BillingSetup(gcp);
+        await setup.LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None);
+
+        var outcome = await setup.EnsureAsync(Project, CancellationToken.None);
+
+        outcome.Kind.ShouldBe(BillingOutcomeKind.ChooseAccount);
+        outcome.Accounts.Select(a => a.AccountId).ShouldBe(["billingAccounts/BBB"]);
+        outcome.AccountId.ShouldBe("billingAccounts/AAA");
+        gcp.BillingLinkCalls.ShouldBe(1, "the user's existing link was replaced without asking");
+    }
+
+    [Fact]
+    public async Task A_linked_but_off_account_that_is_no_longer_in_the_open_list_is_still_not_silently_replaced_by_the_only_open_one()
+    {
+        // The project is linked to a closed account (absent from the open list); one open account exists. Ask, do not link.
+        var gcp = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/OPEN", "Open one").WithBillingLinkThatDoesNotEnable();
+        await gcp.LinkProjectAsync(Project, "billingAccounts/CLOSED", CancellationToken.None);
+
+        var outcome = await new BillingSetup(gcp).EnsureAsync(Project, CancellationToken.None);
+
+        outcome.Kind.ShouldBe(BillingOutcomeKind.ChooseAccount);
+        outcome.Accounts.Select(a => a.AccountId).ShouldBe(["billingAccounts/OPEN"]);
+        gcp.BillingLinkCalls.ShouldBe(1);
     }
 }

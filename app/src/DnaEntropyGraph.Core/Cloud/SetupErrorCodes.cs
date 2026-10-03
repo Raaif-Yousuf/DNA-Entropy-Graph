@@ -33,8 +33,11 @@ public static class SetupErrorCodes
     /// <summary>Google accepted the billing account but the project still has billing off (a suspended account, no valid payment method). Action: pick another billing account.</summary>
     public const string BillingStillOff = "BILLING_STILL_OFF";
 
+    /// <summary>The billing account the project is linked to is not working and no other open account exists to pick (<see cref="BillingOutcomeKind.FixLinkedAccount"/>). Action: open the project's billing page on Google and fix or replace the account.</summary>
+    public const string BillingAccountOff = "BILLING_ACCOUNT_OFF";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -47,6 +50,7 @@ public static class SetupErrorCodes
         BillingNoPermission => "SetupError_BILLING_NO_PERMISSION",
         NotProjectOwner => "SetupError_NOT_PROJECT_OWNER",
         BillingStillOff => "SetupError_BILLING_STILL_OFF",
+        BillingAccountOff => "SetupError_BILLING_ACCOUNT_OFF",
         _ => "SetupError_OTHER",
     };
 
@@ -61,6 +65,7 @@ public static class SetupErrorCodes
         BillingNoPermission => "SetupAction_CopyBillingRequest",
         NotProjectOwner => "SetupAction_CreateProject",
         BillingStillOff => "SetupAction_PickAnotherBillingAccount",
+        BillingAccountOff => "SetupAction_FixBillingAccount",
         _ => "SetupAction_TryAgain",
     };
 }

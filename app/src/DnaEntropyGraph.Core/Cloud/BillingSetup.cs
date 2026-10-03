@@ -17,6 +17,13 @@ public enum BillingOutcomeKind
 
     /// <summary>The link was accepted but billing is still off: <see cref="BillingOutcome.DeepLink"/> opens the project's billing page, or the user picks another account.</summary>
     LinkedButStillOff,
+
+    /// <summary>
+    /// The project is linked to an account that is not working and there is no other open account to pick: open
+    /// <see cref="BillingOutcome.DeepLink"/>, fix (or replace) the account on Google's page, then call
+    /// <see cref="BillingSetup.EnsureAsync"/> again. Never offers "pick another" when there is nothing to pick.
+    /// </summary>
+    FixLinkedAccount,
 }
 
 public sealed record BillingOutcome(
@@ -32,6 +39,7 @@ public sealed record BillingOutcome(
     {
         BillingOutcomeKind.NeedsAccount => SetupErrorCodes.NoBilling,
         BillingOutcomeKind.LinkedButStillOff => SetupErrorCodes.BillingStillOff,
+        BillingOutcomeKind.FixLinkedAccount => SetupErrorCodes.BillingAccountOff,
         _ => null,
     };
 }
@@ -59,6 +67,17 @@ public sealed class BillingSetup
         }
 
         var accounts = await _gateway.ListOpenBillingAccountsAsync(cancellationToken).ConfigureAwait(false);
+
+        // The project already has an account linked and billing is still off (the user's own link, or one a past run
+        // made): never link over it unasked. The user picks another account, or fixes this one on Google's page.
+        if (!string.IsNullOrEmpty(status.AccountId))
+        {
+            var others = Others(accounts, status.AccountId);
+            return others.Count == 0
+                ? FixLinked(projectId, status.AccountId)
+                : new BillingOutcome(BillingOutcomeKind.ChooseAccount, status.AccountId, others);
+        }
+
         return accounts.Count switch
         {
             0 => new BillingOutcome(BillingOutcomeKind.NeedsAccount, DeepLink: BillingLinks.ForProject(projectId)),
@@ -72,10 +91,24 @@ public sealed class BillingSetup
     {
         await _gateway.LinkProjectAsync(projectId, billingAccountId, cancellationToken).ConfigureAwait(false);
         var status = await _gateway.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
-        return status.Enabled
-            ? new BillingOutcome(BillingOutcomeKind.Linked, billingAccountId)
-            : new BillingOutcome(BillingOutcomeKind.LinkedButStillOff, DeepLink: BillingLinks.ForProject(projectId));
+        if (status.Enabled)
+        {
+            return new BillingOutcome(BillingOutcomeKind.Linked, billingAccountId);
+        }
+
+        // Still off: "pick another" is only an action when there is another to pick.
+        var accounts = await _gateway.ListOpenBillingAccountsAsync(cancellationToken).ConfigureAwait(false);
+        var others = Others(accounts, billingAccountId);
+        return others.Count == 0
+            ? FixLinked(projectId, billingAccountId)
+            : new BillingOutcome(BillingOutcomeKind.LinkedButStillOff, billingAccountId, others, BillingLinks.ForProject(projectId));
     }
+
+    private static BillingOutcome FixLinked(string projectId, string accountId)
+        => new(BillingOutcomeKind.FixLinkedAccount, accountId, DeepLink: BillingLinks.ForProject(projectId));
+
+    private static List<BillingAccountSummary> Others(IReadOnlyList<BillingAccountSummary> accounts, string linkedAccountId)
+        => accounts.Where(a => !string.Equals(a.AccountId, linkedAccountId, StringComparison.Ordinal)).ToList();
 }
 
 /// <summary>The Google Cloud console pages the billing step sends the user to (a link action, Hard Rule 13).</summary>

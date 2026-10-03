@@ -81,6 +81,14 @@ public static partial class CloudErrorClassifier
 
         // Issue #539: a refusal that names a missing permission is a missing role even when the permission is
         // "billing.*" and the text mentions a billing account; only a message that says billing is OFF is Billing.
+        // An organization-policy marker wins when no status says otherwise: a "constraints/..." id in a message with no
+        // HTTP status is a policy refusal even if it also says the caller lacks permission. (A 403 that quotes one stays
+        // a permission error, as before: Google words plain denials that way too.)
+        if (status is null && lower.Contains("constraints/", StringComparison.Ordinal))
+        {
+            return CloudErrorKind.OrgPolicy;
+        }
+
         if ((status is null or 403) && IsPermissionDenial(code, lower))
         {
             return CloudErrorKind.Permission;
@@ -88,6 +96,7 @@ public static partial class CloudErrorClassifier
 
         if (status == 403 && lower.Contains("billing", StringComparison.Ordinal)
             && (lower.Contains("enable", StringComparison.Ordinal)
+                || (lower.Contains("required", StringComparison.Ordinal) && !lower.Contains("permission", StringComparison.Ordinal))
                 || lower.Contains("disabled", StringComparison.Ordinal)
                 || lower.Contains("not active", StringComparison.Ordinal)
                 || lower.Contains("not found", StringComparison.Ordinal)
