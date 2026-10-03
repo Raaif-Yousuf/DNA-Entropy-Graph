@@ -29,6 +29,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly IGcpAccount _gcpAccount;
     private readonly IDispatcher? _dispatcher;
     private readonly IStringResourceProvider _strings;
+    private readonly AppDataRoot? _dataRoot;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
     // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
@@ -44,8 +45,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The in-app message bar state (issue #585): the InfoBar in MainWindow binds to this, and it is the same instance the DI-registered <c>IToastService</c> writes to.</summary>
     public InAppMessageCenter Messages { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, IDispatcher? dispatcher = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null)
     {
+        _dataRoot = dataRoot;
         _navigator = navigator;
         _gcpAccount = gcpAccount;
         _dispatcher = dispatcher;
@@ -88,7 +90,17 @@ public sealed partial class ShellViewModel : ObservableObject
     };
 
     /// <summary>The OS window title (taskbar, Alt-Tab). Reuses the plain "AppDisplayName" key because ShellTitle.Text is dotted and a code lookup of a dotted key misses.</summary>
-    public string WindowTitle => _strings.GetString("AppDisplayName");
+    public string WindowTitle => HasProfileOverride
+        ? _strings.GetString("AppDisplayName") + " - " + _strings.GetString("ProfileTitleSuffix")
+        : _strings.GetString("AppDisplayName");
+
+    /// <summary>True when the app runs on a data folder given by <c>--profile</c> or <c>DEG_DATA_DIR</c> (issue #638), so the window must say it is not the real profile.</summary>
+    public bool HasProfileOverride => _dataRoot is { IsOverride: true };
+
+    /// <summary>The banner text naming the sandbox folder; empty on the real profile.</summary>
+    public string ProfileBannerText => _dataRoot is { IsOverride: true } root
+        ? string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("ProfileBanner_Text"), root.Path)
+        : string.Empty;
 
     [RelayCommand]
     private void NavigateTo(string pageKey)

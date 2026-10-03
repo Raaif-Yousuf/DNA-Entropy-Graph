@@ -1,5 +1,6 @@
 using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Cloud;
+using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
@@ -38,10 +39,17 @@ public class ReattachOnStartupTests : IDisposable
         }
     }
 
-    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done)
+    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done, TimeProvider? time = null, Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root);
+        if (time is not null)
+        {
+            services.AddSingleton(time);
+        }
+
+        configure?.Invoke(services);
+
         if (connected)
         {
             // The last registration wins: the same fake, but connected, behind every resilient wrapper the app resolves.
@@ -96,6 +104,20 @@ public class ReattachOnStartupTests : IDisposable
     private static async Task<RunRecord> RowAsync(ServiceProvider provider, string jobId)
         => (await provider.GetRequiredService<IRunRepository>().GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
 
+    /// <summary>Completes when the run's driver is registered: a signal, so no test polls <see cref="ActiveRuns.IsActive"/> on a real clock. Subscribe BEFORE starting the reattach.</summary>
+    private static Task WhenStarted(ActiveRuns active, string jobId)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        active.Started += id =>
+        {
+            if (id == jobId)
+            {
+                started.TrySetResult();
+            }
+        };
+        return started.Task;
+    }
+
     [Fact]
     public void The_reconciler_resolves_from_the_production_container()
     {
@@ -117,6 +139,75 @@ public class ReattachOnStartupTests : IDisposable
         row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
         row.OutputDir.ShouldNotBeNull();
         Directory.EnumerateFiles(row.OutputDir, "*", SearchOption.AllDirectories).ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_reattach_whose_wait_for_a_user_cancel_is_cut_by_shutdown_is_reported_CancelInterrupted_and_leaves_a_row_the_next_pass_finishes()
+    {
+        // Issue #551's observable, through the production container: the action reported and the row agree (a non-terminal Cancelling row is
+        // CancelInterrupted, never CancelFinished or Resumed), and that row is one the next reattach drives to a recorded terminal state.
+        using var provider = Build(connected: true, FakeWorkerMode.Never);
+        await SeedKilledRunAsync(provider, "job-cut", JobPhase.Running, vm: true);
+        var reconciler = provider.GetRequiredService<JobReconciler>();
+        var active = provider.GetRequiredService<ActiveRuns>();
+        var repository = provider.GetRequiredService<IRunRepository>();
+        using var shutdown = new CancellationTokenSource();
+        var driving = WhenStarted(active, "job-cut");
+        var reattach = reconciler.ReattachAsync(shutdown.Token);
+        await driving.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        active.IsActive("job-cut").ShouldBeTrue("precondition: the reattach is driving the run");
+        var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancel = active.CancelAsync("job-cut", async () =>
+        {
+            await repository.UpsertAsync((await RowAsync(provider, "job-cut")) with { Phase = JobPhase.Cancelling }, CancellationToken.None);
+            cancelling.SetResult();
+            await neverEnds.Task;
+        });
+        await cancelling.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        await shutdown.CancelAsync();
+        var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Single();
+
+        outcome.Action.ShouldBe(ReattachAction.CancelInterrupted);
+        (await RowAsync(provider, "job-cut")).Phase.ShouldBe(JobPhase.Cancelling, "the row agrees with the action: the cancel did not end the run");
+        neverEnds.SetResult();
+        await cancel;
+
+        var next = (await reconciler.ReattachAsync(TestContext.Current.CancellationToken)).Single();
+
+        next.Action.ShouldBe(ReattachAction.CancelFinished);
+        (await RowAsync(provider, "job-cut")).Phase.ShouldBe(JobPhase.Cancelled, "the next pass records the terminal state (Hard Rule 11)");
+    }
+
+    [Fact]
+    public async Task A_reconnect_pass_during_a_user_cancel_that_is_still_running_does_not_start_a_second_driver()
+    {
+        // Issue #551 review r4 F1, through the production container: the first reattach stopped waiting for the cancel (the shutdown cut it), the
+        // cancel is still running, and the observer's reconnect pass must not resume the run (a Never worker would make a started driver stay active).
+        using var provider = Build(connected: true, FakeWorkerMode.Never);
+        await SeedKilledRunAsync(provider, "job-twice", JobPhase.Running, vm: true);
+        var reconciler = provider.GetRequiredService<JobReconciler>();
+        var active = provider.GetRequiredService<ActiveRuns>();
+        using var shutdown = new CancellationTokenSource();
+        var driving = WhenStarted(active, "job-twice");
+        var reattach = reconciler.ReattachAsync(shutdown.Token);
+        await driving.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        active.IsActive("job-twice").ShouldBeTrue("precondition: the reattach is driving the run");
+        var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancel = active.CancelAsync("job-twice", () => neverEnds.Task);
+        await shutdown.CancelAsync();
+        (await reattach.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Single().Action.ShouldBe(ReattachAction.CancelInterrupted);
+
+        var observer = (ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>();
+        observer.OnConnectivityChanged(offline: false);
+        await observer.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        active.IsActive("job-twice").ShouldBeFalse("the cancel still owns the run: no second driver may resume it while the cancel deletes its VM");
+        neverEnds.SetResult();
+        await cancel;
     }
 
     [Fact]
@@ -168,6 +259,80 @@ public class ReattachOnStartupTests : IDisposable
         var row = await RowAsync(provider, "job-reconnect");
         row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
         provider.GetRequiredService<CloudRetryLog>().IsOffline.ShouldBeFalse("the offline banner's source still hears every change");
+    }
+
+    [Fact]
+    public async Task An_offline_launch_that_defers_a_run_judges_it_when_the_network_returns_with_no_other_call()
+    {
+        // Issue #559: nothing else touches the cloud after launch (no user action, no breaker event), so only the reconnect probe can notice.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: true, time: time);
+        await SeedKilledRunAsync(provider, "job-probe", JobPhase.Running, vm: true);
+        var gcp = provider.GetRequiredService<FakeGcp>().WithCloudNotConnected();
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "precondition: offline at launch, the row is deferred");
+
+        // Still offline when the first probe (30 s) fires: it must re-arm on the doubled wait (60 s) rather than stop, and only that second probe,
+        // after the network is back, judges the run.
+        var observer = (ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>();
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the first probe pass found the network still down");
+
+        gcp.WithCloudConnected();
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the re-armed probe waits twice as long: 30 s is not enough");
+        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
+        time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
+        await observer.WhenIdleAsync();
+
+        var row = await RowAsync(provider, "job-probe");
+        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_launch_pass_that_throws_a_network_error_still_starts_the_probe()
+    {
+        // Issue #559 review F1: BeginReconcileAsync throwing (the run table unreadable because the network-backed store timed out) must not skip
+        // the probe; the pass records the failure as deferred and the probe is armed from a finally.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: false, time: time, configure: services => services.AddSingleton<IRunRepository>(_ => new TimingOutRepository()));
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        time.PendingTimers.ShouldBe(1, "the probe is armed even though the launch pass threw");
+    }
+
+    [Fact]
+    public async Task A_launch_whose_first_run_table_read_alone_times_out_still_starts_the_probe()
+    {
+        // Issue #559 review r4 F1: only the reattach's own listing fails (the lifecycle read after it succeeds), so (connected, so the idle sweep defers nothing) the only thing that can
+        // arm the probe is the reattach-level deferral; the test above throws on every read and proves the lifecycle path alone.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: true, time: time, configure: services => services.AddSingleton<IRunRepository>(_ => new FirstReadTimesOutRepository()));
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        time.PendingTimers.ShouldBe(1, "the probe is armed: the reattach could not read the run table");
+    }
+
+    private sealed class FirstReadTimesOutRepository : IRunRepository
+    {
+        private int _reads;
+
+        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
+            => Interlocked.Increment(ref _reads) == 1 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
+
+        public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class TimingOutRepository : IRunRepository
+    {
+        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => throw new TimeoutException();
+
+        public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => throw new TimeoutException();
     }
 
     [Fact]
