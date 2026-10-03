@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
@@ -26,8 +25,7 @@ namespace DnaEntropyGraph.App;
 /// </summary>
 public sealed class JobEngine : IJobEngine, IRunVmActions
 {
-
-    private readonly ConcurrentDictionary<string, ActiveRun> _activeRuns = new();
+    private readonly ActiveRuns _activeRuns;
     private readonly IMessenger _messenger;
     private readonly CloudJobRunner _runner;
     private readonly IGcpAccount _account;
@@ -47,8 +45,10 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IProjectRepository projects,
         IRunInputStore inputs,
         IWorkerImageProvider images,
+        ActiveRuns activeRuns,
         Func<string?>? downloadsFolder = null)
     {
+        _activeRuns = activeRuns;
         _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
         _messenger = messenger;
         _runner = runner;
@@ -108,7 +108,26 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             return jobId;
         }
 
-        var installationId = InstallationId.GetOrCreate(_settings);
+        // #558: the id lives in its own write-once file. If it cannot be read or is unusable we
+        // fail the run here, before any cloud resource exists, rather than mint a new id (that
+        // would orphan every labelled resource, Hard Rules 9 and 10) or crash the UI thread.
+        string installationId;
+        try
+        {
+            installationId = InstallationId.GetOrCreate(_settings);
+        }
+        catch (InstallationIdUnusableException ex)
+        {
+            // Names a true action (restore the set-aside copy or contact support); full recovery UX is DECISION #404.
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.InstallationIdUnusable, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
+            return jobId;
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.Other, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
+            return jobId;
+        }
+
         var request = CloudJobRequestFactory.Create(
             options,
             jobId,
@@ -141,57 +160,18 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 InstallationId: installationId),
             cancellationToken).ConfigureAwait(false);
 
-        var cts = new CancellationTokenSource();
-
-        // The run task is created first and only released once it is
-        // registered, so a cancel can never find an entry whose Task is still
-        // null (two writers on the row), and the task's own cleanup cannot
-        // run before the entry exists.
-        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var run = new ActiveRun(cts, Task.Run(async () =>
-        {
-            await registered.Task.ConfigureAwait(false);
-            try
-            {
-                await _runner.RunAsync(request, cts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cts.IsCancellationRequested)
-            {
-                // CancelRunAsync owns the Cancelling/Cancelled records. Any
-                // other cancellation is a timeout, which the runner records as
-                // Failed itself and never throws.
-            }
-            finally
-            {
-                _activeRuns.TryRemove(jobId, out _);
-                cts.Dispose();
-            }
-        }));
-        _activeRuns[jobId] = run;
-        registered.SetResult();
+        // Registered before the body runs (see ActiveRuns), so a cancel can never find a run that is not there yet. The runner
+        // records every phase itself and never throws for a failure; a cancel the caller asked for ends the task quietly.
+        _ = _activeRuns.TryStart(jobId, token => _runner.RunAsync(request, token));
 
         return jobId;
     }
 
     public async Task CancelRunAsync(string jobId, CancellationToken cancellationToken)
     {
-        if (_activeRuns.TryGetValue(jobId, out var run))
-        {
-            try
-            {
-                await run.Cts.CancelAsync().ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException)
-            {
-                // The run finished and disposed its source between the lookup and here.
-            }
-
-            // Let the runner stop writing phases before CancelAsync writes
-            // its own, so there is one writer at a time.
-            await run.Task.ConfigureAwait(false);
-        }
-
-        await _runner.CancelAsync(jobId, cancellationToken).ConfigureAwait(false);
+        // Stop and await whatever drives this run (one the engine started or one the reconciler reattached) before the
+        // cancel writes its own phase, so there is one writer at a time.
+        await _activeRuns.CancelAsync(jobId, () => _runner.CancelAsync(jobId, cancellationToken)).ConfigureAwait(false);
     }
 
     public Task StopVmAsync(string jobId, CancellationToken cancellationToken) => _runner.StopVmAsync(jobId, cancellationToken);
@@ -238,18 +218,5 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 OptionsJson: RunOptionsJson.Serialize(options)),
             cancellationToken).ConfigureAwait(false);
         _messenger.Send(new RunPhaseChangedMessage(jobId, JobPhase.Failed));
-    }
-
-    private sealed class ActiveRun
-    {
-        public ActiveRun(CancellationTokenSource cts, Task task)
-        {
-            Cts = cts;
-            Task = task;
-        }
-
-        public CancellationTokenSource Cts { get; }
-
-        public Task Task { get; }
     }
 }

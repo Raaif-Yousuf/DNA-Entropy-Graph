@@ -90,7 +90,8 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
         }
     }
 
-    private static RunRecord? LatestRecord(IReadOnlyList<RunRecord> all, string jobId)
+    /// <summary>The newest row of a job in <paramref name="all"/> (a repository that appends keeps every version; the last of equal times wins).</summary>
+    internal static RunRecord? LatestRecord(IReadOnlyList<RunRecord> all, string jobId)
     {
         RunRecord? latest = null;
         foreach (var run in all)
