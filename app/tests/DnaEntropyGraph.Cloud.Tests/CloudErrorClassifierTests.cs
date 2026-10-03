@@ -152,6 +152,32 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
     }
 
+    // Issue #54 (rounds 2 and 3): THEORY (unverified): Cloud Storage answers a failed precondition (an etag or generation
+    // that did not match) with 412. A 412 is a precondition conflict ONLY when it positively looks like one (the reason
+    // "conditionNotMet", or "Precondition Failed" wording); every other 412, with or without a "constraints/" id, stays an
+    // org-policy refusal as before. ToTest has the row that captures the real shapes.
+    [Theory]
+    [InlineData(null, "At least one of the pre-conditions you specified did not hold.", CloudErrorKind.Other)]
+    [InlineData("conditionNotMet", "Precondition Failed", CloudErrorKind.Other)]
+    [InlineData(null, "Request violates constraints/storage.retentionPolicySeconds.", CloudErrorKind.OrgPolicy)]
+    [InlineData("FAILED_PRECONDITION", "Operation blocked by an administrator policy on this project.", CloudErrorKind.OrgPolicy)]
+    [InlineData(null, "The request was refused.", CloudErrorKind.OrgPolicy)]
+    [InlineData("FAILED_PRECONDITION", "Precondition check failed: constraints/compute.requireOsLogin is enforced.", CloudErrorKind.OrgPolicy)]
+    [InlineData("CONDITION_NOT_MET", "Operation denied", CloudErrorKind.OrgPolicy)]
+    [InlineData("CONDITION_NOT_MET", "Precondition Failed", CloudErrorKind.Other)]
+    public void A_412_is_a_precondition_conflict_only_when_it_positively_looks_like_one(string? code, string message, CloudErrorKind expected)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, 412, message)).ShouldBe(expected);
+    }
+
+    // Where there is no HTTP 412 to decide by, the structured CONDITION_NOT_MET code is the only signal and means org policy.
+    [Theory]
+    [InlineData(null, "Operation denied")]
+    [InlineData(503, "Operation denied")]
+    public void The_CONDITION_NOT_MET_code_is_an_org_policy_refusal_when_there_is_no_412_to_decide_by(int? status, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError("CONDITION_NOT_MET", status, message)).ShouldBe(CloudErrorKind.OrgPolicy);
+    }
     // Round 4: an org-policy marker (a constraints/ id) beats the permission wording when no status says otherwise,
     // and "billing is required" on a 403 is billing off, not Other.
     [Theory]
@@ -176,6 +202,31 @@ public class CloudErrorClassifierTests
         var messageOnly = CloudErrorClassifier.Classify(new CloudError(null, null, "blocked by an org policy constraint on this project"));
 
         messageOnly.ShouldNotBe(CloudErrorKind.OrgPolicy);
+    }
+
+    // Issue #54: a user who may create VMs but may not run one AS the worker service account gets a 403 naming the
+    // actAs permission or the Service Account User role. It stays the "permission" bucket (an abort) but needs its own code
+    // and action (copy a request for the owner), not the generic "not allowed to create computers".
+    [Theory]
+    [InlineData(403, "Required 'iam.serviceAccounts.actAs' permission for 'projects/my-lab/serviceAccounts/dna-entropy-worker@my-lab.iam.gserviceaccount.com'")]
+    [InlineData(403, "The user does not have access to service account 'dna-entropy-worker@my-lab.iam.gserviceaccount.com'.  User: 'a@b.org'.  Ask a project owner to grant you the iam.serviceAccountUser role on the service account")]
+    [InlineData(403, "Permission 'iam.serviceaccounts.actAs' denied on service account x@my-lab.iam.gserviceaccount.com (or it may not exist).")]
+    public void An_actAs_refusal_is_the_permission_bucket_and_is_recognised_as_PERMISSION_ACTAS(int status, string message)
+    {
+        var error = new CloudError("PERMISSION_DENIED", status, message);
+
+        CloudErrorClassifier.Classify(error).ShouldBe(CloudErrorKind.Permission);
+        CloudErrorClassifier.IsActAsDenial(error).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData(403, "Required 'compute.instances.create' permission for 'projects/my-lab/zones/us-central1-a/instances/deg-x'")]
+    [InlineData(403, "The caller does not have permission")]
+    [InlineData(429, "Quota exceeded for quota metric iam.serviceAccounts.actAs")]
+    [InlineData(null, "")]
+    public void Other_refusals_are_not_PERMISSION_ACTAS(int? status, string message)
+    {
+        CloudErrorClassifier.IsActAsDenial(new CloudError("PERMISSION_DENIED", status, message)).ShouldBeFalse();
     }
 
     private sealed record FixtureCase(

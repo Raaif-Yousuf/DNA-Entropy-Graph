@@ -166,12 +166,19 @@ public sealed partial class RunProgressViewModel : ObservableObject
     {
         _canOpenViewer = CurrentPhase is JobPhase.Completed or JobPhase.PartiallyCompleted && !string.IsNullOrEmpty(_outputFolder);
         OpenViewerCommand.NotifyCanExecuteChanged();
+        OpenResultsCommand.NotifyCanExecuteChanged();
     }
 
     private bool CanOpenViewer() => _canOpenViewer;
 
     [RelayCommand(CanExecute = nameof(CanOpenViewer))]
     private void OpenViewer() => _navigator.NavigateTo(ViewerViewModel.PageKey, _outputFolder);
+
+    // The Results page (issue #102) says for itself when the folder is gone, so this needs only a finished run.
+    private bool CanOpenResults() => CurrentPhase is JobPhase.Completed or JobPhase.PartiallyCompleted;
+
+    [RelayCommand(CanExecute = nameof(CanOpenResults))]
+    private void OpenResults() => _navigator.NavigateTo(ResultsViewModel.PageKey, JobId);
 
     [RelayCommand(CanExecute = nameof(CanCancel))]
     private async Task CancelAsync(CancellationToken cancellationToken)

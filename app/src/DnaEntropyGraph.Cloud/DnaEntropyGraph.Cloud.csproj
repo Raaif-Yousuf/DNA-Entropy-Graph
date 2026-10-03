@@ -21,7 +21,13 @@
     <PackageReference Include="Google.Apis.ServiceUsage.v1" />
     <PackageReference Include="Google.Apis.Compute.v1" />
     <PackageReference Include="Google.Apis.Storage.v1" />
+    <PackageReference Include="Google.Apis.Iam.v1" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <!-- Issue #54: the polled-operation error mapping (GoogleApiErrors) has no public caller until the Compute gateway lands. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DnaEntropyGraph.Cloud.Tests" />
   </ItemGroup>
 
   <ItemGroup>

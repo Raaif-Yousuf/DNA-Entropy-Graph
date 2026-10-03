@@ -73,7 +73,22 @@ internal static class GoogleApiErrors
 
         var kind = KindOf(status);
         var code = IsRateLimit(status) ? CloudErrorClassifier.RateLimitCode : codeFor?.Invoke(kind) ?? status.Status;
-        return new CloudOperationException(new CloudError(code, status.HttpStatus, status.Message), kind);
+        // The reasons do not travel in a CloudError, so a failed precondition (decided with them) keeps its reason as the code:
+        // the one shared rule (CloudErrorClassifier.IsPreconditionConflict) then reads it the same way downstream.
+        if (kind != CloudErrorKind.OrgPolicy && CloudErrorClassifier.IsPreconditionConflict(status.HttpStatus, status.Status, status.Message, status.Reasons))
+        {
+            code = "conditionNotMet";
+        }
+
+        var error = new CloudError(code, status.HttpStatus, status.Message);
+
+        // A refusal to run a VM as the worker service account is a permission error with its own code and action (issue #54).
+        if (kind == CloudErrorKind.Permission && CloudErrorClassifier.IsActAsDenial(error))
+        {
+            error = error with { Code = SetupErrorCodes.PermissionActAs };
+        }
+
+        return new CloudOperationException(error, kind);
     }
 
     // Wording of a per-minute request rate limit, as Google words it ("Quota exceeded for quota metric 'Requests' and
@@ -140,17 +155,25 @@ internal static class GoogleApiErrors
             return CloudErrorKind.Quota;
         }
 
+        // A 412 is an org-policy refusal unless it positively looks like a failed precondition (THEORY, unverified: Cloud
+        // Storage uses 412 for one); the rule is shared, see CloudErrorClassifier.IsPreconditionConflict.
         // A plain PERMISSION_DENIED 403 can quote a "constraints/..." id without being an organization-policy refusal
         // (it only says the caller may not see something), so the wording counts only when the error is not that.
         var plainDenial = status.HttpStatus == 403 && status.Status == "PERMISSION_DENIED";
         if (status.Reasons.Any(r => r.Contains("ORG_POLICY", StringComparison.OrdinalIgnoreCase))
-            || status.HttpStatus == 412
+            || (status.HttpStatus == 412 && !CloudErrorClassifier.IsPreconditionConflict(status.HttpStatus, status.Status, status.Message, status.Reasons))
             || (!plainDenial
                 && (lower.Contains("constraints/", StringComparison.Ordinal)
                     || lower.Contains("org policy", StringComparison.Ordinal)
                     || lower.Contains("organization policy", StringComparison.Ordinal))))
         {
             return CloudErrorKind.OrgPolicy;
+        }
+
+        // A 412 that is a failed precondition (decided above with the reasons, which Classify cannot see) is not a setup failure.
+        if (status.HttpStatus == 412)
+        {
+            return CloudErrorKind.Other;
         }
 
         return CloudErrorClassifier.Classify(new CloudError(status.Status, status.HttpStatus, status.Message));
@@ -184,6 +207,18 @@ internal static class GoogleApiErrors
                     }
 
                     if (detail.TryGetProperty("reason", out var reason) && reason.ValueKind == JsonValueKind.String && reason.GetString() is { Length: > 0 } text)
+                    {
+                        reasons.Add(text);
+                    }
+                }
+            }
+
+            // Cloud Storage and Compute (the Google JSON API shape, not google.rpc) put the reason in errors[].reason.
+            if (error.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in errors.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("reason", out var reason) && reason.ValueKind == JsonValueKind.String && reason.GetString() is { Length: > 0 } text)
                     {
                         reasons.Add(text);
                     }

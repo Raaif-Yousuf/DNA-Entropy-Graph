@@ -17,8 +17,6 @@
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.IsVmActionable": "#66, done: same reasoning as CanCancel above, for StopVmCommand/DeleteVmCommand.",
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CurrentPhase": "#66, done: RunProgressPage binds the derived StageTitle text, not the raw JobPhase enum; a future accessibility pass (docs/ui_conventions.md section 5's LiveSetting=Polite) may bind CurrentPhase directly for Narrator, which would clear this entry.",
 
-  "UNBOUND-COMMAND:ResultsViewModel.LoadCommand": "#102 builds the Results page",
-  "CODE-ONLY-OBSERVABLE:ResultsViewModel.JobId": "#102; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",
   "UNBOUND-COMMAND:CloudResourcesViewModel.ConfirmDeleteCommand": "#105 builds the Cloud page",
   "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests.",
 

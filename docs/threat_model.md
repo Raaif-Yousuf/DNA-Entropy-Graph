@@ -91,7 +91,7 @@ the scope Google requires for this feature set to work at all.
 |---|---|---|
 | The user's OAuth refresh token (stolen from `auth\<sub>.tok`, or a leaked in-memory access token) | Everything the signed-in user's own IAM role permits in their Google Cloud project: create/list/delete VMs and buckets, read the results bucket's contents (the user's sequences), spend the user's quota and money, modify IAM up to what the user's own role allows | Access any *other* user's project (tokens are per-account); bypass the user's own project-level IAM (the token carries the user's actual permissions, no more) |
 | The DPAPI-encrypted token file only, without the user's own Windows login (e.g. a copied file, no decryption key) | Nothing. `ProtectedData.Protect(..., DataProtectionScope.CurrentUser)` ties the encryption to the Windows user account that created it; the file is unreadable outside that account and machine | Decrypt the token without the originating Windows user's own login session |
-| The worker service account's credentials (metadata-token scoped, live only on a running VM) | `compute.instances.get/stop/delete` on `deg-*` named instances only, `storage.objectAdmin` on this one job's bucket only, per the least-privilege IAM role in `cloud_design.md` section 7 | Create new VMs, touch any other bucket or project resource, escalate its own IAM role, read anything outside the one results bucket it was scoped to |
+| The worker service account's credentials (metadata-token scoped, live only on a running VM) | `compute.instances.get/stop/delete` and `compute.zoneOperations.get` through the custom role `dnaEntropyWorker`, bound with an IAM condition that matches only instances named `deg-*` (a VM the user named anything else is outside it), and `roles/storage.objectAdmin` on the one results bucket only (every job's files in it, not one job's), per `cloud_design.md` section 7. If an organization policy forbids service accounts, the VM runs as the project's default Compute Engine account instead (issue #54): that account has the same two bindings added, but it may also hold a broad role (THEORY, unverified: in older projects often Editor; newer organizations do not grant it), so this row then understates what a stolen token can do, and the app says so in a yellow note | Create new VMs, touch any other bucket or project resource, escalate its own IAM role, read anything outside the one results bucket it was scoped to |
 | The GHCR container image, read (it is public and anonymous-pull by design) | Inspect exactly what the worker does, which is intentional, this project ships no secret logic | Modify what a user's VM actually runs, since the app pins the image by digest and refuses an unlisted digest outside developer mode (`packaging_design.md` section 6) |
 | A compromise of the author's GHCR publishing credentials | Publish a malicious image under this project's name, which a **new** install or an update would pull if the app's own digest allowlist were also compromised or bypassed | Retroactively change a digest an already-installed app version has pinned, without also compromising the app's own release/update mechanism |
 | A compromise of the author's OAuth client id and "secret" | Very little beyond what is already public: Google explicitly treats a Desktop-app client's id and secret as non-confidential, since the security boundary for this client type is the user's own consent screen and loopback redirect, not client-secret confidentiality | Impersonate the app to Google in a way that bypasses the user's own explicit consent step; mint a token without the user completing sign-in |
@@ -201,6 +201,24 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
   narrowing available today closes that gap while keeping every wizard feature working,
   and that the incremental-authorization alternative is a real, documented tradeoff for
   the owner to decide on, not a solved problem.
+- The worker identity's condition (`resource.type != Instance || resource.name.contains("/instances/deg-")`) is
+  THEORY (unverified, no live project) until `docs/ToTest.md`'s #54 row is run: if Compute does not evaluate it the way
+  `cloud_design.md` section 7 says, the worker account could stop or delete a VM it should not reach. It still cannot create
+  one, and it exists only for the life of a job's VM.
+- The `deg-` condition limits the worker account to VMs named `deg-*`, not to the one VM the token belongs to (issue #54
+  cold review, round 2). Every worker VM shares one account, so a compromised or buggy `deg-<job A>` token can stop or delete
+  `deg-<job B>`, in this project only, and cannot reach a VM named anything else. That is inherent to one shared account plus
+  a name-prefix condition. Narrowing it to the VM itself needs per-instance IAM (`instances.setIamPolicy` at create time,
+  with a condition on the instance's own name); it is tracked as a follow-up issue under #56 and is not built.
+- The default-Compute-account fallback (issue #54) gives a worker VM an identity with whatever that account already holds,
+  possibly Editor (THEORY, unverified: older projects often, newer organizations not). The app cannot narrow it and says so in the wizard. It also grants `roles/storage.objectAdmin` on the results
+  bucket to the default account, which every workload in the project that runs as the default account holds, so any such VM
+  (not only the app's) can read, overwrite and delete every job's results in that bucket. The yellow note says so, and that the default account may hold a broad role.
+- THEORY (unverified): Cloud Storage answers a failed precondition (an etag that did not match) with HTTP 412, and an
+  organization-policy refusal with 412 too; the app treats a 412 as a conflict only when it positively says so (reason
+  `conditionNotMet` or "precondition" wording, no `constraints/`), and every other 412 stays an org-policy refusal that is not
+  retried. If a real etag conflict is worded differently the bucket binding fails as `org_policy` (safe: nothing is bound,
+  the user sees the policy action); `docs/ToTest.md` has the row that captures the real shapes.
 - A quota-eligible new Google Cloud billing account is, in Google's own words, commonly
   ineligible for GPU quota (`cloud_design.md`'s quota section); this is an availability
   constraint on the user's side, not a vulnerability, but it is worth naming here since a
