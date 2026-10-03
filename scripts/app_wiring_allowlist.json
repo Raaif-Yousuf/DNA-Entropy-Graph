@@ -9,6 +9,10 @@
   "TEST-ONLY-COMMAND:WizardViewModel.SignInCommand": "#99 builds the first-run wizard pages. No wizard page or any other XAML binds a sign-in button yet, so nothing in the shipped UI can start a sign-in; it was UNBOUND-COMMAND until #48 added tests that drive it, which changed the guard's classification, not the fact.",
   "TEST-ONLY-OBSERVABLE:WizardViewModel.SignInErrorText": "#99 builds the first-run wizard pages; #48 added the property, no XAML shows it yet",
   "TEST-ONLY-OBSERVABLE:WizardViewModel.SignInActionText": "#99 builds the first-run wizard pages; #48 added the property, no XAML shows it yet",
+  "TEST-ONLY-COMMAND:WizardViewModel.ChooseProjectCommand": "#99 builds the first-run wizard pages, the Project step among them; #520 added the command that stores the chosen project on the account, and no page binds a project choice yet.",
+  "TEST-ONLY-OBSERVABLE:WizardViewModel.ProjectErrorText": "#99 builds the first-run wizard pages; #520 added the property, no XAML shows it yet",
+  "TEST-ONLY-OBSERVABLE:WizardViewModel.ProjectActionText": "#99 builds the first-run wizard pages; #520 added the property, no XAML shows it yet",
+  "CODE-ONLY-OBSERVABLE:WizardViewModel.SelectedProjectId": "#99 builds the first-run wizard pages; the CODE-ONLY classification is a name collision with IGcpAccount.SelectedProjectId (read by JobEngine and ShellViewModel), see the script docstring on name matching.",
   "CODE-ONLY-OBSERVABLE:WizardViewModel.IsSignedIn": "#99 builds the first-run wizard pages; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.IsSignedIn, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.IsSignedIn in Cloud.Tests.",
 
 

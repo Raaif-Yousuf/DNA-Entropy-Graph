@@ -92,7 +92,7 @@ public sealed class ResultsViewModelTests : IDisposable
     private static RunRecord Row(string id, string? outputDir, string? name = null)
         => new(id, JobPhase.Completed, DateTimeOffset.UnixEpoch, Name: name, OutputDir: outputDir);
 
-    private ResultsViewModel Make(IRunOutputReader? reader = null) => new(_repository, reader ?? new RunOutputReader(), _launcher, _navigator, _strings);
+    private ResultsViewModel Make(IRunOutputReader? reader = null) => new(_repository, reader ?? new RunOutputReader(), _launcher, _navigator, _strings, Substitute.For<IExternalViewerOpener>());
 
     private async Task<ResultsViewModel> Loaded(string jobId, IRunOutputReader? reader = null)
     {
