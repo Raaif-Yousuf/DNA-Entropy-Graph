@@ -14,8 +14,11 @@ public enum ReattachAction
     /// <summary>The run was mid-cancel; the cancel was finished.</summary>
     CancelFinished,
 
-    /// <summary>A cancel of this run was in flight and the reattach's part was cut short (the wait for a user cancel timed out, the app began to shut down, the cancel failed, or its terminal write did not land): the row is not terminal (normally Cancelling) and the next launch finishes it. Never reported with a terminal row (DECISION #599).</summary>
+    /// <summary>A cancel of this run was in flight and the reattach's part was cut short (the wait for a user cancel timed out, the app began to shut down, the cancel failed, or its terminal write did not land): the row is not terminal (normally Cancelling; still Running when the cancel was cut short before it recorded Cancelling, which is #610) and the next launch looks again. A snapshot, not a final answer: a cancel's delete cannot be cancelled once started, so it may still complete after this is reported. Never reported with a terminal row (DECISION #599).</summary>
     CancelInterrupted,
+
+    /// <summary>A cancel of this run ended and could not confirm its VM gone: the row is Failed with <see cref="RunErrorCodes.CancelFailed"/> and the user is told to delete the VM by hand (DECISION #599).</summary>
+    CancelFailed,
 
     /// <summary>The VM is gone and no <c>result.json</c> exists: recorded Failed. A lost VM is never silently replaced.</summary>
     FailedVmMissing,
@@ -635,7 +638,7 @@ public sealed class JobReconciler
             // stays Cancelling when the terminal write did not land) instead of letting the shutdown hide the outcome. The next launch finishes it.
             _log.Warning("reconciler", row.JobId, nameof(OperationCanceledException));
             var after = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
-            return new ReattachOutcome(row.JobId, ActionAfterUserCancel(underway.Action, after?.Phase), after?.Phase, after?.ErrorCode);
+            return new ReattachOutcome(row.JobId, ActionAfterUserCancel(underway.Action, after?.Phase, after?.ErrorCode), after?.Phase, after?.ErrorCode);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -776,7 +779,7 @@ public sealed class JobReconciler
         }
 
         var settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
-        return new ReattachOutcome(jobId, ActionAfterUserCancel(underway, settled?.Phase), settled?.Phase, settled?.ErrorCode);
+        return new ReattachOutcome(jobId, ActionAfterUserCancel(underway, settled?.Phase, settled?.ErrorCode), settled?.Phase, settled?.ErrorCode);
     }
 
     /// <summary>
@@ -784,19 +787,25 @@ public sealed class JobReconciler
     /// not terminal means the cancel did not end the run (it was cut short by the shutdown or the settle deadline, or it failed): the reattach
     /// is no longer driving the run, so it is never reported as resumed, only as <see cref="ReattachAction.CancelInterrupted"/>.
     /// </summary>
-    private static ReattachAction ActionAfterUserCancel(ReattachAction underway, JobPhase? finalPhase)
-        => finalPhase is { } phase && JobStateMachine.IsTerminal(phase) ? ActionForFinalPhase(underway, phase) : ReattachAction.CancelInterrupted;
+    private static ReattachAction ActionAfterUserCancel(ReattachAction underway, JobPhase? finalPhase, string? errorCode)
+        => finalPhase is { } phase && JobStateMachine.IsTerminal(phase) ? ActionForFinalPhase(underway, phase, errorCode) : ReattachAction.CancelInterrupted;
 
     /// <summary>
     /// What the reattach did, as the row it left says it did. A reattach that was stopped by a user cancel may have set its own action (it
     /// goes first, before its write) for a write that never landed: a row that ended Cancelled was cancelled, and a Failed* action is only true
-    /// of a row that is Failed.
+    /// of a row that is Failed. A row that is Failed because a cancel could not confirm the VM gone (<see cref="RunErrorCodes.CancelFailed"/>, or any
+    /// Failed row the reattach reached while finishing a cancel) is <see cref="ReattachAction.CancelFailed"/>, whatever the reattach was doing.
     /// </summary>
-    internal static ReattachAction ActionForFinalPhase(ReattachAction underway, JobPhase? finalPhase)
+    internal static ReattachAction ActionForFinalPhase(ReattachAction underway, JobPhase? finalPhase, string? errorCode = null)
     {
         if (finalPhase == JobPhase.Cancelled)
         {
             return ReattachAction.CancelFinished;
+        }
+
+        if (finalPhase == JobPhase.Failed && (errorCode == RunErrorCodes.CancelFailed || underway == ReattachAction.CancelFinished))
+        {
+            return ReattachAction.CancelFailed;
         }
 
         if (underway == ReattachAction.CancelFinished && (finalPhase is null || !JobStateMachine.IsTerminal(finalPhase.Value)))
@@ -926,7 +935,7 @@ public sealed class JobReconciler
         }
 
         var after = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
-        return new ReattachOutcome(row.JobId, ActionForFinalPhase(ReattachAction.CancelFinished, after?.Phase), after?.Phase, after?.ErrorCode);
+        return new ReattachOutcome(row.JobId, ActionForFinalPhase(ReattachAction.CancelFinished, after?.Phase, after?.ErrorCode), after?.Phase, after?.ErrorCode);
     }
 
     private async Task<ReattachOutcome> FailAsync(RunRecord row, Underway underway, ReattachAction action, string code, string detail, CancellationToken cancellationToken)

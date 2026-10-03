@@ -232,6 +232,52 @@ public class JobReconcilerReattachBoundsTests
         outcome.Action.ShouldBe(ReattachAction.CancelFinished, "the row is Cancelled, so the action must not claim the run was failed as unrecoverable");
     }
 
+    [Fact]
+    public async Task A_user_cancel_whose_delete_failed_is_reported_as_CancelFailed_not_Resumed()
+    {
+        // Issue #551 review: VmCanceller records Failed/cancel_failed when the VM is not confirmed gone; the reattach the cancel took over must
+        // not report Resumed (it was stopped) or CancelFinished (nothing finished) over that row.
+        var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
+        await env.SeedAsync("job-cancel-failed", JobPhase.Running, vm: true);
+        var reattach = env.Reconciler(ClockAfterTheSeededRows()).ReattachAsync(CancellationToken.None);
+        await WaitUntilAsync(() => env.Active.IsActive("job-cancel-failed"));
+
+        await env.Active.CancelAsync("job-cancel-failed", () => env.Repo.UpsertAsync(
+            env.Row("job-cancel-failed") with { Phase = JobPhase.Failed, ErrorCode = RunErrorCodes.CancelFailed, ErrorDetail = "the VM is still there" },
+            CancellationToken.None));
+        var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Single();
+
+        outcome.FinalPhase.ShouldBe(JobPhase.Failed);
+        outcome.ErrorCode.ShouldBe(RunErrorCodes.CancelFailed);
+        outcome.Action.ShouldBe(ReattachAction.CancelFailed, "the row says the cancel failed, so the action must too");
+    }
+
+    [Theory]
+    [InlineData(ReattachAction.Resumed, RunErrorCodes.CancelFailed, ReattachAction.CancelFailed)]
+    [InlineData(ReattachAction.FailedUnrecoverable, RunErrorCodes.CancelFailed, ReattachAction.CancelFailed)]
+    [InlineData(ReattachAction.FailedVmMissing, RunErrorCodes.CancelFailed, ReattachAction.CancelFailed)]
+    [InlineData(ReattachAction.CancelFinished, RunErrorCodes.CancelFailed, ReattachAction.CancelFailed)]
+    [InlineData(ReattachAction.CancelFinished, null, ReattachAction.CancelFailed)]
+    [InlineData(ReattachAction.Resumed, RunErrorCodes.WorkerCrashed, ReattachAction.Resumed)]
+    [InlineData(ReattachAction.FailedUnrecoverable, RunErrorCodes.NoProject, ReattachAction.FailedUnrecoverable)]
+    public void A_Failed_row_is_named_for_what_failed(ReattachAction underway, string? errorCode, ReattachAction expected)
+    {
+        JobReconciler.ActionForFinalPhase(underway, JobPhase.Failed, errorCode).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void The_failed_row_theory_covers_every_action_a_cancel_can_overwrite()
+    {
+        // Vacuity guard: the theory above must feed every underway action a user cancel can take over.
+        var underways = typeof(JobReconcilerReattachBoundsTests).GetMethod(nameof(A_Failed_row_is_named_for_what_failed))!
+            .GetCustomAttributes(typeof(InlineDataAttribute), false)
+            .Cast<InlineDataAttribute>()
+            .Select(a => (ReattachAction)a.Data![0]!)
+            .ToHashSet();
+
+        underways.ShouldBe([ReattachAction.Resumed, ReattachAction.FailedUnrecoverable, ReattachAction.FailedVmMissing, ReattachAction.CancelFinished], ignoreOrder: true);
+    }
+
     [Theory]
     [InlineData(ReattachAction.FailedUnrecoverable, JobPhase.Failed, ReattachAction.FailedUnrecoverable)]
     [InlineData(ReattachAction.FailedVmMissing, JobPhase.Failed, ReattachAction.FailedVmMissing)]
