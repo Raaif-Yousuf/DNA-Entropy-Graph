@@ -86,6 +86,7 @@ NOT_A_GATE: dict[str, str] = {
     "scripts/cloud_gpu_test.ps1": "creates billed cloud resources; never a pre-merge step",
     "scripts/gen_third_party_notices.py": "generator; its output is verified by check_third_party_notices.py",
     "scripts/compile_sprint_log.py": "folds fragments at merge time; only its --check arm is a gate",
+    "scripts/ci_changes_gate.py": "a path-diff gate that needs a pull request base sha and only decides which CI jobs run; its tests (scripts/tests/test_ci_changes_gate.py) run in the scripts-tests gate",
 }
 
 # Test projects that are not run here, with the reason (ci-app.yml excludes the same one).
