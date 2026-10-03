@@ -30,6 +30,7 @@ public static class ResultsCopy
     public const string SizeBytes = "Results_Size_Bytes";
     public const string SizeKilobytes = "Results_Size_Kilobytes";
     public const string SizeMegabytes = "Results_Size_Megabytes";
+    public const string SizeUnknown = "Results_Size_Unknown";
 
     /// <summary>
     /// The copy key for a direction token as <c>writers/summary.py</c> writes it (<c>Direction</c> values in <c>worker/.../config.py</c>),
@@ -50,7 +51,7 @@ public static class ResultsCopy
     [
         NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
-        Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes,
+        Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>

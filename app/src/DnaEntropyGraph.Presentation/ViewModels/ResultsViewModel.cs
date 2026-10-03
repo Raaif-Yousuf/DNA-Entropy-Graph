@@ -198,8 +198,9 @@ public sealed partial class ResultsViewModel : ObservableObject
         return key == ResultsCopy.DirectionUnknown ? Format(key, token) : _strings.GetString(key);
     }
 
-    private string SizeText(long bytes) => bytes switch
+    private string SizeText(long? bytes) => bytes switch
     {
+        null => _strings.GetString(ResultsCopy.SizeUnknown),
         >= (long)Megabyte => Format(ResultsCopy.SizeMegabytes, bytes / Megabyte),
         >= (long)Kilobyte => Format(ResultsCopy.SizeKilobytes, bytes / Kilobyte),
         _ => Format(ResultsCopy.SizeBytes, bytes),

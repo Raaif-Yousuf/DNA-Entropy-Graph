@@ -882,6 +882,9 @@
   <data name="Results_Size_Megabytes" xml:space="preserve">
     <value>{0:N1} MB</value>
   </data>
+  <data name="Results_Size_Unknown" xml:space="preserve">
+    <value>size unknown</value>
+  </data>
   <data name="ResultsShowRunsButton.Content" xml:space="preserve">
     <value>Show runs</value>
   </data>

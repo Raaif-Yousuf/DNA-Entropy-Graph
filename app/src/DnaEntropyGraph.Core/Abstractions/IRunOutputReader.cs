@@ -3,7 +3,7 @@ using DnaEntropyGraph.Core.Runs;
 namespace DnaEntropyGraph.Core.Abstractions;
 
 /// <summary>One file in a run's output folder. <see cref="RelativePath"/> uses <c>/</c> and is what the page shows.</summary>
-public sealed record RunOutputFile(string RelativePath, string FullPath, long Bytes);
+public sealed record RunOutputFile(string RelativePath, string FullPath, long? Bytes);
 
 /// <summary>A summary file the worker wrote; <see cref="Summary"/> is null when it could not be read or understood.</summary>
 public sealed record RunSummaryFile(string RelativePath, RunSummary? Summary);

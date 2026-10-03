@@ -92,8 +92,8 @@ public sealed class RunOutputReaderTests : IDisposable
     // A OneDrive "online-only" file is a reparse point whose bytes are in the cloud: still the user's own result file.
     private const FileAttributes Placeholder = FileAttributes.Archive | FileAttributes.ReparsePoint | FileAttributes.Offline | RunOutputReader.RecallOnDataAccess;
 
-    private RunOutputReader WithAttributes(Func<string, FileAttributes> attributesOf, Func<string, string?>? linkTarget = null)
-        => new(attributesOf, linkTarget ?? (_ => null));
+    private RunOutputReader WithAttributes(Func<string, FileAttributes> attributesOf, Func<string, string?>? linkTarget = null, Func<string, long?>? sizeOf = null)
+        => new(attributesOf, linkTarget ?? (_ => null), sizeOf);
 
     [Theory]
     [InlineData(FileAttributes.ReparsePoint | FileAttributes.Offline)]
@@ -133,13 +133,58 @@ public sealed class RunOutputReaderTests : IDisposable
     }
 
     [Fact]
-    public void A_link_whose_target_cannot_be_resolved_is_refused()
+    public void A_reparse_point_with_no_link_target_is_a_placeholder_and_is_listed()
+    {
+        // No resolvable link target means it is not a symlink or mount point, whatever the attribute bits say.
+        Put("two/two.gb", "LOCUS");
+        var file = Path.Combine(_folder, "two", "two.gb");
+        var reader = WithAttributes(p => p == file ? FileAttributes.ReparsePoint : File.GetAttributes(p));
+
+        reader.Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe(["two/two.gb"]);
+    }
+
+    public static TheoryData<FileAttributes> OfflineBitCombinations() => new()
+    {
+        FileAttributes.ReparsePoint,
+        FileAttributes.ReparsePoint | FileAttributes.Offline,
+        FileAttributes.ReparsePoint | RunOutputReader.RecallOnOpen,
+        FileAttributes.ReparsePoint | RunOutputReader.RecallOnDataAccess,
+        FileAttributes.ReparsePoint | FileAttributes.Offline | RunOutputReader.RecallOnOpen | RunOutputReader.RecallOnDataAccess,
+    };
+
+    [Fact]
+    public void The_offline_bit_combinations_cover_every_recall_bit()
+    {
+        var all = OfflineBitCombinations().Select(d => d.Data).Aggregate((a, b) => a | b);
+
+        all.HasFlag(FileAttributes.Offline).ShouldBeTrue();
+        all.HasFlag(RunOutputReader.RecallOnOpen).ShouldBeTrue();
+        all.HasFlag(RunOutputReader.RecallOnDataAccess).ShouldBeTrue();
+    }
+
+    [Theory]
+    [MemberData(nameof(OfflineBitCombinations))]
+    public void A_link_to_a_file_outside_the_folder_is_refused_whatever_attribute_bits_it_carries(FileAttributes attributes)
     {
         Put("two/two.gb", "LOCUS");
         var link = Path.Combine(_folder, "two", "two.gb");
-        var reader = WithAttributes(p => p == link ? FileAttributes.ReparsePoint : File.GetAttributes(p));
+        var outside = Path.Combine(Path.GetTempPath(), "somewhere-else.txt");
+        var reader = WithAttributes(p => p == link ? attributes : File.GetAttributes(p), p => p == link ? outside : null);
 
         reader.Read(_folder)!.Files.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(OfflineBitCombinations))]
+    public void A_link_to_a_file_inside_the_folder_is_listed_whatever_attribute_bits_it_carries(FileAttributes attributes)
+    {
+        Put("two/two.gb", "LOCUS");
+        Put("two/real.gb", "LOCUS");
+        var link = Path.Combine(_folder, "two", "two.gb");
+        var inside = Path.Combine(_folder, "two", "real.gb");
+        var reader = WithAttributes(p => p == link ? attributes : File.GetAttributes(p), p => p == link ? inside : null);
+
+        reader.Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe(["two/real.gb", "two/two.gb"]);
     }
 
     [Fact]
@@ -149,12 +194,85 @@ public sealed class RunOutputReaderTests : IDisposable
         Put("cloud/b.gb", "LOCUS");
         var linked = Path.Combine(_folder, "linked");
         var cloud = Path.Combine(_folder, "cloud");
-        var reader = WithAttributes(p =>
-            p == linked ? FileAttributes.Directory | FileAttributes.ReparsePoint
-            : p == cloud ? FileAttributes.Directory | FileAttributes.ReparsePoint | RunOutputReader.RecallOnDataAccess
-            : File.GetAttributes(p));
+        var reader = WithAttributes(
+            p =>
+                p == linked ? FileAttributes.Directory | FileAttributes.ReparsePoint
+                : p == cloud ? FileAttributes.Directory | FileAttributes.ReparsePoint | RunOutputReader.RecallOnDataAccess
+                : File.GetAttributes(p),
+            p => p == linked ? Path.GetTempPath() : null);
 
         reader.Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe(["cloud/b.gb"]);
+    }
+
+    [Theory]
+    [MemberData(nameof(OfflineBitCombinations))]
+    public void A_junction_carrying_offline_bits_is_never_entered_even_when_it_points_at_the_parent(FileAttributes attributes)
+    {
+        Put("loop/a.gb", "LOCUS");
+        Put("keep.gb", "LOCUS");
+        var junction = Path.Combine(_folder, "loop");
+        var parent = Path.GetDirectoryName(_folder)!;
+        var reader = WithAttributes(
+            p => p == junction ? FileAttributes.Directory | attributes : File.GetAttributes(p),
+            p => p == junction ? parent : null);
+
+        reader.Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe(["keep.gb"]);
+    }
+
+    [Fact]
+    public void A_linked_folder_inside_the_run_folder_is_not_entered_either()
+    {
+        Put("loop/a.gb", "LOCUS");
+        var junction = Path.Combine(_folder, "loop");
+        var reader = WithAttributes(
+            p => p == junction ? FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Offline : File.GetAttributes(p),
+            p => p == junction ? _folder : null);
+
+        reader.Read(_folder)!.Files.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_folder_tree_deeper_than_any_run_makes_stops_at_a_depth_cap()
+    {
+        var relative = string.Join('/', Enumerable.Repeat("d", RunOutputReader.MaxDepth + 8)) + "/deep.gb";
+        Put("top.gb", "LOCUS");
+        Put(relative, "LOCUS");
+
+        var files = new RunOutputReader().Read(_folder)!.Files.Select(f => f.RelativePath).ToList();
+
+        files.ShouldContain("top.gb");
+        files.ShouldNotContain(relative);
+    }
+
+    [Fact]
+    public void A_file_at_the_deepest_allowed_level_is_still_listed()
+    {
+        var relative = string.Join('/', Enumerable.Repeat("d", RunOutputReader.MaxDepth)) + "/ok.gb";
+        Put(relative, "LOCUS");
+
+        new RunOutputReader().Read(_folder)!.Files.Select(f => f.RelativePath).ShouldBe([relative]);
+    }
+
+    [Fact]
+    public void A_size_that_cannot_be_read_is_unknown_not_zero()
+    {
+        Put("two/two.gb", "LOCUS");
+        Put("two/other.gb", "LOCUS");
+        var unreachable = Path.Combine(_folder, "two", "two.gb");
+        var reader = WithAttributes(File.GetAttributes, sizeOf: p => p == unreachable ? null : 5);
+
+        var files = reader.Read(_folder)!.Files.ToDictionary(f => f.RelativePath);
+
+        files["two/two.gb"].Bytes.ShouldBeNull();
+        files["two/other.gb"].Bytes.ShouldBe(5);
+    }
+
+    [Fact]
+    public void A_readable_file_reports_its_real_size()
+    {
+        Put("two/two.gb", "LOCUS");
+
+        new RunOutputReader().Read(_folder)!.Files.Single().Bytes.ShouldBe(5);
     }
 
     [Fact]

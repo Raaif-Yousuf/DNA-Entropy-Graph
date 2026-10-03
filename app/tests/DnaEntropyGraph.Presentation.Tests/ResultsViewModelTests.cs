@@ -33,6 +33,7 @@ public sealed class ResultsViewModelTests : IDisposable
         _strings.GetString(ResultsCopy.SizeBytes).Returns("{0:N0} bytes");
         _strings.GetString(ResultsCopy.SizeKilobytes).Returns("{0:N1} KB");
         _strings.GetString(ResultsCopy.SizeMegabytes).Returns("{0:N1} MB");
+        _strings.GetString(ResultsCopy.SizeUnknown).Returns("size unknown");
         _strings.GetString(ResultsCopy.Headline).Returns("mean {0:F3}, lowest {1:F3}, highest {2:F3}, {3:N0} nt in {4}");
         _strings.GetString(ResultsCopy.StatsUnreadable).Returns("unreadable {0}");
         _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => _rows);
@@ -387,5 +388,18 @@ public sealed class ResultsViewModelTests : IDisposable
         var vm = await Loaded("job-a", reader);
 
         vm.Files.Single().SizeText.ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task A_file_whose_size_cannot_be_read_says_so_instead_of_zero_bytes()
+    {
+        var folder = MakeRunFolder("alpha", null);
+        var reader = Substitute.For<IRunOutputReader>();
+        reader.Read(folder).Returns(new RunOutputSnapshot([new RunOutputFile("a.bin", Path.Combine(folder, "a.bin"), null)], []));
+        _rows = [Row("job-a", folder)];
+
+        var vm = await Loaded("job-a", reader);
+
+        vm.Files.Single().SizeText.ShouldBe("size unknown");
     }
 }
