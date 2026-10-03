@@ -320,8 +320,24 @@ public sealed class CloudJobRunner
             }
         }
 
-        // Issue #606: the account the VM runs as exists (and may delete itself and write the bucket) before any create. It is
-        // idempotent, so a resumed run asks again; a refusal throws a classified CloudOperationException and no VM is made.
+        await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
+        var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, token), progress, cancellationToken).ConfigureAwait(false);
+        if (!provisioned.Success)
+        {
+            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, RunErrorCodes.For(provisioned.FailureKind.Value), provisioned.FailureMessage, provisioned.VmEndNote).ConfigureAwait(false);
+        }
+
+        progress.Zone = provisioned.Zone!;
+        return await RunOnVmAsync(request, bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Issue #606: the spec to create. The provisioner asks for it only when no VM exists for the job, so a run that adopts a VM
+    /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured
+    /// here, once, before the first create; a refusal throws a classified CloudOperationException and no VM is made.
+    /// </summary>
+    private async Task<VmSpec> CompleteSpecAsync(CloudJobRequest request, string bucket, CancellationToken cancellationToken)
+    {
         var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken).ConfigureAwait(false);
         if (identity.NoteCode == SetupErrorCodes.WorkerDefaultAccount)
         {
@@ -332,16 +348,7 @@ public sealed class CloudJobRunner
                 cancellationToken).ConfigureAwait(false);
         }
 
-        await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
-        var spec = VmProvisioner.WithStartupMetadata(request, bucket) with { ServiceAccountEmail = identity.ServiceAccountEmail };
-        var provisioned = await _provisioner.ProvisionAsync(request, spec, progress, cancellationToken).ConfigureAwait(false);
-        if (!provisioned.Success)
-        {
-            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, RunErrorCodes.For(provisioned.FailureKind.Value), provisioned.FailureMessage, provisioned.VmEndNote).ConfigureAwait(false);
-        }
-
-        progress.Zone = provisioned.Zone!;
-        return await RunOnVmAsync(request, bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+        return VmProvisioner.WithStartupMetadata(request, bucket) with { ServiceAccountEmail = identity.ServiceAccountEmail };
     }
 
     /// <summary>Everything from the moment a VM exists. <see cref="RunCoreAsync"/> ends the VM for any exception that leaves here without having done so.</summary>

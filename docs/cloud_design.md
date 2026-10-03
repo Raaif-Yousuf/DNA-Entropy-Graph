@@ -1134,11 +1134,12 @@ account and a role and edits two policies, and a whole-method retry would replay
   either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
   per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers
   labels on these two, so there is no allowlist entry. Everything that bills (the VM, the bucket) keeps its labels.
-- **Caller (issue #606).** `CloudJobRunner.RunStepsAsync` calls `EnsureWorkerIdentityAsync(projectId, bucket)` after
-  `EnsureBucketAsync` and after the "result.json already there" look, immediately before `Provisioning`, and sets the returned
-  `ServiceAccountEmail` on the spec it provisions with (`with { ServiceAccountEmail = ... }`); without it `GoogleComputeGateway`
-  refuses the create (`WORKER_SERVICE_ACCOUNT_MISSING`). It is idempotent, so a resumed run asks again (a resumed run that
-  adopts a VM does not use the answer; a finished job never reaches it). A refusal is a `CloudOperationException` that ends the
+- **Caller (issue #606).** `CloudJobRunner.CompleteSpecAsync` calls `EnsureWorkerIdentityAsync(projectId, bucket)` after
+  `EnsureBucketAsync`, and `VmProvisioner.ProvisionAsync` invokes it only after its adoption lookup (`FindByJobIdAsync`) found
+  no VM, once, before the first create. It sets the returned `ServiceAccountEmail` on the spec it creates with
+  (`with { ServiceAccountEmail = ... }`); without it `GoogleComputeGateway` refuses the create (`WORKER_SERVICE_ACCOUNT_MISSING`).
+  A run that adopts a VM, or whose job already finished, never calls IAM, so an IAM failure can never end a healthy working
+  VM (cold review of #606). A refusal is a `CloudOperationException` that ends the
   run through the ordinary classifier (`permission`, `org_policy`, ...) before any VM is created. `WORKER_DEFAULT_ACCOUNT` is a
   note: the run continues and the row carries `RunErrorCodes.WorkerDefaultAccount` (`worker_default_account`, copy
   `RunError_worker_default_account`) as an `ErrorCode` on a row that still completes, which the Runs list shows as its warning line

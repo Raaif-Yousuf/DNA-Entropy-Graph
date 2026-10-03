@@ -105,6 +105,25 @@ public class CloudJobRunnerWorkerIdentityTests
         gcp.WorkerIdentityEnsureCalls.ShouldBe(1, "a terminal job is returned from its row, nothing is re-ensured");
     }
 
+    [Fact]
+    public async Task A_resume_that_adopts_an_existing_VM_never_asks_for_the_identity_so_an_IAM_failure_cannot_end_it()
+    {
+        // The cold review of #606: adoption needed no IAM call before this change, and a failing one must not stop a working VM.
+        var gcp = new FakeGcp().WithWorkerIdentityPermissionDenied();
+        var repo = new InMemoryRunRepository();
+        var request = TestInputs.Request("job-i5", Spec("job-i5"));
+        await gcp.CreateVmAsync(request.Spec, "us-central1-a", CancellationToken.None);
+        await repo.UpsertAsync(new RunRecord("job-i5", JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var result = await Runner(gcp, gcp, repo).RunAsync(request, CancellationToken.None);
+
+        // Whatever else the resumed run does (the manifest was never uploaded here, so it waits for a result and times out),
+        // it is not the identity refusal, and the adopted VM was looked at, never asked about IAM.
+        result.FailureCode.ShouldNotBe("permission", "an IAM refusal must not fail a run that adopts a VM");
+        gcp.WorkerIdentityEnsureCalls.ShouldBe(0, "an adopted VM needs no identity");
+        gcp.CreatedSpecs.Count.ShouldBe(1, "only the seeded VM exists; nothing was created");
+    }
+
     private sealed class RecordingIdentity(IWorkerIdentityGateway inner, Func<int> vmsCreated) : IWorkerIdentityGateway
     {
         public List<(string Project, string Bucket, int VmsCreatedSoFar)> Calls { get; } = [];
