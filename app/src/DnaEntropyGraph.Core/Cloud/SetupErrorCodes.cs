@@ -34,13 +34,13 @@ public static class SetupErrorCodes
         _ => "SetupError_OTHER",
     };
 
-    /// <summary>The <c>Resources.resw</c> key for the button that carries the one action, or null when the message itself says it.</summary>
-    public static string? ActionResourceKey(string? code) => code switch
+    /// <summary>The <c>Resources.resw</c> key for the button that carries the one action. Every message names one, the catch-all included.</summary>
+    public static string ActionResourceKey(string? code) => code switch
     {
         ProjectQuota => "SetupAction_PickExistingProject",
         OrgPolicyBlock => "SetupAction_CopyMessageForIt",
         NoBilling => "SetupAction_LinkBilling",
         BillingNoPermission => "SetupAction_CopyBillingRequest",
-        _ => null,
+        _ => "SetupAction_TryAgain",
     };
 }

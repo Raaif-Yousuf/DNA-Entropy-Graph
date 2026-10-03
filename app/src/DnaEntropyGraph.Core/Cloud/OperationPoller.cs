@@ -27,6 +27,9 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public static class OperationPoller
 {
+    /// <summary>The <see cref="CloudError.Code"/> of a deadline spent before the operation reported done.</summary>
+    public const string TimeoutCode = "OPERATION_POLL_TIMEOUT";
+
     public static readonly TimeSpan InitialBackoff = TimeSpan.FromSeconds(1);
 
     public static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(10);
@@ -66,7 +69,7 @@ public static class OperationPoller
                 // way a real HttpRequestException/timeout would
                 // (docs/cloud_design.md section 5's table).
                 return OperationOutcome<T>.Failed(new CloudError(
-                    "OPERATION_POLL_TIMEOUT",
+                    TimeoutCode,
                     null,
                     $"Polling timed out after {deadline} without the operation reporting done."));
             }
