@@ -70,7 +70,7 @@ public class FakeGcpRetrySafetyTests
         // attempts could create two VMs with the same name in different
         // zones" - is not merely plausible, it is exactly what this
         // gateway-level call sequence produces when nothing reconciles
-        // first. This is why CloudJobRunner.ProvisionAsync calls
+        // first. This is why VmProvisioner.ProvisionAsync calls
         // FindByJobIdAsync BEFORE attempting any zone, never after.
         var gcp = new FakeGcp();
         var spec = ValidSpec("job-3");
