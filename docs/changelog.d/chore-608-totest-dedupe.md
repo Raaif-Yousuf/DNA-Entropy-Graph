@@ -1,0 +1,1 @@
+- check_totest_format now fails on two ToTest rows with the same issue number and identical Do-this text, naming both lines; removed the #475 and #31 rows a union merge had duplicated (#608).

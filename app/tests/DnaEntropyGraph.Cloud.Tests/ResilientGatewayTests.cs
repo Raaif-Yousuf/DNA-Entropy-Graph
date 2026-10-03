@@ -272,10 +272,11 @@ public class ResilientGatewayTests
 
         gateways.ProjectCatalog.GetType().Name.ShouldBe("GoogleProjectCatalogGateway");
         gateways.Services.GetType().Name.ShouldBe("GoogleServiceUsageGateway");
+        gateways.WorkerIdentity.GetType().Name.ShouldBe("GoogleIamGateway");
         typeof(CloudCallPipeline).Assembly.GetTypes()
             .Select(t => t.Name)
-            .Where(n => n.StartsWith("Resilient", StringComparison.Ordinal) && (n.Contains("ProjectCatalog", StringComparison.Ordinal) || n.Contains("ServiceEnablement", StringComparison.Ordinal)))
-            .ShouldBeEmpty("a Resilient wrapper for the catalog or service-usage gateway exists; wrapping them re-POSTs on a failed read");
+            .Where(n => n.StartsWith("Resilient", StringComparison.Ordinal) && (n.Contains("ProjectCatalog", StringComparison.Ordinal) || n.Contains("ServiceEnablement", StringComparison.Ordinal) || n.Contains("WorkerIdentity", StringComparison.Ordinal)))
+            .ShouldBeEmpty("a Resilient wrapper for the catalog, service-usage or worker-identity gateway exists; wrapping them re-POSTs (or re-creates an account) on a failed read");
         gateways.Billing.GetType().Name.ShouldBe("ResilientBillingGateway");
     }
 
