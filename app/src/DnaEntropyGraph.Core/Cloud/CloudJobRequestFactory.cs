@@ -67,7 +67,8 @@ public static class CloudJobRequestFactory
             WorkerImage: workerImage);
     }
 
-    private static string LifecycleLabel(AfterTaskAction action) => action switch
+    /// <summary>The <c>lifecycle</c> label value (<c>delete</c>, <c>keep</c>, <c>stop</c>) a VM for a run with this after-task choice carries.</summary>
+    internal static string LifecycleLabel(AfterTaskAction action) => action switch
     {
         AfterTaskAction.Delete => "delete",
         AfterTaskAction.KeepAlive => "keep",

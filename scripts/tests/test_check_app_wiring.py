@@ -556,3 +556,178 @@ def test_a_variable_of_unknown_or_owning_type_is_still_a_read(tmp_path):
                    "public class Reader { string A() { var options = Make(); return options.Caption; } }\n"):
         root = _unbound_caption_tree(tmp_path / f"v{abs(hash(reader))}", reader)
         assert "CODE-ONLY-OBSERVABLE" in _codes(root), reader
+
+
+# --- #530: a factory registration builds the type itself, the container injects none of its constructor ------
+
+
+def test_a_factory_registered_type_with_a_func_parameter_is_not_an_unregistered_dependency(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<Reconciler>();",
+            "s.AddSingleton<Watcher>(sp => new Watcher(\n        () => sp.GetRequiredService<Reconciler>()));",
+            "s.AddSingleton<IObserver>(sp => sp.GetRequiredService<Watcher>());",
+        ),
+        "src/Demo.Core/Reconciler.cs": "public sealed class Reconciler { }\n",
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<Reconciler> factory) { } }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == []  # was: Watcher(Func<Reconciler>)
+
+
+def test_a_factory_registered_type_with_an_interface_and_a_lambda_parameter_is_skipped_too(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<IWatcher, Watcher>((IServiceProvider _) => new Watcher(null!));",
+        ),
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher : IWatcher { public Watcher(Func<int> f) { } }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == []
+
+
+def test_a_type_registered_without_a_factory_and_taking_a_func_is_still_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Watcher>();"),
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == ["Watcher(Func<int>)"]
+
+
+# --- #530 cold-review round: the factory skip must not blind the check ---------------------------------------
+
+
+def _codes_of(root: Path, code: str) -> list[str]:
+    return [f.symbol for f in _findings(root) if f.code == code]
+
+
+def test_a_get_required_service_of_an_unregistered_type_inside_a_factory_is_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<Missing>()));",
+        ),
+        "src/Demo.Core/W.cs": "public sealed class W { public W(Missing m) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Missing"]  # was: nothing (and W(Missing) before the skip)
+
+
+def test_a_get_required_service_of_a_registered_type_is_not_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<Dep>();",
+            "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<Dep>()));",
+            "s.AddSingleton<IView>(sp => sp.GetRequiredService<W>());",
+        ),
+        "src/Demo.Core/W.cs": "public sealed class W { public W(Dep d) { } }\n",
+        "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_resolve_named_only_in_a_comment_is_not_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "// sp.GetRequiredService<Ghost>() is how a caller would ask",
+            "s.AddSingleton<Dep>();",
+        ),
+        "src/Demo.Core/Dep.cs": "public sealed class Dep { public Dep(int n) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_type_registered_by_a_factory_and_plainly_is_still_checked_as_a_plain_registration(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<Watcher>(sp => new Watcher(() => 1));",
+            "s.AddTransient<Watcher>();",
+        ),
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == ["Watcher(Func<int>)"]
+
+
+def test_static_and_parenthesised_and_nested_paren_lambdas_are_factory_registrations(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<A>(static sp => new A(() => 1));",
+            "s.AddSingleton<B>((sp) => new B(() => 1));",
+            "s.AddSingleton<C>(static (IServiceProvider sp) => new C(() => 1));",
+            "s.AddSingleton<D>(async (IServiceProvider sp, object? key) => new D(() => 1));",
+        ),
+        "src/Demo.Core/Types.cs": (
+            "public sealed class A { public A(Func<int> f) { } }\n"
+            "public sealed class B { public B(Func<int> f) { } }\n"
+            "public sealed class C { public C(Func<int> f) { } }\n"
+            "public sealed class D { public D(Func<int> f) { } }\n"
+        ),
+    })
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []
+
+
+def test_the_inferred_type_factory_form_registers_the_type_it_news_up(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton(_ => new Db(\"p\"));",
+            "s.AddSingleton<IRepo>(sp => new Repo(sp.GetRequiredService<Db>()));",
+        ),
+        "src/Demo.Core/Repo.cs": "public sealed class Repo : IRepo { public Repo(Db d) { } }\n",
+        "src/Demo.Core/Db.cs": "public sealed class Db { public Db(string path) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []  # was: Db
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []
+
+
+# --- #530 cold-review round 2 ---------------------------------------------------------------------------------
+
+
+def test_resolving_the_implementation_type_of_an_interface_registration_is_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<IToastService, ToastService>();",
+            "s.AddSingleton<Other>(sp => new Other(sp.GetRequiredService<ToastService>()));",
+        ),
+        "src/Demo.Core/Toast.cs": "public sealed class ToastService : IToastService { }\n",
+        "src/Demo.Core/Other.cs": "public sealed class Other { public Other(ToastService t) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["ToastService"]
+
+
+def test_resolving_the_interface_of_an_interface_registration_is_not_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<IToastService, ToastService>();",
+            "s.AddSingleton<Other>(sp => new Other(sp.GetRequiredService<IToastService>()));",
+        ),
+        "src/Demo.Core/Toast.cs": "public sealed class ToastService : IToastService { }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_commented_out_registration_does_not_count_as_registered(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "// s.AddSingleton<Dep>();",
+            "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<Dep>()));",
+        ),
+        "src/Demo.Core/W.cs": "public sealed class W { public W(Dep d) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Dep"]
+
+
+def test_a_commented_out_plain_registration_does_not_defeat_the_factory_skip(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "// s.AddTransient<Watcher>();",
+            "s.AddSingleton<Watcher>(sp => new Watcher(() => 1));",
+        ),
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []
+
+
+def test_get_service_the_optional_resolve_is_not_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<W>(sp => new W(sp.GetService<Maybe>()));",
+        ),
+        "src/Demo.Core/W.cs": "public sealed class W { public W(Maybe? m) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
