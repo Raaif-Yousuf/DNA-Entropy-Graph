@@ -11,9 +11,13 @@ namespace DnaEntropyGraph.Guards.Tests;
 /// the 4 minute hang timeout was parked in <c>MddBootstrapInitialize2</c>, reached from <c>&lt;Module&gt;..cctor</c>
 /// of the App assembly (the Windows App SDK's generated <c>AutoInitialize</c>) the first time the test touched an App
 /// type. Its default option is <c>OnNoMatch_ShowUI</c>: with no Windows App Runtime installed it opens a modal "install
-/// the runtime" dialog, and a CI runner has no desktop to answer it, so the call waits forever. In CI (<c>CI=true</c>,
-/// set by GitHub Actions) the App is built with option <c>None</c>, which fails fast with the HRESULT instead.
-/// Developer machines keep the default, which is the friendly path for a person at a desktop.
+/// the runtime" dialog, and a CI runner has no desktop to answer it, so the call waits forever. The App is therefore
+/// built with option <c>None</c> in every configuration (a missing runtime then ends the process with its HRESULT).
+/// Unconditional on purpose: the shipped app is published self-contained, which drops the auto-initializer, so the
+/// dialog only ever existed in dev and test builds, and one behaviour everywhere means a laptop reproduces CI.
+/// MEASURED 2026-10-03: the bootstrap cannot simply be switched off (WindowsAppSdkBootstrapInitialize=false): the
+/// Guards DiResolutionTests then die with COMException 0x80040154 in DispatcherAdapter, so the runtime must still be
+/// installed where tests run (ci-app.yml installs and asserts it).
 /// </summary>
 public class BootstrapNeverShowsUiGuardTests
 {
@@ -29,28 +33,20 @@ public class BootstrapNeverShowsUiGuardTests
     }
 
     [Fact]
-    public void A_CI_build_of_the_App_bootstraps_without_ever_showing_a_dialog()
+    public void The_App_bootstraps_without_ever_showing_a_dialog()
     {
-        var options = OptionsOfTheBuiltApp();
-
-        if (string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase))
-        {
-            options.ShouldBe("None", "any option containing OnNoMatch_ShowUI blocks forever on a runner with no desktop (#438).");
-        }
-        else
-        {
-            options.ShouldBe("OnNoMatch_ShowUI", "outside CI the default dialog stays; if this fails the Windows App SDK changed its default, re-read #438.");
-        }
+        // Read from the compiled App assembly, so this is the value the build really used, independent of the test-time environment.
+        OptionsOfTheBuiltApp().ShouldBe("None", "any option containing OnNoMatch_ShowUI blocks forever on a runner with no desktop (#438).");
     }
 
     [Fact]
-    public void The_App_csproj_turns_the_bootstrap_dialog_off_only_when_CI_is_true()
+    public void The_App_csproj_sets_the_bootstrap_option_to_None_unconditionally()
     {
         File.Exists(AppCsproj).ShouldBeTrue();
 
         var element = XDocument.Load(AppCsproj).Descendants("WindowsAppSDKBootstrapAutoInitializeOptions_None").ShouldHaveSingleItem();
 
         element.Value.ShouldBe("true");
-        element.Attribute("Condition")?.Value.ShouldBe("'$(CI)' == 'true'");
+        element.Attribute("Condition").ShouldBeNull("a CI-only condition makes a laptop differ from CI; see the class summary.");
     }
 }

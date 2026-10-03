@@ -1,6 +1,8 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
 
@@ -15,12 +17,24 @@ public sealed partial class WizardViewModel : ObservableObject
     private readonly IGcpAccount _gcpAccount;
     private readonly IDialogService _dialogService;
     private readonly INavigator _navigator;
+    private readonly IStringResourceProvider _strings;
+    private readonly IDispatcher? _dispatcher;
 
     [ObservableProperty]
     private bool _isSignedIn;
 
-    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator)
+    /// <summary>What went wrong, in the user's words and naming one action (Hard Rule 13); empty when the last sign-in did not fail.</summary>
+    [ObservableProperty]
+    private string _signInErrorText = string.Empty;
+
+    /// <summary>The label of the button that carries that action; empty when the message itself is the action.</summary>
+    [ObservableProperty]
+    private string _signInActionText = string.Empty;
+
+    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null)
     {
+        _strings = strings;
+        _dispatcher = dispatcher;
         _gcpAccount = gcpAccount;
         _dialogService = dialogService;
         _navigator = navigator;
@@ -30,11 +44,42 @@ public sealed partial class WizardViewModel : ObservableObject
     [RelayCommand]
     private async Task SignInAsync(CancellationToken cancellationToken)
     {
-        await _gcpAccount.SignInAsync(cancellationToken).ConfigureAwait(false);
-        IsSignedIn = _gcpAccount.IsSignedIn;
-        if (IsSignedIn)
+        try
         {
-            _navigator.NavigateTo("Wizard/Project");
+            await _gcpAccount.SignInAsync(cancellationToken).ConfigureAwait(false);
         }
+        catch (AccountAuthException failure)
+        {
+            // The command resumes off the UI thread (ConfigureAwait(false)), and these properties are bound to it.
+            OnUiThread(() =>
+            {
+                SignInErrorText = _strings.GetString(AuthErrorCodes.ResourceKey(failure.Code));
+                SignInActionText = AuthErrorCodes.ActionResourceKey(failure.Code) is { } actionKey ? _strings.GetString(actionKey) : string.Empty;
+                IsSignedIn = _gcpAccount.IsSignedIn;
+            });
+            return;
+        }
+
+        OnUiThread(() =>
+        {
+            SignInErrorText = string.Empty;
+            SignInActionText = string.Empty;
+            IsSignedIn = _gcpAccount.IsSignedIn;
+            if (IsSignedIn)
+            {
+                _navigator.NavigateTo("Wizard/Project");
+            }
+        });
+    }
+
+    private void OnUiThread(Action action)
+    {
+        if (_dispatcher is null)
+        {
+            action();
+            return;
+        }
+
+        _dispatcher.Enqueue(action);
     }
 }

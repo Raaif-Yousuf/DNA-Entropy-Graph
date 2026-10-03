@@ -59,10 +59,11 @@ jobs:
 
       # #438. MEASURED 2026-10-03 (minidump of PR #529's run): the hung test was blocked in the Windows App SDK
       # bootstrap (MddBootstrapInitialize2) because windows-latest has no Windows App Runtime, and the default
-      # bootstrap option opens a dialog nobody can answer. DnaEntropyGraph.App.csproj now sets option None when CI=true
-      # (a missing runtime exits with an HRESULT instead of hanging); this step installs the runtime so the tests that
-      # touch WinUI types (Guards DiResolutionTests) can pass. THEORY (unverified) until a run shows it: that the
-      # redistributable installs silently on windows-latest; see docs/ToTest.md.
+      # bootstrap option opens a dialog nobody can answer. DnaEntropyGraph.App.csproj now sets option None (a missing
+      # runtime exits with an HRESULT instead of hanging). MEASURED 2026-10-03 on a laptop: the bootstrap cannot be
+      # disabled for the tests either (COMException 0x80040154 in Guards DiResolutionTests), so this step installs the
+      # runtime and the next one asserts it is there, so a silent --quiet no-op fails here and not as a test error.
+      # THEORY (unverified) until a run shows it: that the redistributable installs silently on windows-latest; see docs/ToTest.md.
       - name: install Windows App Runtime
         shell: pwsh
         run: |
@@ -70,6 +71,12 @@ jobs:
           $p = Start-Process -FilePath "$env:RUNNER_TEMP/windowsappruntimeinstall.exe" -ArgumentList '--quiet' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Windows App Runtime install exited $($p.ExitCode)" }
 
+      - name: assert Windows App Runtime 1.8 is installed
+        shell: pwsh
+        run: |
+          $pkgs = Get-AppxPackage -AllUsers 'Microsoft.WindowsAppRuntime.1.8*'
+          if (-not $pkgs) { throw 'Windows App Runtime 1.8 is not installed after the install step (a silent --quiet no-op).' }
+          $pkgs | ForEach-Object { Write-Host "installed: $($_.Name) $($_.Version)" }
       - name: restore
         working-directory: app
         run: dotnet restore
@@ -116,6 +123,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { $failed += "$p (exit $LASTEXITCODE)" }
             Write-Host "::endgroup::"
           }
+          $trx = @(Get-ChildItem TestResults -Recurse -Filter *.trx -ErrorAction SilentlyContinue)
+          if ($trx.Count -lt 5) { $failed += "expected 5 .trx files, found $($trx.Count) (a dropped --report-trx flag)" }
           if ($failed.Count -gt 0) {
             Write-Host "::error title=app tests failed::$($failed -join ', '). Exit 7 means the hang dump fired; download the test-results artifact."
             exit 1
