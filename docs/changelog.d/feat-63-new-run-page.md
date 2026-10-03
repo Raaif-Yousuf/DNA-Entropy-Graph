@@ -1,2 +1,3 @@
 - The New run page: a drop area for files and folders, Add files (Ctrl+O), a Paste a sequence panel with a live base counter, one pill per file and the Treat as RNA button; the wiring guard no longer reports x:Bind inside a typed DataTemplate (#63).
 - New run review fixes: notices are plain-words copy chosen by code, a slow older check can no longer overwrite a newer one, drops never crash the app and a second drop is not lost, a failed paste stays in its box, the Run name box is hidden until the runner uses it (#514), and the page says Run starts only the selected file (#63).
+- New run: Remove now selects the neighbouring file (the list used to leave nothing selected), and each file in the list has its name for screen readers (#63).

@@ -256,6 +256,31 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task The_list_clearing_its_selection_after_a_removal_does_not_leave_the_page_with_none_selected()
+    {
+        // MEASURED 2026-10-03 in the real app: after Remove, the ListView pushed a null SelectedItem back through
+        // the TwoWay binding, so the neighbour was not selected and Run stayed disabled.
+        var a = await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        var b = await AddOne(Write("b.fasta", ">b\n" + Dna + "\n"));
+        var raised = new List<string?>();
+        _viewModel.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        _viewModel.RemoveItemCommand.Execute(a);
+        _viewModel.SelectedItem = null;
+
+        _viewModel.SelectedItem.ShouldBeSameAs(b);
+        raised.ShouldContain(nameof(NewRunViewModel.SelectedItem));
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Nothing_selected_is_accepted_when_there_are_no_pills()
+    {
+        _viewModel.SelectedItem = null;
+
+        _viewModel.SelectedItem.ShouldBeNull();
+    }
+    [Fact]
     public void Remove_cannot_run_with_nothing_selected()
         => _viewModel.RemoveItemCommand.CanExecute(null).ShouldBeFalse();
 

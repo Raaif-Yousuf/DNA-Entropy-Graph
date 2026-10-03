@@ -29,9 +29,6 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly TimeProvider _time;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RunNamePreview))]
-    [NotifyCanExecuteChangedFor(nameof(StartRunCommand))]
     private InputPillItem? _selectedItem;
 
     [ObservableProperty]
@@ -77,6 +74,30 @@ public sealed partial class NewRunViewModel : ObservableObject
         var saved = settingsStore.GetString(NameTemplateSettingKey);
         _nameTemplate = string.IsNullOrWhiteSpace(saved) ? DefaultNameTemplate : saved;
         Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasSeveralItems));
+    }
+
+    /// <summary>The pill Run will run. Never cleared while pills exist: see the setter.</summary>
+    public InputPillItem? SelectedItem
+    {
+        get => _selectedItem;
+        set
+        {
+            if (value is null && Items.Count > 0)
+            {
+                // MEASURED 2026-10-03 in the real app: after Remove, the ListView pushed null back through the
+                // TwoWay binding and left the neighbour unselected with Run disabled. A single-selection list
+                // with pills has no way to be deselected by the user, so null here is that echo: refuse it and
+                // tell the binding to select what we still have.
+                OnPropertyChanged();
+                return;
+            }
+
+            if (SetProperty(ref _selectedItem, value))
+            {
+                OnPropertyChanged(nameof(RunNamePreview));
+                StartRunCommand.NotifyCanExecuteChanged();
+            }
+        }
     }
 
     /// <summary>One pill per file or pasted sequence, in the order added.</summary>

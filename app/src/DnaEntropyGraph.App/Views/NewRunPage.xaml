@@ -69,7 +69,7 @@
                 SelectionMode="Single">
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="vm:InputPillItem">
-                        <StackPanel Padding="0,8" Spacing="2">
+                        <StackPanel Padding="0,8" Spacing="2" AutomationProperties.Name="{x:Bind DisplayName}">
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <TextBlock Text="{x:Bind DisplayName}" FontWeight="SemiBold" />
                                 <TextBlock Text="{x:Bind KindText, Mode=OneWay}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
