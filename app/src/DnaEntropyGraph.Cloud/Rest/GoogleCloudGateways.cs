@@ -1,6 +1,7 @@
 using DnaEntropyGraph.Core.Cloud;
 using Google.Apis.Cloudbilling.v1;
 using Google.Apis.CloudResourceManager.v3;
+using Google.Apis.Compute.v1;
 using Google.Apis.ServiceUsage.v1;
 
 namespace DnaEntropyGraph.Cloud.Rest;
@@ -14,7 +15,8 @@ public sealed record GoogleCloudGatewaySet(
     IProjectCatalogGateway ProjectCatalog,
     IBillingGateway Billing,
     IServiceEnablementGateway Services,
-    IProjectSetupGateway ProjectSetup);
+    IProjectSetupGateway ProjectSetup,
+    IComputeGateway Compute);
 
 /// <summary>
 /// The one place the real gateways are built, and so the one place production switches from <see cref="FakeGcp"/> to
@@ -25,7 +27,7 @@ public sealed record GoogleCloudGatewaySet(
 /// </summary>
 public static class GoogleCloudGateways
 {
-    public static GoogleCloudGatewaySet Create(IGcpAccessTokenSource tokens, CloudCallPipeline pipeline, GoogleCloudOptions? options = null)
+    public static GoogleCloudGatewaySet Create(IGcpAccessTokenSource tokens, CloudCallPipeline pipeline, GoogleCloudOptions? options = null, Func<string?>? selectedProjectId = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -42,6 +44,10 @@ public static class GoogleCloudGateways
             catalog,
             billing,
             services,
-            new GoogleProjectSetupGateway(catalog, billing, services));
+            new GoogleProjectSetupGateway(catalog, billing, services),
+            // Wrapped whole, like every IComputeGateway: the insert carries a deterministic requestId, so a replay is safe.
+            new ResilientComputeGateway(
+                new GoogleComputeGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), options, selectedProjectId ?? (() => null)),
+                pipeline));
     }
 }

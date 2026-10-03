@@ -7,8 +7,7 @@ reference - `CloudJobRunner` is this table's first production caller: it runs th
 continue rule in section 5 for real, over `FakeGcp`. Still not built: the escalating-
 parallelism zone ladder (`GpuPlanner`, issue #86 - `CloudJobRunner`'s own zone list is a
 plain sequential walk, not that ladder), the setup health checks (issue #204), and a real
-(non-fake) gateway implementation against `Google.Cloud.Compute.V1` -
-`DnaEntropyGraph.Cloud` today holds only `FakeGcp`. Authoritative detail lives in
+(non-fake) gateway implementation (`Google.Apis.Compute.v1`, section 16; `FakeGcp` is still what production resolves until #609). Authoritative detail lives in
 [Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this doc is the
 "what a developer needs while implementing" summary with the tables filled in, not a
 shorter copy of the whole appendix.
@@ -532,7 +531,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
     leaving the row in `Cancelling`. A row that is already terminal (a second cancel racing the first) is left alone and
     nothing throws. `RunAsync` on a row in `Cancelling` finishes the cancel (it used to attempt `Cancelling -> Validating`).
   - *The result wait is measured from the VM's creation.* `VmDescriptor.CreatedAt` is the instance's `creationTimestamp`;
-    the real Compute gateway MUST fill it (there is no real gateway yet, so this is a contract for it). The default deadline
+    the real Compute gateway fills it (`GoogleComputeGateway`, issue #56, from `creationTimestamp`). The default deadline
     is `maxRunDuration - 3 min` from that instant, so an 8 minute boot or a resume no longer lets the platform delete the VM
     before the runner gives up (it read as `vm_unhealthy`). A gateway that leaves it null falls back to "from Running".
     An explicit `ResultTimeout` still measures from Running. `FakeGcp.WithMaxRunDurationEnforced()` makes the fake delete a
@@ -931,10 +930,43 @@ creates the project's default network).
   already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
   already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
-  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute and
-  storage gateways and the token refresher do not, so production still resolves everything to `FakeGcp` (#56, #520).
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the storage gateway and the token refresher do not, and production still resolves everything to
+  `FakeGcp` (the switch is #609, which needs #520 and #606).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
 - **Proven only by a real project:** `docs/ToTest.md`.
+
+### Compute gateway (issue #56)
+
+`Rest/GoogleComputeGateway` implements `IComputeGateway` over `Google.Apis.Compute.v1` (Apache-2.0; the same REST-over-gRPC
+choice as above, DECISION #535) and `GoogleCloudGateways.Create(...).Compute` is it inside `ResilientComputeGateway`, so
+every call goes through `CloudCallPipeline` like any `IComputeGateway`. **Production DI still resolves `IComputeGateway`
+to `FakeGcp` until #609**; nothing in the running app calls this class yet.
+
+- **Project.** Only create carries one (`VmSpec.ProjectId`). Get, stop, delete, find and list take it from the optional
+  `selectedProjectId` argument of `Create` (production will pass `IGcpAccount.SelectedProjectId`, #609); none selected
+  throws `InvalidOperationException` and sends nothing.
+- **Create.** `VmSpec.ToLabels()` runs first (Hard Rule 10), then `instances.insert` is built with: the six standard labels,
+  `scheduling.maxRunDuration` (seconds), `instanceTerminationAction` from the spec (DELETE), `onHostMaintenance=TERMINATE`,
+  `automaticRestart=false`, every `VmSpec.Metadata` item (the startup script and `deg-*` keys) plus
+  `block-project-ssh-keys=true` (section 9), a `pd-balanced` 150 GB boot disk with `autoDelete`, the default network with an
+  external address (the VM pulls its image), and the `deg-worker@<project>` service account with the `cloud-platform`
+  scope. `VmSpec` does not carry image, disk or service account, so they are fixed in `ComputeVmShape`: the DLVM family
+  for `g2-`/`g4-`/`a2-`/`a3-`/`a4-` machine types, `cos-cloud/cos-stable` otherwise. The insert's `requestId` is a UUID derived
+  from project, zone and VM name, identical on every replay, so a pipeline retry cannot make a second VM (#257).
+- **Operations.** insert, stop and delete return a zone operation, polled with `OperationPoller` (1 s doubling to 10 s,
+  `OperationDeadline`) until `DONE`. `operation.error` becomes a `CloudOperationException` classified by
+  `CloudErrorClassifier` alone (code, `httpErrorStatusCode`, message), so `ZONE_RESOURCE_POOL_EXHAUSTED` is `stockout`
+  and `QUOTA_EXCEEDED` is `quota`. A refused HTTP call (billing off and API off arrive as a 403 on the insert) goes
+  through `GoogleApiErrors`, which uses the same classifier. A spent deadline is `OPERATION_POLL_TIMEOUT` (`network`).
+- **Get, stop, delete.** A 404 on get is `null`; a 404 on stop or delete, or an operation that reports not found, is
+  "already gone", not an error.
+- **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
+  (or `labels.installation-id`), following `nextPageToken` across every zone; a value no label can hold returns nothing
+  without a request, and each returned VM's labels are re-checked client-side. Zone is parsed from the instance's zone URL;
+  `Labels` and `StoppedAt` (`lastStopTimestamp`) are filled, `CreatedAt` from `creationTimestamp`.
+- **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
+  scheduling settings; that the `labels.job-id = "x"` filter syntax matches; the worker service account name (nothing creates
+  it yet); and the COS image family for `startup.sh`. `docs/ToTest.md` carries the cpu-vm row.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

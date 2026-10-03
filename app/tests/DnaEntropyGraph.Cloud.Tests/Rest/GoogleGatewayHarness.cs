@@ -38,7 +38,7 @@ internal sealed class StubTokenSource : IGcpAccessTokenSource, ICloudTokenRefres
 /// </summary>
 internal sealed class GoogleGatewayHarness
 {
-    public GoogleGatewayHarness(TimeSpan? operationDeadline = null, int retries = 3)
+    public GoogleGatewayHarness(TimeSpan? operationDeadline = null, int retries = 3, string? selectedProjectId = "my-lab")
     {
         Tokens = new StubTokenSource();
         Handler = new ScriptedHttpHandler();
@@ -59,7 +59,8 @@ internal sealed class GoogleGatewayHarness
                     return Task.CompletedTask;
                 },
                 OperationDeadline = operationDeadline ?? TimeSpan.FromMinutes(2),
-            });
+            },
+            () => selectedProjectId);
     }
 
     public StubTokenSource Tokens { get; }
