@@ -1,0 +1,1 @@
+- fix(cloud): the runner reads the worker heartbeat in status.json while it waits, so a wedged worker (or a missing GPU) ends the run and the VM within minutes instead of at the result limit; new codes worker_no_heartbeat and worker_heartbeat_stale, FakeGcp heartbeat worker modes (#498)

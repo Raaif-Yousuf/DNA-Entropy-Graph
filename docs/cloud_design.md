@@ -398,6 +398,21 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `maxRunDuration` plus 5 minutes). Ending first lets the runner give up on its own terms: end the
   VM per the user's choice, verify it, record `result_timeout`. A worker still uploading in the last
   3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
+- **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
+  also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
+  CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
+  machines can disagree by minutes). Three verdicts, each ending the VM before the run is recorded Failed: no
+  worker-written heartbeat (a `status.json` whose `worker.version` is non-empty; the startup script's own infra snapshots
+  do not count) within `FirstHeartbeatTimeout` (25 min from the start of the wait: booting 8 + image pull 15 + 2 margin,
+  the stage deadlines of job_contract.md section 5; THEORY (unverified) on a real VM) records `worker_no_heartbeat`; a
+  heartbeat unchanged for `HeartbeatStaleTimeout` (default 20 x `limits.heartbeatSeconds` = 600 s, job_contract.md section 5's
+  "older than 600 s regardless of instance state") records `worker_heartbeat_stale`; and a first progress line
+  (`worker starting; GPU: ...`) that says `no GPU detected` on a GPU machine type records `gpu_not_visible` and DELETES the VM
+  (as `startup.sh` does for a box whose GPU never came up). A last look for `result.json` precedes each verdict, because a
+  worker writes it before it stops heartbeating. A transient failure reading `status.json` never ends the run. Not done
+  here (issue #90 remains): per-stage deadlines other than the first heartbeat, the 180 s "not RUNNING" death rule, the
+  cancel-ack 60 s rule, and showing the heartbeat in the UI. `FakeGcp` scripts `NoHeartbeat`, `HeartbeatStopsAfterRunning`,
+  `NoGpuFirstLine` and a healthy `HeartbeatingThenDone` worker.
 - **Giving up records what was verified.** After the VM end is attempted the runner re-reads the VM:
   confirmed ended is `result_timeout` ("we shut it down"); not confirmed (calls failing, still running
   at `LifecycleTimeout`) is `vm_end_unconfirmed` ("open the Cloud page and delete it"), and the raw detail

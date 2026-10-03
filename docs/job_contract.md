@@ -294,6 +294,12 @@ actually emit these two stages, is an open question for whoever picks it up next
 - Per-stage deadlines, each independently enforced: provisioning 10 min, booting 8 min,
  image pull (`installing`) 15 min, model-loading 15 min, running computed from `nt` count
  and window/direction count, uploading 10 min.
+- **What the runner enforces today (issue #498):** a worker-written `status.json` (non-empty `worker.version`) must
+ appear within 25 minutes of the app starting to wait for `result.json`; once seen, its `heartbeatSeq`/`updatedAt` must change
+ at least every 20 x `limits.heartbeatSeconds` (600 s at the 30 s default), judged by change between the app's looks and not
+ by comparing `updatedAt` with the app's clock; and the worker's first progress line (`worker starting; GPU: ...`) must not
+ say `no GPU detected` on a GPU machine type. Failures are `worker_no_heartbeat`, `worker_heartbeat_stale` and
+ `gpu_not_visible`, each ending the VM. The rest of this section (180 s rule, per-stage deadlines) is not enforced yet.
 - On death, the app offers "Delete VM and show logs" - `logs/startup.log` (uploaded by the
  startup script's own trap) and, as a last resort before any worker log exists,
  `instances.getSerialPortOutput`.
