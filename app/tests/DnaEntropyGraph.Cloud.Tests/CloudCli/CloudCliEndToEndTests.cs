@@ -215,7 +215,8 @@ public class CloudCliEndToEndTests
 
         var session = rig.Sessions.Open("my-lab", "inst-1");
 
-        session.Compute.ShouldBeOfType<ResilientComputeGateway>();
+        session.Compute.GetType().Name.ShouldBe("GoogleComputeGateway"); // internal type; resilience is per request inside it (#56)
+        session.Compute.ShouldNotBeOfType<ResilientComputeGateway>();
         session.Compute.ShouldNotBeOfType<FakeGcp>();
         session.Storage.ShouldNotBeOfType<FakeGcp>();
         session.Storage.ShouldNotBeOfType<ResilientStorageGateway>();
