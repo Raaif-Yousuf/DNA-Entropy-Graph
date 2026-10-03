@@ -22,7 +22,7 @@ public class RunTransferTests
         "output/a\\b",
         "output/C:/x",
         "/output/x",
-        "output/a?b",
+        "output/a\u0000b",
     };
 
     [Theory]

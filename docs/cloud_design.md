@@ -76,7 +76,7 @@ outside the preflight chain proper. Every one of these throws the same
 `FakeGcpScriptedFailureTests.cs` round-trips several of them back through
 `CloudErrorClassifier.Classify` to prove the two agree.
 
-**Implemented** (`app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs`, issue #58):
+**Implemented** (`app/src/DnaEntropyGraph.Core/Cloud/PreflightChecks.cs`, sequenced by `CloudJobRunner.RunAsync`, issue #58):
 `CloudJobRunner.RunAsync` runs this exact preflight chain (steps 1-4; step 5, bucket-exists,
 is folded into the Uploading phase's own `EnsureBucketAsync` call) before a run ever reaches
 Uploading, and aborts to `Failed` on the first failure with the failing
@@ -331,7 +331,7 @@ exercise.
 
 ## 11. The job runner and operation polling (issues #58, #256)
 
-**Implemented**: `app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs` turns one
+**Implemented**: `app/src/DnaEntropyGraph.Core/Cloud/CloudJobRunner.cs` (a sequencer over the collaborators listed in `architecture.md` section 3) turns one
 `CloudJobRequest` into a finished run over `IComputeGateway`/`IStorageGateway`/
 `IProjectSetupGateway`/`IQuotaGateway` (today, `FakeGcp` implementing all four - there is
 no real gateway yet), driven by `JobStateMachine`'s legal-transition table over the
@@ -468,7 +468,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   - *A create that fails may still have landed.* After a Network, Other or Stockout create failure (not only a timeout) the
     runner looks by job-id label and deletes what it finds before it moves to the next zone or records the run, so a lost
     response after the server accepted the insert cannot leave one VM per zone. A sweep that cannot be confirmed records
-    `vm_end_unconfirmed`. `EnsureVmsEndedByLabelAsync` ends every VM it finds even when an earlier one could not be ended.
+    `vm_end_unconfirmed`. `VmTerminator.EnsureVmsEndedByLabelAsync` ends every VM it finds even when an earlier one could not be ended.
   - *Cancel always records one terminal state.* `CancelAsync` tolerates a 404 on delete (the worker or platform got there
     first), re-looks by label afterwards (polling to `LifecycleTimeout`) before it records `Cancelled`, and when the caller's
     token is cancelled midway makes one last uncancellable attempt and records `Cancelled` or `Failed/cancel_failed` instead of
@@ -489,7 +489,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   - *A resumed cancel cannot fail blind.* If `CancelAsync` throws before its own delete logic on a resume, the runner ends the VM
     by label and records `Cancelled` or `cancel_failed`; a repository that keeps failing leaves the row `Cancelling`.
   - *A terminal row answers with its own code,* a cancel tries every VM, and a VM found by label is ended under its own name.
-  - *The end helpers never throw.* `VmTerminator.EnsureVmEndedAsync` and `EnsureVmsEndedByLabelAsync` catch any exception that is not the
+  - *The end helpers never throw.* `VmTerminator.EnsureVmEndedAsync` and `VmTerminator.EnsureVmsEndedByLabelAsync` catch any exception that is not the
     caller cancelling and report it as an unconfirmed end (`vm_end_unconfirmed`).
 
 - **The input is validated before anything is created (Hard Rule 2, #479).** `JobEngine` runs

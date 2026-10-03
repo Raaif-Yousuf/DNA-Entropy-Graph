@@ -56,11 +56,29 @@ public class VmTerminatorTests
     }
 
     [Fact]
-    public async Task A_run_with_no_VM_is_confirmed_ended()
+    public async Task A_run_with_no_VM_is_confirmed_ended_and_another_jobs_VM_is_left_alone()
     {
         var gcp = new FakeGcp();
+        var other = await gcp.CreateVmAsync(Spec("job-other"), Zone, CancellationToken.None);
         var request = TestInputs.Request("job-t3", Spec("job-t3"));
 
-        (await Terminator(gcp).EndVmAfterFailureAsync(request, Zone)).ShouldBeNull();
+        (await Terminator(gcp).EndVmAfterFailureAsync(request, null, forceDelete: true)).ShouldBeNull();
+
+        (await gcp.GetVmAsync(other.Name, Zone, CancellationToken.None))!.Status.ShouldBe("RUNNING");
+    }
+
+    [Fact]
+    public async Task A_VM_that_never_stops_is_reported_unconfirmed_with_the_VM_named()
+    {
+        var gcp = new FakeGcp().WithStopBehaviour(stoppingPolls: 1_000_000);
+        var spec = Spec("job-t4");
+        var vm = await gcp.CreateVmAsync(spec, Zone, CancellationToken.None);
+        var request = TestInputs.Request("job-t4", spec);
+
+        var note = await Terminator(gcp).EndVmAfterFailureAsync(request, Zone);
+
+        note.ShouldNotBeNull();
+        note.ShouldContain("VM end not confirmed");
+        note.ShouldContain(vm.Name);
     }
 }

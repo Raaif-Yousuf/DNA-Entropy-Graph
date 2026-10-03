@@ -84,6 +84,26 @@ public class VmProvisionerTests
     public async Task Settling_with_nothing_in_flight_is_immediately_true()
         => (await Provisioner(new FakeGcp()).SettleInflightCreatesAsync("job-p4")).ShouldBeTrue();
 
+    [Fact]
+    public async Task A_create_still_in_flight_past_the_settle_limit_is_not_settled_and_lands_later()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate();
+        var spec = Spec("job-p5");
+        var provisioner = Provisioner(gcp);
+        var request = TestInputs.Request("job-p5", spec, zones: ["us-central1-a"]);
+        using var cancel = new CancellationTokenSource();
+
+        // The ladder gives up on the blocked create (cancel) while the request is still in flight inside the fake.
+        var ladder = provisioner.ProvisionAsync(request, spec, new RunProgress(), cancel.Token);
+        await gcp.CreateVmEntered;
+        (await provisioner.SettleInflightCreatesAsync("job-p5").WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ShouldBeFalse();
+        (await provisioner.SettleInflightCreatesAsync("another-job")).ShouldBeTrue();
+
+        gcp.ReleaseCreate();
+        await ladder;
+        (await provisioner.SettleInflightCreatesAsync("job-p5")).ShouldBeTrue();
+    }
+
     [Theory]
     [InlineData("g2-standard-8", true)]
     [InlineData("a2-highgpu-1g", true)]
