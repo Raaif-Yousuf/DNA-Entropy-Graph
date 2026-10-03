@@ -366,6 +366,19 @@ sequence is undefined, and reading its bases raises Biopython's `UndefinedSequen
 the record is skipped with a notice, and a file with no readable record is refused with
 `GenBankReadError` (`INPUT_INVALID`), the same skip-then-refuse as the app's `GenBankLite`.
 
+**A non-ASCII character in an ORIGIN block is refused before Biopython reads it (issue
+#492, MEASURED 2026-10-02):** Biopython upper-cases the ORIGIN text with `str.upper()`,
+which folds some non-ASCII letters into ASCII (long s U+017F becomes `S`, a valid IUPAC
+code), so `validate_sequence` never saw the original and the run accepted a letter that is
+not DNA. `readers/genbank.py` therefore scans the raw ORIGIN lines first and raises
+`GenBankReadError` in `validate_sequence`'s own wording: `Invalid character U+017F at
+position 9 of GenBank record 1's sequence`. The position is 1-based over the record's own
+sequence characters (the line-start numbers and the spaces between 10-base groups are
+skipped; a non-ASCII space or digit is refused, not skipped), and the record is named by
+index, never by id. The app's `GenBankLite` already refuses the same characters at the same
+position, so this closes the worker-versus-app divergence for GenBank (FASTA and paste were
+already correct).
+
 **Contig names are hardened against real filename hazards (issue #350, MEASURED
 2026-09-19):** `_safe_contig_name` (`readers/input.py`) disambiguates a name that
 sanitizes to a Windows-reserved device name (`CON`, `NUL`, `PRN`, `COM1`..`9`,
