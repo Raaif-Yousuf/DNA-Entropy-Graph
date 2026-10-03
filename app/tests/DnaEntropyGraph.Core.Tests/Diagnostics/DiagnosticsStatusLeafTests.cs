@@ -2,9 +2,9 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Diagnostics;
 using Shouldly;
 using Xunit;
 
