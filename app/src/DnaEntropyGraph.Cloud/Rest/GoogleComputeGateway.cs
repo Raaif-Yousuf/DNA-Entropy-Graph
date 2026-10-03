@@ -15,20 +15,23 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// through <see cref="CloudErrorClassifier"/> and nothing else: this class invents no classification rule. An HTTP error
 /// (billing off and the Compute API off arrive here, as a 403) goes through <see cref="GoogleApiErrors"/>, which
 /// delegates to the same classifier.
-/// It does NOT call <see cref="CloudCallPipeline"/> itself: production wraps the whole gateway in
-/// <see cref="ResilientComputeGateway"/>, the way every <see cref="IComputeGateway"/> is. That is safe for the mutating
-/// <c>insert</c> because instance names are unique per zone: a replay after a lost response is answered 409
-/// <c>alreadyExists</c> (<see cref="CloudErrorKind.AlreadyExists"/>), which the runner adopts instead of creating twice. Every call sends a
-/// FRESH random <c>requestId</c>, never one derived from the VM name: Compute Engine replays the ORIGINAL operation for a repeated id
-/// within its idempotency window, so a deterministic id would hand a retry after a stockout the old failure, and a re-create of
-/// the same <c>deg-&lt;job&gt;</c> after a delete the old DONE operation with no VM made.
+/// Every HTTP request goes through <see cref="CloudCallPipeline"/> on its own (as the project and service gateways do), so a
+/// transient error on one poll retries THAT poll and never replays the insert. Production therefore must NOT wrap this gateway in
+/// <see cref="ResilientComputeGateway"/> (a second layer would replay the whole create while the original operation may still be
+/// pending). Each <c>CreateVmAsync</c> call fixes ONE random <c>requestId</c> at its start and every replay of that insert POST
+/// carries it, so Compute Engine answers a replay with the same operation. A NEW call gets a new id, never one derived from the VM
+/// name: Compute replays the ORIGINAL operation for a repeated id within its idempotency window, which would hand a retry after a
+/// stockout the old failure, or a re-create of the same <c>deg-&lt;job&gt;</c> after a delete the old DONE operation with no VM made.
+/// Instance names are unique per zone, so a NEW call after a lost response is answered 409 <c>alreadyExists</c>
+/// (<see cref="CloudErrorKind.AlreadyExists"/>), which the runner adopts. THEORY (unverified): an abandoned create (the provisioner
+/// gave up) can still be finishing in Compute, so a later retry may adopt an instance whose original operation then fails.
 /// The interface has no project parameter on the calls other than create (which has <see cref="VmSpec.ProjectId"/>), so the
 /// project comes from <c>selectedProjectId</c>; none selected is an <see cref="InvalidOperationException"/>, never a guess.
 /// </summary>
 internal sealed class GoogleComputeGateway : IComputeGateway
 {
     /// <summary>The only values a label can hold (the same rule <see cref="VmSpec"/> enforces), so a filter value built from one cannot carry filter syntax.</summary>
-    private static readonly Regex LabelValuePattern = new("^[a-z0-9_-]{1,63}$", RegexOptions.Compiled);
+    private static readonly Regex LabelValuePattern = new(@"\A[a-z0-9_-]{1,63}\z", RegexOptions.Compiled);
 
     /// <summary>Which kind wins when one operation reports several errors: the ones a user or the zone ladder can act on first.</summary>
     private static readonly CloudErrorKind[] KindPreference =
@@ -38,12 +41,14 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     ];
 
     private readonly ComputeService _service;
+    private readonly CloudCallPipeline _pipeline;
     private readonly GoogleCloudOptions _options;
     private readonly Func<string?> _selectedProjectId;
 
-    public GoogleComputeGateway(ComputeService service, GoogleCloudOptions options, Func<string?> selectedProjectId)
+    public GoogleComputeGateway(ComputeService service, CloudCallPipeline pipeline, GoogleCloudOptions options, Func<string?> selectedProjectId)
     {
         _service = service;
+        _pipeline = pipeline;
         _options = options;
         _selectedProjectId = selectedProjectId;
     }
@@ -54,6 +59,15 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         // Hard Rule 10: a spec missing a label or a lifetime limit throws here, before any request exists.
         var labels = spec.ToLabels();
+
+        // Create is the one call that carries its own project (spec.ProjectId); the rest use the selected one. They must agree, or a
+        // later find, stop or delete would look in a different project from the one that holds the VM.
+        if (_selectedProjectId() is not { Length: > 0 } selected || !string.Equals(selected, spec.ProjectId, StringComparison.Ordinal))
+        {
+            throw new CloudOperationException(
+                new CloudError("PROJECT_MISMATCH", null, "The VM spec names a different Google Cloud project from the selected one, so no VM was created."),
+                CloudErrorKind.Other);
+        }
 
         // The worker identity comes from the spec (issue #54, filled by the run path, #606/#609); guessing a name nothing creates
         // would boot a VM that cannot reach its bucket.
@@ -66,9 +80,17 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         var instance = ComputeVmShape.Build(spec, zone, labels, spec.ServiceAccountEmail);
 
-        var insert = _service.Instances.Insert(instance, spec.ProjectId, zone);
-        insert.RequestId = Guid.NewGuid().ToString();
-        var operation = await ExecuteAsync(() => insert.ExecuteAsync(cancellationToken)).ConfigureAwait(false);
+        // One id for this call: every replay of the insert POST by the pipeline carries it (see the class remarks).
+        var requestId = Guid.NewGuid().ToString();
+        var operation = await CallAsync(
+            "compute.instances.insert",
+            token =>
+            {
+                var insert = _service.Instances.Insert(instance, spec.ProjectId, zone);
+                insert.RequestId = requestId;
+                return insert.ExecuteAsync(token);
+            },
+            cancellationToken).ConfigureAwait(false);
         await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
         // A 404 here means the outcome is unknown, not that nothing was made (the operation said DONE): Network class, so it is
@@ -88,7 +110,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         ComputeData.Operation operation;
         try
         {
-            operation = await ExecuteAsync(() => _service.Instances.Stop(project, zone, vmName).ExecuteAsync(cancellationToken)).ConfigureAwait(false);
+            operation = await CallAsync("compute.instances.stop", token => _service.Instances.Stop(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
@@ -104,7 +126,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         ComputeData.Operation operation;
         try
         {
-            operation = await ExecuteAsync(() => _service.Instances.Delete(project, zone, vmName).ExecuteAsync(cancellationToken)).ConfigureAwait(false);
+            operation = await CallAsync("compute.instances.delete", token => _service.Instances.Delete(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
@@ -135,10 +157,21 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         string? pageToken = null;
         do
         {
-            var request = _service.Instances.AggregatedList(project);
-            request.Filter = filter;
-            request.PageToken = pageToken;
-            var page = await ExecuteAsync(() => request.ExecuteAsync(cancellationToken)).ConfigureAwait(false);
+            var requestedToken = pageToken;
+            var page = await CallAsync(
+                "compute.instances.aggregatedList",
+                token =>
+                {
+                    var request = _service.Instances.AggregatedList(project);
+                    request.Filter = filter;
+                    request.PageToken = requestedToken;
+                    // Without this Compute fails the whole list when one zone is down and never fills `unreachables`. Google.Apis.Compute.v1
+                    // has no typed property for it on this call, so it is added to the query by hand.
+                    request.ModifyRequest += message =>
+                        message.RequestUri = new Uri(message.RequestUri + (string.IsNullOrEmpty(message.RequestUri!.Query) ? "?" : "&") + "returnPartialSuccess=true");
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
 
             // A zone Compute could not reach is NOT an empty zone: returning the rest would let VmTerminator read "no VM" and the runner
             // create a duplicate (or leak one). Fail the whole listing with a retryable (Network-class) error instead.
@@ -164,7 +197,14 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             }
 
             var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            pageToken = next == pageToken ? null : next;
+            if (next is not null && next == pageToken)
+            {
+                throw new CloudOperationException(
+                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the VM list may be incomplete."),
+                    CloudErrorKind.Network);
+            }
+
+            pageToken = next;
         }
         while (pageToken is not null);
 
@@ -175,7 +215,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     {
         try
         {
-            var instance = await ExecuteAsync(() => _service.Instances.Get(project, zone, vmName).ExecuteAsync(cancellationToken)).ConfigureAwait(false);
+            var instance = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
             return ToDescriptor(instance, zone);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
@@ -194,7 +234,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             var outcome = await OperationPoller.PollAsync(
                 async token =>
                 {
-                    latest = await ExecuteAsync(() => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(token)).ConfigureAwait(false);
+                    latest = await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
                     return new OperationPoll<bool>(IsDone(latest), true, null);
                 },
                 _options.OperationDeadline,
@@ -238,18 +278,22 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
     private static bool IsDone(ComputeData.Operation operation) => string.Equals(operation.Status, "DONE", StringComparison.Ordinal);
 
-    /// <summary>Runs one request, turning a Google HTTP error into the one exception the app understands.</summary>
-    private static async Task<T> ExecuteAsync<T>(Func<Task<T>> request)
-    {
-        try
-        {
-            return await request().ConfigureAwait(false);
-        }
-        catch (GoogleApiException ex)
-        {
-            throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-        }
-    }
+    /// <summary>Runs ONE HTTP request through the resilience pipeline (retry, token refresh, breaker), turning a Google HTTP error into the one exception the app understands.</summary>
+    private Task<T> CallAsync<T>(string operation, Func<CancellationToken, Task<T>> request, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync(
+            operation,
+            async token =>
+            {
+                try
+                {
+                    return await request(token).ConfigureAwait(false);
+                }
+                catch (GoogleApiException ex)
+                {
+                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                }
+            },
+            cancellationToken);
 
     private string RequireProject()
         => _selectedProjectId() is { Length: > 0 } project
@@ -327,6 +371,7 @@ internal static class ComputeVmShape
                         SourceImage = Image,
                         DiskSizeGb = BootDiskGb,
                         DiskType = $"zones/{zone}/diskTypes/pd-balanced",
+                        Labels = labels.ToDictionary(p => p.Key, p => p.Value),
                     },
                 },
             ],

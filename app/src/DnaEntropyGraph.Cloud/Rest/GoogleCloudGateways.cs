@@ -52,9 +52,8 @@ public static class GoogleCloudGateways
             // Not wrapped: EnsureBucketAsync is a list, a create, a read-back and a patch, and a whole-method retry would
             // replay the create. Each of its HTTP calls goes through the pipeline itself.
             storage,
-            // Wrapped whole, like every IComputeGateway (a pipeline retry of an insert is safe: instance names are unique per zone).
-            new ResilientComputeGateway(
-                new GoogleComputeGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), options, selectedProjectId ?? (() => null)),
-                pipeline));
+            // Not wrapped in ResilientComputeGateway: every HTTP request goes through the pipeline itself, so a transient poll error
+            // retries that poll and never replays the insert. Production DI must not wrap it either (#609).
+            new GoogleComputeGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options, selectedProjectId ?? (() => null)));
     }
 }

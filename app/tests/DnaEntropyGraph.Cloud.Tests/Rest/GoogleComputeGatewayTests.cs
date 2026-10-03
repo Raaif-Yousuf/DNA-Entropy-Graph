@@ -109,6 +109,7 @@ public class GoogleComputeGatewayTests
         disk.GetProperty("boot").GetBoolean().ShouldBeTrue();
         disk.GetProperty("autoDelete").GetBoolean().ShouldBeTrue();
         disk.GetProperty("initializeParams").GetProperty("diskSizeGb").GetInt64().ShouldBe(150);
+        disk.GetProperty("initializeParams").GetProperty("labels").EnumerateObject().ToDictionary(l => l.Name, l => l.Value.GetString()).ShouldBe(labels);
         disk.GetProperty("initializeParams").GetProperty("diskType").GetString().ShouldBe("zones/" + Zone + "/diskTypes/pd-balanced");
         disk.GetProperty("initializeParams").GetProperty("sourceImage").GetString().ShouldBe("projects/deeplearning-platform-release/global/images/family/pytorch-2-9-cu129-ubuntu-2404-nvidia-580");
 
@@ -154,17 +155,72 @@ public class GoogleComputeGatewayTests
     }
 
     [Fact]
+    public async Task A_transient_error_while_polling_retries_that_poll_and_never_replays_the_insert()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, Instances, 200, Op("PENDING"))
+            .Returns(Get, OperationPath, 503, RpcError(503, "UNAVAILABLE", "try later"))
+            .Returns(Get, OperationPath, 200, Op("DONE"))
+            .Returns(Get, Instance, 200, Vm("deg-job1", Zone, "RUNNING"));
+
+        await rig.Gateways.Compute.CreateVmAsync(Spec(), Zone, CancellationToken.None);
+
+        rig.Handler.To(Post, Instances).Count.ShouldBe(1);
+        rig.Handler.To(Get, OperationPath).Count.ShouldBe(2);
+        rig.Log.Retries.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_insert_replayed_after_a_503_carries_the_same_request_id()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, Instances, 503, RpcError(503, "UNAVAILABLE", "try later"))
+            .Returns(Post, Instances, 200, Op("DONE"))
+            .Returns(Get, Instance, 200, Vm("deg-job1", Zone, "RUNNING"));
+
+        await rig.Gateways.Compute.CreateVmAsync(Spec(), Zone, CancellationToken.None);
+
+        var ids = rig.Handler.To(Post, Instances).Select(i => HttpUtility.ParseQueryString(i.Uri.Query)["requestId"]).ToList();
+        ids.Count.ShouldBe(2);
+        Guid.TryParse(ids[0], out _).ShouldBeTrue();
+        ids[1].ShouldBe(ids[0]);
+    }
+
+    [Fact]
     public async Task A_create_retried_after_the_first_insert_made_the_vm_surfaces_already_exists_so_the_runner_adopts_instead_of_creating_twice()
     {
         var rig = new GoogleGatewayHarness();
         rig.Handler
-            .Returns(Post, Instances, 503, RpcError(503, "UNAVAILABLE", "the response was lost"))
             .Returns(Post, Instances, 409, RpcError(409, "ALREADY_EXISTS", "The resource 'projects/my-lab/zones/us-central1-a/instances/deg-job1' already exists"));
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.CreateVmAsync(Spec(), Zone, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.AlreadyExists);
-        rig.Handler.To(Post, Instances).Count.ShouldBe(2);
+        rig.Handler.To(Post, Instances).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_create_for_a_project_other_than_the_selected_one_is_refused_by_name_before_any_request()
+    {
+        var rig = new GoogleGatewayHarness(selectedProjectId: "another-project");
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.CreateVmAsync(Spec(), Zone, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("PROJECT_MISMATCH");
+        rig.Handler.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_create_with_no_selected_project_is_refused_by_name_before_any_request()
+    {
+        var rig = new GoogleGatewayHarness(selectedProjectId: null);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.CreateVmAsync(Spec(), Zone, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("PROJECT_MISMATCH");
+        rig.Handler.Requests.ShouldBeEmpty();
     }
 
     [Fact]
@@ -454,6 +510,42 @@ public class GoogleComputeGatewayTests
         var found = await rig.Gateways.Compute.FindByJobIdAsync("job1", CancellationToken.None);
 
         found.Select(v => v.Name).ShouldBe(["deg-job1"]);
+    }
+
+    [Fact]
+    public async Task The_aggregated_list_asks_for_partial_success_so_unreachable_zones_are_reported_not_hidden()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Aggregated, 200, Aggregate(null, ("us-central1-a", [])));
+
+        await rig.Gateways.Compute.FindByJobIdAsync("job1", CancellationToken.None);
+
+        HttpUtility.ParseQueryString(rig.Handler.To(Get, Aggregated).Single().Uri.Query)["returnPartialSuccess"].ShouldBe("true");
+    }
+
+    [Fact]
+    public async Task A_repeated_page_token_fails_the_listing_instead_of_silently_truncating_it()
+    {
+        var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler
+            .Returns(Get, Aggregated, 200, Aggregate("same", ("us-central1-a", [Vm("deg-job1", "us-central1-a", "RUNNING")])))
+            .Returns(Get, Aggregated, 200, Aggregate("same", ("us-east1-b", [])));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.FindByJobIdAsync("job1", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+    }
+
+    [Fact]
+    public async Task FindByJobId_with_a_trailing_newline_in_the_id_asks_nobody()
+    {
+        var rig = new GoogleGatewayHarness();
+
+        var found = await rig.Gateways.Compute.FindByJobIdAsync("job1\n", CancellationToken.None);
+
+        found.ShouldBeEmpty();
+        rig.Handler.Requests.ShouldBeEmpty();
     }
 
     [Fact]

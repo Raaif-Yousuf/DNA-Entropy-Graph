@@ -1000,25 +1000,30 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
 ### Compute gateway (issue #56)
 
 `Rest/GoogleComputeGateway` implements `IComputeGateway` over `Google.Apis.Compute.v1` (Apache-2.0; the same REST-over-gRPC
-choice as above, DECISION #535) and `GoogleCloudGateways.Create(...).Compute` is it inside `ResilientComputeGateway`, so
-every call goes through `CloudCallPipeline` like any `IComputeGateway`. **Production DI still resolves `IComputeGateway`
-to `FakeGcp` until #609**; nothing in the running app calls this class yet.
+choice as above, DECISION #535) and `GoogleCloudGateways.Create(...).Compute` is it, NOT wrapped in `ResilientComputeGateway`:
+every HTTP request goes through `CloudCallPipeline` on its own (like the project and service gateways), so a transient error
+on one poll retries that poll and never replays the insert. A second wrapping layer would replay the whole create, so
+production DI must not add one (#609). **Production DI still resolves `IComputeGateway` to `FakeGcp` until #609**; nothing in
+the running app calls this class yet.
 
-- **Project.** Only create carries one (`VmSpec.ProjectId`). Get, stop, delete, find and list take it from the optional
-  `selectedProjectId` argument of `Create` (production will pass `IGcpAccount.SelectedProjectId`, #609); none selected
-  throws `InvalidOperationException` and sends nothing.
+- **Project.** Create carries `VmSpec.ProjectId`; get, stop, delete, find and list take the optional `selectedProjectId`
+  argument of `Create` (production will pass `IGcpAccount.SelectedProjectId`, #609); none selected throws
+  `InvalidOperationException` and sends nothing. A create whose `VmSpec.ProjectId` differs from the selected project (or with none
+  selected) is refused as `PROJECT_MISMATCH` before any request, so a VM can never be made where the later lookups do not look.
 - **Create.** `VmSpec.ToLabels()` runs first (Hard Rule 10; `VmSpec` also rejects any `TerminationAction` other than `DELETE`), then a spec with no
   `ServiceAccountEmail` is refused by name (`WORKER_SERVICE_ACCOUNT_MISSING`, kind `other`) before any request: the run path fills it from the worker
   identity (#54) via #606/#609, and nothing guesses `deg-worker@<project>`. Then `instances.insert` is built with: the six standard labels,
   `scheduling.maxRunDuration` (seconds), `instanceTerminationAction` DELETE, `onHostMaintenance=TERMINATE`, `automaticRestart=false`, every
   `VmSpec.Metadata` item (the startup script and `deg-*` keys) plus `block-project-ssh-keys=true` (section 9), a `pd-balanced` 150 GB boot disk with
-  `autoDelete`, the default network with an external address (the VM pulls its image), and the spec's service account with the `cloud-platform` scope.
+  `autoDelete` and the VM's labels on the disk (Hard Rule 10), the default network with an external address (the VM pulls its image), and the spec's service account with the `cloud-platform` scope.
   `VmSpec` does not carry image or disk, so they are fixed in `ComputeVmShape`: the DLVM family for EVERY machine type, CPU included, because
   `startup.sh` needs docker, python3 and a writable root (Container-Optimized OS has none of them; DECISION #615), and `startup.sh` passes `--gpus all` only
-  when `deg-expect-gpu` is true. Each `CreateVmAsync` call sends a fresh random `requestId`, never one derived from the VM name: Compute replays the
+  when `deg-expect-gpu` is true. Each `CreateVmAsync` call fixes ONE random `requestId` at its start and every pipeline replay of that insert POST carries it
+  (Compute answers a replay with the same operation); a NEW call gets a new id, never one derived from the VM name: Compute replays the
   ORIGINAL operation for a repeated id within its idempotency window, so a derived id would return an old stockout to a retry, or an old DONE operation
-  (no VM made) to a re-create of the same `deg-<job>` after a delete. Instance names are unique per zone, so a replay after a lost response is answered 409
-  (`already_exists`), which the runner adopts.
+  (no VM made) to a re-create of the same `deg-<job>` after a delete. Instance names are unique per zone, so a new call after a lost response is answered 409
+  (`already_exists`), which the runner adopts. THEORY (unverified): an abandoned create (the provisioner gave up) can still be finishing in Compute,
+  so a later retry may adopt an instance whose original operation then fails; the run then ends `vm_unhealthy` rather than trying the next zone.
 - **Operations.** insert, stop and delete return a zone operation, polled with `OperationPoller` (1 s doubling to 10 s,
   `OperationDeadline`) until `DONE`. `operation.error` becomes a `CloudOperationException` classified by
   `CloudErrorClassifier` alone (code, `httpErrorStatusCode`, message), across EVERY entry of `errors` (the most specific kind wins: stockout, quota,
@@ -1031,7 +1036,9 @@ to `FakeGcp` until #609**; nothing in the running app calls this class yet.
   "already gone", not an error. A 404 on stop or delete means "not in that zone" (the caller may have the wrong zone), not "the VM does not exist anywhere":
   `VmTerminator`'s label re-check (`FindByJobIdAsync`, sound because of the next point) is the authority on whether it is really gone.
 - **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
-  (or `labels.installation-id`), following `nextPageToken` across every zone; a value no label can hold returns nothing
+  (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
+  (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
+  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
   without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;

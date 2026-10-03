@@ -16,9 +16,10 @@
 #   - No SSH anywhere (docs/cloud_design.md section 9): every network call here is either
 #     the metadata server (instance-local, no auth) or an authenticated REST call using the
 #     instance's own metadata-token credentials.
-#   - `put_object` uses curl unconditionally (no gcloud, no Python SDK) so the identical
-#     script runs on both the DLVM image (has gcloud) and Container-Optimized OS (does not)
-#     for the CPU smoke test — see worker/Dockerfile.cpu / issue #36.
+#   - `put_object` uses curl unconditionally (no gcloud, no Python SDK). The CPU smoke VM boots
+#     the same DLVM image as the GPU VM (issue #56, DECISION #615; Container-Optimized OS has no
+#     python3 and a read-only root), so one script serves both and `--gpus all` is added only
+#     when a GPU is expected. See worker/Dockerfile.cpu / issue #36.
 #
 # Per-job values (bucket, job id, worker image, lifecycle, expected GPU, max run minutes)
 # are read from THIS INSTANCE's own metadata attributes at boot time via meta(), never

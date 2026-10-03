@@ -144,8 +144,8 @@ def test_exit_code_dispatch_matches_the_cli_contract() -> None:
 
 
 def test_uses_curl_unconditionally_no_gcloud_dependency() -> None:
-    """Must run identically on the DLVM (has gcloud) and Container-Optimized OS (does
-    not) for the CPU smoke test."""
+    """No gcloud dependency: the script talks to the metadata server and Google REST with curl, so it
+    does not rely on the image shipping gcloud (the DLVM image does, for CPU and GPU alike, #615)."""
     code = _code_only()
     assert "gcloud" not in code
     assert "curl" in code
