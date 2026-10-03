@@ -590,3 +590,86 @@ def test_a_type_registered_without_a_factory_and_taking_a_func_is_still_reported
         "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
     })
     assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == ["Watcher(Func<int>)"]
+
+
+# --- #530 cold-review round: the factory skip must not blind the check ---------------------------------------
+
+
+def _codes_of(root: Path, code: str) -> list[str]:
+    return [f.symbol for f in _findings(root) if f.code == code]
+
+
+def test_a_get_required_service_of_an_unregistered_type_inside_a_factory_is_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<Missing>()));",
+        ),
+        "src/Demo.Core/W.cs": "public sealed class W { public W(Missing m) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Missing"]  # was: nothing (and W(Missing) before the skip)
+
+
+def test_a_get_required_service_of_a_registered_type_is_not_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<Dep>();",
+            "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<Dep>()));",
+            "s.AddSingleton<IView>(sp => sp.GetRequiredService<W>());",
+        ),
+        "src/Demo.Core/W.cs": "public sealed class W { public W(Dep d) { } }\n",
+        "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_resolve_named_only_in_a_comment_is_not_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "// sp.GetRequiredService<Ghost>() is how a caller would ask",
+            "s.AddSingleton<Dep>();",
+        ),
+        "src/Demo.Core/Dep.cs": "public sealed class Dep { public Dep(int n) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_type_registered_by_a_factory_and_plainly_is_still_checked_as_a_plain_registration(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<Watcher>(sp => new Watcher(() => 1));",
+            "s.AddTransient<Watcher>();",
+        ),
+        "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == ["Watcher(Func<int>)"]
+
+
+def test_static_and_parenthesised_and_nested_paren_lambdas_are_factory_registrations(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<A>(static sp => new A(() => 1));",
+            "s.AddSingleton<B>((sp) => new B(() => 1));",
+            "s.AddSingleton<C>(static (IServiceProvider sp) => new C(() => 1));",
+            "s.AddSingleton<D>(async (IServiceProvider sp, object? key) => new D(() => 1));",
+        ),
+        "src/Demo.Core/Types.cs": (
+            "public sealed class A { public A(Func<int> f) { } }\n"
+            "public sealed class B { public B(Func<int> f) { } }\n"
+            "public sealed class C { public C(Func<int> f) { } }\n"
+            "public sealed class D { public D(Func<int> f) { } }\n"
+        ),
+    })
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []
+
+
+def test_the_inferred_type_factory_form_registers_the_type_it_news_up(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton(_ => new Db(\"p\"));",
+            "s.AddSingleton<IRepo>(sp => new Repo(sp.GetRequiredService<Db>()));",
+        ),
+        "src/Demo.Core/Repo.cs": "public sealed class Repo : IRepo { public Repo(Db d) { } }\n",
+        "src/Demo.Core/Db.cs": "public sealed class Db { public Db(string path) { } }\n",
+    })
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []  # was: Db
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []
