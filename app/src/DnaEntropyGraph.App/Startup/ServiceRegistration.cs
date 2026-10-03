@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.App.Services;
 using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Cloud.Auth;
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Diagnostics;
@@ -30,28 +31,30 @@ namespace DnaEntropyGraph.App.Startup;
 public static class ServiceRegistration
 {
     /// <summary>
-    /// <paramref name="appDataRoot"/> lets a caller redirect
-    /// <see cref="SqliteDatabase"/> and <see cref="SettingsStore"/> away
-    /// from the real <c>%LOCALAPPDATA%\DNAEntropyGraph\</c> - the real app
-    /// never passes it (<c>null</c> means "use the real default paths"),
-    /// but <c>Guards.Tests/DiResolutionTests</c> does, to a throwaway temp
-    /// directory it deletes afterward. Without this, building this same
-    /// graph under <c>ValidateOnBuild</c> - which eagerly constructs every
-    /// singleton, including <see cref="SqliteDatabase"/>, to prove the DI
-    /// graph resolves - has a real side effect on the machine running the
-    /// test: <see cref="SqliteDatabase"/>'s constructor creates its parent
-    /// directory for real. MEASURED 2026-09-19: running the guard suite
-    /// left an empty <c>%LOCALAPPDATA%\DNAEntropyGraph\</c> on this
-    /// machine; no <c>app.db</c> or <c>settings.json</c> is written, since
-    /// neither constructor opens a connection or touches the settings
-    /// file - only <c>OpenConnection</c>/<c>GetString</c>/<c>SetString</c>
-    /// do that, and DI validation never calls them - but the directory
-    /// itself is a real, unsandboxed write a guard test should not make.
+    /// The production entry point: <paramref name="root"/> is the one resolved data folder (issue #638: the default, or the
+    /// <c>--profile</c> / <c>DEG_DATA_DIR</c> override), and every service that owns a path takes it from there.
+    /// </summary>
+    public static IServiceCollection AddDnaEntropyGraph(this IServiceCollection services, AppDataRoot root)
+        => services.Register(root, hermetic: false);
+
+    /// <summary>
+    /// <paramref name="appDataRoot"/> lets a test redirect all app state away from the real
+    /// <c>%LOCALAPPDATA%\DNAEntropyGraph\</c> to a throwaway temp directory (<c>null</c> means the real default folder).
+    /// Building this graph under <c>ValidateOnBuild</c> eagerly constructs every singleton; without the redirect that has a real
+    /// side effect on the machine running the test. MEASURED 2026-09-19: running the guard suite left an empty
+    /// <c>%LOCALAPPDATA%\DNAEntropyGraph\</c> on this machine. A test root is also hermetic: the OAuth client is looked for only
+    /// inside it, never in the repo's secrets folder.
     /// </summary>
     public static IServiceCollection AddDnaEntropyGraph(this IServiceCollection services, string? appDataRoot = null)
+        => appDataRoot is null
+            ? services.Register(AppDataRoot.Default(), hermetic: false)
+            : services.Register(AppDataRoot.FromPath(appDataRoot), hermetic: true);
+
+    private static IServiceCollection Register(this IServiceCollection services, AppDataRoot root, bool hermetic)
     {
-        var databasePath = appDataRoot is null ? SqliteDatabase.DefaultPath() : Path.Combine(appDataRoot, "app.db");
-        var settingsPath = appDataRoot is null ? SettingsStore.DefaultPath() : Path.Combine(appDataRoot, "settings.json");
+        var databasePath = root.DatabaseFile;
+        var settingsPath = root.SettingsFile;
+        services.AddSingleton<AppDataRoot>(root);
 
         // App-owned, WinUI-bound services (Presentation depends on their
         // interfaces only - docs/architecture.md section 2).
@@ -83,10 +86,10 @@ public static class ServiceRegistration
         // Every path is resolved lazily on first use, so building this graph (Guards.Tests) touches no disk.
         services.AddSingleton<GoogleAccountOptions>(sp => new GoogleAccountOptions
         {
-            AuthDirectory = Path.Combine(Path.GetDirectoryName(settingsPath)!, "auth"),
-            ClientLoader = new OAuthClientLoader(appDataRoot is null
-                ? OAuthClientLoader.DefaultCandidates(Path.GetDirectoryName(settingsPath)!, AppContext.BaseDirectory)
-                : [Path.Combine(appDataRoot, OAuthClientLoader.FileName)]),
+            AuthDirectory = root.AuthDirectory,
+            ClientLoader = new OAuthClientLoader(hermetic
+                ? [Path.Combine(root.Path, OAuthClientLoader.FileName)]
+                : OAuthClientLoader.DefaultCandidates(root.Path, AppContext.BaseDirectory)),
             Browser = new SystemBrowserLauncher(),
 
             // Only a fallback since #520 (a project the account chose wins): while every gateway is FakeGcp, an account
@@ -144,13 +147,13 @@ public static class ServiceRegistration
 
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
-        services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(Path.GetDirectoryName(settingsPath)!));
+        services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(root.Path));
 
         // Issue #530: where the reconciler records an error it did not expect (job id and error class only), under the same app data folder.
-        services.AddSingleton<IDiagnosticsLog>(_ => new FileDiagnosticsLog(Path.GetDirectoryName(settingsPath)!));
+        services.AddSingleton<IDiagnosticsLog>(_ => new FileDiagnosticsLog(root.Path));
 
         // Issue #63: a pasted sequence is saved under app data too, never next to anything of the user's.
-        services.AddSingleton<IPastedInputStore>(_ => new LocalPastedInputStore(Path.GetDirectoryName(settingsPath)!));
+        services.AddSingleton<IPastedInputStore>(_ => new LocalPastedInputStore(root.Path));
 
         // Issue #101: the Runs page's services. Output folders are only ever deleted from under the run's own
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
@@ -159,7 +162,7 @@ public static class ServiceRegistration
         services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
             sp.GetRequiredService<IRunInputStore>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
-            [Path.GetDirectoryName(settingsPath)!]));
+            [root.Path]));
         services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
 
         // Issue #102: the Results page reads a run's own output folder and opens its files through Windows.
@@ -182,7 +185,7 @@ public static class ServiceRegistration
         // folder (never auth, inputs or the database); the machine facts are read when the button is pressed.
         services.AddSingleton<IFolderLauncher, FolderLauncher>();
         services.AddSingleton<IDiagnosticsExporter>(sp => new DiagnosticsExporter(
-            new FolderDiagnosticsSource(Path.GetDirectoryName(settingsPath)!),
+            new FolderDiagnosticsSource(root.Path),
             sp.GetRequiredService<IRunRepository>(),
             () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>())));
 
