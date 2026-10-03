@@ -1,81 +1,68 @@
-# Handoff: after the 2026-10-02 three-lane wave
+# Handoff: after the 2026-10-02/03 three-layer wave
 
 > Overwritten every session. Re-check `git log -1 main` and `gh issue list` before trusting
 > anything here.
 
 ## What this session was
 
-One orchestrator and three Sonnet lanes in one shared checkout: C# app/cloud, Python worker
-and repo tooling. Each lane owned disjoint paths and the orchestrator ran every `git` command.
-There were 9 merged PRs (#443, #446, #447, #457, #465, #467, #470, #471, plus this handoff) and
-about 30 issues closed. Every test count in a PR body was re-run by the orchestrator, and two
-full `premerge.py` runs covered the combined tree.
+Two waves in one shared checkout, with the top orchestrator running every git command.
+- **Wave 1:** three Sonnet lanes.
+- **Wave 2:** the owner's three-layer shape. Three Opus orchestrators each ran two Sonnets; the owner picked two per Opus over three, for RAM.
+- **Results:** 14 PRs merged (#482, #483, #500-#509, plus this docs PR), and about 25 issues closed.
+- **Landing gate:** each unit was verified in a clean worktree of its exact commit before merging. The full `premerge.py` ran on main afterwards.
 
 ## Start here next session
 
-1. **Sweep the v0.1 milestone with `issue_precheck.py`.** The previous handoff said five v0.1
-   issues remained. That was wrong: its issue list was truncated at 60, and about 29 are
-   open. Several look already built but never closed (#26, #28, #31, #33 by their titles;
-   #41 and #44 are only waiting on doc and keep-idle boxes). Run
-   `worker\.venv\Scripts\python.exe scripts\issue_precheck.py <every v0.1 number>`, then have
-   one read-only lane classify each issue as DONE, PARTIAL or NOT STARTED with file:line
-   evidence. Lane B did exactly this for nine worker issues this session, and two of them
-   turned out fully built.
-2. **The two P1 wired-to-nothing gaps in the cloud path:** **#460** (no input is uploaded and
-   no output is downloaded; the request carries no object keys) and **#458** (no source for the
-   worker image digest, so a real VM gets no startup script). Until both are fixed, pressing
-   Run reaches a VM that has nothing to do. Next come #204 (SetupHealthService) and #205 (IAM
-   preflight).
-3. **Launch the app.** It has still never been run. `docs/ToTest.md`'s #62 row names what to
-   look for.
+1. **Owner instruction (2026-10-02): work issues in ascending number order** with 2 Opus
+   orchestrators x 2 Sonnets, skipping owner-only, DECISION, epic and GPU-VM issues. The split
+   that keeps the C# lanes disjoint:
+   - One orchestrator takes the real Google layer in order: #48, #50-#56, #59, #60.
+   - The other takes everything else in order: #31, #32, #33, #35, #44, #63, #69, #79-#81, ...
+2. **The real Google layer does not exist.** MEASURED: no `Google.*` package is referenced
+   anywhere in app/. Production DI is `FakeGcp().WithCloudNotConnected()`, so every run fails
+   fast with `cloud_not_connected` until #48/#50-#56 and #69 land.
+3. **Split `CloudJobRunner.cs` before adding the real gateway.** It is about 1700 lines (provision,
+   await, download, cancel), and every cold-review round of it found real defects.
+4. Owner decisions are pending:
+   - dismiss secret-scanning alert #1 as "used in tests" (it was a synthetic fixture, now built at runtime by #486)
+   - enable Dependabot alerts
+   - set the repo variable `DEPENDENCY_GRAPH_ENABLED=true` (#325)
+   - rescope #44
 
-## Tools that exist now and did not this morning
+## How landing works now (MEASURED this session)
 
-- **`scripts/premerge.py`** runs every gate (29) with the right interpreter and working
-  directory. `--fast` is per-lane. FAIL, ERROR, SKIP and KNOWN are reported separately. A
-  pytest run that reaches 100% and then crashes in teardown is ERROR, not FAIL. Run it before
-  `gh pr create`. It is red in full mode with `--log-dir` under a deep path until **#469** is
-  fixed (MAX_PATH in `test_land_pr`'s temp bare repo); without `--log-dir` it is fine.
-- **`scripts/land_pr.py`** lands one lane from the shared tree: explicit paths or byte-exact
-  hunks, then PR, wait, merge, and `git checkout -B main origin/main`. **Known bug (#472):** it queries checks seconds after `gh pr create`, sees none, and stops with
-  "no checks reported", so the PR is left open on its branch. Until that is fixed, use
-  `--no-merge` and merge by hand after `gh pr checks --watch`. Never use `--allow-no-checks` to
-  get around it, because it would merge before CI starts.
-- **New guards:** `check_em_dash.py`, `check_write_newline.py` (Hard Rule 5, which now has a
-  mechanical check), `check_manifest_spec_reads.py`, `check_repo_hygiene.py`; a fragment
-  presence check (`check_changelog_fragments --base`); `scripts/ruff.toml`.
-- **`ci-notices.yml`** runs `check_third_party_notices.py` on windows-latest on every
-  dependency-touching PR. Its first real run was green.
-- **`scripts/hooks/require_premerge_before_pr.py`** is written and tested but **not
-  registered** in `.claude/settings.json`. That is deliberate (#451): in a shared-checkout wave,
-  premerge sees other lanes' in-flight edits, so a stamp keyed by HEAD either blocks every PR
-  mid-wave or means less than it claims. Decide whether premerge should run in a temporary
-  worktree of the commit being landed before registering it.
+- **Git hunks cannot separate units that share a file** (Resources.resw, ServiceRegistration.cs,
+  NavigationRoutes.cs, dev_commands.md). Have each orchestrator write the exact committed
+  content per unit (origin/main plus that unit only, or cumulative in landing order), then stage
+  the blobs with `git hash-object -w --path=<p>` and `git update-index --cacheinfo`.
+- **Verify the exact commit in a throwaway worktree, never in the shared tree.** This catches
+  failures that the shared tree hides:
+  - A guard read the shared tree.
+  - An orphan resw key rode in a unit.
+  - A test planted a user-home path.
+- **Three requirements for the throwaway worktree:**
+  - `worker\.venv` is a junction to the real venv, unlinked with `rmdir` before `git worktree remove`.
+  - `PYTHONPATH=<wt>\worker\src`, so the editable install does not import the shared tree's code.
+  - `--artifacts-path` sits inside the worktree, because some tests walk up from the test binary (#495).
+- The orchestrator's scripts for this were in the session scratchpad. Making them a repo tool is
+  worth an issue: `land_pr.py --content-dir` plus a worktree verify.
+- **`dotnet test` must run from `app\`** (global.json selects Microsoft.Testing.Platform). Use
+  `heavy.py --lane <name> --` for every agent build (#487).
+- **Never run a git command while `land_pr.py` runs in the background.**
 
 ## Found this session, worth more than the fixes
 
-- **A framing-free review caught eight defects in a lane's finished, green, mutation-checked
-  cloud diff.** The cold-diff reviewer saw only the patch. It found that a transport timeout
-  left a run non-terminal (Hard Rule 11), that Network failures were reported as Stockout (the
-  exact CLAUDE.md pitfall), that Cancel was blocked by an open circuit breaker, and inline
-  English reaching the UI. Every one was real. Run a cold review on any cloud-path diff
-  before landing it.
-- **The worker deleted its own VM with `POST .../delete`.** Compute's `instances.delete` is an
-  HTTP DELETE on the instance URL. The old test asserted the wrong URL (#452).
-- **The reverse pass fed the model uncomplemented ambiguity codes** under the default `keep`
-  policy (#78). After an OOM halving, the recorded seam was also wrong (#456). Both were
-  wrong numbers with no error.
-- **`compile_sprint_log.py` wrote CRLF on Windows** (#444). A sweep found seven more writers
-  doing the same, and that is now guarded.
-
-## Open decisions for the owner
-
-#450 (CI trigger intent), and #451 (whether to register the premerge hook, see above). The
-earlier list in `OWNER_TODO.md` still stands: #301, #402 and #413 all point at the one
-unwritten Rule 21 carve-out section (#433).
+- **Cold reviews keep paying.**
+  - 13, 18, 10 and 7 findings on four rounds of the cloud runner.
+  - 11 on the viewer, 8 on the validator and 10 on heavy.py.
+  - 5 on the worker keep-alive change, including failed runs billed for an idle GPU.
+- **CodeQL had never analysed C#.** Fixed (#484): the first C# analysis found 182 alerts, about 110 of them in generated code. Triage is in #491 (C#) and #488 (Python).
+- **The app was launched and driven for the first time.** Build it with heavy.py and launch it
+  maximized (owner instruction). UI Automation reaches the native controls, and
+  `PrintWindow(hwnd, hdc, 2)` after `SetProcessDPIAware()` takes screenshots without stealing
+  focus. WebView2 content is opaque to UI Automation.
 
 ## Still unproven
 
-Nothing cloud-facing has run against real Google Cloud. The new retry/breaker pipeline, the
-cancel paths and `StartupMetadata` are proven only against `FakeGcp`. `docs/ToTest.md` has a
-row for each.
+Nothing cloud-facing has run against real Google Cloud. `docs/ToTest.md` has a row for every
+closed behaviour that needs a VM, an installer, or a real dev build.

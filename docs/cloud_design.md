@@ -266,8 +266,13 @@ this repo's redaction rules). Consequences this drives directly:
  "already applied": the script only uploads `logs/startup.log` and exits, and never calls
  the Compute API a second time. If the worker's own call failed it exits `0`/`2`/`3`
  (its ordinary outcome) and the script's `cleanup "$LIFECYCLE"` runs as the backstop.
- `lifecycle=keep` is currently treated as stop by that backstop (issue #464: nothing in
- the script knows the keep-alive window, and a VM must never be kept with no expiry).
+ `lifecycle=keep` (issue #464, 0657dda): with `keepAliveMinutes > 0` the worker makes no
+ Compute call and `startup.sh keep_hold` holds the VM for the window, measured from
+ `/proc/uptime` and capped 10 minutes before `maxRunDuration`, then applies
+ `afterKeepAlive` (default stop). Only a successful run (exit 0) is held; a failed or
+ cancelled run applies `afterKeepAlive` at once (DECISION, agent-made, reversible: an idle
+ GPU after a run that produced nothing is pure cost). The app cannot send a window yet
+ (#476), so today every keep run is held for 0 minutes.
 - A `shutdown -h +N` deadman is armed as a genuine last resort only, in case the API call
  itself is what failed.
 - The app **independently verifies** the VM reached its terminal state after
@@ -676,6 +681,19 @@ script") and exits 0 locally via `uv run --with shellcheck-py shellcheck`. Becau
 text never varies with a job, one shellcheck run covers every render; a per-render shellcheck
 would be vacuous. There is no Verify snapshot: the embedded-equals-source test is the stronger
 check, and the attribute set is asserted key by key.
+
+## 14. Model weights cache (issue #75)
+
+`cache/models/<modelId>/` lives at the bucket root, not under `jobs/<id>/`, so every job in
+the project shares it. For an Evo job, before building the predictor, the worker sets stage
+`restoring-cache` and, if `_COMPLETE.json` has `"complete": true`, restores the files into the
+Hugging Face cache (`HF_HOME=/hf-cache`, host folder `/var/cache/deg-hf` owned by uid 10001,
+mounted by `startup.sh`). After a load that downloaded into an empty cache, it mirrors the
+files back and writes the marker last; a re-mirror first overwrites an existing marker with
+`"complete": false`, so an interrupted re-mirror cannot vouch for mixed files. Both directions
+are best effort: a failure is a progress notice and the job continues. Symlinks are recorded
+in the marker, not uploaded. Cost: about 14 GB of bucket storage per model. Until #496 the
+GCS blobstore reads each shard fully into memory.
 
 ## Related
 

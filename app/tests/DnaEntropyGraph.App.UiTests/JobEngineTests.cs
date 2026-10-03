@@ -4,8 +4,8 @@ using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
-using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Presentation.Messaging;
 using Shouldly;
 using Xunit;
 

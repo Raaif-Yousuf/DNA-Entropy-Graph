@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using DnaEntropyGraph.Presentation.Services;
-using DnaEntropyGraph.Presentation.ViewModels;
 using DnaEntropyGraph.Presentation.Viewer;
+using DnaEntropyGraph.Presentation.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;

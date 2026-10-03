@@ -1,0 +1,2 @@
+- Docs: ToTest rows for #464, #460, #458, #481, #75, #72 and #73; the #62 row records the first dev-build launch; cloud_design.md section 8 describes the keep-alive hold (#464) and a new section 14 documents the model weights cache (#75).
+- Style: sort imports in five C# files from the 2026-10-02 wave, so `dotnet format --verify-no-changes` passes on the whole app.
