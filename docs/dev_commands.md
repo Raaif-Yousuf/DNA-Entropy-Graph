@@ -453,20 +453,21 @@ scripts\cloud_gpu_test.ps1 -Apply            # NOT functional yet — see below
 scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
-**Updated 2026-09-19: the script exists (issue #317), dry-run is real,
-`-Apply` deliberately is not yet.** The dry-run path (labels, cost/duration
-math, the leak-check and interrupt-safety contract) is provable today with
-zero cloud spend and is exercised by `-SelfTest`. `-Apply` looks for a built
-`CloudCli` (issue #60, itself built from `app/`, issue #61) and fails
-clearly, naming #60/#61/#24, rather than silently falling back to a raw
-`gcloud` call — Appendix C's permission design denies `gcloud` to an agent
-on purpose, and a script that quietly substitutes it under the hood would
-defeat that. `docs/ToTest.md` carries the row for exercising `-Apply` for
-real once `CloudCli` exists. Once it works: launches a labelled VM in the
+**Updated 2026-10-03: the script exists (issue #317), dry-run is real,
+`CloudCli` exists (issue #60), and `-Apply` is still UNVERIFIED.** The dry-run
+path (labels, cost/duration math, the leak-check and interrupt-safety contract)
+is provable today with zero cloud spend and is exercised by `-SelfTest`.
+`-Apply` calls the built `CloudCli` (see "CloudCli" above) and fails clearly,
+naming #60/#61/#24, if the executable is not built, rather than silently
+falling back to a raw `gcloud` call: Appendix C's permission design denies
+`gcloud` to an agent on purpose. The `vm create` arguments the script builds
+do not yet match the CLI's real flags (tracked as a sub-issue of #60), so do
+not run `-Apply` until that is fixed. `docs/ToTest.md` carries the row for
+exercising it for real. Once it works: launches a labelled VM in the
 owner's GCP project (blocked on `OWNER_TODO.md` item 2 / issue #24 until a
 project and GPU quota exist), runs `pytest -m gpu` on it, and tears the VM
-down. Read `working-on-gcp` before running it for real even once `-Apply`
-works — it creates real, billed cloud resources. Launch detached and poll
+down. Read `working-on-gcp` before running it for real: it creates real,
+billed cloud resources. Launch detached and poll
 rather than blocking a single tool call on it (a real run is 6-20 minutes;
 see the `a-tool-call-caps-at-600s` memory seed).
 
