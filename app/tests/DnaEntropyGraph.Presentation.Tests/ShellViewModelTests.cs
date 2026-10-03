@@ -81,15 +81,88 @@ public class ShellViewModelTests
         strings.Received(1).GetString("StatusPillNotSignedIn");
     }
 
+    // Issue #490: MEASURED 2026-10-02, the header showed the raw key "NewRun".
     [Fact]
-    public void NavigateTo_forwards_to_the_navigator_and_updates_the_current_page_key()
+    public void The_header_title_is_the_localized_string_for_the_current_page_not_the_page_key()
     {
-        var viewModel = CreateViewModel(out var navigator, out _, out _);
+        var navigator = Substitute.For<INavigator>();
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("PageTitle_NewRun").Returns("New run");
+        strings.GetString("PageTitle_Cloud").Returns("Cloud services");
+        var viewModel = new ShellViewModel(navigator, Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings);
+
+        viewModel.CurrentPageTitle.ShouldBe("New run");
+        viewModel.NavigateToCommand.Execute("Cloud");
+        viewModel.CurrentPageTitle.ShouldBe("Cloud services");
+    }
+
+    [Fact]
+    public void Changing_the_page_raises_PropertyChanged_for_the_header_title()
+    {
+        var viewModel = CreateViewModel(out _, out _, out _);
+        var raised = new List<string?>();
+        viewModel.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        viewModel.NavigateToCommand.Execute("Runs");
+
+        raised.ShouldContain("CurrentPageTitle");
+    }
+
+    [Fact]
+    public void The_window_title_comes_from_the_string_resource_provider()
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("AppDisplayName").Returns("DNA Entropy Graph");
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings);
+
+        viewModel.WindowTitle.ShouldBe("DNA Entropy Graph");
+    }
+
+    [Fact]
+    public void The_shell_starts_on_New_run_and_exposes_that_key_as_the_initial_destination()
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("PageTitle_NewRun").Returns("New run");
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings);
+
+        viewModel.CurrentPageTitle.ShouldBe("New run");
+        ShellViewModel.InitialPageKey.ShouldBe("NewRun");
+    }
+
+    [Fact]
+    public void NavigateTo_forwards_to_the_navigator_and_updates_the_header()
+    {
+        var navigator = Substitute.For<INavigator>();
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("PageTitle_Cloud").Returns("Cloud");
+        var viewModel = new ShellViewModel(navigator, Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings);
 
         viewModel.NavigateToCommand.Execute("Cloud");
 
         navigator.Received(1).NavigateTo("Cloud", Arg.Any<object?>());
-        viewModel.CurrentPageKey.ShouldBe("Cloud");
+        viewModel.CurrentPageTitle.ShouldBe("Cloud");
+    }
+
+    // The resw keys are looked up by literal name (scripts/check_app_wiring.py's ORPHAN-RESOURCE
+    // scan sees only literal keys), so every nav destination's key is named here once.
+    [Theory]
+    [InlineData("NewRun", "PageTitle_NewRun")]
+    [InlineData("Runs", "PageTitle_Runs")]
+    [InlineData("Cloud", "PageTitle_Cloud")]
+    [InlineData("Settings", "PageTitle_Settings")]
+    public void Each_nav_destination_maps_to_its_own_literal_title_key(string pageKey, string reswKey)
+        => ShellViewModel.PageTitleKey(pageKey).ShouldBe(reswKey);
+
+    [Fact]
+    public void A_page_with_no_title_key_shows_an_empty_header_never_a_raw_key()
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings);
+
+        viewModel.NavigateToCommand.Execute("SomethingUnbuilt");
+
+        viewModel.CurrentPageTitle.ShouldBe(string.Empty);
     }
 
     [Fact]

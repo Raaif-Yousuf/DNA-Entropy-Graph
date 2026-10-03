@@ -1,0 +1,16 @@
+<Page
+    x:Class="DnaEntropyGraph.App.Views.PlaceholderPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Issue #490: the one generic page for every destination whose own page is
+        not built yet (New run #63, Runs #101, Cloud #105, Settings #104). It
+        replaces an empty frame. Delete a destination's reliance on it by
+        registering that destination's page in Startup/NavigationRoutes.cs.
+    -->
+    <StackPanel Padding="24" Spacing="8">
+        <TextBlock x:Uid="PlaceholderPageTitle" Style="{StaticResource SubtitleTextBlockStyle}" />
+        <TextBlock x:Uid="PlaceholderPageBody" TextWrapping="Wrap" />
+    </StackPanel>
+</Page>

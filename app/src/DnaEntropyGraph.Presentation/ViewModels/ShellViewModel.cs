@@ -20,11 +20,18 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// </summary>
 public sealed partial class ShellViewModel : ObservableObject
 {
+    /// <summary>The destination the shell selects at startup (issue #490); also the page whose title <see cref="CurrentPageTitle"/> shows first.</summary>
+    public const string InitialPageKeyValue = "NewRun";
+
+    public static string InitialPageKey => InitialPageKeyValue;
+
     private readonly INavigator _navigator;
+    private readonly IStringResourceProvider _strings;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
-    [ObservableProperty]
-    private string _currentPageKey = "NewRun";
+    // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
+    // CurrentPageTitle, which NavigateTo notifies.
+    private string _currentPageKey = InitialPageKeyValue;
 
     [ObservableProperty]
     private string _statusPillText;
@@ -35,16 +42,37 @@ public sealed partial class ShellViewModel : ObservableObject
     public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings)
     {
         _navigator = navigator;
+        _strings = strings;
         _statusPillText = BuildStatusPillText(gcpAccount, strings);
 
         messenger.Register<ShellViewModel, RunPhaseChangedMessage>(this, static (recipient, message) => recipient.OnRunPhaseChanged(message));
     }
 
+    /// <summary>The NavigationView header: the localized page name (issue #490), never the raw page key; empty for a page with no title key.</summary>
+    public string CurrentPageTitle => PageTitleKey(_currentPageKey) is { } key ? _strings.GetString(key) : string.Empty;
+
+    /// <summary>
+    /// The plain (non-dotted, see the note below) resw key for a nav destination's header. Literal keys on
+    /// purpose: scripts/check_app_wiring.py's ORPHAN-RESOURCE scan, and a grep, see only literal names.
+    /// </summary>
+    public static string? PageTitleKey(string pageKey) => pageKey switch
+    {
+        "NewRun" => "PageTitle_NewRun",
+        "Runs" => "PageTitle_Runs",
+        "Cloud" => "PageTitle_Cloud",
+        "Settings" => "PageTitle_Settings",
+        _ => null,
+    };
+
+    /// <summary>The OS window title (taskbar, Alt-Tab). Reuses the plain "AppDisplayName" key because ShellTitle.Text is dotted and a code lookup of a dotted key misses.</summary>
+    public string WindowTitle => _strings.GetString("AppDisplayName");
+
     [RelayCommand]
     private void NavigateTo(string pageKey)
     {
         _navigator.NavigateTo(pageKey);
-        CurrentPageKey = pageKey;
+        _currentPageKey = pageKey;
+        OnPropertyChanged(nameof(CurrentPageTitle));
     }
 
     private void OnRunPhaseChanged(RunPhaseChangedMessage message)

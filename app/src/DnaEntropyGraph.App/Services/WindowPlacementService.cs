@@ -11,6 +11,47 @@ public sealed record WindowPlacement(int X, int Y, int Width, int Height)
     /// <summary>Used on a fresh profile, or whenever the saved value cannot be trusted.</summary>
     public static WindowPlacement Default { get; } = new(100, 100, 1280, 800);
 
+    /// <summary>
+    /// Windows parks a minimized window at -32000,-32000 with a title-bar-sized
+    /// rect. MEASURED 2026-10-02 (#489): minimizing the real window saved
+    /// "-32000,-32000,391,61". Any coordinate at or below this is that sentinel.
+    /// </summary>
+    public const int OffScreenSentinel = -30000;
+
+    public const int MinWidth = 320;
+
+    public const int MinHeight = 200;
+
+    /// <summary>False for a minimized-window rect or a size too small to use.</summary>
+    public bool IsPlausible => X > OffScreenSentinel && Y > OffScreenSentinel && Width >= MinWidth && Height >= MinHeight;
+
+    /// <summary>
+    /// <see cref="Default"/> is 1280x800 DIPs; AppWindow works in physical pixels,
+    /// so multiply by the window's DPI scale (dpi / 96). A non-positive scale changes nothing.
+    /// </summary>
+    public WindowPlacement Scaled(double scale)
+        => scale <= 0
+            ? this
+            : new WindowPlacement((int)Math.Round(X * scale), (int)Math.Round(Y * scale), (int)Math.Round(Width * scale), (int)Math.Round(Height * scale));
+
+    /// <summary>Shrinks the size to the work area if larger, then moves the rect fully inside it.</summary>
+    public WindowPlacement FitInto(int workX, int workY, int workWidth, int workHeight)
+    {
+        var width = Math.Min(Width, workWidth);
+        var height = Math.Min(Height, workHeight);
+        var x = Math.Max(workX, Math.Min(X, workX + workWidth - width));
+        var y = Math.Max(workY, Math.Min(Y, workY + workHeight - height));
+        return new WindowPlacement(x, y, width, height);
+    }
+
+    /// <summary>True when at least a 100x50 piece of the window overlaps the given work area, so the title bar can be grabbed.</summary>
+    public bool IsReachableOn(int workX, int workY, int workWidth, int workHeight)
+    {
+        var overlapWidth = Math.Min(X + Width, workX + workWidth) - Math.Max(X, workX);
+        var overlapHeight = Math.Min(Y + Height, workY + workHeight) - Math.Max(Y, workY);
+        return overlapWidth >= 100 && overlapHeight >= 50;
+    }
+
     public static WindowPlacement? Parse(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -40,7 +81,8 @@ public sealed record WindowPlacement(int X, int Y, int Width, int Height)
             return null;
         }
 
-        return new WindowPlacement(x, y, width, height);
+        var placement = new WindowPlacement(x, y, width, height);
+        return placement.IsPlausible ? placement : null;
     }
 
     public string Serialize() => $"{X},{Y},{Width},{Height}";
@@ -64,7 +106,17 @@ public sealed class WindowPlacementService
         _settingsStore = settingsStore;
     }
 
-    public WindowPlacement Load() => WindowPlacement.Parse(_settingsStore.GetString(PlacementKey)) ?? WindowPlacement.Default;
+    public WindowPlacement Load() => TryLoad() ?? WindowPlacement.Default;
 
-    public void Save(WindowPlacement placement) => _settingsStore.SetString(PlacementKey, placement.Serialize());
+    /// <summary>The saved placement, or null on a fresh profile or when the saved value is unusable (so the caller can DPI-scale the default).</summary>
+    public WindowPlacement? TryLoad() => WindowPlacement.Parse(_settingsStore.GetString(PlacementKey));
+
+    /// <summary>Refuses an implausible (minimized or degenerate) placement so the last good one survives.</summary>
+    public void Save(WindowPlacement placement)
+    {
+        if (placement.IsPlausible)
+        {
+            _settingsStore.SetString(PlacementKey, placement.Serialize());
+        }
+    }
 }

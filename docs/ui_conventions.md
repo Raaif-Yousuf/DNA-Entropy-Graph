@@ -20,6 +20,15 @@ files, `Ctrl+Shift+V` paste sequence, `Ctrl+Enter` run, `Esc` cancel a dialog, `
 (Cloud/History), `Ctrl+,` Settings, `Ctrl+L` focus the locus box in the viewer, `Alt+Left`
 back.
 
+Shell behaviour MEASURED 2026-10-02 (#489, #490): the header is the localized
+`PageTitle_<key>` string (`ShellViewModel.CurrentPageTitle`), never the page key; New run
+is selected at startup (`NavigationView.Loaded`), so header, selection and frame agree; a
+destination with no page registered in `Startup/NavigationRoutes.cs` shows the one generic
+`PlaceholderPage` instead of an empty frame; the OS window title is `AppDisplayName`.
+Window placement: nothing is saved while the window is minimized or maximized, a saved
+rect that is the minimized sentinel (-32000) or smaller than 320x200 is refused, and a
+first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the work area).
+
 ## 2. Copy rules (CLAUDE.md rule 13; this is the rationale and the worked examples)
 
 - **Every user-visible string lives in `Strings/en-US/Resources.resw`**, referenced by

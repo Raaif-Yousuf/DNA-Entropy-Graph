@@ -30,12 +30,18 @@ public sealed partial class MainWindow : Window
     {
         ViewModel = shellViewModel;
         InitializeComponent();
+        Title = ViewModel.WindowTitle;
         ExtendsContentIntoTitleBar = true;
         SystemBackdrop = new MicaBackdrop();
         SetTitleBar(AppTitleBar);
         ThemeApplier.Apply(RootNavigationView, settingsStore);
         WindowPlacementApplier.Apply(this, windowPlacementService);
     }
+
+    // Issue #490: Loaded fires after App.OnLaunched has handed RootFrame to NavigationService,
+    // so selecting New run (the first menu item, ShellViewModel.InitialPageKey) here navigates the frame too.
+    private void RootNavigationView_Loaded(object sender, RoutedEventArgs e)
+        => RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
         => ViewModel.NavigateToCommand.Execute((args.SelectedItemContainer as NavigationViewItem)?.Tag);
