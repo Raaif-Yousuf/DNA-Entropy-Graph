@@ -52,7 +52,8 @@ public class GoogleStorageGatewayTests
         string? pap = "enforced",
         int? jobsAge = 30,
         int? cacheAge = 365,
-        string created = "2026-10-01T10:00:00.000Z")
+        string created = "2026-10-01T10:00:00.000Z",
+        string? extraRules = null)
     {
         var labels = labelled
             ? "{\"app\":\"dna-entropy-graph\",\"installation-id\":\"" + installation + "\",\"app-version\":\"0-1-0\",\"lifecycle\":\"results\"}"
@@ -66,6 +67,11 @@ public class GoogleStorageGatewayTests
         if (cacheAge is { } c)
         {
             rules.Add("{\"action\":{\"type\":\"Delete\"},\"condition\":{\"age\":" + c + ",\"matchesPrefix\":[\"cache/\"]}}");
+        }
+
+        if (extraRules is not null)
+        {
+            rules.Add(extraRules);
         }
 
         return "{\"kind\":\"storage#bucket\",\"name\":\"" + name + "\",\"location\":\"US\",\"timeCreated\":\"" + created + "\","
@@ -89,7 +95,7 @@ public class GoogleStorageGatewayTests
 
     private static int RuleAge(JsonElement root, string prefix)
         => root.GetProperty("lifecycle").GetProperty("rule").EnumerateArray()
-            .Single(r => r.GetProperty("condition").GetProperty("matchesPrefix")[0].GetString() == prefix)
+            .Single(r => r.GetProperty("action").GetProperty("type").GetString() == "Delete" && r.GetProperty("condition").GetProperty("matchesPrefix")[0].GetString() == prefix)
             .GetProperty("condition").GetProperty("age").GetInt32();
 
     /// <summary>Scripts the resumable upload of one object: the initiating POST answers with the session URL, the PUT stores it.</summary>
@@ -103,6 +109,14 @@ public class GoogleStorageGatewayTests
         });
         handler.Returns(Put, UploadPath(bucket), 200, "{\"name\":\"app-config.json\",\"bucket\":\"" + bucket + "\"}");
     }
+
+    /// <summary>The conditional config write (ifGenerationMatch=0) of a bucket whose app-config.json already exists: Google answers 412 and that file stands.</summary>
+    private static void ScriptConfigAlreadyThere(ScriptedHttpHandler handler, string bucket)
+        => handler.Returns(Post, UploadPath(bucket), 412, RpcError(412, "FAILED_PRECONDITION", "At least one of the pre-conditions you specified did not hold."));
+
+    /// <summary>The listing the call makes right after its own insert (to notice a rival that created one too): just the bucket it made.</summary>
+    private static void ScriptCreatedListing(ScriptedHttpHandler handler, string created)
+        => handler.Returns(Get, Buckets, 200, List(BucketJson(created)));
 
     private static GoogleGatewayHarness NewRig(int retentionDays = 30, string? installationId = "installation-1")
     {
@@ -120,6 +134,7 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Post, Buckets, 200, BucketJson(name));
         rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
         ScriptUpload(rig.Handler, name);
+        ScriptCreatedListing(rig.Handler, name);
 
         var bucket = await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
 
@@ -164,6 +179,7 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Post, Buckets, 200, "{}");
         rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name, jobsAge: 365));
         ScriptUpload(rig.Handler, name);
+        ScriptCreatedListing(rig.Handler, name);
 
         await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
 
@@ -182,7 +198,7 @@ public class GoogleStorageGatewayTests
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
 
-        ex.Error.Code.ShouldBe(ResultsBucketErrorCodes.ConfigNotApplied);
+        ex.Error.Code.ShouldBe(SetupErrorCodes.BucketConfigNotApplied);
         ex.Message.ShouldContain("jobs/");
         rig.Handler.To(Post, UploadPath(name)).ShouldBeEmpty("a bucket that is not what was asked for is not given a config file");
     }
@@ -209,7 +225,7 @@ public class GoogleStorageGatewayTests
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
 
-        ex.Error.Code.ShouldBe(ResultsBucketErrorCodes.ConfigNotApplied);
+        ex.Error.Code.ShouldBe(SetupErrorCodes.BucketConfigNotApplied);
         ex.Message.ShouldContain(mentioned);
     }
 
@@ -223,6 +239,7 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Post, Buckets, 200, "{}");
         rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
         ScriptUpload(rig.Handler, name);
+        ScriptCreatedListing(rig.Handler, name);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
     }
@@ -233,6 +250,7 @@ public class GoogleStorageGatewayTests
         var rig = NewRig();
         var existing = "deg-" + Number + "-abcdef";
         rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing)));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
 
         var bucket = await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
 
@@ -240,6 +258,8 @@ public class GoogleStorageGatewayTests
         rig.Handler.To(Post, Buckets).ShouldBeEmpty();
         rig.Handler.To(Patch, BucketPath(existing)).ShouldBeEmpty();
         rig.Handler.To(Put, UploadPath(existing)).ShouldBeEmpty();
+        rig.Handler.To(Post, UploadPath(existing)).Single().Uri.Query.ShouldContain("ifGenerationMatch=0");
+        rig.Handler.Requests.ShouldNotContain(r => r.Method == HttpMethod.Delete, "a bucket this call did not create is never deleted");
         var list = rig.Handler.To(Get, Buckets).Single();
         list.Uri.Query.ShouldContain("prefix=deg-");
         list.Uri.Query.ShouldContain("project=my-lab");
@@ -255,6 +275,7 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Post, Buckets, 200, "{}");
         rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
         ScriptUpload(rig.Handler, name);
+        ScriptCreatedListing(rig.Handler, name);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
     }
@@ -265,6 +286,7 @@ public class GoogleStorageGatewayTests
         var rig = NewRig(installationId: "installation-2");
         var existing = "deg-" + Number + "-abcdef";
         rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, installation: "installation-1")));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(existing);
         rig.Handler.To(Post, Buckets).ShouldBeEmpty();
@@ -282,12 +304,14 @@ public class GoogleStorageGatewayTests
             BucketJson(newer, installation: "installation-3", created: "2026-10-03T10:00:00.000Z"),
             BucketJson(oldest, installation: "installation-1", created: "2026-09-01T10:00:00.000Z"),
             BucketJson(mine, installation: "installation-2", created: "2026-10-02T10:00:00.000Z")));
+        ScriptConfigAlreadyThere(rig.Handler, mine);
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(mine);
 
         var other = NewRig(installationId: "installation-9");
         other.Handler.Returns(Get, Buckets, 200, List(
             BucketJson(newer, installation: "installation-3", created: "2026-10-03T10:00:00.000Z"),
             BucketJson(oldest, installation: "installation-1", created: "2026-09-01T10:00:00.000Z")));
+        ScriptConfigAlreadyThere(other.Handler, oldest);
         (await other.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(oldest);
     }
 
@@ -299,6 +323,7 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90)));
         rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
         rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(existing);
 
@@ -318,7 +343,7 @@ public class GoogleStorageGatewayTests
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
 
-        ex.Error.Code.ShouldBe(ResultsBucketErrorCodes.ConfigNotApplied);
+        ex.Error.Code.ShouldBe(SetupErrorCodes.BucketConfigNotApplied);
     }
 
     [Fact]
@@ -334,6 +359,7 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Post, Buckets, 200, "{}");
         rig.Handler.Returns(Get, BucketPath(second), 200, BucketJson(second));
         ScriptUpload(rig.Handler, second);
+        ScriptCreatedListing(rig.Handler, second);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(second);
 
@@ -350,6 +376,7 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Post, Buckets, 409, RpcError(409, "ALREADY_EXISTS", "You already own this bucket."));
         rig.Handler.Returns(Get, BucketPath(first), 200, BucketJson(first));
         ScriptUpload(rig.Handler, first);
+        ScriptCreatedListing(rig.Handler, first);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(first);
 
@@ -369,7 +396,7 @@ public class GoogleStorageGatewayTests
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
 
-        ex.Error.Code.ShouldBe(ResultsBucketErrorCodes.NameTaken);
+        ex.Error.Code.ShouldBe(SetupErrorCodes.BucketNameTaken);
         ex.Kind.ShouldBe(CloudErrorKind.AlreadyExists);
         rig.Handler.To(Post, Buckets).Count.ShouldBe(5);
         Enumerable.Range(0, 5).Select(i => InsertedName(rig.Handler, i)).Distinct().Count().ShouldBe(5);
@@ -398,10 +425,11 @@ public class GoogleStorageGatewayTests
         rig.Handler.Returns(Post, Buckets, 200, "{}");
         rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
         ScriptUpload(rig.Handler, name);
+        ScriptCreatedListing(rig.Handler, name);
 
         (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
 
-        rig.Handler.To(Get, Buckets).Count.ShouldBe(2);
+        rig.Handler.To(Get, Buckets).Count.ShouldBe(3, "the failed list, the retried one, and the look after the insert");
         rig.Handler.To(Post, Buckets).Count.ShouldBe(1);
     }
 
@@ -427,6 +455,128 @@ public class GoogleStorageGatewayTests
         rig.Handler.Requests.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task A_config_write_that_fails_is_written_by_the_next_call_that_adopts_the_bucket()
+    {
+        var rig = NewRig();
+        var name = Name(0);
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
+        ScriptCreatedListing(rig.Handler, name);
+        for (var i = 0; i < 3; i++)
+        {
+            rig.Handler.Returns(Post, UploadPath(name), 503, RpcError(503, "UNAVAILABLE", "try later"));
+        }
+
+        await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
+        rig.Handler.To(Put, UploadPath(name)).ShouldBeEmpty("the first call never stored the config");
+
+        rig.Handler.Returns(Get, Project, 200, ProjectBody());
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(name)));
+        ScriptUpload(rig.Handler, name);
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
+
+        using var config = JsonDocument.Parse(rig.Handler.To(Put, UploadPath(name)).Single().Body);
+        config.RootElement.GetProperty("installationId").GetString().ShouldBe("installation-1");
+        rig.Handler.To(Post, Buckets).Count.ShouldBe(1, "the second call adopted, it did not insert again");
+    }
+
+    [Fact]
+    public async Task Two_computers_that_both_created_a_bucket_converge_on_the_older_and_the_newer_one_is_deleted()
+    {
+        var rig = NewRig();
+        var mine = Name(0);
+        var older = "deg-" + Number + "-aaaaaa";
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(mine), 200, BucketJson(mine, created: "2026-10-03T10:00:00.000Z"));
+        rig.Handler.Returns(Get, Buckets, 200, List(
+            BucketJson(mine, created: "2026-10-03T10:00:00.000Z"),
+            BucketJson(older, created: "2026-10-01T10:00:00.000Z")));
+        rig.Handler.Returns(HttpMethod.Delete, BucketPath(mine), 204, string.Empty);
+        ScriptUpload(rig.Handler, older);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(older);
+
+        rig.Handler.To(HttpMethod.Delete, BucketPath(mine)).Count.ShouldBe(1);
+        rig.Handler.Requests.Count(r => r.Method == HttpMethod.Delete).ShouldBe(1);
+        rig.Handler.To(Post, UploadPath(mine)).ShouldBeEmpty("the bucket being thrown away is never given a config file");
+        rig.Handler.To(Put, UploadPath(older)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_bucket_this_call_created_that_is_still_the_preferred_one_is_kept_and_not_deleted()
+    {
+        var rig = NewRig();
+        var mine = Name(0);
+        var newer = "deg-" + Number + "-zzzzzz";
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(mine), 200, BucketJson(mine, created: "2026-10-01T10:00:00.000Z"));
+        rig.Handler.Returns(Get, Buckets, 200, List(
+            BucketJson(newer, created: "2026-10-03T10:00:00.000Z"),
+            BucketJson(mine, created: "2026-10-01T10:00:00.000Z")));
+        ScriptUpload(rig.Handler, mine);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(mine);
+
+        rig.Handler.Requests.ShouldNotContain(r => r.Method == HttpMethod.Delete);
+    }
+
+    [Fact]
+    public async Task A_delete_of_the_losing_bucket_that_fails_does_not_fail_the_call()
+    {
+        var rig = NewRig();
+        var mine = Name(0);
+        var older = "deg-" + Number + "-aaaaaa";
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(mine), 200, BucketJson(mine, created: "2026-10-03T10:00:00.000Z"));
+        rig.Handler.Returns(Get, Buckets, 200, List(
+            BucketJson(mine, created: "2026-10-03T10:00:00.000Z"),
+            BucketJson(older, created: "2026-10-01T10:00:00.000Z")));
+        rig.Handler.Returns(HttpMethod.Delete, BucketPath(mine), 409, RpcError(409, "FAILED_PRECONDITION", "The bucket you tried to delete is not empty."));
+        ScriptUpload(rig.Handler, older);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(older);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    [InlineData(100000)]
+    public async Task A_retention_outside_the_allowed_range_is_refused_before_any_request(int days)
+    {
+        var rig = NewRig(retentionDays: days);
+
+        await Should.ThrowAsync<ArgumentOutOfRangeException>(() => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None));
+
+        rig.Handler.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_patch_keeps_the_lifecycle_rules_the_user_added_and_replaces_only_ours()
+    {
+        var rig = NewRig(retentionDays: 30);
+        var existing = "deg-" + Number + "-abcdef";
+        const string scratch = "{\"action\":{\"type\":\"Delete\"},\"condition\":{\"age\":7,\"matchesPrefix\":[\"scratch/\"]}}";
+        const string nearline = "{\"action\":{\"type\":\"SetStorageClass\",\"storageClass\":\"NEARLINE\"},\"condition\":{\"age\":10,\"matchesPrefix\":[\"jobs/\"]}}";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 90, extraRules: scratch + "," + nearline)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 30, extraRules: scratch + "," + nearline));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        var rules = body.RootElement.GetProperty("lifecycle").GetProperty("rule").EnumerateArray().ToList();
+        rules.Count.ShouldBe(4);
+        rules.ShouldContain(r => r.GetProperty("condition").GetProperty("matchesPrefix")[0].GetString() == "scratch/" && r.GetProperty("condition").GetProperty("age").GetInt32() == 7);
+        rules.ShouldContain(r => r.GetProperty("action").GetProperty("type").GetString() == "SetStorageClass");
+        rules.Count(r => r.GetProperty("action").GetProperty("type").GetString() == "Delete" && r.GetProperty("condition").GetProperty("matchesPrefix")[0].GetString() == "jobs/").ShouldBe(1);
+        RuleAge(body.RootElement, "jobs/").ShouldBe(30);
+    }
     [Fact]
     public async Task Upload_sends_the_object_bytes_to_the_bucket_through_a_resumable_session()
     {

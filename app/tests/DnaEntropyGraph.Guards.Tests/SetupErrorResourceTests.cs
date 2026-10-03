@@ -94,4 +94,14 @@ public class SetupErrorResourceTests
         text.ShouldContain("{account}");
         text.ShouldNotContain("\u2014");
     }
+
+    [Theory]
+    [InlineData("BUCKET_CONFIG_NOT_APPLIED", "SetupError_BUCKET_CONFIG_NOT_APPLIED")]
+    [InlineData("BUCKET_NAME_TAKEN", "SetupError_BUCKET_NAME_TAKEN")]
+    public void The_results_bucket_failures_are_in_the_setup_roster_and_do_not_fall_to_the_catch_all(string code, string messageKey)
+    {
+        SetupErrorCodes.All.ShouldContain(code);
+        SetupErrorCodes.ResourceKey(code).ShouldBe(messageKey);
+        ReswValues().ShouldContainKey(messageKey);
+    }
 }

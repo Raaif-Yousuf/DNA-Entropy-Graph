@@ -12,17 +12,17 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// <summary>
 /// The real <see cref="IStorageGateway"/> over Cloud Storage v1 REST (issue #53): the results bucket, and the object
 /// calls the job runner uses. It is never wrapped in <see cref="ResilientStorageGateway"/>: <see cref="EnsureBucketAsync"/>
-/// is a list, a create, a read-back and possibly a patch, and a whole-method retry would replay the create. Each HTTP call
+/// is a list, a create, a read-back, a second list, a config write and possibly a patch or a delete, and a whole-method retry would replay the create. Each HTTP call
 /// goes through <see cref="CloudCallPipeline"/> on its own (docs/cloud_design.md section 16).
 /// <para>
 /// <b>EnsureBucketAsync.</b> The bucket is found by LABEL (<c>app=dna-entropy-graph</c>) among the project's
 /// <c>deg-</c> buckets, never by a fixed name (Hard Rule 9), so a second PC (same installation or another one in the same
-/// project) adopts it. One that is found but drifted (UBLA, public access prevention, or a lifecycle rule not as asked,
+/// project) adopts it. One that is found without its app-config.json gets it written (conditional, 412 ignored). One that is found but drifted (UBLA, public access prevention, or a lifecycle rule not as asked,
 /// for instance a changed retention) is patched. A new one is <c>deg-&lt;projectNumber&gt;-&lt;rand6&gt;</c>; a 409 on the
 /// insert is either our own insert replayed after a dropped connection (the bucket is ours, so it is kept) or a name
 /// somebody else holds (a new suffix is drawn, five names at most). Every path ends by reading the bucket back and
 /// comparing: "applied is not present", so a bucket that is not what was asked for fails with
-/// <see cref="ResultsBucketErrorCodes.ConfigNotApplied"/> naming what differs, and no name is returned.
+/// <see cref="SetupErrorCodes.BucketConfigNotApplied"/> naming what differs, and no name is returned.
 /// </para>
 /// </summary>
 internal sealed class GoogleStorageGateway : IStorageGateway
@@ -51,6 +51,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             throw new InvalidOperationException("The results bucket needs the installation id: a bucket without the installation-id label is invisible to the Cloud page (Hard Rule 10).");
         }
 
+        ResultsBucket.ValidateRetentionDays(_options.ResultsRetentionDays);
         var labels = ResultsBucket.Labels(_options.InstallationId, _options.AppVersion);
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
@@ -185,13 +186,54 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             }
 
             ThrowIfNotApplied(created);
+
+            // Two PCs can both list nothing and both insert. Look again before the config is written: if the preferred bucket is
+            // somebody else's, adopt it and throw this one away (it is empty, and a bucket this call did not create is never touched).
+            var preferred = await FindOursAsync(projectId, cancellationToken).ConfigureAwait(false);
+            if (preferred is not null && !string.Equals(preferred.Name, name, StringComparison.Ordinal))
+            {
+                await DeleteOwnEmptyBucketAsync(name, cancellationToken).ConfigureAwait(false);
+                return await ConvergeAsync(preferred, cancellationToken).ConfigureAwait(false);
+            }
+
             await WriteConfigAsync(name, cancellationToken).ConfigureAwait(false);
             return name;
         }
 
         throw new CloudOperationException(
-            new CloudError(ResultsBucketErrorCodes.NameTaken, 409, $"Every one of {MaxNameAttempts} generated bucket names was already taken."),
+            new CloudError(SetupErrorCodes.BucketNameTaken, 409, $"Every one of {MaxNameAttempts} generated bucket names was already taken."),
             CloudErrorKind.AlreadyExists);
+    }
+
+    /// <summary>
+    /// Deletes the bucket this call just created and no longer wants. Best effort: Google refuses to delete a bucket that holds
+    /// an object (another PC adopted it in the meantime and wrote its config), which is the right answer, so a refusal is
+    /// swallowed and the labelled bucket simply stays (cloud_design.md section 16).
+    /// </summary>
+    private async Task DeleteOwnEmptyBucketAsync(string name, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _pipeline.ExecuteAsync(
+                "Storage.DeleteBucket",
+                async ct =>
+                {
+                    try
+                    {
+                        await _service.Buckets.Delete(name).ExecuteAsync(ct).ConfigureAwait(false);
+                        return true;
+                    }
+                    catch (GoogleApiException ex)
+                    {
+                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException)
+        {
+            // Not empty, already gone or not ours to delete: leave it.
+        }
     }
 
     /// <summary>Our bucket by name, or null when it does not exist or is somebody else's (a 403 or 404, or no app label).</summary>
@@ -250,13 +292,17 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     private async Task<string> ConvergeAsync(StorageData.Bucket bucket, CancellationToken cancellationToken)
     {
+        // The config file is written whenever it is absent, also on an adopted bucket: the call that created the bucket may have
+        // died before its write landed (conditional, so a file that is already there stands).
         if (Problems(bucket).Count == 0)
         {
+            await WriteConfigAsync(bucket.Name, cancellationToken).ConfigureAwait(false);
             return bucket.Name;
         }
 
-        // Drifted (a changed retention, or a rule or setting that never applied): patch, then read back and compare.
-        var patch = new StorageData.Bucket { IamConfiguration = DesiredIamConfiguration(), Lifecycle = DesiredLifecycle() };
+        // Drifted (a changed retention, or a rule or setting that never applied): patch, then read back and compare. The
+        // user's own lifecycle rules are kept; only the jobs/ and cache/ Delete rules are ours and are replaced.
+        var patch = new StorageData.Bucket { IamConfiguration = DesiredIamConfiguration(), Lifecycle = DesiredLifecycle(bucket.Lifecycle?.Rule) };
         await _pipeline.ExecuteAsync(
             "Storage.PatchBucket",
             async ct =>
@@ -273,6 +319,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             cancellationToken).ConfigureAwait(false);
 
         ThrowIfNotApplied(await GetAsync(bucket.Name, cancellationToken).ConfigureAwait(false));
+        await WriteConfigAsync(bucket.Name, cancellationToken).ConfigureAwait(false);
         return bucket.Name;
     }
 
@@ -282,14 +329,22 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         PublicAccessPrevention = PublicAccessEnforced,
     };
 
-    private StorageData.Bucket.LifecycleData DesiredLifecycle() => new()
+    /// <summary>Our two rules, after any rules in <paramref name="existing"/> that are not ours (a user's own lifecycle rules survive a patch).</summary>
+    private StorageData.Bucket.LifecycleData DesiredLifecycle(IEnumerable<StorageData.Bucket.LifecycleData.RuleData>? existing = null) => new()
     {
         Rule =
         [
+            .. (existing ?? []).Where(r => !IsOurRule(r)),
             DeleteRule(ResultsBucket.JobsPrefix, _options.ResultsRetentionDays),
             DeleteRule(ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays),
         ],
     };
+
+    /// <summary>A Delete rule whose only prefix is <c>jobs/</c> or <c>cache/</c>: the two the app owns.</summary>
+    private static bool IsOurRule(StorageData.Bucket.LifecycleData.RuleData rule)
+        => string.Equals(rule.Action?.Type, DeleteAction, StringComparison.Ordinal)
+            && rule.Condition?.MatchesPrefix is { Count: 1 } prefixes
+            && (prefixes[0] == ResultsBucket.JobsPrefix || prefixes[0] == ResultsBucket.CachePrefix);
 
     private static StorageData.Bucket.LifecycleData.RuleData DeleteRule(string prefix, int ageDays) => new()
     {
@@ -306,7 +361,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         {
             throw new CloudOperationException(
                 new CloudError(
-                    ResultsBucketErrorCodes.ConfigNotApplied,
+                    SetupErrorCodes.BucketConfigNotApplied,
                     null,
                     $"Bucket {readBack.Name} does not read back as asked: {string.Join("; ", problems)}."),
                 CloudErrorKind.Other);

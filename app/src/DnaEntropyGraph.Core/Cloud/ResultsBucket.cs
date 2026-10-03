@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -22,9 +23,25 @@ public static class ResultsBucket
     /// <summary>The model-weights cache lives under this prefix; it has its own, longer rule.</summary>
     public const string CachePrefix = "cache/";
 
+    /// <summary>The "Cloud results retention" default; <c>RunOptions.CloudResultsRetentionDays</c> takes its default from here.</summary>
     public const int DefaultRetentionDays = 90;
 
     public const int CacheRetentionDays = 365;
+
+    /// <summary>The longest retention accepted (ten years): the choices offered are 7/30/90/365 days, and anything past this is a typo, not a policy.</summary>
+    public const int MaxRetentionDays = 3650;
+
+    /// <summary>
+    /// Refuses a retention that would delete job results at once (0) or that Google rejects (negative), or that is absurdly
+    /// long, before any request is built. The lifecycle rule is the only thing that deletes results (Hard Rule 14).
+    /// </summary>
+    public static void ValidateRetentionDays(int days)
+    {
+        if (days is < 1 or > MaxRetentionDays)
+        {
+            throw new ArgumentOutOfRangeException(nameof(days), days, $"Results retention must be between 1 and {MaxRetentionDays} days.");
+        }
+    }
 
     /// <summary>The multi-region the bucket is created in when nothing else is asked for (the "US" region group).</summary>
     public const string DefaultLocation = "US";
@@ -57,7 +74,7 @@ public static class ResultsBucket
     /// <summary>
     /// The labels a bucket carries: the standard set (Hard Rule 10) minus <c>job-id</c> and <c>model</c>, which name one
     /// run and one model while a bucket serves every run (the same exemption the project's own labels have), and its
-    /// <c>lifecycle</c> is <see cref="LifecycleLabelValue"/>. DECISION (agent-made, reversible): filed with issue #53.
+    /// <c>lifecycle</c> is <see cref="LifecycleLabelValue"/>. DECISION (agent-made, reversible): see #582 and the Rule 9/10 carve-out in docs/hard_rules.md.
     /// </summary>
     public static IReadOnlyDictionary<string, string> Labels(string installationId, string appVersion)
     {
@@ -78,25 +95,20 @@ public static class ResultsBucket
 
     /// <summary>The body of <see cref="ConfigObject"/>: plain JSON, UTF-8, LF, no sequence data.</summary>
     public static string ConfigJson(string installationId, string appVersion, int retentionDays, DateTimeOffset createdUtc)
-        => "{\n"
-            + "  \"schema\": 1,\n"
-            + $"  \"installationId\": \"{installationId}\",\n"
-            + $"  \"appVersion\": \"{appVersion}\",\n"
-            + $"  \"resultsRetentionDays\": {retentionDays.ToString(CultureInfo.InvariantCulture)},\n"
-            + $"  \"cacheRetentionDays\": {CacheRetentionDays.ToString(CultureInfo.InvariantCulture)},\n"
-            + $"  \"createdUtc\": \"{createdUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture)}\"\n"
-            + "}\n";
-}
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true, NewLine = "\n" }))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("schema", 1);
+            writer.WriteString("installationId", installationId);
+            writer.WriteString("appVersion", appVersion);
+            writer.WriteNumber("resultsRetentionDays", retentionDays);
+            writer.WriteNumber("cacheRetentionDays", CacheRetentionDays);
+            writer.WriteString("createdUtc", createdUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture));
+            writer.WriteEndObject();
+        }
 
-/// <summary>The codes the results-bucket step fails under, in <see cref="CloudError.Code"/> of a <see cref="CloudOperationException"/>.</summary>
-public static class ResultsBucketErrorCodes
-{
-    /// <summary>
-    /// Google accepted the bucket but reading it back shows UBLA, public access prevention or a lifecycle rule is not what
-    /// was asked for ("applied is not present"). Nothing is reported as created. The message names what is missing.
-    /// </summary>
-    public const string ConfigNotApplied = "BUCKET_CONFIG_NOT_APPLIED";
-
-    /// <summary>Every bucket name tried was taken by someone else; trying again generates new names.</summary>
-    public const string NameTaken = "BUCKET_NAME_TAKEN";
+        return Encoding.UTF8.GetString(stream.ToArray()) + "\n";
+    }
 }

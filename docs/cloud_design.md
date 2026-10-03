@@ -893,26 +893,39 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
   `RunOptions.CloudResultsRetentionDays`, default 90) for objects matching prefix `jobs/`, and Delete at age 365 for `cache/`.
 - **Labels.** `app=dna-entropy-graph`, `installation-id`, `app-version` (sanitized), `lifecycle=results`. `job-id` and `model`
   are left off: a bucket serves every run and every model, the same exemption a project has. DECISION (agent-made,
-  reversible), filed as a DECISION issue. A missing installation id fails before any request (Hard Rule 10).
+  reversible): see #582; the carve-out is recorded under Rules 9 and 10 in `hard_rules.md`. A missing installation id fails before any request (Hard Rule 10).
 - **Applied is not present.** After an insert, and after a patch, the bucket is read back and compared: UBLA, PAP, and both
   rules with the configured ages. A difference fails with `BUCKET_CONFIG_NOT_APPLIED` (kind `other`) naming what differs; the
   name is not returned and no `app-config.json` is written. The next call finds the labelled bucket, sees it drifted, and patches it.
 - **Discovery by label, adoption.** `buckets.list` with prefix `deg-` for the project, keep the ones labelled
   `app=dna-entropy-graph`, prefer this installation's, then the oldest, then by name. A second PC of the same installation, or
   another installation in the same project, adopts it: no insert. An adopted bucket that reads back drifted (for instance the
-  user changed the retention on the other PC) is patched and read back; one that reads back right is left alone.
+  user changed the retention on the other PC) is patched and read back; one that reads back right is left alone. The patch
+  keeps every lifecycle rule that is not ours (anything other than a Delete rule whose only prefix is `jobs/` or `cache/`) and
+  replaces only ours. Two installations with different retention settings overwrite each other's `jobs/` age: last writer wins,
+  accepted (spec Appendix A, "same account, two PCs").
+- **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference
+  order); if the preferred bucket is not the one it just made, it deletes its own (still empty: the config is written after this
+  check) and adopts the preferred one. A delete Google refuses (not empty, because the other PC adopted it meanwhile) is
+  swallowed and the bucket stays labelled. A bucket this call did not create is never deleted. Two installations in one project
+  each prefer their own bucket, so they may keep one each; that is the same accepted behaviour as before.
 - **409 on insert.** Our own insert replayed after a dropped connection also answers 409: if the named bucket reads back as
   ours it is kept (its read is the read-back); otherwise (403 or not ours) a new suffix is drawn. Five names at most, then
   `BUCKET_NAME_TAKEN` (kind `already_exists`).
-- **`app-config.json`** at the bucket root: schema, installation id, app version, both retentions, creation time. Written once,
-  with `ifGenerationMatch=0` ("only if absent"): a 412 means another PC wrote it first and its file stands. It is not
+- **`app-config.json`** at the bucket root: schema, installation id, app version, both retentions, creation time (built with
+  `System.Text.Json`, so ids are escaped). Written on create and again on every adopt or repair, always with
+  `ifGenerationMatch=0` ("only if absent"): a 412 means the file is already there and stands, so a first write that failed is
+  made good by the next call. It is not
   rewritten when a retention changes (the lifecycle rule on the bucket is the truth; a `retention change patches the rule` flow is #114).
 - **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
   tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (results and manifests are
   small; the multi-GB weights cache is the worker's, #496). `TryDownloadAsync` answers null for a 404 only; every other failure
   throws, so a transport error never reads as "the worker has not finished".
-- **Not in the error roster yet.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are not in `SetupErrorCodes.All`, so
-  the wizard would show the Try again catch-all for them; their copy and action are filed as a follow-up issue.
+- **Error roster.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are `SetupErrorCodes.BucketConfigNotApplied` and
+  `BucketNameTaken` (in `SetupErrorCodes.All`, `Resources.resw`, `copy_catalog.md` and `triage_diagnostics.py`); both name Try
+  again. A project the account cannot see is `PERMISSION`, whose message names Copy request for owner.
+- **Retention is validated.** `ResultsRetentionDays` outside 1 to 3650 throws `ArgumentOutOfRangeException` before any request
+  (0 would delete job results at once). The default is `ResultsBucket.DefaultRetentionDays`, which `RunOptions.CloudResultsRetentionDays` reuses.
 - **Proven only by a real project:** `docs/ToTest.md`.
 ## Related
 
