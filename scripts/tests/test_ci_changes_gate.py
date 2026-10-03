@@ -257,6 +257,7 @@ def test_every_job_gated_on_changes_runs_when_the_gate_itself_failed(workflow):
             "required job reads as green"
         )
         assert _evaluate(expr, "failure", "") is True, f"{workflow}:{job} is skipped when the changes job fails"
+        assert _evaluate(expr, "success", "") is True, f"{workflow}:{job} is skipped when the gate output is missing or empty"
         assert _evaluate(expr, "success", "true") is True, f"{workflow}:{job} does not run when the gate says run"
         assert _evaluate(expr, "success", "false") is False, f"{workflow}:{job} runs although the gate said skip"
 
@@ -269,3 +270,25 @@ def test_the_gate_decision_is_case_insensitive():
     assert gate.is_relevant("ci-app", "docs/COPY_CATALOG.md") is True
     assert gate.is_relevant("ci-app", "ReadMe.md") is False
     assert gate.is_relevant("ci-app", "third-party-notices.md") is True
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS)
+def test_the_changes_job_is_a_real_job_that_runs_the_gate_script(workflow):
+    """MEASURED 2026-10-03 (cold review of 0cc0587): a replace glued `changes:` onto the end of a comment line, so the workflow
+    had no changes job at all and the text-based wiring test above still passed. Pin the structure itself."""
+    text = (REPO / ".github" / "workflows" / f"{workflow}.yml").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert "  changes:" in lines, f"{workflow}: no line is exactly '  changes:' (a job key at 2-space indent on its own line)"
+    glued = [ln for ln in lines if ln.lstrip().startswith("#") and re.search(r"\S\s{2,}[\w-]+:\s*$", ln)]
+    assert not glued, f"{workflow}: a key is glued to the end of a comment line: {glued}"
+    in_jobs = False
+    for ln in lines:
+        if re.match(r"^jobs:\s*$", ln):
+            in_jobs = True
+        elif in_jobs and ln.strip() and not ln.lstrip().startswith("#") and len(ln) - len(ln.lstrip()) == 2:
+            assert re.match(r"^  [\w-]+:\s*$", ln), f"{workflow}: malformed job key line {ln!r}"
+    start = lines.index("  changes:")
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"^  [\w-]+:\s*$", lines[i])), len(lines))
+    body = "\n".join(lines[start:end])
+    assert f"scripts/ci_changes_gate.py --workflow {workflow}" in body, f"{workflow}: the changes job does not run the gate script"
+    assert "needs: changes" in text

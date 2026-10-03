@@ -45,11 +45,13 @@ jobs:
   # FAIL-OPEN HAZARD (#31 round 2): a job whose `needs` failed is SKIPPED unless its `if:` contains a status function, and a
   # skipped required check reads as green. So a broken `changes` job (outputs.run empty) would skip every real job and turn
   # the PR green with nothing tested. Each gated job therefore uses
-  #     !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true')
+  #     !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false')
+  # (an explicit 'false' is the only thing that skips; a missing or empty output runs the jobs.)
   # `!cancelled()` is a status function, so it replaces the implicit success() and the job is evaluated even when `changes`
   # failed; then `result != 'success'` makes a broken gate RUN the tests. A cancelled run (the workflow is being cancelled)
   # still stops, and reads as cancelled, not green. Chosen over a final aggregator job because the required check names stay
-  # the real jobs' names. Pinned by scripts/tests/test_ci_changes_gate.py (parses this file's needs/if wiring).  changes:
+  # the real jobs' names. Pinned by scripts/tests/test_ci_changes_gate.py (parses this file's needs/if wiring).
+  changes:
     name: changes (app)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -74,7 +76,7 @@ jobs:
   build:
     name: build and test
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
