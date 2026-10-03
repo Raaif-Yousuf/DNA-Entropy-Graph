@@ -30,7 +30,7 @@ public sealed class PricingTableTests : IDisposable
           "currency": "USD",
           "region": "us-central1",
           "source": "test source note",
-          "disk": { "type": "pd-balanced", "sizeGb": 150, "usdPerGbMonth": 0.10 },
+          "disk": { "type": "pd-balanced", "usdPerGbMonth": 0.10 },
           "machines": {
             "g2-standard-8": { "accelerator": "1x NVIDIA L4", "onDemandUsdPerHour": 0.85, "spotUsdPerHour": 0.18 },
             "a2-highgpu-1g": { "accelerator": "1x NVIDIA A100 40GB", "onDemandUsdPerHour": 3.67, "spotUsdPerHour": null }
@@ -48,7 +48,8 @@ public sealed class PricingTableTests : IDisposable
         table.AsOf.ShouldBe(new DateOnly(2026, 9, 19));
         table.Region.ShouldBe("us-central1");
         table.Source.ShouldBe("test source note");
-        table.DiskSizeGb.ShouldBe(150);
+        table.DiskUsdPerHour(150).ShouldBe(150 * 0.10 / 730, 1e-12, "the run's own boot disk size is what is priced; the file carries no size");
+        table.DiskUsdPerDay(300).ShouldBe(300 * 0.10 / 730 * 24, 1e-12);
         table.DiskUsdPerGbMonth.ShouldBe(0.10);
         table.Find("g2-standard-8")!.OnDemandUsdPerHour.ShouldBe(0.85);
         table.Find("g2-standard-8")!.SpotUsdPerHour.ShouldBe(0.18);
@@ -71,8 +72,7 @@ public sealed class PricingTableTests : IDisposable
         { "a spot price above on-demand", Good.Replace("\"spotUsdPerHour\": 0.18", "\"spotUsdPerHour\": 0.9"), PricingProblem.InvalidValue },
         { "a price given as text", Good.Replace("\"onDemandUsdPerHour\": 0.85", "\"onDemandUsdPerHour\": \"0.85\""), PricingProblem.InvalidValue },
         { "no machines", Good.Replace("\"machines\"", "\"other\""), PricingProblem.InvalidValue },
-        { "an empty machine list", """{"schema":1,"asOf":"2026-09-19","currency":"USD","region":"r","source":"s","disk":{"sizeGb":150,"usdPerGbMonth":0.1},"machines":{}}""", PricingProblem.InvalidValue },
-        { "a zero disk size", Good.Replace("\"sizeGb\": 150", "\"sizeGb\": 0"), PricingProblem.InvalidValue },
+        { "an empty machine list", """{"schema":1,"asOf":"2026-09-19","currency":"USD","region":"r","source":"s","disk":{"usdPerGbMonth":0.1},"machines":{}}""", PricingProblem.InvalidValue },
         { "a zero disk price", Good.Replace("\"usdPerGbMonth\": 0.10", "\"usdPerGbMonth\": 0"), PricingProblem.InvalidValue },
         { "no disk", Good.Replace("\"disk\"", "\"dsk\""), PricingProblem.InvalidValue },
     };

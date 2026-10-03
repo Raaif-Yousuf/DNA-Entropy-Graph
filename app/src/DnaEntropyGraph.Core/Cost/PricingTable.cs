@@ -39,12 +39,11 @@ public sealed class PricingTable
 
     private readonly Dictionary<string, MachinePrice> _machines;
 
-    private PricingTable(DateOnly asOf, string region, string source, double diskSizeGb, double diskUsdPerGbMonth, Dictionary<string, MachinePrice> machines)
+    private PricingTable(DateOnly asOf, string region, string source, double diskUsdPerGbMonth, Dictionary<string, MachinePrice> machines)
     {
         AsOf = asOf;
         Region = region;
         Source = source;
-        DiskSizeGb = diskSizeGb;
         DiskUsdPerGbMonth = diskUsdPerGbMonth;
         _machines = machines;
     }
@@ -55,12 +54,16 @@ public sealed class PricingTable
 
     public string Source { get; }
 
-    public double DiskSizeGb { get; }
-
     public double DiskUsdPerGbMonth { get; }
 
-    /// <summary>What the boot disk costs for each hour the VM exists, whether it runs or not.</summary>
-    public double DiskUsdPerHour => DiskSizeGb * DiskUsdPerGbMonth / HoursPerMonth;
+    /// <summary>
+    /// What a boot disk of <paramref name="sizeGb"/> costs for each hour the VM exists, whether it runs or not. The size is the
+    /// run's own (<c>RunOptions.BootDiskGb</c>), never a second constant in the price file.
+    /// </summary>
+    public double DiskUsdPerHour(double sizeGb) => sizeGb * DiskUsdPerGbMonth / HoursPerMonth;
+
+    /// <summary>What the same disk keeps costing for a day after the VM is stopped.</summary>
+    public double DiskUsdPerDay(double sizeGb) => DiskUsdPerHour(sizeGb) * 24;
 
     public MachinePrice? Find(string machineType) => _machines.GetValueOrDefault(machineType);
 
@@ -116,9 +119,9 @@ public sealed class PricingTable
         }
 
         if (!root.TryGetProperty("disk", out var disk) || disk.ValueKind != JsonValueKind.Object
-            || !TryPositive(disk, "sizeGb", out var diskGb) || !TryPositive(disk, "usdPerGbMonth", out var diskPrice))
+            || !TryPositive(disk, "usdPerGbMonth", out var diskPrice))
         {
-            return Invalid("\"disk\" needs a positive \"sizeGb\" and \"usdPerGbMonth\".");
+            return Invalid("\"disk\" needs a positive \"usdPerGbMonth\".");
         }
 
         if (!root.TryGetProperty("machines", out var machines) || machines.ValueKind != JsonValueKind.Object)
@@ -140,7 +143,7 @@ public sealed class PricingTable
 
         return prices.Count == 0
             ? Invalid("\"machines\" lists no machine.")
-            : new PricingLoadResult(new PricingTable(asOf, region, source, diskGb, diskPrice, prices), null, null);
+            : new PricingLoadResult(new PricingTable(asOf, region, source, diskPrice, prices), null, null);
     }
 
     private static string? ReadMachine(JsonProperty machine, out MachinePrice? price)

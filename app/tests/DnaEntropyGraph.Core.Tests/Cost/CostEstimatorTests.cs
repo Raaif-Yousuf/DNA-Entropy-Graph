@@ -16,30 +16,61 @@ public sealed class CostEstimatorTests
 
     private static readonly PricingTable Table = PricingTable.Parse(PricingTableTests.Good).Table!;
 
-    private static CostEstimateResult Estimate(string machine = L4, bool spot = false, long? bases = 5_000, params double[] pastMinutes)
-        => CostEstimator.Estimate(Table, RunTimeModel.Default, new CostEstimateRequest(machine, spot, bases, pastMinutes.Select(TimeSpan.FromMinutes).ToList()));
+    private static CostEstimateResult Estimate(string machine = L4, bool spot = false, long? bases = 5_000, int bootDiskGb = 150, params double[] pastMinutes)
+        => CostEstimator.Estimate(Table, RunTimeModel.Default, new CostEstimateRequest(machine, spot, bases, bootDiskGb, pastMinutes.Select(TimeSpan.FromMinutes).ToList()));
+
+    private static double PredictMinutes(long bases) => bases / 1000.0 * 2.0 / 60;
 
     [Fact]
-    public void History_gives_one_point_estimate_from_the_median_duration_priced_at_the_hourly_rate()
+    public void History_gives_one_point_estimate_of_the_median_past_duration_as_fixed_overhead_plus_this_inputs_predict_time()
     {
-        var result = Estimate(bases: 5_000, pastMinutes: [8, 9, 30]);
+        var result = Estimate(bases: 1_000, pastMinutes: [8, 9, 30]);
 
         var estimate = result.Estimate.ShouldNotBeNull();
         estimate.Basis.ShouldBe(EstimateBasis.History);
         estimate.IsPoint.ShouldBeTrue();
-        estimate.MinMinutes.ShouldBe(9, 1e-9);
-        estimate.MinUsd.ShouldBe(L4PerHour * 9 / 60, 1e-9);
+        estimate.MinMinutes.ShouldBe(9 + PredictMinutes(1_000), 1e-9);
+        estimate.MinUsd.ShouldBe(L4PerHour * (9 + PredictMinutes(1_000)) / 60, 1e-9);
         estimate.MaxUsd.ShouldBe(estimate.MinUsd, 1e-12);
         Math.Round(estimate.MinUsd, 2).ShouldBe(0.13, "the issue's own example: about $0.13, about 9 minutes");
     }
 
     [Fact]
-    public void An_even_number_of_past_runs_uses_the_mean_of_the_middle_two()
-        => Estimate(pastMinutes: [8, 10]).Estimate!.MinMinutes.ShouldBe(9, 1e-9);
+    public void History_is_size_aware_a_5_kb_run_and_a_5_Mb_run_on_the_same_history_differ()
+    {
+        var small = Estimate(bases: 5_000, pastMinutes: [9]).Estimate!;
+        var large = Estimate(bases: 5_000_000, pastMinutes: [9]).Estimate!;
+
+        small.Basis.ShouldBe(EstimateBasis.History);
+        large.Basis.ShouldBe(EstimateBasis.History);
+        (large.MinMinutes - small.MinMinutes).ShouldBe(PredictMinutes(5_000_000) - PredictMinutes(5_000), 1e-6);
+        large.MinMinutes.ShouldBeGreaterThan(small.MinMinutes * 10);
+        large.MinUsd.ShouldBeGreaterThan(small.MinUsd * 10);
+    }
 
     [Fact]
-    public void History_needs_no_size_because_the_past_runs_already_say_how_long_it_takes()
-        => Estimate(bases: null, pastMinutes: [9]).Estimate!.Basis.ShouldBe(EstimateBasis.History);
+    public void An_even_number_of_past_runs_uses_the_mean_of_the_middle_two()
+        => Estimate(bases: 0, pastMinutes: [8, 10]).Estimate!.MinMinutes.ShouldBe(9, 1e-9);
+
+    [Fact]
+    public void History_with_an_unknown_size_is_unknown_because_the_past_runs_do_not_say_how_long_this_input_takes()
+    {
+        var result = Estimate(bases: null, pastMinutes: [9]);
+
+        result.Estimate.ShouldBeNull();
+        result.Reason.ShouldBe(EstimateUnavailable.UnknownSize);
+    }
+
+    [Fact]
+    public void The_disk_is_priced_at_the_runs_own_boot_disk_size_and_the_stopped_disk_per_day_is_reported()
+    {
+        var small = Estimate(bootDiskGb: 150, pastMinutes: [60]).Estimate!;
+        var large = Estimate(bootDiskGb: 300, pastMinutes: [60]).Estimate!;
+
+        (large.MinUsd - small.MinUsd).ShouldBe(150 * 0.10 / 730 * (60 + PredictMinutes(5_000)) / 60, 1e-9);
+        small.StoppedDiskUsdPerDay.ShouldBe(150 * 0.10 / 730 * 24, 1e-9);
+        large.StoppedDiskUsdPerDay.ShouldBe(300 * 0.10 / 730 * 24, 1e-9);
+    }
 
     [Fact]
     public void With_no_history_the_model_gives_a_range_from_a_warm_to_a_fresh_computer_plus_predict_time()
@@ -81,7 +112,7 @@ public sealed class CostEstimatorTests
         var onDemand = Estimate(spot: false, pastMinutes: [9]).Estimate!;
         var spot = Estimate(spot: true, pastMinutes: [9]).Estimate!;
 
-        spot.MinUsd.ShouldBe((0.18 + (150 * 0.10 / 730)) * 9 / 60, 1e-9);
+        spot.MinUsd.ShouldBe((0.18 + (150 * 0.10 / 730)) * (9 + PredictMinutes(5_000)) / 60, 1e-9);
         spot.MinUsd.ShouldBeLessThan(onDemand.MinUsd);
     }
 
@@ -105,7 +136,7 @@ public sealed class CostEstimatorTests
 
     [Fact]
     public void The_a100_tier_is_priced_from_its_own_row()
-        => Estimate(machine: A100, pastMinutes: [60]).Estimate!.MinUsd.ShouldBe(3.67 + (150 * 0.10 / 730), 1e-9);
+        => Estimate(machine: A100, pastMinutes: [60]).Estimate!.MinUsd.ShouldBe((3.67 + (150 * 0.10 / 730)) * (60 + PredictMinutes(5_000)) / 60, 1e-9);
 
     private static RunRecord Run(JobPhase phase, string machine, int minutes, int daysAgo, bool finished = true) => new(
         "j" + Guid.NewGuid().ToString("N"),

@@ -128,6 +128,12 @@
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
+            <TextBlock
+                Text="{x:Bind ViewModel.EstimateDiskText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.HasEstimateDisk, Mode=OneWay}"
+                TextWrapping="Wrap"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
             <Button
                 x:Uid="NewRunRun"
                 Style="{StaticResource AccentButtonStyle}"

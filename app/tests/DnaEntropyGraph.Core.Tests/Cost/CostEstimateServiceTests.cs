@@ -25,7 +25,7 @@ public sealed class CostEstimateServiceTests
     [Fact]
     public async Task With_no_past_runs_it_estimates_from_the_model_for_the_given_size()
     {
-        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, CancellationToken.None);
+        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
 
         result.Estimate!.Basis.ShouldBe(EstimateBasis.Model);
     }
@@ -37,10 +37,19 @@ public sealed class CostEstimateServiceTests
         _runs.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<RunRecord>>(
             [new RunRecord("a", JobPhase.Completed, start, MachineType: L4, StartedAt: start, FinishedAt: start.AddMinutes(9))]));
 
-        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, CancellationToken.None);
+        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
 
         result.Estimate!.Basis.ShouldBe(EstimateBasis.History);
-        result.Estimate.MinMinutes.ShouldBe(9, 1e-9);
+        result.Estimate.MinMinutes.ShouldBe(9 + (5_000 / 1000.0 * 2.0 / 60), 1e-9);
+    }
+
+    [Fact]
+    public async Task The_runs_own_boot_disk_size_reaches_the_estimate()
+    {
+        var small = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+        var large = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 300, CancellationToken.None);
+
+        large.Estimate!.StoppedDiskUsdPerDay.ShouldBe(small.Estimate!.StoppedDiskUsdPerDay * 2, 1e-9);
     }
 
     [Fact]
@@ -48,7 +57,7 @@ public sealed class CostEstimateServiceTests
     {
         _pricing.Load().Returns(new PricingLoadResult(null, PricingProblem.FileMissing, "gone"));
 
-        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, CancellationToken.None);
+        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
 
         result.Estimate.ShouldBeNull();
         result.Reason.ShouldBe(EstimateUnavailable.PriceListUnreadable);
@@ -59,7 +68,7 @@ public sealed class CostEstimateServiceTests
     {
         _runs.GetAllAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<RunRecord>>>(_ => throw new InvalidOperationException("db locked"));
 
-        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, CancellationToken.None);
+        var result = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
 
         result.Estimate!.Basis.ShouldBe(EstimateBasis.Model);
     }
@@ -69,8 +78,8 @@ public sealed class CostEstimateServiceTests
     {
         var service = Service();
 
-        await service.EstimateAsync(L4, false, 1_000, CancellationToken.None);
-        await service.EstimateAsync(L4, false, 2_000, CancellationToken.None);
+        await service.EstimateAsync(L4, false, 1_000, 150, CancellationToken.None);
+        await service.EstimateAsync(L4, false, 2_000, 150, CancellationToken.None);
 
         _pricing.Received(1).Load();
     }
@@ -82,6 +91,6 @@ public sealed class CostEstimateServiceTests
         await cts.CancelAsync();
         _runs.GetAllAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<RunRecord>>>(_ => throw new OperationCanceledException());
 
-        await Should.ThrowAsync<OperationCanceledException>(() => Service().EstimateAsync(L4, false, 1_000, cts.Token));
+        await Should.ThrowAsync<OperationCanceledException>(() => Service().EstimateAsync(L4, false, 1_000, 150, cts.Token));
     }
 }

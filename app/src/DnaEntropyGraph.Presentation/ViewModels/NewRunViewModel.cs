@@ -28,6 +28,9 @@ public sealed partial class NewRunViewModel : ObservableObject
     private const GpuTier DefaultTier = GpuTier.CheapestAvailable;
     private const bool DefaultSpot = false;
 
+    // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
+    private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
+
     // A count of this many characters or fewer is worked out on the spot; a bigger paste is counted off the UI thread.
     private const int InlineCountLimit = 20_000;
     private static readonly TimeSpan CountDebounce = TimeSpan.FromMilliseconds(150);
@@ -62,6 +65,11 @@ public sealed partial class NewRunViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasEstimate))]
     private string _estimateText = string.Empty;
+
+    /// <summary>The line after the estimate: what the disk keeps costing per day while the computer sits stopped after the run (the default). Empty whenever <see cref="EstimateText"/> is not an estimate.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasEstimateDisk))]
+    private string _estimateDiskText = string.Empty;
 
     /// <summary>A line of help for the user (a path that does not exist, a folder with nothing to run); empty when there is none.</summary>
     [ObservableProperty]
@@ -118,6 +126,8 @@ public sealed partial class NewRunViewModel : ObservableObject
     public ObservableCollection<InputPillItem> Items { get; } = [];
 
     public bool HasEstimate => EstimateText.Length > 0;
+
+    public bool HasEstimateDisk => EstimateDiskText.Length > 0;
 
     public bool HasStatusMessage => StatusMessage.Length > 0;
 
@@ -468,6 +478,12 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
 
         var generation = pill.BeginChecking();
+        if (ReferenceEquals(pill, SelectedItem))
+        {
+            // The old estimate was for the old result; a Checking pill must not show it (and an estimate still in flight must not land).
+            ClearEstimate();
+        }
+
         var treatAsRna = IsTreatingAsRna;
         var applied = false;
         try
@@ -504,38 +520,62 @@ public sealed partial class NewRunViewModel : ObservableObject
         if (SelectedItem is not { IsValid: true, TotalBases: { } bases })
         {
             EstimateText = string.Empty;
+            EstimateDiskText = string.Empty;
             return;
         }
 
         string text;
+        string diskText;
         try
         {
-            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, CancellationToken.None);
+            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
+            diskText = result.Estimate is { } estimate
+                ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
+                : string.Empty;
         }
         catch (Exception)
         {
             text = string.Empty;
+            diskText = string.Empty;
         }
 
         if (version == Volatile.Read(ref _estimateVersion))
         {
             EstimateText = text;
+            EstimateDiskText = diskText;
         }
+    }
+
+    private void ClearEstimate()
+    {
+        Interlocked.Increment(ref _estimateVersion);
+        EstimateText = string.Empty;
+        EstimateDiskText = string.Empty;
     }
 
     private string EstimateLine(CostEstimateResult result)
     {
         if (result.Estimate is not { } estimate)
         {
-            return result.Reason == EstimateUnavailable.UnknownSize ? string.Empty : _strings.GetString("NewRunEstimateUnavailable");
+            return result.Reason switch
+            {
+                EstimateUnavailable.UnknownSize or null => string.Empty,
+                EstimateUnavailable.NoPriceForMachine => _strings.GetString("NewRunEstimateNoPrice"),
+                EstimateUnavailable.NoSpotPrice => _strings.GetString("NewRunEstimateNoSpotPrice"),
+                _ => _strings.GetString("NewRunEstimateUnavailable"),
+            };
         }
 
         var lowUsd = Money(estimate.MinUsd);
         var lowMinutes = WholeMinutes(estimate.MinMinutes);
         if (estimate.IsPoint || (lowUsd == Money(estimate.MaxUsd) && lowMinutes == WholeMinutes(estimate.MaxMinutes)))
         {
-            return Format("NewRunEstimateHistory", Format("NewRunEstimateMoney", lowUsd), MinutesPhrase(lowMinutes));
+            // Only a history estimate may say it is based on earlier runs; a model range that rounds to one figure has none.
+            return Format(
+                estimate.Basis == EstimateBasis.History ? "NewRunEstimateHistory" : "NewRunEstimateModelPoint",
+                Format("NewRunEstimateMoney", lowUsd),
+                MinutesPhrase(lowMinutes));
         }
 
         return Format(

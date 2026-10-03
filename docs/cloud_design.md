@@ -318,19 +318,30 @@ exercise.
  access - every number in this app is a modeled estimate, never a real invoice figure.
 - A **pre-run estimate** (issue #98, shipped): `Core/Cost/`. `PricingTable.Parse` reads
  `app/src/DnaEntropyGraph.App/Assets/pricing.json` (schema 1: `asOf`, `source`, `region`,
- `disk`, per-machine `onDemandUsdPerHour` and a nullable `spotUsdPerHour`; a null spot price
+ `disk` (`usdPerGbMonth` only: the size is the run's own `RunOptions.BootDiskGb`), per-machine `onDemandUsdPerHour` and a nullable `spotUsdPerHour`; a null spot price
  is "unknown", never zero) and returns a `PricingLoadResult` with a `PricingProblem`
  (`FileMissing`, `Unreadable`, `Malformed`, `UnsupportedSchema`, `InvalidValue`), never an
  exception. The app copies the file to `<output>\Assets\pricing.json` (a csproj `Content` item,
  kept by publish) and `FilePricingSource` reads it from `AppContext.BaseDirectory`;
- `Guards.Tests/CostEstimateWiringTests` fails if it is missing from the build output or has no
- price for the machine the New run page starts. `CostEstimator.Estimate` is pure:
- `minutes * (machine $/h + diskGb * $/GB-month / 730) / 60`. Minutes are the median of the
- newest 10 completed cloud runs on that machine on this PC (`RunHistory`); with none, the
- `RunTimeModel` gives a range: 5 min (warm) to 12 min (fresh) plus 2 s per kb of input.
+ `Guards.Tests/CostEstimateWiringTests` fails if it is missing from the build output, if
+ `ci-app.yml` stops asserting `publish/Assets/pricing.json` (the "publish carries the price
+ list" step), or if any `GpuTier` the app can start lacks an on-demand price. The one
+ exclusion is H100 (`a3-highgpu-1g`): no figure has been gathered for it and an unsourced
+ price would be invented, so its estimate line says there is no estimate for that machine
+ yet (#572); the guard fails the day that row is added, so the exclusion cannot go stale. `CostEstimator.Estimate` is pure:
+ `minutes * (machine $/h + bootDiskGb * $/GB-month / 730) / 60`. Minutes with history are
+ the median of the newest 10 completed cloud runs on that machine on this PC (`RunHistory`)
+ as the fixed overhead (boot, pull, model load) PLUS this input's own predict time (2 s per
+ kb): a 5 kb and a 5 Mb file never price the same. The history does not record the past
+ inputs' sizes, so a past duration cannot be scaled; a long past run therefore overstates
+ the overhead a little (THEORY (unverified) until sizes are recorded, #571). With
+ none, the `RunTimeModel` gives a range: 5 min (warm) to 12 min (fresh) plus the same predict time.
+ The estimate also carries `StoppedDiskUsdPerDay` (the run's disk over 24 h), because the
+ default after a run is Stop (Hard Rule 11) and the disk keeps billing while stopped; the page
+ shows it as a second line labelled an estimate.
  Those model constants are THEORY (unverified) until the first GPU acceptance run records
  real numbers, and apply to every tier (an A100 is faster, so its model range overstates).
- An unknown size with no history is `UnknownSize` (no line on the page), not a guess. The
+ An unknown size is `UnknownSize` (no line on the page), history or not, not a guess. A model range that rounds to one figure says "no earlier runs", never "based on your earlier runs". `NoPriceForMachine` and `NoSpotPrice` each have their own copy (not an error the user can fix, so it says the estimate is not available for that machine yet); only an unreadable list says to reinstall. Starting a new check (Treat as RNA, a new validation) clears the line so a Checking pill never shows the old estimate. The
  New run page (`NewRunViewModel.EstimateText`) shows it from the selected, valid file's
  base count, always labelled an estimate. The shipped prices are THEORY (unverified):
  gathered 2026-09-19 for us-central1 from public pages, not checked against the Billing
