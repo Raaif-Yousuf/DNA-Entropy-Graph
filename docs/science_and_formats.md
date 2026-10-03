@@ -253,7 +253,8 @@ neither number has run on a GPU yet).
  and the test name no longer overclaims.
 
 **Pushback (validated locally in the app before any VM is created; the worker
-re-validates the same rules, since the app's check is a convenience, not the boundary):**
+re-validates the same rules, since the app's check is a convenience, not the boundary;
+the worker checks every record of a multi-record input before predicting the first, issue #80):**
 
 | Condition | Result |
 |---|---|

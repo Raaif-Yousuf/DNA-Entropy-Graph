@@ -601,13 +601,16 @@ def run(
     notices: list[str] = list(loaded.notices)
     processed: list[tuple[Contig, DirectionResult]] = []
     reduced_total = 0
+    # issue #80: re-validate EVERY contig before the first prediction, so a refusal on a
+    # later record (e.g. a 5 nt one) never costs the earlier records' GPU time.
+    for contig in loaded.contigs:
+        notices += validate_context(
+            context_length=cfg.context_length,
+            ceiling=cfg.max_len,
+            seq_len=len(contig.seq),
+        )
     try:
         for contig in loaded.contigs:
-            notices += validate_context(
-                context_length=cfg.context_length,
-                ceiling=cfg.max_len,
-                seq_len=len(contig.seq),
-            )
             dr = analyze_direction(
                 predictor,
                 contig.seq,

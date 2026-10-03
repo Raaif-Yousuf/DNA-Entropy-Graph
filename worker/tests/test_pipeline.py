@@ -848,3 +848,45 @@ def test_both_separate_geneious_tracks_are_not_written_when_geneious_is_off(tmp_
     )
     pipeline.run(cfg, raw="ACGT" * 70)
     assert not list(tmp_path.glob("*.geneious.gff3"))
+
+
+# --- issue #80: a context-length refusal happens before ANY prediction ------------------
+
+
+class _CountingPredictor:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def predict(self, seq: str):  # pragma: no cover - must not run in these tests
+        self.calls += 1
+        return MockPredictor(seed=0).predict(seq)
+
+
+def test_k_below_the_minimum_is_refused_naming_the_threshold_before_the_predictor_is_called(
+    tmp_path: Path,
+) -> None:
+    predictor = _CountingPredictor()
+    cfg = RunConfig(name="k64", out_dir=str(tmp_path), context_length=64)
+    with pytest.raises(WindowingError, match="128"):
+        pipeline.run(cfg, raw="ACGT" * 100, predictor=predictor)
+    assert predictor.calls == 0
+
+
+def test_a_later_too_short_record_is_refused_before_the_first_record_is_predicted(tmp_path: Path) -> None:
+    """Every contig is validated up front: record 2 (5 nt) must not cost record 1's GPU time."""
+    predictor = _CountingPredictor()
+    src = tmp_path / "in.fasta"
+    src.write_text(">one\n" + "ACGT" * 100 + "\n>two\nACGTA\n", encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="multi", out_dir=str(tmp_path / "o"), context_length=128, input_path=str(src))
+    with pytest.raises(WindowingError, match="10"):
+        pipeline.run(cfg, predictor=predictor)
+    assert predictor.calls == 0
+
+
+def test_a_short_input_notice_is_still_raised_per_record_and_the_run_completes(tmp_path: Path) -> None:
+    src = tmp_path / "in.fasta"
+    src.write_text(">a\n" + "ACGT" * 20 + "\n>b\n" + "ACGT" * 30 + "\n", encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="shortok", out_dir=str(tmp_path / "o"), context_length=4096, input_path=str(src))
+    result = pipeline.run(cfg)
+    assert result.contigs == 2
+    assert sum("shorter than the context length" in n for n in result.notices) == 2
