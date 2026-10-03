@@ -230,6 +230,7 @@ public class ResilientGatewayTests
             (typeof(IStorageGateway), (g, p) => new ResilientStorageGateway(g, p)),
             (typeof(IProjectSetupGateway), (g, p) => new ResilientProjectSetupGateway(g, p)),
             (typeof(IQuotaGateway), (g, p) => new ResilientQuotaGateway(g, p)),
+            (typeof(IProjectCatalogGateway), (g, p) => new ResilientProjectCatalogGateway(g, p)),
         };
 
         var methodCount = 0;

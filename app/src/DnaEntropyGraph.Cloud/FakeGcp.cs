@@ -39,7 +39,7 @@ namespace DnaEntropyGraph.Cloud;
 /// failure is armed afterward through the fluent setters below, never
 /// through a constructor argument.
 /// </summary>
-public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGateway, IQuotaGateway, IGcpAccount, ICloudTokenRefresher
+public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGateway, IQuotaGateway, IGcpAccount, ICloudTokenRefresher
 {
     private readonly TimeProvider _timeProvider;
 
