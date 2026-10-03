@@ -168,6 +168,20 @@ class RunConfig:
     # default, like every other writer toggle here (issue #123's own "Done when": "Selectable
     # output, on by default").
     include_surprisal: bool = True
+    # issue #126: rolling-mean copies of the entropy track, one file per window:
+    # <name>.entropy.smooth<W>.bedgraph (or .wig). Each W is an odd number of bases
+    # (analysis/smoothing.py validates); () means none. The raw track stays primary.
+    include_smoothed: bool = True
+    smoothing_windows: tuple[int, ...] = (51,)
+    # issue #125: low/high-entropy region calls -> <name>.regions.bed + <name>.regions.gff3.
+    # A base is "low" below `region_threshold` bits and "high" above the mirror
+    # (2 - region_threshold); regions shorter than `region_min_length` bases are dropped, and
+    # runs at most `region_merge_gap` bases apart are merged (analysis/regions.py). Defaults
+    # are the issue's. Written even when nothing is called (an empty track means "none found").
+    include_regions: bool = True
+    region_threshold: float = 0.5
+    region_min_length: int = 20
+    region_merge_gap: int = 5
     # issue #124: <name>.genes.tsv + <name>.genes.csv, one row per gene/CDS (GenBank features,
     # or Prodigal's calls when `genes` is set) with mean/min/max entropy over the gene's bases.
     # Only written when the run actually has genes; on by default like every other writer.

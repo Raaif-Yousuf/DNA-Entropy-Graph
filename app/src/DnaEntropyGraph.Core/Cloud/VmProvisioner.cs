@@ -83,7 +83,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         // would otherwise hang the run forever.
                         createTask = compute.CreateVmAsync(spec, zone, pollToken);
                         TrackInflightCreate(request.JobId, createTask);
-                        var vm = await createTask.WaitAsync(settings.CreateTimeout, pollToken).ConfigureAwait(false);
+                        var vm = await createTask.WaitAsync(settings.CreateTimeout, settings.TimeProvider, pollToken).ConfigureAwait(false);
                         return new OperationPoll<VmDescriptor>(true, vm, null);
                     }
                     catch (TimeoutException)
@@ -173,7 +173,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         }
 
         var all = Task.WhenAll(pending);
-        var winner = await Task.WhenAny(all, Task.Delay(settings.CreateSettleTimeout)).ConfigureAwait(false);
+        var winner = await Task.WhenAny(all, Task.Delay(settings.CreateSettleTimeout, settings.TimeProvider)).ConfigureAwait(false);
         if (winner != all)
         {
             return false;
@@ -211,7 +211,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// </summary>
     private async Task<string?> SettleAbandonedCreateAsync(CloudJobRequest request, Task createTask)
     {
-        var winner = await Task.WhenAny(createTask, Task.Delay(settings.CreateSettleTimeout)).ConfigureAwait(false);
+        var winner = await Task.WhenAny(createTask, Task.Delay(settings.CreateSettleTimeout, settings.TimeProvider)).ConfigureAwait(false);
         if (winner != createTask)
         {
             return $" (VM end not confirmed: a create request was still in flight after {settings.CreateSettleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s and could not be cancelled)";

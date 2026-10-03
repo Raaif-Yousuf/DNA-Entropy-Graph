@@ -1,0 +1,1 @@
+- On launch the app reattaches every run a killed or closed app left unfinished: a run whose result is ready is downloaded, a run whose computer is still working keeps being watched, a run whose computer is gone is marked failed with one action instead of staying "running" forever, and nothing is created a second time (#59).

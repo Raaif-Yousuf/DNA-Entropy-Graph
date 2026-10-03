@@ -264,6 +264,14 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--no-tsv",
         "--surprisal",
         "--no-surprisal",
+        "--smoothed",  # issue #126
+        "--no-smoothed",
+        "--smoothing-window",
+        "--regions",  # issue #125
+        "--no-regions",
+        "--region-threshold",
+        "--region-min-length",
+        "--region-merge-gap",
         "--gene-summary",  # issue #124
         "--no-gene-summary",
         "--seed",
