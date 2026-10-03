@@ -332,3 +332,38 @@ def test_manifest_outputs_name_smoothed() -> None:
     assert _cfg(_manifest(outputs=["bedgraph", "smoothed"])).include_smoothed is True
     assert _cfg(_manifest(outputs=["bedgraph"])).include_smoothed is False
     assert _cfg(_manifest()).include_smoothed is True
+
+
+# --- end to end through the worker: manifest -> run_job -> result.json ---------------------------------
+
+
+def _job(tmp_path: Path, outputs: list[str], analysis_extra: dict | None = None) -> set[str]:
+    from dna_entropy.worker.blobstore import LocalBlobstore
+    from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job
+
+    store = LocalBlobstore(tmp_path)
+    analysis = {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"}
+    manifest = {
+        "schema": 1,
+        "jobId": "smooth-job",
+        "inputs": [{"id": "in1", "path": "input/a.fasta", "name": "a"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {**analysis, **(analysis_extra or {})},
+        "outputs": outputs,
+        "store": {"kind": "localdir", "root": "unused"},
+    }
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/a.fasta", ">a\n" + "ACGT" * 75 + "\n")
+    run_job(store)
+    doc = json.loads(store.read_text(RESULT_PATH))
+    return {Path(f["path"]).name for f in doc["inputs"][0]["files"]}
+
+
+def test_a_job_lists_the_smoothed_files_named_by_the_manifest_in_result_json(tmp_path: Path) -> None:
+    listed = _job(tmp_path, [], {"smoothingWindows": [11, 101]})
+    assert {"a.entropy.bedgraph", "a.entropy.smooth11.bedgraph", "a.entropy.smooth101.bedgraph"} <= listed
+    assert "a.entropy.smooth51.bedgraph" not in listed  # the default was replaced, not added to
+
+
+def test_a_job_with_outputs_that_omit_smoothed_writes_no_smoothed_file(tmp_path: Path) -> None:
+    assert not any("smooth" in n for n in _job(tmp_path, ["bedgraph", "tsv"]))
