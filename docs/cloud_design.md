@@ -657,8 +657,26 @@ than `idle_stopped_vm_hours` is deleted (default 72, range 1 to 720, no off swit
 `lastStopTimestamp`; a gateway that cannot fill it makes the sweep skip the VM, never delete it). Only VMs with our app label AND this
 installation's id are touched (two users may share one account). The pass runs at launch and again when the pipeline reports the
 connection is back (`ReconcileOnReconnect`, single-flight: reconnects while a pass runs coalesce into at most one follow-up pass, and a pass ends once the lifecycle and the sweep have run and the reattached runs are handed to their own drivers, not when those runs end (`JobReconciler.BeginReconcileAsync`; launch still awaits them through `ReconcileAsync`); the observer
-is rarely invoked today because reconciler calls bypass the breaker, #559). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
+is rarely invoked by the pipeline because reconciler calls bypass the breaker, so #559 adds the reconnect probe below). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
 and its label filter matches as `FakeGcp` models it; nothing here has touched a real project (docs/ToTest.md).
+
+**Reconnect probe (issue #559)**: a launch with no network defers every run it could not look at, and the breaker's `OnClosed` (the only source of
+`OnConnectivityChanged(offline: false)`) almost never fires because every reconciler call passes `bypassBreaker: true`. `ReconcileOnReconnect` therefore
+also probes: while `JobReconciler.HasDeferred` is true (a reattach ended Deferred and no later pass judged that job, or the last lifecycle enforcement
+had a Deferred outcome) it runs the same pass again after 30 s, then 60 s, doubling up to a 5 minute cap, on the `TimeProvider` in the container (tests move virtual time);
+it stops when nothing is deferred and starts over at 30 s next time. The launch pass runs outside this class, so `AppStartup.BeginAsync` calls
+`StartProbeIfDeferred()` once the pass has judged every run (`BeginReconcileAsync`'s outer task now also waits for each run's look at the cloud, so `HasDeferred` is settled when
+it ends; a resumed run is judged as it is handed to its driver and does not hold it, and neither does a run whose half-done cancel is being finished: it is judged at the start of that work, so a stuck cancel never holds
+the single-flight slot, and `ReconcileOnReconnect` and `AppStartup` look at the probe again when the reattached runs end, because such a run can still end Deferred). The call is in a `finally`, so a launch pass that throws (a network
+timeout reading the run table) still arms the probe: the pass has already recorded itself deferred. Passes can overlap (the launch pass is outside the single flight): each takes a generation and only the latest-started pass may write
+the pass-level deferred state (`_lifecycleDeferred`, `_reattachDeferred`: the reattach could not even read the run table), so an older pass that ends last never overwrites a newer one's answer. A run's own mark (`_deferredRuns`) is different: the pass that DRIVES the run owns it whatever its generation, and a pass that was Skipped because another drives the run neither sets nor clears it. If `BeginReconcileAsync`'s lifecycle step throws, the failure is logged and the reattached runs are still returned (never orphaned). A probe whose own `hasDeferred` check throws re-arms on the current delay (logged) rather than stopping. DECISION (agent-made, reversible): a probe that re-runs the pass, over
+(a) `NetworkChange.NetworkAvailabilityChanged`, which cannot be tested without a network stack and fires on LAN changes that say nothing about Google reachability, and
+(b) feeding reconciler failures into the breaker, which changes what `bypassBreaker` means for every caller. Cost while offline: one pass (a few failing lookups, no retries beyond
+the pipeline's own) per backoff step, never while nothing is deferred. THEORY (unverified): the 30 s first delay and 5 minute cap are reasonable for a laptop waking from sleep; nothing measured them.
+What counts as deferred (DECISION, agent-made, reversible; two cold reviewers disagreed): a run or a lifecycle pass is deferred if and only if the failure is a
+network class (no connection, `CloudErrorKind.Network`, or a lookup deadline). Any other exception while judging a run ends as `ReattachAction.Errored`: logged
+by error class, row untouched, left for the next launch, and it does not keep the probe alive. A lifecycle pass that throws sets deferred by the same rule and
+rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
 
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
