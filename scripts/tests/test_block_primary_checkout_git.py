@@ -82,6 +82,30 @@ DENIED = [
     'pwsh -NoProfile -Command "git switch -c x"',
     # a heredoc fed to a shell is executed, so its body counts
     "bash <<'EOF'\ngit switch -c x\nEOF",
+    # review round 2: only the exact recovery shapes switch branches
+    "git checkout -bfeat main",
+    "git switch -cfeat main",
+    "git switch --create=feat main",
+    "git switch --create feat main",
+    "git switch --det main",
+    "git checkout -b main origin/main",
+    "git checkout -fB main origin/main",
+    "git checkout -B main origin/main -t",
+    "git switch -C main origin/main --track",
+    "git checkout --orphan main",
+    # last of --ff-only / --ff / --no-ff wins, as in git
+    "git merge --ff-only --no-ff feat",
+    "git merge --ff-only --ff feat",
+    "git pull --ff-only --no-ff",
+    # heredoc scanner: here-strings, quotes, arithmetic and a missing terminator hide nothing
+    "cat <<'EOF' | bash\ngit switch -c x\nEOF",
+    "cat <<< hi\ngit switch -c x",
+    "echo $((1<<2))\ngit switch -c x",
+    "echo '<<EOF'\ngit switch -c x\nEOF",
+    "cat <<EOF\ngit switch -c x",
+    # pwsh flag prefixes
+    "pwsh -co 'git switch -c x'",
+    'powershell -Comm "git switch -c x"',
 ]
 
 ALLOWED = [
@@ -140,6 +164,11 @@ ALLOWED = [
     "tee notes.txt <<EOF\ngit switch -c x\nEOF",
     "gh pr create --body-file - <<'EOF'\ngit checkout feat/x\nEOF",
     "cat > f.txt <<-EOF\n\tgit commit -m x\n\tEOF",
+    "git merge --no-ff --ff-only feat",
+    "git pull --no-ff --ff-only",
+    "git checkout -q main",
+    "git switch --quiet main",
+    "git switch --force main",
 ]
 
 
@@ -395,3 +424,56 @@ def test_unresolvable_cd_does_not_poison_a_later_absolute_dash_C(repos):
 def test_unresolvable_relative_target_after_unresolvable_cd_still_fails_open(repos):
     primary, _ = repos
     assert hook.verdict("cd $SOMEWHERE && git -C sub switch -c x", _in(primary)) is None
+
+
+# ---------------------------------------------------------------------------
+# review round 2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "GIT_DIR={p}/.git",
+        "GIT_WORK_TREE={p}",
+        "env GIT_DIR={p}/.git",
+        "env -i GIT_WORK_TREE={p}",
+    ],
+)
+def test_git_dir_env_assignments_are_classified(repos, prefix):
+    primary, worktree = repos
+    command = f"{prefix.format(p=_in(primary))} git switch -c x"
+    assert hook.verdict(command, _in(worktree)) is not None
+
+
+def test_total_git_time_budget_fails_open(repos, monkeypatch):
+    primary, worktree = repos
+    calls = []
+
+    def counting(directory, timeout=10.0):
+        calls.append(timeout)
+        return "primary"
+
+    monkeypatch.setattr(hook, "classify", counting)
+    monkeypatch.setattr(hook, "TOTAL_BUDGET_SECONDS", 0.0)
+    assert hook.verdict("git switch -c x", _in(primary)) is None
+    assert calls == []
+
+
+def test_each_classify_timeout_is_capped_by_the_remaining_budget(repos, monkeypatch):
+    primary, worktree = repos
+    calls = []
+
+    def counting(directory, timeout=10.0):
+        calls.append(timeout)
+        return "linked_worktree"
+
+    monkeypatch.setattr(hook, "classify", counting)
+    monkeypatch.setattr(hook, "TOTAL_BUDGET_SECONDS", 1.0)
+    hook.verdict(f"git -C {_in(primary)} commit -m a; git -C {_in(worktree)} commit -m b", _in(worktree))
+    assert len(calls) == 2
+    assert all(timeout <= 1.0 for timeout in calls)
+
+
+def test_budget_is_shorter_than_the_dispatcher_kill():
+    assert hook.TOTAL_BUDGET_SECONDS < 8.0

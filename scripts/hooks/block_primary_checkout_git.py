@@ -45,8 +45,16 @@ LIMITS (honest)
 This is a command-text check. It looks through `bash|sh -c/-lc`, `pwsh -Command`,
 `cmd /c`, `env`, `time`, `nohup`, `command`, `then`/`do`/`{` and `git -C<path>`,
 `--git-dir`, `--work-tree`. Out of scope, documented as known limits: `gh pr checkout`,
-`git update-ref`, `git symbolic-ref`, git run inside a script, a command assembled at
-runtime, and any tool other than Bash/PowerShell.
+`git update-ref`, `git symbolic-ref`, git run inside a script, `-c alias.x=...` aliases,
+a command assembled at runtime, and any tool other than Bash/PowerShell. The overall
+git time budget is 5 seconds per invocation (3 per directory); past it the answer is
+"unknown" and the command is allowed.
+
+A branch change is allowed only in the exact recovery shapes (`switch main`, `checkout
+main`, `checkout -B main origin/main`, `switch -C main origin/main`, plus `-f`/`-q`
+and their long forms); any other dash token (glued `-bfeat`, `--create=x`, an
+abbreviated `--det`) is refused. `--ff-only` counts only when it is the last of
+`--ff-only` / `--ff` / `--no-ff`, as in git.
 
 A `--` counts as a path separator only when a path follows it, so `git checkout
 feat/x --` and `git reset origin/main --` (no path) are still branch/commit changes.
@@ -72,6 +80,7 @@ import json
 import os
 import re
 import sys
+import time
 
 # A hook that cannot import its sibling must not crash: run_hook.py turns any
 # non-zero exit into a deny of EVERY Bash/PowerShell call. Fail open instead.
@@ -84,8 +93,11 @@ else:
     _IMPORT_ERROR = None
 
 # git's own answer for a directory is fast; a slow git must FAIL OPEN (unknown)
-# well before run_hook.py's 8s guard kill would turn the hang into a deny.
+# well before run_hook.py's 8s guard kill would turn the hang into a deny. Each
+# call is capped, and so is the SUM over one invocation, so several distinct
+# directories with a hung git cannot add up to the kill either.
 CLASSIFY_TIMEOUT_SECONDS = 3.0
+TOTAL_BUDGET_SECONDS = 5.0
 
 MESSAGE = """This is the PRIMARY checkout, and `git {sub}` is blocked here.
 
@@ -145,7 +157,10 @@ _RECOVERY = {"--abort", "--quit"}
 _RECOVERY_BRANCH = "main"
 _RECOVERY_START = "origin/main"
 
-_HEREDOC = re.compile(r"<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_FF_FLAGS = ("--ff-only", "--ff", "--no-ff")
+_QUIET_FLAGS = {"-f", "--force", "-q", "--quiet"}  # the only extra flags a recovery may carry
+_GIT_ENV_TARGETS = {"GIT_DIR", "GIT_WORK_TREE"}
 _SHELL_CONSUMER = re.compile(r"(?:^|[\s;&|(])(?:bash|sh|zsh|dash|pwsh|powershell)(?:\.exe)?(?=\s|$)", re.IGNORECASE)
 
 
@@ -168,17 +183,51 @@ def _strip_heredoc_bodies(command: str) -> str:
         line = lines[i]
         out.append(line)
         i += 1
-        opener = _HEREDOC.search(line)
-        if not opener or _SHELL_CONSUMER.search(line[: opener.start()]):
+        opener = _find_heredoc(line)
+        # The shell consumer may sit on either side of the pipe: `cat <<EOF | bash`.
+        if not opener or _SHELL_CONSUMER.search(line):
             continue
         delimiter = opener.group(2)
-        while i < n and lines[i].strip() != delimiter:
-            out.append("")
-            i += 1
-        if i < n:
-            out.append(lines[i])
-            i += 1
+        end = i
+        while end < n and lines[end].strip() != delimiter:
+            end += 1
+        if end >= n:
+            continue  # no terminator: not a heredoc as far as we can tell, hide nothing
+        out.extend([""] * (end - i))
+        out.append(lines[end])
+        i = end + 1
     return "\n".join(out)
+
+
+def _find_heredoc(line: str) -> re.Match[str] | None:
+    """The first real heredoc opener on `line`, or None. A `<<` inside quotes, a
+    `<<<` here-string and a `<<` inside `$(( ... ))` arithmetic are not openers."""
+    quote = ""
+    arithmetic = 0
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote:
+            if c == quote:
+                quote = ""
+        elif c in "'\"":
+            quote = c
+        elif line.startswith("((", i):
+            arithmetic += 1
+            i += 2
+            continue
+        elif line.startswith("))", i) and arithmetic:
+            arithmetic -= 1
+            i += 2
+            continue
+        elif line.startswith("<<", i) and not arithmetic and (i == 0 or line[i - 1] != "<") and not line.startswith("<<<", i):
+            match = _HEREDOC.match(line, i)
+            if match:
+                return match
+            i += 2
+            continue
+        i += 1
+    return None
 
 
 def _split_segments(command: str) -> list[list[str]]:
@@ -253,22 +302,36 @@ def _resolve(current: str | None, target: str | None) -> str | None:
     return os.path.normpath(os.path.join(current, target))
 
 
-def _leading_call(tokens: list[str]) -> list[str]:
-    """Drop what precedes the command proper: env assignments, `env [-i] [VAR=x]`,
-    shell keywords (`then`, `do`, `{`), `time`, `nohup`, `command`, PowerShell's `&`
-    and an `rtk` proxy prefix."""
+def _leading_call(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """(directories named by GIT_DIR / GIT_WORK_TREE assignments, the command proper).
+
+    Drops what precedes the command: env assignments, `env [-i] [VAR=x]`, shell
+    keywords (`then`, `do`, `{`), `time`, `nohup`, `command`, PowerShell's `&` and
+    an `rtk` proxy prefix."""
+    env_targets: list[str] = []
+
+    def note(assignment: str) -> None:
+        name, _, value = assignment.partition("=")
+        if name in _GIT_ENV_TARGETS:
+            env_targets.append(value)
+
     i = 0
     while i < len(tokens):
         low = tokens[i].lower()
-        if _ENV_ASSIGN.match(tokens[i]) or low in _WRAPPERS:
+        if _ENV_ASSIGN.match(tokens[i]):
+            note(tokens[i])
+            i += 1
+        elif low in _WRAPPERS:
             i += 1
         elif low == "env":
             i += 1
             while i < len(tokens) and (tokens[i].startswith("-") or _ENV_ASSIGN.match(tokens[i])):
+                if _ENV_ASSIGN.match(tokens[i]):
+                    note(tokens[i])
                 i += 2 if tokens[i] in {"-u", "-C", "-S"} else 1
         else:
             break
-    return tokens[i:]
+    return env_targets, tokens[i:]
 
 
 def _dir_argument(args: list[str]) -> str | None:
@@ -288,13 +351,14 @@ def _dir_argument(args: list[str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_git(tokens: list[str], current: str | None) -> tuple[list[str | None], str, list[str]]:
+def _parse_git(tokens: list[str], current: str | None, env_targets: list[str]) -> tuple[list[str | None], str, list[str]]:
     """(directories git will act on, subcommand, subcommand args). `tokens[0]` is git.
 
-    Normally one directory: `current` moved by any `-C`. With `--git-dir` or
-    `--work-tree` it is those targets instead."""
+    Normally one directory: `current` moved by any `-C`. With `--git-dir`,
+    `--work-tree` (or the GIT_DIR / GIT_WORK_TREE assignments before the command)
+    it is those targets instead."""
     directory = current
-    targets: list[str | None] = []
+    targets: list[str | None] = list(env_targets)
     i = 1
     while i < len(tokens):
         tok = tokens[i]
@@ -333,29 +397,38 @@ def _safe_branch_change(sub: str, args: list[str]) -> bool:
         return sub == "checkout"  # bare `git checkout` only lists status
     if sub == "checkout" and _has_paths_after_dashdash(args):
         return True  # path restore; HEAD does not move
-    if set(args) & {"--detach", "-d", "--orphan"}:
-        return False
-    rest = [a for a in args if a != "--"]
-    created = False
-    name: str | None = None
+    rest = args[:-1] if args[-1] == "--" else args
+    # Exact shapes only. Every dash token that is not one of the listed ones is a
+    # refusal: git accepts glued (`-bfeat`, `--create=feat`) and abbreviated
+    # (`--det`) spellings that a looser parse would read as harmless flags.
+    reset_flag = "-B" if sub == "checkout" else "-C"
+    reset_name: str | None = None
     positionals: list[str] = []
     i = 0
     while i < len(rest):
-        if rest[i] in {"-b", "-B", "-c", "-C"}:
-            created = True
-            name = rest[i + 1] if i + 1 < len(rest) else None
+        tok = rest[i]
+        if tok in _QUIET_FLAGS:
+            i += 1
+        elif tok == reset_flag and reset_name is None and i + 1 < len(rest):
+            reset_name = rest[i + 1]
             i += 2
-        elif rest[i].startswith("-"):
-            i += 1
+        elif tok.startswith("-"):
+            return False
         else:
-            positionals.append(rest[i])
+            positionals.append(tok)
             i += 1
-    if created:
-        # Creating or resetting `main` is recovery only when it is reset to origin/main.
-        return name == _RECOVERY_BRANCH and positionals == [_RECOVERY_START]
+    if reset_name is not None:
+        # Resetting `main` is recovery only when it is reset to origin/main.
+        return reset_name == _RECOVERY_BRANCH and positionals == [_RECOVERY_START]
     if sub == "checkout" and positionals == ["."]:
         return True
     return positionals == [_RECOVERY_BRANCH]
+
+
+def _fast_forward_only(args: list[str]) -> bool:
+    """True when the LAST of --ff-only / --ff / --no-ff is --ff-only, as in git."""
+    last = [a for a in args if a in _FF_FLAGS]
+    return bool(last) and last[-1] == "--ff-only"
 
 
 def _denied_subcommand(sub: str, args: list[str]) -> bool:
@@ -364,11 +437,11 @@ def _denied_subcommand(sub: str, args: list[str]) -> bool:
     if sub in {"checkout", "switch"}:
         return not _safe_branch_change(sub, args)
     if sub in {"merge", "rebase", "cherry-pick", "revert"}:
-        if sub == "merge" and "--ff-only" in flags:
+        if sub == "merge" and _fast_forward_only(args):
             return False
         return not (flags & _RECOVERY)
     if sub == "pull":
-        return "--ff-only" not in flags
+        return not _fast_forward_only(args)
     if sub in {"commit", "am"}:
         return "--dry-run" not in flags
     if sub == "reset":
@@ -382,17 +455,31 @@ def _denied_subcommand(sub: str, args: list[str]) -> bool:
     return False
 
 
-def _check_segment(tokens: list[str], current: str | None, cache: dict[str, str]) -> str | None:
+class _Classifier:
+    """`classify()` with a per-directory cache and one overall time budget. When
+    the budget is spent the answer is "unknown", which allows: a hung git must
+    never add up to run_hook.py's kill, which would deny instead."""
+
+    def __init__(self) -> None:
+        self._cache: dict[str, str] = {}
+        self._deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
+
+    def __call__(self, directory: str) -> str:
+        if directory not in self._cache:
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                return "unknown"
+            self._cache[directory] = classify(directory, timeout=min(CLASSIFY_TIMEOUT_SECONDS, remaining))
+        return self._cache[directory]
+
+
+def _check_segment(tokens: list[str], current: str | None, env_targets: list[str], classifier: _Classifier) -> str | None:
     """Deny reason for a `git ...` segment, else None."""
-    directories, sub, args = _parse_git(tokens, current)
+    directories, sub, args = _parse_git(tokens, current, env_targets)
     if not sub or not _denied_subcommand(sub, args):
         return None
     for directory in directories:
-        if directory is None:
-            continue
-        if directory not in cache:
-            cache[directory] = classify(directory, timeout=CLASSIFY_TIMEOUT_SECONDS)
-        if cache[directory] == "primary":
+        if directory is not None and classifier(directory) == "primary":
             return MESSAGE.format(sub=sub)
     return None
 
@@ -405,7 +492,7 @@ def _nested_command(head: str, tokens: list[str]) -> str | None:
                 return tokens[idx + 1]
     elif head in _POWERSHELLS:
         for idx, tok in enumerate(tokens[1:], start=1):
-            if tok.lower() in {"-c", "-command"}:
+            if len(tok) >= 2 and "-command".startswith(tok.lower()):  # -c, -co, ... -Command
                 return " ".join(tokens[idx + 1 :])
     elif head == "cmd":
         for idx, tok in enumerate(tokens[1:], start=1):
@@ -414,11 +501,11 @@ def _nested_command(head: str, tokens: list[str]) -> str | None:
     return None
 
 
-def _verdict(command: str, cwd: str | None, depth: int, cache: dict[str, str]) -> str | None:
+def _verdict(command: str, cwd: str | None, depth: int, classifier: _Classifier) -> str | None:
     current: str | None = cwd
     stack: list[str | None] = []
     for raw in _split_segments(_strip_heredoc_bodies(command or "")):
-        tokens = _leading_call(raw)
+        env_targets, tokens = _leading_call(raw)
         if not tokens:
             continue
         head = os.path.basename(tokens[0].replace("\\", "/")).lower()
@@ -430,13 +517,13 @@ def _verdict(command: str, cwd: str | None, depth: int, cache: dict[str, str]) -
         elif head in _POP_COMMANDS:
             current = stack.pop() if stack else None
         elif head == "git":
-            reason = _check_segment(tokens, current, cache)
+            reason = _check_segment(tokens, current, env_targets, classifier)
             if reason:
                 return reason
         elif depth < 2:
             nested = _nested_command(head, tokens)
             if nested:
-                reason = _verdict(nested, current, depth + 1, cache)
+                reason = _verdict(nested, current, depth + 1, classifier)
                 if reason:
                     return reason
     return None
@@ -446,7 +533,7 @@ def verdict(command: str, cwd: str | None) -> str | None:
     """Return the reason to deny, or None to stay silent."""
     if classify is None:
         return None
-    return _verdict(command, cwd, 0, {})
+    return _verdict(command, cwd, 0, _Classifier())
 
 
 def decide(payload: dict) -> str | None:
@@ -492,6 +579,11 @@ _SELF_DENY = (
     "env GIT_PAGER=cat git commit -m x",
     "if true; then git switch -c x; fi",
     "cmd /c git switch -c x",
+    "git checkout -bfeat main",
+    "git switch --det main",
+    "git merge --ff-only --no-ff feat",
+    "cat <<'EOF' | bash\ngit switch -c x\nEOF",
+    "cat <<< hi\ngit switch -c x",
 )
 _SELF_ALLOW = (
     "git merge --ff-only origin/main",
