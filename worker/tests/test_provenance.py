@@ -167,3 +167,15 @@ def test_writer_output_is_deterministic_key_order(tmp_path: Path) -> None:
     path_b = ProvenanceWriter().write(out_dir=str(tmp_path), data=data)
     text_b = Path(path_b).read_text(encoding="utf-8")
     assert text_a == text_b  # sort_keys=True: byte-identical for byte-identical input
+
+
+# --- issue #79: provenance records the reduced-context POSITIONS ------------------------
+
+
+def test_reduced_context_range_is_recorded_as_a_zero_based_half_open_span() -> None:
+    c = _contig(reduced_context_count=80, reduced_context_range=(20, 100))
+    assert c["reduced_context_range"] == [20, 100]
+
+
+def test_reduced_context_range_defaults_to_null() -> None:
+    assert _contig()["reduced_context_range"] is None

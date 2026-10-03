@@ -224,7 +224,9 @@ neither number has run on a GPU yet).
 - **Both, combined**: base `i` takes the forward estimate when it has `>= K` bases of
  context before it, else the reverse estimate when it has `>= K` bases after it, else
  whichever direction has more context (only possible when `L < 2K`; recorded as "reduced
- context" in provenance). With `L >= 2K` this reduces exactly to the owner's recipe: the
+ context" in provenance: `reduced_context_count` plus `reduced_context_range`, the 0-based
+ half-open `[start, end)` span of those positions, `null` when there are none; issue #79).
+ With `L >= 2K` this reduces exactly to the owner's recipe: the
  first `K` bases come from the reverse read, the rest from the forward read, with one
  **seam** at position `K` - drawn as a marker in the Results viewer and recorded in
  `provenance.json`.
@@ -235,7 +237,11 @@ neither number has run on a GPU yet).
 - **Both, averaged**: mean of forward and reverse wherever both have `>= K` context, same
  fallback as above elsewhere.
 - **Both, separate tracks**: emits `.entropy.fwd.*` and `.entropy.rev.*` alongside the
- combined track - three full sets of the position-indexed outputs in section 5.
+ combined track - three full sets of the position-indexed outputs in section 5. The
+ bedGraph/WIG and the Geneious GFF3 get separate `.fwd`/`.rev` files (the Geneious ones are
+ `<name>.entropy.fwd.geneious.gff3` / `.rev.`, issue #79, gated by the `geneious_gff3`
+ output); the TSV carries all three tracks in one file. The GenBank, FASTA and stats files
+ carry the combined track only.
 - **Forward only** / **Reverse only**: single direction. Forward-only reproduces the
  prototype's output within a `1e-6` floating-point tolerance, including the uniform,
  2.0-bit first base — **not** exact bit-identity. MEASURED 2026-09-19 (issue #316): the
