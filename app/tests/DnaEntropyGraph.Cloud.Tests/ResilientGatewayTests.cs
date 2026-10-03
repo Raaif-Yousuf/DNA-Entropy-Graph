@@ -232,6 +232,7 @@ public class ResilientGatewayTests
             (typeof(IQuotaGateway), (g, p) => new ResilientQuotaGateway(g, p)),
             (typeof(IProjectCatalogGateway), (g, p) => new ResilientProjectCatalogGateway(g, p)),
             (typeof(IBillingGateway), (g, p) => new ResilientBillingGateway(g, p)),
+            (typeof(IServiceEnablementGateway), (g, p) => new ResilientServiceEnablementGateway(g, p)),
         };
 
         var methodCount = 0;
@@ -276,6 +277,11 @@ public class ResilientGatewayTests
         if (type == typeof(Stream))
         {
             return new MemoryStream();
+        }
+
+        if (type == typeof(IReadOnlyList<string>))
+        {
+            return new[] { "x" };
         }
 
         return type == typeof(string) ? "x" : throw new InvalidOperationException($"No sample for {type}");

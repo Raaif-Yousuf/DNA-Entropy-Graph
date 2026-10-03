@@ -144,6 +144,24 @@ public sealed class ResilientBillingGateway : IBillingGateway
         => _pipeline.ExecuteAsync("Billing.LinkProject", token => _inner.LinkProjectAsync(projectId, billingAccountId, token), cancellationToken);
 }
 
+public sealed class ResilientServiceEnablementGateway : IServiceEnablementGateway
+{
+    private readonly IServiceEnablementGateway _inner;
+    private readonly CloudCallPipeline _pipeline;
+
+    public ResilientServiceEnablementGateway(IServiceEnablementGateway inner, CloudCallPipeline pipeline)
+    {
+        _inner = inner;
+        _pipeline = pipeline;
+    }
+
+    public Task<bool> IsServiceEnabledAsync(string projectId, string serviceId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Services.IsServiceEnabled", token => _inner.IsServiceEnabledAsync(projectId, serviceId, token), cancellationToken);
+
+    public Task EnableServicesAsync(string projectId, IReadOnlyList<string> serviceIds, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Services.EnableServices", token => _inner.EnableServicesAsync(projectId, serviceIds, token), cancellationToken);
+}
+
 public sealed class ResilientQuotaGateway : IQuotaGateway
 {
     private readonly IQuotaGateway _inner;

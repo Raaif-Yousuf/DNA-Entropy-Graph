@@ -1,11 +1,20 @@
 using DnaEntropyGraph.Core.Cloud;
 using Google.Apis.Cloudbilling.v1;
 using Google.Apis.CloudResourceManager.v3;
+using Google.Apis.ServiceUsage.v1;
 
 namespace DnaEntropyGraph.Cloud.Rest;
 
-/// <summary>The real, Google-backed gateways, each already wrapped in the resilience pipeline.</summary>
-public sealed record GoogleCloudGatewaySet(IProjectCatalogGateway ProjectCatalog, IBillingGateway Billing);
+/// <summary>
+/// The real, Google-backed gateways, each already wrapped in the resilience pipeline. <see cref="ProjectSetup"/> is
+/// the preflight chain (<see cref="IProjectSetupGateway"/>) that <c>CloudJobRunner</c> consumes; the other three are
+/// the wizard's steps 3 to 5.
+/// </summary>
+public sealed record GoogleCloudGatewaySet(
+    IProjectCatalogGateway ProjectCatalog,
+    IBillingGateway Billing,
+    IServiceEnablementGateway Services,
+    IProjectSetupGateway ProjectSetup);
 
 /// <summary>
 /// The one place the real gateways are built, and so the one place production switches from <see cref="FakeGcp"/> to
@@ -22,10 +31,14 @@ public static class GoogleCloudGateways
         ArgumentNullException.ThrowIfNull(pipeline);
         options ??= new GoogleCloudOptions();
 
-        var resourceManager = new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options));
-        var billing = new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options));
+        var catalog = new GoogleProjectCatalogGateway(new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options)), options);
+        var billing = new GoogleBillingGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options)));
+        var services = new GoogleServiceUsageGateway(new ServiceUsageService(GoogleRestClient.CreateInitializer(tokens, options)), options);
+
         return new GoogleCloudGatewaySet(
-            new ResilientProjectCatalogGateway(new GoogleProjectCatalogGateway(resourceManager, options), pipeline),
-            new ResilientBillingGateway(new GoogleBillingGateway(billing), pipeline));
+            new ResilientProjectCatalogGateway(catalog, pipeline),
+            new ResilientBillingGateway(billing, pipeline),
+            new ResilientServiceEnablementGateway(services, pipeline),
+            new ResilientProjectSetupGateway(new GoogleProjectSetupGateway(catalog, billing, services), pipeline));
     }
 }

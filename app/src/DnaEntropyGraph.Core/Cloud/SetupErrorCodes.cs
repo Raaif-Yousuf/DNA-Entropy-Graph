@@ -21,8 +21,11 @@ public static class SetupErrorCodes
     /// <summary>The user can use a billing account but is not allowed to link projects to it. Action: copy the request for the billing admin.</summary>
     public const string BillingNoPermission = "BILLING_NO_PERMISSION";
 
+    /// <summary>The user is a member of the project but not its Owner, so Google refused to switch a service on (HTTP 403). Action: create a project of their own.</summary>
+    public const string NotProjectOwner = "NOT_PROJECT_OWNER";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, NoBilling, BillingNoPermission];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, NoBilling, BillingNoPermission, NotProjectOwner];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -31,6 +34,7 @@ public static class SetupErrorCodes
         OrgPolicyBlock => "SetupError_ORG_POLICY_BLOCK",
         NoBilling => "SetupError_NO_BILLING",
         BillingNoPermission => "SetupError_BILLING_NO_PERMISSION",
+        NotProjectOwner => "SetupError_NOT_PROJECT_OWNER",
         _ => "SetupError_OTHER",
     };
 
@@ -41,6 +45,7 @@ public static class SetupErrorCodes
         OrgPolicyBlock => "SetupAction_CopyMessageForIt",
         NoBilling => "SetupAction_LinkBilling",
         BillingNoPermission => "SetupAction_CopyBillingRequest",
+        NotProjectOwner => "SetupAction_CreateProject",
         _ => null,
     };
 }

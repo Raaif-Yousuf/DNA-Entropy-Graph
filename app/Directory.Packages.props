@@ -21,6 +21,7 @@
     <!-- Cloud: REST discovery clients for Resource Manager v3, Cloud Billing and Service Usage (issues #50 to #52). Apache-2.0. Chosen over Google.Cloud.* because their HttpClientFactory is injectable (docs/cloud_design.md section 16). -->
     <PackageVersion Include="Google.Apis.CloudResourceManager.v3" Version="1.76.0.4277" />
     <PackageVersion Include="Google.Apis.Cloudbilling.v1" Version="1.76.0.4261" />
+    <PackageVersion Include="Google.Apis.ServiceUsage.v1" Version="1.77.0.4281" />
     <!-- Cloud: DPAPI (CurrentUser) for the token files (issue #48). MIT. -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
 

@@ -4,7 +4,7 @@ namespace DnaEntropyGraph.Cloud;
 
 // The account's project catalogue (issue #50): IProjectCatalogGateway with scripted failures. A partial file so the
 // wizard-setup scenarios (#50 to #52) do not grow the 1,200-line runner fake any further.
-public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway
+public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway, IServiceEnablementGateway
 {
     private readonly object _catalogGate = new();
     private readonly Dictionary<string, ProjectSummary> _catalog = new(StringComparer.Ordinal);
@@ -167,6 +167,93 @@ public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway
             if (!_billingLinkDoesNotEnable)
             {
                 _billingOffProjects.Remove(projectId);
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    // ----------------------------------------------------------------
+    // IServiceEnablementGateway (issue #52). Compute shares its switch with WithComputeApiOff and
+    // IsComputeApiEnabledAsync, so the wizard step and the preflight step cannot disagree.
+    // ----------------------------------------------------------------
+
+    private readonly HashSet<(string Project, string Service)> _disabledServices = [];
+    private readonly Dictionary<(string Project, string Service), int> _enablingPollsLeft = [];
+    private readonly HashSet<string> _notOwnerProjects = new(StringComparer.Ordinal);
+    private int _enablementDelayPolls;
+
+    /// <summary>The project has this Google service switched off (Compute is the same switch as <see cref="WithComputeApiOff"/>).</summary>
+    public FakeGcp WithServiceDisabled(string projectId, string serviceId)
+    {
+        lock (_catalogGate)
+        {
+            if (serviceId == RequiredServices.Compute)
+            {
+                _apiDisabledProjects.Add(projectId);
+            }
+            else
+            {
+                _disabledServices.Add((projectId, serviceId));
+            }
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// After <see cref="EnableServicesAsync"/> returns, a service reads off for the next <paramref name="polls"/>
+    /// <see cref="IsServiceEnabledAsync"/> checks: the gap a real operation leaves between "done" and "ENABLED".
+    /// The real gateway waits that gap out; this is for a caller that checks by itself.
+    /// </summary>
+    public FakeGcp WithServiceEnablementDelay(int polls)
+    {
+        _enablementDelayPolls = polls;
+        return this;
+    }
+
+    /// <summary>The user is a member of the project but not its Owner: enabling throws <see cref="SetupErrorCodes.NotProjectOwner"/>.</summary>
+    public FakeGcp WithNotProjectOwner(string projectId)
+    {
+        _notOwnerProjects.Add(projectId);
+        return this;
+    }
+
+    public Task<bool> IsServiceEnabledAsync(string projectId, string serviceId, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        ThrowIfCatalogNotConnected();
+        lock (_catalogGate)
+        {
+            if (_enablingPollsLeft.TryGetValue((projectId, serviceId), out var left) && left > 0)
+            {
+                _enablingPollsLeft[(projectId, serviceId)] = left - 1;
+                return Task.FromResult(false);
+            }
+
+            var off = serviceId == RequiredServices.Compute ? _apiDisabledProjects.Contains(projectId) : _disabledServices.Contains((projectId, serviceId));
+            return Task.FromResult(!off);
+        }
+    }
+
+    public Task EnableServicesAsync(string projectId, IReadOnlyList<string> serviceIds, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        ThrowIfCatalogNotConnected();
+        lock (_catalogGate)
+        {
+            if (_notOwnerProjects.Contains(projectId))
+            {
+                throw Build(CloudErrorKind.Permission, SetupErrorCodes.NotProjectOwner, 403, "Permission denied to enable service.");
+            }
+
+            foreach (var serviceId in serviceIds)
+            {
+                var wasOff = serviceId == RequiredServices.Compute ? _apiDisabledProjects.Remove(projectId) : _disabledServices.Remove((projectId, serviceId));
+                if (wasOff && _enablementDelayPolls > 0)
+                {
+                    _enablingPollsLeft[(projectId, serviceId)] = _enablementDelayPolls;
+                }
             }
         }
 

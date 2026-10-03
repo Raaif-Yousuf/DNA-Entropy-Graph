@@ -808,6 +808,30 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
   still backed by the fake; the composite real `IProjectSetupGateway` that delegates it to `GetBillingStatusAsync`
   lands with #52.
 - **Proven only by a real account:** `docs/ToTest.md`.
+### Enable services (issue #52, wizard step 5) and the real preflight gateway
+
+`IServiceEnablementGateway`: `IsServiceEnabledAsync`, `EnableServicesAsync`. `RequiredServices.Ids` is
+`compute.googleapis.com`, `storage.googleapis.com`, `cloudquotas.googleapis.com` in that order (enabling Compute also
+creates the project's default network).
+
+- **Requests.** `POST /v1/projects/{id}/services:batchEnable` with `{"serviceIds": [...]}` returns an operation;
+  `GET /v1/operations/{name}` is polled every 5 s (`OperationPoller` with its new `fixedInterval`, the doubling
+  backoff would be wrong for a documented cadence) until the 5 minute deadline; once the operation is done,
+  `GET /v1/projects/{id}/services/{service}` is asked every 5 s until each reads `ENABLED`. A finished operation is not
+  a ready service, so the second poll is its own step with its own deadline. A timeout in either is
+  `OPERATION_POLL_TIMEOUT`, classed `network`.
+- **Errors.** A 403, on the call or as `PERMISSION_DENIED` inside the operation, is `NOT_PROJECT_OWNER` (kind
+  `permission`; action: create a project of your own). Enabling Compute on a project with no billing keeps the billing
+  kind (Google answers a precondition failure that names billing), so the wizard sends the user back to step 4 rather
+  than to "ask the owner". A Service Usage API that is itself off reads as `api_disabled`.
+- **The preflight gateway.** `GoogleProjectSetupGateway` implements the existing `IProjectSetupGateway` from the
+  three real gateways (project state from Resource Manager, billing from Cloud Billing, the Compute API from Service
+  Usage), wrapped once by `ResilientProjectSetupGateway`. `GoogleCloudGateways.Create(...)` returns it as
+  `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute and
+  storage gateways and the token refresher do not, so production still resolves everything to `FakeGcp` (#56, #520).
+- **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
+- **Proven only by a real project:** `docs/ToTest.md`.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

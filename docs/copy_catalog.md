@@ -181,7 +181,7 @@ in it.
 because the sign-in message is one sentence group on the wizard, not a card. `AuthErrorCodes.All` in Core is the
 roster; `Guards.Tests/AuthErrorResourceTests` fails when a code in it has no row below or no `.resw` entry.
 
-**Project-setup codes (issues #50 to #52) as built:** the app holds the body as one string, `SetupError_<CODE>` (for example `SetupError_PROJECT_QUOTA`), and the button label as `SetupAction_*`, same as the sign-in codes above. `SetupErrorCodes.All` in Core is the roster (`PROJECT_QUOTA`, `ORG_POLICY_BLOCK`, `NO_BILLING`, `BILLING_NO_PERMISSION` so far; the request text for the last is `SetupBillingRequestText`); `Guards.Tests/SetupErrorResourceTests` fails when a code in it has no row below, no triage entry or no `.resw` entry. `SetupError_OTHER` is the fallback for a setup failure with no code of its own.
+**Project-setup codes (issues #50 to #52) as built:** the app holds the body as one string, `SetupError_<CODE>` (for example `SetupError_PROJECT_QUOTA`), and the button label as `SetupAction_*`, same as the sign-in codes above. `SetupErrorCodes.All` in Core is the roster (`PROJECT_QUOTA`, `ORG_POLICY_BLOCK`, `NO_BILLING`, `BILLING_NO_PERMISSION`, `NOT_PROJECT_OWNER` so far; the request text for the last is `SetupBillingRequestText`); `Guards.Tests/SetupErrorResourceTests` fails when a code in it has no row below, no triage entry or no `.resw` entry. `SetupError_OTHER` is the fallback for a setup failure with no code of its own.
 
 | Code | Key | Title | Body | Actions |
 |---|---|---|---|---|

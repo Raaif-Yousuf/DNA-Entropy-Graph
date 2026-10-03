@@ -20,6 +20,8 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// observable: "an insert that fails with ZONE_RESOURCE_POOL_EXHAUSTED
 /// surfaces that code from the polled operation, not a generic timeout."
 ///
+/// <paramref name="fixedInterval"/> replaces the doubling backoff with one constant wait, for an API whose documented polling cadence is fixed (Service Usage: every 5 s, issue #52).
+///
 /// No real time is ever awaited unless the caller's own <paramref
 /// name="delay"/> (default <see cref="Task.Delay(TimeSpan, CancellationToken)"/>)
 /// does so - a test supplies an instant, recording delay function so the
@@ -35,12 +37,13 @@ public static class OperationPoller
         Func<CancellationToken, Task<OperationPoll<T>>> poll,
         TimeSpan deadline,
         CancellationToken cancellationToken,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        TimeSpan? fixedInterval = null)
     {
         ArgumentNullException.ThrowIfNull(poll);
 
         var wait = delay ?? ((span, ct) => Task.Delay(span, ct));
-        var backoff = InitialBackoff;
+        var backoff = fixedInterval ?? InitialBackoff;
         var elapsed = TimeSpan.Zero;
 
         while (true)
@@ -79,7 +82,10 @@ public static class OperationPoller
 
             await wait(thisWait, cancellationToken).ConfigureAwait(false);
             elapsed += thisWait;
-            backoff = backoff * 2 > MaxBackoff ? MaxBackoff : backoff * 2;
+            if (fixedInterval is null)
+            {
+                backoff = backoff * 2 > MaxBackoff ? MaxBackoff : backoff * 2;
+            }
         }
     }
 }
