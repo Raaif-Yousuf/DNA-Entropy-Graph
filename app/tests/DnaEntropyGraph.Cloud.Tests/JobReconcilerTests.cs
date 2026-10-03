@@ -485,11 +485,23 @@ public class JobReconcilerTests
     {
         var env = new Env(new FakeGcp().WithWorker(FakeWorkerMode.Never));
         await env.SeedAsync("job-cc", JobPhase.Cancelling, vm: true);
-        var launch = await ReattachParkedInItsLookAsync(env, "job-cc", CancellationToken.None);
+        // Counting from here, read 1 is the reconciler's own; read 2 is the runner's cancel looking at the row, with the driver's token and no catch around it,
+        // so a stop there leaves the driver without an outcome and the answer comes from OutcomeOfCancelledAsync.
+        var parked = new TaskCompletionSource();
+        env.Repo.BeforeGetAll = async (call, token) =>
+        {
+            if (call == 2)
+            {
+                parked.SetResult();
+                await Task.Delay(Timeout.Infinite, token);
+            }
+        };
+        var launch = env.Reconciler().ReattachAsync(CancellationToken.None);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await env.Active.CancelAsync("job-cc", () => Task.CompletedTask);
         var outcomes = await launch.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        outcomes.Single().Action.ShouldBe(ReattachAction.CancelFinished, "the reattach was finishing a cancel, not resuming a run (the runner's cancel ends on its own token, so this holds whether or not the driver was stopped mid-way)");
+        outcomes.Single().Action.ShouldBe(ReattachAction.CancelFinished, "the reattach was finishing a cancel, not resuming a run");
     }
 }

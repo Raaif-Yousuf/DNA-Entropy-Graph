@@ -29,18 +29,59 @@ public sealed class ActiveRunsTests
         await started.Task;
         runs.IsActive("job-1").ShouldBeTrue();
 
-        var found = await runs.CancelAndWaitAsync("job-1");
+        var cancelRan = false;
+        await runs.CancelAsync("job-1", () =>
+        {
+            cancelRan = true;
+            ended.ShouldBeTrue("the driver has finished before the cancel writes its own phase");
+            return Task.CompletedTask;
+        });
 
-        found.ShouldBeTrue();
+        cancelRan.ShouldBeTrue();
         ended.ShouldBeTrue("the driver has finished before the caller writes its own phase");
         runs.IsActive("job-1").ShouldBeFalse();
         task!.IsCompletedSuccessfully.ShouldBeTrue("a cancel the caller asked for is not a fault");
     }
 
     [Fact]
-    public async Task Cancel_of_an_unknown_job_is_a_no_op()
+    public async Task Cancel_of_a_job_with_no_driver_still_runs_the_cancel()
     {
-        (await new ActiveRuns().CancelAndWaitAsync("job-none")).ShouldBeFalse();
+        var cancelRan = false;
+
+        await new ActiveRuns().CancelAsync("job-none", () =>
+        {
+            cancelRan = true;
+            return Task.CompletedTask;
+        });
+
+        cancelRan.ShouldBeTrue("the caller then cancels the run itself");
+    }
+
+    [Fact]
+    public async Task A_second_concurrent_cancel_runs_nothing_and_the_settle_waits_for_the_first()
+    {
+        var runs = new ActiveRuns();
+        var release = new TaskCompletionSource();
+        var calls = 0;
+        var first = runs.CancelAsync("job-1", async () =>
+        {
+            Interlocked.Increment(ref calls);
+            await release.Task;
+        });
+        var second = runs.CancelAsync("job-1", () =>
+        {
+            Interlocked.Increment(ref calls);
+            return Task.CompletedTask;
+        });
+
+        second.IsCompleted.ShouldBeFalse("the second cancel waits for the first instead of writing beside it");
+        runs.WhenCancelSettledAsync("job-1").IsCompleted.ShouldBeFalse();
+        release.SetResult();
+        await first;
+        await second;
+
+        calls.ShouldBe(1);
+        runs.WhenCancelSettledAsync("job-1").IsCompletedSuccessfully.ShouldBeTrue();
     }
 
     [Fact]
