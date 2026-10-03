@@ -14,6 +14,14 @@ public interface IProjectRepository
 
     /// <summary>Inserts a new project, or replaces every column of an existing one keyed by <see cref="ProjectRecord.ProjectId"/>.</summary>
     Task UpsertAsync(ProjectRecord project, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Makes sure a row exists for <paramref name="projectId"/>, inserting a bare one (id only) when it
+    /// does not and leaving an existing row untouched (unlike <see cref="UpsertAsync"/>, which replaces
+    /// every column). <c>Runs.ProjectId</c> references this table with foreign keys on (issue #532), so
+    /// a run can only be written for a project that has a row.
+    /// </summary>
+    Task EnsureAsync(string projectId, CancellationToken cancellationToken);
 }
 
 /// <summary>One row of the <c>Projects</c> table.</summary>

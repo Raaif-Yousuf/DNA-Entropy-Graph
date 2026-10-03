@@ -7,6 +7,9 @@
     <PackageVersion Include="Microsoft.WindowsAppSDK" Version="1.8.250916003" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.6584" />
 
+    <!-- App installer and updater (MIT). vpk 1.2.161 pairs with this version. -->
+    <PackageVersion Include="Velopack" Version="1.2.161" />
+
     <!-- Presentation (MVVM), no WinUI reference -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 
@@ -27,6 +30,9 @@
 
     <!-- Tests: xUnit v3, Shouldly, NSubstitute (Hard Rule 21 - not FluentAssertions 8+, not Moq) -->
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <!-- Issue #438: hang dump + TRX for every test assembly. MIT. Version must equal the Microsoft.Testing.Platform that xunit.v3 4.0.1 pulls (2.4.0). -->
+    <PackageVersion Include="Microsoft.Testing.Extensions.HangDump" Version="2.4.0" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.4.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="Shouldly" Version="4.3.0" />
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
