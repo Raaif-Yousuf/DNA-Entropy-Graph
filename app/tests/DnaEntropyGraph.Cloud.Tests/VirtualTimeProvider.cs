@@ -29,6 +29,18 @@ internal sealed class VirtualTimeProvider(bool autoAdvance = false) : TimeProvid
         return timer;
     }
 
+    /// <summary>How many timers are armed right now (a deadline or backoff someone is waiting on).</summary>
+    public int PendingTimers
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count;
+            }
+        }
+    }
+
     /// <summary>Moves the clock forward, firing every timer that falls due on the way in due-time order.</summary>
     public void Advance(TimeSpan by)
     {
