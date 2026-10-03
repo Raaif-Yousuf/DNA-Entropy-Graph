@@ -59,6 +59,7 @@ def contig_provenance(
     direction: str,
     seam: int | None,
     reduced_context_count: int,
+    reduced_context_range: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """One contig's windowing/direction record.
 
@@ -93,6 +94,9 @@ def contig_provenance(
         "direction": direction,
         "seam": seam,
         "reduced_context_count": reduced_context_count,
+        # issue #79: WHERE the reduced-context positions are (0-based, half-open), not only
+        # how many; null when there are none.
+        "reduced_context_range": list(reduced_context_range) if reduced_context_range else None,
     }
 
 
