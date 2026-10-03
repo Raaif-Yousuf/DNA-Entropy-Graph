@@ -157,10 +157,11 @@ jobs:
         run: >
           dotnet publish src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj
           -c Release -p:Platform=x64 -r win-x64 --self-contained true
-          -p:WindowsAppSDKSelfContained=true -p:WindowsPackageType=None
+          -p:WindowsPackageType=None
           -o publish
 
-      # #32: the publish output must carry the Windows App SDK runtime. MEASURED 2026-10-03: without
+      # #32: the publish output must carry the Windows App SDK runtime. The publish step above deliberately passes no
+      # -p:WindowsAppSDKSelfContained, so this assert proves the csproj's own _IsPublishing line (#475), not a CLI flag. MEASURED 2026-10-03: without
       # WindowsAppSDKSelfContained the publish folder had 252 files and no Microsoft.ui.xaml.dll; with it, 441.
       # A green build never shows the difference, so assert the one file that would be missing.
       - name: publish carries the Windows App SDK runtime
@@ -180,29 +181,19 @@ jobs:
       # package id. The artifact is a throwaway uploaded for seven days and never published.
       #
       # MEASURED 2026-10-03 (vpk 1.2.161, run locally against a real publish folder): the pack needs
-      # --mainExe DnaEntropyGraph.App.exe (the exe is not named after the pack id) and then refuses with
-      # "Unable to verify VelopackApp is called" because the app does not call VelopackApp.Build().Run()
-      # yet (#513). There is no flag to skip that check, so until #513 lands the step reports a warning
-      # and does not pack. The check below is the whole switch: the moment any app source mentions
-      # VelopackApp the pack runs for real and a failure fails the job. vpk is pinned so a new major
+      # --mainExe DnaEntropyGraph.App.exe (the exe is not named after the pack id) and refuses an app that
+      # does not call VelopackApp.Build().Run() (#513, which Program.cs now does). With both, it exited 0
+      # in 6 s and wrote DnaEntropyGraph-win-Setup.exe (56.6 MB), a Portable.zip, the full .nupkg, RELEASES and
+      # releases.win.json. It runs unconditionally: a failure fails the job. vpk is pinned so a new major
       # cannot change the rules overnight.
       - name: vpk pack (unsigned)
-        id: pack
         working-directory: app
         run: |
-          $wired = @(Get-ChildItem src -Recurse -Filter *.cs | Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' } | Select-String -Pattern 'VelopackApp').Count -gt 0
-          if (-not $wired) {
-            Write-Host "::warning title=vpk pack skipped::The app does not call VelopackApp.Build().Run() yet, so vpk pack would refuse it (#513). No installer artifact this run."
-            "packed=false" >> $env:GITHUB_OUTPUT
-            exit 0
-          }
           dotnet tool install -g vpk --version 1.2.161
           vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "packed=true" >> $env:GITHUB_OUTPUT
 
       - name: upload installer (unsigned, 7 days)
-        if: ${{ steps.pack.outputs.packed == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-unsigned
