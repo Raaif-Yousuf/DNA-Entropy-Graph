@@ -149,7 +149,7 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
   value omitted. Each of `status.json`, `result.json` and `progress.jsonl` has its own list of keys (`KeySpec`): a key
   not on the list is dropped with everything under it, and a kept string value must be short and made of plain
   characters. Free-text fields (`message`, `data`, `detail.input`, `detail.contig`, output paths, contig lists) are not on
-  any list. The cost: a progress line's message is not in the bundle.
+  any list. The cost: a progress line's message is not in the bundle. MEASURED 2026-10-03 (issue #590): every `status.json` leaf on the list is a constant, a number, a worker-made id, a hardware string or an error code. The worker writes a user-derived string only into `detail.input`, `detail.contig`, `detail.inputs`, `vm.name`, `error.message`, `error.detail` and `error.remediation` (`worker/src/dna_entropy/worker/runner.py`, `status.py`), and none is on the list, so an imported run with no manifest cannot ship one. `DiagnosticsStatusLeafTests` pins the exact shipped leaf set: allowlisting a free-text leaf turns it red.
 - **Scrub list.** Everything the bundle does not copy is also removed from the logs. The list is built from the user's
   email and Windows account name, each run's name, output folder, project, bucket, VM name and notes, every name and
   path in the run's manifest and options, and every key that looks like a name plus every string inside the dropped parts
