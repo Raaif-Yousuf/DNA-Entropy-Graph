@@ -42,7 +42,7 @@ public class ReconnectProbeTests
 
         public void Dispose() => Observer.Dispose();
 
-        /// <summary>Advances virtual time and waits for the pass that came due (none when <paramref name="expectPass"/> is false).</summary>
+        /// <summary>Advances virtual time and waits for every pass that came due (nothing to wait for when no timer was due).</summary>
         public async Task AdvanceAsync(TimeSpan by)
         {
             Time.Advance(by);

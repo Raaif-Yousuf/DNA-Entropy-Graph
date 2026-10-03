@@ -216,6 +216,9 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
                 {
                     _log.Warning("reconcile-on-reconnect", null, t.Exception!.GetBaseException().GetType().Name);
                 }
+
+                // A run judged at the start of its own work (a cancel being finished) can end Deferred after the pass that started it ended: look again.
+                StartProbeIfDeferred();
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
