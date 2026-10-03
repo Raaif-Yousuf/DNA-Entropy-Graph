@@ -1,5 +1,6 @@
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
@@ -140,6 +141,60 @@ public sealed class HistoryViewModelTests
         Item(vm, "live").CanRedownload.ShouldBeFalse();
         Item(vm, "live").CanRemove.ShouldBeFalse();
         Item(vm, "has").CanRemove.ShouldBeTrue();
+    }
+
+    public static TheoryData<string> EveryRunErrorCode() => [.. RunErrorCodes.All];
+
+    [Theory]
+    [MemberData(nameof(EveryRunErrorCode))]
+    public async Task A_failed_run_shows_the_resource_text_for_its_code_and_never_the_raw_detail(string code)
+    {
+        RunErrorCodes.All.ShouldContain(code);
+        var vm = await Loaded(Row("bad", JobPhase.Failed) with { ErrorCode = code, ErrorDetail = "RAW-EXCEPTION-TEXT" });
+
+        var item = Item(vm, "bad");
+        item.HasReason.ShouldBeTrue();
+        item.ReasonText.ShouldBe(RunErrorCodes.ResourceKey(code));
+        item.ReasonText!.ShouldNotContain("RAW-EXCEPTION-TEXT");
+    }
+
+    [Fact]
+    public void The_theory_is_fed_every_code_so_an_empty_list_cannot_pass_it()
+        => EveryRunErrorCode().Count.ShouldBe(RunErrorCodes.All.Count);
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    [InlineData("a_code_from_a_newer_version")]
+    public async Task A_failed_run_with_no_or_unknown_code_shows_the_generic_message(string? code)
+    {
+        var vm = await Loaded(Row("bad", JobPhase.Failed) with { ErrorCode = code, ErrorDetail = "RAW-EXCEPTION-TEXT" });
+
+        Item(vm, "bad").ReasonText.ShouldBe("RunError_other");
+    }
+
+    [Fact]
+    public async Task A_completed_run_with_a_code_shows_it_as_a_warning_and_one_without_shows_nothing()
+    {
+        var vm = await Loaded(
+            Row("warn", JobPhase.Completed) with { ErrorCode = RunErrorCodes.LifecycleUnverified },
+            Row("clean", JobPhase.Completed),
+            Row("blank", JobPhase.Completed) with { ErrorCode = " " });
+
+        Item(vm, "warn").ReasonText.ShouldBe("RunError_lifecycle_unverified");
+        Item(vm, "warn").HasReason.ShouldBeTrue();
+        Item(vm, "clean").HasReason.ShouldBeFalse();
+        Item(vm, "clean").ReasonText.ShouldBeNull();
+        Item(vm, "blank").HasReason.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_run_still_going_shows_no_reason_even_with_a_code()
+    {
+        var vm = await Loaded(Row("live", JobPhase.Running) with { ErrorCode = RunErrorCodes.Other });
+
+        Item(vm, "live").HasReason.ShouldBeFalse();
     }
 
     [Fact]

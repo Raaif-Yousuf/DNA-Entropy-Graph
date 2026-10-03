@@ -25,6 +25,10 @@ its results are still available in the cloud or only on your own computer.
 - **Remove from list**: takes the entry off your history list without touching any files,
   and only for runs that are over.
 
+A run that failed shows, under its status, a short plain explanation of why and the one thing
+to do about it. A run that finished but needs your attention (for example, your results are
+saved but we could not confirm the rented computer shut down) shows the same kind of note.
+
 Use the search box to find a run by its name, its input file name or its id, and the status
 box to show only running, completed, failed or cancelled runs.
 
