@@ -85,3 +85,33 @@ def test_check_against_this_repos_real_tree_runs_without_crashing():
     repo_root = SCRIPTS_DIR.parent
     problems = ctf.check(repo_root, max_age_days=ctf.DEFAULT_MAX_AGE_DAYS)
     assert isinstance(problems, list)
+
+
+def _row(line_no, issue, do_this):
+    return ctf.Row(line_no=line_no, cells=(issue, "abc1234", "installer", do_this, "ok", "not ok"))
+
+
+def test_find_duplicate_rows_names_both_lines_after_whitespace_normalisation():
+    rows = [_row(10, "#31", "Open  a PR\nthen merge"), _row(20, "#31", "open a pr then merge")]
+    problems = ctf.find_duplicate_rows(rows)
+    assert len(problems) == 1
+    assert "L10" in problems[0] and "L20" in problems[0]
+
+
+def test_find_duplicate_rows_allows_one_issue_with_different_checks():
+    rows = [_row(10, "#31", "Open a PR"), _row(20, "#31", "Close the PR")]
+    assert ctf.find_duplicate_rows(rows) == []
+
+
+def test_find_duplicate_rows_allows_same_text_on_different_issues():
+    rows = [_row(10, "#31", "Open a PR"), _row(20, "#32", "Open a PR")]
+    assert ctf.find_duplicate_rows(rows) == []
+
+
+def test_check_reports_an_appended_duplicate_row(tmp_path):
+    table = ctf._GOOD_TABLE.format(sha="abc1234")
+    last = table.strip().splitlines()[-1]
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ctf.TOTEST_RELATIVE).write_text(table + last + "\n", encoding="utf-8", newline="\n")
+    problems = ctf.check(tmp_path, 45)
+    assert any("duplicate" in p.lower() for p in problems), problems

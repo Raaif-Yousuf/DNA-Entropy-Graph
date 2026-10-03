@@ -1,0 +1,1 @@
+- Diagnostics bundle: measured that no allowlisted worker status leaf can carry a user-derived name, and added a test that pins the exact set of status leaves that ship, so a free-text leaf cannot be allowlisted unnoticed (#590).
