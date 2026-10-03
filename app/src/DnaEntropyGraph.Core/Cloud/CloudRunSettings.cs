@@ -50,4 +50,13 @@ internal sealed class CloudRunSettings
     public TimeSpan LifecycleTimeout { get; set; } = TimeSpan.FromMinutes(3);
 
     public TimeSpan LifecyclePollInterval { get; set; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// The budget for the whole worker-identity step (#606), which is many HTTP calls in one gateway method. THEORY (unverified,
+    /// sized from the gateway's worst case, not measured): a project read, an account create, up to 6 tries with 5 waits of
+    /// 2 s growing to 12 s for a new account to become visible, a role create and read-back, and two policy read-modify-writes
+    /// of up to 5 attempts each is under 40 calls; at the pipeline's per-call limits that is well over the 60 s
+    /// <see cref="CallTimeout"/>, so it gets 5 minutes. Abandoning it earlier would leave the gateway writing policies after the run failed.
+    /// </summary>
+    public TimeSpan WorkerIdentityTimeout { get; set; } = TimeSpan.FromMinutes(5);
 }

@@ -46,10 +46,10 @@ public static class RunErrorCodes
     /// <summary>The installation id file was unusable and set aside (#558). Minimal copy only; the recovery UX is owner-only DECISION #404.</summary>
     public const string InstallationIdUnusable = "installation_id_unusable";
 
-    /// <summary>The <c>CloudError.Code</c> a gateway with no real cloud behind it throws; the runner records it as <see cref="CloudNotConnected"/>.</summary>
     /// <summary>A note, not a failure (#606): the run went ahead as the project's default Compute Engine account because an organization policy refused the app's own worker identity. Recorded on the row of a run that still completes.</summary>
     public const string WorkerDefaultAccount = "worker_default_account";
 
+    /// <summary>The <c>CloudError.Code</c> a gateway with no real cloud behind it throws; the runner records it as <see cref="CloudNotConnected"/>.</summary>
     public const string NotConnectedGatewayCode = "CLOUD_NOT_CONNECTED";
     public const string Other = "other";
 

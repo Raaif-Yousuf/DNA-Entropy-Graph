@@ -1139,7 +1139,10 @@ account and a role and edits two policies, and a whole-method retry would replay
   no VM, once, before the first create. It sets the returned `ServiceAccountEmail` on the spec it creates with
   (`with { ServiceAccountEmail = ... }`); without it `GoogleComputeGateway` refuses the create (`WORKER_SERVICE_ACCOUNT_MISSING`).
   A run that adopts a VM, or whose job already finished, never calls IAM, so an IAM failure can never end a healthy working
-  VM (cold review of #606). A refusal is a `CloudOperationException` that ends the
+  VM (cold review of #606). The step runs under its own `CloudRunSettings.WorkerIdentityTimeout` (5 minutes, not the 60 s
+  `CallTimeout`), because the gateway is a dozen or more HTTP calls in one method (account create, up to 6 tries with 2 s to 12 s
+  visibility waits, role create and read-back, two policy edits of up to 5 attempts) and abandoning it at 60 s would leave it
+  writing policies after the run failed `network`. THEORY (unverified): 5 minutes is sized from that worst case, not measured. A refusal is a `CloudOperationException` that ends the
   run through the ordinary classifier (`permission`, `org_policy`, ...) before any VM is created. `WORKER_DEFAULT_ACCOUNT` is a
   note: the run continues and the row carries `RunErrorCodes.WorkerDefaultAccount` (`worker_default_account`, copy
   `RunError_worker_default_account`) as an `ErrorCode` on a row that still completes, which the Runs list shows as its warning line

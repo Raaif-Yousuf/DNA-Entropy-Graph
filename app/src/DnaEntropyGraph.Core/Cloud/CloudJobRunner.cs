@@ -113,6 +113,9 @@ public sealed class CloudJobRunner
     /// <summary>How long to wait for a stop or delete to land (verifying the VM's terminal state) before recording it unverified.</summary>
     public TimeSpan LifecycleTimeout { get => _settings.LifecycleTimeout; init => _settings.LifecycleTimeout = value; }
 
+    /// <summary>The budget for the whole worker-identity step (#606), which is many calls in one gateway method; see <see cref="CloudRunSettings.WorkerIdentityTimeout"/>.</summary>
+    public TimeSpan WorkerIdentityTimeout { get => _settings.WorkerIdentityTimeout; init => _settings.WorkerIdentityTimeout = value; }
+
     /// <summary>How long to wait between looks at a VM that is stopping or being deleted.</summary>
     public TimeSpan LifecyclePollInterval { get => _settings.LifecyclePollInterval; init => _settings.LifecyclePollInterval = value; }
 
@@ -338,7 +341,7 @@ public sealed class CloudJobRunner
     /// </summary>
     private async Task<VmSpec> CompleteSpecAsync(CloudJobRequest request, string bucket, CancellationToken cancellationToken)
     {
-        var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken).ConfigureAwait(false);
+        var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken, _settings.WorkerIdentityTimeout).ConfigureAwait(false);
         if (identity.NoteCode == SetupErrorCodes.WorkerDefaultAccount)
         {
             // A yellow note, not a failure: the run carries on as the project's default account and its row says so.

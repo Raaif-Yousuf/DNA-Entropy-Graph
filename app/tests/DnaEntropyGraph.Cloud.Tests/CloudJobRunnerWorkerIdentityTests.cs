@@ -119,9 +119,45 @@ public class CloudJobRunnerWorkerIdentityTests
 
         // Whatever else the resumed run does (the manifest was never uploaded here, so it waits for a result and times out),
         // it is not the identity refusal, and the adopted VM was looked at, never asked about IAM.
-        result.FailureCode.ShouldNotBe("permission", "an IAM refusal must not fail a run that adopts a VM");
+        result.FailureCode.ShouldBe(RunErrorCodes.ResultTimeout, "it got through provisioning (adopting the VM) into the wait for the result, which is where a surviving run ends here");
         gcp.WorkerIdentityEnsureCalls.ShouldBe(0, "an adopted VM needs no identity");
         gcp.CreatedSpecs.Count.ShouldBe(1, "only the seeded VM exists; nothing was created");
+    }
+
+    [Fact]
+    public async Task An_identity_step_longer_than_the_general_call_deadline_but_inside_its_own_budget_still_reaches_the_create()
+    {
+        // The real gateway is a dozen or more HTTP calls (account, role, two policy edits with retries); the general
+        // CallTimeout would abandon it mid-write. The step has its own budget (CloudRunSettings.WorkerIdentityTimeout).
+        var gcp = new FakeGcp();
+        var slow = new SlowIdentity(gcp, TimeSpan.FromMilliseconds(250));
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, slow, repo)
+        {
+            CallTimeout = TimeSpan.FromMilliseconds(50),
+            WorkerIdentityTimeout = TimeSpan.FromSeconds(10),
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromMilliseconds(80),
+            CreateTimeout = TimeSpan.FromSeconds(5),
+            UploadTimeout = TimeSpan.FromSeconds(5),
+            BootTimeout = TimeSpan.FromSeconds(5),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(80),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+        };
+
+        var result = await runner.RunAsync(TestInputs.Request("job-i6", Spec("job-i6")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        gcp.CreatedSpecs.ShouldNotBeEmpty("the slow identity step still reached the create");
+    }
+
+    private sealed class SlowIdentity(IWorkerIdentityGateway inner, TimeSpan delay) : IWorkerIdentityGateway
+    {
+        public async Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            return await inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken);
+        }
     }
 
     private sealed class RecordingIdentity(IWorkerIdentityGateway inner, Func<int> vmsCreated) : IWorkerIdentityGateway
