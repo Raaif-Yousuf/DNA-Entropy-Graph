@@ -332,13 +332,214 @@ exercise.
 `IProjectSetupGateway`/`IQuotaGateway` (today, `FakeGcp` implementing all four - there is
 no real gateway yet), driven by `JobStateMachine`'s legal-transition table over the
 existing `JobPhase` enum (`app/src/DnaEntropyGraph.Core/JobPhase.cs`, from the #61
-skeleton). Sequence: preflight (section 2's four checks) -> Validating -> Uploading ->
-Provisioning (section 3's reconciler-first zone walk) -> Preparing -> Running (a second VM-
-status poll, to catch a preemption discovered mid-run - CLAUDE.md's "RUNNING is not
-working"; the worker's own `status.json` heartbeat is a separate, worker-owned signal this
-runner does not have) -> Finalizing (Hard Rule 11: stop or delete per the request, then
-independently re-`GetVmAsync` to verify the terminal state actually landed, never just
-trusting the call succeeded) -> Downloading -> Completed/PartiallyCompleted/Failed.
+skeleton). Sequence: preflight (section 2's four checks, then the bucket) -> Validating ->
+Uploading (the input bytes, then `manifest.json`) -> Provisioning (section 3's reconciler-
+first zone walk) -> Preparing -> Running (wait for the worker's `result.json`, see
+"Transfers" below) -> Finalizing (`result.json` read and judged) -> Downloading (the files
+`result.json` lists, THEN Hard Rule 11: stop or delete per the request and independently
+re-`GetVmAsync` to verify the terminal state actually landed, never just trusting the call
+succeeded) -> Completed/PartiallyCompleted/Failed. The download comes first because the
+bucket outlives the VM and the worker has usually ended its own VM by then (see "The wait,
+the download and the lifecycle check" below).
+
+**Transfers (issue #460).** Before this the request carried empty object keys and the
+transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
+
+- `JobEngine` copies the chosen file under `%LOCALAPPDATA%\DNAEntropyGraph\runs\<jobId>\input\`
+  (`LocalRunInputStore`, Hard Rule 14: the user's file is only read, never written next to)
+  *before* any cloud resource exists, and a missing or unreadable file is recorded `Failed`
+  with `input_missing`.
+- `UploadAsync` streams that copy (a seekable `FileStream`, so the #258 retry pipeline can
+  rewind and replay it) to `jobs/<jobId>/input/<name>`, then writes `manifest.json`
+  (`WorkerManifestBuilder`, built from `RunOptions` per `job_contract.md` section 3) last, so
+  its presence means every input is already there. The row records `Bucket`, `JobPrefix` and
+  `ManifestJson`. A run resumed past `Uploading` never uploads again: the manifest is
+  immutable once a worker may be reading it.
+- While `Running` the runner polls `jobs/<jobId>/result.json` with `IStorageGateway.TryDownloadAsync`
+  (null means "not yet") and looks at the VM between polls; the full rules are under "The wait,
+  the download and the lifecycle check" below.
+- `result.json` is read strictly (`WorkerResultReader`): anything that is not a recognised
+  `done | failed | cancelled` is `worker_failed`, never success. A failed job, or a `done`
+  job in which no input finished, is `Failed` (`worker_failed`) and the VM is ended;
+  some inputs failing is `PartiallyCompleted`.
+- Outputs go to a fresh `<output folder>\<input name>[_2]` (default Downloads), recorded as
+  `OutputDir` so a resumed download reuses it. Each file is downloaded to `*.part`, checked
+  against the byte count and SHA-256 from `result.json`, then renamed; a path that is not
+  `output/<plain relative path>` is refused, since it comes from a bucket object.
+  `download_failed` covers an unwritable folder or a network failure mid-download; a result path outside `output/`
+  and a listed file that is not in the bucket are the worker breaking the contract and are `worker_failed` (the action there
+  is to send diagnostics, not to free up space); a size or checksum mismatch is `download_corrupt`. In both the results
+  are still in the bucket, so the copy says download again (Hard Rule 14), not start again.
+
+### The wait, the download and the lifecycle check (cold review of #460, 2026-10-02)
+
+- **A transient failure never ends the wait.** The poll loop catches every `CloudOperationException`
+  except the project-wide classes (billing, API off, permission, org policy: these end the run at
+  once, after a best-effort end of the VM) and looks again on the next tick. The VM and the worker
+  carry on without the app, so a network blip of a minute must not cost the user a second run.
+  Pinned by `More_transient_503s_than_the_retry_pipeline_absorbs...` (14 scripted 503s behind the real
+  retry pipeline and breaker, then a valid result: Completed with the track on disk).
+- **Per-call deadline.** Every gateway call the runner makes runs under `CallTimeout` (60 s) through
+  `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, `EnsureBucket`,
+  every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
+  `StopVmAsync` and `DeleteVmAsync`, and each read of a downloaded file. A call that outlives it is a
+  network failure: the wait loops look again, anywhere else the run (or the cancel) is recorded Failed
+  instead of hanging. **Uploads** have their own deadline, `UploadTimeout`, default a floor of 2 minutes plus
+  1 second per 128 KiB of the object (a link as slow as 1 Mbit/s still finishes); a flat 60 s would cut every
+  large input short. The resilience pipeline underneath retries inside that one deadline.
+- **The deadline is relative to the VM's own limit.** The default wait is `maxRunDuration` minus 3
+  minutes (`CloudJobRunner.ResultWaitLimit`), measured from the VM's creation, not from `Running`. The platform deletes the VM at
+  `maxRunDuration` (Hard Rule 10) and the worker's own limit is the same number, so a wait that
+  ended later could only ever find a lost VM and `result_timeout` was unreachable (the old limit was
+  `maxRunDuration` plus 5 minutes). Ending first lets the runner give up on its own terms: end the
+  VM per the user's choice, verify it, record `result_timeout`. A worker still uploading in the last
+  3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
+- **Giving up records what was verified.** After the VM end is attempted the runner re-reads the VM:
+  confirmed ended is `result_timeout` ("we shut it down"); not confirmed (calls failing, still running
+  at `LifecycleTimeout`) is `vm_end_unconfirmed` ("open the Cloud page and delete it"), and the raw detail
+  says why. No message claims a stop nobody checked. This is general, not only for timeouts: whenever any
+  failed run's VM end is not confirmed (a stop that never lands, calls refused, a create that may still land)
+  the recorded code is `vm_end_unconfirmed`, whose copy sends the user to the Cloud page, and the original
+  code and cause stay in `ErrorDetail` ("Original code: model_oom"). `RunRecord` has no separate field for
+  this, so the code takes precedence.
+- **Download first, lifecycle after.** As soon as a valid `result.json` is in hand and it reports at
+  least one finished input, the files are downloaded; only then is the VM ended and verified. The
+  worker has usually stopped or deleted its own VM already (`startup.sh` exit codes 10 and 11), and
+  the old order (verify, then download) failed the whole run, results never fetched, whenever it had.
+- **The lifecycle check tolerates a worker that already acted.** Delete chosen: a VM already gone, or a
+  delete answered 404, is success. Stop chosen: `STOPPING` is polled to `LifecycleTimeout` (3 minutes);
+  `STOPPED` and `TERMINATED` both count as stopped; a VM already gone counts too. THEORY (unverified):
+  Compute Engine reports a stopped instance as `TERMINATED` (the API's own name for the state); nobody
+  here has measured it against a real instance, so both spellings are accepted rather than guessed.
+- **A failed lifecycle check after a good download keeps the results.** The run still ends `Completed`
+  (or `PartiallyCompleted`) with `ErrorCode = lifecycle_unverified` and the reason in `ErrorDetail`; the
+  copy tells the user to delete the VM from the Cloud page. A download that fails still ends the VM
+  (best effort, recorded in the detail) before the run is `Failed`.
+- **A boot failure reads as its own cause.** `startup.sh` writes `status.json` with an `error.code` and
+  ends the VM for `GPU_NOT_VISIBLE`, `IMAGE_PULL_FAILED`, `MANIFEST_INVALID` and `WORKER_CRASH` and
+  never writes `result.json`; the container's own failures do write it. Whenever the VM is found not
+  running with no `result.json`, the runner reads `status.json` and records `gpu_not_visible`,
+  `image_pull_failed`, `manifest_invalid` or `worker_crashed` (each with its own copy and one action);
+  any other or missing code stays `vm_unhealthy`. (An earlier version of this document said
+  `result.json` is always written first. It is written first only by a worker that got as far as a
+  result.)
+- **Resume.** A run resumed from Provisioning onward (a create can have been accepted before the app died)
+  first looks for `result.json`; if the worker already finished, it goes straight to the download and
+  never provisions, so it cannot create a second billed VM. A resumed run whose worker is still going
+  adopts the VM as before.
+- **Every failure once a VM may exist ends the VM.** The guard covers the whole run, not only the part after a
+  create: it applies from the moment the row is at or past `Provisioning` (a resume can find a VM already
+  running) and from the first create attempt. Any exception that leaves without an end attempt (a failed
+  look, a bad transition, a failing repository, a failed preflight or probe on a resume) ends the VM first,
+  by the zone when known and by the job-id label when not (best effort, per the user's choice, verified). A
+  transient failure of the `result.json` probe on a resume is not fatal: the run carries on and adopts the
+  VM. Exceptions that already went through an end attempt are marked so it is not waited out twice.
+  Cancellation is the exception: `CancelAsync` owns that delete. A failed run honours the user's choice: Delete, or keep-alive with Delete afterwards,
+  deletes; everything else stops (`startup.sh` applies `afterKeepAlive` at once for a run that did not
+  succeed).
+- **A booting VM is waited for.** Right after create the runner waits for RUNNING; PROVISIONING and
+  STAGING are "still starting", polled to `BootTimeout` (8 minutes), then the VM is ended and the run is
+  `vm_unhealthy`. THEORY (unverified): a real instance reads PROVISIONING then STAGING for a short while
+  after insert; nobody here has measured it. A VM that never reached RUNNING is **deleted** at the boot deadline,
+  whatever the user chose for after a run. THEORY (unverified): `instances.stop` on an instance that is not
+  RUNNING is rejected, and a VM that never booted has no disk worth keeping. A VM found already stopped, gone
+  or terminated at the first look is judged exactly like one lost while waiting: `result.json` first (a fast
+  worker can finish and stop its VM between two looks, and is downloaded), then `status.json` for a mapped
+  boot-failure code. A transient failure of the look is retried, not fatal; a class
+  that aborts (billing, API off, permission, org policy) ends the VM and the run at once.
+- **A hung create ends at its deadline.** Each zone's create runs under `CreateTimeout` (30 s) with
+  `Task.WaitAsync`, because the poller checks its deadline only between polls. A create that timed out may
+  still be accepted and land later, so the runner keeps the insert task and, before the zone ladder moves on or
+  the run is recorded, waits for it to settle (bounded by `CreateSettleTimeout`, 30 s) and then deletes
+  whatever carries the job's label. If the insert is still in flight after that, the run is recorded
+  `vm_end_unconfirmed` (the Cloud page); the VM's own `maxRunDuration` is the backstop. `CancelAsync` does
+  the same with the inserts this runner instance started for the job: it waits for them (bounded) before it
+  looks for VMs, and records `cancel_failed` if one is still in flight. THEORY (unverified): a different
+  runner instance cannot see another's in-flight insert, so a cancel from a fresh instance after a crash only
+  has the label lookup.
+- **Round 4 guarantees (framing-free review, 2026-10-02).** Pinned by `CloudJobRunnerGuaranteesTests`.
+  - *A gateway's own deadline is a failure, not a cancel.* Only an `OperationCanceledException` whose cause is the
+    CALLER's token skips the end-the-VM guard; the one a gateway throws on its own HTTP or gRPC deadline (the caller's
+    token still live) ends the VM like any other failure.
+  - *A create that fails may still have landed.* After a Network, Other or Stockout create failure (not only a timeout) the
+    runner looks by job-id label and deletes what it finds before it moves to the next zone or records the run, so a lost
+    response after the server accepted the insert cannot leave one VM per zone. A sweep that cannot be confirmed records
+    `vm_end_unconfirmed`. `EnsureVmsEndedByLabelAsync` ends every VM it finds even when an earlier one could not be ended.
+  - *Cancel always records one terminal state.* `CancelAsync` tolerates a 404 on delete (the worker or platform got there
+    first), re-looks by label afterwards (polling to `LifecycleTimeout`) before it records `Cancelled`, and when the caller's
+    token is cancelled midway makes one last uncancellable attempt and records `Cancelled` or `Failed/cancel_failed` instead of
+    leaving the row in `Cancelling`. A row that is already terminal (a second cancel racing the first) is left alone and
+    nothing throws. `RunAsync` on a row in `Cancelling` finishes the cancel (it used to attempt `Cancelling -> Validating`).
+  - *The result wait is measured from the VM's creation.* `VmDescriptor.CreatedAt` is the instance's `creationTimestamp`;
+    the real Compute gateway MUST fill it (there is no real gateway yet, so this is a contract for it). The default deadline
+    is `maxRunDuration - 3 min` from that instant, so an 8 minute boot or a resume no longer lets the platform delete the VM
+    before the runner gives up (it read as `vm_unhealthy`). A gateway that leaves it null falls back to "from Running".
+    An explicit `ResultTimeout` still measures from Running. `FakeGcp.WithMaxRunDurationEnforced()` makes the fake delete a
+    VM at its limit so a test can see the difference.
+  - *A notification never changes the outcome.* The `onPhaseChanged` callback runs after the row is committed and its
+    exceptions are swallowed: a throwing callback can no longer fail a run, end a kept-alive VM, or make the returned result
+    disagree with the row. When `RunAsync` cannot record `Failed` because the row is already `Completed` or `Cancelled`, it
+    returns that state.
+  - *A booting VM is deleted, not stopped.* When the VM reads PROVISIONING or STAGING at the moment a failure ends it, the end
+    is a delete whatever the user chose (THEORY, unverified: stop is rejected on an instance that is not RUNNING).
+  - *A resumed cancel cannot fail blind.* If `CancelAsync` throws before its own delete logic on a resume, the runner ends the VM
+    by label and records `Cancelled` or `cancel_failed`; a repository that keeps failing leaves the row `Cancelling`.
+  - *A terminal row answers with its own code,* a cancel tries every VM, and a VM found by label is ended under its own name.
+  - *The end helpers never throw.* `EnsureVmEndedAsync` and `EnsureVmsEndedByLabelAsync` catch any exception that is not the
+    caller cancelling and report it as an unconfirmed end (`vm_end_unconfirmed`).
+
+- **The input is validated before anything is created (Hard Rule 2, #479).** `JobEngine` runs
+  `InputFileValidator` on the staged copy before it calls the runner; a problem records the run `Failed`
+  with an `input_*` code (`InputProblemErrorCodes`), and no bucket object or VM exists. `ErrorDetail` carries
+  only the problem code, record number and position, never the problem text.
+- **The output folder is proven before anything is created.** After `Validating` the run's folder is made
+  (recorded as `OutputDir`) and a probe file is written and deleted in it; failure is `output_folder_unusable`
+  before the bucket or a VM exists. The download reuses that folder. A run that ends `Failed` with nothing in
+  its folder removes the empty folder (never a file, Hard Rule 14) and clears `OutputDir`.
+- **What the run record does and does not carry.** `ErrorDetail` goes to SQLite and the diagnostics zip, so
+  the runner's own messages name the input id and file number ("Result file 1 of input in1"), never a path
+  or file name, and drop the worker's free-text message (it can carry a record name) in favour of its code.
+  That is the whole claim. The row does store `ManifestJson` (the manifest as uploaded), which carries each
+  input's `name` and `path` (the file name without and with its extension), and `OutputDir`, which is named
+  after the first input. Both are the user's own data on their own machine and the manifest is needed to
+  re-run; they are not in `ErrorDetail`. Known gap: a gateway's own exception text can still carry an object
+  key, and `RunAsync`'s catch-all records `ex.Message` as is.
+- **A finished input must have a track.** An input the worker reports `done` with no files is not counted
+  as finished: if no input finished the run is `Failed` (`worker_failed`, "A finished input listed no result
+  files"), otherwise `PartiallyCompleted`.
+- **Worker codes with their own user action get their own run code**, from `status.json` and from
+  `result.json`: `MODEL_OOM`, `MODEL_NEEDS_HOPPER`, `BATCH_LIMIT_EXCEEDED`, `INPUT_INVALID`,
+  `WORKER_VERSION_MISMATCH` plus the four boot failures above. `MODEL_UNKNOWN` has no row in
+  `docs/copy_catalog.md`, so it is generic (`worker_failed`) on purpose
+  (`RunErrorCodes.WorkerStatusCodesWithoutDedicatedCopy`). `WorkerContractGuardTests` fails when a code in
+  `docs/contract/error-codes.json` is neither mapped nor listed, and when a list entry goes stale; a second
+  test ties the manifest builder's FP8 model list to `MODEL_REQUIREMENTS` in `hardware.py`. Both read repo
+  files and need the default artifacts path.
+- **Partial results are kept.** Every input that lists files is downloaded, whatever its status: a failed
+  or cancelled input's partial files land beside the finished ones (docs/job_contract.md sections 6 and 7),
+  the run reads `PartiallyCompleted` when some inputs finished, and when none did the partial files are still
+  fetched before the run is recorded `Failed` (its detail says partial files were kept).
+- **Known gap.** The copy for `download_failed` and `download_corrupt` points at downloading again from
+  the Runs page while the objects exist (Hard Rule 14). No Runs-page "download again" command exists
+  yet, and a `Failed` run is terminal, so today the only way to act on that copy is a new feature.
+  Presentation owns it.
+
+**No real cloud yet.** The production composition (`ServiceRegistration`) still backs every gateway
+with `FakeGcp`. It now registers it with `WithCloudNotConnected()`, so preflight throws a
+`CLOUD_NOT_CONNECTED` error before anything is uploaded or created and the run is recorded `Failed`
+with `cloud_not_connected` ("not connected in this version of the app yet, nothing was sent to Google
+and nothing was billed"). Before this, the simulated worker wrote `fake-track:` files into the user's
+real output folder and the run read `Completed`. Tests and the future `--fake-cloud` switch (#69) use
+a plain `new FakeGcp()`, which simulates success.
+
+`FakeGcp` is a real in-memory bucket for this: `ObjectKeys`, `GetObjectBytes`, `PutObject`,
+and a simulated worker (`WithWorker(FakeWorkerMode)`) that writes outputs then `result.json`
+for any VM created while a manifest is in the bucket. For the behaviours above it also scripts
+`WithWorkerEndingItsOwnVm(Stop|Delete)` (acts the first time anyone looks for `result.json`, like
+`startup.sh` exit codes 10 and 11), `WithDeleteOfMissingVmNotFound()` and
+`WithNextDeleteRacingAWorkerDelete()` (a 404 like real Compute), `WithStopBehaviour(stoppingPolls, status)`
+(`STOPPING` for N polls, then `STOPPED` or `TERMINATED`), `WithHungCalls(n)`, the boot-failure worker modes
+(`GpuNotVisible`, `ImagePullFailed`, `ManifestInvalid`, `WorkerCrash`) and `WithCloudNotConnected()`.
 
 Every phase change is written to `IRunRepository` before any `onPhaseChanged` callback
 fires (issue #58's own Done-when). There is deliberately no separate "resume" method:
@@ -451,9 +652,21 @@ built. The real script is about 9 KB, well inside both limits.
 
 `CloudJobRunner` attaches the metadata once the bucket name is known (`CloudJobRequest.WorkerImage`
 set means attach; null means create the VM with none). An invalid value fails the run before
-any VM exists. `JobEngine` reads the image reference from the `worker_image` setting; the
-digest allowlist that should supply it is not built, so with the setting unset a VM is created
-without a startup script.
+any VM exists.
+
+**Where the image comes from (issue #458).** `IWorkerImageProvider` (Core) is implemented by
+`PinnedWorkerImageProvider` (App), which reads `worker-images.json`, embedded in the App
+assembly: `{"images":[{"version","cuda","cpu"}]}`, one entry per app version, each reference
+pinned by digest (`PinnedWorkerImageList` drops and counts any entry that is not). The same list
+is the allowlist. `JobEngine` asks for the image of the running app version (`-cuda` for a GPU
+machine type, `-cpu` otherwise) before it stages anything, and **fails the run** instead of
+creating a VM with no script: `no_worker_image` when the list has nothing for this version,
+`worker_image_refused` when a `worker_image` override is not acceptable. The override, read from
+`settings.json`, is accepted when it is on the list, or when `developer_mode` is `true` and it is
+pinned by digest; there is no UI for either on purpose. **The shipped list is empty until the
+release pipeline writes the digests of a tagged build into it**, so until then every run ends
+`no_worker_image` unless a developer sets the override; this is deliberate and honest rather than
+a VM that boots and does nothing.
 
 **Verification**: `StartupMetadataTests` (Core.Tests) prove the embedded text equals
 `worker/vm/startup.sh`, that every `meta instance/attributes/<x>` the script reads is set by

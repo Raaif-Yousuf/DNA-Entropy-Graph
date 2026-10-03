@@ -49,8 +49,7 @@ public class ResilienceRegressionTests
     private static VmSpec Spec(string jobId) => new(
         Project, "install-1", jobId, "evo2_7b", "0.1.0", "stop", "g2-standard-8", TimeSpan.FromHours(1), "DELETE");
 
-    private static CloudJobRequest Request(string jobId, params string[] zones) => new(
-        jobId, Spec(jobId), zones.Length == 0 ? ["us-central1-a"] : zones, [], [], AfterTaskAction.Stop);
+    private static CloudJobRequest Request(string jobId, params string[] zones) => TestInputs.Request(jobId, Spec(jobId), zones.Length == 0 ? ["us-central1-a"] : zones);
 
     // ---- 1. a timeout is not the caller cancelling -------------------------------------
 

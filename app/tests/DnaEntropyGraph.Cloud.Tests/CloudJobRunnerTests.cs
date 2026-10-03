@@ -28,13 +28,7 @@ public class CloudJobRunnerTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRequest ValidRequest(string jobId, IReadOnlyList<string>? zones = null, AfterTaskAction afterTask = AfterTaskAction.Stop) => new(
-        JobId: jobId,
-        Spec: ValidSpec(jobId),
-        Zones: zones ?? ["us-central1-a"],
-        InputObjectKeys: ["jobs/" + jobId + "/input/input.gb"],
-        OutputObjectKeys: ["jobs/" + jobId + "/output/track.bedgraph"],
-        AfterTask: afterTask);
+    private static CloudJobRequest ValidRequest(string jobId, IReadOnlyList<string>? zones = null, AfterTaskAction afterTask = AfterTaskAction.Stop) => TestInputs.Request(jobId, ValidSpec(jobId), zones, afterTask);
 
     private static CloudJobRunner NewRunner(FakeGcp gcp, InMemoryRunRepository? repo = null, Action<string, JobPhase>? onPhaseChanged = null)
         => new(gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository(), onPhaseChanged);
@@ -179,12 +173,15 @@ public class CloudJobRunnerTests
         var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-09-19T08:00:00Z"));
         var jobId = "job-8";
         var spec = ValidSpec(jobId);
-        var gcp = new FakeGcp(time).WithPreemption(spec.VmName, "us-central1-a", TimeSpan.Zero);
+        // Never: a worker that had already written its result before the VM was reclaimed is downloaded (see
+        // CloudJobRunnerResumeAndSettleTests); this one never finished, so the loss is the run's failure.
+        var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithPreemption(spec.VmName, "us-central1-a", TimeSpan.Zero);
         var runner = NewRunner(gcp);
 
         var result = await runner.RunAsync(ValidRequest(jobId), CancellationToken.None);
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldBe(RunErrorCodes.VmUnhealthy);
     }
 
     [Fact]

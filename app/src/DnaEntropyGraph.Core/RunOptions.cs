@@ -41,6 +41,13 @@ public sealed record RunOptions
 
     // ---- Input ----
 
+    /// <summary>
+    /// The file the user dropped or browsed to (issue #460). Read-only to the app: JobEngine copies it
+    /// under app data and the copy is what is uploaded (Hard Rule 14). Null means "no input chosen"
+    /// and a run with none fails before any cloud resource exists.
+    /// </summary>
+    public string? InputPath { get; init; }
+
     /// <summary>Manifest: <c>inputs[].informat</c>. Default "Auto" (auto-detect, matching <see cref="Inputs.SequenceSniffer" />).</summary>
     public InputFormat Format { get; init; } = InputFormat.Auto;
 

@@ -169,4 +169,10 @@ public sealed record VmSpec(
     }
 }
 
-public sealed record VmDescriptor(string Name, string Zone, string Status, string? StatusReason = null);
+/// <summary>
+/// A VM as a gateway reports it. <paramref name="CreatedAt"/> is when Compute Engine created the instance (the
+/// <c>creationTimestamp</c> of the real instance resource, which a real gateway MUST fill): the VM's own
+/// <c>maxRunDuration</c> clock starts there, so the runner measures its result deadline from it. Null means the gateway
+/// did not say, and the runner falls back to measuring from the moment the run reached Running.
+/// </summary>
+public sealed record VmDescriptor(string Name, string Zone, string Status, string? StatusReason = null, DateTimeOffset? CreatedAt = null);

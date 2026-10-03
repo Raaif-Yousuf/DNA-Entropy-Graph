@@ -37,7 +37,7 @@ public sealed partial class NewRunViewModel : ObservableObject
     private async Task StartRunAsync(CancellationToken cancellationToken)
     {
         _settingsStore.SetString("LastModelId", ModelId);
-        var options = new RunOptions { ModelId = ModelId, RunTarget = "Cloud" };
+        var options = new RunOptions { ModelId = ModelId, RunTarget = "Cloud", InputPath = SelectedInputPath };
         var jobId = await _jobEngine.StartRunAsync(options, cancellationToken).ConfigureAwait(false);
         _navigator.NavigateTo("RunProgress", jobId);
     }

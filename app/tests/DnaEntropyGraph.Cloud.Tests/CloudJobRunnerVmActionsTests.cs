@@ -28,13 +28,7 @@ public class CloudJobRunnerVmActionsTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRequest Request(string jobId, AfterTaskAction afterTask = AfterTaskAction.KeepAlive, string installationId = "install-1") => new(
-        JobId: jobId,
-        Spec: Spec(jobId, installationId),
-        Zones: ["us-central1-a"],
-        InputObjectKeys: [],
-        OutputObjectKeys: [],
-        AfterTask: afterTask);
+    private static CloudJobRequest Request(string jobId, AfterTaskAction afterTask = AfterTaskAction.KeepAlive, string installationId = "install-1") => TestInputs.Request(jobId, Spec(jobId, installationId), null, afterTask);
 
     private static CloudJobRunner NewRunner(FakeGcp gcp, InMemoryRunRepository? repo = null)
         => new(gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository());
@@ -149,14 +143,12 @@ public class CloudJobRunnerStartupMetadataTests
 {
     private const string Digest = "ghcr.io/raaif-yousuf/dna-entropy-worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    private static CloudJobRequest Request(string jobId, string? image, string machineType = "g2-standard-8") => new(
-        JobId: jobId,
-        Spec: new VmSpec("my-project", "install-1", jobId, "evo2_7b", "0.1.0", "stop", machineType, TimeSpan.FromHours(2), "DELETE"),
-        Zones: ["us-central1-a"],
-        InputObjectKeys: [],
-        OutputObjectKeys: [],
-        AfterTask: AfterTaskAction.Stop,
-        WorkerImage: image);
+    private static CloudJobRequest Request(string jobId, string? image, string machineType = "g2-standard-8") => TestInputs.Request(
+            jobId,
+            new VmSpec("my-project", "install-1", jobId, "evo2_7b", "0.1.0", "stop", machineType, TimeSpan.FromHours(2), "DELETE"),
+            null,
+            AfterTaskAction.Stop,
+            image);
 
     [Fact]
     public async Task A_run_with_a_worker_image_creates_the_VM_with_the_startup_script_and_attributes()

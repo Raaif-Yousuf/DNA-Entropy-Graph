@@ -239,6 +239,7 @@ public class ResilientGatewayTests
             {
                 methodCount++;
                 var gcp = new FakeGcp().WithTransientFailures(503, 1);
+                gcp.PutObject("x", "x", [1]); // Download of a missing object is a 404 now, as the real bucket would say
                 var rig = new Rig(gcp, FastOptions());
                 var gateway = make(gcp, rig.Pipeline);
 

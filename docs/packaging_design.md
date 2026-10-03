@@ -110,7 +110,8 @@ for the smoke test and the CPU-only `v0.1` walking skeleton). Both are published
 only, publicly and anonymously pullable, built by GitHub Actions from a tagged commit with
 provenance attestation. The app refuses to launch a worker image whose digest is not in
 its own allowlist unless an explicit "developer mode" override is set (`cloud_design.md`
-section 8's supply-chain note); this is what makes "the VM runs released bytes, not your
+section 8's supply-chain note, and section 13 for the mechanism: `worker-images.json`
+embedded in the App project, read by `PinnedWorkerImageProvider`, issue #458); this is what makes "the VM runs released bytes, not your
 working tree" (CLAUDE.md's Critical Pitfalls) an enforced property rather than a
 convention.
 
@@ -130,6 +131,19 @@ fast-boot benefit of a pre-baked image without the per-project storage cost or t
 re-bake maintenance burden.
 
 ## 7. What a release actually produces
+
+**Open item for the release runbook (issue #458):** the app's pinned list is
+`app/src/DnaEntropyGraph.App/worker-images.json` and ships **empty** today. A release must
+write the just-built `-cuda` and `-cpu` digests, keyed by the release version, into that file
+**before** the app is built, or every run in that build ends `no_worker_image`. Nothing does
+this yet; it belongs in `release.yml` and `docs/release_runbook.md`.
+The provider allows an image only if it is exactly the entry for the running app version and
+the variant the run needs (`-cuda` for a GPU tier, `-cpu` otherwise); a pinned image of another
+version or variant is refused (a `-cpu` image on a GPU VM has no torch). Developer mode
+(`developer_mode` in settings.json, no UI) still accepts any digest-pinned reference and marks
+the resolution `IsDeveloperOverride`. That flag is exposed but **not yet recorded**: App has no logger and the run record has no column for it, so nothing reads it today. `PinnedWorkerImageProviderTests` carries a placeholder
+test (`ISSUE_480_...`) asserting the shipped list is empty; it goes red when #480 fills the list
+and must then be replaced by a guard that the app's own version has both entries.
 
 - `Setup.exe` (Velopack, signed) attached to a GitHub Release, plus the delta-update
   assets Velopack generates alongside it.
