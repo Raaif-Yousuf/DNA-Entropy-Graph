@@ -193,7 +193,7 @@ service account and its custom role carry no labels at all: Google's IAM has no 
 field on either. They are found by their fixed ids (`dna-entropy-worker`, `dnaEntropyWorker`,
 `WorkerIdentityNames`), not by label, and are per project and shared by design (a second PC
 adopts them); nothing that bills is unlabelled. DECISION (agent-made, reversible): see #582
-for the bucket, and the DECISION issue filed with #54 for the service account and role. No
+for the bucket, and #593 for the service account and role. No
 guard checks labels on those two, so there is no allowlist entry. See `termination-action-does-not-fire-on-guest-
 shutdown` (memory seed) for the related pitfall this rule alone does not
 cover — the VM must also self-delete via the Compute API, not rely on
