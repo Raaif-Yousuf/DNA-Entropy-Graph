@@ -76,24 +76,8 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
 
         try
         {
-            return await _pipeline.ExecuteAsync(
-                "ProjectCatalog.GetProject",
-                async ct =>
-                {
-                    try
-                    {
-                        return Summarize(await _service.Projects.Get("projects/" + projectId).ExecuteAsync(ct).ConfigureAwait(false));
-                    }
-                    catch (GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
-                    {
-                        return null;
-                    }
-                    catch (GoogleApiException ex)
-                    {
-                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-                    }
-                },
-                cancellationToken).ConfigureAwait(false);
+            var project = await FetchAsync(projectId, cancellationToken).ConfigureAwait(false);
+            return project is null ? null : Summarize(project);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 403 && ex.Kind == CloudErrorKind.Permission)
         {
@@ -102,6 +86,46 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
             return null;
         }
     }
+
+    /// <summary>
+    /// The project NUMBER (digits), which names the results bucket (<c>deg-&lt;projectNumber&gt;-...</c>): Resource Manager
+    /// returns it as <c>name: projects/&lt;number&gt;</c>. A project the account cannot see is a permission error with
+    /// the action "pick another project", never a bucket named after nothing.
+    /// </summary>
+    public async Task<string> GetProjectNumberAsync(string projectId, CancellationToken cancellationToken)
+    {
+        // Permissive on purpose: legacy and domain-scoped ids ("example.com:proj") are real projects the strict grammar rejects.
+        var project = !string.IsNullOrWhiteSpace(projectId) && !projectId.Contains('/') && !projectId.Any(char.IsWhiteSpace) ? await FetchAsync(projectId, cancellationToken).ConfigureAwait(false) : null;
+        var name = project?.Name;
+        if (name is null || !name.StartsWith("projects/", StringComparison.Ordinal) || name.Length == "projects/".Length)
+        {
+            throw new CloudOperationException(
+                new CloudError(SetupErrorCodes.Permission, 404, "The signed-in account cannot see this Google Cloud project."),
+                CloudErrorKind.Permission);
+        }
+
+        return name["projects/".Length..];
+    }
+
+    private Task<Project?> FetchAsync(string projectId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync<Project?>(
+            "ProjectCatalog.GetProject",
+            async ct =>
+            {
+                try
+                {
+                    return await _service.Projects.Get("projects/" + projectId).ExecuteAsync(ct).ConfigureAwait(false);
+                }
+                catch (GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    return null;
+                }
+                catch (GoogleApiException ex)
+                {
+                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                }
+            },
+            cancellationToken);
 
     public async Task<ProjectSummary> CreateProjectAsync(string projectId, string displayName, string installationId, CancellationToken cancellationToken)
     {
