@@ -106,6 +106,23 @@ Stop/Delete. A run with no selected project, or with a target other than Cloud/A
 `RunOptions`: input staging and result download (the request carries no object keys, so
 the runner transfers nothing), and the gateways behind the interfaces are still `FakeGcp`.
 
+**`CloudJobRunner` is a thin sequencer (issue #512).** It keeps the public API (`RunAsync`, `CancelAsync`,
+`StopVmAsync`, `DeleteVmAsync`, `UploadInputsAsync`, `GetPhaseAsync` and the timeout properties) and delegates to
+internal collaborators in `app/src/DnaEntropyGraph.Core/Cloud/`, each with a narrow constructor and no access to another's
+private state. They share one `CloudRunSettings` object (the runner's `init` properties write through to it) and one
+`GatewayCalls` (the per-call deadline, `TryReadTextAsync`).
+
+| Collaborator | Owns |
+|---|---|
+| `PreflightChecks` | Preflight steps 1-4 (project active, billing, Compute API, GPU quota). |
+| `RunTransfer` | Input upload and manifest, output download with checksum and the `SafeRelativeOutputPath` rule, the run's output folder (Hard Rule 14). |
+| `VmProvisioner` | The zone ladder, adoption of an existing VM, and the **only** in-flight create state (`_inflightCreates`, `SettleInflightCreatesAsync`). |
+| `ResultWaiter` | Boot wait, `result.json` poll, VM-lost detection and the worker's `status.json` error code. |
+| `VmTerminator` | Stop/delete/verify of a VM (`EnsureVmEndedAsync`, by label, `DeleteOwnedVmsAndVerifyAsync`), the run page's Stop/Delete. |
+| `VmCanceller` | The cancel path: asks `VmProvisioner` to settle, deletes via `VmTerminator`, records exactly one terminal state. |
+| `RunOutcomeRecorder` | `FailAsync` and `FinishAsync`: how a run ends in a recorded terminal state. |
+| `RunRowStore` | The only writer of phases and row annotations (committed before the UI callback). |
+
 ## 4. The `JobPhase` state machine
 
 ```
