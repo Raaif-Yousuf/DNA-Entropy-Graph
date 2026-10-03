@@ -935,6 +935,12 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="SetupAction_FixBillingAccount" xml:space="preserve">
     <value>Fix billing account</value>
   </data>
+  <data name="SetupError_BUCKET_CONFIG_NOT_APPLIED" xml:space="preserve">
+    <value>Google created your results storage but it did not take every setting the app asked for (private access or the automatic cleanup rules). Choose Try again and the app will repair it. If it keeps happening, wait a few minutes before you do.</value>
+  </data>
+  <data name="SetupError_BUCKET_NAME_TAKEN" xml:space="preserve">
+    <value>Google would not give your results storage any of the names the app tried, because other people already use them. Choose Try again and the app will pick new names.</value>
+  </data>
   <data name="SetupAction_CopyBillingRequest" xml:space="preserve">
     <value>Copy request for the billing admin</value>
   </data>

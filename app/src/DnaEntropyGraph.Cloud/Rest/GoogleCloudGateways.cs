@@ -2,19 +2,21 @@ using DnaEntropyGraph.Core.Cloud;
 using Google.Apis.Cloudbilling.v1;
 using Google.Apis.CloudResourceManager.v3;
 using Google.Apis.ServiceUsage.v1;
+using Google.Apis.Storage.v1;
 
 namespace DnaEntropyGraph.Cloud.Rest;
 
 /// <summary>
 /// The real, Google-backed gateways, each already wrapped in the resilience pipeline. <see cref="ProjectSetup"/> is
-/// the preflight chain (<see cref="IProjectSetupGateway"/>) that <c>CloudJobRunner</c> consumes; the other three are
-/// the wizard's steps 3 to 5.
+/// the preflight chain (<see cref="IProjectSetupGateway"/>) that <c>CloudJobRunner</c> consumes; the next three are
+/// the wizard's steps 3 to 5, and <see cref="Storage"/> is the results bucket and the object calls (issue #53).
 /// </summary>
 public sealed record GoogleCloudGatewaySet(
     IProjectCatalogGateway ProjectCatalog,
     IBillingGateway Billing,
     IServiceEnablementGateway Services,
-    IProjectSetupGateway ProjectSetup);
+    IProjectSetupGateway ProjectSetup,
+    IStorageGateway Storage);
 
 /// <summary>
 /// The one place the real gateways are built, and so the one place production switches from <see cref="FakeGcp"/> to
@@ -35,6 +37,8 @@ public static class GoogleCloudGateways
         var billing = new ResilientBillingGateway(new GoogleBillingGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options))), pipeline);
         var services = new GoogleServiceUsageGateway(new ServiceUsageService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options);
 
+        var storage = new GoogleStorageGateway(new StorageService(GoogleRestClient.CreateInitializer(tokens, options)), catalog, pipeline, options);
+
         return new GoogleCloudGatewaySet(
             // Not wrapped: the project catalog and the service-enablement gateway route each of their own HTTP calls through
             // the pipeline (a create or enable is a POST plus polled reads, and one retry around the whole thing would
@@ -42,6 +46,9 @@ public static class GoogleCloudGateways
             catalog,
             billing,
             services,
-            new GoogleProjectSetupGateway(catalog, billing, services));
+            new GoogleProjectSetupGateway(catalog, billing, services),
+            // Not wrapped either: EnsureBucketAsync is a list, a create, a read-back and a patch, and a whole-method retry would
+            // replay the create. Each of its HTTP calls goes through the pipeline itself.
+            storage);
     }
 }

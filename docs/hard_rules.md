@@ -166,9 +166,15 @@ collides the moment two runs overlap, on the same account or even the same
 run by accident. Every resource must be independently identifiable by the
 job that created it.
 
-**Carve-out:** None. This is a hard boundary, not a default.
+**Carve-out:** None for compute resources. This is a hard boundary, not a default.
+The results bucket is one per Google project and serves every job, so it carries the
+`installation-id` label (and `app`, `app-version`, `lifecycle`) but no `job-id`: its
+objects are keyed by job id under `jobs/<job-id>/` instead. DECISION (agent-made,
+reversible): see #582. There is no label-checking guard for buckets to carry an
+allowlist entry for; `ResultsBucket.Labels` is the one place the bucket labels are
+built and `GoogleStorageGateway` refuses to run without an installation id.
 
-**Guard:** `VmSpec` (and its bucket equivalent) rejects construction if the
+**Guard:** `VmSpec` (and its bucket equivalent, `ResultsBucket.Labels`) rejects construction if the
 job id or installation id is missing, at the point the object is built, not
 at the point it is sent.
 
@@ -180,7 +186,10 @@ the app — only by going to the GCP console directly, which defeats the
 entire "no terminal, no gcloud" promise to the user. `maxRunDuration` and
 `instanceTerminationAction=DELETE` bound the cost of a run that goes wrong.
 
-**Carve-out:** None. See `termination-action-does-not-fire-on-guest-
+**Carve-out:** None for VMs. The results bucket omits `job-id` and `model` (it serves every job
+and every model, and has no run duration); it keeps `app`, `installation-id`,
+`app-version` and `lifecycle`, so the Cloud page still finds it by label. DECISION
+(agent-made, reversible): see #582. See `termination-action-does-not-fire-on-guest-
 shutdown` (memory seed) for the related pitfall this rule alone does not
 cover — the VM must also self-delete via the Compute API, not rely on
 `maxRunDuration` as the only mechanism.
