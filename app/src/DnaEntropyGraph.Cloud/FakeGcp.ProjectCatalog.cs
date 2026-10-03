@@ -214,7 +214,11 @@ public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway, I
     /// </summary>
     public FakeGcp WithServiceEnablementDelay(int polls)
     {
-        _enablementDelayPolls = polls;
+        lock (_catalogGate)
+        {
+            _enablementDelayPolls = polls;
+        }
+
         return this;
     }
 
@@ -233,7 +237,11 @@ public sealed partial class FakeGcp : IProjectCatalogGateway, IBillingGateway, I
     /// <summary>The user is a member of the project but not its Owner: enabling throws <see cref="SetupErrorCodes.NotProjectOwner"/>.</summary>
     public FakeGcp WithNotProjectOwner(string projectId)
     {
-        _notOwnerProjects.Add(projectId);
+        lock (_catalogGate)
+        {
+            _notOwnerProjects.Add(projectId);
+        }
+
         return this;
     }
 

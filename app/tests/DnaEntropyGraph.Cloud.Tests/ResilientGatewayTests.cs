@@ -230,9 +230,7 @@ public class ResilientGatewayTests
             (typeof(IStorageGateway), (g, p) => new ResilientStorageGateway(g, p)),
             (typeof(IProjectSetupGateway), (g, p) => new ResilientProjectSetupGateway(g, p)),
             (typeof(IQuotaGateway), (g, p) => new ResilientQuotaGateway(g, p)),
-            (typeof(IProjectCatalogGateway), (g, p) => new ResilientProjectCatalogGateway(g, p)),
             (typeof(IBillingGateway), (g, p) => new ResilientBillingGateway(g, p)),
-            (typeof(IServiceEnablementGateway), (g, p) => new ResilientServiceEnablementGateway(g, p)),
         };
 
         var methodCount = 0;
@@ -259,6 +257,26 @@ public class ResilientGatewayTests
 
         methodCount.ShouldBeGreaterThan(10);
         failures.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// The project catalog and service-usage gateways make a mutating POST plus polled reads. A wrapper that sends the
+    /// whole call through one retry would replay the POST when a read fails, so the real gateways pipeline each HTTP
+    /// call themselves and must never be wrapped. This fails if a wrapper is added to either one (by type name, so it
+    /// cannot be satisfied by deleting the class and keeping the wrapping), and if no Resilient wrapper for them exists.
+    /// </summary>
+    [Fact]
+    public void The_catalog_and_service_usage_gateways_are_never_wrapped_in_a_resilient_decorator()
+    {
+        var gateways = DnaEntropyGraph.Cloud.Rest.GoogleCloudGateways.Create(new Rest.StubTokenSource(), new CloudCallPipeline(FastOptions(), new FakeGcp(), new CloudRetryLog()));
+
+        gateways.ProjectCatalog.GetType().Name.ShouldBe("GoogleProjectCatalogGateway");
+        gateways.Services.GetType().Name.ShouldBe("GoogleServiceUsageGateway");
+        typeof(CloudCallPipeline).Assembly.GetTypes()
+            .Select(t => t.Name)
+            .Where(n => n.StartsWith("Resilient", StringComparison.Ordinal) && (n.Contains("ProjectCatalog", StringComparison.Ordinal) || n.Contains("ServiceEnablement", StringComparison.Ordinal)))
+            .ShouldBeEmpty("a Resilient wrapper for the catalog or service-usage gateway exists; wrapping them re-POSTs on a failed read");
+        gateways.Billing.GetType().Name.ShouldBe("ResilientBillingGateway");
     }
 
     private static object? ArgumentFor(ParameterInfo parameter)

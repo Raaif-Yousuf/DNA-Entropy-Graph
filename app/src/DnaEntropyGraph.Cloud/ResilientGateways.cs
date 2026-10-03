@@ -102,27 +102,6 @@ public sealed class ResilientProjectSetupGateway : IProjectSetupGateway
         => _pipeline.ExecuteAsync("ProjectSetup.EnableComputeApi", token => _inner.EnableComputeApiAsync(projectId, token), cancellationToken);
 }
 
-public sealed class ResilientProjectCatalogGateway : IProjectCatalogGateway
-{
-    private readonly IProjectCatalogGateway _inner;
-    private readonly CloudCallPipeline _pipeline;
-
-    public ResilientProjectCatalogGateway(IProjectCatalogGateway inner, CloudCallPipeline pipeline)
-    {
-        _inner = inner;
-        _pipeline = pipeline;
-    }
-
-    public Task<IReadOnlyList<ProjectSummary>> ListActiveProjectsAsync(CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("ProjectCatalog.ListActiveProjects", token => _inner.ListActiveProjectsAsync(token), cancellationToken);
-
-    public Task<ProjectSummary?> GetProjectAsync(string projectId, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("ProjectCatalog.GetProject", token => _inner.GetProjectAsync(projectId, token), cancellationToken);
-
-    public Task<ProjectSummary> CreateProjectAsync(string projectId, string displayName, string installationId, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("ProjectCatalog.CreateProject", token => _inner.CreateProjectAsync(projectId, displayName, installationId, token), cancellationToken);
-}
-
 public sealed class ResilientBillingGateway : IBillingGateway
 {
     private readonly IBillingGateway _inner;
@@ -142,24 +121,6 @@ public sealed class ResilientBillingGateway : IBillingGateway
 
     public Task LinkProjectAsync(string projectId, string billingAccountId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Billing.LinkProject", token => _inner.LinkProjectAsync(projectId, billingAccountId, token), cancellationToken);
-}
-
-public sealed class ResilientServiceEnablementGateway : IServiceEnablementGateway
-{
-    private readonly IServiceEnablementGateway _inner;
-    private readonly CloudCallPipeline _pipeline;
-
-    public ResilientServiceEnablementGateway(IServiceEnablementGateway inner, CloudCallPipeline pipeline)
-    {
-        _inner = inner;
-        _pipeline = pipeline;
-    }
-
-    public Task<bool> IsServiceEnabledAsync(string projectId, string serviceId, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Services.IsServiceEnabled", token => _inner.IsServiceEnabledAsync(projectId, serviceId, token), cancellationToken);
-
-    public Task EnableServicesAsync(string projectId, IReadOnlyList<string> serviceIds, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Services.EnableServices", token => _inner.EnableServicesAsync(projectId, serviceIds, token), cancellationToken);
 }
 
 public sealed class ResilientQuotaGateway : IQuotaGateway

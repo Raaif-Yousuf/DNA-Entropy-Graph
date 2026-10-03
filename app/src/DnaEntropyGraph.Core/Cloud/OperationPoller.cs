@@ -118,7 +118,11 @@ public static class OperationPoller
     // specifically recognize is given (this one is poller-local, not a Google code), and a poll deadline expiring is
     // meant to classify the same way a real HttpRequestException/timeout would (docs/cloud_design.md section 5's table).
     private static OperationOutcome<T> TimedOut<T>(TimeSpan deadline)
-        => OperationOutcome<T>.Failed(new CloudError(TimeoutCode, null, $"Polling timed out after {deadline} without the operation reporting done."));
+        => OperationOutcome<T>.Failed(TimeoutError(deadline));
+
+    /// <summary>The error for a spent deadline; also used by a caller that runs its own first call inside the same deadline.</summary>
+    public static CloudError TimeoutError(TimeSpan deadline)
+        => new(TimeoutCode, null, $"Polling timed out after {deadline} without the operation reporting done.");
 }
 
 /// <summary>One poll of an in-flight operation: not done yet, done with a result, or done with an error.</summary>

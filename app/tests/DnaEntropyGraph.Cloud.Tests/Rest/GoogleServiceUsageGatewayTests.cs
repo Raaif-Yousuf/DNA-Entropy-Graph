@@ -113,7 +113,8 @@ public class GoogleServiceUsageGatewayTests
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
         ex.Kind.ShouldBe(CloudErrorKind.Network);
-        rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(10);
+        // The POST's own (tiny) wall time comes off the one budget, so the waits add up to just under the deadline.
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBeInRange(9, 10);
     }
 
     [Fact]
@@ -228,7 +229,8 @@ public class GoogleServiceUsageGatewayTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
-        rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(20);
+        // The POST's own (tiny) wall time comes off the one budget, so the waits add up to just under the deadline.
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBeInRange(19, 20);
     }
 
     [Fact]
@@ -285,6 +287,41 @@ public class GoogleServiceUsageGatewayTests
         rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
         rig.Handler.To(Get, Compute).Count.ShouldBe(1);
         rig.Log.Retries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_hung_batchEnable_POST_ends_at_the_one_deadline_as_a_single_timeout_code_and_is_not_retried()
+    {
+        // The deadline starts before the POST, so the POST (and any retries) share the one budget instead of getting
+        // their own HTTP timeouts before the poll's clock starts.
+        var deadline = TimeSpan.FromMilliseconds(600);
+        var rig = new GoogleGatewayHarness(operationDeadline: deadline, retries: 3);
+        rig.Handler.Hangs(Post, BatchEnable);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var call = rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None);
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => call.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+
+        ex.Error.Code.ShouldBe(OperationPoller.TimeoutCode);
+        started.Elapsed.ShouldBeGreaterThanOrEqualTo(deadline - TimeSpan.FromMilliseconds(100));
+        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
+        rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
+        rig.Log.Retries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_callers_cancel_during_a_hung_batchEnable_POST_is_a_cancel_not_a_timeout()
+    {
+        var rig = new GoogleGatewayHarness(retries: 3);
+        using var cts = new CancellationTokenSource();
+        rig.Handler.Calls(Post, BatchEnable, async token =>
+        {
+            await cts.CancelAsync();
+            await Task.Delay(Timeout.Infinite, token);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+        });
+
+        await Should.ThrowAsync<OperationCanceledException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, cts.Token));
     }
 
     [Fact]

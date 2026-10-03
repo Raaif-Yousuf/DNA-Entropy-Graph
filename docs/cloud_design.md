@@ -796,7 +796,7 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   long-running operation, polled with `OperationPoller` (1 s doubling to 10 s, 5 minute deadline); a timeout is
   `OPERATION_POLL_TIMEOUT`, classed `network`.
 - **One retry per HTTP call, never per composite.** `GoogleProjectCatalogGateway` is not wrapped in
-  `ResilientProjectCatalogGateway`: it sends every call through `CloudCallPipeline` itself. The mutating
+  a `Resilient*` decorator (none exists; `ResilientGatewayTests` fails if one is added): it sends every call through `CloudCallPipeline` itself. The mutating
   `POST /v3/projects` is retried alone; each `operations.get` is its own retried idempotent read. A 429 or 5xx on a
   poll read therefore re-reads and never re-POSTs. The poll deadline is wall-clock (`GoogleCloudOptions.TimeProvider`)
   and covers the time inside each read: `OperationPoller` hands every read a token that ends at the deadline, so a hung
@@ -853,11 +853,13 @@ creates the project's default network).
   backoff would be wrong for a documented cadence); once the operation is done,
   `GET /v1/projects/{id}/services/{service}` is asked every 5 s until each reads `ENABLED`. A finished operation is not
   a ready service, so each service is checked after the operation, but both phases share ONE 5 minute deadline for the
-  whole call (two separate polls could wait twice that), so the call waits at most one deadline. The deadline is
+  whole call (two separate polls could wait twice that), and the deadline starts BEFORE the `batchEnable` POST, so the
+  POST, its retries and their HTTP timeouts share it too: the whole call waits at most one deadline. A deadline that
+  ends the POST is the same `OPERATION_POLL_TIMEOUT`; the caller's own cancel stays a cancel. The deadline is
   wall-clock and covers the time inside each read (a hung GET ends at the deadline, not at the HTTP client's 100 s).
   A timeout in either is `OPERATION_POLL_TIMEOUT`, classed `network`.
 - **One retry per HTTP call, never per composite.** `GoogleServiceUsageGateway` is not wrapped in
-  `ResilientServiceEnablementGateway`: the `batchEnable` POST is retried alone, and each `operations.get` and
+  a `Resilient*` decorator (none exists; `ResilientGatewayTests` fails if one is added): the `batchEnable` POST is retried alone, and each `operations.get` and
   `services.get` is its own retried idempotent read. A 429 or 5xx while polling re-reads and never re-POSTs; a poll
   read that keeps failing ends the call as `network` after one POST. The caller's own cancel still surfaces as a cancel.
 - **Errors.** The reason and kind decide first: a 403 that says Service Usage is off is `api_disabled`, billing off is `billing`, an organization policy is `org_policy`. A remaining plain permission 403, on the call or as `PERMISSION_DENIED` inside the operation, is `NOT_PROJECT_OWNER` (kind

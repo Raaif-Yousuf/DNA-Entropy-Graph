@@ -224,7 +224,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>The Compute Engine API is disabled on the project. <see cref="EnableComputeApiAsync"/> clears this, matching the real API's idempotent enable.</summary>
     public FakeGcp WithComputeApiOff(string projectId)
     {
-        _apiDisabledProjects.Add(projectId);
+        lock (_catalogGate)
+        {
+            _apiDisabledProjects.Add(projectId);
+        }
+
         return this;
     }
 
@@ -1249,7 +1253,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public Task<bool> IsComputeApiEnabledAsync(string projectId, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        return Task.FromResult(!_apiDisabledProjects.Contains(projectId));
+        lock (_catalogGate)
+        {
+            return Task.FromResult(!_apiDisabledProjects.Contains(projectId));
+        }
     }
 
     public Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken)
@@ -1258,7 +1265,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // Real `gcloud services enable` is idempotent; scripting it as an
         // immediate, unconditional clear matches that, minus the real
         // API's ~30-60s LRO delay (tracked as a known gap in issue #390).
-        _apiDisabledProjects.Remove(projectId);
+        lock (_catalogGate)
+        {
+            _apiDisabledProjects.Remove(projectId);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -1292,7 +1303,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             throw Build(CloudErrorKind.Billing, "BILLING_DISABLED", 403, $"The billing account for the owning project '{projectId}' is disabled.");
         }
 
-        if (_apiDisabledProjects.Contains(projectId))
+        bool apiDisabled;
+        lock (_catalogGate)
+        {
+            apiDisabled = _apiDisabledProjects.Contains(projectId);
+        }
+
+        if (apiDisabled)
         {
             throw Build(CloudErrorKind.ApiDisabled, "SERVICE_DISABLED", 403, $"Compute Engine API has not been used in project {projectId} before or it is disabled.");
         }

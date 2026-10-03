@@ -8,8 +8,8 @@ using Google.Apis.Json;
 namespace DnaEntropyGraph.Cloud.Rest;
 
 /// <summary>
-/// The real <see cref="IProjectCatalogGateway"/> over Cloud Resource Manager v3 REST (issue #50). It is NOT wrapped in
-/// <see cref="ResilientProjectCatalogGateway"/>: it routes every HTTP call through <see cref="CloudCallPipeline"/>
+/// The real <see cref="IProjectCatalogGateway"/> over Cloud Resource Manager v3 REST (issue #50). It is never wrapped in a
+/// resilience decorator (none exists for it; a test fails if one is added): it routes every HTTP call through <see cref="CloudCallPipeline"/>
 /// itself, because project creation is several calls. <c>projects.create</c> is a long-running operation (it returns
 /// an operation, and the real error, project limit or organization policy, arrives in the polled one), and wrapping the
 /// whole composite in one retry would replay the non-idempotent POST whenever a poll read hit a 429 or a timeout.
