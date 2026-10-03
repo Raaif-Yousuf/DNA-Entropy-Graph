@@ -39,7 +39,7 @@ namespace DnaEntropyGraph.Cloud;
 /// failure is armed afterward through the fluent setters below, never
 /// through a constructor argument.
 /// </summary>
-public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGateway, IQuotaGateway, IGcpAccount, ICloudTokenRefresher
+public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGateway, IQuotaGateway, IGcpAccount, ICloudTokenRefresher
 {
     private readonly TimeProvider _timeProvider;
 
@@ -201,17 +201,34 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     // Scripting API - one line per scenario, as issue #49 asks for.
     // ----------------------------------------------------------------
 
+    // One lock for the whole billing-off set: the catalogue and billing fakes (FakeGcp.ProjectCatalog.cs) share it with the runner fake.
+    private bool IsBillingOff(string projectId)
+    {
+        lock (_catalogGate)
+        {
+            return _billingOffProjects.Contains(projectId);
+        }
+    }
+
     /// <summary>The project's billing account is off. Every <see cref="CreateVmAsync"/> for it throws <see cref="CloudErrorKind.Billing"/>; preflight's <see cref="IsBillingEnabledAsync"/> reports it too.</summary>
     public FakeGcp WithBillingOff(string projectId)
     {
-        _billingOffProjects.Add(projectId);
+        lock (_catalogGate)
+        {
+            _billingOffProjects.Add(projectId);
+        }
+
         return this;
     }
 
     /// <summary>The Compute Engine API is disabled on the project. <see cref="EnableComputeApiAsync"/> clears this, matching the real API's idempotent enable.</summary>
     public FakeGcp WithComputeApiOff(string projectId)
     {
-        _apiDisabledProjects.Add(projectId);
+        lock (_catalogGate)
+        {
+            _apiDisabledProjects.Add(projectId);
+        }
+
         return this;
     }
 
@@ -1248,13 +1265,16 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     public Task<bool> IsBillingEnabledAsync(string projectId, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        return Task.FromResult(!_billingOffProjects.Contains(projectId));
+        return Task.FromResult(!IsBillingOff(projectId));
     }
 
     public Task<bool> IsComputeApiEnabledAsync(string projectId, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        return Task.FromResult(!_apiDisabledProjects.Contains(projectId));
+        lock (_catalogGate)
+        {
+            return Task.FromResult(!_apiDisabledProjects.Contains(projectId));
+        }
     }
 
     public Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken)
@@ -1263,7 +1283,11 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         // Real `gcloud services enable` is idempotent; scripting it as an
         // immediate, unconditional clear matches that, minus the real
         // API's ~30-60s LRO delay (tracked as a known gap in issue #390).
-        _apiDisabledProjects.Remove(projectId);
+        lock (_catalogGate)
+        {
+            _apiDisabledProjects.Remove(projectId);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -1292,12 +1316,18 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         // (billing before API before permission/org policy) so a project
         // scripted with more than one project-wide failure still reports
         // the one a real preflight run would surface first.
-        if (_billingOffProjects.Contains(projectId))
+        if (IsBillingOff(projectId))
         {
             throw Build(CloudErrorKind.Billing, "BILLING_DISABLED", 403, $"The billing account for the owning project '{projectId}' is disabled.");
         }
 
-        if (_apiDisabledProjects.Contains(projectId))
+        bool apiDisabled;
+        lock (_catalogGate)
+        {
+            apiDisabled = _apiDisabledProjects.Contains(projectId);
+        }
+
+        if (apiDisabled)
         {
             throw Build(CloudErrorKind.ApiDisabled, "SERVICE_DISABLED", 403, $"Compute Engine API has not been used in project {projectId} before or it is disabled.");
         }

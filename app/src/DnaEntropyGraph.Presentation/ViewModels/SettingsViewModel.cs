@@ -55,14 +55,39 @@ public sealed partial class SettingsViewModel : ObservableObject
         _filePicker = filePicker;
         _folderLauncher = folderLauncher;
         _time = time;
-        _theme = settingsStore.GetString(ThemeKey) ?? "System";
+        _theme = ReadTheme(settingsStore) ?? "System";
+    }
+
+    private static string? ReadTheme(ISettingsStore settingsStore)
+    {
+        try
+        {
+            return settingsStore.GetString(ThemeKey);
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            // #558: a locked settings file must not crash opening Settings.
+            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while reading theme: {ex.GetType().Name}");
+            return null;
+        }
     }
 
     [RelayCommand]
     private void SetTheme(string theme)
     {
         Theme = theme;
-        _settingsStore.SetString(ThemeKey, theme);
+        try
+        {
+            _settingsStore.SetString(ThemeKey, theme);
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            // The theme still applies for this session; it just is not remembered (#558), so say so.
+            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while saving theme: {ex.GetType().Name}");
+            _toastService.ShowToast(_strings.GetString("ThemeNotSaved_Title"), _strings.GetString("ThemeNotSaved_Body"));
+            return;
+        }
+
         // Plain (non-dotted) resw key: see ShellViewModel.BuildStatusPillText's comment.
         _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), theme);
     }

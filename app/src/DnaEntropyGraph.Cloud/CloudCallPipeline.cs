@@ -214,6 +214,13 @@ public sealed class CloudCallPipeline
             return false;
         }
 
+        // A spent poll deadline is not a flaky call: replaying the call that started the operation would start it a
+        // second time (a duplicate create answers 409) and wait the whole deadline again, once per retry.
+        if (cloud.Error.Code == OperationPoller.TimeoutCode)
+        {
+            return false;
+        }
+
         if (IsPermanent(cloud.Kind) || IsPermanent(CloudErrorClassifier.Classify(cloud.Error)))
         {
             return false;

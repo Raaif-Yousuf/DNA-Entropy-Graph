@@ -33,6 +33,12 @@
   <data name="ThemeUpdated_Title" xml:space="preserve">
     <value>Theme updated</value>
   </data>
+  <data name="ThemeNotSaved_Title" xml:space="preserve">
+    <value>Theme not saved</value>
+  </data>
+  <data name="ThemeNotSaved_Body" xml:space="preserve">
+    <value>The theme changed for now but could not be remembered. Close other copies of the app, then choose the theme again.</value>
+  </data>
   <data name="NavNewRun.Content" xml:space="preserve">
     <value>New run</value>
   </data>
@@ -248,6 +254,9 @@
   </data>
   <data name="RunError_input_too_long" xml:space="preserve">
     <value>Your sequence file is longer than one run can analyze. Split it into smaller files, choose one of them, then start the run again.</value>
+  </data>
+  <data name="RunError_installation_id_unusable" xml:space="preserve">
+    <value>The file that identifies this installation could not be used, so the run did not start. A copy was set aside in the DNAEntropyGraph folder under Local AppData, named installation_id.invalid- or settings.json.unreadable- followed by a date. Restore the id from that copy, or send the copy to support.</value>
   </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
@@ -872,4 +881,70 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="DiagnosticsFileTypeLabel" xml:space="preserve">
     <value>Zip file</value>
   </data>
+  <data name="SetupError_PROJECT_QUOTA" xml:space="preserve">
+    <value>Google says this account has reached its limit on Google Cloud projects, so a new one cannot be made. Choose Pick an existing project and use one you already have.</value>
+  </data>
+  <data name="SetupError_ORG_POLICY_BLOCK" xml:space="preserve">
+    <value>Your organization's Google Cloud settings do not allow this action. Choose Copy message for IT and send it to your IT administrator.</value>
+  </data>
+  <data name="SetupError_OTHER" xml:space="preserve">
+    <value>Google would not finish setting up your project. Choose Try again. If it keeps happening, wait a few minutes before you do.</value>
+  </data>
+  <data name="SetupAction_PickExistingProject" xml:space="preserve">
+    <value>Pick an existing project</value>
+  </data>
+  <data name="SetupAction_TryAgain" xml:space="preserve">
+    <value>Try again</value>
+  </data>
+  <data name="SetupAction_CopyMessageForIt" xml:space="preserve">
+    <value>Copy message for IT</value>
+  </data>
+  <data name="SetupError_NO_BILLING" xml:space="preserve">
+    <value>This project has no billing account, so Google will not start any computer. Choose Link billing to open Google's billing page and add a payment method.</value>
+  </data>
+  <data name="SetupError_BILLING_NO_PERMISSION" xml:space="preserve">
+    <value>You can use this billing account but you are not allowed to link projects to it. Choose Copy request for the billing admin and send it to the person who manages billing.</value>
+  </data>
+  <data name="SetupError_PERMISSION" xml:space="preserve">
+    <value>Your Google account is not allowed to do this in the project. Choose Copy request for the project owner and send it to the person who owns the project.</value>
+  </data>
+  <data name="SetupError_API_DISABLED" xml:space="preserve">
+    <value>A Google service this step needs is switched off in your project. Choose Turn it on, then try the step again.</value>
+  </data>
+  <data name="SetupAction_CopyRequestForOwner" xml:space="preserve">
+    <value>Copy request for the project owner</value>
+  </data>
+  <data name="SetupAction_TurnItOn" xml:space="preserve">
+    <value>Turn it on</value>
+  </data>
+  <data name="SetupAction_LinkBilling" xml:space="preserve">
+    <value>Link billing</value>
+  </data>
+  <data name="SetupError_BILLING_STILL_OFF" xml:space="preserve">
+    <value>Google accepted that billing account, but this project still has billing off. The account may be suspended or may have no working payment method. Choose Pick another billing account and select a different one.</value>
+  </data>
+  <data name="SetupAction_PickAnotherBillingAccount" xml:space="preserve">
+    <value>Pick another billing account</value>
+  </data>
+  <data name="SetupError_BILLING_ACCOUNT_OFF" xml:space="preserve">
+    <value>The billing account linked to this project is not working, and you have no other billing account to use. It may be suspended or may have no working payment method. Choose Fix billing account to open Google's billing page for this project, fix the account or add a new one there, then check again.</value>
+  </data>
+  <data name="SetupAction_FixBillingAccount" xml:space="preserve">
+    <value>Fix billing account</value>
+  </data>
+  <data name="SetupAction_CopyBillingRequest" xml:space="preserve">
+    <value>Copy request for the billing admin</value>
+  </data>
+  <data name="SetupBillingRequestText" xml:space="preserve">
+    <value>Hello, I use DNA Entropy Graph, which runs analyses on a Google Cloud project. Please link the project {project} to the billing account {account}, or give me the Billing Account User role on it. Thank you.</value>
+  </data>
+  <data name="SetupError_NOT_PROJECT_OWNER" xml:space="preserve">
+    <value>You can use this project but you are not its Owner, so you cannot switch on the Google services the app needs. Choose Create project to make one of your own.</value>
+  </data>
+  <data name="SetupAction_CreateProject" xml:space="preserve">
+    <value>Create project</value>
+  </data>
 </root>
+
+
+
