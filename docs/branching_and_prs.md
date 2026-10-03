@@ -100,6 +100,34 @@ inside the grace period (`--grace-seconds`, default 120) is polled again, not re
 after that wait and the message says how long it waited. `--allow-no-checks` is for a PR that genuinely has no CI; it is
 never the workaround for "the checks have not shown up yet" (it also waits the grace period first).
 
+## Landing a worktree branch: `scripts/land_wt.py`
+
+Every lane works in its own worktree and commits there, so the orchestrator lands a **commit**, not a working tree. Given
+`<branch> @ <sha>`, `scripts/land_wt.py` (#510) verifies that exact commit in a throwaway worktree and opens the PR; it
+never touches any checkout's working tree and never force-pushes.
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <sha> --title "feat: ..." --body-file body.md          # premerge --fast
+worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <sha> --title "feat: ..." --body-file body.md --full   # full premerge
+gh pr merge <n> --merge                                                                                                                # your call, after CI
+```
+
+In order: fetch; the sha must be the branch tip (a stale sha refuses); a control-byte scan of the changed text files
+(MEASURED 2026-10-02: an agent's `scripts\v` became `\x0b`); a detached worktree under `%TEMP%\landwt` at the sha; origin/main
+merged in if the branch is behind (`docs/ToTest.md` is union-resolved, since two lanes appending rows is routine; **any other
+conflict aborts the merge and refuses with the file list**, so the lane resolves it); premerge inside the worktree with
+`worker\.venv` reached through a junction and `PYTHONPATH=<wt>\worker\src`; on green, `HEAD` is pushed to
+`refs/heads/<branch>` (`--land-branch` to rename) and `gh pr create` runs. Red premerge prints the failing gates and the
+log path and pushes nothing.
+
+**The junction is removed with `os.rmdir`, then checked, then `git worktree remove`, on success and on every failure**
+(MEASURED: an earlier tool deleted the real venv through a junction). If the link cannot be removed the worktree is left
+in place and named, not removed. A worktree left by a killed run is cleaned the same way at the next start. Exit codes: 0
+PR opened, 1 refused (nothing pushed), 2 usage, 3 premerge red, 4 failed after work began.
+
+`land_pr.py` stays for the shared-checkout case (uncommitted edits, exact paths or hunks); it is a separate script because its
+input and its return-to-main step do not apply here. `--content-dir` is deferred to #576, only needed if a wave goes back to a
+shared checkout.
 ## Closing keywords
 
 A commit message or PR body that says an issue is **not** fixed can still
@@ -109,7 +137,7 @@ leave the number out of that sentence.
 
 ## Agents and branches
 
-During an agent wave the agents run **no git command at all** and leave their
+In a shared-checkout wave the agents run **no git command at all** and leave their
 work uncommitted in the shared checkout; the orchestrator commits with
 explicit pathspecs so one lane's half-finished edit cannot ride along with
 another's. The PR is therefore always the orchestrator's, and the branch is
