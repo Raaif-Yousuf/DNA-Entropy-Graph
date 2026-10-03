@@ -23,6 +23,9 @@ public enum ReattachAction
     /// <summary>The cloud could not be asked (no connection, offline). The row is untouched and the next launch looks again.</summary>
     Deferred,
 
+    /// <summary>An error that is not a missing connection (a refusal, an unreadable row, a failing repository) stopped the look. The row is untouched, the error class is logged and in <see cref="ReattachOutcome.ErrorCode"/>, and the next launch looks again. It does not keep the reconnect probe alive (issue #559).</summary>
+    Errored,
+
     /// <summary>Not a cloud run (a local-engine run has no cloud state to reattach).</summary>
     Skipped,
 }
@@ -200,6 +203,21 @@ public sealed class JobReconciler
     /// Returns what it did. Never throws for a cloud failure or an error in one row: that row or VM gets a <see cref="LifecycleAction.Deferred"/> or <see cref="LifecycleAction.Failed"/> outcome and the pass goes on with the rest.
     /// </summary>
     public async Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await EnforceLifecycleCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            // The pass itself failed (a failing repository): deferred if and only if it is a network class, so a non-network failure
+            // cannot keep the reconnect probe alive (issue #559). The caller still sees the exception.
+            _lifecycleDeferred = IsNoAnswerException(ex);
+            throw;
+        }
+    }
+
+    private async Task<IReadOnlyList<LifecycleOutcome>> EnforceLifecycleCoreAsync(CancellationToken cancellationToken)
     {
         var outcomes = new List<LifecycleOutcome>();
         var installation = InstallationId.GetOrCreate(_settings);
@@ -423,7 +441,7 @@ public sealed class JobReconciler
     /// </summary>
     private static void Record(List<LifecycleOutcome> outcomes, string jobId, string vmName, Exception ex)
     {
-        var noAnswer = ex is TimeoutException || (ex is CloudOperationException cloud && IsNoAnswer(cloud));
+        var noAnswer = IsNoAnswerException(ex);
         var code = ex is CloudOperationException c ? c.Error.Code : "TIMEOUT";
         lock (outcomes)
         {
@@ -460,6 +478,13 @@ public sealed class JobReconciler
             .Select(id => RunRowStore.LatestRecord(all, id)!)
             .Where(r => !JobStateMachine.IsTerminal(r.Phase) && r.CreatedUtc < _startedAt)
             .ToList();
+        var candidateIds = candidates.Select(r => r.JobId).ToHashSet(StringComparer.Ordinal);
+        foreach (var stale in _deferredRuns.Keys.Where(id => !candidateIds.Contains(id)))
+        {
+            // A run deferred offline that has since ended (cancelled, deleted) is no longer anyone's to look at: it must not keep the probe alive.
+            _deferredRuns.TryRemove(stale, out _);
+        }
+
         var judgements = candidates.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToList();
         var tasks = candidates.Select((row, i) => ReattachOneAsync(row, judgements[i], cancellationToken)).ToList();
         return (Task.WhenAll(judgements.Select(j => j.Task)), WhenAllOutcomesAsync(tasks));
@@ -518,8 +543,15 @@ public sealed class JobReconciler
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // A failing repository or an unforeseen error must not stop the other runs from being reattached; the row is
-            // left as it is and the next launch tries again.
-            return new ReattachOutcome(row.JobId, ReattachAction.Deferred, null, ex.GetType().Name);
+            // left as it is and the next launch tries again. Only a missing answer from the cloud (network class) is Deferred and keeps the
+            // reconnect probe alive; anything else is logged by class and left for the next launch (issue #559).
+            if (IsNoAnswerException(ex))
+            {
+                return new ReattachOutcome(row.JobId, ReattachAction.Deferred, null, ex is CloudOperationException c ? c.Error.Code : "TIMEOUT");
+            }
+
+            _log.Warning("reconciler", row.JobId, ex.GetType().Name);
+            return new ReattachOutcome(row.JobId, ReattachAction.Errored, null, ex.GetType().Name);
         }
     }
 
@@ -697,6 +729,9 @@ public sealed class JobReconciler
     }
 
     /// <summary>The cloud gave no answer about the run: nothing is connected, or the network is down. That says nothing about the run itself.</summary>
+    private static bool IsNoAnswerException(Exception ex)
+        => ex is TimeoutException || (ex is CloudOperationException cloud && IsNoAnswer(cloud));
+
     private static bool IsNoAnswer(CloudOperationException ex)
         => ex.Error.Code == RunErrorCodes.NotConnectedGatewayCode || ex.Kind == CloudErrorKind.Network;
 

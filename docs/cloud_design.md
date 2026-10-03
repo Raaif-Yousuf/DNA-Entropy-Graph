@@ -637,6 +637,10 @@ it ends; a resumed run is judged as it is handed to its driver and does not hold
 (a) `NetworkChange.NetworkAvailabilityChanged`, which cannot be tested without a network stack and fires on LAN changes that say nothing about Google reachability, and
 (b) feeding reconciler failures into the breaker, which changes what `bypassBreaker` means for every caller. Cost while offline: one pass (a few failing lookups, no retries beyond
 the pipeline's own) per backoff step, never while nothing is deferred. THEORY (unverified): the 30 s first delay and 5 minute cap are reasonable for a laptop waking from sleep; nothing measured them.
+What counts as deferred (DECISION, agent-made, reversible; two cold reviewers disagreed): a run or a lifecycle pass is deferred if and only if the failure is a
+network class (no connection, `CloudErrorKind.Network`, or a lookup deadline). Any other exception while judging a run ends as `ReattachAction.Errored`: logged
+by error class, row untouched, left for the next launch, and it does not keep the probe alive. A lifecycle pass that throws sets deferred by the same rule and
+rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
 
 **Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logspp.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
 because it is called from inside the reconciler's catch blocks. A lifecycle step that throws no longer orphans the reattach: `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
