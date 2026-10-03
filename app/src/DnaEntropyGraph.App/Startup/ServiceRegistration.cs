@@ -158,6 +158,11 @@ public static class ServiceRegistration
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
         services.AddSingleton<IWorkerImageProvider, PinnedWorkerImageProvider>();
+        // Issue #98: the price list ships beside the app (Assets\pricing.json in the output folder) and the New run page's
+        // estimate reads it through this one service. A missing file is a named message on the page, not a crash.
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingSource>(_ => new DnaEntropyGraph.Core.Cost.FilePricingSource(
+            Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
         // LocalEngine.
         services.AddSingleton<LocalEngineManager>();
@@ -182,6 +187,24 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IQuotaGateway>(),
                 sp.GetRequiredService<IRunRepository>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
+        // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
+        // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.
+        // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
+        services.AddSingleton<ActiveRuns>();
+        services.AddSingleton<JobReconciler>(sp =>
+        {
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new JobReconciler(
+                sp.GetRequiredService<CloudJobRunner>(),
+                sp.GetRequiredService<IComputeGateway>(),
+                sp.GetRequiredService<IStorageGateway>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<IRunInputStore>(),
+                sp.GetRequiredService<IWorkerImageProvider>(),
+                sp.GetRequiredService<ActiveRuns>(),
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
+                Services.KnownFolders.Downloads);
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());

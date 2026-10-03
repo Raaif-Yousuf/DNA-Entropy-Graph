@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -175,12 +176,29 @@ public sealed partial class HistoryViewModel : ObservableObject
             _cloud.IsAvailable(run),
             _cloud.CanDelete(run),
             DeleteCloudHint(run),
+            ReasonFor(run),
             new AsyncRelayCommand(() => OpenAsync(run)),
             new AsyncRelayCommand(() => RerunAsync(run), () => IsFinished(run.Phase)),
             new AsyncRelayCommand(() => RedownloadAsync(run)),
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
             new AsyncRelayCommand(() => RemoveAsync(run)));
+    }
+
+    /// <summary>
+    /// The reason line for a finished run (issue #459). A Failed run always has one (an unknown or missing code gets the
+    /// generic message); any other finished run has one only when it was recorded with a code, such as a Completed run
+    /// whose VM end could not be confirmed. A run still going has none.
+    /// </summary>
+    private string? ReasonFor(RunRecord run)
+    {
+        if (!IsFinished(run.Phase))
+        {
+            return null;
+        }
+
+        var hasCode = !string.IsNullOrWhiteSpace(run.ErrorCode);
+        return run.Phase == JobPhase.Failed || hasCode ? _strings.GetString(RunErrorCodes.ResourceKey(run.ErrorCode)) : null;
     }
 
     /// <summary>Why Delete cloud copy is off for this run (one reason, one action), or empty when it is on.</summary>
