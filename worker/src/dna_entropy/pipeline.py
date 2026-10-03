@@ -595,9 +595,6 @@ def run(
             f"fastaRecords='first': analyzing only the first record; {dropped} other "
             "record(s) in this FASTA were not processed"
         ]
-    if predictor is None:
-        predictor = build_predictor(cfg)
-
     notices: list[str] = list(loaded.notices)
     processed: list[tuple[Contig, DirectionResult]] = []
     reduced_total = 0
@@ -609,6 +606,10 @@ def run(
             ceiling=cfg.max_len,
             seq_len=len(contig.seq),
         )
+    # Built only AFTER every refusal above: loading a real model is the expensive step, and a
+    # refused run must never pay for it.
+    if predictor is None:
+        predictor = build_predictor(cfg)
     try:
         for contig in loaded.contigs:
             dr = analyze_direction(
