@@ -109,6 +109,7 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     private readonly ConcurrentDictionary<(string Name, string Zone), TimeSpan> _maxRunByVm = new();
     private bool _partialFilesOnFailedInputs;
     private TimeSpan _createDelay = TimeSpan.Zero;
+    private long _firstDeleteDelayTicks;
     private bool _stopRejectedUnlessRunning;
     private int _findFailuresRemaining;
     private CloudError? _findError;
@@ -334,6 +335,16 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     {
         _hangsRemaining = count;
         _hangsIgnoreCancellation = ignoreCancellation;
+        return this;
+    }
+
+    /// <summary>
+    /// The first <see cref="DeleteVmAsync"/> takes <paramref name="delay"/> (honouring its token: a caller that gives up first leaves the VM
+    /// in place), like a real delete operation that is still running. Later deletes are immediate.
+    /// </summary>
+    public FakeGcp WithFirstDeleteDelay(TimeSpan delay)
+    {
+        Interlocked.Exchange(ref _firstDeleteDelayTicks, delay.Ticks);
         return this;
     }
 
@@ -901,9 +912,15 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         }
     }
 
-    public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    public async Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
+        var delay = TimeSpan.FromTicks(Interlocked.Exchange(ref _firstDeleteDelayTicks, 0));
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        }
+
         var existed = _vms.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
@@ -915,8 +932,6 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
         {
             throw Build(CloudErrorKind.Other, "NOT_FOUND", 404, $"The resource 'projects/fake/zones/{zone}/instances/{vmName}' was not found");
         }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>

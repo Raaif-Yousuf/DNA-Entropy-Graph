@@ -3,6 +3,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Runs;
 using Shouldly;
 using Xunit;
 
@@ -51,7 +52,7 @@ public class JobReconcilerLifecycleTests
 
         public FakeGcp Gcp => Env.Gcp;
 
-        public JobReconciler Reconciler() => Env.Reconciler(Clock);
+        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout);
 
         /// <summary>A finished run (<paramref name="phase"/>) whose VM exists, finished ten minutes before launch.</summary>
         public async Task SeedFinishedAsync(
@@ -164,6 +165,98 @@ public class JobReconcilerLifecycleTests
         (await rig.VmsAsync("job-kf")).ShouldBeEmpty("startup.sh applies afterKeepAlive at once for a run that did not succeed");
     }
 
+    // phase, keep-alive minutes, minutes since the run finished, VM must survive. Mirrors worker/vm/startup.sh keep_hold:
+    // only a worker exit 0 (Completed, PartiallyCompleted) holds the VM for the window; exit 2 (Failed) and 3 (Cancelled) end it at once.
+    private static readonly (JobPhase Phase, int KeepMinutes, int FinishedAgo, bool Survives)[] KeepAliveRows =
+    [
+        (JobPhase.Completed, 240, 1, true),
+        (JobPhase.PartiallyCompleted, 240, 1, true),
+        (JobPhase.Failed, 240, 1, false),
+        (JobPhase.Cancelled, 240, 1, false),
+        (JobPhase.Completed, 240, 250, false),
+        (JobPhase.PartiallyCompleted, 240, 250, false),
+    ];
+
+    public static TheoryData<JobPhase, int, int, bool> KeepAliveCases
+    {
+        get
+        {
+            var data = new TheoryData<JobPhase, int, int, bool>();
+            foreach (var r in KeepAliveRows)
+            {
+                data.Add(r.Phase, r.KeepMinutes, r.FinishedAgo, r.Survives);
+            }
+
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(KeepAliveCases))]
+    public async Task A_keep_alive_VM_is_held_for_its_window_only_when_the_worker_exited_0(JobPhase phase, int keepMinutes, int finishedMinutesAgo, bool survives)
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-ka", AfterTaskAction.KeepAlive, phase: phase, keepAliveMinutes: keepMinutes, afterKeepAlive: AfterKeepAliveAction.Delete, tweak: row => row with { FinishedAt = Launch.AddMinutes(-finishedMinutesAgo) });
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.VmsAsync("job-ka")).Count.ShouldBe(survives ? 1 : 0, $"{phase}, window {keepMinutes} min, finished {finishedMinutesAgo} min ago");
+    }
+
+    [Fact]
+    public void The_keep_alive_case_table_covers_every_terminal_phase_and_both_outcomes()
+    {
+        KeepAliveRows.Select(c => c.Phase).Distinct().OrderBy(p => p).ShouldBe([JobPhase.Completed, JobPhase.PartiallyCompleted, JobPhase.Cancelled, JobPhase.Failed]);
+        KeepAliveRows.Select(c => c.Survives).Distinct().Count().ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_slow_delete_does_not_expire_under_the_lookup_deadline_and_the_next_VM_is_still_deleted()
+    {
+        var rig = new Rig(g => g.WithFirstDeleteDelay(TimeSpan.FromMilliseconds(600)));
+        await rig.SeedFinishedAsync("job-slow-a", AfterTaskAction.Delete);
+        await rig.SeedFinishedAsync("job-slow-b", AfterTaskAction.Delete);
+
+        var outcomes = await rig.Reconciler(lookupTimeout: TimeSpan.FromMilliseconds(150)).EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.VmsAsync("job-slow-a")).ShouldBeEmpty("a delete is an operation that may outlast a lookup's deadline");
+        (await rig.VmsAsync("job-slow-b")).ShouldBeEmpty();
+        outcomes.Count(o => o.Action == LifecycleAction.VmDeleted).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_delete_that_outlasts_even_the_mutation_deadline_is_deferred_and_the_pass_goes_on_with_the_next_VM()
+    {
+        var rig = new Rig(g => g.WithFirstDeleteDelay(TimeSpan.FromSeconds(30)));
+        await rig.SeedFinishedAsync("job-hang-a", AfterTaskAction.Delete);
+        await rig.SeedFinishedAsync("job-hang-b", AfterTaskAction.Delete);
+
+        var outcomes = await rig.Reconciler(lookupTimeout: TimeSpan.FromMilliseconds(100), mutationTimeout: TimeSpan.FromMilliseconds(200)).EnforceLifecycleAsync(CancellationToken.None);
+
+        outcomes.Count(o => o.Action == LifecycleAction.Deferred).ShouldBe(1);
+        outcomes.Count(o => o.Action == LifecycleAction.VmDeleted).ShouldBe(1);
+        var left = (await rig.VmsAsync("job-hang-a")).Count + (await rig.VmsAsync("job-hang-b")).Count;
+        left.ShouldBe(1, "one delete was deferred; the other VM was not skipped because of it");
+    }
+
+    [Fact]
+    public async Task A_row_that_throws_does_not_end_the_pass_and_the_idle_sweep_still_runs()
+    {
+        var rig = new Rig();
+        // A finished keep-alive run whose finish time makes the expiry arithmetic throw: the one unexpected error a single row can raise.
+        await rig.SeedFinishedAsync("job-bad", AfterTaskAction.KeepAlive, keepAliveMinutes: 30, tweak: row => row with { FinishedAt = DateTimeOffset.MaxValue });
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Stop };
+        var orphan = CloudJobRequestFactory.Create(options, "job-idle-orphan", Project, "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
+        await rig.Gcp.CreateVmAsync(orphan.Spec, Zone, CancellationToken.None);
+        await rig.Gcp.StopVmAsync(orphan.Spec.VmName, Zone, CancellationToken.None);
+        rig.Clock.Advance(TimeSpan.FromDays(10));
+
+        var outcomes = await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.VmsAsync("job-idle-orphan")).ShouldBeEmpty("the idle sweep ran after the bad row");
+        outcomes.ShouldContain(o => o.JobId == "job-bad" && o.Action == LifecycleAction.Failed && o.ErrorCode == nameof(ArgumentOutOfRangeException));
+    }
+
     [Fact]
     public async Task A_VM_labelled_for_another_installation_is_never_touched_even_under_this_installations_job_id()
     {
@@ -196,7 +289,6 @@ public class JobReconcilerLifecycleTests
     {
         var rig = new Rig();
         await rig.SeedFinishedAsync("job-old", AfterTaskAction.Delete, tweak: row => row with { FinishedAt = Launch.AddDays(-30) });
-        rig.Env.Settings.Values[CloudHousekeepingSettings.IdleStoppedVmHoursKey] = "0";
 
         await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
 
@@ -244,7 +336,7 @@ public class JobReconcilerLifecycleTests
         rig.Env.Settings.Values[CloudHousekeepingSettings.IdleStoppedVmHoursKey] = "6";
         CloudHousekeepingSettings.IdleStoppedVmLimit(rig.Env.Settings).ShouldBe(TimeSpan.FromHours(6));
         rig.Env.Settings.Values[CloudHousekeepingSettings.IdleStoppedVmHoursKey] = "0";
-        CloudHousekeepingSettings.IdleStoppedVmLimit(rig.Env.Settings).ShouldBeNull();
+        CloudHousekeepingSettings.IdleStoppedVmLimit(rig.Env.Settings).ShouldBe(TimeSpan.FromHours(72), "zero is the default: there is no off switch");
         rig.Env.Settings.Values[CloudHousekeepingSettings.IdleStoppedVmHoursKey] = "soon";
         CloudHousekeepingSettings.IdleStoppedVmLimit(rig.Env.Settings).ShouldBe(TimeSpan.FromHours(72), "an unreadable value is the default, never off");
         await Task.CompletedTask;
@@ -269,7 +361,7 @@ public class JobReconcilerLifecycleTests
     }
 
     [Fact]
-    public async Task The_idle_limit_setting_changes_what_is_deleted_and_zero_turns_the_sweep_off()
+    public async Task The_idle_limit_setting_changes_what_is_deleted_and_zero_is_the_default_not_off()
     {
         var rig = new Rig();
         await rig.SeedFinishedAsync("job-s", AfterTaskAction.Stop);
@@ -282,11 +374,21 @@ public class JobReconcilerLifecycleTests
         rig.Env.Settings.Values[CloudHousekeepingSettings.IdleStoppedVmHoursKey] = "0";
         rig.Clock.Advance(TimeSpan.FromDays(30));
         await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
-        (await rig.VmsAsync("job-s")).Count.ShouldBe(1, "0 turns the sweep off");
+        (await rig.VmsAsync("job-s")).ShouldBeEmpty("0 is the 72 h default, there is no off switch, and the VM sat stopped for 30 days");
+    }
 
+    [Fact]
+    public async Task The_idle_sweep_reads_the_limit_from_the_setting()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-five", AfterTaskAction.Stop);
+        await rig.StopAsync("job-five");
+        rig.Clock.Advance(TimeSpan.FromHours(10));
         rig.Env.Settings.Values[CloudHousekeepingSettings.IdleStoppedVmHoursKey] = "5";
+
         await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
-        (await rig.VmsAsync("job-s")).ShouldBeEmpty("the setting is what the sweep reads");
+
+        (await rig.VmsAsync("job-five")).ShouldBeEmpty("stopped 10 h ago, limit 5 h");
     }
 
     [Fact]
@@ -368,12 +470,15 @@ public class JobReconcilerLifecycleTests
         var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
         var release = new TaskCompletionSource();
         var started = 0;
+        var bodyRunning = new TaskCompletionSource();
         var driver = rig.Env.Active.TryStart("job-act", async _ =>
         {
             Interlocked.Increment(ref started);
+            bodyRunning.SetResult();
             await release.Task;
         });
         (driver is null).ShouldBeFalse();
+        await bodyRunning.Task;
 
         observer.OnConnectivityChanged(offline: false);
         await observer.WhenIdleAsync();
@@ -399,6 +504,66 @@ public class JobReconcilerLifecycleTests
         inner.Refreshes.ShouldBe(1);
         inner.Changes.ShouldBe([true]);
         await observer.WhenIdleAsync();
+    }
+
+    [Fact]
+    public async Task Reconnects_during_a_slow_pass_coalesce_into_one_follow_up_and_never_overlap()
+    {
+        var running = 0;
+        var maxRunning = 0;
+        var passes = 0;
+        var gate = new TaskCompletionSource();
+        var firstStarted = new TaskCompletionSource();
+        var observer = new ReconcileOnReconnect(new NullObserver(), async _ =>
+        {
+            var n = Interlocked.Increment(ref passes);
+            var now = Interlocked.Increment(ref running);
+            InterlockedMax(ref maxRunning, now);
+            if (n == 1)
+            {
+                firstStarted.SetResult();
+                await gate.Task;
+            }
+
+            Interlocked.Decrement(ref running);
+        });
+
+        observer.OnConnectivityChanged(offline: false);
+        await firstStarted.Task;
+        observer.OnConnectivityChanged(offline: false);
+        observer.OnConnectivityChanged(offline: false);
+        observer.OnConnectivityChanged(offline: false);
+        gate.SetResult();
+        await observer.WhenIdleAsync();
+
+        passes.ShouldBe(2, "three reconnects during pass 1 are one follow-up pass");
+        maxRunning.ShouldBe(1, "two passes must never overlap");
+    }
+
+    [Fact]
+    public async Task A_reconnect_after_the_passes_have_ended_starts_a_fresh_pass_and_a_faulting_pass_does_not_stop_later_ones()
+    {
+        var passes = 0;
+        var observer = new ReconcileOnReconnect(new NullObserver(), _ =>
+        {
+            Interlocked.Increment(ref passes);
+            throw new InvalidOperationException("boom");
+        });
+
+        observer.OnConnectivityChanged(offline: false);
+        await observer.WhenIdleAsync();
+        observer.OnConnectivityChanged(offline: false);
+        await observer.WhenIdleAsync();
+
+        passes.ShouldBe(2);
+    }
+
+    private static void InterlockedMax(ref int target, int value)
+    {
+        int seen;
+        while (value > (seen = Volatile.Read(ref target)) && Interlocked.CompareExchange(ref target, value, seen) != seen)
+        {
+        }
     }
 
     private sealed class NullObserver : ICloudCallObserver

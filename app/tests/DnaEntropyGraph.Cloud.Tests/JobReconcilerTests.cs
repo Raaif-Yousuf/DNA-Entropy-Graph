@@ -1,9 +1,9 @@
 using DnaEntropyGraph.Cloud;
-using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.Runs;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -64,7 +64,7 @@ public class JobReconcilerTests
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         };
 
-        public JobReconciler Reconciler(TimeProvider? clock = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null) => new(
             Runner,
             Gcp,
             Gcp,
@@ -75,7 +75,9 @@ public class JobReconcilerTests
             Settings,
             (id, phase) => Notified.Add((id, phase)),
             () => Path.Combine(AppData, "downloads"),
-            clock ?? new FixedClock(Launch));
+            clock ?? new FixedClock(Launch),
+            lookupTimeout,
+            mutationTimeout);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 

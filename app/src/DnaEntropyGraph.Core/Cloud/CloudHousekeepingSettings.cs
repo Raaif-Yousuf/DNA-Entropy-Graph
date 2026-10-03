@@ -9,21 +9,32 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public static class CloudHousekeepingSettings
 {
-    /// <summary>Whole hours a stopped VM of this installation may sit idle before the reconciler deletes it. <c>0</c> (or less) turns the sweep off.</summary>
+    /// <summary>Whole hours a stopped VM of this installation may sit idle before the reconciler deletes it. Range <see cref="MinIdleStoppedVmHours"/> to <see cref="MaxIdleStoppedVmHours"/>; there is no off switch (decision #555).</summary>
     public const string IdleStoppedVmHoursKey = "idle_stopped_vm_hours";
 
     /// <summary>
     /// 72 hours: a stopped GPU VM keeps its boot disk (about $15 a month for 150 GB, so roughly $1.50 over three days), and three days
-    /// covers a long weekend between two runs on the same VM. DECISION (agent-made, reversible): recorded in the decision issue filed with #530.
+    /// covers a long weekend between two runs on the same VM. Decision #555.
     /// </summary>
     public const int DefaultIdleStoppedVmHours = 72;
 
-    /// <summary>How long a stopped VM may idle, or null when the sweep is switched off. An absent or unreadable value is the default, never "off".</summary>
-    public static TimeSpan? IdleStoppedVmLimit(ISettingsStore settings)
+    /// <summary>The shortest limit a user may set.</summary>
+    public const int MinIdleStoppedVmHours = 1;
+
+    /// <summary>The longest limit a user may set (30 days); a larger value is clamped to it.</summary>
+    public const int MaxIdleStoppedVmHours = 720;
+
+    /// <summary>
+    /// How long a stopped VM may idle. An absent, zero, negative or unreadable value is the default (72 h), never "off"; a value above
+    /// <see cref="MaxIdleStoppedVmHours"/> is clamped to it. A stopped VM always ends up deleted (Hard Rule 11).
+    /// </summary>
+    public static TimeSpan IdleStoppedVmLimit(ISettingsStore settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         var raw = settings.GetString(IdleStoppedVmHoursKey)?.Trim();
-        var hours = int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : DefaultIdleStoppedVmHours;
-        return hours <= 0 ? null : TimeSpan.FromHours(Math.Min(hours, 24 * 365));
+        var hours = int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed >= MinIdleStoppedVmHours
+            ? Math.Min(parsed, MaxIdleStoppedVmHours)
+            : DefaultIdleStoppedVmHours;
+        return TimeSpan.FromHours(hours);
     }
 }
