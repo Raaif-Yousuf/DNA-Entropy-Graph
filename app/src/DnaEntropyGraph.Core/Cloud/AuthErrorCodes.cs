@@ -40,11 +40,17 @@ public static class AuthErrorCodes
     /// <summary>A switch to an account this PC has no sign-in for.</summary>
     public const string AccountNotFound = "ACCOUNT_NOT_FOUND";
 
+    /// <summary>The project id the wizard offered is not a legal Google project id (empty, wrong characters or length). Nothing was stored.</summary>
+    public const string ProjectInvalid = "PROJECT_INVALID";
+
+    /// <summary>The chosen project could not be saved to the app's folder (disk full, read-only, no access). Nothing was stored. Action: Try again.</summary>
+    public const string ProjectSaveFailed = "PROJECT_SAVE_FAILED";
+
     /// <summary>Every code a sign-in can fail under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         SigninExpired, SigninCancelled, SigninTimeout, SigninFailed, NetworkUnavailable,
-        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed,
+        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed,
     ];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (plain, non-dotted, literal so the orphan-resource scan sees it).</summary>
@@ -61,6 +67,8 @@ public static class AuthErrorCodes
         BrowserUnavailable => "AuthError_SIGNIN_BROWSER",
         LoopbackUnavailable => "AuthError_SIGNIN_LOOPBACK",
         StorageFailed => "AuthError_SIGNIN_STORAGE",
+        ProjectInvalid => "AuthError_PROJECT_INVALID",
+        ProjectSaveFailed => "AuthError_PROJECT_SAVE_FAILED",
         _ => "AuthError_SIGNIN_FAILED",
     };
 
@@ -71,7 +79,7 @@ public static class AuthErrorCodes
     public static string? ActionResourceKey(string? code) => code switch
     {
         SigninExpired or SigninCancelled or SigninTimeout or SigninFailed or AccountNotFound or BrowserUnavailable or LoopbackUnavailable or StorageFailed => "AuthAction_SignInAgain",
-        NetworkUnavailable => "AuthAction_TryAgain",
+        NetworkUnavailable or ProjectSaveFailed => "AuthAction_TryAgain",
         _ => null,
     };
 }

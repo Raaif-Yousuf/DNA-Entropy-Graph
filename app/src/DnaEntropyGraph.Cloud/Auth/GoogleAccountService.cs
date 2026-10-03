@@ -52,11 +52,11 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     public bool IsSignedIn => State.Active is { NeedsSignIn: false };
 
     /// <summary>
-    /// <see cref="GoogleAccountOptions.ProjectIdUntilSelectionExists"/> while signed in, null otherwise: the project is
-    /// chosen in the setup wizard and stored per account in a later issue (#520). Signed out stays null, so a run
-    /// still fails with no_project before anyone signs in, exactly as it did against the fake.
+    /// The project the current account chose (<see cref="SelectProjectAsync"/>, stored in its <c>accounts.json</c> record), or, while
+    /// signed in with none chosen, <see cref="GoogleAccountOptions.ProjectIdUntilSelectionExists"/> (null in a build with the real
+    /// gateways). Signed out is null, so a run fails with no_project before anyone signs in, exactly as it did against the fake.
     /// </summary>
-    public string? SelectedProjectId => IsSignedIn ? _options.ProjectIdUntilSelectionExists : null;
+    public string? SelectedProjectId => State.Active is { NeedsSignIn: false } active ? active.ProjectId ?? _options.ProjectIdUntilSelectionExists : null;
 
     public AccountInfo? CurrentAccount => State.Active is { } active ? ToInfo(active) : null;
 
@@ -98,8 +98,9 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 try
                 {
                     await _store.StoreAsync(identity.Sub, token).ConfigureAwait(false);
-                    var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false);
                     var current = State;
+                    // An account that signs in again (its token expired) keeps the project it chose; a signed-out one was dropped with its record.
+                    var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false, current.Accounts.FirstOrDefault(a => a.Sub == identity.Sub)?.ProjectId);
                     Commit(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record]));
                 }
                 catch (TokenStorageException ex)
@@ -153,6 +154,37 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
         RaiseChanged();
         return revoked;
+    }
+
+    public async Task SelectProjectAsync(string projectId, CancellationToken cancellationToken)
+    {
+        if (!ProjectIdGenerator.IsValid(projectId))
+        {
+            throw new AccountAuthException(AuthErrorCodes.ProjectInvalid, "the project id is not a legal Google project id");
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var current = State;
+            if (current.Active is not { NeedsSignIn: false } active)
+            {
+                throw new AccountAuthException(AuthErrorCodes.SigninExpired, "no signed-in account");
+            }
+
+            Commit(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] });
+        }
+        catch (TokenStorageException ex)
+        {
+            // Not StorageFailure: its code says "your sign-in could not be saved" and offers Sign in again, wrong for a project choice.
+            throw new AccountAuthException(AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        RaiseChanged();
     }
 
     public async Task SwitchAccountAsync(string sub, CancellationToken cancellationToken)

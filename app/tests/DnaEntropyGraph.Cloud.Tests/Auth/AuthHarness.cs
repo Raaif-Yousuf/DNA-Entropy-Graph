@@ -39,6 +39,9 @@ internal sealed class AuthHarness : IDisposable
 
     public FakeGoogleOAuth Google { get; } = new();
 
+    /// <summary>What a signed-in account with no chosen project answers (GoogleAccountOptions.ProjectIdUntilSelectionExists); null like a build with the real gateways.</summary>
+    public string? FallbackProjectId { get; set; }
+
     public TimeSpan SignInTimeout { get; set; } = TimeSpan.FromSeconds(20);
 
     /// <summary>When set, the service uses this instead of the fake browser.</summary>
@@ -57,6 +60,7 @@ internal sealed class AuthHarness : IDisposable
         Protector = new XorProtector(),
         HttpHandler = UseProductionHttp ? null : Google,
         SignInTimeout = SignInTimeout,
+        ProjectIdUntilSelectionExists = FallbackProjectId,
     });
 
     public async Task<GoogleAccountService> SignedInAsync(string sub, string email, GoogleAccountService? service = null)

@@ -819,7 +819,12 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `access_type=offline`, prompt `select_account consent`.
 - **Files** under `%LOCALAPPDATA%\DNAEntropyGraph\auth\`: `<sub>.tok` (DPAPI, one per account, key = the id token's
   `sub`, held to `[A-Za-z0-9_-]` because it becomes a file name) and `accounts.json` (`activeSub` and a list of
-  `{sub, email, needsSignIn}`, no token). Token refresh is done by Google's `UserCredential` and written back through
+  `{sub, email, needsSignIn, projectId?}`, no token). `projectId` is the project that account chose in the wizard (issue #520):
+  `IGcpAccount.SelectProjectAsync` validates it with `ProjectIdGenerator.IsValid` and stores it in the active account's record, so it
+  follows the account on a switch, survives a restart, is dropped with the record on sign-out and is kept when an expired account
+  signs in again; a file written before it existed loads with no project. `SelectedProjectId` reads it. While every gateway is
+  `FakeGcp`, a signed-in account with no chosen project still answers `GoogleAccountOptions.ProjectIdUntilSelectionExists`
+  (`"fake-project"`); a chosen project always wins, and the fallback goes with the real gateways (#609). Token refresh is done by Google's `UserCredential` and written back through
   the same store, so a restart needs no browser.
 - **Errors** are `AccountAuthException` with a code from `AuthErrorCodes`; the English is `AuthError_<code>` in
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`

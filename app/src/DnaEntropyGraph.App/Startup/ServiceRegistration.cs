@@ -89,9 +89,9 @@ public static class ServiceRegistration
                 : [Path.Combine(appDataRoot, OAuthClientLoader.FileName)]),
             Browser = new SystemBrowserLauncher(),
 
-            // Until #520 stores a per-account project, a signed-in account answers the id the fake used, so a run
-            // still reaches the not-connected gateways and fails as cloud_not_connected (an honest message) rather than
-            // as no_project, which names a project picker that does not exist yet. Remove with the real gateways (#56).
+            // Only a fallback since #520 (a project the account chose wins): while every gateway is FakeGcp, an account
+            // with no chosen project still reaches the not-connected gateways and fails as cloud_not_connected rather than
+            // as no_project, which names a project picker the app has no page for yet. Remove with the real gateways (#609).
             ProjectIdUntilSelectionExists = "fake-project",
             Pages = new LoopbackPages(
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserSuccess"),
