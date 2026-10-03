@@ -7,6 +7,9 @@
     <PackageVersion Include="Microsoft.WindowsAppSDK" Version="1.8.250916003" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.6584" />
 
+    <!-- App installer and updater (MIT). vpk 1.2.161 pairs with this version. -->
+    <PackageVersion Include="Velopack" Version="1.2.161" />
+
     <!-- Presentation (MVVM), no WinUI reference -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 
@@ -15,6 +18,11 @@
 
     <!-- Cloud: retry, jitter and circuit breaker for every gateway call (issue #258). Polly is BSD-3-Clause. -->
     <PackageVersion Include="Polly.Core" Version="8.6.5" />
+
+    <!-- Cloud: Google OAuth for the desktop sign-in (issue #48). Apache-2.0. Only DnaEntropyGraph.Cloud references it (Hard Rule 7). -->
+    <PackageVersion Include="Google.Apis.Auth" Version="1.67.0" />
+    <!-- Cloud: DPAPI (CurrentUser) for the token files (issue #48). MIT. -->
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
 
     <!-- Tests: xUnit v3, Shouldly, NSubstitute (Hard Rule 21 - not FluentAssertions 8+, not Moq) -->
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
