@@ -167,19 +167,80 @@ public sealed class RunCloudResultsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_file_already_in_the_folder_is_never_overwritten_and_missing_ones_are_restored()
+    public async Task A_verified_file_already_in_the_folder_is_left_untouched_and_missing_ones_are_restored()
     {
         PutResult();
         var folder = Path.Combine(_root, "sample");
         Directory.CreateDirectory(folder);
-        File.WriteAllText(Path.Combine(folder, "sample.bedgraph"), "my own edits");
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllBytes(kept, BedGraph);
+        var stamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(kept, stamp);
 
         (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
 
-        File.ReadAllText(Path.Combine(folder, "sample.bedgraph")).ShouldBe("my own edits");
-        File.Delete(Path.Combine(folder, "sample.bedgraph"));
+        File.GetLastWriteTimeUtc(kept).ShouldBe(stamp);
+        File.Delete(kept);
         (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
-        File.ReadAllBytes(Path.Combine(folder, "sample.bedgraph")).ShouldBe(BedGraph);
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+    }
+
+    [Fact]
+    public async Task A_kept_file_with_the_wrong_size_is_downloaded_again()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllBytes(kept, BedGraph[..4]);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+    }
+
+    [Fact]
+    public async Task A_kept_file_of_the_right_size_but_the_wrong_hash_is_downloaded_again()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllBytes(kept, new byte[BedGraph.Length]);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        File.ReadAllBytes(kept).ShouldBe(BedGraph);
+    }
+
+    [Fact]
+    public async Task A_kept_file_is_checked_by_size_alone_when_the_result_lists_no_hash()
+    {
+        var content = BedGraph;
+        var json = $$"""{"schema":1,"status":"done","inputs":[{"id":"in1","status":"done","files":[{"path":"output/sample.bedgraph","bytes":{{content.Length}}}]}]}""";
+        _gcp.PutObject(Bucket, Prefix + "result.json", Encoding.UTF8.GetBytes(json));
+        _gcp.PutObject(Bucket, Prefix + "output/sample.bedgraph", content);
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        var kept = Path.Combine(folder, "sample.bedgraph");
+        File.WriteAllBytes(kept, new byte[content.Length]);
+
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        File.ReadAllBytes(kept).ShouldBe(new byte[content.Length]);
+        File.WriteAllBytes(kept, content[..3]);
+        (await Make().RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+        File.ReadAllBytes(kept).ShouldBe(content);
+    }
+
+    [Fact]
+    public async Task A_done_job_with_a_failed_input_is_partial_not_done()
+    {
+        var json = $$"""{"schema":1,"status":"done","inputs":[{"id":"in1","status":"done","files":[{"path":"output/sample.bedgraph","bytes":{{BedGraph.Length}}}]},{"id":"in2","status":"failed","files":[]}]}""";
+        _gcp.PutObject(Bucket, Prefix + "result.json", Encoding.UTF8.GetBytes(json));
+        _gcp.PutObject(Bucket, Prefix + "output/sample.bedgraph", BedGraph);
+
+        (await Make().RedownloadAsync(Run(Path.Combine(_root, "sample")), CancellationToken.None)).ShouldBe(CloudResultsStatus.Partial);
     }
 
     [Fact]

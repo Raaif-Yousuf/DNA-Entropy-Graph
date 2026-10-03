@@ -62,7 +62,8 @@ public interface IRunCloudResults
 
     /// <summary>
     /// Restores the run's output files from the bucket into its output folder (recreated if it was deleted).
-    /// A file already in the folder is left exactly as it is (Hard Rule 14: it may hold the user's edits); only missing files are fetched.
+    /// A file already in the folder that matches the size and SHA-256 recorded in <c>result.json</c> is left exactly as it is;
+    /// a missing one, or one that no longer matches (cut off or damaged), is fetched again and replaced.
     /// </summary>
     Task<CloudResultsStatus> RedownloadAsync(RunRecord run, CancellationToken cancellationToken);
 
@@ -130,7 +131,10 @@ public sealed class RunCloudResults : IRunCloudResults
                 await DownloadFileAsync(run, folder, file, cancellationToken).ConfigureAwait(false);
             }
 
-            return string.Equals(result.Status, "done", StringComparison.Ordinal) ? CloudResultsStatus.Done : CloudResultsStatus.Partial;
+            
+            // Same rule as RunOutcomeRecorder: every input finished with files, else the history says "partly completed".
+            var allInputsDone = result.Inputs.All(i => i.Status == "done" && i.Files.Count > 0);
+            return string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -193,6 +197,27 @@ public sealed class RunCloudResults : IRunCloudResults
         return RunOutputRoot.IsStrictlyInside(folder, root) ? folder : null;
     }
 
+    /// <summary>
+    /// True when the file already on disk is the one the worker uploaded: same size, and same SHA-256 where <c>result.json</c> lists one.
+    /// A file the result gives no size or hash for cannot be checked, so it is kept as it is.
+    /// </summary>
+    private static async Task<bool> IsKeptFileIntactAsync(string path, WorkerResultFile file, CancellationToken cancellationToken)
+    {
+        if (file.Bytes is { } expected && new FileInfo(path).Length != expected)
+        {
+            return false;
+        }
+
+        if (file.Sha256 is not { } expectedHash)
+        {
+            return true;
+        }
+
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+        var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+        return string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task DownloadFileAsync(RunRecord run, string folder, WorkerResultFile file, CancellationToken cancellationToken)
     {
         var relative = RunTransfer.SafeRelativeOutputPath(file.Path, "A result file");
@@ -202,7 +227,7 @@ public sealed class RunCloudResults : IRunCloudResults
             throw new InvalidDataException("A result file leaves the output folder.");
         }
 
-        if (File.Exists(destination))
+        if (File.Exists(destination) && await IsKeptFileIntactAsync(destination, file, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -237,7 +262,8 @@ public sealed class RunCloudResults : IRunCloudResults
                 throw new InvalidDataException("A result file does not match its checksum.");
             }
 
-            File.Move(partial, destination, overwrite: false);
+            // Reached for a missing file, or a kept one that failed its size or checksum (a cut-off or damaged copy).
+            File.Move(partial, destination, overwrite: true);
         }
         finally
         {
