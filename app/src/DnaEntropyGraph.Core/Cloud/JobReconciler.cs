@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Runs;
@@ -99,6 +100,12 @@ public sealed class JobReconciler
     private readonly TimeSpan _mutationTimeout;
     private readonly IDiagnosticsLog _log;
 
+    /// <summary>Jobs whose last reattach could not ask the cloud (Deferred), until a later pass judges them (issue #559).</summary>
+    private readonly ConcurrentDictionary<string, byte> _deferredRuns = new();
+
+    /// <summary>True when the last lifecycle enforcement had a row or VM it could not ask the cloud about.</summary>
+    private volatile bool _lifecycleDeferred;
+
     /// <summary>
     /// How far back a finished run's VM is looked up by its job-id label. Older leaks are caught by the idle sweep, which lists by installation and
     /// so costs one call however long the history is; this keeps a launch from making one lookup per run row ever recorded.
@@ -143,6 +150,12 @@ public sealed class JobReconciler
     }
 
     /// <summary>
+    /// True while a run or VM the passes so far could not judge (the cloud gave no answer) is still waiting for another look. The reconnect probe
+    /// (<see cref="ReconcileOnReconnect"/>) runs only while this is true. A job leaves it once a later pass judges it.
+    /// </summary>
+    public bool HasDeferred => _lifecycleDeferred || !_deferredRuns.IsEmpty;
+
+    /// <summary>
     /// One full pass: reattaches the runs a killed app left (<see cref="ReattachAsync"/>) and enforces lifecycles (<see cref="EnforceLifecycleAsync"/>),
     /// concurrently, because a reattached run can take minutes and must not hold the housekeeping back. Safe to call again at any time (on
     /// reconnect): a job something already drives is skipped, a row already judged is terminal.
@@ -152,15 +165,18 @@ public sealed class JobReconciler
 
     /// <summary>
     /// The same pass as <see cref="ReconcileAsync"/>, split at the point that matters to a repeating caller. The returned (outer) task ends when the
-    /// lifecycle enforcement and the idle sweep have run and every non-terminal run has been handed to its own driver in <see cref="ActiveRuns"/>;
+    /// lifecycle enforcement and the idle sweep have run and every non-terminal run has been judged (looked at in the cloud, so <see cref="HasDeferred"/>
+    /// is settled) and handed to its own driver in <see cref="ActiveRuns"/>;
     /// its result is the inner task, which ends only when every reattached run has ENDED (minutes or hours). A caller that runs passes one at a
     /// time (<see cref="ReconcileOnReconnect"/>) waits for the outer task only: a long run must not hold the next pass back.
     /// </summary>
     public async Task<Task> BeginReconcileAsync(CancellationToken cancellationToken)
     {
-        var reattached = ReattachAsync(cancellationToken);
+        var started = StartReattachAsync(cancellationToken);
         await EnforceLifecycleAsync(cancellationToken).ConfigureAwait(false);
-        return reattached;
+        var (judged, outcomes) = await started.ConfigureAwait(false);
+        await judged.ConfigureAwait(false);
+        return outcomes;
     }
 
     /// <summary>
@@ -193,6 +209,11 @@ public sealed class JobReconciler
         }
 
         await SweepIdleAsync(installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        lock (outcomes)
+        {
+            _lifecycleDeferred = outcomes.Any(o => o.Action == LifecycleAction.Deferred);
+        }
+
         return outcomes;
     }
 
@@ -410,6 +431,16 @@ public sealed class JobReconciler
     /// <summary>Reattaches every non-terminal cloud run created before this reconciler existed, concurrently, and returns what happened to each once they have all ended.</summary>
     public async Task<IReadOnlyList<ReattachOutcome>> ReattachAsync(CancellationToken cancellationToken)
     {
+        var (_, outcomes) = await StartReattachAsync(cancellationToken).ConfigureAwait(false);
+        return await outcomes.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Starts every reattach. <c>Judged</c> ends when each run has been judged: looked at in the cloud and either left deferred or on its way to a
+    /// driver (<see cref="HasDeferred"/> is then settled for this pass). <c>Outcomes</c> ends when every run has ended.
+    /// </summary>
+    private async Task<(Task Judged, Task<IReadOnlyList<ReattachOutcome>> Outcomes)> StartReattachAsync(CancellationToken cancellationToken)
+    {
         var all = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
         var candidates = all
             .Select(r => r.JobId)
@@ -417,17 +448,48 @@ public sealed class JobReconciler
             .Select(id => RunRowStore.LatestRecord(all, id)!)
             .Where(r => !JobStateMachine.IsTerminal(r.Phase) && r.CreatedUtc < _startedAt)
             .ToList();
-        return await Task.WhenAll(candidates.Select(row => ReattachOneAsync(row, cancellationToken))).ConfigureAwait(false);
+        var judgements = candidates.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToList();
+        var tasks = candidates.Select((row, i) => ReattachOneAsync(row, judgements[i], cancellationToken)).ToList();
+        return (Task.WhenAll(judgements.Select(j => j.Task)), WhenAllOutcomesAsync(tasks));
     }
 
-    private async Task<ReattachOutcome> ReattachOneAsync(RunRecord row, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<ReattachOutcome>> WhenAllOutcomesAsync(List<Task<ReattachOutcome>> tasks)
+        => await Task.WhenAll(tasks).ConfigureAwait(false);
+
+    private async Task<ReattachOutcome> ReattachOneAsync(RunRecord row, TaskCompletionSource judged, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var outcome = await ReattachCoreAsync(row, judged, cancellationToken).ConfigureAwait(false);
+            if (outcome.Action == ReattachAction.Deferred)
+            {
+                _deferredRuns[row.JobId] = 0;
+            }
+            else
+            {
+                _deferredRuns.TryRemove(row.JobId, out _);
+            }
+
+            return outcome;
+        }
+        finally
+        {
+            judged.TrySetResult();
+        }
+    }
+
+    private async Task<ReattachOutcome> ReattachCoreAsync(RunRecord row, TaskCompletionSource judged, CancellationToken cancellationToken)
     {
         try
         {
             // Registered BEFORE the first look at the cloud, and covering every write the reattach can make (the look, a failure it records,
             // a cancel it finishes, the run itself): a cancel at any moment finds the driver, stops it and waits for it, so one writer at a time.
             ReattachOutcome? outcome = null;
-            var underway = new Underway();
+            var underway = new Underway(() =>
+            {
+                _deferredRuns.TryRemove(row.JobId, out _);
+                judged.TrySetResult();
+            });
             var driver = _active.TryStart(row.JobId, async token =>
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
@@ -528,13 +590,17 @@ public sealed class JobReconciler
             OutputParent(row, options));
 
         underway.Action = ReattachAction.Resumed;
+        underway.Judged();
         var result = await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
         return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
     }
 
     /// <summary>What the reattach of one run was doing; read when a user cancel stopped it before it could say.</summary>
-    private sealed class Underway
+    private sealed class Underway(Action onJudged)
     {
+        /// <summary>The run's look at the cloud is done and it goes on to be driven: it is no longer waiting to be judged.</summary>
+        public void Judged() => onJudged();
+
         /// <summary>Resumed until a branch says otherwise: a cancel during the first look stops a run that was about to be resumed.</summary>
         public ReattachAction Action { get; set; } = ReattachAction.Resumed;
     }

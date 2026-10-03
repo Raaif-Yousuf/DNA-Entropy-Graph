@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- One virtual clock with timers for every test project that waits on a backoff. -->
+    <Compile Include="..\DnaEntropyGraph.Guards.Tests\VirtualTimeProvider.cs" Link="VirtualTimeProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Cloud\DnaEntropyGraph.Cloud.csproj" />
   </ItemGroup>

@@ -38,10 +38,15 @@ public class ReattachOnStartupTests : IDisposable
         }
     }
 
-    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done)
+    private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done, TimeProvider? time = null)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root);
+        if (time is not null)
+        {
+            services.AddSingleton(time);
+        }
+
         if (connected)
         {
             // The last registration wins: the same fake, but connected, behind every resilient wrapper the app resolves.
@@ -168,6 +173,25 @@ public class ReattachOnStartupTests : IDisposable
         var row = await RowAsync(provider, "job-reconnect");
         row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
         provider.GetRequiredService<CloudRetryLog>().IsOffline.ShouldBeFalse("the offline banner's source still hears every change");
+    }
+
+    [Fact]
+    public async Task An_offline_launch_that_defers_a_run_judges_it_when_the_network_returns_with_no_other_call()
+    {
+        // Issue #559: nothing else touches the cloud after launch (no user action, no breaker event), so only the reconnect probe can notice.
+        var time = new VirtualTimeProvider();
+        using var provider = Build(connected: true, time: time);
+        await SeedKilledRunAsync(provider, "job-probe", JobPhase.Running, vm: true);
+        var gcp = provider.GetRequiredService<FakeGcp>().WithCloudNotConnected();
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+        (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "precondition: offline at launch, the row is deferred");
+
+        gcp.WithCloudConnected();
+        time.Advance(TimeSpan.FromMinutes(10));
+        await ((ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>()).WhenIdleAsync();
+
+        var row = await RowAsync(provider, "job-probe");
+        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
     }
 
     [Fact]

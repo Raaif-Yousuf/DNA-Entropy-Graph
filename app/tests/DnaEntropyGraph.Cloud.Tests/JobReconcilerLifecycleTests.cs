@@ -438,6 +438,42 @@ public class JobReconcilerLifecycleTests
         (await rig.VmsAsync("job-orphan")).ShouldBeEmpty();
     }
 
+    // ---- 3a. what the reconnect probe asks: is anything still deferred (issue #559) ----
+
+    [Fact]
+    public async Task HasDeferred_is_false_before_any_pass_true_after_an_offline_reattach_and_false_once_a_later_pass_judges_the_run()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-hd", JobPhase.Running, vm: true);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+        reconciler.HasDeferred.ShouldBeFalse("nothing has been asked yet");
+
+        await reconciler.BeginReconcileAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeTrue("the run could not be judged offline");
+
+        rig.Gcp.WithCloudConnected();
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None));
+        rig.Env.Row("job-hd").Phase.ShouldBe(JobPhase.Completed, rig.Env.Row("job-hd").ErrorCode);
+        reconciler.HasDeferred.ShouldBeFalse("judged now");
+    }
+
+    [Fact]
+    public async Task HasDeferred_is_true_when_the_lifecycle_pass_could_not_ask_the_cloud_and_false_after_it_can()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-hl", AfterTaskAction.Delete);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+
+        (await reconciler.EnforceLifecycleAsync(CancellationToken.None)).ShouldContain(o => o.Action == LifecycleAction.Deferred);
+        reconciler.HasDeferred.ShouldBeTrue();
+
+        rig.Gcp.WithCloudConnected();
+        await reconciler.EnforceLifecycleAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeFalse();
+    }
+
     // ---- 3. the reconnect trigger ----
 
     [Fact]

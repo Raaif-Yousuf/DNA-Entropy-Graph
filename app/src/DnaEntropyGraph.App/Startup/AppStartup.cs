@@ -20,7 +20,11 @@ public static class AppStartup
     {
         try
         {
-            await services.GetRequiredService<JobReconciler>().ReconcileAsync(cancellationToken).ConfigureAwait(false);
+            // The pass runs here, not through ReconcileOnReconnect, so the reconnect probe is started by hand once the pass has judged every run:
+            // a launch with no network leaves Deferred rows, and nothing else would look at them again until the next launch (issue #559).
+            var reattached = await services.GetRequiredService<JobReconciler>().BeginReconcileAsync(cancellationToken).ConfigureAwait(false);
+            services.GetRequiredService<ReconcileOnReconnect>().StartProbeIfDeferred();
+            await reattached.ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

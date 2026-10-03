@@ -112,7 +112,8 @@ public static class ServiceRegistration
         services.AddSingleton<ReconcileOnReconnect>(sp => new ReconcileOnReconnect(
             sp.GetRequiredService<CloudRetryLog>(),
             () => sp.GetRequiredService<JobReconciler>(),
-            sp.GetRequiredService<IDiagnosticsLog>()));
+            sp.GetRequiredService<IDiagnosticsLog>(),
+            sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<ReconcileOnReconnect>());
         // SWITCH POINT (#56): while every gateway is FakeGcp the refresher is FakeGcp too, because a 401 from a fake
         // must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked

@@ -1,0 +1,1 @@
+- A launch with no network now gets a second look at its deferred runs when the network returns, with no other action: a reconnect probe re-runs the reconcile pass on a 30 s doubling backoff (cap 5 min) while any run or VM is still deferred, and stops when none is (#559). Decision recorded in docs/cloud_design.md.
