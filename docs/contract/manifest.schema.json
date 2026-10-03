@@ -114,6 +114,15 @@
             "linear",
             "circular"
           ]
+        },
+        "regionThreshold": {
+          "type": "number"
+        },
+        "regionMinLength": {
+          "type": "integer"
+        },
+        "regionMergeGap": {
+          "type": "integer"
         }
       }
     },

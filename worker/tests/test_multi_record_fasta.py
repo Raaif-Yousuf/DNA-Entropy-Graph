@@ -224,6 +224,8 @@ def test_pipeline_single_record_fasta_produces_exactly_this_output_set(
         "single.entropy.bedgraph",
         "single.entropy.geneious.gff3",
         "single.summary.txt",
+        "single.regions.bed",  # issue #125
+        "single.regions.gff3",
         "single.gb",
         "single.entropy.tsv",
         "single.surprisal.bedgraph",
