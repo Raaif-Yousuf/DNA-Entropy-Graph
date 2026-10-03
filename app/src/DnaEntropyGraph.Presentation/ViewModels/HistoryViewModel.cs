@@ -343,9 +343,9 @@ public sealed partial class HistoryViewModel : ObservableObject
     /// Runs one row action. Whatever it throws becomes the <paramref name="failure"/> toast (each names an action,
     /// Hard Rule 13), never an unobserved exception; the list is rebuilt afterwards so it shows what is really on disk.
     /// </summary>
-    private async Task ActAsync(Func<Task<(string Title, string Body)?>> action, (string Title, string Body) failure)
+    private async Task ActAsync(Func<Task<RunsMessage?>> action, RunsMessage failure)
     {
-        (string Title, string Body)? copy;
+        RunsMessage? copy;
         try
         {
             copy = await action();
@@ -363,9 +363,9 @@ public sealed partial class HistoryViewModel : ObservableObject
         await RefreshAsync(CancellationToken.None);
     }
 
-    private void Toast((string Title, string Body) copy, params object[] args)
+    private void Toast(RunsMessage copy, params object[] args)
     {
         var body = _strings.GetString(copy.Body);
-        _toasts.ShowToast(_strings.GetString(copy.Title), args.Length == 0 ? body : string.Format(CultureInfo.CurrentCulture, body, args));
+        _toasts.ShowToast(_strings.GetString(copy.Title), args.Length == 0 ? body : string.Format(CultureInfo.CurrentCulture, body, args), copy.Severity);
     }
 }
