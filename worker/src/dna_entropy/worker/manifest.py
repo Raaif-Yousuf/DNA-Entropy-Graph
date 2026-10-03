@@ -468,4 +468,5 @@ class JobManifest:
             include_stats=_wanted("stats"),
             include_genbank=_wanted("genbank"),
             include_genes_gff3=include_genes_gff3,
+            include_gene_summary=_wanted("gene_summary"),
         )

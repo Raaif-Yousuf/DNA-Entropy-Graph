@@ -5,9 +5,9 @@ namespace DnaEntropyGraph.App.Startup;
 
 /// <summary>
 /// Every page key -> Page type mapping <see cref="NavigationService"/>
-/// needs. "RunProgress" (issue #66) and "Runs" (issue #101) are registered: "New run",
-/// "Cloud" and "Settings" are sibling issues' own Views (#63,
-/// #105, #104 per <c>scripts/app_wiring_allowlist.json</c>) and are not
+/// needs. "NewRun" (#63), "RunProgress" (#66), "Runs" (#101) and the viewer (#72/#73) are registered:
+/// "Cloud" and "Settings" are sibling issues' own Views (#105,
+/// #104 per <c>scripts/app_wiring_allowlist.json</c>) and are not
 /// registered yet; until each lands, its NavigationView item resolves to the
 /// fallback <see cref="PlaceholderPage"/> (issue #490), never an empty frame.
 /// </summary>
@@ -15,6 +15,9 @@ public static class NavigationRoutes
 {
     public static void RegisterAll(NavigationService navigationService)
     {
+        // Issue #63: the New run page, the first item of the navigation menu (ShellViewModel.InitialPageKeyValue).
+        navigationService.RegisterPage(DnaEntropyGraph.Presentation.ViewModels.ShellViewModel.InitialPageKeyValue, typeof(NewRunPage));
+
         navigationService.RegisterPage("RunProgress", typeof(RunProgressPage));
 
         // Issue #101: the Runs page (history, re-run, re-download, deletes). The nav item's Tag is "Runs".
