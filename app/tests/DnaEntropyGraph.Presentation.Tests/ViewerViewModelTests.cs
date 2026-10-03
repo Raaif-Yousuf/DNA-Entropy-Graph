@@ -1,7 +1,7 @@
 using System.Text.Json;
 using DnaEntropyGraph.Presentation.Services;
-using DnaEntropyGraph.Presentation.ViewModels;
 using DnaEntropyGraph.Presentation.Viewer;
+using DnaEntropyGraph.Presentation.ViewModels;
 using NSubstitute;
 using Shouldly;
 using Xunit;

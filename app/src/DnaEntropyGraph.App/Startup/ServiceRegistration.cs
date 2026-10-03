@@ -8,8 +8,8 @@ using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
-using DnaEntropyGraph.Presentation.ViewModels;
 using DnaEntropyGraph.Presentation.Viewer;
+using DnaEntropyGraph.Presentation.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DnaEntropyGraph.App.Startup;
