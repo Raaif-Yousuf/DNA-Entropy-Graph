@@ -226,8 +226,13 @@ fi
 # the old `/root/.cache/huggingface` mount was never read or written by that user.
 mkdir -p /var/cache/deg-hf
 chown 10001:10001 /var/cache/deg-hf
+# `--gpus all` only when a GPU is expected: the CPU smoke VM boots the same image with no GPU (issue #56), and docker run fails on it with the flag.
+GPU_FLAGS=()
+if [ "$EXPECT_GPU" = "true" ]; then
+  GPU_FLAGS=(--gpus all)
+fi
 docker run --rm \
-  --gpus all --shm-size=8g \
+  "${GPU_FLAGS[@]}" --shm-size=8g \
   -v /work:/work \
   -v /var/cache/deg-hf:/hf-cache \
   -e HF_HOME=/hf-cache \

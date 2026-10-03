@@ -1007,28 +1007,39 @@ to `FakeGcp` until #609**; nothing in the running app calls this class yet.
 - **Project.** Only create carries one (`VmSpec.ProjectId`). Get, stop, delete, find and list take it from the optional
   `selectedProjectId` argument of `Create` (production will pass `IGcpAccount.SelectedProjectId`, #609); none selected
   throws `InvalidOperationException` and sends nothing.
-- **Create.** `VmSpec.ToLabels()` runs first (Hard Rule 10), then `instances.insert` is built with: the six standard labels,
-  `scheduling.maxRunDuration` (seconds), `instanceTerminationAction` from the spec (DELETE), `onHostMaintenance=TERMINATE`,
-  `automaticRestart=false`, every `VmSpec.Metadata` item (the startup script and `deg-*` keys) plus
-  `block-project-ssh-keys=true` (section 9), a `pd-balanced` 150 GB boot disk with `autoDelete`, the default network with an
-  external address (the VM pulls its image), and the `deg-worker@<project>` service account with the `cloud-platform`
-  scope. `VmSpec` does not carry image, disk or service account, so they are fixed in `ComputeVmShape`: the DLVM family
-  for `g2-`/`g4-`/`a2-`/`a3-`/`a4-` machine types, `cos-cloud/cos-stable` otherwise. The insert's `requestId` is a UUID derived
-  from project, zone and VM name, identical on every replay, so a pipeline retry cannot make a second VM (#257).
+- **Create.** `VmSpec.ToLabels()` runs first (Hard Rule 10; `VmSpec` also rejects any `TerminationAction` other than `DELETE`), then a spec with no
+  `ServiceAccountEmail` is refused by name (`WORKER_SERVICE_ACCOUNT_MISSING`, kind `other`) before any request: the run path fills it from the worker
+  identity (#54) via #606/#609, and nothing guesses `deg-worker@<project>`. Then `instances.insert` is built with: the six standard labels,
+  `scheduling.maxRunDuration` (seconds), `instanceTerminationAction` DELETE, `onHostMaintenance=TERMINATE`, `automaticRestart=false`, every
+  `VmSpec.Metadata` item (the startup script and `deg-*` keys) plus `block-project-ssh-keys=true` (section 9), a `pd-balanced` 150 GB boot disk with
+  `autoDelete`, the default network with an external address (the VM pulls its image), and the spec's service account with the `cloud-platform` scope.
+  `VmSpec` does not carry image or disk, so they are fixed in `ComputeVmShape`: the DLVM family for EVERY machine type, CPU included, because
+  `startup.sh` needs docker, python3 and a writable root (Container-Optimized OS has none of them; DECISION #615), and `startup.sh` passes `--gpus all` only
+  when `deg-expect-gpu` is true. Each `CreateVmAsync` call sends a fresh random `requestId`, never one derived from the VM name: Compute replays the
+  ORIGINAL operation for a repeated id within its idempotency window, so a derived id would return an old stockout to a retry, or an old DONE operation
+  (no VM made) to a re-create of the same `deg-<job>` after a delete. Instance names are unique per zone, so a replay after a lost response is answered 409
+  (`already_exists`), which the runner adopts.
 - **Operations.** insert, stop and delete return a zone operation, polled with `OperationPoller` (1 s doubling to 10 s,
   `OperationDeadline`) until `DONE`. `operation.error` becomes a `CloudOperationException` classified by
-  `CloudErrorClassifier` alone (code, `httpErrorStatusCode`, message), so `ZONE_RESOURCE_POOL_EXHAUSTED` is `stockout`
+  `CloudErrorClassifier` alone (code, `httpErrorStatusCode`, message), across EVERY entry of `errors` (the most specific kind wins: stockout, quota,
+  permission, billing, api_disabled, org_policy, already_exists, then generic), so `ZONE_RESOURCE_POOL_EXHAUSTED` is `stockout`
   and `QUOTA_EXCEEDED` is `quota`. A refused HTTP call (billing off and API off arrive as a 403 on the insert) goes
-  through `GoogleApiErrors`, which uses the same classifier. A spent deadline is `OPERATION_POLL_TIMEOUT` (`network`).
+  through `GoogleApiErrors`, which uses the same classifier. A spent deadline is `OPERATION_POLL_TIMEOUT` (`network`), and a create whose operation said DONE but whose VM then reads 404 is
+  `CREATE_OUTCOME_UNKNOWN` (`network`): in both the VM MAY exist, so the error is retryable (a retry lands on 409 `already_exists` if it does) and **the runner
+  must list by label (`FindByJobIdAsync`) before trying another zone**.
 - **Get, stop, delete.** A 404 on get is `null`; a 404 on stop or delete, or an operation that reports not found, is
-  "already gone", not an error.
+  "already gone", not an error. A 404 on stop or delete means "not in that zone" (the caller may have the wrong zone), not "the VM does not exist anywhere":
+  `VmTerminator`'s label re-check (`FindByJobIdAsync`, sound because of the next point) is the authority on whether it is really gone.
 - **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
   (or `labels.installation-id`), following `nextPageToken` across every zone; a value no label can hold returns nothing
-  without a request, and each returned VM's labels are re-checked client-side. Zone is parsed from the instance's zone URL;
+  without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
+  the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
+  the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
   `Labels` and `StoppedAt` (`lastStopTimestamp`) are filled, `CreatedAt` from `creationTimestamp`.
 - **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
-  scheduling settings; that the `labels.job-id = "x"` filter syntax matches; the worker service account name (nothing creates
-  it yet); and the COS image family for `startup.sh`. `docs/ToTest.md` carries the cpu-vm row.
+  scheduling settings; that the `labels.job-id = "x"` filter syntax matches; that the DLVM image family boots and runs docker on a machine with no GPU;
+  the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

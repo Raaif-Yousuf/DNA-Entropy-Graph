@@ -1,6 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 using DnaEntropyGraph.Core.Cloud;
 using Google;
@@ -19,8 +17,11 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// delegates to the same classifier.
 /// It does NOT call <see cref="CloudCallPipeline"/> itself: production wraps the whole gateway in
 /// <see cref="ResilientComputeGateway"/>, the way every <see cref="IComputeGateway"/> is. That is safe for the mutating
-/// <c>insert</c> because it carries a deterministic <c>requestId</c> (issue #257): Compute Engine treats a replay
-/// with the same id as the same request, so a retry after a transient failure while polling cannot make a second VM.
+/// <c>insert</c> because instance names are unique per zone: a replay after a lost response is answered 409
+/// <c>alreadyExists</c> (<see cref="CloudErrorKind.AlreadyExists"/>), which the runner adopts instead of creating twice. Every call sends a
+/// FRESH random <c>requestId</c>, never one derived from the VM name: Compute Engine replays the ORIGINAL operation for a repeated id
+/// within its idempotency window, so a deterministic id would hand a retry after a stockout the old failure, and a re-create of
+/// the same <c>deg-&lt;job&gt;</c> after a delete the old DONE operation with no VM made.
 /// The interface has no project parameter on the calls other than create (which has <see cref="VmSpec.ProjectId"/>), so the
 /// project comes from <c>selectedProjectId</c>; none selected is an <see cref="InvalidOperationException"/>, never a guess.
 /// </summary>
@@ -28,6 +29,13 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 {
     /// <summary>The only values a label can hold (the same rule <see cref="VmSpec"/> enforces), so a filter value built from one cannot carry filter syntax.</summary>
     private static readonly Regex LabelValuePattern = new("^[a-z0-9_-]{1,63}$", RegexOptions.Compiled);
+
+    /// <summary>Which kind wins when one operation reports several errors: the ones a user or the zone ladder can act on first.</summary>
+    private static readonly CloudErrorKind[] KindPreference =
+    [
+        CloudErrorKind.Stockout, CloudErrorKind.Quota, CloudErrorKind.Permission, CloudErrorKind.Billing, CloudErrorKind.ApiDisabled,
+        CloudErrorKind.OrgPolicy, CloudErrorKind.AlreadyExists, CloudErrorKind.Network, CloudErrorKind.Other,
+    ];
 
     private readonly ComputeService _service;
     private readonly GoogleCloudOptions _options;
@@ -46,17 +54,29 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         // Hard Rule 10: a spec missing a label or a lifetime limit throws here, before any request exists.
         var labels = spec.ToLabels();
-        var instance = ComputeVmShape.Build(spec, zone, labels);
+
+        // The worker identity comes from the spec (issue #54, filled by the run path, #606/#609); guessing a name nothing creates
+        // would boot a VM that cannot reach its bucket.
+        if (string.IsNullOrWhiteSpace(spec.ServiceAccountEmail))
+        {
+            throw new CloudOperationException(
+                new CloudError("WORKER_SERVICE_ACCOUNT_MISSING", null, "The VM spec names no worker service account, so no VM was created."),
+                CloudErrorKind.Other);
+        }
+
+        var instance = ComputeVmShape.Build(spec, zone, labels, spec.ServiceAccountEmail);
 
         var insert = _service.Instances.Insert(instance, spec.ProjectId, zone);
-        insert.RequestId = RequestIdFor(spec.ProjectId, zone, spec.VmName);
+        insert.RequestId = Guid.NewGuid().ToString();
         var operation = await ExecuteAsync(() => insert.ExecuteAsync(cancellationToken)).ConfigureAwait(false);
         await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
+        // A 404 here means the outcome is unknown, not that nothing was made (the operation said DONE): Network class, so it is
+        // retryable, and a retry lands on 409 alreadyExists if the VM exists. The runner lists by label before trying another zone.
         return await GetAsync(spec.ProjectId, spec.VmName, zone, cancellationToken).ConfigureAwait(false)
             ?? throw new CloudOperationException(
-                new CloudError("NOT_FOUND", 404, $"Compute Engine reported the create of '{spec.VmName}' done, but the VM cannot be found."),
-                CloudErrorKind.Other);
+                new CloudError("CREATE_OUTCOME_UNKNOWN", null, $"Compute Engine reported the create of '{spec.VmName}' done, but the VM cannot be found."),
+                CloudErrorKind.Network);
     }
 
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
@@ -119,6 +139,15 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             request.Filter = filter;
             request.PageToken = pageToken;
             var page = await ExecuteAsync(() => request.ExecuteAsync(cancellationToken)).ConfigureAwait(false);
+
+            // A zone Compute could not reach is NOT an empty zone: returning the rest would let VmTerminator read "no VM" and the runner
+            // create a duplicate (or leak one). Fail the whole listing with a retryable (Network-class) error instead.
+            if (page.Unreachables is { Count: > 0 } unreachable)
+            {
+                throw new CloudOperationException(
+                    new CloudError("ZONES_UNREACHABLE", null, $"Compute Engine could not list these places: {string.Join(", ", unreachable.Select(u => ZoneName(u) ?? u))}."),
+                    CloudErrorKind.Network);
+            }
 
             foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.InstancesScopedList>())
             {
@@ -188,8 +217,22 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 return;
             }
 
-            var error = new CloudError(first.Code, operation.HttpErrorStatusCode, first.Message ?? operation.HttpErrorMessage ?? string.Empty);
-            throw new CloudOperationException(error, CloudErrorClassifier.Classify(error));
+            // Every entry is classified and the most specific wins (a generic first entry must not hide a stockout behind it).
+            CloudError? chosen = null;
+            var chosenKind = CloudErrorKind.Other;
+            var chosenRank = int.MaxValue;
+            foreach (var entry in errors)
+            {
+                var candidate = new CloudError(entry.Code, operation.HttpErrorStatusCode, entry.Message ?? operation.HttpErrorMessage ?? string.Empty);
+                var kind = CloudErrorClassifier.Classify(candidate);
+                var rank = Array.IndexOf(KindPreference, kind);
+                if (chosen is null || rank < chosenRank)
+                {
+                    (chosen, chosenKind, chosenRank) = (candidate, kind, rank);
+                }
+            }
+
+            throw new CloudOperationException(chosen!, chosenKind);
         }
     }
 
@@ -213,16 +256,6 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             ? project
             : throw new InvalidOperationException("No Google Cloud project is selected, so there is no project to ask Compute Engine about.");
 
-    /// <summary>
-    /// A UUID derived from what the request creates, so every replay of one create (a retry, or a resume after a crash) carries the
-    /// same <c>requestId</c> and Compute Engine answers it with the original operation instead of making a second VM.
-    /// </summary>
-    private static string RequestIdFor(string project, string zone, string vmName)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"deg-create/{project}/{zone}/{vmName}"));
-        return new Guid(hash.AsSpan(0, 16)).ToString();
-    }
-
     private static VmDescriptor ToDescriptor(ComputeData.Instance instance, string zone)
         => new(
             instance.Name,
@@ -242,24 +275,21 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 }
 
 /// <summary>
-/// The shape of the VM a <see cref="VmSpec"/> becomes: the parts <see cref="VmSpec"/> does not carry (boot image, disk, service
-/// account, network) are fixed here, in one place. THEORY (unverified, no live project): that
+/// The shape of the VM a <see cref="VmSpec"/> becomes: the parts <see cref="VmSpec"/> does not carry (boot image, disk, network)
+/// are fixed here, in one place. ONE image family for every machine type: <c>worker/vm/startup.sh</c> needs docker, python3,
+/// curl and a writable root, which the deep learning VM image ships and Container-Optimized OS does not (DECISION, agent-made,
+/// reversible: see the issue linked from docs/cloud_design.md). THEORY (unverified, no live project): that
 /// <c>scheduling.maxRunDuration</c> is accepted on a standard-provisioning VM with <c>onHostMaintenance=TERMINATE</c> and
-/// <c>automaticRestart=false</c>; that the worker service account is named <c>deg-worker@&lt;project&gt;.iam.gserviceaccount.com</c>
-/// (docs/cloud_design.md section 7; nothing creates it yet); and that the CPU image family is right for
-/// <c>worker/vm/startup.sh</c>. docs/ToTest.md carries the row that proves them on a real VM.
+/// <c>automaticRestart=false</c>, and that this image family boots and runs docker on a machine with no GPU.
+/// docs/ToTest.md carries the row that proves them on a real VM.
 /// </summary>
 internal static class ComputeVmShape
 {
-    public const string GpuImage = "projects/deeplearning-platform-release/global/images/family/pytorch-2-9-cu129-ubuntu-2404-nvidia-580";
-
-    public const string CpuImage = "projects/cos-cloud/global/images/family/cos-stable";
+    public const string Image = "projects/deeplearning-platform-release/global/images/family/pytorch-2-9-cu129-ubuntu-2404-nvidia-580";
 
     public const int BootDiskGb = 150;
 
-    private static readonly string[] GpuMachineFamilies = ["g2-", "g4-", "a2-", "a3-", "a4-"];
-
-    public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels)
+    public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
     {
         var items = new List<ComputeData.Metadata.ItemsData>();
         foreach (var (key, value) in spec.Metadata ?? new Dictionary<string, string>())
@@ -294,7 +324,7 @@ internal static class ComputeVmShape
                     AutoDelete = true,
                     InitializeParams = new ComputeData.AttachedDiskInitializeParams
                     {
-                        SourceImage = IsGpu(spec.MachineType) ? GpuImage : CpuImage,
+                        SourceImage = Image,
                         DiskSizeGb = BootDiskGb,
                         DiskType = $"zones/{zone}/diskTypes/pd-balanced",
                     },
@@ -312,12 +342,10 @@ internal static class ComputeVmShape
             [
                 new ComputeData.ServiceAccount
                 {
-                    Email = $"deg-worker@{spec.ProjectId}.iam.gserviceaccount.com",
+                    Email = serviceAccountEmail,
                     Scopes = ["https://www.googleapis.com/auth/cloud-platform"],
                 },
             ],
         };
     }
-
-    private static bool IsGpu(string machineType) => GpuMachineFamilies.Any(f => machineType.StartsWith(f, StringComparison.Ordinal));
 }
