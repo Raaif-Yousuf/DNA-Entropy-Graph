@@ -39,6 +39,7 @@ public sealed class RunListItem
         bool cloudAvailable,
         bool canDeleteCloud,
         string? deleteCloudHint,
+        string? reasonText,
         IAsyncRelayCommand openCommand,
         IAsyncRelayCommand rerunCommand,
         IAsyncRelayCommand redownloadCommand,
@@ -56,6 +57,7 @@ public sealed class RunListItem
         CanRedownload = finished && cloudAvailable;
         CanDeleteCloud = finished && cloudAvailable && canDeleteCloud;
         DeleteCloudHint = deleteCloudHint;
+        ReasonText = reasonText;
         CanRemove = finished;
         OpenCommand = openCommand;
         RerunCommand = rerunCommand;
@@ -87,6 +89,15 @@ public sealed class RunListItem
 
     /// <summary>Why Delete cloud copy is unavailable, or null when it is available; shown as its tooltip.</summary>
     public string? DeleteCloudHint { get; }
+
+    /// <summary>
+    /// Why the run failed, or what to check on a run that finished with a warning (issue #459): the plain-language
+    /// <c>RunError_*</c> text for its code, which names one action. Null when there is nothing to say.
+    /// Never the raw <c>RunRecord.ErrorDetail</c>, which is for the diagnostics zip only.
+    /// </summary>
+    public string? ReasonText { get; }
+
+    public bool HasReason => ReasonText is not null;
 
     public IAsyncRelayCommand OpenCommand { get; }
 

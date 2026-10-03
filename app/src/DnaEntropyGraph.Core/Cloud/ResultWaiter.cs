@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using DnaEntropyGraph.Core.Contract;
 
@@ -45,7 +44,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// </summary>
     public async Task<(BootOutcome Outcome, string? Reason)> WaitForBootAsync(CloudJobRequest request, string zone, CancellationToken cancellationToken)
     {
-        var clock = Stopwatch.StartNew();
+        var clockStart = settings.StartClock();
         string? lastTransient = null;
         while (true)
         {
@@ -71,12 +70,12 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 lastTransient = ex.Message;
             }
 
-            if (clock.Elapsed >= settings.BootTimeout)
+            if (settings.ElapsedSince(clockStart) >= settings.BootTimeout)
             {
                 return (BootOutcome.TimedOut, $"The VM did not finish starting within {settings.BootTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s.{(lastTransient is null ? string.Empty : " The last look failed: " + lastTransient + ".")}");
             }
 
-            await Task.Delay(settings.ResultPollInterval, cancellationToken).ConfigureAwait(false);
+            await settings.DelayAsync(settings.ResultPollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -92,7 +91,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     {
         var key = WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json";
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
-        var clock = Stopwatch.StartNew();
+        var clockStart = settings.StartClock();
         string? lastTransient = null;
 
         // The VM's maxRunDuration started when Compute Engine created it, not when it reached Running: a boot of several
@@ -124,7 +123,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 if (!ageKnown && vm?.CreatedAt is { } createdAt)
                 {
                     ageKnown = true;
-                    var age = settings.TimeProvider.GetUtcNow() - createdAt - clock.Elapsed;
+                    var age = settings.TimeProvider.GetUtcNow() - createdAt - settings.ElapsedSince(clockStart);
                     elapsedBeforeClock = age > TimeSpan.Zero ? age : TimeSpan.Zero;
                 }
 
@@ -145,7 +144,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 // heartbeat in status.json is the health signal; a dead or frozen worker process ends the run here, not at the result limit.
                 var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
-                var verdict = watch.Observe(statusText, progressText, clock.Elapsed);
+                var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart));
                 if (verdict is not null)
                 {
                     // A worker writes result.json BEFORE it stops its heartbeat: one last look before calling it dead.
@@ -170,7 +169,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 lastTransient = ex.Message;
             }
 
-            if (clock.Elapsed + elapsedBeforeClock >= limit)
+            if (settings.ElapsedSince(clockStart) + elapsedBeforeClock >= limit)
             {
                 var note = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
                 var minutes = limit.TotalMinutes.ToString("0.#", CultureInfo.InvariantCulture);
@@ -178,7 +177,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 throw VmEndNotes.Apply(new RunFailureException(CloudErrorKind.Other, RunErrorCodes.ResultTimeout, $"No result.json after {minutes} minutes.{last}"), note);
             }
 
-            await Task.Delay(settings.ResultPollInterval, cancellationToken).ConfigureAwait(false);
+            await settings.DelayAsync(settings.ResultPollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 

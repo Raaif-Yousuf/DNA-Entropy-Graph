@@ -1,16 +1,30 @@
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Inputs;
+using Windows.Storage.Pickers;
 
 namespace DnaEntropyGraph.App.Services;
 
 /// <summary>
-/// Placeholder for the WinRT file/folder picker. The real implementation
-/// needs an owner window handle via <c>IInitializeWithWindow</c>
-/// (docs/ui_conventions.md); that wiring is a follow-up issue once
-/// MainWindow exists as more than an empty shell.
+/// The WinRT file picker, owned by the main window through <see cref="WindowHandleProvider"/>
+/// (a desktop app's picker throws without an owner window handle). The output-folder picker
+/// is still a placeholder (a follow-up issue).
 /// </summary>
-public sealed class FilePickerService : IFilePicker
+public sealed class FilePickerService(WindowHandleProvider window) : IFilePicker
 {
-    public Task<string?> PickInputFileAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);
+    public async Task<IReadOnlyList<string>> PickInputFilesAsync(CancellationToken cancellationToken)
+    {
+        var picker = new FileOpenPicker();
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
+        foreach (var extension in SequenceFileTypes.Extensions)
+        {
+            picker.FileTypeFilter.Add(extension);
+        }
+
+        var files = await picker.PickMultipleFilesAsync();
+        // A file with no local path (a cloud-only placeholder) cannot be read, so it is not offered on.
+        return files.Select(file => file.Path).Where(path => !string.IsNullOrEmpty(path)).ToList();
+    }
 
     public Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);
 }

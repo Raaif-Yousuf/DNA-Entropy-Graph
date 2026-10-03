@@ -59,6 +59,7 @@ public static class ServiceRegistration
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
         services.AddSingleton<IToastService, ToastService>();
+        services.AddSingleton<WindowHandleProvider>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
         services.AddSingleton<IDialogService>(sp => sp.GetRequiredService<DialogService>());
@@ -145,6 +146,9 @@ public static class ServiceRegistration
         // Issue #530: where the reconciler records an error it did not expect (job id and error class only), under the same app data folder.
         services.AddSingleton<IDiagnosticsLog>(_ => new FileDiagnosticsLog(Path.GetDirectoryName(settingsPath)!));
 
+        // Issue #63: a pasted sequence is saved under app data too, never next to anything of the user's.
+        services.AddSingleton<IPastedInputStore>(_ => new LocalPastedInputStore(Path.GetDirectoryName(settingsPath)!));
+
         // Issue #101: the Runs page's services. Output folders are only ever deleted from under the run's own
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
         services.AddSingleton<TimeProvider>(TimeProvider.System);
@@ -164,6 +168,11 @@ public static class ServiceRegistration
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
         services.AddSingleton<IWorkerImageProvider, PinnedWorkerImageProvider>();
+        // Issue #98: the price list ships beside the app (Assets\pricing.json in the output folder) and the New run page's
+        // estimate reads it through this one service. A missing file is a named message on the page, not a crash.
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingSource>(_ => new DnaEntropyGraph.Core.Cost.FilePricingSource(
+            Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
         // LocalEngine.
         services.AddSingleton<LocalEngineManager>();

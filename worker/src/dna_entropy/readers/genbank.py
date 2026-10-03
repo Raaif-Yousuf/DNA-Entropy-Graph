@@ -210,12 +210,14 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
             )
             continue
 
+        segments: tuple[tuple[int, int], ...] = ()
         if is_compound:
             # Sorted ascending by genomic start, not transcript/part order (Biopython
             # writes a minus-strand join()'s parts in transcription order, i.e. highest
             # coordinate first) — a biologist reading the notice wants segments in
             # genomic order regardless of strand.
             parts = sorted((int(p.start) + 1, int(p.end)) for p in loc.parts)
+            segments = tuple(parts)  # issue #124: the gene table summarises these, not the outer span
             parts_desc = ", ".join(f"{a}..{b}" for a, b in parts)
             notices.append(
                 f"GenBank feature {gene_id!r} has a compound (spliced) location with "
@@ -225,7 +227,11 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
                 "not exon-only. Use the segment coordinates above if exon-only entropy "
                 "is needed (docs/science_and_formats.md)."
             )
-        features.append(GeneFeature(begin=begin, end=end, strand=strand, partial=partial, gene_id=gene_id))
+        features.append(
+            GeneFeature(
+                begin=begin, end=end, strand=strand, partial=partial, gene_id=gene_id, segments=segments
+            )
+        )
     return features, notices
 
 
