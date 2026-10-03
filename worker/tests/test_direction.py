@@ -733,3 +733,30 @@ def test_the_last_base_of_the_reverse_track_is_the_uniform_row() -> None:
     assert result.forward_values[0] == pytest.approx(2.0)
     assert result.reverse_values[-1] == pytest.approx(2.0)  # rc index 0 maps to original L-1
     assert result.reverse_values[0] < 2.0 - 1e-3  # and only that end
+
+
+# --- issue #79: reduced context is recorded as POSITIONS, not only a count ---------------
+
+
+def test_reduced_context_range_is_the_exact_middle_span_neither_direction_reached_k() -> None:
+    K, seq = 100, "ACGT" * 30  # L=120: positions [L-K, K) = [20, 100) have < K in both directions
+    result = analyze_direction(
+        MockPredictor(seed=6), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED
+    )
+    assert result.reduced_context_range == (len(seq) - K, K)
+    start, end = result.reduced_context_range
+    assert end - start == result.reduced_context_count
+
+
+def test_reduced_context_range_is_none_when_l_at_least_2k() -> None:
+    result = analyze_direction(
+        MockPredictor(seed=6), "ACGT" * 30, context_length=20, ceiling=8192, direction=Direction.BOTH_COMBINED
+    )
+    assert result.reduced_context_range is None
+
+
+def test_reduced_context_range_is_none_for_a_single_direction() -> None:
+    result = analyze_direction(
+        MockPredictor(seed=6), "ACGT" * 30, context_length=100, ceiling=8192, direction=Direction.FORWARD_ONLY
+    )
+    assert result.reduced_context_range is None
