@@ -83,7 +83,10 @@ first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the w
 ## 4. Theme
 
 Three choices in Settings: **Light / Dark / Use system** (default: Use system),
-implemented via `ThemeService` broadcasting a `ThemeChanged` message. The embedded viewer
+applied live (#639): `SettingsViewModel.SetThemeCommand` calls `IThemeApplier.Apply` (Presentation), implemented by
+`App/Services/WindowThemeApplier` setting `RequestedTheme` on the shell's root `NavigationView` (the same element
+`ThemeApplier.Apply` sets from the saved value at startup), so every page inherits it. The apply happens before the
+save, so a locked settings file (#558) still changes the window for the session. The embedded viewer
 (igv.js in WebView2) is not a native WinUI surface, so it needs its own theme sync:
 `CoreWebView2.Profile.PreferredColorScheme` follows the app theme, and a `dark.css`
 override (toggled by a `body.dark` class posted through the bridge) recolors igv.js's own
@@ -211,7 +214,14 @@ left as unnecessary caution.
   next to Run once there is more than one pill.
 ## 10. Settings page (issues #106, #104)
 
-`SettingsPage` is one scrolling `StackPanel` of groups. #106 built the **Diagnostics** group (the Save diagnostics button,
+`SettingsPage` has **no title of its own**: the shell's `NavigationView` header already shows "Settings" (#627), the same
+pattern every page follows. It is one scrolling `StackPanel` of groups. **The group pattern (#639):** each group is a
+`StackPanel Spacing=8` holding a `SubtitleTextBlockStyle` header (its own `Settings<Group>Header` resw key) and a `Border`
+with `SettingsGroupCardStyle` (a `Page.Resources` style: card fill and stroke, 16 padding) containing the group's
+controls; groups are spaced 24 apart. A new group (#640 to #644) adds one such `StackPanel`; no
+CommunityToolkit SettingsControls dependency. **Appearance** (#639) is three `RadioButton`s sharing `GroupName="Theme"`,
+each bound to `SetThemeCommand` with its own `CommandParameter` and to a `Is<Choice>Theme` flag on the view model, so
+the marked choice follows the saved value. #106 built the **Diagnostics** group (the Save diagnostics button,
 Open folder, the status line and one line saying what is and is never included). #104 adds its groups to the same
 panel and keeps this one. The run-error strings say "Choose Save diagnostics in Settings"; `Guards.Tests/SaveDiagnosticsWiringTests`
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because

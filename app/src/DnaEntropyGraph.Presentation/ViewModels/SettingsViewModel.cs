@@ -24,9 +24,20 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly IFilePicker _filePicker;
     private readonly IFolderLauncher _folderLauncher;
     private readonly TimeProvider _time;
+    private readonly IThemeApplier _themeApplier;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsLightTheme))]
+    [NotifyPropertyChangedFor(nameof(IsDarkTheme))]
+    [NotifyPropertyChangedFor(nameof(IsSystemTheme))]
     private string _theme;
+
+    /// <summary>Which radio button is marked. Anything that is not "Light" or "Dark" (nothing saved, an unknown value) is "Use system".</summary>
+    public bool IsLightTheme => Theme == "Light";
+
+    public bool IsDarkTheme => Theme == "Dark";
+
+    public bool IsSystemTheme => !IsLightTheme && !IsDarkTheme;
 
     /// <summary>The plain-words result of the last Save diagnostics, shown under the button. Empty before the first one.</summary>
     [ObservableProperty]
@@ -46,7 +57,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         IDiagnosticsExporter diagnostics,
         IFilePicker filePicker,
         IFolderLauncher folderLauncher,
-        TimeProvider time)
+        TimeProvider time,
+        IThemeApplier themeApplier)
     {
         _settingsStore = settingsStore;
         _toastService = toastService;
@@ -55,6 +67,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _filePicker = filePicker;
         _folderLauncher = folderLauncher;
         _time = time;
+        _themeApplier = themeApplier;
         _theme = ReadTheme(settingsStore) ?? "System";
     }
 
@@ -76,6 +89,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private void SetTheme(string theme)
     {
         Theme = theme;
+        // Applied before the save: a locked settings file (#558) must not stop the window changing for this session.
+        _themeApplier.Apply(theme);
         try
         {
             _settingsStore.SetString(ThemeKey, theme);

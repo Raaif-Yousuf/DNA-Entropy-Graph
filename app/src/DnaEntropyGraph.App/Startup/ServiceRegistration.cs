@@ -60,6 +60,8 @@ public static class ServiceRegistration
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
         services.AddSingleton<IToastService, ToastService>();
+        services.AddSingleton<WindowThemeApplier>();
+        services.AddSingleton<IThemeApplier>(sp => sp.GetRequiredService<WindowThemeApplier>());
         services.AddSingleton<WindowHandleProvider>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();

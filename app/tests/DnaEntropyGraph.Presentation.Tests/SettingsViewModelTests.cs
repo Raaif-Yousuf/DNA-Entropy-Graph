@@ -10,12 +10,12 @@ namespace DnaEntropyGraph.Presentation.Tests;
 
 public class SettingsViewModelTests
 {
-    private static SettingsViewModel CreateViewModel(ISettingsStore settingsStore, out IToastService toastService)
+    private static SettingsViewModel CreateViewModel(ISettingsStore settingsStore, out IToastService toastService, IThemeApplier? themeApplier = null)
     {
         toastService = Substitute.For<IToastService>();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
-        return new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System);
+        return new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System, themeApplier ?? Substitute.For<IThemeApplier>());
     }
 
     [Fact]
@@ -80,10 +80,63 @@ public class SettingsViewModelTests
         var toastService = Substitute.For<IToastService>();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("ThemeUpdated_Title").Returns("Theme updated (from resw)");
-        var viewModel = new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System);
+        var viewModel = new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System, Substitute.For<IThemeApplier>());
 
         viewModel.SetThemeCommand.Execute("Dark");
 
         toastService.Received(1).ShowToast("Theme updated (from resw)", "Dark");
+    }
+
+    [Fact]
+    public void Choosing_a_theme_applies_it_to_the_window_at_once()
+    {
+        var applier = Substitute.For<IThemeApplier>();
+        var viewModel = CreateViewModel(Substitute.For<ISettingsStore>(), out _, applier);
+
+        viewModel.SetThemeCommand.Execute("Dark");
+
+        applier.Received(1).Apply("Dark");
+    }
+
+    [Fact]
+    public void A_locked_settings_file_still_applies_the_theme_for_this_session()
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.When(s => s.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(_ => throw new SettingsUnavailableException("locked"));
+        var applier = Substitute.For<IThemeApplier>();
+        var viewModel = CreateViewModel(settingsStore, out _, applier);
+
+        viewModel.SetThemeCommand.Execute("Light");
+
+        applier.Received(1).Apply("Light");
+    }
+
+    [Theory]
+    [InlineData("Light", true, false, false)]
+    [InlineData("Dark", false, true, false)]
+    [InlineData("System", false, false, true)]
+    [InlineData("garbage", false, false, true)]
+    public void Exactly_one_choice_is_marked_and_it_follows_the_saved_theme(string saved, bool light, bool dark, bool system)
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.GetString("Theme").Returns(saved);
+        var viewModel = CreateViewModel(settingsStore, out _);
+
+        (viewModel.IsLightTheme, viewModel.IsDarkTheme, viewModel.IsSystemTheme).ShouldBe((light, dark, system));
+    }
+
+    [Fact]
+    public void The_marked_choice_and_its_change_notification_follow_a_new_choice()
+    {
+        var viewModel = CreateViewModel(Substitute.For<ISettingsStore>(), out _);
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        viewModel.SetThemeCommand.Execute("Dark");
+
+        viewModel.IsDarkTheme.ShouldBeTrue();
+        viewModel.IsSystemTheme.ShouldBeFalse();
+        changed.ShouldContain(nameof(SettingsViewModel.IsDarkTheme));
+        changed.ShouldContain(nameof(SettingsViewModel.IsSystemTheme));
     }
 }

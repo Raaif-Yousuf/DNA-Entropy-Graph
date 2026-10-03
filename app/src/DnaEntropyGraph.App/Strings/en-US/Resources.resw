@@ -930,10 +930,21 @@
   <data name="RunProgressOpenResults.Content" xml:space="preserve">
     <value>View results</value>
   </data>
-  <data name="SettingsPageTitle.Text" xml:space="preserve">
-    <value>Settings</value>
+  <data name="SettingsAppearanceHeader.Text" xml:space="preserve">
+    <value>Appearance</value>
   </data>
-  <data name="SettingsDiagnosticsHeader.Text" xml:space="preserve">
+  <data name="SettingsAppearanceExplainer.Text" xml:space="preserve">
+    <value>Choose how the app looks. The change applies right away and is remembered the next time you open the app.</value>
+  </data>
+  <data name="ThemeLightRadio.Content" xml:space="preserve">
+    <value>Light</value>
+  </data>
+  <data name="ThemeDarkRadio.Content" xml:space="preserve">
+    <value>Dark</value>
+  </data>
+  <data name="ThemeSystemRadio.Content" xml:space="preserve">
+    <value>Use system</value>
+  </data>  <data name="SettingsDiagnosticsHeader.Text" xml:space="preserve">
     <value>Diagnostics</value>
   </data>
   <data name="SettingsDiagnosticsExplainer.Text" xml:space="preserve">

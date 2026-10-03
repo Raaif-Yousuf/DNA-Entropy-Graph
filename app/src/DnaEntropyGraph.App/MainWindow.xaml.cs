@@ -26,7 +26,7 @@ public sealed partial class MainWindow : Window
 {
     public ShellViewModel ViewModel { get; }
 
-    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService)
+    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService, WindowThemeApplier windowThemeApplier)
     {
         ViewModel = shellViewModel;
         InitializeComponent();
@@ -34,6 +34,7 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SystemBackdrop = new MicaBackdrop();
         SetTitleBar(AppTitleBar);
+        windowThemeApplier.Attach(RootNavigationView);
         ThemeApplier.Apply(RootNavigationView, settingsStore);
         WindowPlacementApplier.Apply(this, windowPlacementService);
     }

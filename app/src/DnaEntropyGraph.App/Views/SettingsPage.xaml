@@ -4,22 +4,56 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!--
-        Issue #106 built the Diagnostics group only. Issue #104 (the full Settings page) adds its groups to this same
-        StackPanel and keeps this one: extend, do not replace. Every string is in Resources.resw via x:Uid.
+        Titled groups (docs/ui_conventions.md section 10): a header, then a card holding that group's controls. The page has
+        no title of its own: the shell's NavigationView header already says "Settings" (#627). Issue #104's other groups
+        (#640 to #644) add one more group StackPanel each, in the order the user_guide lists them. Every string is in
+        Resources.resw via x:Uid.
     -->
+    <Page.Resources>
+        <Style x:Key="SettingsGroupCardStyle" TargetType="Border">
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="CornerRadius" Value="{StaticResource OverlayCornerRadius}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        </Style>
+    </Page.Resources>
+
     <ScrollViewer>
-        <StackPanel Padding="24" Spacing="16">
-            <TextBlock x:Uid="SettingsPageTitle" Style="{StaticResource TitleTextBlockStyle}" />
+        <StackPanel Padding="24" Spacing="24">
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsAppearanceHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsAppearanceExplainer" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <RadioButton x:Uid="ThemeLightRadio" GroupName="Theme" CommandParameter="Light"
+                                         Command="{x:Bind ViewModel.SetThemeCommand}"
+                                         IsChecked="{x:Bind ViewModel.IsLightTheme, Mode=OneWay}" />
+                            <RadioButton x:Uid="ThemeDarkRadio" GroupName="Theme" CommandParameter="Dark"
+                                         Command="{x:Bind ViewModel.SetThemeCommand}"
+                                         IsChecked="{x:Bind ViewModel.IsDarkTheme, Mode=OneWay}" />
+                            <RadioButton x:Uid="ThemeSystemRadio" GroupName="Theme" CommandParameter="System"
+                                         Command="{x:Bind ViewModel.SetThemeCommand}"
+                                         IsChecked="{x:Bind ViewModel.IsSystemTheme, Mode=OneWay}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
 
             <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsDiagnosticsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
-                <TextBlock x:Uid="SettingsDiagnosticsExplainer" TextWrapping="Wrap" />
-                <StackPanel Orientation="Horizontal" Spacing="12">
-                    <Button x:Uid="SaveDiagnosticsButton" Command="{x:Bind ViewModel.SaveDiagnosticsCommand}" />
-                    <Button x:Uid="DiagnosticsOpenFolderButton" Command="{x:Bind ViewModel.OpenDiagnosticsFolderCommand}" />
-                    <ProgressRing IsActive="{x:Bind ViewModel.IsSavingDiagnostics, Mode=OneWay}" Width="20" Height="20" />
-                </StackPanel>
-                <TextBlock Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsDiagnosticsExplainer" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button x:Uid="SaveDiagnosticsButton" Command="{x:Bind ViewModel.SaveDiagnosticsCommand}" />
+                            <Button x:Uid="DiagnosticsOpenFolderButton" Command="{x:Bind ViewModel.OpenDiagnosticsFolderCommand}" />
+                            <ProgressRing IsActive="{x:Bind ViewModel.IsSavingDiagnostics, Mode=OneWay}" Width="20" Height="20" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </StackPanel>
     </ScrollViewer>
