@@ -581,6 +581,12 @@ instance - already-passed happy-path phases are silently skipped
 `FindByJobIdAsync` first (section 3, issue #257) - so a second call after a crash *is* the
 resume path, not a distinct one someone has to remember to call.
 
+**On launch (issue #59)**: `JobReconciler` (Core/Cloud) is what calls that resume path for every run a killed app left
+non-terminal. It reads the VM by label and `result.json`, decides (architecture.md section 6 has the table), and hands the run to
+`RunAsync`; it never creates a VM for a run past `Provisioning` whose VM is gone. `FakeGcp.WithCloudNotConnected()` now also makes
+`FindByJobIdAsync` throw `CLOUD_NOT_CONNECTED`, because a listing cannot succeed with no connection: the reconciler reads that, and a network
+error, as "no answer" and leaves the row alone instead of calling the run lost.
+
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a
