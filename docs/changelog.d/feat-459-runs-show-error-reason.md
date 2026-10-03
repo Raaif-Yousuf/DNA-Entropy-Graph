@@ -1,0 +1,1 @@
+- feat(app): each failed run on the Runs page now shows a plain-language reason and the one action to take, from the run's recorded error code, with a generic message for an unknown or missing code. A Completed run recorded with a code (such as `lifecycle_unverified`, where the VM end was not confirmed) shows the same kind of warning. The raw error detail is never shown (#459)

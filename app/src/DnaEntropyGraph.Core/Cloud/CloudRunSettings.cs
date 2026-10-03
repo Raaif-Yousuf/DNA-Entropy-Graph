@@ -19,7 +19,21 @@ internal sealed class CloudRunSettings
 
     public TimeSpan? ResultTimeout { get; set; }
 
+    /// <summary>The clock for every deadline, elapsed-time check and wait of the run (gateway call deadlines, the boot, result and lifecycle waits, poll sleeps). A test passes a clock it moves by hand, so a loaded machine cannot race a wall-clock deadline (#525).</summary>
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
+    /// <summary>Replaces the sleep between polls. Null sleeps on <see cref="TimeProvider"/>. A test passes one that advances its clock by the slept time and returns at once.</summary>
+    public Func<TimeSpan, CancellationToken, Task>? PollDelay { get; set; }
+
+    /// <summary>Sleeps between two looks, on <see cref="PollDelay"/> when set, else on <see cref="TimeProvider"/>.</summary>
+    public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+        => PollDelay is { } custom ? custom(delay, cancellationToken) : Task.Delay(delay, TimeProvider, cancellationToken);
+
+    /// <summary>A moment on <see cref="TimeProvider"/> to measure from with <see cref="ElapsedSince"/>.</summary>
+    public long StartClock() => TimeProvider.GetTimestamp();
+
+    /// <summary>Time elapsed on <see cref="TimeProvider"/> since <paramref name="start"/>.</summary>
+    public TimeSpan ElapsedSince(long start) => TimeProvider.GetElapsedTime(start);
 
     /// <summary>
     /// How long after the wait for the result begins the worker's first heartbeat may take: booting 8 min plus image pull 15 min
