@@ -104,6 +104,20 @@ public class ReattachOnStartupTests : IDisposable
     private static async Task<RunRecord> RowAsync(ServiceProvider provider, string jobId)
         => (await provider.GetRequiredService<IRunRepository>().GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
 
+    /// <summary>Completes when the run's driver is registered: a signal, so no test polls <see cref="ActiveRuns.IsActive"/> on a real clock. Subscribe BEFORE starting the reattach.</summary>
+    private static Task WhenStarted(ActiveRuns active, string jobId)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        active.Started += id =>
+        {
+            if (id == jobId)
+            {
+                started.TrySetResult();
+            }
+        };
+        return started.Task;
+    }
+
     [Fact]
     public void The_reconciler_resolves_from_the_production_container()
     {
@@ -138,23 +152,20 @@ public class ReattachOnStartupTests : IDisposable
         var active = provider.GetRequiredService<ActiveRuns>();
         var repository = provider.GetRequiredService<IRunRepository>();
         using var shutdown = new CancellationTokenSource();
+        var driving = WhenStarted(active, "job-cut");
         var reattach = reconciler.ReattachAsync(shutdown.Token);
-        for (var i = 0; i < 500 && !active.IsActive("job-cut"); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await driving.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         active.IsActive("job-cut").ShouldBeTrue("precondition: the reattach is driving the run");
         var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancel = active.CancelAsync("job-cut", async () =>
         {
             await repository.UpsertAsync((await RowAsync(provider, "job-cut")) with { Phase = JobPhase.Cancelling }, CancellationToken.None);
+            cancelling.SetResult();
             await neverEnds.Task;
         });
-        for (var i = 0; i < 500 && (await RowAsync(provider, "job-cut")).Phase != JobPhase.Cancelling; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await cancelling.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         await shutdown.CancelAsync();
         var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Single();
@@ -180,11 +191,9 @@ public class ReattachOnStartupTests : IDisposable
         var reconciler = provider.GetRequiredService<JobReconciler>();
         var active = provider.GetRequiredService<ActiveRuns>();
         using var shutdown = new CancellationTokenSource();
+        var driving = WhenStarted(active, "job-twice");
         var reattach = reconciler.ReattachAsync(shutdown.Token);
-        for (var i = 0; i < 500 && !active.IsActive("job-twice"); i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await driving.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         active.IsActive("job-twice").ShouldBeTrue("precondition: the reattach is driving the run");
         var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

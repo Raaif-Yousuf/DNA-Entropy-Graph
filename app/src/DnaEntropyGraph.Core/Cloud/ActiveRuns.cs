@@ -13,6 +13,12 @@ public sealed class ActiveRuns
     private readonly ConcurrentDictionary<string, TaskCompletionSource> _cancels = new();
 
     /// <summary>
+    /// Raised with the job id once a driver is registered for it (<see cref="IsActive"/> is true) and before its body runs; not raised for a start
+    /// that was refused. A signal to wait on instead of polling <see cref="IsActive"/>. A handler that throws is ignored: it never stops the driver.
+    /// </summary>
+    public event Action<string>? Started;
+
+    /// <summary>
     /// Starts <paramref name="body"/> on a background task registered under <paramref name="jobId"/>, and returns a task that ends when the
     /// body has ended and the entry is removed; null when the job already has a driver or a user cancel (<see cref="CancelAsync"/>) is running for it. The job is registered before the body runs, so a
     /// cancel can never miss it. A cancel the caller asked for ends the task quietly; any other exception is the body's to handle.
@@ -37,6 +43,15 @@ public sealed class ActiveRuns
             done.TrySetResult(); // a cancel that already found this entry is waiting on it
             cts.Dispose();
             return null;
+        }
+
+        try
+        {
+            Started?.Invoke(jobId);
+        }
+        catch (Exception)
+        {
+            // A listener's failure is its own; the driver starts regardless.
         }
 
         _ = Task.Run(async () =>
