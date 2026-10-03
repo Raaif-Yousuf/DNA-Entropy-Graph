@@ -14,7 +14,7 @@ public enum ReattachAction
     /// <summary>The run was mid-cancel; the cancel was finished.</summary>
     CancelFinished,
 
-    /// <summary>The reattach was finishing a cancel and was cut short (a user cancel of the same run took over and had not settled in time): the row is not terminal and the next launch looks again. Never reported with a terminal row.</summary>
+    /// <summary>A cancel of this run was in flight and the reattach's part was cut short (the wait for a user cancel timed out, the app began to shut down, the cancel failed, or its terminal write did not land): the row is not terminal (normally Cancelling) and the next launch finishes it. Never reported with a terminal row (DECISION #599).</summary>
     CancelInterrupted,
 
     /// <summary>The VM is gone and no <c>result.json</c> exists: recorded Failed. A lost VM is never silently replaced.</summary>
@@ -548,16 +548,16 @@ public sealed class JobReconciler
 
     private async Task<ReattachOutcome> ReattachCoreAsync(RunRecord row, TaskCompletionSource judged, CancellationToken cancellationToken)
     {
+        var underway = new Underway(() =>
+        {
+            _deferredRuns.TryRemove(row.JobId, out _);
+            judged.TrySetResult();
+        });
         try
         {
             // Registered BEFORE the first look at the cloud, and covering every write the reattach can make (the look, a failure it records,
             // a cancel it finishes, the run itself): a cancel at any moment finds the driver, stops it and waits for it, so one writer at a time.
             ReattachOutcome? outcome = null;
-            var underway = new Underway(() =>
-            {
-                _deferredRuns.TryRemove(row.JobId, out _);
-                judged.TrySetResult();
-            });
             var driver = _active.TryStart(row.JobId, async token =>
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
@@ -570,6 +570,14 @@ public sealed class JobReconciler
 
             await driver.ConfigureAwait(false);
             return outcome ?? await OutcomeOfCancelledAsync(row.JobId, underway.Action, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && underway.Action == ReattachAction.CancelFinished)
+        {
+            // The app is shutting down while this reattach is finishing a cancel it found half done: say so (the row is read as it now is, and
+            // stays Cancelling when the terminal write did not land) instead of letting the shutdown hide the outcome. The next launch finishes it.
+            _log.Warning("reconciler", row.JobId, nameof(OperationCanceledException));
+            var after = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
+            return new ReattachOutcome(row.JobId, ActionAfterUserCancel(underway.Action, after?.Phase), after?.Phase, after?.ErrorCode);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -698,10 +706,23 @@ public sealed class JobReconciler
             // The cancel is still going: report the row as it is now (non-terminal), which says so, rather than wait on it for good.
             _log.Warning("reconciler", jobId, nameof(TimeoutException));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The app is shutting down while the cancel is in flight: the same report, not an exception that would hide every other run's outcome.
+            _log.Warning("reconciler", jobId, nameof(OperationCanceledException));
+        }
 
         var settled = await _rows.TryLatestRecordAsync(jobId).ConfigureAwait(false);
-        return new ReattachOutcome(jobId, ActionForFinalPhase(underway, settled?.Phase), settled?.Phase, settled?.ErrorCode);
+        return new ReattachOutcome(jobId, ActionAfterUserCancel(underway, settled?.Phase), settled?.Phase, settled?.ErrorCode);
     }
+
+    /// <summary>
+    /// The action for a reattach a user cancel took over. A terminal row is judged as <see cref="ActionForFinalPhase"/> does. A row that is
+    /// not terminal means the cancel did not end the run (it was cut short by the shutdown or the settle deadline, or it failed): the reattach
+    /// is no longer driving the run, so it is never reported as resumed, only as <see cref="ReattachAction.CancelInterrupted"/>.
+    /// </summary>
+    private static ReattachAction ActionAfterUserCancel(ReattachAction underway, JobPhase? finalPhase)
+        => finalPhase is { } phase && JobStateMachine.IsTerminal(phase) ? ActionForFinalPhase(underway, phase) : ReattachAction.CancelInterrupted;
 
     /// <summary>
     /// What the reattach did, as the row it left says it did. A reattach that was stopped by a user cancel may have set its own action (it

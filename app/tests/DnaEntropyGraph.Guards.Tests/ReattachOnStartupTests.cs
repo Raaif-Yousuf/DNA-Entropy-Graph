@@ -125,6 +125,49 @@ public class ReattachOnStartupTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reattach_whose_wait_for_a_user_cancel_is_cut_by_shutdown_is_reported_CancelInterrupted_and_leaves_a_row_the_next_pass_finishes()
+    {
+        // Issue #551's observable, through the production container: the action reported and the row agree (a non-terminal Cancelling row is
+        // CancelInterrupted, never CancelFinished or Resumed), and that row is one the next reattach drives to a recorded terminal state.
+        using var provider = Build(connected: true, FakeWorkerMode.Never);
+        await SeedKilledRunAsync(provider, "job-cut", JobPhase.Running, vm: true);
+        var reconciler = provider.GetRequiredService<JobReconciler>();
+        var active = provider.GetRequiredService<ActiveRuns>();
+        var repository = provider.GetRequiredService<IRunRepository>();
+        using var shutdown = new CancellationTokenSource();
+        var reattach = reconciler.ReattachAsync(shutdown.Token);
+        for (var i = 0; i < 500 && !active.IsActive("job-cut"); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        active.IsActive("job-cut").ShouldBeTrue("precondition: the reattach is driving the run");
+        var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancel = active.CancelAsync("job-cut", async () =>
+        {
+            await repository.UpsertAsync((await RowAsync(provider, "job-cut")) with { Phase = JobPhase.Cancelling }, CancellationToken.None);
+            await neverEnds.Task;
+        });
+        for (var i = 0; i < 500 && (await RowAsync(provider, "job-cut")).Phase != JobPhase.Cancelling; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        await shutdown.CancelAsync();
+        var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)).Single();
+
+        outcome.Action.ShouldBe(ReattachAction.CancelInterrupted);
+        (await RowAsync(provider, "job-cut")).Phase.ShouldBe(JobPhase.Cancelling, "the row agrees with the action: the cancel did not end the run");
+        neverEnds.SetResult();
+        await cancel;
+
+        var next = (await reconciler.ReattachAsync(TestContext.Current.CancellationToken)).Single();
+
+        next.Action.ShouldBe(ReattachAction.CancelFinished);
+        (await RowAsync(provider, "job-cut")).Phase.ShouldBe(JobPhase.Cancelled, "the next pass records the terminal state (Hard Rule 11)");
+    }
+
+    [Fact]
     public async Task The_launch_entry_with_the_production_not_connected_cloud_does_not_throw_and_does_not_fail_a_run_it_cannot_judge()
     {
         using var provider = Build(connected: false);

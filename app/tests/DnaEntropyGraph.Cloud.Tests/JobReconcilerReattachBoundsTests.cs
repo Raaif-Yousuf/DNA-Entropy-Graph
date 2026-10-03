@@ -45,7 +45,7 @@ public class JobReconcilerReattachBoundsTests
 
         outcomes.Single(o => o.JobId == "job-ok").FinalPhase.ShouldBe(JobPhase.Completed);
         var hung = outcomes.Single(o => o.JobId == "job-hung");
-        hung.Action.ShouldBe(ReattachAction.Resumed, "the reattach was resuming the run when the cancel took over, and the cancel never finished");
+        hung.Action.ShouldBe(ReattachAction.CancelInterrupted, "the reattach was stopped by a cancel that never finished: it is neither driving the run nor reporting it resumed");
         hung.FinalPhase.ShouldBe(JobPhase.Running, "the cancel has not finished, and the outcome says the row is as it was");
         neverEnds.SetResult();
         await cancel;
@@ -94,6 +94,82 @@ public class JobReconcilerReattachBoundsTests
 
         outcome.FinalPhase.ShouldBe(JobPhase.Cancelling, "the terminal write never landed");
         outcome.Action.ShouldBe(ReattachAction.CancelInterrupted, "a cancel whose end was not recorded must not be reported as CancelFinished");
+    }
+
+    [Fact]
+    public async Task A_shutdown_while_waiting_for_a_user_cancel_is_reported_as_CancelInterrupted_and_does_not_throw()
+    {
+        var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
+        await env.SeedAsync("job-shutdown", JobPhase.Running, vm: true);
+        var armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconciler = env.Reconciler(ClockAfterTheSeededRows());
+        reconciler.CancelSettleArmed = _ => armed.TrySetResult();
+        using var shutdown = new CancellationTokenSource();
+        var reattach = reconciler.ReattachAsync(shutdown.Token);
+        await WaitUntilAsync(() => env.Active.IsActive("job-shutdown"));
+        var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancel = env.Active.CancelAsync("job-shutdown", async () =>
+        {
+            await env.Repo.UpsertAsync(env.Row("job-shutdown") with { Phase = JobPhase.Cancelling }, CancellationToken.None);
+            await neverEnds.Task;
+        });
+        await armed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await WaitUntilAsync(() => env.Row("job-shutdown").Phase == JobPhase.Cancelling);
+
+        await shutdown.CancelAsync();
+        var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Single();
+
+        outcome.Action.ShouldBe(ReattachAction.CancelInterrupted);
+        outcome.FinalPhase.ShouldBe(JobPhase.Cancelling, "the cancel is in flight; the row says so and the next launch finishes it");
+        neverEnds.SetResult();
+        await cancel;
+    }
+
+    [Fact]
+    public async Task A_cancel_that_failed_before_ending_the_run_leaves_the_row_non_terminal_and_is_reported_as_CancelInterrupted_not_Resumed()
+    {
+        var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
+        await env.SeedAsync("job-failed-cancel", JobPhase.Running, vm: true);
+        var reattach = env.Reconciler(ClockAfterTheSeededRows()).ReattachAsync(CancellationToken.None);
+        await WaitUntilAsync(() => env.Active.IsActive("job-failed-cancel"));
+
+        await Should.ThrowAsync<IOException>(() => env.Active.CancelAsync("job-failed-cancel", async () =>
+        {
+            await env.Repo.UpsertAsync(env.Row("job-failed-cancel") with { Phase = JobPhase.Cancelling }, CancellationToken.None);
+            throw new IOException("the stop call failed");
+        }));
+        var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Single();
+
+        outcome.FinalPhase.ShouldBe(JobPhase.Cancelling);
+        outcome.Action.ShouldBe(ReattachAction.CancelInterrupted, "the run is not being driven and its cancel did not end: it was not resumed");
+    }
+
+    [Fact]
+    public async Task A_shutdown_while_finishing_a_cancel_is_reported_as_CancelInterrupted_with_the_row_still_Cancelling()
+    {
+        var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never));
+        await env.SeedAsync("job-cut-by-shutdown", JobPhase.Cancelling, vm: true);
+        // Counting from here, read 1 is the reconciler's own; read 2 is the runner's cancel looking at the row with the reattach's token (the
+        // shutdown reaches it), so a shutdown there leaves the cancel unfinished and the driver with an OperationCanceledException.
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        env.Repo.BeforeGetAll = async (call, token) =>
+        {
+            if (call == 2)
+            {
+                parked.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+            }
+        };
+        using var shutdown = new CancellationTokenSource();
+        var reattach = env.Reconciler(ClockAfterTheSeededRows()).ReattachAsync(shutdown.Token);
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        await shutdown.CancelAsync();
+        var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Single();
+
+        outcome.Action.ShouldBe(ReattachAction.CancelInterrupted);
+        outcome.FinalPhase.ShouldBe(JobPhase.Cancelling, "the cancel never reached its terminal write; the next launch finishes it");
+        env.Row("job-cut-by-shutdown").Phase.ShouldBe(JobPhase.Cancelling);
     }
 
     [Fact]
