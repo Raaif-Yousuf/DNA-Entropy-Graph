@@ -148,14 +148,18 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
     private void ArmProbe(bool escalate)
     {
         bool deferred;
+        var keepDelay = false;
         try
         {
             deferred = _hasDeferred();
         }
         catch (Exception ex)
         {
+            // The check itself failed (the reconciler could not be resolved, say): that is not an answer, so the probe goes on, on the delay it
+            // had (not doubled: nothing was learned), rather than stop for good and leave a deferred run to the next launch.
             _log.Warning("reconcile-probe", null, ex.GetType().Name);
-            return;
+            deferred = true;
+            keepDelay = escalate;
         }
 
         if (!deferred)
@@ -171,7 +175,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
             }
 
             _probing = true;
-            _probeDelay = escalate ? TimeSpan.FromTicks(Math.Min(_probeDelay.Ticks * 2, _probeMaxDelay.Ticks)) : _probeInitialDelay;
+            _probeDelay = keepDelay ? _probeDelay : escalate ? TimeSpan.FromTicks(Math.Min(_probeDelay.Ticks * 2, _probeMaxDelay.Ticks)) : _probeInitialDelay;
             _probeTimer?.Dispose();
             _probeTimer = _time.CreateTimer(_ => OnProbeDue(), null, _probeDelay, Timeout.InfiniteTimeSpan);
         }
