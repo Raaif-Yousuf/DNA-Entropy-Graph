@@ -4,6 +4,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Runs;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -474,6 +475,68 @@ public class JobReconcilerLifecycleTests
         reconciler.HasDeferred.ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task A_deferred_run_that_became_terminal_leaves_HasDeferred_at_the_next_pass()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-gone", JobPhase.Running, vm: true);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+        await reconciler.BeginReconcileAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeTrue("deferred offline");
+
+        // The user cancels it while offline: the row is terminal and is no longer a candidate for any pass.
+        await rig.Env.Repo.UpsertAsync(rig.Env.Row("job-gone") with { Phase = JobPhase.Cancelled, CreatedUtc = Launch.AddMinutes(-4) }, CancellationToken.None);
+        rig.Gcp.WithCloudConnected();
+        await (await reconciler.BeginReconcileAsync(CancellationToken.None));
+
+        reconciler.HasDeferred.ShouldBeFalse("a run that ended is nothing to look at again");
+    }
+
+    [Fact]
+    public async Task A_non_network_failure_judging_a_run_is_logged_and_is_not_deferred()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-403", JobPhase.Running, vm: true);
+        rig.Env.Images.Resolve(Arg.Any<string>(), Arg.Any<bool>()).Returns(_ => throw new InvalidOperationException("boom: secret-file-name.gb"));
+        var reconciler = rig.Reconciler();
+
+        var outcome = (await reconciler.ReattachAsync(CancellationToken.None)).Single();
+
+        outcome.Action.ShouldBe(ReattachAction.Errored);
+        outcome.ErrorCode.ShouldBe(nameof(InvalidOperationException));
+        reconciler.HasDeferred.ShouldBeFalse("only a network failure keeps the reconnect probe alive");
+        rig.Env.Log.Entries.ShouldContain(e => e.JobId == "job-403");
+    }
+
+    [Fact]
+    public async Task A_lifecycle_pass_that_throws_a_non_network_error_clears_HasDeferred_and_still_throws()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-lc", AfterTaskAction.Delete);
+        rig.Gcp.WithCloudNotConnected();
+        var reconciler = rig.Reconciler();
+        await reconciler.EnforceLifecycleAsync(CancellationToken.None);
+        reconciler.HasDeferred.ShouldBeTrue("offline lifecycle pass");
+
+        rig.Env.Repo.BeforeGetAll = (_, _) => throw new InvalidOperationException("database is busy");
+        await Should.ThrowAsync<InvalidOperationException>(() => reconciler.EnforceLifecycleAsync(CancellationToken.None));
+
+        reconciler.HasDeferred.ShouldBeFalse("a non-network failure must not keep the reconnect probe alive");
+    }
+
+    [Fact]
+    public async Task A_network_failure_judging_a_run_still_counts_as_deferred()
+    {
+        var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
+        await rig.Env.SeedAsync("job-net", JobPhase.Running, vm: true);
+        rig.Gcp.WithFindByJobIdFailure(new CloudError(null, null, "could not reach the service"), 1);
+        var reconciler = rig.Reconciler();
+
+        (await reconciler.ReattachAsync(CancellationToken.None)).Single().Action.ShouldBe(ReattachAction.Deferred);
+        reconciler.HasDeferred.ShouldBeTrue();
+    }
+
     // ---- 3. the reconnect trigger ----
 
     [Fact]
@@ -729,7 +792,8 @@ public class JobReconcilerLifecycleTests
     [Fact]
     public async Task The_pass_hands_every_reattached_run_to_its_driver_before_it_returns()
     {
-        // Issue #575 item 4: two passes' reattach listings must not overlap, so a pass ends only once its runs are registered.
+        // REGRESSION GUARD for #559's judged signal (it is green before any #575 change): two passes' reattach listings must not overlap, so a pass
+        // ends only once its runs are registered as drivers. #575 item 4 asked for this and #559 already delivered it.
         var rig = new Rig();
         rig.Env.ResultTimeout = TimeSpan.FromMinutes(5);
         await rig.Env.SeedAsync("job-h1", JobPhase.Running, vm: true);
@@ -747,28 +811,33 @@ public class JobReconcilerLifecycleTests
     [Fact]
     public async Task The_observer_does_not_keep_a_nested_wait_for_every_reconnect_pass_whose_runs_already_ended()
     {
-        // Issue #575 item 5: each pass's reattached-runs task is dropped from what WhenIdleAsync waits on as soon as it ends.
-        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Issue #575 item 5: each pass's reattached-runs task is dropped from what WhenIdleAsync waits on as soon as it ends. Every pass here hands
+        // back a run group that is still going when it is tracked (completed later by the test), so each one is really added and must really be
+        // removed: a group that is already complete when tracked never reaches the removal.
+        var groups = Enumerable.Range(0, 5).Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
         var passes = 0;
-        var observer = new ReconcileOnReconnect(new NullObserver(), _ =>
-        {
-            var n = Interlocked.Increment(ref passes);
-            return Task.FromResult<Task>(n == 3 ? held.Task : Task.CompletedTask);
-        });
+        var observer = new ReconcileOnReconnect(new NullObserver(), _ => Task.FromResult<Task>(groups[Interlocked.Increment(ref passes) - 1].Task));
 
         for (var i = 1; i <= 5; i++)
         {
             observer.OnConnectivityChanged(offline: false);
-            await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref passes) == i));
-            await Task.Yield();
+            await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == i));
         }
 
-        // Pass 5 may still be finishing; settle on the passes (not the held run).
+        observer.TrackedRunGroups.ShouldBe(5, "each pass's still-running group is tracked");
+
+        // Out of order, and the last one held back: the tracked set follows the groups that are still going, one wait and not a chain.
+        foreach (var i in new[] { 1, 3, 0, 4 })
+        {
+            groups[i].SetResult();
+        }
+
         await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 1));
-        held.SetResult();
+        groups[2].SetResult();
         await observer.WhenIdleAsync();
         await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 0));
     }
+
     private static async Task WaitUntilAsync(Func<Task<bool>> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);

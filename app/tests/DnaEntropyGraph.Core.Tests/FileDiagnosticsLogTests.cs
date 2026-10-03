@@ -65,4 +65,27 @@ public class FileDiagnosticsLogTests
         Directory.GetFiles(Path.Combine(root, "logs")).Length.ShouldBe(2, "never more than the log and one rotated copy");
         File.ReadAllText(path).ShouldContain("job=job-99 ", Case.Sensitive, "the newest line is in the live file");
     }
+
+    [Fact]
+    public void A_rotation_that_cannot_move_the_file_still_appends_the_line_instead_of_dropping_it()
+    {
+        // The diagnostics zip (or anything) holding app.log.1 open makes the rotating Move throw; a brief overshoot of the cap beats lost lines.
+        var root = Path.Combine(Path.GetTempPath(), "deg-log-held-" + Guid.NewGuid().ToString("N"));
+        var log = new FileDiagnosticsLog(root, new FixedClock(new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero)), maxBytes: 200);
+        var path = Path.Combine(root, "logs", "app.log");
+        Directory.CreateDirectory(Path.Combine(root, "logs"));
+        File.WriteAllText(path + ".1", "old\n");
+        using var held = new FileStream(path + ".1", FileMode.Open, FileAccess.Read, FileShare.None);
+
+        for (var i = 0; i < 20; i++)
+        {
+            log.Warning("reconciler", "job-" + i, "InvalidOperationException");
+        }
+
+        var text = File.ReadAllText(path);
+        for (var i = 0; i < 20; i++)
+        {
+            text.ShouldContain($"job=job-{i} ", Case.Sensitive, "every line is kept while the rotation is blocked");
+        }
+    }
 }
