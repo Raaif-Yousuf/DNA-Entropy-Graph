@@ -68,7 +68,6 @@ public static class ServiceRegistration
         services.AddSingleton<IStringResourceProvider, ReswStringResourceProvider>();
         services.AddSingleton<WindowPlacementService>();
         services.AddSingleton<ILogTailReader, FileLogTailReader>();
-        services.AddSingleton<IAppLog, InMemoryAppLog>();
 
         // Cloud (Hard Rule 7: the only project allowed to reference
         // Google.*). FakeGcp is the always-succeeds baseline until the real

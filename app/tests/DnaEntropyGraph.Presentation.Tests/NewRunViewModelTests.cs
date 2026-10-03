@@ -25,7 +25,7 @@ public sealed class NewRunViewModelTests : IDisposable
     private readonly INavigator _navigator = Substitute.For<INavigator>();
     private readonly FakeStrings _strings = new();
     private readonly ICostEstimateService _estimates = Substitute.For<ICostEstimateService>();
-    private readonly IAppLog _log = Substitute.For<IAppLog>();
+    private readonly RecordingLog _log = new();
     private NewRunViewModel _viewModel;
 
     public NewRunViewModelTests()
@@ -1096,6 +1096,13 @@ public sealed class NewRunViewModelTests : IDisposable
         _navigator.DidNotReceive().NavigateTo(Arg.Any<string>(), Arg.Any<string>());
     }
 
+    private sealed class RecordingLog : IDiagnosticsLog
+    {
+        public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass) => Entries.Add((source, jobId, errorClass));
+    }
+
     // ---- #553: a failed start is classified by what threw, logged by class, and posted like every other line ----
 
     public static TheoryData<Exception, string, string> StartFailures => new()
@@ -1121,8 +1128,7 @@ public sealed class NewRunViewModelTests : IDisposable
         await _viewModel.StartRunCommand.ExecuteAsync(null);
 
         _viewModel.StatusMessage.ShouldBe(expectedKey);
-        _log.Received(1).Error("NewRun.StartRun", expectedClass);
-        _log.ReceivedCalls().Count().ShouldBe(1);
+        _log.Entries.ShouldBe([("new-run", null, expectedClass)]);
     }
 
     [Fact]
@@ -1140,11 +1146,8 @@ public sealed class NewRunViewModelTests : IDisposable
 
         await _viewModel.StartRunCommand.ExecuteAsync(null);
 
-        _log.ReceivedCalls().ShouldNotBeEmpty();
-        foreach (var call in _log.ReceivedCalls())
-        {
-            call.GetArguments().Select(a => a?.ToString() ?? string.Empty).ShouldAllBe(arg => !arg.Contains("secret-sample-name") && !arg.Contains("no such file"));
-        }
+        _log.Entries.ShouldNotBeEmpty();
+        _log.Entries.Select(e => $"{e.Source} {e.JobId} {e.ErrorClass}").ShouldAllBe(line => !line.Contains("secret-sample-name") && !line.Contains("no such file"));
     }
 
     [Fact]
@@ -1156,7 +1159,7 @@ public sealed class NewRunViewModelTests : IDisposable
 
         await _viewModel.StartRunCommand.ExecuteAsync(null);
 
-        _log.ReceivedCalls().ShouldBeEmpty();
+        _log.Entries.ShouldBeEmpty();
     }
 
     [Fact]
@@ -1211,7 +1214,7 @@ public sealed class NewRunViewModelTests : IDisposable
 
         await _viewModel.BrowseCommand.ExecuteAsync(null);
 
-        _log.Received(1).Error("NewRun.Browse", "InvalidOperationException");
+        _log.Entries.ShouldBe([("new-run", null, "InvalidOperationException")]);
     }
 
     // A check that Treat as RNA started on the pill an add is still checking belongs to the Treat as RNA click, not to the add.

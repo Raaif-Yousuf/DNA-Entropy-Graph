@@ -44,7 +44,7 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly IInputFileSystem _files;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
     private readonly OutputSelectionStore _outputStore;
-    private readonly IAppLog _log;
+    private readonly IDiagnosticsLog _log;
 
     // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
     // kept while the user switches between pills, and written back to the store only when a run starts.
@@ -91,7 +91,7 @@ public sealed partial class NewRunViewModel : ObservableObject
         IPastedInputStore pastedStore,
         ICostEstimateService estimates,
         OutputSelectionStore outputStore,
-        IAppLog log,
+        IDiagnosticsLog log,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null)
     {
@@ -312,9 +312,9 @@ public sealed partial class NewRunViewModel : ObservableObject
     /// Logs a failure by its class (never its message, which can carry a file name) and says its line like any other operation
     /// does: after what another operation in flight has already said, and replacing a stale line only when the page is idle.
     /// </summary>
-    private void ReportFailure(string area, Exception exception, string messageKey)
+    private void ReportFailure(Exception exception, string messageKey)
     {
-        _log.Error(area, ErrorClass(exception));
+        _log.Warning("new-run", null, ErrorClass(exception));
         BeginOperation();
         try
         {
@@ -378,7 +378,7 @@ public sealed partial class NewRunViewModel : ObservableObject
         catch (Exception ex)
         {
             // The picker is a COM call that can fail for reasons we cannot name (no window yet, a shell extension).
-            ReportFailure("NewRun.Browse", ex, "NewRunStatusBrowseFailed");
+            ReportFailure(ex, "NewRunStatusBrowseFailed");
             return;
         }
 
@@ -526,7 +526,7 @@ public sealed partial class NewRunViewModel : ObservableObject
         catch (Exception ex)
         {
             // An exception out of a button command would end the app; say what to do instead, for what actually failed.
-            ReportFailure("NewRun.StartRun", ex, StartFailureKey(ex));
+            ReportFailure(ex, StartFailureKey(ex));
             return;
         }
 
