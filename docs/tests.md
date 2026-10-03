@@ -26,7 +26,7 @@ what it runs, and where CI runs the same thing.
 
 ## CI checks on a pull request (#31)
 
-An **empty** pull request (touching nothing under `app/` or `worker/`, say a one-line README edit)
+An **empty** pull request (touching nothing the tests read: not `app/`, `worker/`, `tests/`, `docs/contract/`, say a one-line README edit)
 must show these checks, all passing or Skipped:
 
 | Workflow | Check names (these are the names branch protection lists) | On an empty PR |
@@ -40,7 +40,7 @@ stops from starting produces *no* check, and a required check that never reports
 waiting for status" and blocks the merge button forever. A job skipped by its own `if:` reports
 Skipped, which branch protection treats as passing. So `ci-app.yml` and `ci-worker.yml` always start,
 and a tiny `changes` job (a `git diff --name-only` of the PR against its base) gates the real jobs.
-`workflow_dispatch` always runs everything.
+The `changes` pattern lists every path the tests *read*, not only `app/` or `worker/`: ci-app also runs for `worker/`, `tests/`, `docs/contract/`; ci-worker also for `tests/`, `docs/contract/`, `docs/copy_catalog.md`. `scripts/tests/test_ci_gate_sync.py` fails when a test reads a top-level directory the pattern omits. `workflow_dispatch` always runs everything.
 
 Requiring them on `main` is an owner action in the repository settings (branch protection, MEASURED
 2026-10-03: `main` is not protected). Require the job names above, **not** `changes (...)`.
