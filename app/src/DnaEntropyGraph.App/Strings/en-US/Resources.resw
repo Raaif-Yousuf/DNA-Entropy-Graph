@@ -885,6 +885,13 @@
   <data name="SetupBillingRequestText" xml:space="preserve">
     <value>Hello, I use DNA Entropy Graph, which runs analyses on a Google Cloud project. Please link the project {project} to the billing account {account}, or give me the Billing Account User role on it. Thank you.</value>
   </data>
+  <data name="SetupError_NOT_PROJECT_OWNER" xml:space="preserve">
+    <value>You can use this project but you are not its Owner, so you cannot switch on the Google services the app needs. Choose Create project to make one of your own.</value>
+  </data>
+  <data name="SetupAction_CreateProject" xml:space="preserve">
+    <value>Create project</value>
+  </data>
 </root>
+
 
 

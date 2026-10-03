@@ -20,6 +20,8 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// observable: "an insert that fails with ZONE_RESOURCE_POOL_EXHAUSTED
 /// surfaces that code from the polled operation, not a generic timeout."
 ///
+/// <paramref name="fixedInterval"/> replaces the doubling backoff with one constant wait, for an API whose documented polling cadence is fixed (Service Usage: every 5 s, issue #52).
+///
 /// No real time is ever awaited unless the caller's own <paramref
 /// name="delay"/> (default <see cref="Task.Delay(TimeSpan, CancellationToken)"/>)
 /// does so - a test supplies an instant, recording delay function so the
@@ -42,13 +44,14 @@ public static class OperationPoller
         TimeSpan deadline,
         CancellationToken cancellationToken,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        TimeSpan? fixedInterval = null)
     {
         ArgumentNullException.ThrowIfNull(poll);
 
         var clock = time ?? TimeProvider.System;
         var wait = delay ?? ((span, ct) => Task.Delay(span, clock, ct));
-        var backoff = InitialBackoff;
+        var backoff = fixedInterval ?? InitialBackoff;
         var waited = TimeSpan.Zero;
         var started = clock.GetTimestamp();
         var firstRead = true;
@@ -103,7 +106,10 @@ public static class OperationPoller
             var thisWait = backoff < left ? backoff : left;
             await wait(thisWait, cancellationToken).ConfigureAwait(false);
             waited += thisWait;
-            backoff = backoff * 2 > MaxBackoff ? MaxBackoff : backoff * 2;
+            if (fixedInterval is null)
+            {
+                backoff = backoff * 2 > MaxBackoff ? MaxBackoff : backoff * 2;
+            }
         }
     }
 
@@ -112,7 +118,11 @@ public static class OperationPoller
     // specifically recognize is given (this one is poller-local, not a Google code), and a poll deadline expiring is
     // meant to classify the same way a real HttpRequestException/timeout would (docs/cloud_design.md section 5's table).
     private static OperationOutcome<T> TimedOut<T>(TimeSpan deadline)
-        => OperationOutcome<T>.Failed(new CloudError(TimeoutCode, null, $"Polling timed out after {deadline} without the operation reporting done."));
+        => OperationOutcome<T>.Failed(TimeoutError(deadline));
+
+    /// <summary>The error for a spent deadline; also used by a caller that runs its own first call inside the same deadline.</summary>
+    public static CloudError TimeoutError(TimeSpan deadline)
+        => new(TimeoutCode, null, $"Polling timed out after {deadline} without the operation reporting done.");
 }
 
 /// <summary>One poll of an in-flight operation: not done yet, done with a result, or done with an error.</summary>

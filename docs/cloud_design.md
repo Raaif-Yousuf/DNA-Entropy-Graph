@@ -809,8 +809,9 @@ from 1.67.0 to 1.77.0 so the whole family is one version. The owner edits the CL
 
 - **Where it lives.** `DnaEntropyGraph.Cloud/Rest/`. `GoogleCloudGateways.Create(IGcpAccessTokenSource, CloudCallPipeline,
   GoogleCloudOptions?)` is the one construction point: it builds each client with a bearer-token interceptor that reads
-  the token source on every request (so a refreshed token is used by the replayed call) and wraps each gateway in its
-  `Resilient*` decorator. Google.Apis's own 503 retry is switched off (`ExponentialBackOffPolicy.None`) so
+  the token source on every request (so a refreshed token is used by the replayed call) and puts each gateway behind the
+  pipeline: single-call gateways (billing) in their `Resilient*` decorator, the two that are a POST plus polled reads
+  (project catalog, service enablement) by sending each HTTP call through the pipeline themselves. Google.Apis's own 503 retry is switched off (`ExponentialBackOffPolicy.None`) so
   `CloudCallPipeline` is the only retry. MEASURED 2026-10-02: with the library default, three scripted 503s were all
   consumed inside one gateway call and the pipeline's retry saw a different error; with `None` the pipeline retried
   twice and gave up as `network` (THEORY, unverified: that the default is the cause of that, not the scripted handler).
@@ -843,7 +844,7 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   long-running operation, polled with `OperationPoller` (1 s doubling to 10 s, 5 minute deadline); a timeout is
   `OPERATION_POLL_TIMEOUT`, classed `network`.
 - **One retry per HTTP call, never per composite.** `GoogleProjectCatalogGateway` is not wrapped in
-  `ResilientProjectCatalogGateway`: it sends every call through `CloudCallPipeline` itself. The mutating
+  a `Resilient*` decorator (none exists; `ResilientGatewayTests` fails if one is added): it sends every call through `CloudCallPipeline` itself. The mutating
   `POST /v3/projects` is retried alone; each `operations.get` is its own retried idempotent read. A 429 or 5xx on a
   poll read therefore re-reads and never re-POSTs. The poll deadline is wall-clock (`GoogleCloudOptions.TimeProvider`)
   and covers the time inside each read: `OperationPoller` hands every read a token that ends at the deadline, so a hung
@@ -889,6 +890,40 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   still backed by the fake; the composite real `IProjectSetupGateway` that delegates it to `GetBillingStatusAsync`
   lands with #52.
 - **Proven only by a real account:** `docs/ToTest.md`.
+### Enable services (issue #52, wizard step 5) and the real preflight gateway
+
+`IServiceEnablementGateway`: `IsServiceEnabledAsync`, `EnableServicesAsync`. `RequiredServices.Ids` is
+`compute.googleapis.com`, `storage.googleapis.com`, `cloudquotas.googleapis.com` in that order (enabling Compute also
+creates the project's default network).
+
+- **Requests.** `POST /v1/projects/{id}/services:batchEnable` with `{"serviceIds": [...]}` returns an operation;
+  `GET /v1/operations/{name}` is polled every 5 s (`OperationPoller` with its new `fixedInterval`, the doubling
+  backoff would be wrong for a documented cadence); once the operation is done,
+  `GET /v1/projects/{id}/services/{service}` is asked every 5 s until each reads `ENABLED`. A finished operation is not
+  a ready service, so each service is checked after the operation, but both phases share ONE 5 minute deadline for the
+  whole call (two separate polls could wait twice that), and the deadline starts BEFORE the `batchEnable` POST, so the
+  POST, its retries and their HTTP timeouts share it too: the whole call waits at most one deadline. A deadline that
+  ends the POST is the same `OPERATION_POLL_TIMEOUT`; the caller's own cancel stays a cancel. The deadline is
+  wall-clock and covers the time inside each read (a hung GET ends at the deadline, not at the HTTP client's 100 s).
+  A timeout in either is `OPERATION_POLL_TIMEOUT`, classed `network`.
+- **One retry per HTTP call, never per composite.** `GoogleServiceUsageGateway` is not wrapped in
+  a `Resilient*` decorator (none exists; `ResilientGatewayTests` fails if one is added): the `batchEnable` POST is retried alone, and each `operations.get` and
+  `services.get` is its own retried idempotent read. A 429 or 5xx while polling re-reads and never re-POSTs; a poll
+  read that keeps failing ends the call as `network` after one POST. The caller's own cancel still surfaces as a cancel.
+- **Errors.** The reason and kind decide first: a 403 that says Service Usage is off is `api_disabled`, billing off is `billing`, an organization policy is `org_policy`. A remaining plain permission 403, on the call or as `PERMISSION_DENIED` inside the operation, is `NOT_PROJECT_OWNER` (kind
+  `permission`; action: create a project of your own). Enabling Compute on a project with no billing keeps the billing
+  kind (Google answers a precondition failure that names billing), so the wizard sends the user back to step 4 rather
+  than to "ask the owner". A Service Usage API that is itself off reads as `api_disabled`.
+- **The preflight gateway.** `GoogleProjectSetupGateway` implements the existing `IProjectSetupGateway` from the
+  three real gateways (project state from Resource Manager, billing from Cloud Billing, the Compute API from Service
+  Usage). It is not wrapped in `ResilientProjectSetupGateway` (the catalog and service gateways it is built from
+  already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
+  already wrapped). `GoogleCloudGateways.Create(...)` returns it as
+  `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute and
+  storage gateways and the token refresher do not, so production still resolves everything to `FakeGcp` (#56, #520).
+- **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
+- **Proven only by a real project:** `docs/ToTest.md`.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

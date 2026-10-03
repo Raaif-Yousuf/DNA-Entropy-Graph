@@ -136,6 +136,24 @@ public class OperationPollerTests
     }
 
     [Fact]
+    public async Task A_fixed_interval_waits_the_same_time_every_poll_and_stops_at_the_deadline()
+    {
+        // Issue #52: services.batchEnable is polled every 5 s for up to 5 minutes, not with the 1 s doubling backoff.
+        var delays = new List<TimeSpan>();
+
+        var outcome = await OperationPoller.PollAsync<string>(
+            _ => Task.FromResult(new OperationPoll<string>(false, null, null)),
+            deadline: TimeSpan.FromSeconds(22),
+            CancellationToken.None,
+            RecordingInstantDelay(delays),
+            fixedInterval: TimeSpan.FromSeconds(5));
+
+        outcome.Success.ShouldBeFalse();
+        outcome.Error!.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
+        delays.ShouldBe([TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(2)]);
+    }
+
+    [Fact]
     public async Task A_poll_that_hangs_ends_at_the_wall_clock_deadline_as_the_timeout_code()
     {
         var outcome = await OperationPoller.PollAsync<string>(

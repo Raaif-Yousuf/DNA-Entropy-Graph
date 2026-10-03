@@ -27,6 +27,9 @@ public static class SetupErrorCodes
     /// <summary>The user can use a billing account but is not allowed to link projects to it. Action: copy the request for the billing admin.</summary>
     public const string BillingNoPermission = "BILLING_NO_PERMISSION";
 
+    /// <summary>The user is a member of the project but not its Owner, so Google refused to switch a service on (HTTP 403). Action: create a project of their own.</summary>
+    public const string NotProjectOwner = "NOT_PROJECT_OWNER";
+
     /// <summary>Google accepted the billing account but the project still has billing off (a suspended account, no valid payment method). Action: pick another billing account.</summary>
     public const string BillingStillOff = "BILLING_STILL_OFF";
 
@@ -34,7 +37,7 @@ public static class SetupErrorCodes
     public const string BillingAccountOff = "BILLING_ACCOUNT_OFF";
 
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, BillingAccountOff];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -45,6 +48,7 @@ public static class SetupErrorCodes
         ApiDisabled => "SetupError_API_DISABLED",
         NoBilling => "SetupError_NO_BILLING",
         BillingNoPermission => "SetupError_BILLING_NO_PERMISSION",
+        NotProjectOwner => "SetupError_NOT_PROJECT_OWNER",
         BillingStillOff => "SetupError_BILLING_STILL_OFF",
         BillingAccountOff => "SetupError_BILLING_ACCOUNT_OFF",
         _ => "SetupError_OTHER",
@@ -59,6 +63,7 @@ public static class SetupErrorCodes
         ApiDisabled => "SetupAction_TurnItOn",
         NoBilling => "SetupAction_LinkBilling",
         BillingNoPermission => "SetupAction_CopyBillingRequest",
+        NotProjectOwner => "SetupAction_CreateProject",
         BillingStillOff => "SetupAction_PickAnotherBillingAccount",
         BillingAccountOff => "SetupAction_FixBillingAccount",
         _ => "SetupAction_TryAgain",
