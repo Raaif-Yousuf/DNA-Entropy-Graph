@@ -13,7 +13,7 @@ from dna_entropy.analysis import MAX_ENTROPY_BITS
 from dna_entropy.analysis.entropy import shannon_entropy
 from dna_entropy.analysis.windowing import WindowingError
 from dna_entropy.config import Direction, PredictorKind, RunConfig, TrackFormat
-from dna_entropy.predictors.base import PredictorError
+from dna_entropy.predictors.base import PredictorError, PredictorOOMError
 from dna_entropy.predictors.mock import MockPredictor
 
 RAW = ">demo header\nATGC ATGC ATGC\nACGTACGTACGT"
@@ -890,6 +890,44 @@ def test_a_short_input_notice_is_still_raised_per_record_and_the_run_completes(t
     result = pipeline.run(cfg)
     assert result.contigs == 2
     assert sum("shorter than the context length" in n for n in result.notices) == 2
+
+
+# --- issue #81: an OOM once yields a COMPLETED run whose provenance shows the halved W/S ---
+
+
+class _OOMOnce:
+    def __init__(self) -> None:
+        self.calls = 0
+        self._inner = MockPredictor(seed=4)
+
+    def predict(self, seq: str):
+        self.calls += 1
+        if self.calls == 1:
+            raise PredictorOOMError("simulated CUDA out of memory")
+        return self._inner.predict(seq)
+
+
+def test_an_oom_once_still_completes_and_provenance_records_the_halved_window_and_stride(
+    tmp_path: Path,
+) -> None:
+    cfg = RunConfig(name="oom", out_dir=str(tmp_path), context_length=128, direction=Direction.FORWARD_ONLY)
+    result = pipeline.run(cfg, raw="ACGT" * 100, predictor=_OOMOnce())
+    contig = json.loads((tmp_path / "provenance.json").read_text(encoding="utf-8"))["contigs"][0]
+    assert (contig["window"], contig["stride"]) == (128, 64), "the HALVED plan, not the configured 256/128"
+    assert contig["k_used"] == 64
+    assert result.window == 128 and result.stride == 64
+    assert any("Out of GPU memory" in n for n in result.notices)
+    assert len(result.values) == 400
+
+
+def test_a_second_oom_fails_the_run_instead_of_retrying_forever(tmp_path: Path) -> None:
+    class _AlwaysOOM:
+        def predict(self, seq: str):
+            raise PredictorOOMError("simulated CUDA out of memory")
+
+    cfg = RunConfig(name="oom2", out_dir=str(tmp_path), context_length=128, direction=Direction.FORWARD_ONLY)
+    with pytest.raises(PredictorOOMError):
+        pipeline.run(cfg, raw="ACGT" * 100, predictor=_AlwaysOOM())
 
 
 def test_a_refused_later_record_never_builds_the_predictor(tmp_path: Path, monkeypatch) -> None:
