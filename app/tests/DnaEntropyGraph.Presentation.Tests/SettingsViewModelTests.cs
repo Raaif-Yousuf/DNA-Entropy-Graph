@@ -173,4 +173,25 @@ public class SettingsViewModelTests
         applier.DidNotReceive().Apply(Arg.Any<string>());
         settingsStore.DidNotReceive().SetString(Arg.Any<string>(), Arg.Any<string>());
     }
+
+    [Theory]
+    [InlineData(Light, "Light label from resw")]
+    [InlineData(Dark, "Dark label from resw")]
+    [InlineData(System, "Use system label from resw")]
+    public void The_theme_updated_toast_names_the_choice_in_the_words_of_the_radio_button_not_the_saved_code(int index, string label)
+    {
+        var settingsStore = Substitute.For<ISettingsStore>();
+        settingsStore.GetString("Theme").Returns(index == Dark ? "Light" : "Dark");
+        var toastService = Substitute.For<IToastService>();
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("ThemeUpdated_Title").Returns("Theme updated");
+        strings.GetString("ThemeChoice_Light").Returns("Light label from resw");
+        strings.GetString("ThemeChoice_Dark").Returns("Dark label from resw");
+        strings.GetString("ThemeChoice_System").Returns("Use system label from resw");
+        var viewModel = new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System, Substitute.For<IThemeApplier>());
+
+        viewModel.ThemeIndex = index;
+
+        toastService.Received(1).ShowToast("Theme updated", label);
+    }
 }

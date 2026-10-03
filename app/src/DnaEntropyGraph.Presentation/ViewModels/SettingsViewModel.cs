@@ -108,7 +108,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
 
         // Plain (non-dotted) resw key: see ShellViewModel.BuildStatusPillText's comment.
-        _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), theme);
+        // The body is the choice in the radio button's own words ("Use system"), not the saved code ("System").
+        _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), _strings.GetString($"ThemeChoice_{theme}"));
     }
 
     /// <summary>Asks where to save, builds the zip off the UI thread, and says what happened. Never throws to the caller.</summary>
