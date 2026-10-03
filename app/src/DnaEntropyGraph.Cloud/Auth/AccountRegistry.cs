@@ -4,11 +4,15 @@ using System.Text.Json.Serialization;
 
 namespace DnaEntropyGraph.Cloud.Auth;
 
-/// <summary>One account in <c>accounts.json</c>. No token, ever: the token is in the DPAPI file keyed by <see cref="Sub"/>.</summary>
+/// <summary>
+/// One account in <c>accounts.json</c>. No token, ever: the token is in the DPAPI file keyed by <see cref="Sub"/>.
+/// <see cref="ProjectId"/> is the project the account chose in the wizard (issue #520); a file written before it existed has none.
+/// </summary>
 public sealed record AccountRecord(
     [property: JsonPropertyName("sub")] string Sub,
     [property: JsonPropertyName("email")] string Email,
-    [property: JsonPropertyName("needsSignIn")] bool NeedsSignIn);
+    [property: JsonPropertyName("needsSignIn")] bool NeedsSignIn,
+    [property: JsonPropertyName("projectId"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ProjectId = null);
 
 /// <summary>The switcher's list and which account is current.</summary>
 public sealed record AccountsFile(

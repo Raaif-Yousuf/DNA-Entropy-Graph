@@ -34,4 +34,21 @@ public class FakeGcpAccountTests
         gcp.IsSignedIn.ShouldBeFalse();
         (await Should.ThrowAsync<AccountAuthException>(() => gcp.SwitchAccountAsync("nobody", CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.AccountNotFound);
     }
+
+    [Fact]
+    public async Task SelectProjectAsync_sets_the_project_validates_the_id_and_needs_a_signed_in_account()
+    {
+        var gcp = new FakeGcp();
+        (await Should.ThrowAsync<AccountAuthException>(() => gcp.SelectProjectAsync("my-project-1", CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.SigninExpired);
+
+        await gcp.SignInAsync(CancellationToken.None);
+        var changes = 0;
+        gcp.AccountChanged += (_, _) => changes++;
+        await gcp.SelectProjectAsync("my-project-1", CancellationToken.None);
+
+        gcp.SelectedProjectId.ShouldBe("my-project-1");
+        changes.ShouldBe(1);
+        (await Should.ThrowAsync<AccountAuthException>(() => gcp.SelectProjectAsync("", CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.ProjectInvalid);
+        gcp.SelectedProjectId.ShouldBe("my-project-1");
+    }
 }
