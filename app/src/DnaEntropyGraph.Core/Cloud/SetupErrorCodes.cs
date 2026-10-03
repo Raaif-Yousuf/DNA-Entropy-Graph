@@ -42,8 +42,20 @@ public static class SetupErrorCodes
     /// <summary>Every results-bucket name the app tried was taken by someone else. Action: try again (new names are drawn).</summary>
     public const string BucketNameTaken = "BUCKET_NAME_TAKEN";
 
+    /// <summary>
+    /// An organization policy refuses service-account creation, so the VM will run as the project's default Compute Engine
+    /// account instead (issue #54). Not a failure: the wizard shows it as a yellow note. Action: Continue.
+    /// </summary>
+    public const string WorkerDefaultAccount = "WORKER_DEFAULT_ACCOUNT";
+
+    /// <summary>Google accepted the worker role or its bindings but reading them back shows something is not as asked ("applied is not present"). Action: try again (the next attempt repairs it).</summary>
+    public const string WorkerIdentityNotApplied = "WORKER_IDENTITY_NOT_APPLIED";
+
+    /// <summary>The user may not run a VM as the worker identity (<c>iam.serviceAccounts.actAs</c> missing, Compute Admin alone lacks it). Action: copy a request for the project owner.</summary>
+    public const string PermissionActAs = "PERMISSION_ACTAS";
+
     /// <summary>Every code a setup step can fail under.</summary>
-    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff, BucketConfigNotApplied, BucketNameTaken];
+    public static IReadOnlyList<string> All { get; } = [ProjectQuota, OrgPolicyBlock, Permission, ApiDisabled, NoBilling, BillingNoPermission, BillingStillOff, NotProjectOwner, BillingAccountOff, BucketConfigNotApplied, BucketNameTaken, WorkerDefaultAccount, WorkerIdentityNotApplied, PermissionActAs];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (a literal per code so the orphan-resource scan sees it).</summary>
     public static string ResourceKey(string? code) => code switch
@@ -59,6 +71,9 @@ public static class SetupErrorCodes
         BillingAccountOff => "SetupError_BILLING_ACCOUNT_OFF",
         BucketConfigNotApplied => "SetupError_BUCKET_CONFIG_NOT_APPLIED",
         BucketNameTaken => "SetupError_BUCKET_NAME_TAKEN",
+        WorkerDefaultAccount => "SetupError_WORKER_DEFAULT_ACCOUNT",
+        WorkerIdentityNotApplied => "SetupError_WORKER_IDENTITY_NOT_APPLIED",
+        PermissionActAs => "SetupError_PERMISSION_ACTAS",
         _ => "SetupError_OTHER",
     };
 
@@ -76,6 +91,9 @@ public static class SetupErrorCodes
         BillingAccountOff => "SetupAction_FixBillingAccount",
         BucketConfigNotApplied => "SetupAction_TryAgain",
         BucketNameTaken => "SetupAction_TryAgain",
+        WorkerDefaultAccount => "SetupAction_Continue",
+        WorkerIdentityNotApplied => "SetupAction_TryAgain",
+        PermissionActAs => "SetupAction_CopyRequestForOwner",
         _ => "SetupAction_TryAgain",
     };
 }

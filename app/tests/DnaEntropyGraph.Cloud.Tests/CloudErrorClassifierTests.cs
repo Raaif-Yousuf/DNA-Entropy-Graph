@@ -178,6 +178,31 @@ public class CloudErrorClassifierTests
         messageOnly.ShouldNotBe(CloudErrorKind.OrgPolicy);
     }
 
+    // Issue #54: a user who may create VMs but may not run one AS the worker service account gets a 403 naming the
+    // actAs permission or the Service Account User role. It stays the "permission" bucket (an abort) but needs its own code
+    // and action (copy a request for the owner), not the generic "not allowed to create computers".
+    [Theory]
+    [InlineData(403, "Required 'iam.serviceAccounts.actAs' permission for 'projects/my-lab/serviceAccounts/dna-entropy-worker@my-lab.iam.gserviceaccount.com'")]
+    [InlineData(403, "The user does not have access to service account 'dna-entropy-worker@my-lab.iam.gserviceaccount.com'.  User: 'a@b.org'.  Ask a project owner to grant you the iam.serviceAccountUser role on the service account")]
+    [InlineData(403, "Permission 'iam.serviceaccounts.actAs' denied on service account x@my-lab.iam.gserviceaccount.com (or it may not exist).")]
+    public void An_actAs_refusal_is_the_permission_bucket_and_is_recognised_as_PERMISSION_ACTAS(int status, string message)
+    {
+        var error = new CloudError("PERMISSION_DENIED", status, message);
+
+        CloudErrorClassifier.Classify(error).ShouldBe(CloudErrorKind.Permission);
+        CloudErrorClassifier.IsActAsDenial(error).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData(403, "Required 'compute.instances.create' permission for 'projects/my-lab/zones/us-central1-a/instances/deg-x'")]
+    [InlineData(403, "The caller does not have permission")]
+    [InlineData(429, "Quota exceeded for quota metric iam.serviceAccounts.actAs")]
+    [InlineData(null, "")]
+    public void Other_refusals_are_not_PERMISSION_ACTAS(int? status, string message)
+    {
+        CloudErrorClassifier.IsActAsDenial(new CloudError("PERMISSION_DENIED", status, message)).ShouldBeFalse();
+    }
+
     private sealed record FixtureCase(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("stderr")] string Stderr,

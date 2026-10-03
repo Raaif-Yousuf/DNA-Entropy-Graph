@@ -104,4 +104,18 @@ public class SetupErrorResourceTests
         SetupErrorCodes.ResourceKey(code).ShouldBe(messageKey);
         ReswValues().ShouldContainKey(messageKey);
     }
+
+    [Theory]
+    [InlineData("WORKER_DEFAULT_ACCOUNT", "SetupError_WORKER_DEFAULT_ACCOUNT", "SetupAction_Continue")]
+    [InlineData("WORKER_IDENTITY_NOT_APPLIED", "SetupError_WORKER_IDENTITY_NOT_APPLIED", "SetupAction_TryAgain")]
+    [InlineData("PERMISSION_ACTAS", "SetupError_PERMISSION_ACTAS", "SetupAction_CopyRequestForOwner")]
+    public void The_worker_identity_codes_are_in_the_roster_and_name_their_one_action(string code, string messageKey, string actionKey)
+    {
+        // Issue #54: the yellow note (default compute account), the read-back failure, and the actAs refusal.
+        SetupErrorCodes.All.ShouldContain(code);
+        SetupErrorCodes.ResourceKey(code).ShouldBe(messageKey);
+        SetupErrorCodes.ActionResourceKey(code).ShouldBe(actionKey);
+        SetupErrorCodes.WorkerDefaultAccount.ShouldBe("WORKER_DEFAULT_ACCOUNT");
+        SetupErrorCodes.PermissionActAs.ShouldBe("PERMISSION_ACTAS");
+    }
 }

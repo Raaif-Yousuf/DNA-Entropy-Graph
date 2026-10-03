@@ -73,7 +73,15 @@ internal static class GoogleApiErrors
 
         var kind = KindOf(status);
         var code = IsRateLimit(status) ? CloudErrorClassifier.RateLimitCode : codeFor?.Invoke(kind) ?? status.Status;
-        return new CloudOperationException(new CloudError(code, status.HttpStatus, status.Message), kind);
+        var error = new CloudError(code, status.HttpStatus, status.Message);
+
+        // A refusal to run a VM as the worker service account is a permission error with its own code and action (issue #54).
+        if (kind == CloudErrorKind.Permission && CloudErrorClassifier.IsActAsDenial(error))
+        {
+            error = error with { Code = SetupErrorCodes.PermissionActAs };
+        }
+
+        return new CloudOperationException(error, kind);
     }
 
     // Wording of a per-minute request rate limit, as Google words it ("Quota exceeded for quota metric 'Requests' and

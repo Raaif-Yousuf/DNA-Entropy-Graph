@@ -233,15 +233,40 @@ Two distinct quota reads matter, and conflating them is a real bug shape:
 
 ## 7. Least-privilege IAM for the worker service account
 
-A custom role (`projects/<p>/roles/dnaEntropyWorker`) grants exactly
-`compute.instances.get`, `compute.instances.stop`, `compute.instances.delete`, and
-`compute.zoneOperations.get`, bound at the project level with an IAM condition:
-`resource.type == "compute.googleapis.com/Instance" && resource.name.extract("/instances/
-{name}").startsWith("deg-")`. On the results bucket, the worker SA gets
-`roles/storage.objectAdmin` and nothing else. No `logging.logWriter`, no SSH-related
-permission (SSH itself is never used - see section 9). The signed-in user separately needs
-`iam.serviceAccounts.actAs` on this SA (Owner/Editor have it implicitly; a bare Compute
-Admin role does not, which is the `PERMISSION_ACTAS` error class).
+The VM runs as the service account `dna-entropy-worker@<project>.iam.gserviceaccount.com`
+(`WorkerIdentityNames`, issue #54). A custom role (`projects/<p>/roles/dnaEntropyWorker`)
+grants exactly `compute.instances.get`, `compute.instances.stop`,
+`compute.instances.delete` and `compute.zoneOperations.get`.
+
+**What the VM actually calls (MEASURED 2026-10-03 by reading `worker/vm/startup.sh`):** only
+`DELETE .../instances/<name>` and `POST .../instances/<name>/stop` on itself (both with the
+metadata token, both `|| true`), plus Cloud Storage object calls with `curl`. It never reads
+its own instance, never polls a zone operation, never sets metadata. So `instances.get` and
+`zoneOperations.get` are not needed by the script today; they stay because the issue asks for
+them (the worker reading its own state and the operation a stop or delete returns) and they
+are read-only. Nothing the script calls is missing from the role.
+
+The role is bound at the project, to the worker account, with an IAM condition:
+`resource.type != "compute.googleapis.com/Instance" || resource.name.contains("/instances/deg-")`
+(`WorkerIdentityNames.ConditionExpression`). `deg-` is the prefix `VmSpec.VmName` gives every
+VM (`deg-<jobId>`). A VM the user named anything else (`other-x`) fails the condition, so the
+worker account cannot stop or delete it. The first half passes any resource that is not an
+Instance (a zone operation read is checked against a `ZoneOperation`), so the permission that
+needs it is not blocked by a condition written for instances. THEORY (unverified, no live
+project): that Compute evaluates the condition this way for `instances.stop`/`instances.delete`
+and for `zoneOperations.get`; the earlier text of this section and Appendix B wrote
+`resource.type == ... && resource.name.extract(...)`, which would also deny the zone-operation
+read, and asked for the CEL to be verified once. `docs/ToTest.md` carries that row. On the
+results bucket the worker account gets `roles/storage.objectAdmin` and nothing else (a bucket
+policy binding, not a project one). No `logging.logWriter`, no SSH-related permission (SSH
+itself is never used - see section 9).
+
+The signed-in user separately needs `iam.serviceAccounts.actAs` on this account (Owner/Editor
+have it implicitly; a bare Compute Admin role does not). A VM create that fails for that reason
+is the `PERMISSION_ACTAS` error: `CloudErrorClassifier.IsActAsDenial` recognises a 403 naming
+`iam.serviceAccounts.actAs` or `roles/iam.serviceAccountUser`, `GoogleApiErrors.ToException`
+gives it the code `PERMISSION_ACTAS` (still the `permission` bucket, so it still aborts), and the
+one action is Copy request for the project owner.
 
 ## 8. Termination semantics - the pitfall this project has already been burned by once
 
@@ -927,6 +952,41 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
 - **Retention is validated.** `ResultsRetentionDays` outside 1 to 3650 throws `ArgumentOutOfRangeException` before any request
   (0 would delete job results at once). The default is `ResultsBucket.DefaultRetentionDays`, which `RunOptions.CloudResultsRetentionDays` reuses.
 - **Proven only by a real project:** `docs/ToTest.md`.
+### The worker identity (issue #54)
+
+`GoogleIamGateway` (IAM v1, Resource Manager v3 and Cloud Storage v1; `Google.Apis.Iam.v1` 1.77.0.4285, Apache-2.0, the
+version NuGet resolved online because the offline cache did not hold it) implements `IWorkerIdentityGateway`. Like the
+catalog and the bucket gateways it is never wrapped in a `Resilient*` decorator (a test fails if one appears): it creates an
+account and a role and edits two policies, and a whole-method retry would replay the creates. Each HTTP call goes through
+`CloudCallPipeline` itself.
+
+- **Order.** Read the project (its number names the fallback account; a project the user cannot see fails first), then the
+  account, then the role, then the project binding, then the bucket binding.
+- **Account.** `serviceAccounts.create`. A 409 is adopted (confirmed with a `get`). An organization-policy refusal
+  (`iam.disableServiceAccountCreation`, which classifies as `org_policy`) falls back to the default Compute Engine account
+  `<projectNumber>-compute@developer.gserviceaccount.com` with the same role and bindings, and the result carries
+  `WorkerIdentity.NoteCode = WORKER_DEFAULT_ACCOUNT`: the wizard shows `SetupError_WORKER_DEFAULT_ACCOUNT` as a yellow note
+  with Continue, not as a failure. That account usually already has the broad Editor role, which the app cannot narrow, and the
+  note says so. Any other refusal (a plain 403) does not fall back. THEORY (unverified, no live project): the exact wording of
+  the org-policy refusal; the classifier keys on the `constraints/` id and the 400/412 shape.
+- **Role.** `roles.create`. A 409 reads the role back: `deleted=true` is undeleted (a deleted custom role keeps its id for about
+  7 days), a role whose permission set is not exactly the four is patched with `updateMask=includedPermissions` and read back,
+  and a patch that does not read back fails with `WORKER_IDENTITY_NOT_APPLIED` ("applied is not present", as for the bucket).
+- **Policies.** Conditional bindings need policy version 3: the read sends `requestedPolicyVersion=3` and the write sets
+  `version=3`. A binding is its role plus its condition; it is added only when missing, so a second run writes nothing, and
+  nothing the app did not add is touched (other bindings, audit configs). The write carries the etag it read; a 409 re-reads
+  and re-applies, five attempts at most. A just-created account can be briefly invisible to `setIamPolicy` (400 "does not
+  exist"); that case alone waits on the injected delay (2 s, 4 s, ... ) and re-reads, six attempts at most, then fails with
+  `WORKER_IDENTITY_NOT_APPLIED` whose button is Try again.
+- **Hard Rule 10 and labels.** A service account and a custom role cannot carry labels (Google's IAM has no label field on
+  either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
+  per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers
+  labels on these two, so there is no allowlist entry. Everything that bills (the VM, the bucket) keeps its labels.
+- **Production** still resolves `FakeGcp` for `IWorkerIdentityGateway` until the switch in #56; `FakeGcp` implements the member
+  with scripted failures (`WithServiceAccountCreationBlockedByOrgPolicy`, `WithWorkerIdentityPermissionDenied`,
+  `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
+- **Proven only by a real project:** `docs/ToTest.md`.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

@@ -27,6 +27,8 @@
     <PackageVersion Include="Google.Apis.ServiceUsage.v1" Version="1.77.0.4281" />
     <!-- Cloud: Cloud Storage v1 REST discovery client for the results bucket (issue #53). Apache-2.0. Same reason as above: an injectable HttpClientFactory. -->
     <PackageVersion Include="Google.Apis.Storage.v1" Version="1.67.0.3365" />
+    <!-- Cloud: IAM v1 REST discovery client for the worker service account and its custom role (issue #54). Apache-2.0. Same reason as above. -->
+    <PackageVersion Include="Google.Apis.Iam.v1" Version="1.77.0.4285" />
     <!-- Cloud: DPAPI (CurrentUser) for the token files (issue #48). MIT. -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
 

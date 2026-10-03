@@ -188,8 +188,13 @@ entire "no terminal, no gcloud" promise to the user. `maxRunDuration` and
 
 **Carve-out:** None for VMs. The results bucket omits `job-id` and `model` (it serves every job
 and every model, and has no run duration); it keeps `app`, `installation-id`,
-`app-version` and `lifecycle`, so the Cloud page still finds it by label. DECISION
-(agent-made, reversible): see #582. See `termination-action-does-not-fire-on-guest-
+`app-version` and `lifecycle`, so the Cloud page still finds it by label. The worker
+service account and its custom role carry no labels at all: Google's IAM has no label
+field on either. They are found by their fixed ids (`dna-entropy-worker`, `dnaEntropyWorker`,
+`WorkerIdentityNames`), not by label, and are per project and shared by design (a second PC
+adopts them); nothing that bills is unlabelled. DECISION (agent-made, reversible): see #582
+for the bucket, and the DECISION issue filed with #54 for the service account and role. No
+guard checks labels on those two, so there is no allowlist entry. See `termination-action-does-not-fire-on-guest-
 shutdown` (memory seed) for the related pitfall this rule alone does not
 cover — the VM must also self-delete via the Compute API, not rely on
 `maxRunDuration` as the only mechanism.

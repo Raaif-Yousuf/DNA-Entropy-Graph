@@ -125,6 +125,27 @@ public static partial class CloudErrorClassifier
     }
 
     /// <summary>
+    /// A refusal to run a VM AS a service account (issue #54, the <c>PERMISSION_ACTAS</c> class): a 403 naming the
+    /// <c>iam.serviceAccounts.actAs</c> permission or the Service Account User role. It classifies as
+    /// <see cref="CloudErrorKind.Permission"/> (an abort), but its action is not the generic "ask the owner to let you
+    /// create computers": the owner must grant that one role on the worker account. THEORY (unverified, no live
+    /// project): the exact wording Compute uses; the markers are the permission and role ids Google's docs name.
+    /// </summary>
+    public static bool IsActAsDenial(CloudError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+
+        if (error.HttpStatus != 403)
+        {
+            return false;
+        }
+
+        var lower = (error.Message ?? string.Empty).ToLowerInvariant();
+        return lower.Contains("iam.serviceaccounts.actas", StringComparison.Ordinal)
+            || lower.Contains("iam.serviceaccountuser", StringComparison.Ordinal)
+            || lower.Contains("does not have access to service account", StringComparison.Ordinal);
+    }
+    /// <summary>
     /// The shapes Google uses for "you lack this role": the <c>IAM_PERMISSION_DENIED</c> reason, <c>Permission 'x.y.z'
     /// denied</c>, and "does not have permission". THEORY (unverified against a real project): Cloud Billing words a
     /// missing billing role this way.
