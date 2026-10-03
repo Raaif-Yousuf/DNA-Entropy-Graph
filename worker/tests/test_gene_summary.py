@@ -444,3 +444,38 @@ def test_manifest_outputs_name_gene_summary_turns_it_on_and_omitting_it_turns_it
 
 def test_an_unspecified_outputs_list_means_everything_including_the_gene_table() -> None:
     assert _cfg([]).include_gene_summary is True
+
+
+# --- end to end through the worker: manifest -> run_job -> result.json ---------------------------------
+
+
+def _job(tmp_path: Path, outputs: list[str]) -> set[str]:
+    from dna_entropy.worker.blobstore import LocalBlobstore
+    from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job
+
+    store = LocalBlobstore(tmp_path)
+    manifest = {
+        "schema": 1,
+        "jobId": "genes-job",
+        "inputs": [{"id": "in1", "path": "input/toy.gb", "name": "toy"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"},
+        "outputs": outputs,
+        "store": {"kind": "localdir", "root": "unused"},
+    }
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/toy.gb", (DATA / "sample.gb").read_text(encoding="utf-8"))
+    run_job(store)
+    doc = json.loads(store.read_text(RESULT_PATH))
+    return {Path(f["path"]).name for f in doc["inputs"][0]["files"]}
+
+
+def test_a_job_lists_the_gene_table_files_in_result_json(tmp_path: Path) -> None:
+    assert {"toy.genes.tsv", "toy.genes.csv"} <= _job(tmp_path / "all", [])
+    assert {"toy.genes.tsv", "toy.genes.csv"} <= _job(tmp_path / "named", ["genbank", "gene_summary"])
+
+
+def test_a_job_with_outputs_that_omit_gene_summary_writes_no_gene_table(tmp_path: Path) -> None:
+    listed = _job(tmp_path, ["genbank", "genes_gff3"])
+    assert "toy.genes.gff3" in listed  # the sibling output is unaffected
+    assert not {"toy.genes.tsv", "toy.genes.csv"} & listed
