@@ -6,6 +6,13 @@ using Xunit;
 
 namespace DnaEntropyGraph.Core.Tests;
 
+/// <summary>The pre-#460 call shape: tests of labels, zones and machine types do not care about transfers, so they get one staged input.</summary>
+internal static class FactoryCall
+{
+    public static CloudJobRequest Create(RunOptions options, string jobId, string projectId, string installationId, string appVersion, string? workerImage = null)
+        => CloudJobRequestFactory.Create(options, jobId, projectId, installationId, appVersion, workerImage, [new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb")], @"C:\out");
+}
+
 /// <summary>
 /// Issue #428: JobEngine turns a user's <see cref="RunOptions"/> into the
 /// <see cref="CloudJobRequest"/> <see cref="CloudJobRunner"/> consumes. The
@@ -45,7 +52,7 @@ public class CloudJobRequestFactoryTests
     [Fact]
     public void Every_hard_rule_10_field_is_present_and_labels_render()
     {
-        var request = CloudJobRequestFactory.Create(Options(), "20260101-000000-abcdef", "my-project", "install-1", "0.0.1");
+        var request = FactoryCall.Create(Options(), "20260101-000000-abcdef", "my-project", "install-1", "0.0.1");
 
         request.JobId.ShouldBe("20260101-000000-abcdef");
         request.Spec.JobId.ShouldBe(request.JobId);
@@ -67,7 +74,7 @@ public class CloudJobRequestFactoryTests
     [InlineData(AfterTaskAction.KeepAlive, "keep")]
     public void After_task_flows_to_the_request_and_the_lifecycle_label(AfterTaskAction action, string label)
     {
-        var request = CloudJobRequestFactory.Create(Options(b => b.AfterTask = action), "job-1", "p", "i", "0.0.1");
+        var request = FactoryCall.Create(Options(b => b.AfterTask = action), "job-1", "p", "i", "0.0.1");
 
         request.AfterTask.ShouldBe(action);
         request.Spec.Lifecycle.ShouldBe(label);
@@ -76,7 +83,7 @@ public class CloudJobRequestFactoryTests
     [Fact]
     public void The_users_max_run_duration_is_the_VM_backstop()
     {
-        var request = CloudJobRequestFactory.Create(Options(b => b.MaxRunDurationMinutes = 90), "job-1", "p", "i", "0.0.1");
+        var request = FactoryCall.Create(Options(b => b.MaxRunDurationMinutes = 90), "job-1", "p", "i", "0.0.1");
 
         request.Spec.MaxRunDuration.ShouldBe(TimeSpan.FromMinutes(90));
     }
@@ -89,7 +96,7 @@ public class CloudJobRequestFactoryTests
     [InlineData(GpuTier.H100, "a3-highgpu-1g")]
     public void Each_gpu_tier_maps_to_a_machine_type(GpuTier tier, string machineType)
     {
-        var request = CloudJobRequestFactory.Create(Options(b => b.GpuTier = tier), "job-1", "p", "i", "0.0.1");
+        var request = FactoryCall.Create(Options(b => b.GpuTier = tier), "job-1", "p", "i", "0.0.1");
 
         request.Spec.MachineType.ShouldBe(machineType);
     }
@@ -97,7 +104,7 @@ public class CloudJobRequestFactoryTests
     [Fact]
     public void A_zone_preference_is_tried_first_and_never_duplicated()
     {
-        var request = CloudJobRequestFactory.Create(Options(b => b.ZonePreference = "us-central1-b"), "job-1", "p", "i", "0.0.1");
+        var request = FactoryCall.Create(Options(b => b.ZonePreference = "us-central1-b"), "job-1", "p", "i", "0.0.1");
 
         request.Zones[0].ShouldBe("us-central1-b");
         request.Zones.Distinct().Count().ShouldBe(request.Zones.Count);
@@ -107,7 +114,7 @@ public class CloudJobRequestFactoryTests
     [Fact]
     public void Without_a_zone_preference_the_default_ladder_is_used()
     {
-        var request = CloudJobRequestFactory.Create(Options(), "job-1", "p", "i", "0.0.1");
+        var request = FactoryCall.Create(Options(), "job-1", "p", "i", "0.0.1");
 
         request.Zones.ShouldNotBeEmpty();
     }
@@ -155,6 +162,30 @@ public class InstallationIdTests
     }
 }
 
+public class CloudJobRequestFactoryTransferTests
+{
+    [Fact]
+    public void The_staged_inputs_options_and_output_folder_flow_to_the_request()
+    {
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" };
+        var inputs = new[] { new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb") };
+
+        var request = CloudJobRequestFactory.Create(options, "job-1", "p", "i", "0.0.1", null, inputs, @"C:\out");
+
+        request.Inputs.ShouldBe(inputs);
+        request.Options.ShouldBeSameAs(options);
+        request.OutputFolder.ShouldBe(@"C:\out");
+    }
+
+    [Fact]
+    public void A_request_with_no_inputs_is_refused_instead_of_becoming_a_run_that_uploads_nothing()
+    {
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" };
+
+        Should.Throw<ArgumentException>(() => CloudJobRequestFactory.Create(options, "job-1", "p", "i", "0.0.1", null, [], @"C:\out"));
+    }
+}
+
 public class CloudJobRequestFactoryWorkerImageTests
 {
     [Fact]
@@ -162,8 +193,8 @@ public class CloudJobRequestFactoryWorkerImageTests
     {
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" };
 
-        CloudJobRequestFactory.Create(options, "job-1", "p", "i", "0.0.1", "reg/x@sha256:" + new string('a', 64)).WorkerImage.ShouldBe("reg/x@sha256:" + new string('a', 64));
-        CloudJobRequestFactory.Create(options, "job-1", "p", "i", "0.0.1").WorkerImage.ShouldBeNull();
+        FactoryCall.Create(options, "job-1", "p", "i", "0.0.1", "reg/x@sha256:" + new string('a', 64)).WorkerImage.ShouldBe("reg/x@sha256:" + new string('a', 64));
+        FactoryCall.Create(options, "job-1", "p", "i", "0.0.1").WorkerImage.ShouldBeNull();
     }
 }
 

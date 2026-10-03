@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.Contract;
+
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
@@ -17,9 +19,25 @@ public static class CloudJobRequestFactory
     /// </summary>
     private static readonly string[] DefaultZones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"];
 
-    public static CloudJobRequest Create(RunOptions options, string jobId, string projectId, string installationId, string appVersion, string? workerImage = null)
+    public static CloudJobRequest Create(
+        RunOptions options,
+        string jobId,
+        string projectId,
+        string installationId,
+        string appVersion,
+        string? workerImage,
+        IReadOnlyList<StagedInput> inputs,
+        string outputFolder)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(inputs);
+        if (inputs.Count == 0)
+        {
+            // A request with nothing to upload is the stub this issue removed (#460): refuse it here.
+            throw new ArgumentException("A run needs at least one staged input.", nameof(inputs));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFolder);
 
         // A property pattern, not a plain member read: scripts/check_app_wiring.py
         // matches reads by member NAME, so a plain access here would count as
@@ -42,12 +60,9 @@ public static class CloudJobRequestFactory
             JobId: jobId,
             Spec: spec,
             Zones: ZonesFor(options.ZonePreference),
-            // Input staging (manifest + sequence upload) and result download
-            // are not wired from RunOptions yet: the runner's
-            // upload/download steps iterate these lists, so empty means
-            // "no object transfers" rather than transferring fake keys.
-            InputObjectKeys: [],
-            OutputObjectKeys: [],
+            Options: options,
+            Inputs: inputs,
+            OutputFolder: outputFolder,
             AfterTask: options.AfterTask,
             WorkerImage: workerImage);
     }
@@ -59,7 +74,8 @@ public static class CloudJobRequestFactory
         _ => "stop",
     };
 
-    private static string MachineTypeFor(GpuTier tier) => tier switch
+    /// <summary>The machine type for a GPU tier; JobEngine asks it which worker image (-cuda or -cpu) the run needs before the request exists.</summary>
+    public static string MachineTypeFor(GpuTier tier) => tier switch
     {
         GpuTier.A100_40 => "a2-highgpu-1g",
         GpuTier.A100_80 => "a2-ultragpu-1g",

@@ -156,8 +156,13 @@ deleted" (docs/cloud_design.md section 8).
    exception. It is a pre-flight filter: a file it accepts can still be refused by the
    worker (it does not parse GenBank feature tables); known gaps are listed in
    `InputFileValidatorWorkerParityTests`.
-2. **Uploading**: inputs are copied to `%LOCALAPPDATA%\...\cache\inputs\<jobId>\` (so a
- later re-run works even if the original file moved) and uploaded to
+   `JobEngine` runs it on the STAGED copy right after staging and before the runner is called; a problem
+   records the run Failed through `InputProblemErrorCodes` (for example `input_invalid_character`) with only the
+   code, record and position in `ErrorDetail` (never the problem text, which can hold sequence), and no bucket
+   object or VM is created.
+2. **Uploading**: `JobEngine` has already copied the input to
+ `%LOCALAPPDATA%\DNAEntropyGraph\runs\<jobId>\input\` (so a later re-run works even if
+ the original file moved; issue #460) and the runner uploads that copy to
  `jobs/<jobId>/input/`; `manifest.json` is written last, once every input is confirmed
  uploaded.
 3. **Provisioning**: `GcpProvisioner` either reuses an idle keep-alive VM, starts a
@@ -166,8 +171,9 @@ deleted" (docs/cloud_design.md section 8).
 4. **Preparing -> Running -> Finalizing**: the worker takes over entirely from here,
  driving its own stages exactly as documented in `job_contract.md`; the app is a pure
  observer, polling `status.json` and tailing `progress.jsonl`.
-5. **Downloading**: once `result.json` exists, the app downloads every output object into
- the user's chosen output folder.
+5. **Downloading**: once `result.json` exists (the runner polls for it while `Running`),
+ the app downloads every file it lists into a fresh folder under the user's chosen output
+ folder, verifying each against the checksum `result.json` gives (`cloud_design.md` section 11).
 6. **Completed** (or **PartiallyCompleted**, or **Failed(code)**): the `Runs` row is
  updated with final timing and cost; the after-task lifecycle action (Stop/Delete/Keep)
  is verified against the VM's actual state, not merely assumed from the request having

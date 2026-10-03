@@ -1,4 +1,8 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 
@@ -75,6 +79,40 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     private int _transientFailuresRemaining;
     private CloudError? _transientError;
     private int _unauthorizedRemaining;
+
+    // --- Bucket objects (IStorageGateway) and the simulated worker (issue #460) ---
+    private readonly ConcurrentDictionary<(string Bucket, string Key), byte[]> _objects = new();
+    private FakeWorkerMode _workerMode = FakeWorkerMode.Done;
+    private WorkerSelfEnd _workerSelfEnd = WorkerSelfEnd.None;
+
+    // What the simulated worker does to its own VM, applied when result.json (or, for a worker that
+    // never wrote one, its place) is first looked for: a real worker acts a moment AFTER it writes.
+    private readonly ConcurrentDictionary<(string Bucket, string Key), Action> _pendingWorkerEnds = new();
+
+    // --- Compute behaviours a real instance has and a synchronous fake hides ---
+    private bool _deleteOfMissingVmIsNotFound;
+    private bool _nextDeleteRacesAWorkerDelete;
+    private int _stoppingPolls;
+    private string _stoppedStatus = "STOPPED";
+    private readonly ConcurrentDictionary<(string Name, string Zone), int> _stoppingPollsLeft = new();
+    private int _hangsRemaining;
+    private bool _internalStop;
+    private bool _hangsIgnoreCancellation;
+    private int _getVmFailuresRemaining;
+    private CloudError? _getVmError;
+    private int _bootPolls;
+    private readonly ConcurrentDictionary<(string Name, string Zone), int> _bootPollsLeft = new();
+    private bool _enforceMaxRunDuration;
+    private readonly ConcurrentDictionary<(string Name, string Zone), TimeSpan> _maxRunByVm = new();
+    private bool _partialFilesOnFailedInputs;
+    private TimeSpan _createDelay = TimeSpan.Zero;
+    private bool _stopRejectedUnlessRunning;
+    private int _findFailuresRemaining;
+    private CloudError? _findError;
+    private int _tryDownloadFailuresRemaining;
+    private CloudError? _tryDownloadError;
+    private string _workerFailureCode = "MODEL_OOM";
+    private bool _notConnected;
 
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
@@ -244,6 +282,224 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     }
 
     /// <summary>
+    /// The next <paramref name="count"/> <see cref="GetVmAsync"/> or <see cref="TryDownloadAsync"/> calls never
+    /// answer until their token is cancelled: what a hung socket looks like (issue #460 review, finding 3).
+    /// </summary>
+    public FakeGcp WithHungCalls(int count, bool ignoreCancellation = false)
+    {
+        _hangsRemaining = count;
+        _hangsIgnoreCancellation = ignoreCancellation;
+        return this;
+    }
+
+    /// <summary>
+    /// Every <see cref="CreateVmAsync"/> answers only after <paramref name="delay"/>, ignoring its token, and the VM exists from
+    /// then on: an insert the API accepted whose answer was slow (the caller may have given up by the time it lands).
+    /// </summary>
+    public FakeGcp WithCreateDelay(TimeSpan delay)
+    {
+        _createDelay = delay;
+        return this;
+    }
+
+    /// <summary>
+    /// <see cref="StopVmAsync"/> of a VM that is not RUNNING is rejected with a 400 precondition error.
+    /// THEORY (unverified): <c>instances.stop</c> on a PROVISIONING, STAGING or STOPPING instance is rejected; nobody
+    /// here has measured it. Off by default.
+    /// </summary>
+    public FakeGcp WithStopRejectedUnlessRunning()
+    {
+        _stopRejectedUnlessRunning = true;
+        return this;
+    }
+
+    /// <summary>The next <paramref name="count"/> <see cref="FindByJobIdAsync"/> calls fail with exactly <paramref name="error"/>.</summary>
+    public FakeGcp WithFindByJobIdFailure(CloudError error, int count)
+    {
+        _findError = error;
+        _findFailuresRemaining = count;
+        return this;
+    }
+
+    /// <summary>The next <paramref name="count"/> <see cref="TryDownloadAsync"/> calls fail with exactly <paramref name="error"/>.</summary>
+    public FakeGcp WithTryDownloadFailure(CloudError error, int count)
+    {
+        _tryDownloadError = error;
+        _tryDownloadFailuresRemaining = count;
+        return this;
+    }
+
+    /// <summary>The next <paramref name="count"/> <see cref="GetVmAsync"/> calls (and only those) fail with HTTP <paramref name="httpStatus"/>.</summary>
+    public FakeGcp WithGetVmFailures(int httpStatus, int count)
+    {
+        _getVmError = new CloudError(null, httpStatus, "The service is currently unavailable.");
+        _getVmFailuresRemaining = count;
+        return this;
+    }
+
+    /// <summary>The next <paramref name="count"/> <see cref="GetVmAsync"/> calls fail with exactly <paramref name="error"/>, classified as a real gateway would.</summary>
+    public FakeGcp WithGetVmFailure(CloudError error, int count)
+    {
+        _getVmError = error;
+        _getVmFailuresRemaining = count;
+        return this;
+    }
+
+    /// <summary>
+    /// A new VM reads <c>PROVISIONING</c> for <paramref name="polls"/> calls of <see cref="GetVmAsync"/> before it reads
+    /// <c>RUNNING</c>. THEORY (unverified): a real instance is PROVISIONING then STAGING for a short while right after
+    /// insert; nobody here has measured how long, or whether the first read can still show it.
+    /// </summary>
+    public FakeGcp WithBootStatusPolls(int polls)
+    {
+        _bootPolls = polls;
+        return this;
+    }
+
+    /// <summary>
+    /// The platform deletes a VM once its <c>maxRunDuration</c> has passed since it was created (Hard Rule 10's
+    /// <c>instanceTerminationAction=DELETE</c>); off by default. A VM past its limit is gone at the next look,
+    /// by <see cref="GetVmAsync"/> or <see cref="FindByJobIdAsync"/>, measured on this fake's <see cref="TimeProvider"/>.
+    /// </summary>
+    public FakeGcp WithMaxRunDurationEnforced()
+    {
+        _enforceMaxRunDuration = true;
+        return this;
+    }
+
+    private void ExpireOverdueVms()
+    {
+        if (!_enforceMaxRunDuration)
+        {
+            return;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        foreach (var (key, vm) in _vms)
+        {
+            if (vm.CreatedAt is { } created && _maxRunByVm.TryGetValue(key, out var limit) && now >= created + limit)
+            {
+                _vms.TryRemove(key, out _);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Makes the simulated worker act now for a VM that already exists, as if it had finished a moment ago: writes what
+    /// <paramref name="mode"/> writes (result.json last). Needs the job's <c>manifest.json</c> in the bucket, like a real worker.
+    /// </summary>
+    public FakeGcp SimulateWorkerFinishing(VmSpec spec, string zone, FakeWorkerMode mode = FakeWorkerMode.Done)
+    {
+        var before = _workerMode;
+        _workerMode = mode;
+        try
+        {
+            RunSimulatedWorker(spec, zone);
+        }
+        finally
+        {
+            _workerMode = before;
+        }
+
+        return this;
+    }
+
+    /// <summary>A failed input in the simulated result.json still lists the partial file the real worker keeps (docs/job_contract.md section 7).</summary>
+    public FakeGcp WithPartialFilesOnFailedInputs()
+    {
+        _partialFilesOnFailedInputs = true;
+        return this;
+    }
+
+    /// <summary>The <c>error.code</c> the failure worker modes report (default <c>MODEL_OOM</c>).</summary>
+    public FakeGcp WithWorkerFailureCode(string code)
+    {
+        _workerFailureCode = code;
+        return this;
+    }
+
+    /// <summary>
+    /// <see cref="DeleteVmAsync"/> of a VM that does not exist throws a not-found (HTTP 404), as real Compute
+    /// Engine does. Off by default, where it is a silent no-op.
+    /// </summary>
+    public FakeGcp WithDeleteOfMissingVmNotFound()
+    {
+        _deleteOfMissingVmIsNotFound = true;
+        return this;
+    }
+
+    /// <summary>
+    /// The next <see cref="DeleteVmAsync"/> of an existing VM loses a race: the VM is gone by the time the request
+    /// lands, so Compute Engine answers 404 for a VM the caller saw a moment ago (a worker deleting itself).
+    /// </summary>
+    public FakeGcp WithNextDeleteRacingAWorkerDelete()
+    {
+        _nextDeleteRacesAWorkerDelete = true;
+        return this;
+    }
+
+    /// <summary>
+    /// How a stop looks to a poller: the VM reads <c>STOPPING</c> for <paramref name="stoppingPolls"/> calls of
+    /// <see cref="GetVmAsync"/>, then <paramref name="stoppedStatus"/>. THEORY (unverified): a stopped Compute Engine
+    /// instance reports <c>TERMINATED</c>, nobody here has measured it, so a test can pass either spelling.
+    /// </summary>
+    public FakeGcp WithStopBehaviour(int stoppingPolls, string stoppedStatus = "STOPPED")
+    {
+        _stoppingPolls = stoppingPolls;
+        _stoppedStatus = stoppedStatus;
+        return this;
+    }
+
+    /// <summary>
+    /// The simulated worker stops or deletes its own VM through the Compute API once it has written its result,
+    /// as <c>worker/vm/startup.sh</c> does (exit codes 10 and 11). The action lands the first time anyone looks for
+    /// result.json, so the runner's own health check right after create still sees a RUNNING VM.
+    /// </summary>
+    public FakeGcp WithWorkerEndingItsOwnVm(WorkerSelfEnd end)
+    {
+        _workerSelfEnd = end;
+        return this;
+    }
+
+    /// <summary>
+    /// This build has no real Google layer behind it: every preflight fails with a
+    /// <c>CLOUD_NOT_CONNECTED</c> error before anything is uploaded or created. The production
+    /// composition uses this so a run can never "complete" with simulated results.
+    /// </summary>
+    public FakeGcp WithCloudNotConnected()
+    {
+        _notConnected = true;
+        return this;
+    }
+
+    /// <summary>The error code <see cref="WithCloudNotConnected"/> throws under; the runner maps it to <c>cloud_not_connected</c>.</summary>
+    public const string NotConnectedErrorCode = RunErrorCodes.NotConnectedGatewayCode;
+
+    private bool ConsumeHang()
+    {
+        while (true)
+        {
+            var left = Volatile.Read(ref _hangsRemaining);
+            if (left <= 0)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(ref _hangsRemaining, left - 1, left) == left)
+            {
+                return true;
+            }
+        }
+    }
+
+    private async Task<T> HangAsync<T>(CancellationToken cancellationToken)
+    {
+        // A callee that ignores its token is what a stuck socket under a library that never checks it looks like.
+        await Task.Delay(Timeout.Infinite, _hangsIgnoreCancellation ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
+        return default!;
+    }
+
+    /// <summary>
     /// The next <paramref name="times"/> <see cref="CreateVmAsync"/> calls (any
     /// zone) fail with <paramref name="error"/>, classified as a real gateway
     /// would. Unlike <see cref="WithTransientFailures"/> only creates consume
@@ -378,7 +634,18 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
     {
         var gate = _createGate;
+        if (_createDelay > TimeSpan.Zero)
+        {
+            return CreateAfterDelayAsync(spec, zone);
+        }
+
         return gate is null ? CreateVmCore(spec, zone, cancellationToken) : CreateAfterGateAsync(gate, spec, zone, cancellationToken);
+    }
+
+    private async Task<VmDescriptor> CreateAfterDelayAsync(VmSpec spec, string zone)
+    {
+        await Task.Delay(_createDelay).ConfigureAwait(false);
+        return await CreateVmCore(spec, zone, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task<VmDescriptor> CreateAfterGateAsync(CreateGate gate, VmSpec spec, string zone, CancellationToken cancellationToken)
@@ -462,18 +729,65 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
-        var vm = new VmDescriptor(spec.VmName, zone, "RUNNING");
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow());
         _vms[key] = vm;
+        _maxRunByVm[key] = spec.MaxRunDuration;
+        if (_bootPolls > 0)
+        {
+            _bootPollsLeft[key] = _bootPolls;
+        }
+
+        RunSimulatedWorker(spec, zone);
         return Task.FromResult(vm);
     }
 
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        if (ConsumeHang())
+        {
+            return HangAsync<VmDescriptor?>(cancellationToken);
+        }
+
         ThrowIfScriptedTransient();
+        ExpireOverdueVms();
+        if (_getVmFailuresRemaining > 0 && _getVmError is not null)
+        {
+            _getVmFailuresRemaining--;
+            throw new CloudOperationException(_getVmError, CloudErrorClassifier.Classify(_getVmError));
+        }
+
         var key = (vmName, zone);
         if (!_vms.TryGetValue(key, out var vm))
         {
             return Task.FromResult<VmDescriptor?>(null);
+        }
+
+        if (vm.Status == "PROVISIONING" && _bootPollsLeft.TryGetValue(key, out var bootLeft))
+        {
+            if (bootLeft <= 0)
+            {
+                _bootPollsLeft.TryRemove(key, out _);
+                vm = vm with { Status = "RUNNING" };
+                _vms[key] = vm;
+            }
+            else
+            {
+                _bootPollsLeft[key] = bootLeft - 1;
+            }
+        }
+
+        if (vm.Status == "STOPPING" && _stoppingPollsLeft.TryGetValue(key, out var left))
+        {
+            if (left <= 0)
+            {
+                _stoppingPollsLeft.TryRemove(key, out _);
+                vm = vm with { Status = _stoppedStatus };
+                _vms[key] = vm;
+            }
+            else
+            {
+                _stoppingPollsLeft[key] = left - 1;
+            }
         }
 
         if (vm.Status == "RUNNING" && _preemptAt.TryGetValue(key, out var preemptAt) && _timeProvider.GetUtcNow() >= preemptAt)
@@ -488,19 +802,62 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        var key = (vmName, zone);
-        if (_vms.TryGetValue(key, out var vm))
+        StopCore(vmName, zone);
+        return Task.CompletedTask;
+    }
+
+    private void StopInternal(string vmName, string zone)
+    {
+        _internalStop = true;
+        try
         {
-            _vms[key] = vm with { Status = "STOPPED", StatusReason = null };
+            StopCore(vmName, zone);
+        }
+        finally
+        {
+            _internalStop = false;
+        }
+    }
+
+    private void StopCore(string vmName, string zone)
+    {
+        var key = (vmName, zone);
+        if (!_vms.TryGetValue(key, out var vm))
+        {
+            return;
         }
 
-        return Task.CompletedTask;
+        if (_stopRejectedUnlessRunning && vm.Status != "RUNNING" && !_internalStop)
+        {
+            throw Build(CloudErrorKind.Other, "FAILED_PRECONDITION", 400, $"The instance '{vmName}' is not running, so it cannot be stopped.");
+        }
+
+        if (_stoppingPolls > 0)
+        {
+            _vms[key] = vm with { Status = "STOPPING", StatusReason = null };
+            _stoppingPollsLeft[key] = _stoppingPolls;
+        }
+        else
+        {
+            _vms[key] = vm with { Status = _stoppedStatus, StatusReason = null };
+        }
     }
 
     public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        _vms.TryRemove((vmName, zone), out _);
+        var existed = _vms.TryRemove((vmName, zone), out _);
+        if (existed && _nextDeleteRacesAWorkerDelete)
+        {
+            _nextDeleteRacesAWorkerDelete = false;
+            throw Build(CloudErrorKind.Other, "NOT_FOUND", 404, $"The resource 'projects/fake/zones/{zone}/instances/{vmName}' was not found");
+        }
+
+        if (!existed && _deleteOfMissingVmIsNotFound)
+        {
+            throw Build(CloudErrorKind.Other, "NOT_FOUND", 404, $"The resource 'projects/fake/zones/{zone}/instances/{vmName}' was not found");
+        }
+
         return Task.CompletedTask;
     }
 
@@ -518,7 +875,19 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     /// </summary>
     public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
     {
+        if (ConsumeHang())
+        {
+            return HangAsync<IReadOnlyList<VmDescriptor>>(cancellationToken);
+        }
+
         ThrowIfScriptedTransient();
+        if (_findFailuresRemaining > 0 && _findError is not null)
+        {
+            _findFailuresRemaining--;
+            throw new CloudOperationException(_findError, CloudErrorClassifier.Classify(_findError));
+        }
+
+        ExpireOverdueVms();
         var name = $"deg-{jobId}";
         IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
         return Task.FromResult(matches);
@@ -528,23 +897,216 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     // IStorageGateway
     // ----------------------------------------------------------------
 
+    /// <summary>The bucket <see cref="EnsureBucketAsync"/> hands out for <paramref name="projectId"/>.</summary>
+    public static string BucketName(string projectId) => $"deg-{projectId}-fake";
+
     public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
     {
+        if (ConsumeHang())
+        {
+            return HangAsync<string>(cancellationToken);
+        }
+
         ThrowIfScriptedTransient();
-        return Task.FromResult($"deg-{projectId}-fake");
+        return Task.FromResult(BucketName(projectId));
     }
 
-    public Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
+    /// <summary>
+    /// Stores what is read from <paramref name="content"/>'s CURRENT position to its end, exactly what
+    /// a replayed HTTP body would send, so a retry that forgot to rewind the stream stores a short object.
+    /// </summary>
+    public async Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
     {
+        if (ConsumeHang())
+        {
+            await HangAsync<bool>(cancellationToken).ConfigureAwait(false);
+        }
+
         ThrowIfScriptedTransient();
-        return Task.CompletedTask;
+        using var copy = new MemoryStream();
+        await content.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+        _objects[(bucket, objectKey)] = copy.ToArray();
     }
 
     public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        return Task.FromResult<Stream>(new MemoryStream());
+        if (!_objects.TryGetValue((bucket, objectKey), out var bytes))
+        {
+            throw Build(CloudErrorKind.Other, "NOT_FOUND", 404, $"No such object: {bucket}/{objectKey}");
+        }
+
+        return Task.FromResult<Stream>(new MemoryStream(bytes, writable: false));
     }
+
+    public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
+    {
+        if (ConsumeHang())
+        {
+            return HangAsync<Stream?>(cancellationToken);
+        }
+
+        ThrowIfScriptedTransient();
+        if (_tryDownloadFailuresRemaining > 0 && _tryDownloadError is not null)
+        {
+            _tryDownloadFailuresRemaining--;
+            throw new CloudOperationException(_tryDownloadError, CloudErrorClassifier.Classify(_tryDownloadError));
+        }
+
+        if (_pendingWorkerEnds.TryRemove((bucket, objectKey), out var workerEnds))
+        {
+            workerEnds();
+        }
+
+        return Task.FromResult<Stream?>(_objects.TryGetValue((bucket, objectKey), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+    }
+
+    /// <summary>What is in the fake bucket, for a test to assert on (the observable for "something was really uploaded").</summary>
+    public IReadOnlyList<string> ObjectKeys(string bucket)
+        => _objects.Keys.Where(k => k.Bucket == bucket).Select(k => k.Key).OrderBy(k => k, StringComparer.Ordinal).ToList();
+
+    public byte[] GetObjectBytes(string bucket, string objectKey)
+        => _objects.TryGetValue((bucket, objectKey), out var bytes) ? bytes : throw new KeyNotFoundException($"No such object: {bucket}/{objectKey}");
+
+    /// <summary>Puts an object in the bucket directly, as if another party (the worker, an earlier run) had written it.</summary>
+    public void PutObject(string bucket, string objectKey, byte[] content) => _objects[(bucket, objectKey)] = content;
+
+    /// <summary>How the simulated worker behaves for every VM created after this call. The default is <see cref="FakeWorkerMode.Done"/>.</summary>
+    public FakeGcp WithWorker(FakeWorkerMode mode)
+    {
+        _workerMode = mode;
+        return this;
+    }
+
+    /// <summary>The bytes the simulated worker uploads as the track of an input named <paramref name="inputName"/>.</summary>
+    public static byte[] TrackBytes(string inputName) => Encoding.UTF8.GetBytes($"fake-track:{inputName}\n");
+
+    /// <summary>
+    /// Writes what the real worker writes, per <see cref="_workerMode"/>: outputs first, result.json
+    /// LAST (docs/job_contract.md section 7). Does nothing when no manifest is in the bucket, since a
+    /// worker with no manifest has nothing to run.
+    /// </summary>
+    private void RunSimulatedWorker(VmSpec spec, string zone)
+    {
+        if (_workerMode == FakeWorkerMode.Never)
+        {
+            return;
+        }
+
+        var bucket = BucketName(spec.ProjectId);
+        var prefix = $"jobs/{spec.JobId}/";
+        if (!_objects.TryGetValue((bucket, prefix + "manifest.json"), out var manifestBytes))
+        {
+            return;
+        }
+
+        var vmKey = (spec.VmName, zone);
+        var resultKey = (bucket, prefix + "result.json");
+
+        if (BootFailureCode(_workerMode) is { } bootCode)
+        {
+            // worker/vm/startup.sh: write status.json with the error, never result.json, then end the VM
+            // (a box whose GPU never came up is deleted; the other failures apply the lifecycle, stop here).
+            var status = new JsonObject
+            {
+                ["schema"] = 1,
+                ["jobId"] = spec.JobId,
+                ["stage"] = "failed",
+                ["error"] = new JsonObject { ["code"] = bootCode, ["retriable"] = false },
+            };
+            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(status.ToJsonString());
+            _pendingWorkerEnds[resultKey] = bootCode == "GPU_NOT_VISIBLE"
+                ? () => _vms.TryRemove(vmKey, out _)
+                : () => StopInternal(vmKey.Item1, vmKey.Item2);
+            return;
+        }
+
+        if (_workerMode == FakeWorkerMode.GarbageResult)
+        {
+            _objects[resultKey] = Encoding.UTF8.GetBytes("this is not json");
+            return;
+        }
+
+        var names = new List<string>();
+        using (var manifest = JsonDocument.Parse(manifestBytes))
+        {
+            foreach (var input in manifest.RootElement.GetProperty("inputs").EnumerateArray())
+            {
+                names.Add(input.GetProperty("name").GetString() ?? "input");
+            }
+        }
+
+        var results = new JsonArray();
+        for (var i = 0; i < names.Count; i++)
+        {
+            var name = names[i];
+            var failed = _workerMode == FakeWorkerMode.AllInputsFailed || (_workerMode == FakeWorkerMode.SecondInputFailed && i > 0);
+            if (_workerMode == FakeWorkerMode.DoneWithNoFiles)
+            {
+                results.Add(new JsonObject { ["id"] = $"in{i + 1}", ["status"] = "done", ["outputs"] = new JsonArray(), ["files"] = new JsonArray(), ["notices"] = new JsonArray(), ["stats"] = null, ["error"] = null });
+                continue;
+            }
+
+            var entry = new JsonObject { ["id"] = $"in{i + 1}", ["status"] = failed ? "failed" : "done", ["notices"] = new JsonArray(), ["stats"] = null };
+            if (failed)
+            {
+                entry["outputs"] = new JsonArray();
+                entry["files"] = new JsonArray();
+                if (_partialFilesOnFailedInputs)
+                {
+                    var partialPath = $"output/{name}/{name}.partial.bedgraph";
+                    var partialBytes = TrackBytes(name + "-partial");
+                    _objects[(bucket, prefix + partialPath)] = partialBytes;
+                    entry["outputs"] = new JsonArray(partialPath);
+                    entry["files"] = new JsonArray(new JsonObject { ["path"] = partialPath, ["sha256"] = Convert.ToHexString(SHA256.HashData(partialBytes)).ToLowerInvariant(), ["bytes"] = partialBytes.Length });
+                }
+
+                entry["error"] = new JsonObject { ["code"] = _workerFailureCode, ["message"] = "out of memory", ["retriable"] = true };
+            }
+            else
+            {
+                var path = _workerMode == FakeWorkerMode.UnsafePath ? "output/../evil.txt" : $"output/{name}/{name}.bedgraph";
+                var bytes = TrackBytes(name);
+                _objects[(bucket, prefix + path)] = bytes;
+                var sha = _workerMode == FakeWorkerMode.ChecksumMismatch
+                    ? new string('0', 64)
+                    : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+                entry["outputs"] = new JsonArray(path);
+                entry["files"] = new JsonArray(new JsonObject { ["path"] = path, ["sha256"] = sha, ["bytes"] = bytes.Length });
+                entry["error"] = null;
+            }
+
+            results.Add(entry);
+        }
+
+        var wholeFailure = _workerMode == FakeWorkerMode.WholeJobFailed;
+        var result = new JsonObject
+        {
+            ["schema"] = 1,
+            ["jobId"] = spec.JobId,
+            ["status"] = wholeFailure ? "failed" : "done",
+            ["inputs"] = wholeFailure ? new JsonArray() : results,
+            ["error"] = wholeFailure ? new JsonObject { ["code"] = _workerFailureCode, ["message"] = "out of memory", ["retriable"] = true } : null,
+        };
+        _objects[resultKey] = Encoding.UTF8.GetBytes(result.ToJsonString());
+        if (_workerSelfEnd == WorkerSelfEnd.Stop)
+        {
+            _pendingWorkerEnds[resultKey] = () => StopInternal(vmKey.Item1, vmKey.Item2);
+        }
+        else if (_workerSelfEnd == WorkerSelfEnd.Delete)
+        {
+            _pendingWorkerEnds[resultKey] = () => _vms.TryRemove(vmKey, out _);
+        }
+    }
+
+    private static string? BootFailureCode(FakeWorkerMode mode) => mode switch
+    {
+        FakeWorkerMode.GpuNotVisible => "GPU_NOT_VISIBLE",
+        FakeWorkerMode.ImagePullFailed => "IMAGE_PULL_FAILED",
+        FakeWorkerMode.ManifestInvalid => "MANIFEST_INVALID",
+        FakeWorkerMode.WorkerCrash => "WORKER_CRASH",
+        _ => null,
+    };
 
     // ----------------------------------------------------------------
     // IProjectSetupGateway
@@ -553,6 +1115,11 @@ public sealed class FakeGcp : IComputeGateway, IStorageGateway, IProjectSetupGat
     public Task<ProjectLifecycleState> GetProjectStateAsync(string projectId, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
+        if (_notConnected)
+        {
+            throw Build(CloudErrorKind.Other, NotConnectedErrorCode, null, "No Google Cloud connection is built into this version.");
+        }
+
         return Task.FromResult(_projectStates.TryGetValue(projectId, out var state) ? state : ProjectLifecycleState.Active);
     }
 

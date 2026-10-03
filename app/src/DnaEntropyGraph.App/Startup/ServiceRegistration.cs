@@ -3,6 +3,7 @@ using DnaEntropyGraph.App.Services;
 using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
@@ -64,7 +65,10 @@ public static class ServiceRegistration
         // Cloud (Hard Rule 7: the only project allowed to reference
         // Google.*). FakeGcp is the always-succeeds baseline until the real
         // gateways land; it backs every Core/Cloud interface at once.
-        services.AddSingleton<FakeGcp>();
+        // WithCloudNotConnected: nothing real is behind this yet, so a run must fail at preflight with
+        // cloud_not_connected rather than "complete" with simulated results in the user's output folder
+        // (cold review finding 12). The switch that turns the full simulation back on is issue #69.
+        services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithCloudNotConnected());
         services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
 
         // Issue #258: every gateway the app resolves is wrapped in the one
@@ -94,6 +98,14 @@ public static class ServiceRegistration
         services.AddSingleton(_ => new SqliteDatabase(databasePath));
         services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<ISettingsStore>(_ => new SettingsStore(settingsPath));
+
+        // Issue #460: the app's own copy of every run's input, under the same app data folder as the
+        // database and settings (Hard Rule 14).
+        services.AddSingleton<IRunInputStore>(_ => new LocalRunInputStore(Path.GetDirectoryName(settingsPath)!));
+
+        // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
+        services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
+        services.AddSingleton<IWorkerImageProvider, PinnedWorkerImageProvider>();
 
         // LocalEngine.
         services.AddSingleton<LocalEngineManager>();

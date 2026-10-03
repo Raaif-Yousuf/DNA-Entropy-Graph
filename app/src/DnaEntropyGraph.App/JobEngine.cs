@@ -7,6 +7,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -25,14 +26,6 @@ namespace DnaEntropyGraph.App;
 /// </summary>
 public sealed class JobEngine : IJobEngine, IRunVmActions
 {
-    /// <summary>
-    /// THEORY (unverified): until the app pins the worker image by digest from
-    /// an allowlist (CLAUDE.md Stack row "Container"), a dev sets the
-    /// digest-pinned reference here. Unset means the VM is created with no
-    /// startup script.
-    /// </summary>
-    public const string WorkerImageSettingsKey = "worker_image";
-
     private static readonly JsonSerializerOptions OptionsJson = new() { Converters = { new JsonStringEnumConverter() } };
 
     private readonly ConcurrentDictionary<string, ActiveRun> _activeRuns = new();
@@ -41,14 +34,28 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IGcpAccount _account;
     private readonly ISettingsStore _settings;
     private readonly IRunRepository _runs;
+    private readonly IRunInputStore _inputs;
+    private readonly IWorkerImageProvider _images;
+    private readonly Func<string?> _downloadsFolder;
 
-    public JobEngine(IMessenger messenger, CloudJobRunner runner, IGcpAccount account, ISettingsStore settings, IRunRepository runs)
+    public JobEngine(
+        IMessenger messenger,
+        CloudJobRunner runner,
+        IGcpAccount account,
+        ISettingsStore settings,
+        IRunRepository runs,
+        IRunInputStore inputs,
+        IWorkerImageProvider images,
+        Func<string?>? downloadsFolder = null)
     {
+        _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
         _messenger = messenger;
         _runner = runner;
         _account = account;
         _settings = settings;
         _runs = runs;
+        _inputs = inputs;
+        _images = images;
     }
 
     public IReadOnlyList<WorkerResult> CompletedRuns { get; } = Array.Empty<WorkerResult>();
@@ -70,8 +77,45 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             return jobId;
         }
 
+        // Issue #458: no image, no VM. A VM created without the startup script would boot, run
+        // nothing, and sit until maxRunDuration, so the run fails here instead.
+        var gpu = CloudJobRunner.ExpectsGpu(CloudJobRequestFactory.MachineTypeFor(options.GpuTier));
+        var image = _images.Resolve(AppVersion(), gpu);
+        if (image.Status != WorkerImageStatus.Available || image.Reference is null)
+        {
+            var code = image.Status == WorkerImageStatus.OverrideRefused ? RunErrorCodes.WorkerImageRefused : RunErrorCodes.WorkerImageUnavailable;
+            await FailBeforeStartAsync(jobId, options, code, cancellationToken).ConfigureAwait(false);
+            return jobId;
+        }
+
+        // Issue #460 / Hard Rule 14: keep our own copy of the input under app data before anything
+        // is created in the cloud; the copy is what is uploaded, the user's file is never touched.
+        var staged = await StageInputAsync(jobId, options, cancellationToken).ConfigureAwait(false);
+        if (staged is null)
+        {
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputMissing, cancellationToken).ConfigureAwait(false);
+            return jobId;
+        }
+
+        // Hard Rule 2 / #479: validate the staged copy with this run's own options before any bucket
+        // object or VM exists. Nobody pays for a VM to learn their file has an X in it.
+        var check = InputFileValidator.Validate(staged.LocalPath, options.Format, options.AmbiguityPolicy, options.TreatAsRna);
+        if (check.Problem is { } problem)
+        {
+            await FailBeforeStartAsync(jobId, options, InputProblemErrorCodes.For(problem.Code), cancellationToken, InputProblemErrorCodes.DetailFor(problem)).ConfigureAwait(false);
+            return jobId;
+        }
+
         var installationId = InstallationId.GetOrCreate(_settings);
-        var request = CloudJobRequestFactory.Create(options, jobId, projectId, installationId, AppVersion(), _settings.GetString(WorkerImageSettingsKey));
+        var request = CloudJobRequestFactory.Create(
+            options,
+            jobId,
+            projectId,
+            installationId,
+            AppVersion(),
+            image.Reference,
+            [staged],
+            string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder);
 
         // Write-ahead (docs/architecture.md section 6): the row exists
         // before the first network call, so a crash right after Run still
@@ -149,6 +193,24 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
     public Task DeleteVmAsync(string jobId, CancellationToken cancellationToken) => _runner.DeleteVmAsync(jobId, cancellationToken);
 
+    /// <summary>The staged copy of the chosen input, or null when there is no input or it cannot be read (the caller records <see cref="RunErrorCodes.InputMissing"/>).</summary>
+    private async Task<StagedInput?> StageInputAsync(string jobId, RunOptions options, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(options.InputPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _inputs.StageAsync(jobId, options.InputPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
     private static bool IsCloudTarget(string target)
         => string.Equals(target, "Cloud", StringComparison.OrdinalIgnoreCase)
            || string.Equals(target, "Auto", StringComparison.OrdinalIgnoreCase);
@@ -156,7 +218,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private static string AppVersion()
         => Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
-    private async Task FailBeforeStartAsync(string jobId, RunOptions options, string errorCode, CancellationToken cancellationToken)
+    private async Task FailBeforeStartAsync(string jobId, RunOptions options, string errorCode, CancellationToken cancellationToken, string? errorDetail = null)
     {
         var now = DateTimeOffset.UtcNow;
         await _runs.UpsertAsync(
@@ -165,6 +227,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 JobPhase.Failed,
                 now,
                 ErrorCode: errorCode,
+                ErrorDetail: errorDetail,
                 StartedAt: now,
                 FinishedAt: now,
                 OptionsJson: JsonSerializer.Serialize(options, OptionsJson)),

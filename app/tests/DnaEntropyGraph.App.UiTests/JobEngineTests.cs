@@ -5,6 +5,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Presentation.Messaging;
+using DnaEntropyGraph.Core.Inputs;
 using Shouldly;
 using Xunit;
 
@@ -20,6 +21,48 @@ namespace DnaEntropyGraph.App.UiTests;
 public class JobEngineTests
 {
     private const string Project = "my-project";
+
+    private static readonly string Pinned = "ghcr.io/raaif-yousuf/dna-entropy-worker:0.1.0-cuda@sha256:" + new string('a', 64);
+
+    private static readonly string TempRoot = CreateTempRoot();
+
+    private static string CreateTempRoot()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "deg-engine-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        };
+        return path;
+    }
+
+    private static string UserInputPath(string name = "SetTnpB.gb")
+    {
+        var dir = Path.Combine(TempRoot, "user");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, name);
+        if (!File.Exists(path))
+        {
+            File.WriteAllText(path, "LOCUS       SetTnpB\nORIGIN\n        1 acgtacgtac\n//\n");
+        }
+
+        return path;
+    }
+
+    private sealed class StaticImageProvider(WorkerImageResolution resolution) : IWorkerImageProvider
+    {
+        public List<(string Version, bool Gpu)> Calls { get; } = [];
+
+        public WorkerImageResolution Resolve(string appVersion, bool gpu)
+        {
+            Calls.Add((appVersion, gpu));
+            return resolution;
+        }
+    }
 
     private sealed class MemorySettings : ISettingsStore
     {
@@ -46,8 +89,10 @@ public class JobEngineTests
 
     private sealed class Harness
     {
-        public Harness(FakeGcp gcp)
+        public Harness(FakeGcp gcp, WorkerImageResolution? image = null, Func<string?>? downloads = null)
         {
+            ImageProvider = new StaticImageProvider(image ?? new WorkerImageResolution(WorkerImageStatus.Available, Pinned));
+            AppData = Path.Combine(TempRoot, "appdata-" + Guid.NewGuid().ToString("N"));
             Gcp = gcp;
             Messenger = new WeakReferenceMessenger();
             Runs = new MemoryRuns();
@@ -60,9 +105,17 @@ public class JobEngineTests
                     Terminal.TrySetResult(m.Phase);
                 }
             });
-            var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, Runs, (id, phase) => Messenger.Send(new RunPhaseChangedMessage(id, phase)));
-            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs);
+            var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, Runs, (id, phase) => Messenger.Send(new RunPhaseChangedMessage(id, phase)))
+            {
+                ResultPollInterval = TimeSpan.FromMilliseconds(1),
+                ResultTimeout = TimeSpan.FromSeconds(5),
+            };
+            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new LocalRunInputStore(AppData), ImageProvider, downloads);
         }
+
+        public StaticImageProvider ImageProvider { get; }
+
+        public string AppData { get; }
 
         public FakeGcp Gcp { get; }
 
@@ -81,8 +134,15 @@ public class JobEngineTests
         public async Task<JobPhase> TerminalAsync() => await Terminal.Task.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
-    private static RunOptions Options(string target = "Cloud", AfterTaskAction after = AfterTaskAction.Stop)
-        => new() { ModelId = "evo2_7b", RunTarget = target, AfterTask = after };
+    private static RunOptions Options(string target = "Cloud", AfterTaskAction after = AfterTaskAction.Stop, string? input = null, string? output = null)
+        => new()
+        {
+            ModelId = "evo2_7b",
+            RunTarget = target,
+            AfterTask = after,
+            InputPath = input ?? UserInputPath(),
+            OutputFolder = output ?? Path.Combine(TempRoot, "out-" + Guid.NewGuid().ToString("N")),
+        };
 
     [Fact]
     public async Task Starting_a_cloud_run_reaches_the_gateway_and_completes()
@@ -143,19 +203,150 @@ public class JobEngineTests
     }
 
     [Fact]
-    public async Task A_configured_worker_image_reaches_the_VM_as_startup_metadata()
+    public async Task The_pinned_worker_image_reaches_the_VM_as_startup_metadata_without_any_setting()
     {
         var h = new Harness(new FakeGcp().WithSelectedProject(Project));
-        var image = "ghcr.io/raaif-yousuf/dna-entropy-worker@sha256:" + new string('a', 64);
-        h.Settings.SetString(JobEngine.WorkerImageSettingsKey, image);
 
         var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
         (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
 
+        h.Settings.GetString("worker_image").ShouldBeNull("nobody set it; the app supplied the image");
         var metadata = h.Gcp.CreatedSpecs.Single().Metadata;
         metadata.ShouldNotBeNull();
         metadata!["deg-job-id"].ShouldBe(jobId);
-        metadata["deg-worker-image"].ShouldBe(image);
+        metadata["deg-worker-image"].ShouldBe(Pinned);
+        metadata.ShouldContainKey("startup-script");
+        h.ImageProvider.Calls.Single().Gpu.ShouldBeTrue("a GPU tier asks for the -cuda image");
+    }
+
+    [Fact]
+    public async Task With_no_image_shipped_the_run_is_Failed_with_a_named_code_and_no_VM_is_created()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), new WorkerImageResolution(WorkerImageStatus.NoneShipped, null));
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.Phase.ShouldBe(JobPhase.Failed);
+        row.ErrorCode.ShouldBe(RunErrorCodes.WorkerImageUnavailable);
+        h.Gcp.CreatedSpecs.ShouldBeEmpty();
+        (await h.Gcp.FindByJobIdAsync(jobId, CancellationToken.None)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_refused_image_override_is_Failed_with_its_own_code_and_no_VM_is_created()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), new WorkerImageResolution(WorkerImageStatus.OverrideRefused, null));
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe(RunErrorCodes.WorkerImageRefused);
+        h.Gcp.CreatedSpecs.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("")]
+    public async Task A_blank_output_folder_means_the_default_folder_and_the_run_still_gets_a_row(string blank)
+    {
+        var downloads = Path.Combine(TempRoot, "dl-" + Guid.NewGuid().ToString("N"));
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), downloads: () => downloads);
+
+        var jobId = await h.Engine.StartRunAsync(Options() with { OutputFolder = blank }, CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        Path.GetDirectoryName(row.OutputDir!).ShouldBe(downloads);
+    }
+
+    [Fact]
+    public async Task An_input_with_an_invalid_character_fails_locally_and_creates_nothing_in_the_cloud()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var path = Path.Combine(TempRoot, "user", "bad-" + Guid.NewGuid().ToString("N") + ".fasta");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, ">secretname\nACGTACGTAC\nACGXACGTAC\n");
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: path), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(RunErrorCodes.InputInvalidCharacter);
+        row.ErrorDetail.ShouldNotBeNull();
+        row.ErrorDetail.ShouldContain("record=1");
+        row.ErrorDetail.ShouldNotContain("secretname", Case.Insensitive);
+        h.Gcp.CreateAttempts.ShouldBe(0);
+        h.Gcp.CreatedSpecs.ShouldBeEmpty();
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_run_with_no_input_file_fails_with_input_missing_and_creates_nothing()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var options = Options() with { InputPath = null };
+
+        var jobId = await h.Engine.StartRunAsync(options, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe(RunErrorCodes.InputMissing);
+        h.Gcp.CreatedSpecs.ShouldBeEmpty();
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_input_file_that_no_longer_exists_fails_with_input_missing_and_creates_nothing()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: Path.Combine(TempRoot, "gone.gb")), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe(RunErrorCodes.InputMissing);
+        h.Gcp.CreatedSpecs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_input_is_kept_under_app_data_the_bucket_holds_it_and_the_track_lands_in_the_chosen_folder()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var source = UserInputPath();
+        var before = File.ReadAllBytes(source);
+        var output = Path.Combine(TempRoot, "out-observable");
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: source, output: output), CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+
+        // Hard Rule 14: a copy under app data, the original untouched, nothing written next to it.
+        File.ReadAllBytes(Path.Combine(h.AppData, "runs", jobId, "input", "SetTnpB.gb")).ShouldBe(before);
+        File.ReadAllBytes(source).ShouldBe(before);
+        Directory.GetFiles(Path.GetDirectoryName(source)!, "*.bedgraph").ShouldBeEmpty();
+
+        // The observable for #460: the bucket holds the real bytes and the manifest...
+        var bucket = FakeGcp.BucketName(Project);
+        h.Gcp.GetObjectBytes(bucket, $"jobs/{jobId}/input/SetTnpB.gb").ShouldBe(before);
+        h.Gcp.ObjectKeys(bucket).ShouldContain($"jobs/{jobId}/manifest.json");
+
+        // ...and the output folder holds the track.
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        Path.GetDirectoryName(row.OutputDir!).ShouldBe(output);
+        File.ReadAllBytes(Path.Combine(row.OutputDir!, "SetTnpB", "SetTnpB.bedgraph")).ShouldBe(FakeGcp.TrackBytes("SetTnpB"));
+    }
+
+    [Fact]
+    public async Task The_manifest_and_the_run_row_name_the_pinned_image()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        await h.TerminalAsync();
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ManifestJson.ShouldNotBeNull();
+        row.ManifestJson!.ShouldContain(Pinned);
+        row.WorkerImageDigest.ShouldBe(Pinned);
     }
 
     [Fact]
@@ -218,10 +409,17 @@ public class JobEngineTests
         await h.Gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
 
         var cancel = h.Engine.CancelRunAsync(jobId, CancellationToken.None);
+
+        // The insert is still in flight, so the cancel must still be waiting: finishing now would
+        // mean it looked for a VM that does not exist yet and gave up (a billed VM left behind).
+        await Task.WhenAny(cancel, Task.Delay(TimeSpan.FromMilliseconds(300), CancellationToken.None));
+        cancel.IsCompleted.ShouldBeFalse("a cancel must wait for an insert that is still in flight");
+
         h.Gcp.ReleaseCreate();
         await cancel.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
 
         (await h.TerminalAsync()).ShouldBe(JobPhase.Cancelled);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).Phase.ShouldBe(JobPhase.Cancelled);
         h.Messages.Select(m => m.Phase).ShouldNotContain(JobPhase.Preparing);
         (await h.Gcp.FindByJobIdAsync(jobId, CancellationToken.None)).ShouldBeEmpty();
     }

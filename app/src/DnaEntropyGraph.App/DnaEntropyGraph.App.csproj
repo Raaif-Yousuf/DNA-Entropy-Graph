@@ -36,6 +36,11 @@
     <ProjectReference Include="..\DnaEntropyGraph.LocalEngine\DnaEntropyGraph.LocalEngine.csproj" />
   </ItemGroup>
 
+  <!-- Issue #458: the worker images pinned by digest for this app version; also the allowlist. -->
+  <ItemGroup>
+    <EmbeddedResource Include="worker-images.json" LogicalName="worker-images.json" />
+  </ItemGroup>
+
   <!--
     Hard Rule 13: every user-visible string lives in
     Strings\en-US\Resources.resw, referenced via x:Uid, never inline. The

@@ -42,6 +42,9 @@ public static class StartupMetadata
     /// <summary><c>worker/vm/startup.sh</c> with unix line endings (a CR would break <c>#!/usr/bin/env bash</c> on the VM).</summary>
     public static string Script => EmbeddedScript.Value;
 
+    /// <summary>True when <paramref name="reference"/> is a full image reference pinned by digest, the only shape the startup script can run (issue #458).</summary>
+    public static bool IsPinnedImageReference(string? reference) => reference is not null && ImagePattern.IsMatch(reference);
+
     public static IReadOnlyDictionary<string, string> Build(
         string bucket,
         string jobId,
