@@ -1067,5 +1067,6 @@ public class GoogleStorageGatewayTests
         await call.ShouldThrowAsync<CloudOperationException>();
         rig.Handler.To(Post, UploadPath(Name(0))).ShouldBeEmpty();
         rig.Handler.To(HttpMethod.Delete, BucketPath(Name(0))).ShouldBeEmpty();
-    }}
+    }
+}
 
