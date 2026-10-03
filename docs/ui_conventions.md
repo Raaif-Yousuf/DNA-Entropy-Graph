@@ -209,6 +209,14 @@ left as unnecessary caution.
   a name box would promise something false. The XAML to restore is on #514.
 - `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
   next to Run once there is more than one pill.
+## 10. Settings page (issues #106, #104)
+
+`SettingsPage` is one scrolling `StackPanel` of groups. #106 built the **Diagnostics** group (the Save diagnostics button,
+Open folder, the status line and one line saying what is and is never included). #104 adds its groups to the same
+panel and keeps this one. The run-error strings say "Choose Save diagnostics in Settings"; `Guards.Tests/SaveDiagnosticsWiringTests`
+pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
+`ToastService` is still a debug-output placeholder.
+
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text

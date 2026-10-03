@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 using NSubstitute;
@@ -14,7 +15,7 @@ public class SettingsViewModelTests
         toastService = Substitute.For<IToastService>();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
-        return new SettingsViewModel(settingsStore, toastService, strings);
+        return new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System);
     }
 
     [Fact]
@@ -79,7 +80,7 @@ public class SettingsViewModelTests
         var toastService = Substitute.For<IToastService>();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("ThemeUpdated_Title").Returns("Theme updated (from resw)");
-        var viewModel = new SettingsViewModel(settingsStore, toastService, strings);
+        var viewModel = new SettingsViewModel(settingsStore, toastService, strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System);
 
         viewModel.SetThemeCommand.Execute("Dark");
 

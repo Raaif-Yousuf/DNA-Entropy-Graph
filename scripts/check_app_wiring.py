@@ -69,6 +69,11 @@ Nine findings, each with its own code so the allowlist can be specific:
     there. A service never registered resolves to a runtime exception on first
     page open, not at build (CLAUDE.md's DI row).
 
+`UNREGISTERED-RESOLVE`
+    A `GetRequiredService<T>()` inside `ServiceRegistration.cs` (typically a factory lambda)
+    whose `T` is never registered there. Factory-registered types skip the constructor check above, so this is the
+    check that covers what their lambda asks the container for.
+
 `DEAD-REGISTRATION`
     A type registered in `ServiceRegistration.cs` that is never a constructor
     parameter anywhere, never appears in a `GetRequiredService`/`GetService`,
@@ -203,7 +208,16 @@ _ADD_SERVICE = re.compile(
 )
 # The instance form (#461): `services.AddSingleton(new Foo())` / `AddSingleton(new Foo { ... })`.
 _ADD_SERVICE_INSTANCE = re.compile(r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*new\s+([\w.]+)")
+# A factory registration (#530): `AddSingleton<T>(sp => ...)`, `AddSingleton<I, T>((IServiceProvider _) => ...)`. The
+# container runs the lambda and never constructor-injects T, so T's constructor parameters are the lambda's business.
+_FACTORY_LAMBDA = re.compile(r"\s*\(\s*(?:static\s+)?(?:async\s+)?(?:\w+|\((?:[^()]|\([^()]*\))*\))\s*=>")
+# The inferred-type factory form: `AddSingleton(_ => new SqliteDatabase(path))` registers the type the lambda news up.
+_ADD_SERVICE_INFERRED = re.compile(
+    r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*(?:static\s+)?(?:async\s+)?(?:\w+|\((?:[^()]|\([^()]*\))*\))\s*=>\s*new\s+([\w.]+)"
+)
 _GET_SERVICE = re.compile(r"\.Get(?:Required)?Service\s*<\s*([\w\.]+)\s*>")
+# Only the required resolve throws on a missing registration; GetService<T> returns null by design.
+_GET_REQUIRED_SERVICE = re.compile(r"\.GetRequiredService\s*<\s*([\w\.]+)\s*>")
 
 _X_UID = re.compile(r'x:Uid\s*=\s*"([^"]+)"')
 _RESW_DATA = re.compile(r'<data\s+name\s*=\s*"([^"]+)"')
@@ -558,6 +572,20 @@ def _constructor_parameters(text: str, class_name: str, skip_defaults: bool = Fa
     return types
 
 
+def _factory_only_types(text: str) -> set[str]:
+    """Types every one of whose registrations is a factory (`Add*<T>(sp => ...)`): the container never
+    constructor-injects them, so their constructors are the lambda's business. A type that is ALSO registered
+    plainly (`AddTransient<T>()`) is not in this set: that registration is still constructor-injected."""
+    factory: set[str] = set()
+    plain: set[str] = set()
+    for match in _ADD_SERVICE.finditer(text):
+        names = {t.strip().split(".")[-1] for t in match.group(1).split(",") if t.strip()}
+        (factory if _FACTORY_LAMBDA.match(text, match.end()) else plain).update(names)
+    for match in _ADD_SERVICE_INFERRED.finditer(text):
+        factory.add(match.group(1).split(".")[-1])
+    return factory - plain
+
+
 def _registered_types(text: str) -> tuple[set[str], set[str]]:
     """Types named in Add*<...> calls, split into (every type, service types).
 
@@ -575,10 +603,11 @@ def _registered_types(text: str) -> tuple[set[str], set[str]]:
             continue
         every.update(tokens)
         services.add(tokens[0])
-    for match in _ADD_SERVICE_INSTANCE.finditer(text):
-        name = match.group(1).split(".")[-1]
-        every.add(name)
-        services.add(name)
+    for pattern in (_ADD_SERVICE_INSTANCE, _ADD_SERVICE_INFERRED):
+        for match in pattern.finditer(text):
+            name = match.group(1).split(".")[-1]
+            every.add(name)
+            services.add(name)
     return every, services
 
 
@@ -712,8 +741,9 @@ def _check_di(scan: Scan) -> list[Finding]:
     if registration is None:
         return []
 
-    reg_text = scan.cs_files[registration]
+    reg_text = _strip_comments(scan.cs_files[registration])
     registered, service_types = _registered_types(reg_text)
+    factory_built = _factory_only_types(reg_text)
 
     findings: list[Finding] = []
 
@@ -727,7 +757,7 @@ def _check_di(scan: Scan) -> list[Finding]:
 
     for type_name in sorted(registered):
         entry = class_texts.get(type_name)
-        if entry is None:
+        if entry is None or type_name in factory_built:
             continue
         path, text = entry
         for param in _constructor_parameters(text, type_name, skip_defaults=True):
@@ -743,6 +773,23 @@ def _check_di(scan: Scan) -> list[Finding]:
                     str(path),
                 )
             )
+
+    # Every `GetRequiredService<T>()` in the registration file names a registered type. Factory-built types are
+    # exempt from the constructor check above because their lambda supplies the arguments, so this is where a
+    # missing one is caught (#530).
+    for match in _GET_REQUIRED_SERVICE.finditer(reg_text):
+        resolved = match.group(1).split(".")[-1]
+        if resolved in service_types or resolved in _NON_SERVICE_PARAM_TYPES or resolved == "IServiceProvider":
+            continue
+        finding = Finding(
+            "UNREGISTERED-RESOLVE",
+            resolved,
+            f"'{resolved}' is resolved from the container inside ServiceRegistration.cs but never registered "
+            f"there. It throws on first resolve at runtime, not at build.",
+            str(registration),
+        )
+        if finding not in findings:
+            findings.append(finding)
 
     # A registration nothing asks for.
     consumers: dict[str, set[str]] = {}
