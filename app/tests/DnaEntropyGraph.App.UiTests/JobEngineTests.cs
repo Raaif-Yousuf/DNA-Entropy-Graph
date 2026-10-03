@@ -69,7 +69,11 @@ public class JobEngineTests
     {
         private readonly ConcurrentDictionary<string, string> _values = new();
 
-        public string? GetString(string key) => _values.TryGetValue(key, out var v) ? v : null;
+        /// <summary>When set, every read throws it (a persistently locked or unusable settings store, #558).</summary>
+        public IOException? FailReadsWith { get; set; }
+
+        public string? GetString(string key)
+            => FailReadsWith is not null ? throw FailReadsWith : _values.TryGetValue(key, out var v) ? v : null;
 
         public void SetString(string key, string value) => _values[key] = value;
     }
@@ -303,6 +307,26 @@ public class JobEngineTests
 
         (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
         (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe(RunErrorCodes.InputMissing);
+        h.Gcp.CreatedSpecs.ShouldBeEmpty();
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(typeof(SettingsUnavailableException))]
+    [InlineData(typeof(InstallationIdUnusableException))]
+    public async Task An_unavailable_or_unusable_installation_id_fails_the_run_before_any_cloud_resource_exists(Type failure)
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        h.Settings.FailReadsWith = failure == typeof(SettingsUnavailableException)
+            ? new SettingsUnavailableException("settings problem")
+            : new InstallationIdUnusableException("settings problem");
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(failure == typeof(SettingsUnavailableException) ? RunErrorCodes.Other : RunErrorCodes.InstallationIdUnusable);
+        row.ErrorDetail.ShouldBe(failure.Name, "an error class only, never the message");
         h.Gcp.CreatedSpecs.ShouldBeEmpty();
         h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
     }

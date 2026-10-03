@@ -222,6 +222,11 @@ to buy. (`cold-diff-reviewer` under `.claude/agents/` is built for this.)
 
 ## Merging / landing the work
 
+Worktree lanes: land a committed branch with `scripts/land_wt.py --branch <b> --sha <tip> --title ... --body-file ...`
+(`--full` for a full premerge). It verifies that exact sha in a throwaway worktree (origin/main merged in, ToTest rows
+union-resolved, any other conflict refused, premerge red refused, venv junction always unlinked before the worktree is
+removed), pushes and opens the PR; you merge it. See `docs/branching_and_prs.md`. The steps below apply to every landing.
+
 Land one lane at a time, and run the guard set after **each**:
 
 ```powershell

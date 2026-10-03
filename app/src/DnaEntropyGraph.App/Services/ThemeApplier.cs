@@ -21,5 +21,19 @@ public static class ThemeApplier
         _ => ElementTheme.Default,
     };
 
-    public static void Apply(FrameworkElement root, ISettingsStore settingsStore) => root.RequestedTheme = Resolve(settingsStore.GetString("Theme"));
+    public static void Apply(FrameworkElement root, ISettingsStore settingsStore) => root.RequestedTheme = Resolve(ReadTheme(settingsStore));
+
+    /// <summary>The saved theme, or null when the settings file is locked (#558): a launch never fails over the theme.</summary>
+    public static string? ReadTheme(ISettingsStore settingsStore)
+    {
+        try
+        {
+            return settingsStore.GetString("Theme");
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while reading theme: {ex.GetType().Name}");
+            return null;
+        }
+    }
 }

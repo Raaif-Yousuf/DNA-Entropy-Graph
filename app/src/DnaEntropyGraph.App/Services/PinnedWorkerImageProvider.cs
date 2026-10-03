@@ -41,7 +41,7 @@ public sealed class PinnedWorkerImageProvider : IWorkerImageProvider
 
     public WorkerImageResolution Resolve(string appVersion, bool gpu)
     {
-        var requested = _settings.GetString(WorkerImageOverrideSettingsKey)?.Trim();
+        var requested = ReadSetting(WorkerImageOverrideSettingsKey)?.Trim();
         if (!string.IsNullOrEmpty(requested))
         {
             if (_list.Allows(requested, appVersion, gpu))
@@ -61,5 +61,19 @@ public sealed class PinnedWorkerImageProvider : IWorkerImageProvider
     }
 
     private bool DeveloperMode()
-        => string.Equals(_settings.GetString(DeveloperModeSettingsKey)?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(ReadSetting(DeveloperModeSettingsKey)?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+
+    // #558: a locked settings file means "no override, no developer mode" (the safe defaults),
+    // never an exception out of the run-start path.
+    private string? ReadSetting(string key)
+    {
+        try
+        {
+            return _settings.GetString(key);
+        }
+        catch (SettingsUnavailableException)
+        {
+            return null;
+        }
+    }
 }

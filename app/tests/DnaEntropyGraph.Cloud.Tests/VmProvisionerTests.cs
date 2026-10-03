@@ -50,6 +50,33 @@ public class VmProvisionerTests
     }
 
     [Fact]
+    public async Task A_create_slower_than_CreateTimeout_is_cut_off_at_CreateTimeout_and_the_late_VM_is_deleted()
+    {
+        // Pins that CreateTimeout (not the poller's deadline, which is the same value) is what ends the wait: the call
+        // returns near 100 ms although the create would take 400 ms, and what the create then made is deleted.
+        var gcp = new FakeGcp().WithCreateDelay(TimeSpan.FromMilliseconds(400));
+        var spec = Spec("job-p9");
+        var request = TestInputs.Request("job-p9", spec, zones: ["us-central1-a"]);
+        var settings = new CloudRunSettings
+        {
+            CreateTimeout = TimeSpan.FromMilliseconds(100),
+            CreateSettleTimeout = TimeSpan.FromSeconds(5),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(50),
+        };
+        var calls = new GatewayCalls(settings, gcp);
+        var provisioner = new VmProvisioner(gcp, calls, settings, new VmTerminator(gcp, calls, settings));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var create = provisioner.ProvisionAsync(request, spec, new RunProgress(), CancellationToken.None);
+        var result = await create.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.Success.ShouldBeFalse();
+        (await gcp.FindByJobIdAsync("job-p9", CancellationToken.None)).ShouldBeEmpty("the late create must be settled and deleted");
+        clock.Elapsed.ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(90));
+    }
+
+    [Fact]
     public async Task An_existing_VM_for_the_job_is_adopted_before_any_zone_is_tried()
     {
         var gcp = new FakeGcp();

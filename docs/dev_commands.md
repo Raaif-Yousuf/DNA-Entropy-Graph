@@ -162,6 +162,16 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
 - **Timing.** A full run exceeds one tool call's 600 s cap; run `--fast` per lane, and launch the
   full run detached with `--log-dir` and poll `summary.txt`.
 
+## Landing a committed worktree branch: `scripts/land_wt.py`
+
+For lanes that work in their own worktree (#510). Flow and refusals: [branching_and_prs.md](branching_and_prs.md).
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <tip-sha> --title "feat: ..." --body-file body.md [--full]
+```
+
+Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh).
+
 ## Landing a PR from the shared checkout: `scripts/land_pr.py`
 
 One command for the seven git/gh steps, safe while other lanes have uncommitted edits in the same tree (#445):

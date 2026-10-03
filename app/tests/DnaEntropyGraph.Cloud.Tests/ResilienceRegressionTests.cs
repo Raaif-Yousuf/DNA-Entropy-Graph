@@ -272,4 +272,44 @@ public class ResilienceRegressionTests
         row.ErrorCode.ShouldBe("other");
         row.ErrorDetail!.ShouldContain("installation-id");
     }
+
+    [Fact]
+    public async Task A_spent_poll_deadline_is_never_retried_even_when_it_carries_a_retryable_status()
+    {
+        // The guard in CloudCallPipeline.IsTransient for OperationPoller.TimeoutCode: replaying the call that started
+        // an operation would start it twice. A 504 is otherwise retryable, so only the code can stop the replay.
+        var pipeline = new CloudCallPipeline(Fast(3), new FakeGcp(), new CloudRetryLog());
+        var attempts = 0;
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => pipeline.ExecuteAsync<string>(
+            "Test.StartOperation",
+            _ =>
+            {
+                attempts++;
+                throw new CloudOperationException(new CloudError(OperationPoller.TimeoutCode, 504, "Polling timed out after 00:05:00."), CloudErrorKind.Network);
+            },
+            CancellationToken.None));
+
+        attempts.ShouldBe(1);
+        ex.Error.Code.ShouldBe(OperationPoller.TimeoutCode);
+    }
+
+    [Fact]
+    public async Task A_504_without_the_poll_timeout_code_is_retried()
+    {
+        // The neighbour that proves the test above can see the difference: same status, no code, so it retries.
+        var pipeline = new CloudCallPipeline(Fast(3), new FakeGcp(), new CloudRetryLog());
+        var attempts = 0;
+
+        await Should.ThrowAsync<CloudOperationException>(() => pipeline.ExecuteAsync<string>(
+            "Test.StartOperation",
+            _ =>
+            {
+                attempts++;
+                throw new CloudOperationException(new CloudError(null, 504, "Gateway timeout."), CloudErrorKind.Network);
+            },
+            CancellationToken.None));
+
+        attempts.ShouldBe(4);
+    }
 }

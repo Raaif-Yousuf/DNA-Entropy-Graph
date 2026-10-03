@@ -63,6 +63,8 @@ has one linked, and if not, walks you to Google's own page to add one. This step
 further progress until billing is linked, there is no way around it, because Google
 itself requires it.
 
+What the app does depends on how many billing accounts you have. With exactly one, it links it to your project for you. With several, it asks which one to use. With none, the button **Link billing** opens Google's billing page for your project; add a payment method there, come back, and the app checks again. If you can use a billing account but are not allowed to link projects to it, the app shows **Copy request for the billing admin**: send that text to the person who manages billing and they can link it for you.
+
 **A common trap here:** a brand-new Google Cloud account defaults to a "Free Trial." Free
 Trial accounts cannot rent a computer with a graphics card at all, even though everything
 else on this page will appear to work. If you are new to Google Cloud, look for a banner

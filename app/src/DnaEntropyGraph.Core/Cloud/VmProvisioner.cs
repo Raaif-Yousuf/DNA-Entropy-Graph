@@ -64,6 +64,11 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             return ProvisionResult.Ok(existing[0].Zone);
         }
 
+        // One value for both the create's own timeout and the poller's deadline, so they cannot drift apart: the create's
+        // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the
+        // backstop at the same instant.
+        var createTimeout = settings.CreateTimeout;
+
         foreach (var zone in request.Zones)
         {
             // The kind the gateway (or the resilience pipeline in front of
@@ -75,22 +80,23 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             Task<VmDescriptor>? createTask = null;
             progress.VmMayExist = true;
             var outcome = await OperationPoller.PollAsync<VmDescriptor>(
-                async pollToken =>
+                async _ =>
                 {
                     try
                     {
-                        // WaitAsync: the poller only checks its deadline between polls, so a create that never answers
-                        // would otherwise hang the run forever.
-                        createTask = compute.CreateVmAsync(spec, zone, pollToken);
+                        // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
+                        // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
+                        // token (the same instant, so the poller's would win and hide the abandoned create).
+                        createTask = compute.CreateVmAsync(spec, zone, cancellationToken);
                         TrackInflightCreate(request.JobId, createTask);
-                        var vm = await createTask.WaitAsync(settings.CreateTimeout, settings.TimeProvider, pollToken).ConfigureAwait(false);
+                        var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
                         return new OperationPoll<VmDescriptor>(true, vm, null);
                     }
                     catch (TimeoutException)
                     {
                         createTimedOut = true;
                         thrownKind = CloudErrorKind.Network;
-                        return new OperationPoll<VmDescriptor>(true, null, new CloudError("OPERATION_POLL_TIMEOUT", null, "Creating the VM timed out."));
+                        return new OperationPoll<VmDescriptor>(true, null, new CloudError(OperationPoller.TimeoutCode, null, "Creating the VM timed out."));
                     }
                     catch (CloudOperationException ex)
                     {
@@ -98,8 +104,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         return new OperationPoll<VmDescriptor>(true, null, ex.Error);
                     }
                 },
-                settings.CreateTimeout,
-                cancellationToken).ConfigureAwait(false);
+                createTimeout,
+                cancellationToken,
+                time: settings.TimeProvider).ConfigureAwait(false);
 
             if (createTimedOut)
             {

@@ -208,13 +208,46 @@ sharing is possible or attempted):
 app.db  app.db-wal            SQLite (run history, cloud resource inventory, settings mirror)
 settings.json                  RunOptions defaults + UI prefs + theme
 auth\<sub>.tok                 DPAPI (CurrentUser) encrypted OAuth token; accounts.json lists known accounts
-install.json                   installationId, createdAt
+installation_id                write-once installation id (#558); never in settings.json
 logs\app-YYYYMMDD.log          Serilog, 14-day retention
 cache\inputs\<jobId>\          exact copy of every input as uploaded, so a re-run works even if the original moved
 runs\<jobId>\                  local-run manifest copy, status history, worker.log
 engine\                        local engine (uv-managed venv, hf-cache, engine.json, install.log)
 ```
 
+`settings.json` is never destroyed by a read problem (#558). It is read as JSON of any value
+type (`GetString` returns a number or bool as its invariant text) and every key a `SetString`
+does not touch is rewritten with its original JSON type. A file that does not parse is copied
+to `settings.json.unreadable-<yyyyMMdd-HHmmss>` before the first write, the scalar depth-1
+pairs that completed before the error are salvaged with `Utf8JsonReader` (types kept, nested
+values skipped, a number cut off at end of input never emitted), and
+`SettingsStore.RecoveredFromUnreadableFile` is set (sticky for the instance; the recovery UX
+is DECISION #404). Every IO, ACL or lock failure inside the store (temp file, directory,
+keep-aside copy, mutex, move) surfaces as `SettingsUnavailableException` with the cause kept
+as the inner exception, with nothing changed and the flag untouched; callers on close or at
+launch catch only that. One public call has a total wait budget of about 300 ms (lock wait and
+retries share it, at most 5 read attempts), because the callers run on the UI thread; the
+window-placement save on close is best-effort on top of that. Writes are a FileStream temp
+file with `Flush(true)` then `File.Move(overwrite)`, and every read-modify-write holds a named
+`Local\` mutex derived from the full path, so two instances or processes never drop each
+other's keys.
+
+The installation id is NOT in `settings.json`. It is the write-once file `installation_id`
+beside it, published by writing `installation_id.tmp-<guid>` with `Flush(true)` and moving it
+into place with no overwrite, so a crash never leaves a torn prefix and the loser of a race
+reads the winner's file. The id format is not validated more strictly than the label rule
+(`^[a-z0-9_-]{1,63}$`): a legacy id migrated from settings.json can be any such value, and the
+atomic write makes a torn minted id impossible, so a stricter check would only reject real
+ids. If the file is absent (or holds only whitespace or a BOM, which is replaced by an
+overwrite move under the mutex), a complete valid string id is migrated from settings.json
+(parse, salvage, or a lenient scan of the raw text for `"installation_id": "<valid id>"` after
+the corruption point). If the raw text mentions `installation_id` but no complete valid value
+can be recovered, no id is minted: the settings copy is kept aside and
+`InstallationIdUnusableException` is raised. A new id is minted only when the text genuinely
+has none. A non-empty id file with an invalid id is kept aside as
+`installation_id.invalid-<stamp>`, never overwritten and never replaced, with the same
+exception. The run then fails before any cloud resource exists with the code
+`installation_id_unusable` (minimal copy; full recovery UX is DECISION #404).
 The full SQLite DDL (`Accounts`, `Projects`, `Runs`, `RunInputs`, `RunOutputs`,
 `RunEvents`, `CloudResources`, `CostLedger`, `MonthlySpend`, `LocalEngine`) is in
 [Appendix A, section 3](superpowers/specs/2026-09-18-appendix-a-app-design.md#3-local-state-model);

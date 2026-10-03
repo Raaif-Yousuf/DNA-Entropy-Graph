@@ -100,6 +100,31 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(expected);
     }
 
+    // Issue #539: a permission denial that names a billing permission is a missing role, not "billing is off".
+    [Theory]
+    [InlineData("IAM_PERMISSION_DENIED", 403, "Permission 'billing.resourceAssociations.create' denied on resource '//cloudbilling.googleapis.com/billingAccounts/AAA'.")]
+    [InlineData("PERMISSION_DENIED", 403, "The caller does not have permission billing.resourceAssociations.get")]
+    [InlineData("PERMISSION_DENIED", 403, "Permission 'billing.accounts.list' denied on the billing account")]
+    [InlineData(null, 403, "Permission 'billing.resourceAssociations.create' denied")]
+    [InlineData(null, null, "Permission 'billing.resourceAssociations.create' denied on billing account AAA")]
+    public void A_permission_denial_that_mentions_billing_is_permission_and_keeps_the_permission_name(string? code, int? httpStatus, string message)
+    {
+        var error = new CloudError(code, httpStatus, message);
+
+        CloudErrorClassifier.Classify(error).ShouldBe(CloudErrorKind.Permission);
+        error.Message.ShouldContain("billing.");
+    }
+
+    [Theory]
+    [InlineData("BILLING_DISABLED", 403, "This API method requires billing to be enabled.")]
+    [InlineData(null, 403, "Billing must be enabled for activation of service(s)")]
+    [InlineData(null, 403, "The billing account for the owning project is disabled in state absent")]
+    [InlineData(null, 403, "Billing account is not active for this project")]
+    public void A_403_that_says_billing_is_off_stays_billing(string? code, int? httpStatus, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(CloudErrorKind.Billing);
+    }
+
     [Fact]
     public void A_structured_QUOTA_EXCEEDED_code_is_never_confused_with_a_structured_stockout_code()
     {
@@ -113,6 +138,32 @@ public class CloudErrorClassifierTests
 
         quota.ShouldBe(CloudErrorKind.Quota);
         stockout.ShouldBe(CloudErrorKind.Stockout);
+    }
+
+    // Issue #539 (round 3): the permission-denial rule is for a 403 (or an error with no status). A 412 or a 409 that
+    // happens to say "does not have permission" keeps its own structured meaning.
+    [Theory]
+    [InlineData(412, "The request does not have permission to proceed: blocked by constraints/gcp.restrictServiceUsage", CloudErrorKind.OrgPolicy)]
+    [InlineData(409, "Resource already exists; the caller does not have permission to overwrite it", CloudErrorKind.AlreadyExists)]
+    [InlineData(403, "The caller does not have permission", CloudErrorKind.Permission)]
+    [InlineData(null, "The caller does not have permission", CloudErrorKind.Permission)]
+    public void A_permission_denial_wording_only_decides_a_403_or_an_unknown_status(int? status, string message, CloudErrorKind expected)
+    {
+        CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
+    }
+
+    // Round 4: an org-policy marker (a constraints/ id) beats the permission wording when no status says otherwise,
+    // and "billing is required" on a 403 is billing off, not Other.
+    [Theory]
+    [InlineData(null, "Constraint constraints/compute.vmExternalIpAccess violated; the caller does not have permission", CloudErrorKind.OrgPolicy)]
+    [InlineData(null, "Permission 'compute.instances.create' denied by constraints/compute.requireOsLogin", CloudErrorKind.OrgPolicy)]
+    [InlineData(403, "Billing is required for this project", CloudErrorKind.Billing)]
+    [InlineData(403, "This API method requires billing: billing is required", CloudErrorKind.Billing)]
+    [InlineData(403, "The caller does not have permission; billing is required on the billing account", CloudErrorKind.Permission)]
+    [InlineData(403, "Caller does not have required permission to use project 123. Use another project to pass your quota and billing.", CloudErrorKind.Permission)]
+    public void An_org_policy_marker_wins_without_a_status_and_billing_required_is_billing(int? status, string message, CloudErrorKind expected)
+    {
+        CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
     }
 
     [Fact]
