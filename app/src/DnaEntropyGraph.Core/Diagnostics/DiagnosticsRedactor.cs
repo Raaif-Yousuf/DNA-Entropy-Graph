@@ -167,11 +167,12 @@ internal sealed partial class DiagnosticsRedactor
     /// <param name="json">The file text.</param>
     /// <param name="spec">The keys it may carry.</param>
     /// <param name="jobId">When given, every <c>jobId</c> leaf is rewritten to it: the file's own run folder decides the id, not the file.</param>
-    public string? RedactJson(string json, KeySpec spec, string? jobId = null)
+    /// <param name="rewrite">Applied to every kept string leaf before it is checked (never to a key or a number).</param>
+    public string? RedactJson(string json, KeySpec spec, string? jobId = null, Func<string, string>? rewrite = null)
     {
         try
         {
-            return Sanitize(JsonNode.Parse(json), spec, jobId)?.ToJsonString(JsonOptions);
+            return Sanitize(JsonNode.Parse(json), spec, jobId, rewrite)?.ToJsonString(JsonOptions);
         }
         catch (Exception ex) when (IsUnreadableJson(ex))
         {
@@ -180,7 +181,7 @@ internal sealed partial class DiagnosticsRedactor
     }
 
     /// <summary>One JSON object per line; a line that does not parse is replaced by a note, never copied.</summary>
-    public string RedactJsonLines(string text, KeySpec spec)
+    public string RedactJsonLines(string text, KeySpec spec, Func<string, string>? rewrite = null)
     {
         var lines = text.Split('\n')
             .Select(line => line.Trim())
@@ -189,7 +190,7 @@ internal sealed partial class DiagnosticsRedactor
             {
                 try
                 {
-                    return Sanitize(JsonNode.Parse(line), spec)?.ToJsonString(CompactOptions) ?? "null";
+                    return Sanitize(JsonNode.Parse(line), spec, rewrite: rewrite)?.ToJsonString(CompactOptions) ?? "null";
                 }
                 catch (Exception ex) when (IsUnreadableJson(ex))
                 {
@@ -199,7 +200,7 @@ internal sealed partial class DiagnosticsRedactor
         return string.Join('\n', lines) + "\n";
     }
 
-    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec, string? jobId = null)
+    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec, string? jobId = null, Func<string, string>? rewrite = null)
     {
         switch (node)
         {
@@ -211,7 +212,7 @@ internal sealed partial class DiagnosticsRedactor
                     {
                         kept[key] = jobId is not null && key == "jobId" && value is JsonValue
                             ? JsonValue.Create(jobId)
-                            : Sanitize(value, child, jobId);
+                            : Sanitize(value, child, jobId, rewrite);
                     }
                 }
 
@@ -220,11 +221,12 @@ internal sealed partial class DiagnosticsRedactor
                 var items = new JsonArray();
                 foreach (var item in array)
                 {
-                    items.Add(Sanitize(item, spec, jobId));
+                    items.Add(Sanitize(item, spec, jobId, rewrite));
                 }
 
                 return items;
             case JsonValue value when value.TryGetValue<string>(out var text):
+                text = rewrite is null ? text : rewrite(text);
                 return SafeValue().IsMatch(text) && !SequenceShape.IsSequenceLine(text, minLength: 20, out _) ? RedactText(text) : RedactedValue;
             case JsonValue:
                 return node.DeepClone();

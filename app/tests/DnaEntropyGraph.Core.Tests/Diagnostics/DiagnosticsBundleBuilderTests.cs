@@ -585,6 +585,75 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void A_one_character_withheld_id_leaves_numbers_keys_and_other_words_intact()
+    {
+        // Issue #637: an unanchored replace of "1" turned `"percent":100` into `"percent":withheldid1withheldid1`.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/1/status.json"] = """{"jobId":"1","stage":"failed","percent":100}""",
+            ["runs/1/logs/worker.log"] = "INFO job 1 failed after 100 windows",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var status = entries["files/runs/withheldid1/status.json"];
+        status.ShouldContain("\"percent\": 100");
+        status.ShouldContain("\"jobId\": \"withheldid1\"");
+        status.ShouldContain("\"stage\": \"failed\"");
+        entries["files/runs/withheldid1/logs/log-01.log"].ShouldBe("INFO job withheldid1 failed after 100 windows");
+    }
+
+    [Fact]
+    public void A_one_letter_withheld_id_rewrites_only_the_whole_token_in_a_log()
+    {
+        var folder = new Dictionary<string, string> { ["runs/q/logs/worker.log"] = "run q failed: quota exceeded" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "q", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/runs/withheldid1/logs/log-01.log"].ShouldBe("run withheldid1 failed: quota exceeded");
+    }
+
+    [Fact]
+    public void A_numeric_unquoted_job_id_leaf_ships_the_folders_placeholder_and_the_file_stays_valid_json()
+    {
+        var folder = new Dictionary<string, string> { ["runs/12/status.json"] = """{"jobId":12,"stage":"failed"}""" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/runs/withheldid1/status.json"].ShouldContain("\"jobId\": \"withheldid1\"");
+        JsonDocument.Parse(entries["files/runs/withheldid1/status.json"]).RootElement.GetProperty("stage").GetString().ShouldBe("failed");
+    }
+
+    private const char Backslash = (char)92;
+
+    [Fact]
+    public void An_escaped_spelling_of_a_withheld_id_in_an_allowlisted_leaf_does_not_ship_the_digits()
+    {
+        // "12" parses to 12; the scrub list drops an all-digit value, so only the leaf rewrite can catch it.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/12/result.json"] = "{\"jobId\":\"12\",\"status\":\"failed\",\"inputs\":[{\"id\":\"" + Backslash + "u0031" + Backslash + "u0032\",\"status\":\"ok\"},{\"id\":\"seq-2\",\"status\":\"ok\"}]}",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var result = entries["files/runs/withheldid1/result.json"];
+        result.ShouldNotContain("\"12\"");
+        result.ShouldContain("\"id\": \"withheldid1\"");
+        result.ShouldContain("\"id\": \"seq-2\"");
+    }
+
+    [Fact]
+    public void A_longer_withheld_id_wins_over_a_shorter_one_and_a_placeholder_is_never_rewritten_again()
+    {
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "runs ab-12 and ab and withheldid2 done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "ab", Name = "n", ManifestJson = "{}", OptionsJson = "{}" }, Run with { JobId = "ab-12", Name = "m", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("runs withheldid2 and withheldid1 and withheldid2 done");
+    }
+
+    [Fact]
     public void A_standard_id_folder_whose_status_names_a_different_job_id_ships_the_folders_id()
     {
         var folder = new Dictionary<string, string>
