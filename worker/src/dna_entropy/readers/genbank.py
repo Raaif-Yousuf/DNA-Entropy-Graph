@@ -31,6 +31,67 @@ class GenBankReadError(ValidationError):
     """
 
 
+def _record_sequence(rec) -> str:
+    """The record's bases, or ``""`` when it has none to read.
+
+    Issue #536, MEASURED 2026-10-03: a truncated file (a LOCUS line declaring a length, an
+    ORIGIN header, and no sequence lines) parses into a record whose ``seq`` is an
+    UNDEFINED-content sequence of the declared length, and ``str()`` on it raises Biopython's
+    own ``UndefinedSequenceError`` (a ``ValueError``) OUTSIDE the parse try-block above, so it
+    used to escape as a raw exception. It is the same situation as an empty ORIGIN: no
+    nucleotides, so the caller skips the record with a notice, and a file with no readable
+    record at all is then refused with :class:`GenBankReadError` (``INPUT_INVALID``), exactly
+    like the app's ``GenBankLite`` (skip, then refuse when nothing is left).
+    """
+    from Bio.Seq import UndefinedSequenceError
+
+    try:
+        return str(rec.seq)
+    except UndefinedSequenceError:
+        return ""
+
+
+def _refuse_non_ascii_origin(text: str) -> None:
+    """Refuse a non-ASCII character in any record's ORIGIN block, before Biopython sees it.
+
+    Issue #492, MEASURED 2026-10-02: Biopython upper-cases the ORIGIN text itself, and
+    ``str.upper()`` folds some non-ASCII letters into ASCII (long s U+017F becomes ``S``, a
+    valid IUPAC code), so ``validate_sequence`` downstream never saw the original letter
+    and the run accepted a character that is not DNA. Scanning the raw text here, on the
+    same ``\\n``-normalised lines Biopython reads, is the only place the original survives.
+
+    The position matches ``validate_sequence``'s ("Invalid character U+XXXX at position N"):
+    1-based, counted over the record's own sequence characters, so the position numbers
+    GenBank prints at the start of each ORIGIN line and the spacing between 10-base groups
+    are skipped, exactly as Biopython skips them. Only ASCII spaces, tabs and digits are
+    skipped: a non-ASCII space or digit is a non-ASCII character and is refused too, never
+    silently treated as layout.
+    """
+    record = 1
+    position = 0
+    in_origin = False
+    for line in text.split("\n"):
+        if line.startswith("//"):
+            record += 1
+            position = 0
+            in_origin = False
+        elif line.startswith("ORIGIN"):
+            in_origin = True
+        elif in_origin and not line[:1].isspace() and line[:1]:
+            in_origin = False  # a new section keyword (CONTIG, LOCUS, ...) ends the sequence block
+        elif in_origin:
+            for char in line:
+                if char in " \t" or (char.isascii() and char.isdigit()):
+                    continue
+                position += 1
+                if not char.isascii():
+                    raise GenBankReadError(
+                        f"Invalid character U+{ord(char):04X} at position {position} of GenBank "
+                        f"record {record}'s sequence (its ORIGIN block). Only A, C, G, T are "
+                        "allowed. Remove or correct that character in the file and try again."
+                    )
+
+
 def _describe_bare_assertion(exc: AssertionError) -> str:
     """Recover a true, non-empty reason from a bare (message-less) `AssertionError`.
 
@@ -73,6 +134,7 @@ class GenBankRecord:
     record_id: str
     seq: str
     features: list[GeneFeature] = field(default_factory=list)
+    circular: bool = False  # the LOCUS line says "circular" (issue #128)
 
 
 def _feature_id(feature) -> str:
@@ -193,6 +255,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     # not get Python's universal-newlines treatment the way str.splitlines() does, so it
     # has to be done here, before the text reaches Bio.GenBank.Scanner.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    _refuse_non_ascii_origin(text)
     parsed: list = []
     try:
         # #349's own claim here ("every malformed-content failure this scanner raises for
@@ -216,7 +279,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         # id (issue #253: a record id is user free text).
         for parsed_record in SeqIO.parse(io.StringIO(text), "genbank"):
             parsed.append(parsed_record)
-    except (ValueError, AssertionError) as exc:
+    except (ValueError, AssertionError, IndexError) as exc:
         # readers/fasta.py never has this failure class at all (it is hand-rolled, no
         # third-party parser to escape from) -- this is GenBank agreeing with FASTA's
         # blanket guarantee that a malformed file never reaches the caller as a raw
@@ -225,7 +288,17 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         # message reading "Could not parse the GenBank file: . Check..." -- a fact-free
         # gap. _describe_bare_assertion recovers a true, non-empty reason in that case;
         # a ValueError already carries real text from Biopython, so it passes through.
-        if isinstance(exc, AssertionError) and not str(exc):
+        # Issue #536, MEASURED 2026-10-03 (a seeded mutation sweep of sample.gb: three
+        # seeds x 6000 files, the ONLY non-reader exception type seen was IndexError): a
+        # feature line shorter than the scanner's qualifier column indexes past its end in
+        # Scanner.parse_features. Its text ("string index out of range") is a Python
+        # internal, not a fact about the file, so it is replaced with one the user can check.
+        if isinstance(exc, IndexError):
+            reason = (
+                "a feature-table line is shorter than the GenBank layout allows "
+                "(a misaligned feature key or location)"
+            )
+        elif isinstance(exc, AssertionError) and not str(exc):
             reason = _describe_bare_assertion(exc)
         else:
             reason = str(exc)
@@ -241,7 +314,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     records: list[GenBankRecord] = []
     total_features = 0
     for idx, rec in enumerate(parsed, start=1):
-        seq = str(rec.seq)
+        seq = _record_sequence(rec)
         if not seq or set(seq.upper()) <= {"N"}:
             # Never the record id itself (issue #253) — a GenBank LOCUS/ACCESSION id is
             # free text a user or their sequencing core chose, same privacy class as a
@@ -253,10 +326,22 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         feats, feat_notices = _features_of(rec)
         notices += feat_notices
         total_features += len(feats)
-        records.append(GenBankRecord(record_id=rec.id, seq=seq, features=feats))
+        records.append(
+            GenBankRecord(
+                record_id=rec.id,
+                seq=seq,
+                features=feats,
+                # Biopython reads the LOCUS line's topology word into annotations.
+                circular=rec.annotations.get("topology") == "circular",
+            )
+        )
 
     if not records:
-        raise GenBankReadError("The GenBank file has no records with a nucleotide sequence.")
+        raise GenBankReadError(
+            "The GenBank file has no records with a nucleotide sequence (a truncated or "
+            "sequence-less export). Re-export the file from the tool that made it, with its "
+            "sequence included."
+        )
 
     # issue #352: `total_features` being 0 already says "no gene features were found" on
     # its own -- a separate "no gene" word produced "0 no gene feature(s)", which reads

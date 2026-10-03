@@ -29,6 +29,8 @@ public sealed class ProjectRepository : IProjectRepository
             SetupCompletedAt = excluded.SetupCompletedAt, SmokeTestPassedAt = excluded.SmokeTestPassedAt, IsActive = excluded.IsActive;
         """;
 
+    private const string EnsureSql = "INSERT INTO Projects (ProjectId) VALUES (@ProjectId) ON CONFLICT(ProjectId) DO NOTHING;";
+
     private readonly SqliteDatabase _database;
 
     public ProjectRepository(SqliteDatabase database) => _database = database;
@@ -45,6 +47,14 @@ public sealed class ProjectRepository : IProjectRepository
     {
         using var connection = _database.OpenConnection();
         var command = new CommandDefinition(UpsertSql, ToRow(project), cancellationToken: cancellationToken);
+        await connection.ExecuteAsync(command).ConfigureAwait(false);
+    }
+
+    public async Task EnsureAsync(string projectId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(EnsureSql, new { ProjectId = projectId }, cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 

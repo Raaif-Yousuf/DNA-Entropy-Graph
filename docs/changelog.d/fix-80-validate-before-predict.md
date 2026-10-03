@@ -1,0 +1,1 @@
+- Worker: every record of a multi-record input is checked against the context-length rules before the first record is predicted, so a too-short later record no longer wastes GPU time on the earlier ones (#80).

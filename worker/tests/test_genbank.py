@@ -580,3 +580,154 @@ def test_a_truncated_multi_record_genbank_names_the_record_that_failed(tmp_path:
 def test_a_malformed_first_record_is_named_record_1() -> None:
     with pytest.raises(GenBankReadError, match="record 1"):
         read_genbank(MALFORMED_DIR / "genbank_qualifier_missing_slash.gb")
+
+
+# --- issue #536: a truncated file (a LOCUS length, no ORIGIN sequence) is the reader's own error ---
+
+
+def _truncated_after_origin() -> str:
+    text = Path(SAMPLE_GB).read_text(encoding="utf-8")
+    return text[: text.index("ORIGIN\n") + len("ORIGIN\n ")]  # the exact shape the fuzz test found
+
+
+def test_truncated_after_origin_raises_the_readers_own_error_naming_an_action(tmp_path: Path) -> None:
+    path = tmp_path / "truncated.gb"
+    path.write_text(_truncated_after_origin(), encoding="utf-8", newline="\n")
+    with pytest.raises(GenBankReadError) as exc:
+        read_genbank(str(path))
+    assert "Re-export" in str(exc.value)
+    assert isinstance(exc.value, ValidationError)  # INPUT_INVALID at the worker boundary
+
+
+def test_truncated_after_origin_is_a_validation_error_through_load_input(tmp_path: Path) -> None:
+    path = tmp_path / "truncated.gb"
+    path.write_text(_truncated_after_origin(), encoding="utf-8", newline="\n")
+    with pytest.raises(ValidationError):
+        load_input(RunConfig(name="t", input_path=str(path), informat="genbank", out_dir=str(tmp_path)))
+
+
+def test_a_truncated_record_among_good_ones_is_skipped_with_a_notice(tmp_path: Path) -> None:
+    good = Path(SAMPLE_GB).read_text(encoding="utf-8")
+    path = tmp_path / "mixed.gb"
+    path.write_text(good + _truncated_after_origin() + "\n//\n", encoding="utf-8", newline="\n")
+    records, notices = read_genbank(str(path))
+    assert len(records) == 1
+    assert any("Skipped GenBank record 2" in n and "no nucleotide sequence" in n for n in notices)
+
+
+def test_every_prefix_of_a_valid_genbank_file_reads_or_raises_the_readers_own_error(tmp_path: Path) -> None:
+    """A deterministic sweep of the truncation shape the random fuzz test found once."""
+    data = Path(SAMPLE_GB).read_bytes()
+    path = tmp_path / "prefix.gb"
+    outcomes = {"read": 0, "refused": 0}
+    for cut in range(0, len(data) + 1, 3):
+        path.write_bytes(data[:cut])
+        try:
+            read_genbank(str(path))
+            outcomes["read"] += 1
+        except GenBankReadError:
+            outcomes["refused"] += 1
+    assert outcomes["read"] > 0 and outcomes["refused"] > 0, "the sweep must see both outcomes"
+
+
+# --- issue #536 audit: every other exception type Biopython's scanner can raise ---
+
+
+def test_a_feature_line_shorter_than_the_qualifier_indent_is_the_readers_own_error() -> None:
+    """MEASURED 2026-10-03 (a seeded mutation sweep of sample.gb, 18000 files): a feature
+    line shorter than Biopython's qualifier column raised a raw ``IndexError`` out of
+    ``Bio.GenBank.Scanner.parse_features``, which the parse try-block did not catch."""
+    with pytest.raises(GenBankReadError, match="record 1") as exc:
+        read_genbank(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb")
+    assert "Check" in str(exc.value)  # names the action
+    assert "string index out of range" not in str(exc.value)  # a Python-internal phrase, not a fact
+
+
+# --- issue #492: a non-ASCII letter in ORIGIN is refused before Biopython can fold it into ASCII ---
+
+
+def _gb_with_origin(*origin_lines: str, locus_len: int = 16) -> str:
+    return (
+        f"LOCUS       toy    {locus_len} bp    DNA              UNK 01-JAN-1980\n"
+        "FEATURES             Location/Qualifiers\n"
+        "     gene            1..4\n"
+        '                     /gene="g"\n'
+        "ORIGIN\n" + "".join(line + "\n" for line in origin_lines) + "//\n"
+    )
+
+
+NON_ASCII_ORIGIN_LETTERS = [
+    ("\u017f", "U+017F"),  # long s: str.upper() gives "S", a valid IUPAC code (the #492 probe)
+    ("\u00df", "U+00DF"),  # sharp s: str.upper() gives "SS"
+    ("\u0131", "U+0131"),  # dotless i: str.upper() gives "I"
+    ("\u00e9", "U+00E9"),  # e acute: Biopython's own ascii encode used to fail with an opaque codec error
+    ("\u00a0", "U+00A0"),  # no-break space: str.split() would silently treat it as whitespace
+    ("\u0663", "U+0663"),  # Arabic-Indic digit three: str.isdigit() is True, but it is not a position number
+]
+
+
+def test_non_ascii_origin_letter_table_is_not_vacuous() -> None:
+    assert len(NON_ASCII_ORIGIN_LETTERS) >= 6
+    assert all(not ch.isascii() for ch, _ in NON_ASCII_ORIGIN_LETTERS)
+
+
+@pytest.mark.parametrize(("char", "code_point"), NON_ASCII_ORIGIN_LETTERS)
+def test_a_non_ascii_origin_letter_is_refused_naming_its_code_point_and_position(
+    tmp_path: Path, char: str, code_point: str
+) -> None:
+    path = tmp_path / "non_ascii.gb"
+    path.write_text(_gb_with_origin(f"        1 acgtacgt{char}acgtacg"), encoding="utf-8", newline="\n")
+    with pytest.raises(GenBankReadError) as exc:
+        read_genbank(str(path))
+    message = str(exc.value)
+    assert f"Invalid character {code_point} at position 9" in message
+    assert "record 1" in message
+    assert message.isascii()  # Hard Rule 5: the console line never carries the lookalike glyph
+
+
+def test_the_issue_492_probe_is_refused_through_load_input_naming_u017f_at_position_9(tmp_path: Path) -> None:
+    path = tmp_path / "long_s.gb"
+    path.write_text(_gb_with_origin("        1 acgtacgt\u017facgtacg"), encoding="utf-8", newline="\n")
+    cfg = RunConfig(name="t", input_path=str(path), informat="genbank", out_dir=str(tmp_path))
+    with pytest.raises(ValidationError, match=r"U\+017F at position 9"):
+        load_input(cfg)
+
+
+def test_the_non_ascii_position_counts_bases_across_origin_lines_not_digits_or_spaces(tmp_path: Path) -> None:
+    path = tmp_path / "second_line.gb"
+    path.write_text(
+        _gb_with_origin("        1 acgtacgtac gtacgtacgt", "       21 acgt\u017facgtac", locus_len=30),
+        encoding="utf-8",
+        newline="\n",
+    )
+    with pytest.raises(GenBankReadError, match=r"U\+017F at position 25"):
+        read_genbank(str(path))
+
+
+def test_the_non_ascii_refusal_names_the_record_and_counts_from_its_own_origin(tmp_path: Path) -> None:
+    good = _gb_with_origin("        1 acgtacgtacgtacgt")
+    bad = _gb_with_origin("        1 acg\u017facgtacgtacgt")
+    path = tmp_path / "second_record.gb"
+    path.write_text(good + bad, encoding="utf-8", newline="\n")
+    with pytest.raises(
+        GenBankReadError, match=r"U\+017F at position 4 .*record 2|record 2.*U\+017F at position 4"
+    ):
+        read_genbank(str(path))
+
+
+def test_non_ascii_outside_the_origin_block_is_still_read(tmp_path: Path) -> None:
+    text = _gb_with_origin("        1 acgtacgtacgtacgt").replace(
+        '/gene="g"', '/gene="g\u00e9ne"\n                     /note="\u017f"'
+    )
+    path = tmp_path / "qualifier.gb"
+    path.write_text(text, encoding="utf-8", newline="\n")
+    records, _ = read_genbank(str(path))
+    assert records[0].seq == "ACGTACGTACGTACGT"
+    assert records[0].features[0].gene_id == "g\u00e9ne"
+
+
+def test_an_ascii_lowercase_origin_is_still_uppercased(tmp_path: Path) -> None:
+    path = tmp_path / "lower.gb"
+    path.write_text(_gb_with_origin("        1 acgtacgtrykmacgt"), encoding="utf-8", newline="\n")
+    records, _ = read_genbank(str(path))
+    assert records[0].seq == "ACGTACGTRYKMACGT"

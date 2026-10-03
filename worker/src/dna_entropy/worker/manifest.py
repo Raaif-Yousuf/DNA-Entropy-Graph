@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, TrackFormat
+from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, Topology, TrackFormat
 from ..predictors.hardware import MODEL_REQUIREMENTS, model_requirement
 from .batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
 
@@ -195,6 +195,8 @@ class AnalysisSpec:
     direction: Direction = Direction.BOTH_COMBINED
     # The wire field is literally "format", not "trackFormat" (job_contract.md §3's example).
     track_format: TrackFormat = field(default=TrackFormat.BEDGRAPH, metadata={"json_name": "format"})
+    # issue #128: "auto" (the GenBank LOCUS line decides) | "linear" | "circular".
+    topology: Topology = Topology.AUTO
 
     @staticmethod
     def from_dict(d: dict) -> AnalysisSpec:
@@ -208,6 +210,14 @@ class AnalysisSpec:
         if track_format is None:
             valid = sorted(_TRACK_FORMAT_VALUES.keys())
             raise ManifestError(f"manifest.json analysis.format {raw_track_format!r} is not one of {valid}")
+        raw_topology = str(d.get("topology", Topology.AUTO.value))
+        try:
+            topology = Topology(raw_topology)
+        except ValueError:
+            valid = sorted(t.value for t in Topology)
+            raise ManifestError(
+                f"manifest.json analysis.topology {raw_topology!r} is not one of {valid}"
+            ) from None
         context_length = int(d.get("contextLength", 4096))
         window = int(d.get("window", 8192))
         stride = int(d.get("stride", 4096))
@@ -237,6 +247,7 @@ class AnalysisSpec:
             stride=stride,
             direction=direction,
             track_format=track_format,
+            topology=topology,
         )
 
 
@@ -444,6 +455,7 @@ class JobManifest:
             max_len=self.analysis.window,  # the GPU ceiling IS the app-derived window
             context_length=self.analysis.context_length,
             direction=self.analysis.direction,
+            topology=self.analysis.topology,
             genes=input_spec.genes or explicit_genes_gff3_requested,
             rna=input_spec.rna,
             seed=self.predictor.seed,

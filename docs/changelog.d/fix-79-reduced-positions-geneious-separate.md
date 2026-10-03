@@ -1,0 +1,1 @@
+- Worker: `provenance.json` now records WHERE reduced-context positions are (`reduced_context_range`, 0-based half-open) as well as how many, and `Both, separate tracks` also writes `.entropy.fwd.geneious.gff3` / `.entropy.rev.geneious.gff3` (#79).
