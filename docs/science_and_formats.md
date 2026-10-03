@@ -278,6 +278,25 @@ compares them and checks the seam at position `K` for a jump larger than typical
 neighbour-to-neighbour variation - a large jump would indicate a direction-combination
 bug, not a real biological feature.
 
+**Circular molecules (plasmids; issue #128).** On a circular molecule base 1 follows the
+last base, so a linear read throws away real context at both ends (Forward-only gives base
+1 zero context, the uniform 2.0-bit row). `RunOptions.Topology` (`auto | linear | circular`,
+default `auto`; CLI `--topology`, manifest `analysis.topology`) fixes that: a circular contig
+is wrapped around by `K` bases on each side (its own last `K` bases in front, its own first
+`K` behind; a molecule shorter than `K` wraps more than once) **before** the tiled passes, and
+the outputs are trimmed back to `L` afterwards. Everything else is unchanged (one forward
+pass per window of the `L + 2K` padded sequence, reverse = reverse complement, the same
+combination rule), and because every kept base then has `>= K` context in both directions
+there is **no seam and no reduced context**: `provenance.json` records `seam: null`,
+`reduced_context_count: 0`, `reduced_context_range: null`. Cost: `2K` extra bases through
+each pass. `auto` resolves per contig: a GenBank `LOCUS` line saying `circular` is circular,
+everything else (`linear`, FASTA, pasted text) is linear; `linear`/`circular` override the
+input. `provenance.json` records the requested option (`run.topology`) and what each contig
+actually ran with (`contigs[].topology`: `linear | circular`). The mock predictor seeds on
+window content, so rotation invariance (rotating a circular input rotates the output) is
+tested with a pure-local-context stub (`worker/tests/test_circular.py`), not the mock. The
+output GenBank keeps writing a linear `LOCUS` (not changed here).
+
 ---
 
 ## 4. Validation rules

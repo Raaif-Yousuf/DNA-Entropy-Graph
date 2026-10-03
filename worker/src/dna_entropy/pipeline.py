@@ -254,6 +254,7 @@ def _write_provenance(
             seam=dr.seam,
             reduced_context_count=dr.reduced_context_count,
             reduced_context_range=dr.reduced_context_range,
+            topology="circular" if dr.circular else "linear",
         )
         for c, dr in processed
     ]
@@ -266,6 +267,7 @@ def _write_provenance(
         direction=cfg.direction.value,
         ambiguity_policy=cfg.ambiguity_policy.value,
         rna=cfg.rna,
+        topology=cfg.topology.value,
         contigs=contigs,
         wall_time_seconds=time.perf_counter() - t0,
         extra=extra,
@@ -618,6 +620,7 @@ def run(
                 ceiling=cfg.max_len,
                 direction=cfg.direction,
                 on_window=on_window,
+                circular=cfg.topology.resolve(contig.circular),
             )
             notices += dr.notices
             reduced_total += dr.reduced_context_count

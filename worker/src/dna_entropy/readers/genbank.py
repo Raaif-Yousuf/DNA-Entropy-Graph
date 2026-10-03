@@ -73,6 +73,7 @@ class GenBankRecord:
     record_id: str
     seq: str
     features: list[GeneFeature] = field(default_factory=list)
+    circular: bool = False  # the LOCUS line says "circular" (issue #128)
 
 
 def _feature_id(feature) -> str:
@@ -253,7 +254,15 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         feats, feat_notices = _features_of(rec)
         notices += feat_notices
         total_features += len(feats)
-        records.append(GenBankRecord(record_id=rec.id, seq=seq, features=feats))
+        records.append(
+            GenBankRecord(
+                record_id=rec.id,
+                seq=seq,
+                features=feats,
+                # Biopython reads the LOCUS line's topology word into annotations.
+                circular=rec.annotations.get("topology") == "circular",
+            )
+        )
 
     if not records:
         raise GenBankReadError("The GenBank file has no records with a nucleotide sequence.")
