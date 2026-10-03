@@ -84,7 +84,9 @@ the message. Choose **Copy request for the project owner** and send it to them. 
 **"Using the default computer identity"**, a yellow note, not a failure: your organization does
 not let apps create their own worker identity (a service account), so the rented computer
 runs as your project's default one instead. That identity may already have more access than
-the app needs, and the app cannot reduce it. Choose **Continue** to accept this, or ask your
+the app needs, and the app cannot reduce it. The app also gives it read and write access to
+your results storage, so any other computer in this project that runs as the default identity
+can reach your results too. Choose **Continue** to accept this, or ask your
 IT department to allow service accounts and run setup again. *(`WORKER_DEFAULT_ACCOUNT`)*
 
 ## No graphics card is available

@@ -148,11 +148,12 @@ internal static class GoogleApiErrors
             return CloudErrorKind.Quota;
         }
 
+        // THEORY (unverified): a bare 412 is not an org-policy refusal (Cloud Storage uses 412 for a failed precondition),
+        // so only a reason, a constraint id or the policy wording below makes it one. See docs/cloud_design.md section 5.
         // A plain PERMISSION_DENIED 403 can quote a "constraints/..." id without being an organization-policy refusal
         // (it only says the caller may not see something), so the wording counts only when the error is not that.
         var plainDenial = status.HttpStatus == 403 && status.Status == "PERMISSION_DENIED";
         if (status.Reasons.Any(r => r.Contains("ORG_POLICY", StringComparison.OrdinalIgnoreCase))
-            || status.HttpStatus == 412
             || (!plainDenial
                 && (lower.Contains("constraints/", StringComparison.Ordinal)
                     || lower.Contains("org policy", StringComparison.Ordinal)

@@ -152,6 +152,19 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(null, status, message)).ShouldBe(expected);
     }
 
+    // Issue #54 (round 2): THEORY (unverified): Cloud Storage answers a failed precondition (an etag or generation that
+    // did not match) with 412, so a bare 412 is not an org-policy refusal. Only a "constraints/" id or the structured
+    // CONDITION_NOT_MET code makes it one. ToTest has the row that captures the real shapes.
+    [Theory]
+    [InlineData(null, "At least one of the pre-conditions you specified did not hold.", CloudErrorKind.Other)]
+    [InlineData("conditionNotMet", "Precondition Failed", CloudErrorKind.Other)]
+    [InlineData(null, "Request violates constraints/storage.retentionPolicySeconds.", CloudErrorKind.OrgPolicy)]
+    [InlineData("CONDITION_NOT_MET", "Operation denied", CloudErrorKind.OrgPolicy)]
+    public void A_412_is_an_org_policy_refusal_only_when_it_names_a_constraint(string? code, string message, CloudErrorKind expected)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, 412, message)).ShouldBe(expected);
+    }
+
     // Round 4: an org-policy marker (a constraints/ id) beats the permission wording when no status says otherwise,
     // and "billing is required" on a 403 is billing off, not Other.
     [Theory]

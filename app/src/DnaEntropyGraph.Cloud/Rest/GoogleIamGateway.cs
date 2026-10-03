@@ -21,15 +21,20 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// the role: created, adopted, un-deleted (a deleted role keeps its id for about 7 days and answers a create with 409),
 /// or patched when its permissions are not exactly <see cref="WorkerIdentityNames.RolePermissions"/>, then read back
 /// ("applied is not present": a patch that does not read back fails with <see cref="SetupErrorCodes.WorkerIdentityNotApplied"/>).
-/// Then the two policy bindings, each a read-modify-write.
+/// Then the two policy bindings, each a read-modify-write, and each write's ANSWER is read: the policy Google sends back
+/// must hold the worker binding (and, on the project, the deg- condition), or the setup fails with
+/// <see cref="SetupErrorCodes.WorkerIdentityNotApplied"/> instead of reporting success for a binding that is not there.
 /// </para>
 /// <para>
 /// <b>Policy edits.</b> Conditional bindings need policy version 3, so the read asks for it and the write sets it. The
-/// write carries the etag it read; a 409 (another writer got in) re-reads and re-applies, five attempts at most. A binding
+/// write carries the etag it read; a 409 (another writer got in) re-reads and re-applies, five attempts at most. THEORY
+/// (unverified): Cloud Storage words that same etag conflict as a 412, so a 412 that does not name a "constraints/" id is
+/// treated alike, three attempts at most (a 412 that names one is an organization-policy refusal and surfaces). A binding
 /// is added only if it is missing (a binding is its role plus its condition), so a second run writes nothing, and a
 /// binding or an audit config this code did not add is never removed or changed. A just-created account can be briefly
 /// invisible to <c>setIamPolicy</c> (400 "does not exist"): that case alone waits (on the injected clock) and retries,
-/// five waits at most.
+/// five waits at most, and only for an account THIS call just created (an adopted or default account that "does not exist"
+/// is a real failure, and Try again could never fix it).
 /// </para>
 /// THEORY (unverified, no live project): every wire shape here is Google's documented REST shape, and the wording of the
 /// org-policy refusal; docs/ToTest.md carries the rows a real project must prove.
@@ -38,6 +43,8 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
 {
     private const int MaxPolicyConflicts = 5;
     private const int MaxVisibilityAttempts = 6;
+    private const int MaxPreconditionAttempts = 3;
+    private const int MaxAccountCreateAttempts = 2;
     private const int PolicyVersion = 3;
     private static readonly TimeSpan VisibilityWait = TimeSpan.FromSeconds(2);
 
@@ -69,9 +76,11 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         var ownEmail = WorkerIdentityNames.ServiceAccountEmail(projectId);
-        var identity = await EnsureAccountAsync(projectId, ownEmail, cancellationToken).ConfigureAwait(false)
-            ? new WorkerIdentity(ownEmail, null)
-            : new WorkerIdentity(WorkerIdentityNames.DefaultComputeAccountEmail(projectNumber), SetupErrorCodes.WorkerDefaultAccount);
+        var origin = await EnsureAccountAsync(projectId, ownEmail, cancellationToken).ConfigureAwait(false);
+        var identity = origin == AccountOrigin.DefaultCompute
+            ? new WorkerIdentity(WorkerIdentityNames.DefaultComputeAccountEmail(projectNumber), SetupErrorCodes.WorkerDefaultAccount)
+            : new WorkerIdentity(ownEmail, null);
+        var justCreated = origin == AccountOrigin.Created;
 
         await EnsureRoleAsync(projectId, cancellationToken).ConfigureAwait(false);
 
@@ -81,6 +90,8 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             ct => ReadProjectPolicyAsync(projectId, ct),
             policy => AddProjectBinding(policy, WorkerIdentityNames.ProjectRoleName(projectId), member),
             (policy, ct) => WriteProjectPolicyAsync(projectId, policy, ct),
+            applied => HasProjectBinding(applied, WorkerIdentityNames.ProjectRoleName(projectId), member),
+            justCreated,
             cancellationToken).ConfigureAwait(false);
 
         await UpdatePolicyAsync(
@@ -88,6 +99,8 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             ct => ReadBucketPolicyAsync(bucket, ct),
             policy => AddBucketBinding(policy, member),
             (policy, ct) => WriteBucketPolicyAsync(bucket, policy, ct),
+            applied => HasBucketBinding(applied, member),
+            justCreated,
             cancellationToken).ConfigureAwait(false);
 
         return identity;
@@ -95,8 +108,23 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
 
     // ------------------------------------------------------------------ the service account
 
-    /// <summary>True when the app's own account exists (created or adopted); false when an organization policy forbids creating one.</summary>
-    private async Task<bool> EnsureAccountAsync(string projectId, string email, CancellationToken cancellationToken)
+    private enum AccountOrigin
+    {
+        /// <summary>This call made the account: it can be briefly invisible to <c>setIamPolicy</c>.</summary>
+        Created,
+
+        /// <summary>The account was already there (a 409 on create, proved by a read): it is visible.</summary>
+        Adopted,
+
+        /// <summary>An organization policy forbids service accounts: the default Compute Engine account stands in.</summary>
+        DefaultCompute,
+    }
+
+    /// <summary>
+    /// The app's own account: created, adopted, or (organization policy) replaced by the default account. A 409 on create
+    /// followed by a 404 on the read (the account vanished between the two) creates again, once more, then fails with the named code.
+    /// </summary>
+    private async Task<AccountOrigin> EnsureAccountAsync(string projectId, string email, CancellationToken cancellationToken)
     {
         var body = new IamData.CreateServiceAccountRequest
         {
@@ -108,49 +136,52 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             },
         };
 
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            await _pipeline.ExecuteAsync(
-                "Iam.CreateServiceAccount",
-                async ct =>
+            try
+            {
+                await CallAsync(
+                    "Iam.CreateServiceAccount",
+                    ct => _iam.Projects.ServiceAccounts.Create(body, "projects/" + projectId).ExecuteAsync(ct),
+                    cancellationToken).ConfigureAwait(false);
+                return AccountOrigin.Created;
+            }
+            catch (CloudOperationException ex) when (IsServiceAccountCreationForbidden(ex))
+            {
+                // iam.disableServiceAccountCreation: the default Compute Engine account stands in (same role, same bindings).
+                return AccountOrigin.DefaultCompute;
+            }
+            catch (CloudOperationException ex) when (ex.Error.HttpStatus == 409 || ex.Kind == CloudErrorKind.AlreadyExists)
+            {
+                // Ours from an earlier run, or from a second PC: adopt it. The read proves it is really there.
+                try
                 {
-                    try
-                    {
-                        return await _iam.Projects.ServiceAccounts.Create(body, "projects/" + projectId).ExecuteAsync(ct).ConfigureAwait(false);
-                    }
-                    catch (GoogleApiException ex)
-                    {
-                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-                    }
-                },
-                cancellationToken).ConfigureAwait(false);
-            return true;
-        }
-        catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.OrgPolicy)
-        {
-            // iam.disableServiceAccountCreation: the default Compute Engine account stands in (same role, same bindings).
-            return false;
-        }
-        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 409 || ex.Kind == CloudErrorKind.AlreadyExists)
-        {
-            // Ours from an earlier run, or from a second PC: adopt it. The read proves it is really there.
-            await _pipeline.ExecuteAsync(
-                "Iam.GetServiceAccount",
-                async ct =>
+                    await CallAsync(
+                        "Iam.GetServiceAccount",
+                        ct => _iam.Projects.ServiceAccounts.Get($"projects/{projectId}/serviceAccounts/{email}").ExecuteAsync(ct),
+                        cancellationToken).ConfigureAwait(false);
+                    return AccountOrigin.Adopted;
+                }
+                catch (CloudOperationException gone) when (gone.Error.HttpStatus == 404)
                 {
-                    try
+                    // THEORY (unverified): a deleted account keeps its id for a while, so create says "exists" and get says "gone".
+                    if (attempt >= MaxAccountCreateAttempts)
                     {
-                        return await _iam.Projects.ServiceAccounts.Get($"projects/{projectId}/serviceAccounts/{email}").ExecuteAsync(ct).ConfigureAwait(false);
+                        throw NotApplied("Google says the worker account exists when the app creates it and is missing when the app reads it.");
                     }
-                    catch (GoogleApiException getFailure)
-                    {
-                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(getFailure));
-                    }
-                },
-                cancellationToken).ConfigureAwait(false);
-            return true;
+                }
+            }
         }
     }
+
+    /// <summary>
+    /// An organization policy that forbids creating service accounts. THEORY (unverified): Google quotes the constraint id
+    /// (<c>constraints/iam.disableServiceAccountCreation</c>), which the shared classifier reads as org policy; the bare
+    /// constraint name is accepted too in case the message drops the <c>constraints/</c> prefix.
+    /// </summary>
+    private static bool IsServiceAccountCreationForbidden(CloudOperationException ex)
+        => ex.Kind == CloudErrorKind.OrgPolicy
+            || ex.Error.Message?.Contains("iam.disableServiceAccountCreation", StringComparison.OrdinalIgnoreCase) == true;
 
     // ------------------------------------------------------------------ the custom role
 
@@ -228,15 +259,21 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
     /// <summary>
     /// The read-modify-write both policies share. <paramref name="apply"/> changes the policy in place and says whether it
     /// changed anything: false means the binding is already there, so nothing is written (a second run adds nothing).
+    /// <paramref name="write"/> returns the policy Google ANSWERED with, and <paramref name="isApplied"/> must find the
+    /// binding in it: a 200 that does not hold the binding is not success (applied is not present).
+    /// <paramref name="retryUnseenAccount"/> is true only for an account this call created.
     /// </summary>
     private async Task UpdatePolicyAsync<TPolicy>(
         string operation,
         Func<CancellationToken, Task<TPolicy>> read,
         Func<TPolicy, bool> apply,
-        Func<TPolicy, CancellationToken, Task> write,
+        Func<TPolicy, CancellationToken, Task<TPolicy>> write,
+        Func<TPolicy, bool> isApplied,
+        bool retryUnseenAccount,
         CancellationToken cancellationToken)
     {
         var conflicts = 0;
+        var preconditions = 0;
         var unseen = 0;
         while (true)
         {
@@ -248,7 +285,12 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
 
             try
             {
-                await write(policy, cancellationToken).ConfigureAwait(false);
+                var answered = await write(policy, cancellationToken).ConfigureAwait(false);
+                if (answered is null || !isApplied(answered))
+                {
+                    throw NotApplied($"{operation}: Google accepted the policy but the policy it sent back does not hold the worker binding.");
+                }
+
                 return;
             }
             catch (CloudOperationException ex) when (ex.Error.HttpStatus == 409)
@@ -259,7 +301,15 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
                     throw NotApplied($"{operation}: the policy kept changing under the app ({conflicts} conflicting writes).");
                 }
             }
-            catch (CloudOperationException ex) when (IsAccountNotVisibleYet(ex))
+            catch (CloudOperationException ex) when (IsPreconditionConflict(ex))
+            {
+                // THEORY (unverified): Cloud Storage words an etag mismatch as 412. Read again, a few times at most.
+                if (++preconditions >= MaxPreconditionAttempts)
+                {
+                    throw NotApplied($"{operation}: the policy kept changing under the app ({preconditions} failed preconditions).");
+                }
+            }
+            catch (CloudOperationException ex) when (retryUnseenAccount && IsAccountNotVisibleYet(ex))
             {
                 // A just-created account can be briefly invisible to setIamPolicy. Wait on the injected clock, then re-read.
                 if (++unseen >= MaxVisibilityAttempts)
@@ -271,6 +321,10 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             }
         }
     }
+
+    /// <summary>A 412 that does not name an organization-policy constraint (the classifier calls that one <see cref="CloudErrorKind.OrgPolicy"/>).</summary>
+    private static bool IsPreconditionConflict(CloudOperationException ex)
+        => ex.Error.HttpStatus == 412 && ex.Kind != CloudErrorKind.OrgPolicy;
 
     private static bool IsAccountNotVisibleYet(CloudOperationException ex)
         => ex.Error.HttpStatus == 400 && ex.Error.Message?.Contains("does not exist", StringComparison.OrdinalIgnoreCase) == true;
@@ -286,7 +340,7 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         return CallAsync("Iam.GetProjectPolicy", ct => _resourceManager.Projects.GetIamPolicy(body, "projects/" + projectId).ExecuteAsync(ct), cancellationToken);
     }
 
-    private Task WriteProjectPolicyAsync(string projectId, CrmData.Policy policy, CancellationToken cancellationToken)
+    private Task<CrmData.Policy> WriteProjectPolicyAsync(string projectId, CrmData.Policy policy, CancellationToken cancellationToken)
         => CallAsync(
             "Iam.SetProjectPolicy",
             ct => _resourceManager.Projects.SetIamPolicy(new CrmData.SetIamPolicyRequest { Policy = policy }, "projects/" + projectId).ExecuteAsync(ct),
@@ -323,6 +377,11 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         return true;
     }
 
+    private static bool HasProjectBinding(CrmData.Policy policy, string role, string member)
+        => policy.Bindings?.Any(b => b.Role == role
+            && b.Condition?.Expression == WorkerIdentityNames.ConditionExpression
+            && b.Members?.Contains(member) == true) == true;
+
     // --- bucket policy (Cloud Storage v1)
 
     private Task<StorageData.Policy> ReadBucketPolicyAsync(string bucket, CancellationToken cancellationToken)
@@ -336,7 +395,7 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
             },
             cancellationToken);
 
-    private Task WriteBucketPolicyAsync(string bucket, StorageData.Policy policy, CancellationToken cancellationToken)
+    private Task<StorageData.Policy> WriteBucketPolicyAsync(string bucket, StorageData.Policy policy, CancellationToken cancellationToken)
         => CallAsync("Iam.SetBucketPolicy", ct => _storage.Buckets.SetIamPolicy(policy, bucket).ExecuteAsync(ct), cancellationToken);
 
     private static bool AddBucketBinding(StorageData.Policy policy, string member)
@@ -359,6 +418,11 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         policy.Version = Math.Max(policy.Version ?? 1, PolicyVersion);
         return true;
     }
+
+    private static bool HasBucketBinding(StorageData.Policy policy, string member)
+        => policy.Bindings?.Any(b => b.Role == WorkerIdentityNames.BucketRole
+            && b.Condition is null
+            && b.Members?.Contains(member) == true) == true;
 
     // ------------------------------------------------------------------ plumbing
 

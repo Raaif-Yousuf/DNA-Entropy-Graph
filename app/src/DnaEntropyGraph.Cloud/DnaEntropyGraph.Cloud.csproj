@@ -24,6 +24,11 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 
+  <!-- Issue #54: the polled-operation error mapping (GoogleApiErrors) has no public caller until the Compute gateway lands. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DnaEntropyGraph.Cloud.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
   </ItemGroup>

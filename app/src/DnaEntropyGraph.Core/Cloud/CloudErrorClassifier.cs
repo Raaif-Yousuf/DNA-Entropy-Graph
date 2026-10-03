@@ -110,7 +110,10 @@ public static partial class CloudErrorClassifier
             return CloudErrorKind.Permission;
         }
 
-        if (status == 412 || code == "CONDITION_NOT_MET" || lower.Contains("constraints/", StringComparison.Ordinal))
+        // THEORY (unverified, issue #54 round 2): a bare 412 is NOT an org-policy refusal. Cloud Storage uses 412 for a failed
+        // precondition (an etag or generation that did not match). Only a constraint id or the structured code makes it one;
+        // docs/ToTest.md has the row that captures the real shapes.
+        if (code == "CONDITION_NOT_MET" || lower.Contains("constraints/", StringComparison.Ordinal))
         {
             return CloudErrorKind.OrgPolicy;
         }

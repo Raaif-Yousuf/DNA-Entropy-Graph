@@ -198,7 +198,8 @@ Health page (#208) is still unbuilt and still has no caller of its own.
 | HTTP 403 `accessNotConfigured` / "has not been used in project" | `api_disabled` | Abort; route to the setup wizard's "enable APIs" step |
 | HTTP 403 mentioning "billing" / `BILLING_DISABLED` | `billing` | Abort; route to "link billing" |
 | HTTP 403 `forbidden`, `IAM_PERMISSION_DENIED`, mentioning "actAs" | `permission` | Abort |
-| HTTP 412 / `CONDITION_NOT_MET`, message mentions `constraints/` | `org_policy` | Abort; copyable text for IT |
+| `CONDITION_NOT_MET`, or any error whose message mentions `constraints/` (a 412 included) | `org_policy` | Abort; copyable text for IT |
+| HTTP 412 with neither marker | `other` | THEORY (unverified): a failed precondition (Cloud Storage uses 412 for an etag or generation mismatch), not a policy refusal. The caller that sent the precondition decides (the worker-identity bucket write re-reads and retries); `docs/ToTest.md` has the row that captures the real shapes. No new enum value: `other` is the existing class for an error nothing else claims, so no `DECISION` was needed |
 | HTTP 409 `alreadyExists` | `already_exists` | Adopt the existing resource rather than retry-as-failure |
 | `HttpRequestException` / timeout | `network` | Retry with backoff (see `docs/migration/2026-09-19-worker-migration-inventory.md`'s note on the prototype's differentiated backoff, which does not carry over unchanged - the always-on keeper's infinite retry loop is exactly what D1 removes; only the *mechanical* polling backoff, issue #256, survives into the per-job model) |
 
@@ -261,10 +262,16 @@ results bucket the worker account gets `roles/storage.objectAdmin` and nothing e
 policy binding, not a project one). No `logging.logWriter`, no SSH-related permission (SSH
 itself is never used - see section 9).
 
+**Honest limit of the condition (cold review, round 2).** The condition scopes the account to VMs named `deg-*`, not to
+the VM the token belongs to: every worker VM runs as the same account, so one `deg-` VM's token can stop or delete any other
+`deg-` VM in the project (never a VM named anything else, and it cannot create one). Per-instance IAM (`instances.setIamPolicy`
+at create time) would scope it to the VM itself; it is a follow-up under #56 and is not built. See `threat_model.md`.
+
 The signed-in user separately needs `iam.serviceAccounts.actAs` on this account (Owner/Editor
 have it implicitly; a bare Compute Admin role does not). A VM create that fails for that reason
 is the `PERMISSION_ACTAS` error: `CloudErrorClassifier.IsActAsDenial` recognises a 403 naming
 `iam.serviceAccounts.actAs` or `roles/iam.serviceAccountUser`, `GoogleApiErrors.ToException`
+(used for an HTTP error body and for the `error` of a polled operation alike, which `FromOperationError` converts first)
 gives it the code `PERMISSION_ACTAS` (still the `permission` bucket, so it still aborts), and the
 one action is Copy request for the project owner.
 
@@ -892,7 +899,7 @@ consumer and no DI registration until the wizard (#99) and its ViewModel (#56) a
   Requests per minute", no details); THEORY (unverified): the project-limit refusal carries a QuotaFailure or the word
   "quota" without per-minute or per-second wording. A PERMISSION_DENIED 403 that merely quotes a `constraints/` id is a
   permission error, not an organization-policy one, so `GetProjectAsync` still answers "not visible"; only an
-  ORG_POLICY reason, a 412, or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
+  ORG_POLICY reason, a 412 that names a `constraints/` id (a bare 412 is not, issue #54 round 2), or the wording on a non-PERMISSION_DENIED error is `org_policy`. `GetProjectAsync` answers
   null, with no request, for an id outside Google's project-id grammar.
 - **Not proven without a real account:** `docs/ToTest.md`.
 ### Billing check and link (issue #51, wizard step 4)
@@ -1026,16 +1033,28 @@ account and a role and edits two policies, and a whole-method retry would replay
   `WorkerIdentity.NoteCode = WORKER_DEFAULT_ACCOUNT`: the wizard shows `SetupError_WORKER_DEFAULT_ACCOUNT` as a yellow note
   with Continue, not as a failure. That account usually already has the broad Editor role, which the app cannot narrow, and the
   note says so. Any other refusal (a plain 403) does not fall back. THEORY (unverified, no live project): the exact wording of
-  the org-policy refusal; the classifier keys on the `constraints/` id and the 400/412 shape.
+  the org-policy refusal; the classifier keys on the `constraints/` id, and the gateway also accepts the bare
+  `iam.disableServiceAccountCreation` name. A 409 on create followed by a 404 on the read (the account vanished between the
+  two) creates once more, then fails with `WORKER_IDENTITY_NOT_APPLIED`. The default account also receives
+  `roles/storage.objectAdmin` on the results bucket, which every workload running as it holds (see `threat_model.md`); the
+  yellow note says so.
 - **Role.** `roles.create`. A 409 reads the role back: `deleted=true` is undeleted (a deleted custom role keeps its id for about
   7 days), a role whose permission set is not exactly the four is patched with `updateMask=includedPermissions` and read back,
   and a patch that does not read back fails with `WORKER_IDENTITY_NOT_APPLIED` ("applied is not present", as for the bucket).
+- **The answer is read.** Each `setIamPolicy` returns the policy it stored. The project answer must hold the role, the member
+  and the `deg-` condition; the bucket answer must hold `roles/storage.objectAdmin` and the member (no condition). A 200 whose
+  answer lacks the binding fails with `WORKER_IDENTITY_NOT_APPLIED` (Try again) instead of reporting success for a binding that
+  is not there.
 - **Policies.** Conditional bindings need policy version 3: the read sends `requestedPolicyVersion=3` and the write sets
   `version=3`. A binding is its role plus its condition; it is added only when missing, so a second run writes nothing, and
   nothing the app did not add is touched (other bindings, audit configs). The write carries the etag it read; a 409 re-reads
-  and re-applies, five attempts at most. A just-created account can be briefly invisible to `setIamPolicy` (400 "does not
-  exist"); that case alone waits on the injected delay (2 s, 4 s, ... ) and re-reads, six attempts at most, then fails with
-  `WORKER_IDENTITY_NOT_APPLIED` whose button is Try again.
+  and re-applies, five attempts at most. THEORY (unverified): Cloud Storage words the same etag conflict as a 412, so a 412
+  whose message has no `constraints/` id is treated alike (re-read and retry, three writes at most, then
+  `WORKER_IDENTITY_NOT_APPLIED`); a 412 that names a constraint stays `org_policy` and is not retried. A just-created account
+  can be briefly invisible to `setIamPolicy` (400 "does not exist"); that case alone waits on the injected delay (2 s, 4 s,
+  ... ) and re-reads, six tries and five waits at most, then fails with `WORKER_IDENTITY_NOT_APPLIED` whose button is Try
+  again. The wait applies only to an account this call just created: an adopted or default account that "does not exist" is a
+  real failure, and the raw error surfaces at once (Try again could never fix it).
 - **Hard Rule 10 and labels.** A service account and a custom role cannot carry labels (Google's IAM has no label field on
   either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
   per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers

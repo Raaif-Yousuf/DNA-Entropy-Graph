@@ -886,7 +886,7 @@
     <value>Google would not give your results storage any of the names the app tried, because other people already use them. Choose Try again and the app will pick new names.</value>
   </data>
   <data name="SetupError_WORKER_DEFAULT_ACCOUNT" xml:space="preserve">
-    <value>Your organization does not let the app create its own worker identity (a service account), so the rented computer will run as your project's default computer identity instead. That identity may already have more access than the app needs, and the app cannot reduce it. Choose Continue to accept this, or ask your IT administrator to allow service accounts and run setup again.</value>
+    <value>Your organization does not let the app create its own worker identity (a service account), so the rented computer will run as your project's default computer identity instead. That identity may already have more access than the app needs, and the app cannot reduce it. The app also gives it read and write access to your results storage, so any other computer in this project that runs as the default identity can reach your results too. Choose Continue to accept this, or ask your IT administrator to allow service accounts and run setup again.</value>
   </data>
   <data name="SetupError_WORKER_IDENTITY_NOT_APPLIED" xml:space="preserve">
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app will not start a run with it. Choose Try again and the app will repair it.</value>

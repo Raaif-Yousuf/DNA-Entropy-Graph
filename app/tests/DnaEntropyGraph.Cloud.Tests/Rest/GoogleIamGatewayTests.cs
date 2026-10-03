@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DnaEntropyGraph.Cloud.Rest;
 using DnaEntropyGraph.Core.Cloud;
 using Shouldly;
 using Xunit;
@@ -92,7 +93,7 @@ public class GoogleIamGatewayTests
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwOwn", OwnerBinding))
             .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwNew", OwnerBinding + "," + WorkerBinding(WorkerEmail), 3))
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", "{\"role\":\"roles/storage.legacyBucketOwner\",\"members\":[\"projectOwner:my-lab\"]}"))
-            .Returns(Put, BucketPolicy, 200, PolicyBody("CAI=", "", 3));
+            .Returns(Put, BucketPolicy, 200, PolicyBody("CAI=", BucketBinding(WorkerEmail), 3));
 
         var identity = await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
 
@@ -125,6 +126,9 @@ public class GoogleIamGatewayTests
         condition.GetProperty("expression").GetString().ShouldBe(WorkerIdentityNames.ConditionExpression);
         condition.GetProperty("expression").GetString()!.ShouldContain("/instances/deg-");
         condition.GetProperty("title").GetString().ShouldNotBeNullOrWhiteSpace();
+
+        // The bucket read asks for policy version 3 too, or a conditional binding there would come back hidden.
+        rig.Handler.To(Get, BucketPolicy).Single().Uri.Query.ShouldContain("optionsRequestedPolicyVersion=3");
 
         // The bucket: objectAdmin on this bucket only, the existing binding kept.
         rig.Handler.To(Put, BucketPolicy).Count.ShouldBe(1);
@@ -167,7 +171,7 @@ public class GoogleIamGatewayTests
         var theirs = "{\"role\":\"projects/my-lab/roles/dnaEntropyWorker\",\"members\":[\"user:admin@example.org\"],\"condition\":{\"title\":\"theirs\",\"expression\":\"true\"}}";
         rig.Handler
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", theirs, 3))
-            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwB", theirs, 3))
+            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwB", theirs + "," + WorkerBinding(WorkerEmail), 3))
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", BucketBinding(WorkerEmail)));
 
         await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
@@ -189,7 +193,7 @@ public class GoogleIamGatewayTests
         rig.Handler
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", WorkerBinding(WorkerEmail), 3))
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", shared))
-            .Returns(Put, BucketPolicy, 200, PolicyBody("CAI=", shared));
+            .Returns(Put, BucketPolicy, 200, PolicyBody("CAI=", "{\"role\":\"roles/storage.objectAdmin\",\"members\":[\"user:lab@example.org\",\"serviceAccount:" + WorkerEmail + "\"]}"));
 
         await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
 
@@ -268,9 +272,9 @@ public class GoogleIamGatewayTests
             .Returns(Post, Accounts, 400, RpcError(400, "FAILED_PRECONDITION", "Service account creation is not allowed on this project. Operation denied by org policy: [constraints/iam.disableServiceAccountCreation]."))
             .Returns(Post, Roles, 200, RoleBody())
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwOwn", OwnerBinding))
-            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwNew", OwnerBinding, 3))
+            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwNew", OwnerBinding + "," + WorkerBinding(DefaultEmail), 3))
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", ""))
-            .Returns(Put, BucketPolicy, 200, PolicyBody("CAI=", ""));
+            .Returns(Put, BucketPolicy, 200, PolicyBody("CAI=", BucketBinding(DefaultEmail)));
 
         var identity = await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
 
@@ -330,7 +334,7 @@ public class GoogleIamGatewayTests
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwOld", OwnerBinding))
             .Returns(Post, ProjectSetPolicy, 409, RpcError(409, "ABORTED", "There were concurrent policy changes. Please retry the whole read-modify-write with exponential backoff."))
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwFresh", OwnerBinding + "," + theirs))
-            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwDone", OwnerBinding, 3))
+            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwDone", OwnerBinding + "," + WorkerBinding(WorkerEmail), 3))
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", BucketBinding(WorkerEmail)));
 
         await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
@@ -359,8 +363,7 @@ public class GoogleIamGatewayTests
             () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
 
         failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerIdentityNotApplied);
-        var writes = rig.Handler.To(Post, ProjectSetPolicy).Count;
-        writes.ShouldBeInRange(2, 6);
+        rig.Handler.To(Post, ProjectSetPolicy).Count.ShouldBe(5, "five conflicting writes, then it gives up");
     }
 
     [Fact]
@@ -375,7 +378,7 @@ public class GoogleIamGatewayTests
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", OwnerBinding))
             .Returns(Post, ProjectSetPolicy, 400, unseen)
             .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", OwnerBinding))
-            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwB", OwnerBinding, 3))
+            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwB", OwnerBinding + "," + WorkerBinding(WorkerEmail), 3))
             .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", BucketBinding(WorkerEmail)));
 
         await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
@@ -400,7 +403,8 @@ public class GoogleIamGatewayTests
             () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
 
         failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerIdentityNotApplied);
-        rig.Delays.Count.ShouldBeInRange(1, 8);
+        rig.Handler.To(Post, ProjectSetPolicy).Count.ShouldBe(6, "six tries");
+        rig.Delays.Count.ShouldBe(5, "a wait between each pair of tries");
     }
 
     [Fact]
@@ -431,6 +435,229 @@ public class GoogleIamGatewayTests
 
         failure.Kind.ShouldBe(CloudErrorKind.Permission);
         rig.Handler.To(Post, Accounts).ShouldBeEmpty();
+    }
+
+    // ------------------------------------------------------------------ round 2 (cold review)
+
+    private static string StorageError(int http, string reason, string message)
+        => "{\"error\":{\"code\":" + http + ",\"message\":" + JsonSerializer.Serialize(message) + ",\"errors\":[{\"reason\":\"" + reason + "\",\"message\":" + JsonSerializer.Serialize(message) + "}]}}";
+
+    /// <summary>The account and role are made and the project binding is already there, so only the bucket policy is written.</summary>
+    private static void ScriptProjectAlreadyBound(ScriptedHttpHandler handler)
+    {
+        ScriptCreate(handler, WorkerEmail);
+        handler.Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", WorkerBinding(WorkerEmail), 3));
+    }
+
+    // WIRED observable (issue #54): through GoogleCloudGateways.Create over the scripted handler, a setIamPolicy that answers 200
+    // with a policy WITHOUT the worker binding reaches the caller (the setup step) as WORKER_IDENTITY_NOT_APPLIED, not success.
+    [Fact]
+    public async Task A_project_setIamPolicy_answering_without_the_worker_binding_surfaces_WORKER_IDENTITY_NOT_APPLIED_not_success()
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptCreate(rig.Handler, WorkerEmail);
+        rig.Handler
+            .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwOwn", OwnerBinding))
+            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwNew", OwnerBinding, 3));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerIdentityNotApplied);
+        rig.Handler.To(Get, BucketPolicy).ShouldBeEmpty("a project binding that did not apply stops the setup before the bucket is touched");
+    }
+
+    [Fact]
+    public async Task A_project_policy_that_reads_back_the_worker_role_without_the_deg_condition_is_not_applied()
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptCreate(rig.Handler, WorkerEmail);
+        var unconditional = "{\"role\":\"projects/my-lab/roles/dnaEntropyWorker\",\"members\":[\"serviceAccount:" + WorkerEmail + "\"]}";
+        rig.Handler
+            .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwOwn", OwnerBinding))
+            .Returns(Post, ProjectSetPolicy, 200, PolicyBody("BwNew", OwnerBinding + "," + unconditional, 3));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerIdentityNotApplied);
+    }
+
+    [Fact]
+    public async Task A_bucket_setIamPolicy_answering_without_the_worker_binding_surfaces_WORKER_IDENTITY_NOT_APPLIED()
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptProjectAlreadyBound(rig.Handler);
+        rig.Handler
+            .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", ""))
+            .Returns(Put, BucketPolicy, 200, PolicyBody("CAI=", "{\"role\":\"roles/storage.legacyBucketOwner\",\"members\":[\"projectOwner:my-lab\"]}", 3));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerIdentityNotApplied);
+    }
+
+    [Fact]
+    public async Task A_bucket_etag_conflict_answered_412_re_reads_and_keeps_the_binding_that_slipped_in()
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptProjectAlreadyBound(rig.Handler);
+        var theirs = "{\"role\":\"roles/storage.legacyBucketReader\",\"members\":[\"projectViewer:my-lab\"]}";
+        rig.Handler
+            .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", ""))
+            .Returns(Put, BucketPolicy, 412, StorageError(412, "conditionNotMet", "Precondition Failed"))
+            .Returns(Get, BucketPolicy, 200, PolicyBody("CAI=", theirs))
+            .Returns(Put, BucketPolicy, 200, PolicyBody("CAM=", theirs + "," + BucketBinding(WorkerEmail), 3));
+
+        await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
+
+        var writes = rig.Handler.To(Put, BucketPolicy);
+        writes.Count.ShouldBe(2);
+        var second = PolicyOf(writes[1]);
+        second.GetProperty("etag").GetString().ShouldBe("CAI=");
+        Bindings(second, "roles/storage.legacyBucketReader").Count.ShouldBe(1, "the other writer's binding must survive our retry");
+        Bindings(second, "roles/storage.objectAdmin").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_bucket_412_that_never_clears_stops_after_three_writes_with_the_named_code()
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptProjectAlreadyBound(rig.Handler);
+        for (var i = 0; i < 6; i++)
+        {
+            rig.Handler
+                .Returns(Get, BucketPolicy, 200, PolicyBody("CA" + i, ""))
+                .Returns(Put, BucketPolicy, 412, StorageError(412, "conditionNotMet", "Precondition Failed"));
+        }
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerIdentityNotApplied);
+        rig.Handler.To(Put, BucketPolicy).Count.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_bucket_412_that_names_a_constraint_stays_an_org_policy_refusal_and_is_not_retried()
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptProjectAlreadyBound(rig.Handler);
+        rig.Handler
+            .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", ""))
+            .Returns(Put, BucketPolicy, 412, StorageError(412, "conditionNotMet", "One or more users named in the policy do not belong to a permitted customer, per constraints/iam.allowedPolicyMemberDomains."));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+        rig.Handler.To(Put, BucketPolicy).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_org_policy_refusal_worded_by_its_constraint_name_alone_still_falls_back_to_the_default_account()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, ProjectPath, 200, ProjectBody())
+            .Returns(Post, Accounts, 400, RpcError(400, "FAILED_PRECONDITION", "Creating service accounts is blocked: iam.disableServiceAccountCreation is enforced on this project."))
+            .Returns(Post, Roles, 200, RoleBody())
+            .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", WorkerBinding(DefaultEmail), 3))
+            .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", BucketBinding(DefaultEmail)));
+
+        var identity = await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
+
+        identity.NoteCode.ShouldBe(SetupErrorCodes.WorkerDefaultAccount);
+    }
+
+    [Fact]
+    public async Task A_default_account_that_does_not_exist_fails_at_once_with_no_visibility_wait()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, ProjectPath, 200, ProjectBody())
+            .Returns(Post, Accounts, 400, RpcError(400, "FAILED_PRECONDITION", "Blocked by org policy constraints/iam.disableServiceAccountCreation."))
+            .Returns(Post, Roles, 200, RoleBody())
+            .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", OwnerBinding))
+            .Returns(Post, ProjectSetPolicy, 400, RpcError(400, "INVALID_ARGUMENT", "Service account " + DefaultEmail + " does not exist."));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Error.Code.ShouldNotBe(SetupErrorCodes.WorkerIdentityNotApplied, "Try again can never make a missing default account appear");
+        rig.Delays.ShouldBeEmpty();
+        rig.Handler.To(Post, ProjectSetPolicy).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_adopted_account_that_the_policy_cannot_see_fails_at_once_with_no_visibility_wait()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, ProjectPath, 200, ProjectBody())
+            .Returns(Post, Accounts, 409, RpcError(409, "ALREADY_EXISTS", "Service account dna-entropy-worker already exists within project projects/my-lab."))
+            .Returns(Get, AccountPath(WorkerEmail), 200, AccountBody(WorkerEmail))
+            .Returns(Post, Roles, 200, RoleBody())
+            .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", OwnerBinding))
+            .Returns(Post, ProjectSetPolicy, 400, RpcError(400, "INVALID_ARGUMENT", "Service account " + WorkerEmail + " does not exist."));
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Error.Code.ShouldNotBe(SetupErrorCodes.WorkerIdentityNotApplied);
+        rig.Delays.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_409_on_create_followed_by_a_404_on_get_creates_again_once_and_then_carries_on()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, ProjectPath, 200, ProjectBody())
+            .Returns(Post, Accounts, 409, RpcError(409, "ALREADY_EXISTS", "Service account dna-entropy-worker already exists within project projects/my-lab."))
+            .Returns(Get, AccountPath(WorkerEmail), 404, RpcError(404, "NOT_FOUND", "Service account " + WorkerEmail + " does not exist."))
+            .Returns(Post, Accounts, 200, AccountBody(WorkerEmail))
+            .Returns(Post, Roles, 200, RoleBody())
+            .Returns(Post, ProjectGetPolicy, 200, PolicyBody("BwA", WorkerBinding(WorkerEmail), 3))
+            .Returns(Get, BucketPolicy, 200, PolicyBody("CAE=", BucketBinding(WorkerEmail)));
+
+        var identity = await rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None);
+
+        identity.ServiceAccountEmail.ShouldBe(WorkerEmail);
+        rig.Handler.To(Post, Accounts).Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_409_then_404_that_repeats_fails_with_the_named_code_instead_of_looping()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, ProjectPath, 200, ProjectBody());
+        for (var i = 0; i < 4; i++)
+        {
+            rig.Handler
+                .Returns(Post, Accounts, 409, RpcError(409, "ALREADY_EXISTS", "Service account dna-entropy-worker already exists within project projects/my-lab."))
+                .Returns(Get, AccountPath(WorkerEmail), 404, RpcError(404, "NOT_FOUND", "Service account " + WorkerEmail + " does not exist."));
+        }
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.WorkerIdentity.EnsureWorkerIdentityAsync(Project, Bucket, CancellationToken.None));
+
+        failure.Error.Code.ShouldBe(SetupErrorCodes.WorkerIdentityNotApplied);
+        rig.Handler.To(Post, Accounts).Count.ShouldBe(2);
+        rig.Handler.To(Post, Roles).ShouldBeEmpty();
+    }
+
+    // PERMISSION_ACTAS from a VM insert arrives as the error of a polled operation (a gRPC code number), not an HTTP error body.
+    [Fact]
+    public void An_actAs_refusal_that_arrives_as_a_polled_operation_error_carries_PERMISSION_ACTAS_too()
+    {
+        var status = GoogleApiErrors.FromOperationError(7, "Required 'iam.serviceAccounts.actAs' permission for 'projects/my-lab/serviceAccounts/" + WorkerEmail + "'", null);
+
+        var failure = GoogleApiErrors.ToException(status);
+
+        failure.Kind.ShouldBe(CloudErrorKind.Permission);
+        failure.Error.Code.ShouldBe(SetupErrorCodes.PermissionActAs);
     }
 
     [Fact]
