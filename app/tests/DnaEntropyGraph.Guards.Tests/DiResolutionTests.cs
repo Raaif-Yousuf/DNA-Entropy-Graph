@@ -110,6 +110,7 @@ public class DiResolutionTests
             typeof(DnaEntropyGraph.Presentation.Services.IStringResourceProvider),
             typeof(DnaEntropyGraph.Presentation.Services.IRunVmActions),
             typeof(DnaEntropyGraph.Presentation.Services.ILogTailReader),
+            typeof(DnaEntropyGraph.Presentation.Services.IAppLog),
             typeof(IMessenger),
             typeof(DnaEntropyGraph.Core.Cloud.IComputeGateway),
             typeof(DnaEntropyGraph.Core.Cloud.IStorageGateway),
