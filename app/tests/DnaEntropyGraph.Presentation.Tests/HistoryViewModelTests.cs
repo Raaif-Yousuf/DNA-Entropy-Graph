@@ -714,7 +714,7 @@ public sealed class HistoryViewModelTests
         item.CopyOwnerRequestCommand!.Execute(null);
 
         _launcher.Received(1).CopyText("roles/iam.serviceAccountUser|dna-entropy-worker@my-lab.iam.gserviceaccount.com|my-lab|<ann@lab.edu>");
-        _toasts.Received(1).ShowToast(RunsCopy.OwnerRequestCopied.Title, RunsCopy.OwnerRequestCopied.Body);
+        _toasts.Received(1).ShowToast(RunsCopy.OwnerRequestCopied.Title, RunsCopy.OwnerRequestCopied.Body, ToastSeverity.Success);
     }
 
     [Fact]
@@ -743,7 +743,7 @@ public sealed class HistoryViewModelTests
 
         Item(vm, "denied").CopyOwnerRequestCommand!.Execute(null);
 
-        _toasts.Received(1).ShowToast(RunsCopy.OwnerRequestCopyFailed.Title, RunsCopy.OwnerRequestCopyFailed.Body);
+        _toasts.Received(1).ShowToast(RunsCopy.OwnerRequestCopyFailed.Title, RunsCopy.OwnerRequestCopyFailed.Body, ToastSeverity.Error);
     }
 
     [Theory]
