@@ -26,5 +26,19 @@ public sealed class FilePickerService(WindowHandleProvider window) : IFilePicker
         return files.Select(file => file.Path).Where(path => !string.IsNullOrEmpty(path)).ToList();
     }
 
+    public async Task<string?> PickSaveZipAsync(string suggestedFileName, CancellationToken cancellationToken)
+    {
+        var picker = new FileSavePicker
+        {
+            SuggestedStartLocation = PickerLocationId.Downloads,
+            SuggestedFileName = Path.GetFileNameWithoutExtension(suggestedFileName),
+        };
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
+        picker.FileTypeChoices.Add("Zip", [".zip"]);
+
+        var file = await picker.PickSaveFileAsync();
+        return string.IsNullOrEmpty(file?.Path) ? null : file.Path;
+    }
+
     public Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);
 }

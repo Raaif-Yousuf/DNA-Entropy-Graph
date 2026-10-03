@@ -8,9 +8,20 @@ carrying your sequence data.
 
 **When to file an issue in general:** if you followed the one thing to do and it still
 does not work, or the app's own message does not match anything on this page. Open an
-issue from the app (**Settings > Diagnostics > Report a problem**, which pre-fills a
-GitHub issue for you to review before sending, nothing is sent automatically) or directly
-on the project's GitHub page.
+issue on the project's GitHub page and attach a diagnostics file.
+
+## Saving a diagnostics file
+
+Open **Settings**, find **Diagnostics**, and choose **Save diagnostics**. Pick where to save
+the zip (it starts in Downloads, named `dna-entropy-diagnostics-<date>.zip`), then choose
+**Open folder** to find it and attach it to your issue or email.
+
+The file includes the app's logs, your run history (run ids, states, error codes and times),
+the status and result files the app keeps for each run, version numbers and this
+installation's id. It never includes your sequences, your input file names, your results, your
+email address or your sign-in. Paths inside your Windows profile appear as `<user>`. If the
+app finds anything in the file that looks like sequence data it refuses to save and tells you
+so; describe the problem in the issue without a file instead.
 
 ## Signing in
 

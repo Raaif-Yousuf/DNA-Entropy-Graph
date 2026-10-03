@@ -133,6 +133,32 @@ the scope Google requires for this feature set to work at all.
   file is still deleted and the user is told the revoke could not be confirmed (the token then stays valid at
   Google until it is revoked at myaccount.google.com).
 - **Prompt `select_account consent`:** `consent` forces Google to return a refresh token on every sign-in.
+## 5b. The diagnostics bundle (issue #106, implemented)
+
+**Settings > Diagnostics > Save diagnostics** writes one zip the user sends to support. What it contains, and what
+it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`, not by care at the call site.
+
+- **Allowlist of paths.** Only `settings.json`, `logs/*.log`, and under `runs/<job id>/` the `status.json`,
+  `result.json`, `progress*.jsonl` and `logs/*.log` files are read. `auth/` (the DPAPI token files), `inputs/` and
+  `pasted/` (copies of the user's sequences), the SQLite file and every output file are never listed, let alone read.
+- **Allowlist of fields.** The run history is projected to ids, phase, target, error code, timings, hardware, costs and
+  versions; the run name, the free-text error detail, the output folder, the project, bucket and VM names, notes and
+  tags are never copied. `settings.json` keeps only `Theme` and `installation_id`; every other key is listed with its
+  value omitted. In status, result and progress JSON a key that describes data or identity (name, file, path, input,
+  sequence, email, message, ...) is dropped, a string value survives only if it is short and made of identifier
+  characters, and numbers and booleans always survive.
+- **Text redaction** (every kept string, every log line): the user profile path becomes `<user>`; the signed-in emails, the
+  Windows user name, and every run name and output folder name known to the history are replaced; email-shaped text,
+  sequence-file names and any run of 20 or more A, C, G, T or N characters are replaced.
+- **Final scan.** Before any zip exists, every entry is scanned for a run of 20 or more A, C, G, T, N. A hit throws
+  `DiagnosticsLeakException` naming the entry, and nothing is written. The zip is written to a temp file and moved into
+  place, so a refused or failed save leaves no partial file.
+- **Deliberately included:** the installation id (it is a label on every cloud resource and is needed to find them),
+  the app, OS, .NET and WebView2 versions.
+- **Not guaranteed:** the redaction is pattern-based. A free-text value an unknown future field puts under an innocuous key
+  could survive, which is why new fields are added to the allowlists, never to a blocklist. The app has no
+  Serilog file log yet (issue #164), so the bundle holds the worker logs and per-run files only.
+
 ## 6. Residual risk this document does not pretend to solve
 
 - A user's own Windows account being compromised compromises the DPAPI-protected token

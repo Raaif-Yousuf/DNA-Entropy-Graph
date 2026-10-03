@@ -4,6 +4,7 @@ using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Cloud.Auth;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.LocalEngine;
@@ -154,6 +155,14 @@ public static class ServiceRegistration
             sp.GetRequiredService<IRunRepository>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
             sp.GetRequiredService<TimeProvider>()));
+
+        // Issue #106: the support zip. The source only ever lists settings.json, logs and runs under the app data
+        // folder (never auth, inputs or the database); the machine facts are read when the button is pressed.
+        services.AddSingleton<IFolderLauncher, FolderLauncher>();
+        services.AddSingleton<IDiagnosticsExporter>(sp => new DiagnosticsExporter(
+            new FolderDiagnosticsSource(Path.GetDirectoryName(settingsPath)!),
+            sp.GetRequiredService<IRunRepository>(),
+            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>())));
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
