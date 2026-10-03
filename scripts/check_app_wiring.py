@@ -158,7 +158,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-ALLOWLIST_PATH = Path("scripts/app_wiring_allowlist.json")
+# Script-relative, never cwd-relative (MEASURED 2026-10-02: a worktree copy run from the
+# shared checkout silently scanned the shared tree).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+ALLOWLIST_PATH = REPO_ROOT / "scripts" / "app_wiring_allowlist.json"
+DEFAULT_ROOT = REPO_ROOT / "app"
 
 # The five WinUI/MVVM idioms this scanner understands, as regexes over C# text.
 # Deliberately anchored on the attribute, not on the member shape: an
@@ -1164,7 +1168,7 @@ def _add(root: Path, relative: str, content: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--root", default="app", help="tree to scan (default: app)")
+    parser.add_argument("--root", default=str(DEFAULT_ROOT), help="tree to scan (default: <this repo>/app)")
     parser.add_argument("--allowlist", default=str(ALLOWLIST_PATH))
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
