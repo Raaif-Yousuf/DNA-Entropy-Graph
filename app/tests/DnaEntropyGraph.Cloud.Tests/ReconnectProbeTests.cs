@@ -86,7 +86,7 @@ public class ReconnectProbeTests
         // waits until the probe's next timer is armed: the re-arm runs on a continuation, so stepping before it would measure nothing.
         for (var pass = 1; pass <= 6; pass++)
         {
-            await WaitForPendingTimersAsync(rig.Time, 1);
+            rig.Time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the next probe timer is armed");
             var waited = TimeSpan.Zero;
             while (rig.Passes < pass)
             {
@@ -147,16 +147,6 @@ public class ReconnectProbeTests
         rig.Passes.ShouldBe(0);
     }
 
-    private static async Task WaitForPendingTimersAsync(VirtualTimeProvider time, int expected)
-    {
-        for (var i = 0; i < 500 && time.PendingTimers != expected; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
-
-        time.PendingTimers.ShouldBe(expected);
-    }
-
     [Fact]
     public async Task A_deferred_check_that_throws_while_re_arming_does_not_stop_the_probe()
     {
@@ -180,7 +170,7 @@ public class ReconnectProbeTests
         broken = true;
         time.Advance(Initial);
         await observer.WhenIdleAsync();
-        await WaitForPendingTimersAsync(time, 1);
+        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
         broken = false;
         passes.ShouldBe(1);
 
@@ -210,6 +200,7 @@ public class ReconnectProbeTests
 
         time.Advance(Initial);
         await observer.WhenIdleAsync();
+        passes.ShouldBe(1);
         time.Advance(TimeSpan.FromSeconds(60));
         await observer.WhenIdleAsync();
 

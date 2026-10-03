@@ -33,6 +33,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
     private readonly object _gate = new();
     private Task _passes = Task.CompletedTask;
     private readonly List<Task> _runGroups = [];
+    private Task _probeFollowUps = Task.CompletedTask;
     private bool _running;
     private bool _again;
     private bool _probing;
@@ -194,7 +195,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
 
         // Registered synchronously (StartPass sets the pass task before it returns), so WhenIdleAsync sees a probe pass the moment its timer fires.
         passes = StartPass();
-        _ = passes.ContinueWith(
+        var followUp = passes.ContinueWith(
             _ =>
             {
                 lock (_gate)
@@ -208,6 +209,10 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+        lock (_gate)
+        {
+            _probeFollowUps = Task.WhenAll(_probeFollowUps, followUp);
+        }
     }
 
     /// <summary>Remembers the runs a pass reattached, so <see cref="WhenIdleAsync"/> can wait for them; their own failure is logged, never thrown.</summary>
@@ -281,7 +286,7 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
 
     /// <summary>
     /// Completes when every reconcile pass this observer started has ended, and every run they reattached. A probe that is only waiting for its
-    /// next timer is not a pass and is not waited for. For tests and shutdown; the app never waits on it.
+    /// next timer is not a pass and is not waited for, but the re-arm after a probe pass is: when this returns, the next timer exists. For tests and shutdown; the app never waits on it.
     /// </summary>
     public async Task WhenIdleAsync()
     {
@@ -299,6 +304,15 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
         }
 
         await Task.WhenAll(groups).ConfigureAwait(false);
+        Task followUps;
+        lock (_gate)
+        {
+            followUps = _probeFollowUps;
+        }
+
+        // The step after a probe pass (clear the probing flag, arm the next timer) runs on a continuation: without waiting for it a caller
+        // could see "idle" a moment before the next timer exists, and a test that then moves virtual time would move it past nothing (#559 r5).
+        await followUps.ConfigureAwait(false);
     }
 
     /// <summary>Stops the probe. Passes already running finish.</summary>
