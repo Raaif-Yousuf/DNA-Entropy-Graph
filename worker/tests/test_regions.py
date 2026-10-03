@@ -497,3 +497,51 @@ def test_genbank_input_writes_the_region_files_too(tmp_path: Path) -> None:
     result = pipeline.run(RunConfig(name="toy", input_path=sample, out_dir=str(tmp_path)))
     names = {Path(p).name for p in result.outputs}
     assert {"toy.regions.bed", "toy.regions.gff3"} <= names
+
+
+# --- end to end through the worker: manifest -> run_job -> result.json ---------------------------------
+
+
+def _job(tmp_path: Path, outputs: list[str], analysis_extra: dict | None = None) -> tuple[set[str], str]:
+    from dna_entropy.worker.blobstore import LocalBlobstore
+    from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job
+
+    store = LocalBlobstore(tmp_path)
+    analysis = {"contextLength": 128, "window": 256, "stride": 128, "direction": "forward-only"}
+    manifest = {
+        "schema": 1,
+        "jobId": "regions-job",
+        "inputs": [{"id": "in1", "path": "input/a.fasta", "name": "a"}],
+        "predictor": {"kind": "mock", "seed": 0},
+        "analysis": {**analysis, **(analysis_extra or {})},
+        "outputs": outputs,
+        "store": {"kind": "localdir", "root": "unused"},
+    }
+    store.write_text(MANIFEST_PATH, json.dumps(manifest))
+    store.write_text("input/a.fasta", ">a\n" + "ACGT" * 75 + "\n")
+    run_job(store)
+    doc = json.loads(store.read_text(RESULT_PATH))
+    files = doc["inputs"][0]["files"]
+    gff = next((f["path"] for f in files if f["path"].endswith(".regions.gff3")), "")
+    return {Path(f["path"]).name for f in files}, gff
+
+
+def test_a_job_lists_the_region_files_in_result_json_and_the_option_reaches_the_caller(
+    tmp_path: Path,
+) -> None:
+    listed, gff = _job(tmp_path / "a", [])
+    assert {"a.regions.bed", "a.regions.gff3"} <= listed
+    default_rows = [
+        ln for ln in (tmp_path / "a" / gff).read_text(encoding="utf-8").splitlines() if "\t" in ln
+    ]
+    # mock entropy over a 300 nt periodic sequence sits near 2 bits: with the mirrored default
+    # threshold (1.5) that is a long high-entropy stretch; with a tiny threshold (mirror 1.99) it
+    # is a different call, so the manifest option demonstrably changes what is written
+    _, gff2 = _job(tmp_path / "b", [], {"regionThreshold": 0.01})
+    tight_rows = [ln for ln in (tmp_path / "b" / gff2).read_text(encoding="utf-8").splitlines() if "\t" in ln]
+    assert default_rows != tight_rows
+
+
+def test_a_job_with_outputs_that_omit_regions_writes_no_region_file(tmp_path: Path) -> None:
+    listed, _ = _job(tmp_path, ["bedgraph"])
+    assert not any("regions" in n for n in listed)
