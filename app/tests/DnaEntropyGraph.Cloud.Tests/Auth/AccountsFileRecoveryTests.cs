@@ -51,6 +51,8 @@ public class AccountsFileRecoveryTests
         var first = await harness.SignedInAsync("1001", "first@example.test");
         var path = Path.Combine(harness.AuthDirectory, "accounts.json");
         var original = File.ReadAllBytes(path);
+        var clock = new ManualClock();
+        harness.Clock = clock;
         var service = harness.NewService();
         harness.Google.NextIdentity = new FakeIdentity("2002", "second@example.test");
 
@@ -65,10 +67,63 @@ public class AccountsFileRecoveryTests
         AuthErrorCodes.ActionResourceKey(failure.Code).ShouldBe("AuthAction_TryAgain");
         File.ReadAllBytes(path).ShouldBe(original);
 
+        clock.Advance(TimeSpan.FromSeconds(3));
         await service.SignInAsync(CancellationToken.None);
 
         service.Accounts.Select(a => a.Email).ShouldBe(["first@example.test", "second@example.test"], ignoreOrder: true);
         first.CurrentAccount.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_token_request_while_the_accounts_file_is_locked_says_locked_not_sign_in_again()
+    {
+        using var harness = new AuthHarness();
+        await harness.SignedInAsync("1001", "first@example.test");
+        var restarted = harness.NewService();
+
+        using (new FileStream(Path.Combine(harness.AuthDirectory, "accounts.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => restarted.GetAccessTokenAsync(CancellationToken.None));
+
+            failure.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
+        }
+    }
+
+    [Fact]
+    public async Task While_the_accounts_file_is_locked_a_read_is_not_retried_inside_the_window_and_is_after_it()
+    {
+        using var harness = new AuthHarness();
+        await harness.SignedInAsync("1001", "first@example.test");
+        var clock = new ManualClock();
+        harness.Clock = clock;
+        var restarted = harness.NewService();
+
+        using (var hold = new FileStream(Path.Combine(harness.AuthDirectory, "accounts.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            restarted.IsSignedIn.ShouldBeFalse("the file could not be read");
+            hold.Dispose();
+            restarted.IsSignedIn.ShouldBeFalse("inside the window the file is not touched again, so the release is not seen yet");
+
+            clock.Advance(TimeSpan.FromSeconds(3));
+            restarted.IsSignedIn.ShouldBeTrue("after the window the real file is read");
+        }
+    }
+
+    [Fact]
+    public async Task Signing_out_while_the_accounts_file_is_locked_says_locked_and_changes_nothing()
+    {
+        using var harness = new AuthHarness();
+        await harness.SignedInAsync("1001", "first@example.test");
+        var restarted = harness.NewService();
+
+        using (new FileStream(Path.Combine(harness.AuthDirectory, "accounts.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => restarted.SignOutAsync(CancellationToken.None));
+
+            failure.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
+        }
+
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the token was not deleted");
     }
 
     [Fact]

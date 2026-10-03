@@ -27,4 +27,7 @@ public sealed class GoogleAccountOptions
 
     /// <summary>How long the browser page may stay unfinished before the sign-in gives up.</summary>
     public TimeSpan SignInTimeout { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>The clock for the locked-accounts-file retry window (issue #616); tests move it by hand.</summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 }

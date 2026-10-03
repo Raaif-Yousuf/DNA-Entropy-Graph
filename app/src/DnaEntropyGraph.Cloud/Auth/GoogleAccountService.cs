@@ -41,6 +41,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     private AccountsFile? _state;
     private bool _accountsFileSetAside;
     private bool _accountsFileLocked;
+    private DateTimeOffset _retryLoadAfter;
+    private static readonly TimeSpan LockedRetryWindow = TimeSpan.FromSeconds(2);
 
     public GoogleAccountService(GoogleAccountOptions options)
     {
@@ -75,16 +77,43 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                     return _state;
                 }
 
+                var now = _options.TimeProvider.GetUtcNow();
+                if (_accountsFileLocked && now < _retryLoadAfter)
+                {
+                    // The file was just found held: do not touch it (and wait on the mutex) again on every read, which may be the UI thread.
+                    return AccountsFile.Empty;
+                }
+
                 var loaded = Reconcile(_registry.Load());
                 _accountsFileSetAside = _registry.QuarantinedTo is not null;
-                // An unreadable file (locked) gives an empty list that is not the truth: do not keep it, so the next call reads the file again.
+                // An unreadable file (locked) gives an empty list that is not the truth: do not keep it as the state, read the file again after the window.
                 _accountsFileLocked = _registry.Unreadable;
-                if (!_accountsFileLocked)
+                if (_accountsFileLocked)
+                {
+                    _retryLoadAfter = now + LockedRetryWindow;
+                }
+                else
                 {
                     _state = loaded;
                 }
 
                 return loaded;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Anything that would act on the account list while it could not be read (a token request, a sign-out) fails with
+    /// <see cref="AuthErrorCodes.AccountsFileLocked"/> instead of acting on the empty stand-in, which would read as "signed out" or "sign in again".
+    /// </summary>
+    private void ThrowIfAccountsFileLocked()
+    {
+        _ = State;
+        lock (_loadLock)
+        {
+            if (_accountsFileLocked)
+            {
+                throw new AccountAuthException(AuthErrorCodes.AccountsFileLocked, "accounts.json exists but could not be read (held open elsewhere)");
             }
         }
     }
@@ -96,15 +125,9 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     /// </summary>
     private void ThrowIfAccountsFileWasSetAside()
     {
-        _ = State;
+        ThrowIfAccountsFileLocked();
         lock (_loadLock)
         {
-            if (_accountsFileLocked)
-            {
-                // Not cleared: the next call reads the file again, and succeeds once whatever holds it lets go.
-                throw new AccountAuthException(AuthErrorCodes.AccountsFileLocked, "accounts.json exists but could not be read (held open elsewhere)");
-            }
-
             if (!_accountsFileSetAside)
             {
                 return;
@@ -173,6 +196,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileLocked();
             var active = State.Active;
             if (active is null)
             {
@@ -269,6 +293,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfAccountsFileLocked();
             var active = State.Active;
             if (active is null || active.NeedsSignIn)
             {

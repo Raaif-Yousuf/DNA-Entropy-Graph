@@ -105,6 +105,20 @@ public class AccountRegistryTests : IDisposable
     }
 
     [Fact]
+    public void A_mutex_the_system_refuses_to_open_is_a_locked_file_not_a_crash()
+    {
+        // THEORY (unverified): an elevated and a normal copy of the app cannot open each other's Local\ mutex; docs/ToTest.md has the real two-instance row.
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
+        var registry = new AccountRegistry(_dir, _ => throw new UnauthorizedAccessException());
+
+        registry.Load().ShouldBe(AccountsFile.Empty);
+
+        registry.Unreadable.ShouldBeTrue();
+        Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
+    }
+
+    [Fact]
     public void A_read_that_fails_once_and_then_clears_is_retried_and_succeeds()
     {
         Directory.CreateDirectory(_dir);

@@ -12,6 +12,16 @@ internal sealed class XorProtector : ISecretProtector
     public byte[] Unprotect(byte[] protectedBytes) => protectedBytes.Select(b => (byte)(b ^ 0x5A)).ToArray();
 }
 
+/// <summary>A clock the test moves by hand.</summary>
+internal sealed class ManualClock : TimeProvider
+{
+    private DateTimeOffset _now = new(2026, 10, 3, 12, 0, 0, TimeSpan.Zero);
+
+    public void Advance(TimeSpan by) => _now += by;
+
+    public override DateTimeOffset GetUtcNow() => _now;
+}
+
 /// <summary>A temp app-data folder, a fake Google, and a service factory over both.</summary>
 internal sealed class AuthHarness : IDisposable
 {
@@ -50,9 +60,13 @@ internal sealed class AuthHarness : IDisposable
     /// <summary>When true the service gets no HTTP handler: Google's own HTTP stack, as in production.</summary>
     public bool UseProductionHttp { get; set; }
 
+    /// <summary>When set, the service reads this clock (the locked-accounts-file retry window); otherwise the real one.</summary>
+    public TimeProvider? Clock { get; set; }
+
     /// <summary>A service over this harness's folder; calling it twice is "the app restarted".</summary>
     public GoogleAccountService NewService() => new(new GoogleAccountOptions
     {
+        TimeProvider = Clock ?? TimeProvider.System,
         AuthDirectory = AuthDirectory,
         ClientLoader = new OAuthClientLoader([ClientFile]),
         Browser = BrowserOverride ?? Google,

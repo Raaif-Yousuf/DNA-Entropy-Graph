@@ -32,13 +32,23 @@ public sealed class AccountRegistry
 
     private const int ReadAttempts = 5;
     private const int ReadBackoffMs = 50;
-    private static readonly TimeSpan LockWait = TimeSpan.FromSeconds(10);
+    // A read gives up on the mutex quickly (it can run on the UI thread); a save may wait longer because it is the user's change.
+    private static readonly TimeSpan ReadLockWait = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SaveLockWait = TimeSpan.FromSeconds(10);
 
     private readonly string _path;
+    private readonly Func<string, Mutex> _openMutex;
 
     public AccountRegistry(string directory)
+        : this(directory, name => new Mutex(false, name))
+    {
+    }
+
+    /// <summary>Tests only: how the named mutex is opened, so a refusal by the system can be played.</summary>
+    internal AccountRegistry(string directory, Func<string, Mutex> openMutex)
     {
         _path = Path.Combine(directory, "accounts.json");
+        _openMutex = openMutex;
     }
 
     /// <summary>Where the last <see cref="Load"/> set an unparseable file aside (<c>accounts.json.bad</c>, or <c>.bad.1</c>, <c>.bad.2</c> and so on, never over an earlier one), or null when it set nothing aside.</summary>
@@ -57,7 +67,7 @@ public sealed class AccountRegistry
         try
         {
             // Under the same lock as Save, so a read never races another process's replace, and the move aside never races a Save.
-            WithLock(() => result = ReadLocked());
+            WithLock(() => result = ReadLocked(), ReadLockWait);
         }
         catch (TokenStorageException)
         {
@@ -122,7 +132,11 @@ public sealed class AccountRegistry
         return AccountsFile.Empty;
     }
 
-    /// <summary>Replaces the file atomically under a machine-wide named mutex, so two processes (or two instances) saving at once serialise instead of colliding on one temp file. Refuses while <see cref="Unreadable"/>.</summary>
+    /// <summary>
+    /// Replaces the file atomically under a named mutex in the <c>Local\</c> namespace (one Windows session, so every copy of the app one user runs;
+    /// an elevated copy cannot be assumed to share it), so two processes or instances saving at once serialise instead of colliding on one temp file.
+    /// Refuses while <see cref="Unreadable"/>.
+    /// </summary>
     public void Save(AccountsFile file)
         => WithLock(() =>
         {
@@ -145,7 +159,7 @@ public sealed class AccountRegistry
                     File.Delete(temp);
                 }
             }
-        });
+        }, SaveLockWait);
 
     private static AccountsFile? TryParse(string text)
     {
@@ -177,16 +191,16 @@ public sealed class AccountRegistry
         }
     }
 
-    private void WithLock(Action action)
+    private void WithLock(Action action, TimeSpan wait)
     {
         var name = @"Local\DnaEntropyGraph.accounts." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(_path).ToUpperInvariant())), 0, 8);
         try
         {
-            using var mutex = new Mutex(false, name);
+            using var mutex = _openMutex(name);
             var held = false;
             try
             {
-                held = mutex.WaitOne(LockWait);
+                held = mutex.WaitOne(wait);
             }
             catch (AbandonedMutexException)
             {
