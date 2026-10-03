@@ -58,4 +58,5 @@ public sealed class LocalRunInputStore : IRunInputStore
 
         var directory = Path.Combine(_root, "runs", jobId, "input");
         return Directory.Exists(directory) ? Directory.EnumerateFiles(directory).Order(StringComparer.Ordinal).FirstOrDefault() : null;
-    }}
+    }
+}
