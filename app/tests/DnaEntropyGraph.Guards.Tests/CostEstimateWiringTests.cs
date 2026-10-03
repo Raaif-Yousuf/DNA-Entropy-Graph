@@ -22,7 +22,7 @@ public class CostEstimateWiringTests
             "Assets\\pricing.json is not in the output folder: the csproj <Content Include=\"Assets\\pricing.json\" CopyToOutputDirectory> item is missing or wrong.");
 
     [Fact]
-    public void The_real_app_services_read_that_shipped_file_and_price_the_machine_a_run_starts()
+    public async Task The_real_app_services_read_that_shipped_file_and_price_the_machine_a_run_starts()
     {
         var services = new ServiceCollection();
         var appData = Path.Combine(Path.GetTempPath(), "deg-cost-guard-" + Guid.NewGuid().ToString("N"));
@@ -48,8 +48,8 @@ public class CostEstimateWiringTests
         table.Find(machine).ShouldNotBeNull($"the shipped price list has no price for {machine}, the machine the New run page starts");
         table.Find(CloudJobRequestFactory.MachineTypeFor(GpuTier.A100_40)).ShouldNotBeNull("the A100 fallback tier is priced");
 
-        var estimate = provider.GetRequiredService<ICostEstimateService>()
-            .EstimateAsync(machine, spot: false, bases: 5_000, CancellationToken.None).GetAwaiter().GetResult();
+        var estimate = await provider.GetRequiredService<ICostEstimateService>()
+            .EstimateAsync(machine, spot: false, bases: 5_000, TestContext.Current.CancellationToken);
         estimate.Estimate.ShouldNotBeNull();
         estimate.Estimate.MinUsd.ShouldBeGreaterThan(0);
     }

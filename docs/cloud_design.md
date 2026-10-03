@@ -316,9 +316,27 @@ exercise.
 - A **live ticker** per running job: `(now - lastStartTimestamp) * hourlyRate / 3600 +
  disk`, labelled "estimate" everywhere it appears, because there is no billing-export
  access - every number in this app is a modeled estimate, never a real invoice figure.
-- A **pre-run estimate** from historical run durations for the same model tier (defaults:
- 12 min fresh / 5 min warm for the 7B tier, before any real measurement exists -
- THEORY (unverified) until the first GPU acceptance run records real numbers).
+- A **pre-run estimate** (issue #98, shipped): `Core/Cost/`. `PricingTable.Parse` reads
+ `app/src/DnaEntropyGraph.App/Assets/pricing.json` (schema 1: `asOf`, `source`, `region`,
+ `disk`, per-machine `onDemandUsdPerHour` and a nullable `spotUsdPerHour`; a null spot price
+ is "unknown", never zero) and returns a `PricingLoadResult` with a `PricingProblem`
+ (`FileMissing`, `Unreadable`, `Malformed`, `UnsupportedSchema`, `InvalidValue`), never an
+ exception. The app copies the file to `<output>\Assets\pricing.json` (a csproj `Content` item,
+ kept by publish) and `FilePricingSource` reads it from `AppContext.BaseDirectory`;
+ `Guards.Tests/CostEstimateWiringTests` fails if it is missing from the build output or has no
+ price for the machine the New run page starts. `CostEstimator.Estimate` is pure:
+ `minutes * (machine $/h + diskGb * $/GB-month / 730) / 60`. Minutes are the median of the
+ newest 10 completed cloud runs on that machine on this PC (`RunHistory`); with none, the
+ `RunTimeModel` gives a range: 5 min (warm) to 12 min (fresh) plus 2 s per kb of input.
+ Those model constants are THEORY (unverified) until the first GPU acceptance run records
+ real numbers, and apply to every tier (an A100 is faster, so its model range overstates).
+ An unknown size with no history is `UnknownSize` (no line on the page), not a guess. The
+ New run page (`NewRunViewModel.EstimateText`) shows it from the selected, valid file's
+ base count, always labelled an estimate. The shipped prices are THEORY (unverified):
+ gathered 2026-09-19 for us-central1 from public pages, not checked against the Billing
+ Catalog (#214, #303); the A100 Spot prices are left null because sources disagree 4x.
+ Still open under #98: the daily Billing Catalog refresh (#214), the live ticker (#217) and
+ the actual cost on the Results page (#557).
 - Thresholds: warn above a single-job estimate of $2 (user setting), warn at month-to-date
  above $25 (cap $50, user setting), a hard `maxRunHours` cap per job (default 4, max 24)
  enforced via `maxRunDuration`, and an explicit per-job confirmation before any A100/H100

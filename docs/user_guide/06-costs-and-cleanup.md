@@ -27,6 +27,20 @@ anyone connected with this app:
    a few cents a month at most for typical use, and automatically cleaned up after your
    chosen retention period (90 days by default).
 
+## Where the estimate on the New run page comes from
+
+The estimate line is worked out on your PC from a price list that ships inside the app
+(`Assets\pricing.json`, with the date the prices were gathered and where they came from).
+It adds the hourly price of the computer to the hourly share of its storage disk, then
+multiplies by minutes. The minutes come from your own earlier finished runs of the same
+tier on this PC (the middle value of the last ten) when there are any; otherwise from a
+built-in model of about 5 minutes on a warm computer or 12 minutes on a fresh one, plus
+about 2 seconds of analysis for every thousand letters. Those built-in minutes are our
+design guess until the first real GPU runs have been measured. The app does not look up
+live prices yet, so the price list is only as fresh as the release you installed, and a
+Spot price it does not know is left out rather than guessed. Spot is off by default.
+Every figure is labelled an estimate because the app cannot see your real bill.
+
 ## Roughly what a run costs
 
 The default computer tier (called "L4," named after its graphics card) costs Google's

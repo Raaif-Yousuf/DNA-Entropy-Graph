@@ -912,7 +912,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         for (var i = 0; i < 200 && !done(_viewModel.EstimateText); i++)
         {
-            await Task.Delay(10);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
         return _viewModel.EstimateText;
@@ -956,7 +956,7 @@ public sealed class NewRunViewModelTests : IDisposable
         EstimateReturns(Point(9, 0.13));
 
         await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         _viewModel.EstimateText.ShouldBeEmpty();
         _viewModel.HasEstimate.ShouldBeFalse();
@@ -982,7 +982,7 @@ public sealed class NewRunViewModelTests : IDisposable
         EstimateReturns(CostEstimateResult.Unavailable(EstimateUnavailable.UnknownSize));
 
         await AddOne(Write("n.fasta", ">a\n" + Dna + "\n"));
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         _viewModel.EstimateText.ShouldBeEmpty();
     }
@@ -1006,7 +1006,7 @@ public sealed class NewRunViewModelTests : IDisposable
             .Returns<Task<CostEstimateResult>>(_ => throw new InvalidOperationException("boom"));
 
         var pill = await AddOne(Write("x.fasta", ">a\n" + Dna + "\n"));
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         pill.IsValid.ShouldBeTrue();
         _viewModel.EstimateText.ShouldBeEmpty();
@@ -1025,7 +1025,7 @@ public sealed class NewRunViewModelTests : IDisposable
         (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.13, about 9 minutes");
 
         slow.SetResult(Point(99, 9.99));
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         _viewModel.EstimateText.ShouldBe("Estimate: about $0.13, about 9 minutes");
     }
