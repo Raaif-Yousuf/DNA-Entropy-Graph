@@ -415,6 +415,32 @@ gh run list
 gh run view <id>
 ```
 
+## CloudCli: the console host for cloud resources (#60)
+
+`app/tools/DnaEntropyGraph.CloudCli` is the app's own cloud layer from a console (gcloud is denied in this repo). It uses the real
+gateways and **the account the app signed in** (DPAPI token files under `%LOCALAPPDATA%\DNAEntropyGraph\auth`, so run it as the same
+Windows user); it never reads a key file and never signs in itself. Run from `app/`:
+
+```powershell
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- resources list --project <id> [--install <id>] [--kind vm|bucket|all] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- bucket describe --project <id> [--name <bucket>] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm create --project <id> --zone <zone> --install <id> --service-account <email> [--job <id>] [--model <m>] [--machine-type <t>] [--lifecycle <l>] [--app-version <v>] [--max-run-duration 90|90s|30m|2h] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> --zone <zone> --name deg-<job id> [--json]
+```
+
+- `resources list` prints every VM labelled `app=dna-entropy-graph` (or only `--install`'s) and every labelled `deg-` bucket as a plain
+  table ending in `OK: <n> resource(s)`; `--json` prints an array of `{kind,name,zone,location,status,installation,job}` and nothing else.
+  The results bucket is meant to outlive a run, so a leak scan uses `--kind vm` (that is what `scripts/cloud_gpu_test.ps1` runs).
+- `vm create` only builds a `VmSpec`, so the six labels, `maxRunDuration` (default 30m) and termination action DELETE are always set;
+  there is no flag to weaken them. A missing `--job` generates one.
+- `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label; a VM that is
+  already gone is success.
+- Output is ASCII: `OK:` lines on stdout, one `ERROR:` line on stderr naming an action.
+- Exit codes: `0` ok, `1` Google refused or could not be reached (or Ctrl+C), `2` bad command line or a value `VmSpec` rejects, `3` no
+  account signed in ("Sign in with the app first") or the sign-in expired, `4` a safety guard refused, `5` the named bucket is not there.
+- There is no GCP access from agent sessions: tests run the same code over a scripted HTTP handler
+  (`app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/`); `docs/ToTest.md` carries the row that needs a real project.
+
 ## GPU test recipe
 
 **Never on the laptop.** `pytest -m "not gpu"` is the standing local command;

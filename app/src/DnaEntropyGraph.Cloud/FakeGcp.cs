@@ -1023,6 +1023,27 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.FromResult(matches);
     }
 
+    /// <summary>Every VM this fake holds whose labels carry the app label, whichever installation it belongs to. Same scripted-failure behaviour as <see cref="ListByInstallationAsync"/>.</summary>
+    public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken)
+    {
+        if (ConsumeHang())
+        {
+            return HangAsync<IReadOnlyList<VmDescriptor>>(cancellationToken);
+        }
+
+        ThrowIfScriptedTransient();
+        if (_notConnected)
+        {
+            throw Build(CloudErrorKind.Other, NotConnectedErrorCode, null, "No Google Cloud connection is built into this version.");
+        }
+
+        ExpireOverdueVms();
+        IReadOnlyList<VmDescriptor> matches = _vms.Values
+            .Where(v => v.Labels is not null && v.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue)
+            .ToList();
+        return Task.FromResult(matches);
+    }
+
     // ----------------------------------------------------------------
     // IStorageGateway
     // ----------------------------------------------------------------
@@ -1044,7 +1065,28 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ThrowIfScriptedTransient();
+        _bucketProjects[projectId] = 0;
         return Task.FromResult(BucketName(projectId));
+    }
+
+    private readonly ConcurrentDictionary<string, byte> _bucketProjects = new();
+
+    /// <summary>
+    /// The bucket <see cref="EnsureBucketAsync"/> made for <paramref name="projectId"/>, labelled as the real one is (the fake does not
+    /// track an installation, so it carries a fixed <c>installation-id</c>); none before the first ensure. Read-only, like the real one.
+    /// </summary>
+    public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
+    {
+        if (ConsumeHang())
+        {
+            return HangAsync<IReadOnlyList<BucketDescriptor>>(cancellationToken);
+        }
+
+        ThrowIfScriptedTransient();
+        IReadOnlyList<BucketDescriptor> buckets = _bucketProjects.ContainsKey(projectId)
+            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null)]
+            : [];
+        return Task.FromResult(buckets);
     }
 
     /// <summary>

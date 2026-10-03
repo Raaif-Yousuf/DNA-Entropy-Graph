@@ -89,6 +89,8 @@ public class CloudJobRunnerGuaranteesTests
 
         public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
             => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
     }
 
     // ---- M1: a gateway's own deadline (an OCE with the caller's token live) is not the caller cancelling ----

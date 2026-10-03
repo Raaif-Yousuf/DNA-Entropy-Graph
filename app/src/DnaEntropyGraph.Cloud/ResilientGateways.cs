@@ -38,6 +38,9 @@ public sealed class ResilientComputeGateway : IComputeGateway
 
     public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.ListByInstallation", token => _inner.ListByInstallationAsync(installationId, token), cancellationToken, bypassBreaker: true);
+
+    public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.ListAppVms", token => _inner.ListAppVmsAsync(token), cancellationToken, bypassBreaker: true);
 }
 
 public sealed class ResilientStorageGateway : IStorageGateway
@@ -79,6 +82,9 @@ public sealed class ResilientStorageGateway : IStorageGateway
 
     public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Storage.TryDownload", token => _inner.TryDownloadAsync(bucket, objectKey, token), cancellationToken);
+
+    public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Storage.ListBuckets", token => _inner.ListBucketsAsync(projectId, token), cancellationToken);
 }
 
 public sealed class ResilientProjectSetupGateway : IProjectSetupGateway

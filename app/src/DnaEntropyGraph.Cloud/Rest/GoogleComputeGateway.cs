@@ -120,17 +120,23 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
         => ListByLabelAsync("installation-id", installationId, cancellationToken);
 
-    private async Task<IReadOnlyList<VmDescriptor>> ListByLabelAsync(string labelKey, string labelValue, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken)
+        => ListByLabelAsync(null, null, cancellationToken);
+
+    /// <summary>The app label is always part of the query; with <paramref name="labelKey"/> null it is the whole query (every VM of ours, issue #60).</summary>
+    private async Task<IReadOnlyList<VmDescriptor>> ListByLabelAsync(string? labelKey, string? labelValue, CancellationToken cancellationToken)
     {
         var project = RequireProject();
 
         // A value no label can hold matches no VM, and it must never reach a filter expression.
-        if (!LabelValuePattern.IsMatch(labelValue ?? string.Empty))
+        if (labelKey is not null && !LabelValuePattern.IsMatch(labelValue ?? string.Empty))
         {
             return [];
         }
 
-        var filter = $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.{labelKey} = \"{labelValue}\")";
+        var filter = labelKey is null
+            ? $"labels.app = \"{VmSpec.AppLabelValue}\""
+            : $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.{labelKey} = \"{labelValue}\")";
         var found = new List<VmDescriptor>();
         string? pageToken = null;
         do
@@ -156,7 +162,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                     // The server filter is the query; this is the guard that a VM of another job, installation or app can never be returned.
                     if (instance.Labels is { } labels
                         && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
-                        && labels.TryGetValue(labelKey, out var value) && value == labelValue)
+                        && (labelKey is null || (labels.TryGetValue(labelKey, out var value) && value == labelValue)))
                     {
                         found.Add(ToDescriptor(instance, ZoneName(scope) ?? string.Empty));
                     }

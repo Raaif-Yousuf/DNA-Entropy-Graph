@@ -400,8 +400,8 @@ function Find-CloudCli {
     # function exists so the day CloudCli IS built, this script starts
     # finding it without anyone having to edit this function again.
     $candidates = @(
-        (Join-Path $PSScriptRoot '..' 'app' 'artifacts' 'CloudCli' 'CloudCli.exe'),
-        (Join-Path $PSScriptRoot '..' 'app' 'src' 'DnaEntropyGraph.CloudCli' 'bin' 'Release' 'net10.0' 'CloudCli.exe')
+        (Join-Path $PSScriptRoot '..' 'app' 'artifacts' 'CloudCli' 'DnaEntropyGraph.CloudCli.exe'),
+        (Join-Path $PSScriptRoot '..' 'app' 'tools' 'DnaEntropyGraph.CloudCli' 'bin' 'Release' 'net10.0' 'DnaEntropyGraph.CloudCli.exe')
     )
     foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
     $onPath = Get-Command 'CloudCli' -ErrorAction SilentlyContinue
@@ -412,13 +412,15 @@ function Find-CloudCli {
 function Invoke-LeakCheck {
     param(
         [Parameter(Mandatory)][string]$InstallationId,
+        [Parameter(Mandatory)][string]$ProjectId,
         [string]$CloudCliPath = ''
     )
     if (-not $CloudCliPath) {
         Write-Host "leak check: skipped -- no CloudCli found (issue #60), and nothing was created by this run to check for."
         return $true
     }
-    $out = & $CloudCliPath 'resources' 'list' '--install' $InstallationId '--json' 2>&1
+    # --kind vm: the results bucket is meant to outlive a run (lifecycle=results), so only a VM left behind is a leak.
+    $out = & $CloudCliPath 'resources' 'list' '--project' $ProjectId '--install' $InstallationId '--kind' 'vm' '--json' 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-UsageError "leak check: 'CloudCli resources list' failed: $out"
         return $false
@@ -641,6 +643,6 @@ Invoke-Apply -ProjectId $ProjectId -Zone $zoneChoice.Zone -MachineType $MachineT
     -AcceleratorType $AcceleratorType -AcceleratorCount $AcceleratorCount -DiskSizeGb $DiskSizeGb `
     -MaxRunDurationSeconds $MaxRunDurationSeconds -Labels $labels -JobId $effectiveJobId -Image $Image
 
-$leakOk = Invoke-LeakCheck -InstallationId $effectiveInstallationId -CloudCliPath (Find-CloudCli)
+$leakOk = Invoke-LeakCheck -InstallationId $effectiveInstallationId -ProjectId $ProjectId -CloudCliPath (Find-CloudCli)
 if (-not $leakOk) { exit 1 }
 exit 0
