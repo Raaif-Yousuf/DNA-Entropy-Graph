@@ -19,8 +19,8 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
     public async Task<T> CallAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
         var limit = timeout ?? settings.CallTimeout;
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(limit);
+        using var timer = new CancellationTokenSource(limit, settings.TimeProvider);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timer.Token);
         Task<T>? task = null;
         try
         {
@@ -28,7 +28,7 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
 
             // WaitAsync, not just a token the callee may ignore: a call that never looks at its token (a stuck
             // socket under a library that does not check) must still be cut at the deadline.
-            return await task.WaitAsync(limit, cancellationToken).ConfigureAwait(false);
+            return await task.WaitAsync(limit, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {

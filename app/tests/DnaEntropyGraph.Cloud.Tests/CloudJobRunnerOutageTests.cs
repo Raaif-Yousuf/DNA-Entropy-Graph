@@ -32,21 +32,50 @@ public class CloudJobRunnerOutageTests
 
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, TimeSpan? resultTimeout = null)
-        => new(gcp, gcp, gcp, gcp, repo, onPhase)
+    /// <summary>
+    /// The clocks of one test run (#525). <see cref="Run"/> is the runner's: call deadlines, the result and lifecycle waits.
+    /// It moves only when the runner sleeps between polls, never while a call is in flight, so a loaded machine cannot
+    /// make a call "time out". <see cref="Retry"/> is the retry pipeline's: its backoff fires at once and the breaker's
+    /// break period passes as the runner polls. Only the test whose subject is a call that really never
+    /// answers runs the runner on real time.
+    /// </summary>
+    private sealed class Clocks
+    {
+        public VirtualTimeProvider Run { get; } = new();
+
+        public VirtualTimeProvider Retry { get; } = new(autoAdvance: true);
+
+        public Task SleepAsync(TimeSpan span, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Run.Advance(span);
+            Retry.Advance(span);
+            return Task.CompletedTask;
+        }
+    }
+
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, TimeSpan? resultTimeout = null, bool realTime = false)
+    {
+        var clocks = new Clocks();
+        return new(gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = resultTimeout ?? TimeSpan.FromMilliseconds(80),
             CallTimeout = TimeSpan.FromMilliseconds(50),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = realTime ? TimeProvider.System : clocks.Run,
+            PollDelay = realTime ? null : clocks.SleepAsync,
         };
+    }
 
     /// <summary>The production wiring: every gateway behind the one retry pipeline, with delays short enough for a test.</summary>
     private static CloudJobRunner RunnerThroughRetryPipeline(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase, TimeSpan resultTimeout, bool breaker = false)
     {
+        var clocks = new Clocks();
         var options = new CloudRetryOptions
         {
+            TimeProvider = clocks.Retry,
             MaxRetryAttempts = 2,
             BaseDelay = TimeSpan.FromMilliseconds(1),
             MaxDelay = TimeSpan.FromMilliseconds(2),
@@ -67,6 +96,8 @@ public class CloudJobRunnerOutageTests
             CallTimeout = TimeSpan.FromMilliseconds(50),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
     }
 
@@ -239,6 +270,24 @@ public class CloudJobRunnerOutageTests
         (await VmStatusAsync(gcp, "job-order")).ShouldBe("STOPPED");
     }
 
+    /// <summary>Delegates to the fake, but every look at a VM takes real time, as a slow network or a starved machine makes it.</summary>
+    private sealed class SlowLookupCompute(IComputeGateway inner, TimeSpan lookupTime) : IComputeGateway
+    {
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
+
+        public async Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        {
+            await Task.Delay(lookupTime, cancellationToken).ConfigureAwait(false);
+            return await inner.GetVmAsync(vmName, zone, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+
+        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
+    }
+
     /// <summary>Delegates to the fake and notes the instant of the first stop or delete request.</summary>
     private sealed class RecordingCompute(IComputeGateway inner) : IComputeGateway
     {
@@ -272,6 +321,33 @@ public class CloudJobRunnerOutageTests
     // ---- Finding 3: a hung call, and a deadline the VM's own limit does not pre-empt ----
 
     [Fact]
+    public async Task A_call_that_takes_real_time_is_not_cut_by_a_deadline_that_runs_on_test_time()
+    {
+        // MEASURED 2026-10-03 (#525): the call deadline ran on the wall clock, so a machine busy enough to stretch one 50 ms call
+        // turned a healthy call into "request timed out". On the runner's clock a call that takes 150 real milliseconds is
+        // still inside its 50 ms deadline, because test time did not move while it ran.
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var clocks = new Clocks();
+        var runner = new CloudJobRunner(new SlowLookupCompute(gcp, TimeSpan.FromMilliseconds(150)), gcp, gcp, gcp, repo)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            BootTimeout = TimeSpan.FromMilliseconds(80),
+            ResultTimeout = TimeSpan.FromMilliseconds(80),
+            CallTimeout = TimeSpan.FromMilliseconds(50),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(80),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
+        };
+
+        var result = await runner.RunAsync(TestInputs.Request("job-slow-call", Spec("job-slow-call")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        result.FailureCode.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task One_hung_call_does_not_hang_the_run()
     {
         var gcp = new FakeGcp();
@@ -286,7 +362,8 @@ public class CloudJobRunnerOutageTests
                     gcp.WithHungCalls(2);
                 }
             },
-            TimeSpan.FromSeconds(30));
+            TimeSpan.FromSeconds(30),
+            realTime: true);
 
         var finished = runner.RunAsync(TestInputs.Request("job-hang", Spec("job-hang")), CancellationToken.None);
         var winner = await Task.WhenAny(finished, Task.Delay(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
