@@ -31,6 +31,10 @@ public class ProductionRunPersistenceTests
         Directory.CreateDirectory(root);
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: root);
+        // Since #48 the production account is the real Google sign-in, which is signed out here and refuses the run
+        // (no_project) before the write-ahead upsert. This test is about the Projects foreign key, not sign-in, so the
+        // account alone is the scripted fake (last registration wins); the JobEngine, repositories and SQLite stay real.
+        services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
         await using var provider = services.BuildServiceProvider();
 
         provider.GetRequiredService<FakeGcp>().WithSelectedProject(NeverSeenProject);
