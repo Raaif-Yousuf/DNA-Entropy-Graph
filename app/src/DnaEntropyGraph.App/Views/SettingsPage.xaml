@@ -1,0 +1,26 @@
+<Page
+    x:Class="DnaEntropyGraph.App.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Issue #106 built the Diagnostics group only. Issue #104 (the full Settings page) adds its groups to this same
+        StackPanel and keeps this one: extend, do not replace. Every string is in Resources.resw via x:Uid.
+    -->
+    <ScrollViewer>
+        <StackPanel Padding="24" Spacing="16">
+            <TextBlock x:Uid="SettingsPageTitle" Style="{StaticResource TitleTextBlockStyle}" />
+
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsDiagnosticsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <TextBlock x:Uid="SettingsDiagnosticsExplainer" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Uid="SaveDiagnosticsButton" Command="{x:Bind ViewModel.SaveDiagnosticsCommand}" />
+                    <Button x:Uid="DiagnosticsOpenFolderButton" Command="{x:Bind ViewModel.OpenDiagnosticsFolderCommand}" />
+                    <ProgressRing IsActive="{x:Bind ViewModel.IsSavingDiagnostics, Mode=OneWay}" Width="20" Height="20" />
+                </StackPanel>
+                <TextBlock Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

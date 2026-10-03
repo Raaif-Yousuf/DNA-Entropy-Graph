@@ -7,4 +7,10 @@ public interface IFilePicker
     Task<IReadOnlyList<string>> PickInputFilesAsync(CancellationToken cancellationToken);
 
     Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lets the user choose where to save a .zip, starting in Downloads with <paramref name="suggestedFileName"/>.
+    /// Null when the picker was cancelled.
+    /// </summary>
+    Task<string?> PickSaveZipAsync(string suggestedFileName, CancellationToken cancellationToken);
 }

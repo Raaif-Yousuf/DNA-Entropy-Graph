@@ -45,4 +45,12 @@ public interface IComputeGateway
     /// the exact leak #389 describes already happened.
     /// </summary>
     Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Every VM carrying <c>app=dna-entropy-graph</c> AND <c>installation-id=&lt;installationId&gt;</c>, across every zone (Hard Rule 9:
+    /// by label, never by name; never another installation's VMs, because two users may share one Google account). Each descriptor
+    /// carries its <see cref="VmDescriptor.Labels"/> and <see cref="VmDescriptor.StoppedAt"/>. A real gateway implements this via
+    /// <c>instances.aggregatedList</c> filtered on those two labels. Used by the reconciler's idle-VM sweep (issue #530).
+    /// </summary>
+    Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken);
 }

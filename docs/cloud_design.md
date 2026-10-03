@@ -616,6 +616,17 @@ non-terminal. It reads the VM by label and `result.json`, decides (architecture.
 `FindByJobIdAsync` throw `CLOUD_NOT_CONNECTED`, because a listing cannot succeed with no connection: the reconciler reads that, and a network
 error, as "no answer" and leaves the row alone instead of calling the run lost.
 
+**Lifecycle enforcement and idle VMs (issue #530)**: the same `JobReconciler` pass also revisits runs that already ended. A finished run's VM
+found by job-id label in a state its `lifecycle` label forbids is deleted (`delete`), stopped when still running (`stop`), or ended per
+`afterKeepAlive` once its keep-alive expiry has passed (Hard Rule 11); the expiry mirrors `startup.sh` `keep_hold`: only a run the worker finished with exit 0 (Completed, PartiallyCompleted) is held for its window, Failed (exit 2) and Cancelled (exit 3) end at once. Lookups have a 30 s deadline, delete and stop their own 5 minute one (they are operations), and a Deferred, refused or throwing row or VM never ends the pass: the rest are still handled. Separately, `IComputeGateway.ListByInstallationAsync` (real gateway:
+`instances.aggregatedList` filtered on `labels.app` and `labels.installation-id`) feeds an idle sweep: a stopped VM of this installation older
+than `idle_stopped_vm_hours` is deleted (default 72, range 1 to 720, no off switch: 0, a negative or an unreadable value is 72, above 720 is clamped to 720; DECISION #555). `VmDescriptor` now carries `Labels` and `StoppedAt` (the instance's
+`lastStopTimestamp`; a gateway that cannot fill it makes the sweep skip the VM, never delete it). Only VMs with our app label AND this
+installation's id are touched (two users may share one account). The pass runs at launch and again when the pipeline reports the
+connection is back (`ReconcileOnReconnect`, single-flight: reconnects while a pass runs coalesce into at most one follow-up pass, and a pass ends once the lifecycle and the sweep have run and the reattached runs are handed to their own drivers, not when those runs end (`JobReconciler.BeginReconcileAsync`; launch still awaits them through `ReconcileAsync`); the observer
+is rarely invoked today because reconciler calls bypass the breaker, #559). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
+and its label filter matches as `FakeGcp` models it; nothing here has touched a real project (docs/ToTest.md).
+
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
 `RunAsync` turns an exception nothing classified into a recorded `Failed` phase (a

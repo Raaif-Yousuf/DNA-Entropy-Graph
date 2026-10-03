@@ -105,6 +105,8 @@ public class DiResolutionTests
             typeof(DnaEntropyGraph.Core.Abstractions.IDispatcher),
             typeof(DnaEntropyGraph.Core.Abstractions.IFilePicker),
             typeof(DnaEntropyGraph.Core.Abstractions.IToastService),
+            typeof(DnaEntropyGraph.Core.Abstractions.IFolderLauncher),
+            typeof(DnaEntropyGraph.Core.Diagnostics.IDiagnosticsExporter),
             typeof(DnaEntropyGraph.Core.Abstractions.INavigator),
             typeof(DnaEntropyGraph.Core.Abstractions.IDialogService),
             typeof(DnaEntropyGraph.Presentation.Services.IStringResourceProvider),

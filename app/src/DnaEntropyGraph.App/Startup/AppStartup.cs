@@ -11,15 +11,16 @@ namespace DnaEntropyGraph.App.Startup;
 public static class AppStartup
 {
     /// <summary>
-    /// Reattaches every run a killed or closed app left in a non-terminal phase (<see cref="JobReconciler"/>). The returned task ends
-    /// when every reattached run has ended; the app does not await it, so launch is never held up by a run that takes minutes.
+    /// Reattaches every run a killed or closed app left in a non-terminal phase and enforces the lifecycle of every finished run's VM
+    /// (<see cref="JobReconciler.ReconcileAsync"/>); the same pass runs again when the connection returns (<see cref="ReconcileOnReconnect"/>).
+    /// The returned task ends when every reattached run has ended; the app does not await it, so launch is never held up by a run that takes minutes.
     /// Never faults: a failure here must not take the app down, and the rows it could not judge are looked at again next launch.
     /// </summary>
     public static async Task BeginAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
         try
         {
-            await services.GetRequiredService<JobReconciler>().ReattachAsync(cancellationToken).ConfigureAwait(false);
+            await services.GetRequiredService<JobReconciler>().ReconcileAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
