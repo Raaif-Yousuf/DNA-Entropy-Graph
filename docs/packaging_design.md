@@ -52,7 +52,10 @@ win-x64 --self-contained -p:WindowsAppSDKSelfContained=true
 -p:WindowsPackageType=None`, then `vpk pack`.
 
 An unsigned build (7-day artifact retention) comes out of every `ci-app.yml` run for
-review; only a tagged push runs `release.yml`, which is the only path that signs and
+review once #513 lands (MEASURED 2026-10-03: vpk 1.2.161 refuses to pack an app that does not call
+`VelopackApp.Build().Run()`, needs `--mainExe DnaEntropyGraph.App.exe`, and has no flag to skip the check; until then the
+pack step warns and skips, and switches itself on when app source mentions `VelopackApp`; locally `vpk pack` against a real
+publish folder took about 1 s to fail, so no pack duration is known yet); only a tagged push runs `release.yml`, which is the only path that signs and
 publishes.
 
 ## 3. Signing

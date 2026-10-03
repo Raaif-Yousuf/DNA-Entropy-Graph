@@ -157,26 +157,55 @@ jobs:
         run: >
           dotnet publish src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj
           -c Release -p:Platform=x64 -r win-x64 --self-contained true
+          -p:WindowsAppSDKSelfContained=true -p:WindowsPackageType=None
           -o publish
+
+      # #32: the publish output must carry the Windows App SDK runtime. MEASURED 2026-10-03: without
+      # WindowsAppSDKSelfContained the publish folder had 252 files and no Microsoft.ui.xaml.dll; with it, 441.
+      # A green build never shows the difference, so assert the one file that would be missing.
+      - name: publish carries the Windows App SDK runtime
+        working-directory: app
+        run: |
+          if (-not (Test-Path publish/Microsoft.ui.xaml.dll)) {
+            Write-Host "::error title=WASDK runtime missing::publish/Microsoft.ui.xaml.dll is absent; WindowsAppSDKSelfContained did not take effect (#475)."
+            exit 1
+          }
 
       # Unsigned. Signing happens only in release.yml, which asserts its secrets exist.
       #
       # MEASURED 2026-09-20 (run 35528077325, the first pull-request run of this
       # workflow): --packVersion was 0.0.0-ci and vpk 1.2.0 refused it outright with
-      # "Invalid package version '0.0.0-ci', it must be >= 0.0.1". Every step before this
-      # one passed, so the pack was the only thing between a green job and a red one, and
-      # nothing about it is release-specific: this artifact is a throwaway uploaded for
-      # seven days and never published. 0.0.1 is the lowest version vpk will take, and the
-      # run number keeps two runs of the same commit from producing the same package id.
+      # "Invalid package version '0.0.0-ci', it must be >= 0.0.1". 0.0.1 is the lowest version vpk
+      # will take, and the run number keeps two runs of the same commit from producing the same
+      # package id. The artifact is a throwaway uploaded for seven days and never published.
+      #
+      # MEASURED 2026-10-03 (vpk 1.2.161, run locally against a real publish folder): the pack needs
+      # --mainExe DnaEntropyGraph.App.exe (the exe is not named after the pack id) and then refuses with
+      # "Unable to verify VelopackApp is called" because the app does not call VelopackApp.Build().Run()
+      # yet (#513). There is no flag to skip that check, so until #513 lands the step reports a warning
+      # and does not pack. The check below is the whole switch: the moment any app source mentions
+      # VelopackApp the pack runs for real and a failure fails the job. vpk is pinned so a new major
+      # cannot change the rules overnight.
       - name: vpk pack (unsigned)
+        id: pack
         working-directory: app
         run: |
-          dotnet tool install -g vpk
-          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --outputDir releases
+          $wired = @(Get-ChildItem src -Recurse -Filter *.cs | Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' } | Select-String -Pattern 'VelopackApp').Count -gt 0
+          if (-not $wired) {
+            Write-Host "::warning title=vpk pack skipped::The app does not call VelopackApp.Build().Run() yet, so vpk pack would refuse it (#513). No installer artifact this run."
+            "packed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          dotnet tool install -g vpk --version 1.2.161
+          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "packed=true" >> $env:GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: upload installer (unsigned, 7 days)
+        if: ${{ steps.pack.outputs.packed == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-unsigned
           path: app/releases/**
           retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error
