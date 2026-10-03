@@ -203,9 +203,55 @@ public class AccountRegistryTests : IDisposable
     }
 
     [Fact]
+    public void A_save_refused_because_the_file_was_never_read_is_a_lock_style_failure_not_a_disk_one()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
+        var registry = new AccountRegistry(_dir);
+        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            registry.Load();
+        }
+
+        var failure = Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
+
+        failure.GetType().ShouldBe(typeof(AccountsFileLockedException));
+    }
+
+    [Fact]
+    public void A_load_that_is_still_waiting_for_the_lock_does_not_clear_the_unreadable_answer_a_save_relies_on()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
+        var registry = new AccountRegistry(_dir);
+        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            registry.Load();
+        }
+
+        registry.Unreadable.ShouldBeTrue();
+        using var holder = new MutexHolder(_dir);
+        var observed = new List<bool>();
+        var loader = new Thread(() => registry.Load());
+        loader.Start();
+        for (var i = 0; i < 5; i++)
+        {
+            Thread.Sleep(20);
+            observed.Add(registry.Unreadable);
+        }
+
+        loader.Join();
+
+        observed.ShouldAllBe(u => u, "the lock wait lasts 150 ms; the old answer stands until the new one is known");
+    }
+
+    [Fact]
     public void A_save_removes_old_orphan_temp_files_and_keeps_fresh_ones_and_everything_else()
     {
         Directory.CreateDirectory(_dir);
+        var oldFixedName = Path.Combine(_dir, "accounts.json.tmp");
+        File.WriteAllText(oldFixedName, "x");
+        File.SetLastWriteTimeUtc(oldFixedName, DateTime.UtcNow.AddMinutes(-30));
         var old = Path.Combine(_dir, "accounts.json.aaaa.tmp");
         var fresh = Path.Combine(_dir, "accounts.json.bbbb.tmp");
         var bad = Path.Combine(_dir, "accounts.json.bad");
@@ -220,6 +266,7 @@ public class AccountRegistryTests : IDisposable
         new AccountRegistry(_dir).Save(One("1001"));
 
         File.Exists(old).ShouldBeFalse();
+        File.Exists(oldFixedName).ShouldBeFalse("the name an earlier version always wrote through");
         File.Exists(fresh).ShouldBeTrue("a save in another process may be using it");
         File.Exists(bad).ShouldBeTrue();
         File.Exists(other).ShouldBeTrue();

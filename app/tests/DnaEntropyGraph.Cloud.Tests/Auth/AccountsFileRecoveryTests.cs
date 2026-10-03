@@ -170,6 +170,24 @@ public class AccountsFileRecoveryTests
     }
 
     [Fact]
+    public async Task A_sign_out_whose_list_cannot_be_saved_keeps_the_account_listed_with_its_token()
+    {
+        using var harness = new AuthHarness { SaveLockWait = TimeSpan.FromMilliseconds(300) };
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+
+        using (new MutexHolder(harness.AuthDirectory))
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SignOutAsync(CancellationToken.None));
+
+            failure.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
+        }
+
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the token is deleted only after the list was saved");
+        service.IsSignedIn.ShouldBeTrue();
+        harness.NewService().IsSignedIn.ShouldBeTrue("the file on disk still lists the account");
+    }
+
+    [Fact]
     public async Task A_damaged_file_that_cannot_be_set_aside_says_the_folder_is_the_problem_not_a_try_again_lock()
     {
         using var harness = new AuthHarness();

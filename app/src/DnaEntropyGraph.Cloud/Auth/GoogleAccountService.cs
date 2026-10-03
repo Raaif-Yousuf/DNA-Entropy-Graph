@@ -208,13 +208,14 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 return true;
             }
 
-            revoked = await RevokeAsync(active, cancellationToken).ConfigureAwait(false);
-
-            // Local deletion happens whatever Google said: the user asked to be signed out.
-            await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
+            // The list goes first, then the revoke (Google's flow also deletes the stored token when it revokes), then the local deletion,
+            // which happens whatever Google said: the user asked to be signed out. If the list cannot be saved (a lock, a full disk) the
+            // account stays listed, signed in, with its token and still valid at Google, rather than listed signed-in with no token.
             var remaining = State.Accounts.Where(a => a.Sub != active.Sub).ToList();
             var next = remaining.FirstOrDefault(a => !a.NeedsSignIn) ?? remaining.FirstOrDefault();
             await CommitAsync(new AccountsFile(next?.Sub, remaining)).ConfigureAwait(false);
+            revoked = await RevokeAsync(active, cancellationToken).ConfigureAwait(false);
+            await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {

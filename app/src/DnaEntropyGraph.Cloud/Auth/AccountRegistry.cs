@@ -79,22 +79,25 @@ public sealed class AccountRegistry
     /// </summary>
     public AccountsFile Load()
     {
-        QuarantinedTo = null;
-        QuarantineFailed = false;
-        Unreadable = false;
-        var result = AccountsFile.Empty;
+        LoadOutcome outcome;
         try
         {
             // Under the same lock as Save, so a read never races another process's replace, and the move aside never races a Save.
-            WithLock(() => result = ReadLocked(), ReadLockWait);
+            var read = default(LoadOutcome);
+            WithLock(() => read = ReadLocked(), ReadLockWait);
+            outcome = read;
         }
         catch (TokenStorageException)
         {
-            // The lock was never granted or the file could not be moved aside: the file is untouched and Save refuses until a Load succeeds.
-            Unreadable = true;
+            // The lock was never granted: the file is untouched and Save refuses until a Load succeeds.
+            outcome = new LoadOutcome(AccountsFile.Empty, Unreadable: true, QuarantineFailed: false, null);
         }
 
-        return result;
+        // Published only now: a Save that runs while this Load waits for the lock still sees the previous answer and refuses if it was "unreadable".
+        QuarantinedTo = outcome.QuarantinedTo;
+        QuarantineFailed = outcome.QuarantineFailed;
+        Unreadable = outcome.Unreadable;
+        return outcome.File;
     }
 
     /// <summary>
@@ -103,11 +106,13 @@ public sealed class AccountRegistry
     /// </summary>
     public bool Unreadable { get; private set; }
 
-    private AccountsFile ReadLocked()
+    private readonly record struct LoadOutcome(AccountsFile File, bool Unreadable, bool QuarantineFailed, string? QuarantinedTo);
+
+    private LoadOutcome ReadLocked()
     {
         if (!File.Exists(_path))
         {
-            return AccountsFile.Empty;
+            return new LoadOutcome(AccountsFile.Empty, false, false, null);
         }
 
         string? text = null;
@@ -119,14 +124,13 @@ public sealed class AccountRegistry
             }
             catch (FileNotFoundException)
             {
-                return AccountsFile.Empty;
+                return new LoadOutcome(AccountsFile.Empty, false, false, null);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 if (attempt == ReadAttempts)
                 {
-                    Unreadable = true;
-                    return AccountsFile.Empty;
+                    return new LoadOutcome(AccountsFile.Empty, true, false, null);
                 }
 
                 Thread.Sleep(ReadBackoffMs * attempt);
@@ -135,23 +139,19 @@ public sealed class AccountRegistry
 
         if (TryParse(text!) is { } file)
         {
-            return file;
+            return new LoadOutcome(file, false, false, null);
         }
 
         try
         {
-            QuarantinedTo = MoveAside();
+            return new LoadOutcome(AccountsFile.Empty, false, false, MoveAside());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Could not move it aside: the damaged file stays where it is and Save refuses.
-            QuarantineFailed = true;
-            Unreadable = true;
+            return new LoadOutcome(AccountsFile.Empty, true, true, null);
         }
-
-        return AccountsFile.Empty;
     }
-
     /// <summary>
     /// Replaces the file atomically under a named mutex in the <c>Local\</c> namespace (one Windows session, so every copy of the app one user runs;
     /// an elevated copy cannot be assumed to share it), so two processes or instances saving at once serialise instead of colliding on one temp file.
@@ -162,7 +162,7 @@ public sealed class AccountRegistry
         {
             if (Unreadable)
             {
-                throw new IOException("the accounts file exists but could not be read, so it is not replaced");
+                throw new AccountsFileLockedException(new IOException("the accounts file exists but could not be read, so it is not replaced"));
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
@@ -187,8 +187,9 @@ public sealed class AccountRegistry
     {
         try
         {
-            foreach (var orphan in Directory.EnumerateFiles(Path.GetDirectoryName(_path)!, "accounts.json.*.tmp"))
+            foreach (var orphan in Directory.EnumerateFiles(Path.GetDirectoryName(_path)!, "accounts.json.*").Where(f => f.EndsWith(".tmp", StringComparison.Ordinal)))
             {
+                // Includes the fixed name "accounts.json.tmp" an earlier version always wrote through.
                 if (DateTime.UtcNow - File.GetLastWriteTimeUtc(orphan) > OrphanTempAge)
                 {
                     File.Delete(orphan);
