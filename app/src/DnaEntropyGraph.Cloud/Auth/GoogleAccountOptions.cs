@@ -17,6 +17,13 @@ public sealed class GoogleAccountOptions
     /// <summary>Null in production (Google's own HTTP stack, real Google URLs). A test passes a fake that answers those same URLs.</summary>
     public HttpMessageHandler? HttpHandler { get; init; }
 
+    /// <summary>
+    /// What <see cref="GoogleAccountService.SelectedProjectId"/> answers while signed in, until the wizard stores a real
+    /// per-account choice (issue #520). Production sets it to the id the fake used, so a run still reaches the (fake,
+    /// not-connected) gateways and fails as cloud_not_connected. It must be removed when the real gateways are wired.
+    /// </summary>
+    public string? ProjectIdUntilSelectionExists { get; init; }
+
     /// <summary>How long the browser page may stay unfinished before the sign-in gives up.</summary>
     public TimeSpan SignInTimeout { get; init; } = TimeSpan.FromMinutes(5);
 }

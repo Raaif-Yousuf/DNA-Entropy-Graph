@@ -95,4 +95,22 @@ public class AccountSurfaceTests
         viewModel.SignInActionText.ShouldBeEmpty();
         navigator.Received(1).NavigateTo("Wizard/Project");
     }
+
+    [Fact]
+    public async Task The_sign_in_results_are_applied_on_the_UI_thread_when_there_is_a_dispatcher()
+    {
+        var account = Substitute.For<IGcpAccount>();
+        account.SignInAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException(new AccountAuthException(AuthErrorCodes.SigninExpired)));
+        var dispatcher = Substitute.For<IDispatcher>();
+        var queued = new List<Action>();
+        dispatcher.When(d => d.Enqueue(Arg.Any<Action>())).Do(call => queued.Add(call.Arg<Action>()));
+        var viewModel = new WizardViewModel(account, Substitute.For<IDialogService>(), Substitute.For<INavigator>(), Strings(), dispatcher);
+
+        await viewModel.SignInCommand.ExecuteAsync(null);
+
+        viewModel.SignInErrorText.ShouldBeEmpty("bound properties must not change off the UI thread");
+        queued.Count.ShouldBe(1);
+        queued[0]();
+        viewModel.SignInErrorText.ShouldBe("AuthError_SIGNIN_EXPIRED");
+    }
 }

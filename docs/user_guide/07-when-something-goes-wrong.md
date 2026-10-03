@@ -33,6 +33,16 @@ online, then click **Try again**. *(`SIGNIN_NETWORK`)*
 latest installer from the app's download page and install it over this copy.
 *(`OAUTH_CLIENT_MISSING`, `OAUTH_CLIENT_INVALID`)*
 
+**"The app could not open your web browser"**, set a default web browser in Windows Settings,
+then click **Sign in again**. *(`SIGNIN_BROWSER`)*
+
+**"The app could not listen on this computer for Google's reply"**, a security program or a
+company policy blocked it. Allow DNA Entropy Graph in your security program, then click
+**Sign in again**. *(`SIGNIN_LOOPBACK`)*
+
+**"The app could not save your sign-in"**, free some disk space or make sure the folder
+`%LOCALAPPDATA%\DNAEntropyGraph` is not read-only, then click **Sign in again**. *(`SIGNIN_STORAGE`)*
+
 **Using more than one Google account:** each account you sign in with is remembered
 separately on this computer, so you can switch between them without signing in again.
 Signing out removes the sign-in from this computer and also tells Google to cancel it.

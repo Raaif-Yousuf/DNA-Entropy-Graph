@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Security.Cryptography;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using Google.Apis.Auth.OAuth2;
@@ -30,7 +32,11 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     private readonly GoogleAccountOptions _options;
     private readonly DpapiTokenStore _store;
     private readonly AccountRegistry _registry;
+    // _gate guards the account list and the token files and is only ever held for short, local work.
+    // _signInGate serialises sign-ins and IS held across the wait on the browser, so that wait never blocks a
+    // token call for the account that is already signed in (cold review of #48).
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _signInGate = new(1, 1);
     private readonly object _loadLock = new();
     private AccountsFile? _state;
 
@@ -45,8 +51,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
     public bool IsSignedIn => State.Active is { NeedsSignIn: false };
 
-    /// <summary>Always null for now: the project is chosen in the setup wizard (a later issue) and will be stored per account.</summary>
-    public string? SelectedProjectId => null;
+    /// <summary>
+    /// <see cref="GoogleAccountOptions.ProjectIdUntilSelectionExists"/> while signed in, null otherwise: the project is
+    /// chosen in the setup wizard and stored per account in a later issue (#520). Signed out stays null, so a run
+    /// still fails with no_project before anyone signs in, exactly as it did against the fake.
+    /// </summary>
+    public string? SelectedProjectId => IsSignedIn ? _options.ProjectIdUntilSelectionExists : null;
 
     public AccountInfo? CurrentAccount => State.Active is { } active ? ToInfo(active) : null;
 
@@ -65,7 +75,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
     public async Task SignInAsync(CancellationToken cancellationToken)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _signInGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var client = _options.ClientLoader.Load();
@@ -82,19 +92,30 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.SigninFailed, "Google returned no refresh token");
             }
 
-            await _store.StoreAsync(identity.Sub, token).ConfigureAwait(false);
-            var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false);
-            var current = State;
-            Commit(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record]));
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _store.StoreAsync(identity.Sub, token).ConfigureAwait(false);
+                var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false);
+                var current = State;
+                Commit(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record]));
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        catch (Exception ex) when (IsLocalStorageFailure(ex))
+        {
+            throw StorageFailure(ex);
         }
         finally
         {
-            _gate.Release();
+            _signInGate.Release();
         }
 
         RaiseChanged();
     }
-
     public async Task<bool> SignOutAsync(CancellationToken cancellationToken)
     {
         bool revoked;
@@ -114,6 +135,10 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             var remaining = State.Accounts.Where(a => a.Sub != active.Sub).ToList();
             var next = remaining.FirstOrDefault(a => !a.NeedsSignIn) ?? remaining.FirstOrDefault();
             Commit(new AccountsFile(next?.Sub, remaining));
+        }
+        catch (Exception ex) when (IsLocalStorageFailure(ex))
+        {
+            throw StorageFailure(ex);
         }
         finally
         {
@@ -136,6 +161,10 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             }
 
             Commit(current with { ActiveSub = sub });
+        }
+        catch (Exception ex) when (IsLocalStorageFailure(ex))
+        {
+            throw StorageFailure(ex);
         }
         finally
         {
@@ -193,10 +222,17 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             {
                 throw new AccountAuthException(AuthErrorCodes.SigninFailed, $"token endpoint answered {ex.Error?.Error}", ex);
             }
-            catch (HttpRequestException ex)
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
+                // A request timeout reaches us as a TaskCanceledException the caller did not ask for, or, after
+                // Google's refresh manager has retried it three times, as an InvalidOperationException
+                // ("could not be refreshed. Errors: timeout, ..."); a refused token is invalid_grant, handled above.
                 throw new AccountAuthException(AuthErrorCodes.NetworkUnavailable, "the token endpoint could not be reached", ex);
             }
+        }
+        catch (Exception ex) when (IsLocalStorageFailure(ex))
+        {
+            throw StorageFailure(ex);
         }
         finally
         {
@@ -227,9 +263,13 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             throw new AccountAuthException(AuthErrorCodes.SigninFailed, $"token endpoint answered {ex.Error?.Error}", ex);
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             throw new AccountAuthException(AuthErrorCodes.NetworkUnavailable, "Google could not be reached", ex);
+        }
+        catch (Win32Exception ex)
+        {
+            throw new AccountAuthException(AuthErrorCodes.BrowserUnavailable, "the browser could not be started", ex);
         }
         catch (TimeoutException ex)
         {
@@ -255,7 +295,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             return true; // Google no longer knows the token: that is revoked
         }
-        catch (Exception ex) when (ex is TokenResponseException or HttpRequestException or AccountAuthException)
+        catch (Exception ex) when (ex is TokenResponseException or HttpRequestException or AccountAuthException
+            || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             return false;
         }
@@ -293,6 +334,11 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             Accounts = [.. file.Accounts.Select(a => !a.NeedsSignIn && DpapiTokenStore.IsSafeKey(a.Sub) && File.Exists(_store.PathFor(a.Sub)) ? a : a with { NeedsSignIn = true })],
         };
+
+    private static bool IsLocalStorageFailure(Exception ex) => ex is IOException or UnauthorizedAccessException or CryptographicException;
+
+    /// <summary>Only the exception type is kept: its message can carry a path with the user's name in it.</summary>
+    private static AccountAuthException StorageFailure(Exception ex) => new(AuthErrorCodes.StorageFailed, ex.GetType().Name, ex);
 
     private static AccountInfo ToInfo(AccountRecord record) => new(record.Sub, record.Email, record.NeedsSignIn);
 

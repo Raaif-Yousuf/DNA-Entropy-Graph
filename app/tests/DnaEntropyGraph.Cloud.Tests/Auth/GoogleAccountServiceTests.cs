@@ -272,18 +272,105 @@ public class GoogleAccountServiceTests
     }
 
     [Fact]
-    public async Task A_callback_with_the_wrong_state_is_refused_and_no_code_is_exchanged()
+    public async Task A_stray_request_with_the_wrong_state_is_refused_and_the_real_redirect_still_completes_the_sign_in()
     {
         using var harness = new AuthHarness();
-        harness.Google.Behaviour = BrowserBehaviour.WrongState;
+        harness.Google.Behaviour = BrowserBehaviour.WrongStateThenReal;
         var service = harness.NewService();
 
-        var failure = await FailureOf(() => service.SignInAsync(CancellationToken.None));
+        await service.SignInAsync(CancellationToken.None);
 
-        failure.Code.ShouldBe(AuthErrorCodes.SigninFailed);
-        harness.Google.TokenRequests.ShouldBeEmpty();
+        service.IsSignedIn.ShouldBeTrue();
+        harness.Google.TokenRequests.Count.ShouldBe(1, "the forged request's code must never be exchanged");
     }
 
+    [Fact]
+    public async Task Only_forged_requests_never_sign_anyone_in_and_the_wait_ends_as_a_timeout()
+    {
+        using var harness = new AuthHarness { SignInTimeout = TimeSpan.FromMilliseconds(500) };
+        harness.Google.Behaviour = BrowserBehaviour.WrongStateOnly;
+        var service = harness.NewService();
+
+        (await FailureOf(() => service.SignInAsync(CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.SigninTimeout);
+
+        harness.Google.TokenRequests.ShouldBeEmpty();
+        service.IsSignedIn.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_sign_in_waiting_on_the_browser_does_not_block_the_signed_in_account()
+    {
+        using var harness = new AuthHarness();
+        harness.Google.ExpiresInSeconds = 30; // forces a refresh, which takes the service's lock
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+        harness.Google.Behaviour = BrowserBehaviour.Hang;
+        using var cts = new CancellationTokenSource();
+        var pending = service.SignInAsync(cts.Token);
+        await Task.Delay(300, TestContext.Current.CancellationToken); // let the sign-in reach its wait on the browser
+
+        var token = await service.GetAccessTokenAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await service.SwitchAccountAsync("1001", TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        token.ShouldStartWith("at-");
+        pending.IsCompleted.ShouldBeFalse();
+        cts.Cancel();
+        await Should.ThrowAsync<OperationCanceledException>(() => pending);
+    }
+
+    [Fact]
+    public async Task A_browser_that_cannot_be_opened_is_SIGNIN_BROWSER()
+    {
+        using var harness = new AuthHarness { BrowserOverride = new ThrowingBrowser(new System.ComponentModel.Win32Exception("no browser registered")) };
+
+        var failure = await FailureOf(() => harness.NewService().SignInAsync(CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.BrowserUnavailable);
+    }
+
+    [Fact]
+    public async Task A_folder_that_cannot_be_written_is_SIGNIN_STORAGE_not_a_crash()
+    {
+        using var harness = new AuthHarness();
+        File.WriteAllText(harness.AuthDirectory, "a file where the folder should be");
+
+        var failure = await FailureOf(() => harness.NewService().SignInAsync(CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.StorageFailed);
+    }
+
+    [Fact]
+    public async Task A_token_request_that_times_out_is_a_network_problem_not_a_cancellation_or_an_expiry()
+    {
+        using var harness = new AuthHarness();
+        harness.Google.ExpiresInSeconds = 30;
+        await harness.SignedInAsync("1001", "first@example.test");
+        var service = harness.NewService();
+        harness.Google.TokenRequestsTimeOut = true;
+
+        var failure = await FailureOf(() => service.GetAccessTokenAsync(CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.NetworkUnavailable);
+        service.IsSignedIn.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_production_HTTP_path_with_no_injected_handler_runs_the_flow_up_to_the_users_choice()
+    {
+        // No handler means Google's own HttpClient stack and the real Google URLs. The user declining needs no
+        // network, so this proves the flow is constructible and reaches the browser with the production settings.
+        using var harness = new AuthHarness { UseProductionHttp = true };
+        harness.Google.Behaviour = BrowserBehaviour.Deny;
+
+        var failure = await FailureOf(() => harness.NewService().SignInAsync(CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.SigninCancelled);
+        harness.Google.AuthorizationRequests.Single()["code_challenge_method"].ShouldBe("S256");
+    }
+
+    private sealed class ThrowingBrowser(Exception failure) : DnaEntropyGraph.Cloud.Auth.IBrowserLauncher
+    {
+        public Task LaunchAsync(Uri url, CancellationToken cancellationToken) => throw failure;
+    }
     [Fact]
     public async Task A_page_never_completed_is_SIGNIN_TIMEOUT_and_cancelling_is_a_cancellation()
     {

@@ -18,6 +18,7 @@ public sealed partial class WizardViewModel : ObservableObject
     private readonly IDialogService _dialogService;
     private readonly INavigator _navigator;
     private readonly IStringResourceProvider _strings;
+    private readonly IDispatcher? _dispatcher;
 
     [ObservableProperty]
     private bool _isSignedIn;
@@ -30,9 +31,10 @@ public sealed partial class WizardViewModel : ObservableObject
     [ObservableProperty]
     private string _signInActionText = string.Empty;
 
-    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings)
+    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null)
     {
         _strings = strings;
+        _dispatcher = dispatcher;
         _gcpAccount = gcpAccount;
         _dialogService = dialogService;
         _navigator = navigator;
@@ -48,18 +50,35 @@ public sealed partial class WizardViewModel : ObservableObject
         }
         catch (AccountAuthException failure)
         {
-            SignInErrorText = _strings.GetString(AuthErrorCodes.ResourceKey(failure.Code));
-            SignInActionText = AuthErrorCodes.ActionResourceKey(failure.Code) is { } actionKey ? _strings.GetString(actionKey) : string.Empty;
-            IsSignedIn = _gcpAccount.IsSignedIn;
+            // The command resumes off the UI thread (ConfigureAwait(false)), and these properties are bound to it.
+            OnUiThread(() =>
+            {
+                SignInErrorText = _strings.GetString(AuthErrorCodes.ResourceKey(failure.Code));
+                SignInActionText = AuthErrorCodes.ActionResourceKey(failure.Code) is { } actionKey ? _strings.GetString(actionKey) : string.Empty;
+                IsSignedIn = _gcpAccount.IsSignedIn;
+            });
             return;
         }
 
-        SignInErrorText = string.Empty;
-        SignInActionText = string.Empty;
-        IsSignedIn = _gcpAccount.IsSignedIn;
-        if (IsSignedIn)
+        OnUiThread(() =>
         {
-            _navigator.NavigateTo("Wizard/Project");
-        }
+            SignInErrorText = string.Empty;
+            SignInActionText = string.Empty;
+            IsSignedIn = _gcpAccount.IsSignedIn;
+            if (IsSignedIn)
+            {
+                _navigator.NavigateTo("Wizard/Project");
+            }
+        });
     }
-}
+
+    private void OnUiThread(Action action)
+    {
+        if (_dispatcher is null)
+        {
+            action();
+            return;
+        }
+
+        _dispatcher.Enqueue(action);
+    }}

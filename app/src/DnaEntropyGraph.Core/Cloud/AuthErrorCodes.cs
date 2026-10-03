@@ -28,6 +28,15 @@ public static class AuthErrorCodes
     /// <summary>The OAuth client file exists but is not a Google Desktop-app client download.</summary>
     public const string OAuthClientInvalid = "OAUTH_CLIENT_INVALID";
 
+    /// <summary>The system browser could not be opened (no default browser registered, or Windows refused).</summary>
+    public const string BrowserUnavailable = "SIGNIN_BROWSER";
+
+    /// <summary>The app could not listen on this computer for Google's reply (a security program or a policy blocked it).</summary>
+    public const string LoopbackUnavailable = "SIGNIN_LOOPBACK";
+
+    /// <summary>The sign-in could not be saved to, or read from, the app's folder (disk full, read-only, no access).</summary>
+    public const string StorageFailed = "SIGNIN_STORAGE";
+
     /// <summary>A switch to an account this PC has no sign-in for.</summary>
     public const string AccountNotFound = "ACCOUNT_NOT_FOUND";
 
@@ -35,7 +44,7 @@ public static class AuthErrorCodes
     public static IReadOnlyList<string> All { get; } =
     [
         SigninExpired, SigninCancelled, SigninTimeout, SigninFailed, NetworkUnavailable,
-        OAuthClientMissing, OAuthClientInvalid, AccountNotFound,
+        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed,
     ];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (plain, non-dotted, literal so the orphan-resource scan sees it).</summary>
@@ -49,6 +58,9 @@ public static class AuthErrorCodes
         OAuthClientMissing => "AuthError_OAUTH_CLIENT_MISSING",
         OAuthClientInvalid => "AuthError_OAUTH_CLIENT_INVALID",
         AccountNotFound => "AuthError_ACCOUNT_NOT_FOUND",
+        BrowserUnavailable => "AuthError_SIGNIN_BROWSER",
+        LoopbackUnavailable => "AuthError_SIGNIN_LOOPBACK",
+        StorageFailed => "AuthError_SIGNIN_STORAGE",
         _ => "AuthError_SIGNIN_FAILED",
     };
 
@@ -58,7 +70,7 @@ public static class AuthErrorCodes
     /// </summary>
     public static string? ActionResourceKey(string? code) => code switch
     {
-        SigninExpired or SigninCancelled or SigninTimeout or SigninFailed or AccountNotFound => "AuthAction_SignInAgain",
+        SigninExpired or SigninCancelled or SigninTimeout or SigninFailed or AccountNotFound or BrowserUnavailable or LoopbackUnavailable or StorageFailed => "AuthAction_SignInAgain",
         NetworkUnavailable => "AuthAction_TryAgain",
         _ => null,
     };

@@ -70,10 +70,12 @@ public sealed class LoopbackCodeReceiver : ICodeReceiver, IDisposable
                     continue;
                 }
 
+                // Anything else that reaches this port (a stale tab, another program) must not end the sign-in: refuse
+                // it and keep waiting for the real redirect or the timeout.
                 if (received.GetValueOrDefault("state") != state)
                 {
                     Respond(context, HttpStatusCode.BadRequest, _pages.Failure());
-                    throw new AccountAuthException(AuthErrorCodes.SigninFailed, "the redirect's state did not match");
+                    continue;
                 }
 
                 var failed = received.ContainsKey("error");
@@ -99,7 +101,15 @@ public sealed class LoopbackCodeReceiver : ICodeReceiver, IDisposable
         for (var attempt = 0; ; attempt++)
         {
             var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-            probe.Start();
+            try
+            {
+                probe.Start();
+            }
+            catch (System.Net.Sockets.SocketException ex)
+            {
+                throw new AccountAuthException(AuthErrorCodes.LoopbackUnavailable, "no loopback socket could be opened", ex);
+            }
+
             var port = ((IPEndPoint)probe.LocalEndpoint).Port;
             probe.Stop();
 
@@ -109,10 +119,15 @@ public sealed class LoopbackCodeReceiver : ICodeReceiver, IDisposable
             {
                 listener.Start();
             }
-            catch (HttpListenerException) when (attempt < 5)
+            catch (HttpListenerException ex)
             {
                 listener.Close();
-                continue;
+                if (attempt < 5)
+                {
+                    continue;
+                }
+
+                throw new AccountAuthException(AuthErrorCodes.LoopbackUnavailable, "no loopback port could be opened", ex);
             }
 
             _listener = listener;

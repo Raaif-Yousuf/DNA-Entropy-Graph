@@ -41,15 +41,21 @@ internal sealed class AuthHarness : IDisposable
 
     public TimeSpan SignInTimeout { get; set; } = TimeSpan.FromSeconds(20);
 
+    /// <summary>When set, the service uses this instead of the fake browser.</summary>
+    public IBrowserLauncher? BrowserOverride { get; set; }
+
+    /// <summary>When true the service gets no HTTP handler: Google's own HTTP stack, as in production.</summary>
+    public bool UseProductionHttp { get; set; }
+
     /// <summary>A service over this harness's folder; calling it twice is "the app restarted".</summary>
     public GoogleAccountService NewService() => new(new GoogleAccountOptions
     {
         AuthDirectory = AuthDirectory,
         ClientLoader = new OAuthClientLoader([ClientFile]),
-        Browser = Google,
+        Browser = BrowserOverride ?? Google,
         Pages = new LoopbackPages(() => "done", () => "failed"),
         Protector = new XorProtector(),
-        HttpHandler = Google,
+        HttpHandler = UseProductionHttp ? null : Google,
         SignInTimeout = SignInTimeout,
     });
 

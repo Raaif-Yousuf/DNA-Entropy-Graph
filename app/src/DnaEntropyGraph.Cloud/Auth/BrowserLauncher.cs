@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DnaEntropyGraph.Core.Cloud;
 
 namespace DnaEntropyGraph.Cloud.Auth;
 
@@ -13,7 +14,16 @@ public sealed class SystemBrowserLauncher : IBrowserLauncher
 {
     public Task LaunchAsync(Uri url, CancellationToken cancellationToken)
     {
-        Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })?.Dispose();
+        try
+        {
+            Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
+        {
+            // No default browser registered, or Windows refused to start it.
+            throw new AccountAuthException(AuthErrorCodes.BrowserUnavailable, ex.GetType().Name, ex);
+        }
+
         return Task.CompletedTask;
     }
 }

@@ -45,6 +45,21 @@ public class AuthErrorResourceTests
     }
 
     [Fact]
+    public void Every_auth_error_code_is_in_the_copy_catalog_and_the_triage_roster()
+    {
+        var repo = Path.GetFullPath(Path.Combine(RepoPaths.AppRoot, ".."));
+        var catalog = File.ReadAllText(Path.Combine(repo, "docs", "copy_catalog.md"));
+        var triage = File.ReadAllText(Path.Combine(repo, "scripts", "triage_diagnostics.py"));
+
+        AuthErrorCodes.All.Count.ShouldBeGreaterThanOrEqualTo(11);
+        foreach (var code in AuthErrorCodes.All)
+        {
+            catalog.ShouldContain($"| `{code}` |", customMessage: $"docs/copy_catalog.md has no row for auth error code {code}");
+            triage.ShouldContain($"\"{code}\"", customMessage: $"scripts/triage_diagnostics.py KNOWN_CLOUD_ERROR_CODES lacks {code}");
+        }
+    }
+
+    [Fact]
     public void The_browser_close_pages_exist()
     {
         var resw = ReswValues();

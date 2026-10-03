@@ -82,12 +82,19 @@ public static class ServiceRegistration
                 ? OAuthClientLoader.DefaultCandidates(Path.GetDirectoryName(settingsPath)!, AppContext.BaseDirectory)
                 : [Path.Combine(appDataRoot, OAuthClientLoader.FileName)]),
             Browser = new SystemBrowserLauncher(),
+
+            // Until #520 stores a per-account project, a signed-in account answers the id the fake used, so a run
+            // still reaches the not-connected gateways and fails as cloud_not_connected (an honest message) rather than
+            // as no_project, which names a project picker that does not exist yet. Remove with the real gateways (#56).
+            ProjectIdUntilSelectionExists = "fake-project",
             Pages = new LoopbackPages(
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserSuccess"),
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserFailure")),
         });
         services.AddSingleton<GoogleAccountService>();
         services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<GoogleAccountService>());
+        // No consumer yet: the real gateways (#56) take their access token from here. Registered now so that swap
+        // touches only the gateways.
         services.AddSingleton<IGcpAccessTokenSource>(sp => sp.GetRequiredService<GoogleAccountService>());
 
         // Issue #258: every gateway the app resolves is wrapped in the one
@@ -99,9 +106,10 @@ public static class ServiceRegistration
         services.AddSingleton<CloudRetryOptions>(_ => new CloudRetryOptions());
         services.AddSingleton<CloudRetryLog>();
         services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<CloudRetryLog>());
-        // The real account refreshes the real token on a 401. Inert while the gateways are FakeGcp (it never answers a
-        // real 401), correct the moment a real gateway is wrapped, so the swap in #56 touches only the gateways.
-        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<GoogleAccountService>());
+        // SWITCH POINT (#56): while every gateway is FakeGcp the refresher is FakeGcp too, because a 401 from a fake
+        // must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked
+        // about). When the first real gateway is wrapped, register GoogleAccountService here instead.
+        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<CloudCallPipeline>(sp => new CloudCallPipeline(
             sp.GetRequiredService<CloudRetryOptions>(),
             sp.GetRequiredService<ICloudTokenRefresher>(),

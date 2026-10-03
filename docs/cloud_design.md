@@ -700,6 +700,10 @@ GCS blobstore reads each shard fully into memory.
 `GoogleAccountService` (`DnaEntropyGraph.Cloud/Auth/`) is the one implementation of Core's `IGcpAccount`,
 `IGcpAccessTokenSource` and `ICloudTokenRefresher`. Production DI registers it as all three. The gateways are
 still `FakeGcp` until the real ones land, so who is signed in is real while what the gateways do is not.
+Two seams are deliberately still the fake, with the switch point recorded in `ServiceRegistration.cs`: `ICloudTokenRefresher`
+(a fake 401 must not call Google's token endpoint; switch to `GoogleAccountService` when the first real gateway is
+wrapped, #56) and the project id (`ProjectIdUntilSelectionExists = "fake-project"` while signed in, until #520 stores a
+per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet; the real gateways read it.
 
 - **Flow.** `PkceGoogleAuthorizationCodeFlow` from Google.Apis.Auth (it sends `code_challenge`,
   `code_challenge_method=S256` and the matching `code_verifier`) driven by `AuthorizationCodeInstalledApp`, with our
@@ -716,9 +720,17 @@ still `FakeGcp` until the real ones land, so who is signed in is real while what
   `OAUTH_CLIENT_INVALID` name the installer as the action: the user never has this file, the build does.
 - **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
   and the account entry whatever Google said, and makes the next remaining account current.
-- **Not here yet:** the selected project (`IGcpAccount.SelectedProjectId` is null until the wizard's project step
-  stores one per account), and any page that lists accounts, switches or signs out (the commands exist on
-  `IGcpAccount`; the wizard's Sign in button and the shell's status pill are wired).
+- **Not here yet:** the selected project (a placeholder until #520), and any UI that starts a sign-in, lists
+  accounts, switches or signs out: no page binds `WizardViewModel.SignInCommand` yet (#99, #519), so today nothing
+  in the shipped UI can start a sign-in. What is wired in the UI is the shell status pill, which follows
+  `AccountChanged` and shows the account email.
+- **Failures that are not Google's answer** are mapped too, so a command never crashes: browser cannot start
+  (`SIGNIN_BROWSER`), no loopback port (`SIGNIN_LOOPBACK`), token folder not writable (`SIGNIN_STORAGE`), HTTP
+  timeout (`SIGNIN_NETWORK`). The interactive browser wait does not hold the lock that token calls use, so a
+  pending sign-in for a second account never stalls the first. A request on the loopback port with the wrong
+  `state` gets a 400 and is ignored; the wait ends on the real redirect or the timeout.
+- **Roster:** `AuthErrorCodes.All`, `docs/copy_catalog.md` and `scripts/triage_diagnostics.py` agree, enforced by
+  `Guards.Tests/AuthErrorResourceTests`.
 - **Testing.** `Cloud.Tests/Auth` runs the whole flow with no network and no browser: a fake that answers Google's
   real token and revoke URLs and checks the PKCE proof, and a fake browser that calls the real loopback listener back.
 ## Related

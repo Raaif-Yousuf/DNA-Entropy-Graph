@@ -41,6 +41,9 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
     /// <summary>When true every token request fails at the transport level (no network).</summary>
     public bool NetworkDown { get; set; }
 
+    /// <summary>When true every token request times out (HttpClient surfaces that as a TaskCanceledException the caller did not ask for).</summary>
+    public bool TokenRequestsTimeOut { get; set; }
+
     /// <summary>When false the token response has no <c>id_token</c>.</summary>
     public bool ReturnIdToken { get; set; } = true;
 
@@ -97,12 +100,17 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
             var callback = Behaviour switch
             {
                 BrowserBehaviour.Deny => $"{redirect}?error=access_denied&state={Uri.EscapeDataString(query["state"])}",
-                BrowserBehaviour.WrongState => $"{redirect}?code={code}&state=attacker-chosen",
+                BrowserBehaviour.WrongStateOnly or BrowserBehaviour.WrongStateThenReal => $"{redirect}?code={code}&state=attacker-chosen",
                 _ => $"{redirect}?code={code}&state={Uri.EscapeDataString(query["state"])}",
             };
 
             using var http = new HttpClient();
             using var _ = await http.GetAsync(callback, CancellationToken.None);
+            if (Behaviour == BrowserBehaviour.WrongStateThenReal)
+            {
+                // The stray request got its 400; now the genuine redirect arrives.
+                using var real = await http.GetAsync($"{redirect}?code={code}&state={Uri.EscapeDataString(query["state"])}", CancellationToken.None);
+            }
         }, CancellationToken.None);
 
         return Task.CompletedTask;
@@ -124,6 +132,11 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
             if (NetworkDown)
             {
                 throw new HttpRequestException("fake: no network");
+            }
+
+            if (TokenRequestsTimeOut)
+            {
+                throw new TaskCanceledException("fake: the request timed out");
             }
 
             lock (_gate)
@@ -244,6 +257,10 @@ internal enum BrowserBehaviour
 {
     Approve,
     Deny,
-    WrongState,
+    /// <summary>Only a request with the wrong state ever arrives.</summary>
+    WrongStateOnly,
+
+    /// <summary>A request with the wrong state arrives first, then the real redirect.</summary>
+    WrongStateThenReal,
     Hang,
 }
