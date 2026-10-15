@@ -125,4 +125,51 @@ public sealed class ActiveRunsTests
         settled.IsCompletedSuccessfully.ShouldBeTrue("a failed cancel still ends the wait");
         runs.WhenCancelSettledAsync("job-1").IsCompletedSuccessfully.ShouldBeTrue("no cancel in progress is not something to wait for");
     }
+
+    [Fact]
+    public async Task Started_is_raised_once_the_job_is_registered_and_not_for_a_refused_start()
+    {
+        // #559 r5: a signal a test (or a screen) waits on instead of polling IsActive. Raised only after IsActive is true, so a cancel that follows finds the driver.
+        var runs = new ActiveRuns();
+        var raised = new List<(string JobId, bool WasActive)>();
+        runs.Started += jobId => raised.Add((jobId, runs.IsActive(jobId)));
+        var release = new TaskCompletionSource();
+
+        var first = runs.TryStart("job-1", _ => release.Task);
+        runs.TryStart("job-1", _ => Task.CompletedTask).ShouldBeNull();
+
+        raised.ShouldBe([("job-1", true)]);
+        release.SetResult();
+        await first!;
+    }
+
+    [Fact]
+    public async Task A_Started_handler_that_throws_does_not_stop_the_driver()
+    {
+        var runs = new ActiveRuns();
+        runs.Started += _ => throw new InvalidOperationException("handler");
+        var ran = false;
+
+        var task = runs.TryStart("job-1", _ =>
+        {
+            ran = true;
+            return Task.CompletedTask;
+        });
+        await task!;
+
+        ran.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_Started_handler_that_throws_does_not_starve_the_handlers_after_it()
+    {
+        var runs = new ActiveRuns();
+        var second = new List<string>();
+        runs.Started += _ => throw new InvalidOperationException("first handler");
+        runs.Started += jobId => second.Add(jobId);
+
+        await runs.TryStart("job-1", _ => Task.CompletedTask)!;
+
+        second.ShouldBe(["job-1"], "every subscriber hears the start, whatever an earlier one did");
+    }
 }
