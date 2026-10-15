@@ -70,7 +70,7 @@ public class RunOptionsTests
         options.FindGenes.ShouldBeTrue();
 
         // Output
-        options.OutputFiles.ShouldBe(OutputFileKinds.All);
+        options.OutputFiles.ShouldBe(OutputCatalog.Defaults);
         options.TrackFormat.ShouldBe(TrackFormat.BedGraph);
         options.NameTemplate.ShouldBe("{file}");
 
@@ -101,6 +101,6 @@ public class RunOptionsTests
         RunOptions BuildLikeAnExistingCaller() => new() { ModelId = "evo2_7b", RunTarget = "Cloud", OutputFolder = null };
 
         var options = BuildLikeAnExistingCaller();
-        options.OutputFiles.ShouldBe(OutputFileKinds.All);
+        options.OutputFiles.ShouldBe(OutputCatalog.Defaults);
     }
 }
