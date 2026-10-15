@@ -65,7 +65,7 @@ public sealed class NewRunViewModelOutputTests : IDisposable
         _strings,
         new LocalPastedInputStore(Path.Combine(_dir, "appdata")),
         _estimates,
-        new OutputSelectionStore(_settings));
+        new OutputSelectionStore(_settings), NullDiagnosticsLog.Instance);
 
     private async Task AddFile(NewRunViewModel vm, string name, string content)
     {
@@ -161,7 +161,7 @@ public sealed class NewRunViewModelOutputTests : IDisposable
         var navigator = Substitute.For<INavigator>();
         var vm = new NewRunViewModel(
             Substitute.For<IFilePicker>(), _jobEngine, navigator, _strings,
-            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(settings));
+            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(settings), NullDiagnosticsLog.Instance);
         await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
 
         await Should.NotThrowAsync(() => vm.StartRunCommand.ExecuteAsync(null));
@@ -177,7 +177,7 @@ public sealed class NewRunViewModelOutputTests : IDisposable
         navigator.When(n => n.NavigateTo(Arg.Any<string>(), Arg.Any<object?>())).Do(_ => throw new InvalidOperationException("frame gone"));
         var vm = new NewRunViewModel(
             Substitute.For<IFilePicker>(), _jobEngine, navigator, _strings,
-            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(_settings));
+            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(_settings), NullDiagnosticsLog.Instance);
         await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
         Choice(vm, "wig").IsChecked = true;
 
@@ -197,7 +197,7 @@ public sealed class NewRunViewModelOutputTests : IDisposable
         navigator.When(n => n.NavigateTo(Arg.Any<string>(), Arg.Any<object?>())).Do(_ => throw new InvalidOperationException("frame gone"));
         var vm = new NewRunViewModel(
             Substitute.For<IFilePicker>(), _jobEngine, navigator, _strings,
-            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(settings));
+            new LocalPastedInputStore(Path.Combine(_dir, "appdata")), _estimates, new OutputSelectionStore(settings), NullDiagnosticsLog.Instance);
         await AddFile(vm, "a.fasta", ">a\n" + Dna + "\n");
 
         await Should.ThrowAsync<InvalidOperationException>(() => vm.StartRunCommand.ExecuteAsync(null));

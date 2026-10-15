@@ -44,6 +44,7 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly IInputFileSystem _files;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
     private readonly OutputSelectionStore _outputStore;
+    private readonly IDiagnosticsLog _log;
 
     // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
     // kept while the user switches between pills, and written back to the store only when a run starts.
@@ -90,10 +91,12 @@ public sealed partial class NewRunViewModel : ObservableObject
         IPastedInputStore pastedStore,
         ICostEstimateService estimates,
         OutputSelectionStore outputStore,
+        IDiagnosticsLog log,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null)
     {
         _outputStore = outputStore;
+        _log = log;
         _filePicker = filePicker;
         _jobEngine = jobEngine;
         _navigator = navigator;
@@ -305,6 +308,49 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Says a failure's line like any other operation does (after what another operation in flight has already said, replacing a
+    /// stale line only when the page is idle), then logs its class, never its message, which can carry a file name. The line comes
+    /// first and the log is best effort: a log that throws must not hide the line or escape the command.
+    /// </summary>
+    private void ReportFailure(Exception exception, string messageKey)
+    {
+        BeginOperation();
+        try
+        {
+            PostStatus([_strings.GetString(messageKey)]);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        try
+        {
+            _log.Warning("new-run", null, ErrorClass(exception));
+        }
+        catch (Exception)
+        {
+            // The log is advice for the diagnostics zip; the user has already been told what to do.
+        }
+    }
+
+    /// <summary>The exception type, plus the cloud error kind when it has one. Never the message.</summary>
+    private static string ErrorClass(Exception exception)
+        => exception is CloudOperationException cloud ? $"{nameof(CloudOperationException)}:{cloud.Kind}" : exception.GetType().Name;
+
+    /// <summary>
+    /// The line for a run that could not start, by what failed. What the runner interface can let out here: a file the app cannot
+    /// read while keeping its own copy (local), a sign-in or Google Cloud call that failed (cloud), or anything else, such as the
+    /// app's own settings or history store, including a plain <see cref="IOException"/> (a full disk under app data is not the user's file).
+    /// </summary>
+    private static string StartFailureKey(Exception exception) => exception switch
+    {
+        FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException => "NewRunStatusStartFailedFile",
+        CloudOperationException or AccountAuthException => "NewRunStatusStartFailedCloud",
+        _ => "NewRunStatusStartFailedOther",
+    };
+
     /// <summary>A drop: adds its real paths, and says one action when some items had no path or the drop could not be read.</summary>
     [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task AddDroppedAsync(DroppedItems? dropped)
@@ -337,10 +383,10 @@ public sealed partial class NewRunViewModel : ObservableObject
         {
             return;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // The picker is a COM call that can fail for reasons we cannot name (no window yet, a shell extension).
-            StatusMessage = _strings.GetString("NewRunStatusBrowseFailed");
+            ReportFailure(ex, "NewRunStatusBrowseFailed");
             return;
         }
 
@@ -485,10 +531,10 @@ public sealed partial class NewRunViewModel : ObservableObject
         {
             return;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // An exception out of a button command would end the app; say what to do instead.
-            StatusMessage = _strings.GetString("NewRunStatusStartFailed");
+            // An exception out of a button command would end the app; say what to do instead, for what actually failed.
+            ReportFailure(ex, StartFailureKey(ex));
             return;
         }
 
@@ -547,15 +593,17 @@ public sealed partial class NewRunViewModel : ObservableObject
         var pill = new InputPillItem(path, isPasted, _strings);
         Items.Add(pill);
         SelectedItem ??= pill;
-        var applied = await ValidateAsync(pill, cancellationToken);
-        if (!applied && pill.IsChecking && cancellationToken.IsCancellationRequested)
+        var outcome = await ValidateAsync(pill, cancellationToken);
+        if (outcome == CheckOutcome.NotStarted)
         {
             // Cancelled between adding the pill and starting its check: no check will ever report, so end the
-            // "Checking" state with the one action the user has (Remove, then add it again).
-            pill.AbandonLatest();
+            // "Checking" state with the one action the user has (Remove, then add it again). Any other outcome needs nothing here:
+            // a cancelled check ended its own state, and a superseded one left the pill to the newer check (a Treat as RNA click
+            // that is still running must not be marked stopped).
+            pill.AbandonIfNeverChecked();
         }
 
-        return (pill, applied);
+        return (pill, outcome == CheckOutcome.Applied);
     }
 
     /// <summary>A pasted sequence is our own copy under app data, so removing its pill removes it. A user's file is never touched (Hard Rule 14).</summary>
@@ -567,16 +615,32 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
     }
 
+    /// <summary>What became of one <see cref="ValidateAsync"/> call.</summary>
+    private enum CheckOutcome
+    {
+        /// <summary>This check's result is the one the pill shows.</summary>
+        Applied,
+
+        /// <summary>A newer check of the pill started first, so this result was dropped; the newer check owns the pill.</summary>
+        Superseded,
+
+        /// <summary>Cancelled while running: it ended its own checking state (unless a newer check had taken over).</summary>
+        Cancelled,
+
+        /// <summary>Cancelled before it began: it touched nothing.</summary>
+        NotStarted,
+    }
+
     /// <summary>
-    /// Checks one pill. True when this check's result is the one the pill shows. A check whose token was cancelled before
-    /// it began starts nothing (it would only take a newer generation than the check that replaced it and then abandon
-    /// it), and a cancelled or superseded check writes nothing the pill's newest check does not already own.
+    /// Checks one pill. A check whose token was cancelled before it began starts nothing (it would only take a newer
+    /// generation than the check that replaced it and then abandon it), and a cancelled or superseded check writes nothing
+    /// the pill's newest check does not already own.
     /// </summary>
-    private async Task<bool> ValidateAsync(InputPillItem pill, CancellationToken cancellationToken)
+    private async Task<CheckOutcome> ValidateAsync(InputPillItem pill, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            return false;
+            return CheckOutcome.NotStarted;
         }
 
         var generation = pill.BeginChecking();
@@ -587,18 +651,19 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
 
         var treatAsRna = IsTreatingAsRna;
-        var applied = false;
+        var outcome = CheckOutcome.Superseded;
         try
         {
             // Task.Run honours a token only before the delegate starts; WaitAsync is what lets a cancel end the wait for a check
             // already reading the file (the abandoned read finishes on its own and its result is dropped).
             var result = await Task.Run(() => _validate(pill.Path, InputFormat.Auto, AmbiguityPolicy.Keep, treatAsRna), cancellationToken)
                 .WaitAsync(cancellationToken);
-            applied = pill.Apply(result, generation);
+            outcome = pill.Apply(result, generation) ? CheckOutcome.Applied : CheckOutcome.Superseded;
         }
         catch (OperationCanceledException)
         {
             pill.Abandon(generation);
+            outcome = CheckOutcome.Cancelled;
         }
 
         OnPropertyChanged(nameof(OfferTreatAsRna));
@@ -613,7 +678,7 @@ public sealed partial class NewRunViewModel : ObservableObject
             _ = RefreshEstimateAsync();
         }
 
-        return applied;
+        return outcome;
     }
 
     /// <summary>
