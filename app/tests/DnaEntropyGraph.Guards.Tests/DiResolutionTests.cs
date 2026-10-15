@@ -271,6 +271,23 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public async Task An_open_with_file_reaches_the_New_run_screen_the_container_builds_and_waits_for_the_shell()
+    {
+        // Issue #108, wired-to-nothing: the router, the intake and the page's ViewModel share the one registered intake and readiness.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
+        await using var provider = services.BuildServiceProvider();
+        var readiness = provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.ShellReadiness>();
+        var viewModel = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>();
+        await viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(null);
+
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.NewRunIntake>()
+            .TryAdd(new DnaEntropyGraph.Presentation.ViewModels.DroppedItems([], 0, false)).ShouldBeTrue("the page's ViewModel attached to the registered intake");
+        readiness.IsReady.ShouldBeFalse("nothing but the window's Loaded handler marks the shell ready");
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.ActivationRouter>().ShouldNotBeNull();
+    }
+
+    [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {
         Should.NotThrow(() =>

@@ -1373,6 +1373,21 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="OpenResultsWhenDoneBox.Content" xml:space="preserve">
     <value>Open the Results page when a run finishes</value>
   </data>
+  <data name="OpenWithBox.Content" xml:space="preserve">
+    <value>Show DNA Entropy Graph in Open with for GenBank and FASTA files</value>
+  </data>
+  <data name="OpenWithExplainer.Text" xml:space="preserve">
+    <value>Right-click a .gb, .gbk, .fasta, .fa or .fna file in File Explorer, choose Open with, then DNA Entropy Graph, and it is added to New run. It only adds that menu entry for you; it never becomes the program a file opens in when you double-click it.</value>
+  </data>
+  <data name="OpenWithNotSaved" xml:space="preserve">
+    <value>Windows would not let the app change this. Turn the switch on or off again.</value>
+  </data>
+  <data name="OpenWithNotInstalled" xml:space="preserve">
+    <value>Open with can only be set up from the installed app, not from a copy run from source. Install DNA Entropy Graph from its download page.</value>
+  </data>
+  <data name="OpenWithSandbox" xml:space="preserve">
+    <value>This window is a test profile, and Open with belongs to your real Windows account. Start the app without a test profile to change it.</value>
+  </data>
   <data name="NotificationsNotSaved" xml:space="preserve">
     <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then change it again.</value>
   </data>

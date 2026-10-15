@@ -1,5 +1,6 @@
 using DnaEntropyGraph.App.Services;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -26,8 +27,11 @@ public sealed partial class MainWindow : Window
 {
     public ShellViewModel ViewModel { get; }
 
-    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService, WindowThemeApplier windowThemeApplier)
+    private readonly ShellReadiness _readiness;
+
+    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService, WindowThemeApplier windowThemeApplier, ShellReadiness readiness)
     {
+        _readiness = readiness;
         ViewModel = shellViewModel;
         InitializeComponent();
         Title = ViewModel.WindowTitle;
@@ -42,8 +46,12 @@ public sealed partial class MainWindow : Window
 
     // Issue #490: Loaded fires after App.OnLaunched has handed RootFrame to NavigationService,
     // so selecting New run (the first menu item, ShellViewModel.InitialPageKey) here navigates the frame too.
+    // Issue #108: only after that first navigation may an Open-with launch navigate (ShellReadiness), or it would be overwritten.
     private void RootNavigationView_Loaded(object sender, RoutedEventArgs e)
-        => RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
+    {
+        RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
+        _readiness.MarkReady();
+    }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
         => ViewModel.NavigateToCommand.Execute((args.SelectedItemContainer as NavigationViewItem)?.Tag);

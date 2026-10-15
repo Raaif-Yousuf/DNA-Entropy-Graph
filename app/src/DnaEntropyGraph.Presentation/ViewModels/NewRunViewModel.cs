@@ -17,7 +17,7 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// rules as the worker before any cloud resource exists (Hard Rule 2); <c>JobEngine</c> validates once more
 /// at run start.
 /// </summary>
-public sealed partial class NewRunViewModel : ObservableObject
+public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 {
     // The model the New run page runs. There is no model picker on the page yet (a bigger model needs a confirmation
     // and a cost estimate first), so this is the one model the app offers, not a property nothing binds.
@@ -42,6 +42,7 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly IPastedInputStore _pastedStore;
     private readonly ICostEstimateService _estimates;
     private readonly IInputFileSystem _files;
+    private readonly NewRunIntake? _intake;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
     private readonly OutputSelectionStore _outputStore;
     private readonly IDiagnosticsLog _log;
@@ -93,8 +94,10 @@ public sealed partial class NewRunViewModel : ObservableObject
         OutputSelectionStore outputStore,
         IDiagnosticsLog log,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
-        IInputFileSystem? files = null)
+        IInputFileSystem? files = null,
+        NewRunIntake? intake = null)
     {
+        _intake = intake;
         _outputStore = outputStore;
         _log = log;
         _filePicker = filePicker;
@@ -370,6 +373,24 @@ public sealed partial class NewRunViewModel : ObservableObject
             PostStatus([_strings.GetString("NewRunStatusDropVirtual")]);
         }
     }
+
+    /// <summary>
+    /// What the page forwards from its navigation parameter (issue #108): files handed over by "Open with" in Explorer arrive as
+    /// <see cref="DroppedItems"/> and are added like a drop; any other parameter (none, the usual case) is ignored.
+    /// </summary>
+    /// <remarks>It is also the "this screen is now showing" call: the screen attaches to the <see cref="NewRunIntake"/>, so later Open-with files are added here instead of to a fresh page.</remarks>
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private Task ReceiveNavigationParameterAsync(object? parameter)
+    {
+        _intake?.Attach(this);
+        return parameter is DroppedItems dropped ? AddDroppedAsync(dropped) : Task.CompletedTask;
+    }
+
+    /// <summary>The page was left: files handed over from now on open a New run page instead of being added to this one.</summary>
+    public void DetachFromIntake() => _intake?.Detach(this);
+
+    /// <inheritdoc />
+    void INewRunScreen.Add(DroppedItems items) => AddDroppedCommand.Execute(items);
 
     [RelayCommand]
     private async Task BrowseAsync(CancellationToken cancellationToken)

@@ -18,6 +18,16 @@ public static class Program
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
         DesktopActivation.UnregisterAll();
+
+        // Issue #108: the Open with entries go with the app. Best effort: an uninstall must never fail over a registry key.
+        try
+        {
+            new Core.FileAssociationService(new Services.CurrentUserClasses(), () => null).Disable();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException or InvalidOperationException)
+        {
+            System.Diagnostics.Trace.TraceWarning($"open with entries could not be removed: {ex.GetType().Name}");
+        }
     }
 
     [STAThread]

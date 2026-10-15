@@ -33,7 +33,8 @@ public partial class App : Application
             Services.GetRequiredService<Presentation.ViewModels.ShellViewModel>(),
             Services.GetRequiredService<Core.Abstractions.ISettingsStore>(),
             Services.GetRequiredService<Services.WindowPlacementService>(),
-            Services.GetRequiredService<Services.WindowThemeApplier>());
+            Services.GetRequiredService<Services.WindowThemeApplier>(),
+            Services.GetRequiredService<Presentation.Services.ShellReadiness>());
         var navigationService = Services.GetRequiredService<NavigationService>();
         navigationService.Initialize(window.RootFrame);
         Startup.NavigationRoutes.RegisterAll(navigationService);
