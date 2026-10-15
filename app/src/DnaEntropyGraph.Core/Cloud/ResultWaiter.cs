@@ -3,9 +3,37 @@ using DnaEntropyGraph.Core.Contract;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
-/// <summary>When a VM's platform run-limit clock started (platform time) and how far the platform's clock is ahead of this laptop's when last measured (issue #691).</summary>
-internal readonly record struct VmClockBasis(DateTimeOffset RunClockStart, TimeSpan Skew);
+/// <summary>
+/// The platform's own time at one look (<see cref="VmDescriptor.ServerNow"/>) with a monotonic mark taken when it was read, so "platform now" later is
+/// <c>ServerNow + monotonic elapsed</c>. A wall-clock difference stored once and added to a later wall clock is broken by an NTP step or a resume from
+/// sleep between the two; a monotonic interval is not (issue #691).
+/// </summary>
+internal readonly record struct PlatformReading(DateTimeOffset ServerNow, long Mark);
 
+/// <summary>
+/// When a VM's platform run-limit clock started (platform time) and the platform reading to age it with; a null reading (no server time, or an
+/// implausible one) means "judge on this laptop's own clock".
+/// </summary>
+internal readonly record struct VmClockBasis(DateTimeOffset RunClockStart, PlatformReading? Reading);
+
+internal static class PlatformClock
+{
+    /// <summary>
+    /// A server time more than this far from the laptop's wall clock is a broken proxy or a broken clock (1970, or days off), not information:
+    /// it is refused and the laptop's own clock is used. A real laptop clock is off by seconds, rarely by hours.
+    /// </summary>
+    public static readonly TimeSpan MaxPlausibleSkew = TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// The reading to keep, or null when <paramref name="serverNow"/> is absent or implausible. PRECISION (issue #691 review): the HTTP <c>Date</c>
+    /// header has one-second resolution (truncated, so it reads up to 1 s behind the platform) and was generated before the answer crossed the
+    /// network (another 0.1 to 1.5 s behind, THEORY (unverified): ToTest measures it). So "platform now" runs at most about 2.5 s BEHIND true, never
+    /// ahead: a VM that vanished within that margin of its limit may read vm_unhealthy, and nothing reads run_time_limit early. The margin is small
+    /// beside a limit of tens of minutes, so it is documented, not compensated.
+    /// </summary>
+    public static PlatformReading? Read(DateTimeOffset? serverNow, DateTimeOffset localNow, long mark)
+        => serverNow is { } server && (server - localNow).Duration() <= MaxPlausibleSkew ? new PlatformReading(server, mark) : null;
+}
 internal enum BootOutcome
 {
     Running,
@@ -97,7 +125,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var clockStart = settings.StartClock();
         string? lastTransient = null;
         DateTimeOffset? vmCreatedAt = null; // when the platform's limit clock last started, on the PLATFORM's clock (see VmDescriptor.RunClockStart)
-        var skew = TimeSpan.Zero; // platform time minus this laptop's time, from the last look that found the VM (issue #691); zero until one does
+        PlatformReading? platform = null; // the platform's time at the last look that found the VM, with a monotonic mark (issue #691); none until one does
 
         // The VM's maxRunDuration started when Compute Engine last STARTED it (its creation, for a new VM; the start of the reuse, for a VM
         // created days ago, #94), not when it reached Running: a boot of several minutes, or a resume, has already used part of it. With the
@@ -140,11 +168,11 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 lastTransient = null;
                 vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
-                skew = vm?.ServerNow is { } serverNow ? serverNow - settings.TimeProvider.GetUtcNow() : skew;
+                platform = PlatformClock.Read(vm?.ServerNow, settings.TimeProvider.GetUtcNow(), settings.StartClock()) ?? platform;
                 if (!ageKnown && vm?.RunClockStart is { } clockBegan)
                 {
                     ageKnown = true;
-                    var age = settings.TimeProvider.GetUtcNow() + skew - clockBegan - settings.ElapsedSince(clockStart);
+                    var age = PlatformNow(platform) - clockBegan - settings.ElapsedSince(clockStart);
                     elapsedBeforeClock = age > TimeSpan.Zero ? (age < request.Spec.MaxRunDuration ? age : request.Spec.MaxRunDuration) : TimeSpan.Zero;
                 }
 
@@ -159,7 +187,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                     }
 
                     // Only a VM that is GONE (not merely stopped or preempted) can be one the platform deleted at its limit.
-                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null && vmCreatedAt is { } clockStartedAt ? new VmClockBasis(clockStartedAt, skew) : null).ConfigureAwait(false);
+                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null && vmCreatedAt is { } clockStartedAt ? new VmClockBasis(clockStartedAt, platform) : null).ConfigureAwait(false);
                 }
 
                 // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
@@ -203,6 +231,10 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
+    /// <summary>The platform's time now: the last reading aged by monotonic elapsed time, or this laptop's wall clock when no plausible reading was ever taken.</summary>
+    private DateTimeOffset PlatformNow(PlatformReading? reading)
+        => reading is { } r ? r.ServerNow + settings.ElapsedSince(r.Mark) : settings.TimeProvider.GetUtcNow();
+
     /// <summary>
     /// The VM is gone or no longer running and no result.json exists. Boot-time failures
     /// (<c>worker/vm/startup.sh</c>: GPU_NOT_VISIBLE, IMAGE_PULL_FAILED, MANIFEST_INVALID, WORKER_CRASH) write
@@ -216,9 +248,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var mapped = RunErrorCodes.ForWorkerStatusCode(workerCode);
 
         // #89: a VM that was seen created, is gone, and whose maxRunDuration has now passed was deleted by Compute Engine at its limit
-        // (Hard Rule 10's backstop), not lost. Issue #691: "now passed" is judged on the platform's clock (this laptop's now plus the skew last measured
-        // against the server's own time), because the laptop's clock may be an hour out; no measured skew (a gateway that reports no server time) is a skew of zero. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
-        var pastLimit = clock is { } basis && settings.TimeProvider.GetUtcNow() + basis.Skew >= basis.RunClockStart + request.Spec.MaxRunDuration;
+        // (Hard Rule 10's backstop), not lost. Issue #691: "now passed" is judged on the platform's clock (the last server time read plus the monotonic time since), because the laptop's clock may be an hour out; the platform's time is aged with a MONOTONIC interval so a wall-clock step cannot move it; with no plausible server time the laptop's clock is used. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
+        var pastLimit = clock is { } basis && PlatformNow(basis.Reading) >= basis.RunClockStart + request.Spec.MaxRunDuration;
         return VmEndNotes.Apply(
             mapped is not null
                 ? new RunFailureException(CloudErrorKind.Other, mapped, $"The worker reported {workerCode} in status.json and no result.json followed. {reason}")

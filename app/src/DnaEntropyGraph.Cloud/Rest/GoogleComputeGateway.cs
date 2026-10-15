@@ -434,13 +434,17 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                     using var response = await _service.HttpClient.SendAsync(message, token).ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode)
                     {
-                        // ExecuteAsync would have thrown this itself; the raw path must raise the same exception so the classification is unchanged.
+                        // ExecuteAsync would have thrown this itself; the raw path must raise the same exception so the classification is unchanged. It is the ONLY
+                        // hand-rolled request (ExecuteAsync exposes no response headers), so there is no shared helper to drift from: the parity tests in
+                        // GoogleComputeGatewayTests compare its exceptions with the ExecuteAsync path's for each error shape.
                         var error = await _service.DeserializeError(response).ConfigureAwait(false);
                         throw new GoogleApiException(_service.Name, error?.Message) { Error = error, HttpStatusCode = response.StatusCode };
                     }
 
                     var read = await _service.DeserializeResponse<ComputeData.Instance>(response).ConfigureAwait(false);
-                    return (read, response.Headers.Date);
+                    // A cached or proxied answer replays an old Date (its Age says how old): that is not the platform's time now, so it is dropped.
+                    // Precision of the rest: see PlatformClock.Read (one-second resolution, a round-trip behind).
+                    return (read, response.Headers.Age is { } age && age > TimeSpan.Zero ? null : response.Headers.Date);
                 },
                 cancellationToken).ConfigureAwait(false);
             return ToDescriptor(instance, zone) with { ServerNow = serverNow };

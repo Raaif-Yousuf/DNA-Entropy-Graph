@@ -313,7 +313,9 @@ public class CloudJobRunnerGuaranteesTests
     {
         // Virtual time. The app was not looking (a closed laptop lid): the clock jumps past the VM's maxRunDuration between
         // two looks, the platform has deleted the VM, no result.json exists. The record must say the run hit its limit.
-        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"));
+        // Issue #691: the age of the last look is carried by the MONOTONIC clock, so the jump moves it too (THEORY (unverified): Windows's
+        // performance counter keeps counting through sleep; a monotonic clock that stopped in sleep would under-count here and read vm_unhealthy).
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"), timestampFollowsClock: true);
         var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithMaxRunDurationEnforced();
         var looks = 0;
         var compute = new ScriptedCompute(gcp)
