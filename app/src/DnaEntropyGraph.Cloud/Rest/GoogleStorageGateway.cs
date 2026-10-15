@@ -104,6 +104,28 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     /// </summary>
     private async Task<StorageData.Bucket?> FindOursAsync(string projectId, bool preferOwnInstallation, CancellationToken cancellationToken)
     {
+        var ours = await ListOursAsync(projectId, cancellationToken).ConfigureAwait(false);
+
+        return ours
+            .OrderByDescending(b => preferOwnInstallation && string.Equals(InstallationOf(b), _options.InstallationId, StringComparison.Ordinal))
+            .ThenBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
+            .ThenBy(b => b.Name, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    /// <summary>Read-only: every bucket of ours in the project (issue #60). Never creates or repairs one.</summary>
+    public async Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
+    {
+        var ours = await ListOursAsync(projectId, cancellationToken).ConfigureAwait(false);
+        return ours
+            .OrderBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
+            .ThenBy(b => b.Name, StringComparer.Ordinal)
+            .Select(b => new BucketDescriptor(b.Name, b.Location ?? string.Empty, new Dictionary<string, string>(b.Labels ?? new Dictionary<string, string>()), b.TimeCreatedDateTimeOffset))
+            .ToList();
+    }
+
+    private async Task<List<StorageData.Bucket>> ListOursAsync(string projectId, CancellationToken cancellationToken)
+    {
         var ours = new List<StorageData.Bucket>();
         string? pageToken = null;
         do
@@ -132,11 +154,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         }
         while (!string.IsNullOrEmpty(pageToken));
 
-        return ours
-            .OrderByDescending(b => preferOwnInstallation && string.Equals(InstallationOf(b), _options.InstallationId, StringComparison.Ordinal))
-            .ThenBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
-            .ThenBy(b => b.Name, StringComparer.Ordinal)
-            .FirstOrDefault();
+        return ours;
     }
 
     private static bool IsOurs(StorageData.Bucket bucket)
