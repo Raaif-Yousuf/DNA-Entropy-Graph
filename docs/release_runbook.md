@@ -93,20 +93,22 @@ git push origin vX.Y.Z
 
 Pushing the tag triggers `release.yml` (`on: push: tags: v*`). Its jobs, in order (`packaging_design.md` section 9 has the why):
 
-1. `verify`: asserts every secret in section 0 exists (names only, never values) and fails the run before anything is built
+1. `verify` (needs your approval once, the `release` environment): asserts every secret in section 0 exists (names only, never values) and fails the run before anything is built
    if one is missing; runs `check_version_lockstep.py --tag`; checks the tagged commit is on `main`.
 2. `images` (cuda and cpu in parallel): checks the base is pinned by digest, builds and pushes
    `ghcr.io/raaif-yousuf/dna-entropy-worker:vX.Y.Z-cuda` and `-cpu`, runs the Trivy gate, writes SBOMs and attestations.
 3. `wheel`: builds the worker wheel.
-4. `app`: writes the image digests into `worker-images.json`, publishes, writes `oauth_client.local.json` from `OAUTH_CLIENT_JSON`,
-   signs the app binaries, `vpk pack`, signs `Setup.exe`, verifies both signatures, attests, and uploads a **draft** release.
-5. `publish`: attaches wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, checks every expected asset is present, and only then
+4. `app` (approval again; read token only): writes the image digests into `worker-images.json`, publishes, writes `oauth_client.local.json` from `OAUTH_CLIENT_JSON`,
+   signs the app binaries, `vpk pack`, signs `Setup.exe`, verifies EVERY signed file (chain and signer subject), stages exactly this
+   release's files, attests them and hands them on.
+5. `upload`: the only job with a write token besides `publish`; `vpk upload github` creates a **draft** release.
+6. `publish`: attaches wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, checks every expected asset is present, and only then
    makes the release public (a tag with a `-` becomes a pre-release). This ordering matters: the in-app updater reads the
    Releases API, so a release that is public before every asset exists would be offered to users half-uploaded.
-6. `verify-reminder`: opens `Verify vX.Y.Z on a clean VM` (one per version) with the checklist of section 5.
+7. `verify-reminder`: opens `Verify vX.Y.Z on a clean VM` (one per version) with the checklist of section 5.
 
-Watch the run (`gh run watch`, or the Actions tab). A failure in jobs 1 to 4 leaves no public release (the draft, if it was
-created, stays a draft): fix forward with a commit and a new tag, and never force-push an existing tag. A failure in `publish`
+Watch the run (`gh run watch`, or the Actions tab). A failure in jobs 1 to 5 leaves no public release (the draft, if it was
+created, stays a draft): fix forward with a commit and a new tag, and never force-push an existing tag. A failure in `publish` (including a missing asset)
 leaves the draft in place; fix the cause and re-run the failed job.
 
 ## 5. Verification on a clean machine
