@@ -80,6 +80,15 @@ public static class RunErrorCodes
     ];
 
     /// <summary>The <c>CloudErrorKind</c> wire names from docs/cloud_design.md section 5.</summary>
+    /// <summary>
+    /// True for a run the user can fix by asking the project owner for the actAs role (issue #604): recorded as <see cref="PermissionActAs"/>, or as
+    /// <see cref="VmEndUnconfirmed"/> when the VM sweep after the refusal also failed (issue #665: the billing warning is the headline, but the
+    /// owner request is still the user's one action for the next run, and the original code is carried in the detail).
+    /// </summary>
+    public static bool IsActAsRefusal(string? code, string? detail)
+        => code == PermissionActAs
+            || (code == VmEndUnconfirmed && detail is not null && detail.Contains("Original code: " + PermissionActAs + ".", StringComparison.Ordinal));
+
     public static string For(CloudErrorKind kind) => kind switch
     {
         CloudErrorKind.Billing => "billing",

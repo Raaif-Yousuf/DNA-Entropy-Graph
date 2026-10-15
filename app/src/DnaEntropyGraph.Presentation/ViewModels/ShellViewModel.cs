@@ -28,6 +28,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IGcpAccount _gcpAccount;
     private readonly IDispatcher? _dispatcher;
+    private readonly RunCompletionActions _completion;
     private readonly IStringResourceProvider _strings;
     private readonly AppDataRoot? _dataRoot;
     private readonly SimulatedCloudMode? _simulatedCloud;
@@ -46,8 +47,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The in-app message bar state (issue #585): the InfoBar in MainWindow binds to this, and it is the same instance the DI-registered <c>IToastService</c> writes to.</summary>
     public InAppMessageCenter Messages { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null)
     {
+        _completion = completion;
         _dataRoot = dataRoot;
         _simulatedCloud = simulatedCloud;
         _navigator = navigator;
@@ -129,7 +131,16 @@ public sealed partial class ShellViewModel : ObservableObject
         }
 
         HasActiveRun = _activeJobIds.Count > 0;
+
+        // Issue #643: what happens at the end of a run (toast, open folder, open Results) is decided by the Notifications settings.
+        if (message.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted)
+        {
+            CompletionWork = _completion.OnRunFinishedAsync(message.JobId, message.Phase);
+        }
     }
+
+    /// <summary>The last run-finished work started by <see cref="OnRunPhaseChanged"/>; tests await it.</summary>
+    public Task CompletionWork { get; private set; } = Task.CompletedTask;
 
     private static bool IsTerminal(JobPhase phase) => phase is JobPhase.Completed or JobPhase.PartiallyCompleted or JobPhase.Cancelled or JobPhase.Failed;
 

@@ -110,7 +110,8 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
             return new HeartbeatVerdict(
                 RunErrorCodes.WorkerStageStuck,
                 $"The worker stayed in stage '{_stage}' for {Format(elapsed - _stageSince)}, past that stage's {Format(deadline)} deadline.",
-                DeleteVm: false) { Stage = _stage };
+                DeleteVm: false)
+            { Stage = _stage };
         }
 
         if (!_workerSeen)
@@ -119,7 +120,8 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
                 ? new HeartbeatVerdict(
                     RunErrorCodes.WorkerNoHeartbeat,
                     $"No worker heartbeat appeared in status.json within {Format(firstHeartbeatTimeout)}.",
-                    DeleteVm: false) { Stage = _stage }
+                    DeleteVm: false)
+                { Stage = _stage }
                 : null;
         }
 
@@ -127,7 +129,8 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
             ? new HeartbeatVerdict(
                 RunErrorCodes.WorkerHeartbeatStale,
                 $"The worker's heartbeat in status.json has not changed for {Format(staleTimeout)} (last heartbeatSeq {_lastSeq?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}).",
-                DeleteVm: false) { Stage = _stage }
+                DeleteVm: false)
+            { Stage = _stage }
             : null;
     }
 
