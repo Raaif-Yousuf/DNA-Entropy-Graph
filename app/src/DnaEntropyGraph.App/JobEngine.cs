@@ -77,7 +77,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         var decision = await _targets.ResolveAsync(options, cancellationToken).ConfigureAwait(false);
         if (RunTargets.IsThisPc(decision.Target))
         {
-            await _local.StartAsync(jobId, options, AppVersion(), cancellationToken).ConfigureAwait(false);
+            await _local.StartAsync(jobId, options, AppVersion(), cancellationToken, decision.Readiness).ConfigureAwait(false);
             return jobId;
         }
 

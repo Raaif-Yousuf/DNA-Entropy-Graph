@@ -49,8 +49,11 @@ public sealed class LocalRunDriver
         _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
     }
 
-    /// <summary>Starts the run in the background. Every refusal is recorded on the run's own row and announced; nothing here throws for one.</summary>
-    public async Task StartAsync(string jobId, RunOptions options, string appVersion, CancellationToken cancellationToken)
+    /// <summary>
+    /// Starts the run in the background. Every refusal is recorded on the run's own row and announced; nothing here throws for one.
+    /// <paramref name="checkedAlready"/> is the readiness check the target resolver just made (Auto), so this PC is looked at once.
+    /// </summary>
+    public async Task StartAsync(string jobId, RunOptions options, string appVersion, CancellationToken cancellationToken, LocalReadiness? checkedAlready = null)
     {
         var mock = options.Predictor == PredictorSelection.MockTestPredictor;
         if (!mock && WorkerManifestBuilder.NeedsFp8(options.ModelId))
@@ -59,7 +62,7 @@ public sealed class LocalRunDriver
             return;
         }
 
-        var readiness = await _readiness.CheckAsync(cancellationToken).ConfigureAwait(false);
+        var readiness = checkedAlready ?? await _readiness.CheckAsync(cancellationToken).ConfigureAwait(false);
         if (readiness.Engine.State != LocalEngineState.Healthy)
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.LocalEngineNotReady, cancellationToken, "engine " + readiness.Engine.State).ConfigureAwait(false);
@@ -109,7 +112,9 @@ public sealed class LocalRunDriver
             staged,
             installationId,
             appVersion,
-            string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder);
+            string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder,
+            // The worker uses the card that was judged (a PC with two cards numbers them by CUDA's own order, not the order nvidia-smi lists them in).
+            mock ? null : readiness.Capability.Gpu?.Uuid);
 
         var now = DateTimeOffset.UtcNow;
         await _runs.UpsertAsync(
@@ -125,7 +130,29 @@ public sealed class LocalRunDriver
             cancellationToken).ConfigureAwait(false);
 
         // Registered before the body runs (see ActiveRuns), so a cancel can never find a run that is not there yet.
-        _ = _activeRuns.TryStart(jobId, token => _runner.RunAsync(request, token));
+        var started = _activeRuns.TryStart(jobId, token => RunGuardedAsync(request, token));
+        if (started is null)
+        {
+            // A driver already owns this job id (or a cancel is running for it): the start did not happen, and the row must not stay a Draft.
+            await _runner.RecordFailureAsync(jobId, RunErrorCodes.Other, "A run with this id was already being driven.").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The runner's own failures are recorded by the runner; anything else that escapes it is recorded here, so a row never stays non-terminal with no one driving it.</summary>
+    private async Task RunGuardedAsync(LocalJobRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await _runner.RecordFailureAsync(request.JobId, RunErrorCodes.Other, ex.GetType().Name).ConfigureAwait(false);
+        }
     }
 
     /// <summary>A user cancel of a This PC run: the runner stops the worker (cooperatively, then by killing its tree), then the cancel's own phases are recorded.</summary>

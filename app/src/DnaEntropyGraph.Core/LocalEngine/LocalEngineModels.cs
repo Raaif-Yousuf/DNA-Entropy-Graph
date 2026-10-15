@@ -63,8 +63,9 @@ public interface ILocalReadinessSource
 
 /// <summary>Where a run was sent, and why not where the user asked when those differ.</summary>
 /// <param name="Target"><see cref="RunTargets.Cloud"/> or <see cref="RunTargets.ThisPc"/>; never Auto.</param>
+/// <param name="Readiness">The check Auto made, so a This PC start does not check again (a second check costs a health run and can disagree with the first). Null when no check was made.</param>
 /// <param name="AutoReason">For Auto: why this one was chosen, as a code (<c>local_ready</c>, <c>local_not_ready</c>, <c>model_needs_fp8</c>, <c>local_blocked</c>). Null for an explicit choice.</param>
-public sealed record RunTargetDecision(string Target, string? AutoReason = null);
+public sealed record RunTargetDecision(string Target, string? AutoReason = null, LocalReadiness? Readiness = null);
 
 public interface IRunTargetResolver
 {
@@ -85,7 +86,8 @@ public enum LocalInstallStep
     Removing,
 }
 
-public sealed record LocalInstallProgress(LocalInstallStep Step, string? Line = null);
+/// <summary>Which step the install is on. Deliberately no free text: the tool's own output is untranslated and can hold a user name, so the page shows the step's phrase from Resources.resw.</summary>
+public sealed record LocalInstallProgress(LocalInstallStep Step);
 
 /// <summary>Result of install, repair or remove. <paramref name="ErrorCode"/> is one of <see cref="LocalEngineErrorCodes"/>.</summary>
 public sealed record LocalInstallResult(bool Succeeded, string? ErrorCode = null, string? Detail = null);

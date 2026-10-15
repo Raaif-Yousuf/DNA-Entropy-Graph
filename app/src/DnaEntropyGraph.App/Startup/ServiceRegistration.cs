@@ -209,7 +209,9 @@ public static class ServiceRegistration
 
         // LocalEngine (issues #120, #172, #173, #174): the This PC path. Everything that starts a program goes through the one
         // IProcessLauncher (Hard Rule 6), so a test or a dev run can replace it.
-        services.AddSingleton<IProcessLauncher, SystemProcessLauncher>();
+        // One kill-on-close Job Object for the whole app (issue #734): every child it starts dies with it, however the app ends. The container disposes it at a clean exit.
+        services.AddSingleton<WindowsKillOnCloseJob>();
+        services.AddSingleton<IProcessLauncher>(sp => new SystemProcessLauncher(sp.GetRequiredService<WindowsKillOnCloseJob>()));
         services.AddSingleton<IGpuDetector>(sp => new NvidiaSmiGpuDetector(sp.GetRequiredService<IProcessLauncher>(), NvidiaSmiGpuDetector.WindowsCandidates()));
         services.AddSingleton<IFreeDiskSpace, DriveFreeDiskSpace>();
         services.AddSingleton<LocalEngineLayout>(sp => LocalEngineSetup.Layout(sp.GetRequiredService<AppDataRoot>()));

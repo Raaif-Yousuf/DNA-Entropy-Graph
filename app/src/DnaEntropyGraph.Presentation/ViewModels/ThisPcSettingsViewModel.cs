@@ -139,7 +139,7 @@ public sealed partial class ThisPcSettingsViewModel : ObservableObject
             {
                 if (IsBusy)
                 {
-                    ProgressText = _strings.GetString(StepKey(p.Step)) + (string.IsNullOrEmpty(p.Line) ? string.Empty : " " + p.Line);
+                    ProgressText = _strings.GetString(StepKey(p.Step));
                 }
             });
             var result = await action(_installer, progress, _installCancel.Token).ConfigureAwait(true);

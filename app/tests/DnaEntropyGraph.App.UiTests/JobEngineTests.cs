@@ -204,6 +204,7 @@ public class JobEngineTests
                 ResultTimeout = TimeSpan.FromSeconds(5),
             };
             var activeRuns = new ActiveRuns();
+            ActiveRuns = activeRuns;
             var ready = new StaticReadiness(readiness ?? new LocalReadiness(new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 0), LocalEngineHealth.NotInstalled()));
             var inputs = new LocalRunInputStore(AppData);
             var localRunner = new LocalJobRunner(
@@ -216,11 +217,19 @@ public class JobEngineTests
                 PollInterval = TimeSpan.FromMilliseconds(10),
                 CancelGrace = TimeSpan.FromMilliseconds(100),
             };
+            Ready = ready;
             var local = new LocalRunDriver(Messenger, localRunner, ready, Settings, Runs, inputs, activeRuns, downloads);
+            Local = local;
             Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), inputs, ImageProvider, activeRuns, new RunTargetResolver(ready), local, downloads);
         }
 
         public StaticImageProvider ImageProvider { get; }
+
+        public StaticReadiness Ready { get; }
+
+        public LocalRunDriver Local { get; }
+
+        public ActiveRuns ActiveRuns { get; }
 
         public string AppData { get; }
 
@@ -693,4 +702,64 @@ public class JobEngineTests
         hanging.Killed.ShouldBeTrue("the worker ignored the cancel file, so its process tree was killed");
         (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).Phase.ShouldBe(JobPhase.Cancelled);
     }
-}
+
+    [Fact]
+    public async Task Auto_that_picks_this_PC_looks_at_this_PC_once_not_twice()
+    {
+        // MEASURED 2026-10-15 (review of #173): the resolver checked, then the driver checked again, a second 60 s health run and a second chance to disagree.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: true), launcher: new FinishingWorkerLauncher());
+
+        await h.Engine.StartRunAsync(Options(target: "Auto"), CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+
+        h.Ready.Checks.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_unexpected_exception_in_a_This_PC_run_ends_the_row_Failed_with_a_code_instead_of_leaving_it_Running()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: new ThrowingLauncher());
+
+        var jobId = await h.Engine.StartRunAsync(Options(target: "This PC") with { Predictor = PredictorSelection.MockTestPredictor }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe("other");
+        row.ErrorDetail.ShouldBe("InvalidOperationException");
+        row.FinishedAt.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_refused_start_ends_the_row_Failed_with_a_code()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: new FinishingWorkerLauncher());
+        _ = h.ActiveRuns.TryStart("job-dup", token => Task.Delay(Timeout.Infinite, token));
+
+        await h.Local.StartAsync("job-dup", Options(target: "This PC") with { Predictor = PredictorSelection.MockTestPredictor }, "0.0.1", CancellationToken.None);
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "job-dup");
+        row.Phase.ShouldBe(JobPhase.Failed);
+        row.ErrorCode.ShouldBe("other");
+        row.FinishedAt.ShouldNotBeNull();
+        await h.ActiveRuns.CancelAsync("job-dup", () => Task.CompletedTask);
+    }
+
+    [Fact]
+    public async Task A_real_model_run_on_this_PC_pins_the_worker_to_the_card_that_was_judged()
+    {
+        var worker = new FinishingWorkerLauncher();
+        var ready = new LocalReadiness(
+            new LocalCapability(true, [], new GpuInfo("NVIDIA GeForce RTX 4090", 24564, "551.61", "GPU-abc"), 100L << 30),
+            new LocalEngineHealth(LocalEngineState.Healthy, "0.0.1", true, true, string.Empty));
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: ready, launcher: worker);
+
+        await h.Engine.StartRunAsync(Options(target: "This PC"), CancellationToken.None);
+        await h.TerminalAsync();
+
+        worker.Started.Single().Environment!["CUDA_VISIBLE_DEVICES"].ShouldBe("GPU-abc");
+    }
+
+    private sealed class ThrowingLauncher : IProcessLauncher
+    {
+        public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null) => throw new InvalidOperationException("boom with a path C:\\Users\\someone");
+    }}

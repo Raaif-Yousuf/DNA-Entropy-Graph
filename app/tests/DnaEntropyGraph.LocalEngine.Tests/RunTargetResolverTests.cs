@@ -46,12 +46,14 @@ public sealed class RunTargetResolverTests
     [Fact]
     public async Task Auto_picks_This_PC_when_the_engine_is_healthy_with_cuda_and_the_model_fits()
     {
-        var (resolver, _) = Make(Ready());
+        var readiness = Ready();
+        var (resolver, _) = Make(readiness);
 
         var decision = await resolver.ResolveAsync(Options("Auto"), CancellationToken.None);
 
         decision.Target.ShouldBe(RunTargets.ThisPc);
         decision.AutoReason.ShouldBe("local_ready");
+        decision.Readiness.ShouldBeSameAs(readiness, "the start reuses this check instead of making a second one");
     }
 
     [Fact]

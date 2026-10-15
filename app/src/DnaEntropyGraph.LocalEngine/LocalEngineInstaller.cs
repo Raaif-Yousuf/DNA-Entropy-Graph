@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.LocalEngine;
 
 namespace DnaEntropyGraph.LocalEngine;
@@ -23,6 +25,8 @@ public sealed class LocalEngineInstaller : ILocalEngineInstaller
     private readonly string _workerPackage;
     private readonly string _appDataFolder;
     private readonly Func<CancellationToken, Task<LocalEngineHealth>> _healthCheck;
+    private readonly IDiagnosticsLog _log;
+    private readonly string _userName;
 
     /// <param name="workerPackage">The worker wheel that ships with the app.</param>
     /// <param name="appDataFolder">The folder the engine folder must be strictly inside for Remove to delete it.</param>
@@ -34,8 +38,12 @@ public sealed class LocalEngineInstaller : ILocalEngineInstaller
         string lockFile,
         string workerPackage,
         string appDataFolder,
-        Func<CancellationToken, Task<LocalEngineHealth>> healthCheck)
+        Func<CancellationToken, Task<LocalEngineHealth>> healthCheck,
+        IDiagnosticsLog? log = null,
+        string? userName = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
+        _userName = userName ?? Environment.UserName;
         _launcher = launcher;
         _layout = layout;
         _uvPath = uvPath;
@@ -126,15 +134,15 @@ public sealed class LocalEngineInstaller : ILocalEngineInstaller
             {
                 progress?.Report(new LocalInstallProgress(step));
                 var output = await _launcher
-                    .RunToEndAsync(new ProcessSpec(_uvPath, arguments, EngineFolder, environment), cancellationToken)
+                    .RunToEndAsync(new ProcessSpec(_uvPath, arguments, EngineFolder, environment, _layout.ClearedVariables), cancellationToken)
                     .ConfigureAwait(false);
                 if (!output.Started || output.ExitCode != 0)
                 {
-                    // Only the step and the exit code are kept: uv's text can carry a user name in a path.
+                    // The step and the exit code go in the result; the log also gets uv's last line, with paths and the user name removed.
+                    _log.Warning("local-install", null, $"{step} failed (exit code {output.ExitCode}): {SanitizedLastLine(output.Text, _userName)}");
                     return new LocalInstallResult(false, LocalEngineErrorCodes.InstallFailed, $"{step} failed (exit code {output.ExitCode}).");
                 }
 
-                ReportLastLine(progress, step, output.Text);
             }
 
             progress?.Report(new LocalInstallProgress(LocalInstallStep.Checking));
@@ -153,12 +161,22 @@ public sealed class LocalEngineInstaller : ILocalEngineInstaller
         }
     }
 
-    private static void ReportLastLine(IProgress<LocalInstallProgress>? progress, LocalInstallStep step, string text)
+    /// <summary>
+    /// The last line of uv's output with everything that can identify the user removed: any word that looks like a path (it holds a separator or a
+    /// drive colon) becomes <c>&lt;path&gt;</c>, and the user name becomes <c>&lt;user&gt;</c>. Cut to 160 characters. For the log only; never shown.
+    /// </summary>
+    internal static string SanitizedLastLine(string text, string userName)
     {
-        var last = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
-        if (last is not null)
+        var last = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? string.Empty;
+        var words = last.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(word => LooksLikePath(word) ? "<path>" : word);
+        var line = string.Join(' ', words);
+        if (!string.IsNullOrWhiteSpace(userName))
         {
-            progress?.Report(new LocalInstallProgress(step, last.Length > 200 ? last[..200] : last));
+            line = Regex.Replace(line, Regex.Escape(userName), "<user>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
+
+        return line.Length > 160 ? line[..160] : line;
     }
+
+    private static bool LooksLikePath(string word) => word.Contains('\\', StringComparison.Ordinal) || word.Contains('/', StringComparison.Ordinal) || (word.Length > 1 && word[1] == ':');
 }

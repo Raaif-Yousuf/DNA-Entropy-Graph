@@ -50,10 +50,10 @@ public sealed class RunTargetResolver : IRunTargetResolver
 
         if (readiness.CanRun(needsGpu: !mock))
         {
-            return new RunTargetDecision(RunTargets.ThisPc, "local_ready");
+            return new RunTargetDecision(RunTargets.ThisPc, "local_ready", readiness);
         }
 
         var engineUsable = readiness.Engine.State == LocalEngineState.Healthy;
-        return new RunTargetDecision(RunTargets.Cloud, engineUsable ? "local_blocked" : "local_not_ready");
+        return new RunTargetDecision(RunTargets.Cloud, engineUsable ? "local_blocked" : "local_not_ready", readiness);
     }
 }

@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.LocalEngine;
 using Shouldly;
 using Xunit;
@@ -41,7 +42,8 @@ public sealed class LocalEngineInstallerTests : IDisposable
         FakeProcessLauncher launcher,
         LocalEngineHealth? health = null,
         string? uv = null,
-        string? lockFile = null)
+        string? lockFile = null,
+        IDiagnosticsLog? log = null)
         => new(
             launcher,
             new LocalEngineLayout(_engine),
@@ -49,7 +51,9 @@ public sealed class LocalEngineInstallerTests : IDisposable
             lockFile ?? _lock,
             _wheel,
             Path.Combine(_root, "data"),
-            _ => Task.FromResult(health ?? Healthy));
+            _ => Task.FromResult(health ?? Healthy),
+            log,
+            userName: "jdoe");
 
     private static FakeProcessLauncher AlwaysOk()
         => new(_ =>
@@ -104,6 +108,75 @@ public sealed class LocalEngineInstallerTests : IDisposable
             spec.Environment!["UV_PYTHON_INSTALL_DIR"].ShouldStartWith(_engine);
             spec.Environment["UV_CACHE_DIR"].ShouldStartWith(_engine);
         }
+    }
+
+    private sealed class RecordingLog : IDiagnosticsLog
+    {
+        public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass) => Entries.Add((source, jobId, errorClass));
+    }
+
+    private sealed class Reports : IProgress<LocalInstallProgress>
+    {
+        public List<LocalInstallProgress> All { get; } = [];
+
+        public void Report(LocalInstallProgress value) => All.Add(value);
+    }
+
+    [Fact]
+    public async Task Progress_carries_only_the_step_never_uvs_own_text_which_can_hold_a_user_name()
+    {
+        // MEASURED 2026-10-15 (review of #172): uv prints paths under C:\Users\<name>\ and English text; both reached the Settings page.
+        var launcher = new FakeProcessLauncher(_ =>
+        {
+            var p = new FakeProcess();
+            p.Print(@"Installed 1 package in C:\Users\jdoe\AppData\Local\DNAEntropyGraph\engine\.venv");
+            p.End(0);
+            return p;
+        });
+        var reports = new Reports();
+
+        await Installer(launcher).InstallAsync(reports, CancellationToken.None);
+
+        reports.All.Count.ShouldBeGreaterThanOrEqualTo(4);
+        typeof(LocalInstallProgress).GetProperties().Where(p => p.PropertyType == typeof(string)).ShouldBeEmpty("a progress report has no free-text member, so uv's text cannot reach the page");
+    }
+
+    [Fact]
+    public async Task A_failed_step_logs_one_sanitized_line_with_no_user_name_and_no_path()
+    {
+        var launcher = new FakeProcessLauncher(_ =>
+        {
+            var p = new FakeProcess();
+            p.Print(@"error: failed to open C:\Users\jdoe\AppData\Local\uv\cache: access denied for jdoe");
+            p.End(2);
+            return p;
+        });
+        var log = new RecordingLog();
+
+        var result = await Installer(launcher, log: log).InstallAsync(null, CancellationToken.None);
+
+        result.ErrorCode.ShouldBe(LocalEngineErrorCodes.InstallFailed);
+        var entry = log.Entries.Single();
+        entry.Source.ShouldBe("local-install");
+        entry.ErrorClass.ShouldContain("CreatingEnvironment");
+        entry.ErrorClass.ShouldContain("exit code 2");
+        entry.ErrorClass.ShouldContain("access denied");
+        entry.ErrorClass.ShouldNotContain("jdoe");
+        entry.ErrorClass.ShouldNotContain(@"C:\");
+        entry.ErrorClass.ShouldNotContain(@"Users");
+        result.Detail!.ShouldNotContain("jdoe");
+    }
+
+    [Fact]
+    public async Task The_inherited_python_variables_are_cleared_for_every_uv_step()
+    {
+        var launcher = AlwaysOk();
+
+        await Installer(launcher).InstallAsync(null, CancellationToken.None);
+
+        launcher.Started.ShouldAllBe(s => s.ClearEnvironment != null && s.ClearEnvironment.Contains("PYTHONPATH") && s.ClearEnvironment.Contains("VIRTUAL_ENV") && s.ClearEnvironment.Contains("PYTHONHOME"));
     }
 
     [Fact]

@@ -560,6 +560,57 @@ public sealed class LocalJobRunnerTests : IDisposable
 
         public void Warning(string source, string? jobId, string errorClass) => Entries.Add((source, jobId, errorClass));
     }
+    [Theory]
+    [InlineData(JobPhase.Draft)]
+    [InlineData(JobPhase.Preparing)]
+    [InlineData(JobPhase.Running)]
+    [InlineData(JobPhase.Finalizing)]
+    [InlineData(JobPhase.Downloading)]
+    public async Task On_launch_a_local_run_left_non_terminal_with_no_result_is_failed_as_interrupted(JobPhase phase)
+    {
+        // MEASURED 2026-10-15 (issue #734): a killed app left the row Running for ever; nothing looked at Target=local rows.
+        _runs.Seed(new RunRecord("old-1", phase, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord));
+
+        var count = await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        count.ShouldBe(2, "this row plus the Draft row the fixture seeds");
+        var row = _runs.Latest("old-1");
+        row.Phase.ShouldBe(JobPhase.Failed);
+        row.ErrorCode.ShouldBe(RunErrorCodes.LocalRunInterrupted);
+        row.FinishedAt.ShouldNotBeNull();
+        _phases.ShouldContain(JobPhase.Failed);
+    }
+
+    [Fact]
+    public async Task On_launch_a_local_run_whose_worker_finished_before_the_app_died_is_completed_from_its_result_json()
+    {
+        var jobDir = Path.Combine(RunsDirectory, "old-2");
+        var (rel, sha, bytes) = WriteOutput(jobDir, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+        WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+        var outputDir = Path.Combine(OutputParent, "locus");
+        Directory.CreateDirectory(outputDir);
+        _runs.Seed(new RunRecord("old-2", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir));
+
+        await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        _runs.Latest("old-2").Phase.ShouldBe(JobPhase.Completed);
+        File.ReadAllText(Path.Combine(outputDir, "locus", "locus.entropy.bedgraph")).ShouldBe("locus 0 12 1.5\n");
+    }
+
+    [Fact]
+    public async Task On_launch_a_Cancelling_local_run_becomes_Cancelled_and_cloud_and_finished_rows_are_left_alone()
+    {
+        _runs.Seed(new RunRecord("old-3", JobPhase.Cancelling, DateTimeOffset.UtcNow, Target: RunTargets.LocalRecord));
+        _runs.Seed(new RunRecord("cloud-1", JobPhase.Running, DateTimeOffset.UtcNow, Target: RunTargets.CloudRecord));
+        _runs.Seed(new RunRecord("done-1", JobPhase.Completed, DateTimeOffset.UtcNow, Target: RunTargets.LocalRecord));
+
+        var count = await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        count.ShouldBe(2, "the seeded Draft of the fixture plus the Cancelling row");
+        _runs.Latest("old-3").Phase.ShouldBe(JobPhase.Cancelled);
+        _runs.Latest("cloud-1").Phase.ShouldBe(JobPhase.Running);
+        _runs.Latest("done-1").Phase.ShouldBe(JobPhase.Completed);
+    }
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);

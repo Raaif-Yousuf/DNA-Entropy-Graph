@@ -146,6 +146,12 @@ public sealed class LocalJobRunner
             {
                 watched = await WatchAsync(request, jobDir, process, cancellationToken).ConfigureAwait(false);
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Whatever went wrong on the app side, the worker must not be left running with nobody watching it.
+                process.Kill(entireTree: true);
+                throw;
+            }
             catch (OperationCanceledException)
             {
                 // The worker is stopped before the cancel is acknowledged; whatever it had finished is kept (docs/job_contract.md section 6).
@@ -165,6 +171,13 @@ public sealed class LocalJobRunner
         }
     }
 
+    /// <summary>
+    /// Ends a run that the caller could not finish (an exception nobody expected, or a start that was refused) in <see cref="JobPhase.Failed"/> with a code.
+    /// A run already at a terminal phase never moves. Only the code and the exception class are kept: the exception's text can hold a path.
+    /// </summary>
+    public async Task RecordFailureAsync(string jobId, string code, string detail)
+        => await FailAsync(jobId, code, detail).ConfigureAwait(false);
+
     /// <summary>Records the end of a user cancel: <see cref="JobPhase.Cancelling"/> then <see cref="JobPhase.Cancelled"/>. Call after <see cref="RunAsync"/> has stopped.</summary>
     public async Task RecordCancelledAsync(string jobId)
     {
@@ -172,6 +185,56 @@ public sealed class LocalJobRunner
         await SetPhaseAsync(jobId, JobPhase.Cancelled).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Run once at launch (issue #734), before any run is started: a This PC row a killed or closed app left non-terminal has no driver, and the
+    /// worker died with the app (<see cref="WindowsKillOnCloseJob"/>). With a finished <c>result.json</c> and an output folder the run is finished from it
+    /// (the files are copied and verified as for any run); otherwise it ends Failed as <see cref="RunErrorCodes.LocalRunInterrupted"/>, and a Cancelling
+    /// row ends Cancelled. Cloud and finished rows are not touched. Returns how many rows were judged. One row's failure never stops the others.
+    /// </summary>
+    public async Task<int> ReconcileInterruptedAsync(CancellationToken cancellationToken)
+    {
+        var rows = (await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false))
+            .Where(r => RunTargets.IsLocalRecord(r.Target) && !JobStateMachine.IsTerminal(r.Phase))
+            .ToList();
+        var judged = 0;
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await ReconcileOneAsync(row).ConfigureAwait(false);
+                judged++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                _log.Warning("local-reconcile", row.JobId, ex.GetType().Name);
+            }
+        }
+
+        return judged;
+    }
+
+    private async Task ReconcileOneAsync(RunRecord row)
+    {
+        if (row.Phase == JobPhase.Cancelling)
+        {
+            await SetPhaseAsync(row.JobId, JobPhase.Cancelled).ConfigureAwait(false);
+            return;
+        }
+
+        var jobDir = Path.Combine(_runsDirectory, row.JobId);
+        var finished = RunOutputRoot.IsStrictlyInside(jobDir, _runsDirectory)
+            && File.Exists(Path.Combine(jobDir, "result.json"))
+            && !string.IsNullOrEmpty(row.OutputDir)
+            && Directory.Exists(row.OutputDir);
+        if (finished)
+        {
+            await FinishAsync(row.JobId, jobDir, row.OutputDir!, exitCode: 0).ConfigureAwait(false);
+            return;
+        }
+
+        await FailAsync(row.JobId, RunErrorCodes.LocalRunInterrupted, "The app was closed or stopped while the run was in progress.").ConfigureAwait(false);
+    }
     private async Task<string> PrepareJobFolderAsync(LocalJobRequest request, string jobDir, CancellationToken cancellationToken)
     {
         var inputDir = Path.Combine(jobDir, "input");

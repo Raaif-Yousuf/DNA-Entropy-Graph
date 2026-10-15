@@ -125,7 +125,7 @@ public sealed class ThisPcSettingsTests
         var seen = new List<string>();
         _installer.InstallAsync(Arg.Any<IProgress<LocalInstallProgress>>(), Arg.Any<CancellationToken>()).Returns(async call =>
         {
-            call.Arg<IProgress<LocalInstallProgress>>().Report(new LocalInstallProgress(LocalInstallStep.InstallingPackages, "torch"));
+            call.Arg<IProgress<LocalInstallProgress>>().Report(new LocalInstallProgress(LocalInstallStep.InstallingPackages));
             await Task.Delay(150); // a Progress report posts to the thread pool in a test; let it land while the install is still running
             Ready(Capable, Healthy);
             return new LocalInstallResult(true);
@@ -145,7 +145,7 @@ public sealed class ThisPcSettingsTests
         vm.EngineText.ShouldBe("ThisPcEngine_Healthy");
         vm.IsBusy.ShouldBeFalse();
         vm.ProgressText.ShouldBeEmpty();
-        seen.ShouldContain("ThisPcStep_InstallingPackages torch");
+        seen.ShouldContain("ThisPcStep_InstallingPackages");
     }
 
     [Fact]
