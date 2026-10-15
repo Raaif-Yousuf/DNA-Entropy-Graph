@@ -15,17 +15,34 @@ public sealed partial class SetupStepRow : ObservableObject
     public const string ManualGuideUrl = "https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/blob/main/docs/gcp_setup_manual.md";
 
     private readonly IStringResourceProvider _strings;
-    private readonly string _stepKey;
 
-    public SetupStepRow(SetupStep step, string stepKey, IStringResourceProvider strings)
+    public SetupStepRow(SetupStep step, IStringResourceProvider strings)
     {
         Step = step;
-        _stepKey = stepKey;
         _strings = strings;
-        Title = strings.GetString("WizardStep_" + stepKey + "_Title");
-        Why = strings.GetString("WizardStep_" + stepKey + "_Why");
+        Title = strings.GetString(TitleKey(step));
+        Why = strings.GetString(WhyKey(step));
         _statusText = strings.GetString("WizardStatus_Pending");
     }
+
+    // A literal per step so the orphan-resource scan sees every key (scripts/check_app_wiring.py).
+    private static string TitleKey(SetupStep step) => step switch
+    {
+        SetupStep.Project => "WizardStep_Project_Title",
+        SetupStep.Billing => "WizardStep_Billing_Title",
+        SetupStep.Services => "WizardStep_Services_Title",
+        SetupStep.Storage => "WizardStep_Storage_Title",
+        _ => "WizardStep_Quota_Title",
+    };
+
+    private static string WhyKey(SetupStep step) => step switch
+    {
+        SetupStep.Project => "WizardStep_Project_Why",
+        SetupStep.Billing => "WizardStep_Billing_Why",
+        SetupStep.Services => "WizardStep_Services_Why",
+        SetupStep.Storage => "WizardStep_Storage_Why",
+        _ => "WizardStep_Quota_Why",
+    };
 
     public SetupStep Step { get; }
 
@@ -45,9 +62,59 @@ public sealed partial class SetupStepRow : ObservableObject
 
     public Uri ManualUri { get; } = new(ManualGuideUrl);
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsOk), nameof(IsFix), nameof(IsRunning), nameof(ShowDoItByHand))]
     private SetupStatus _status = SetupStatus.Pending;
+    private SetupActionKind _actionKind;
+    private bool _canSkip;
+
+    /// <summary>Where the row is. Not itself bound: the page binds the flags derived from it (<see cref="IsOk"/>, <see cref="IsFix"/>, <see cref="IsRunning"/>).</summary>
+    public SetupStatus Status
+    {
+        get => _status;
+        private set
+        {
+            if (SetProperty(ref _status, value))
+            {
+                OnPropertyChanged(nameof(IsOk));
+                OnPropertyChanged(nameof(IsFix));
+                OnPropertyChanged(nameof(IsRunning));
+                OnPropertyChanged(nameof(ShowDoItByHand));
+                OnPropertyChanged(nameof(HasAction));
+                OnPropertyChanged(nameof(HasLinkAction));
+                OnPropertyChanged(nameof(HasCommandAction));
+                OnPropertyChanged(nameof(HasRecheck));
+                OnPropertyChanged(nameof(HasSkip));
+            }
+        }
+    }
+
+    /// <summary>What the one button does (the ViewModel reads it; the page binds <see cref="HasLinkAction"/> and <see cref="HasCommandAction"/>).</summary>
+    public SetupActionKind ActionKind
+    {
+        get => _actionKind;
+        private set
+        {
+            if (SetProperty(ref _actionKind, value))
+            {
+                OnPropertyChanged(nameof(HasAction));
+                OnPropertyChanged(nameof(HasLinkAction));
+                OnPropertyChanged(nameof(HasCommandAction));
+                OnPropertyChanged(nameof(HasRecheck));
+            }
+        }
+    }
+
+    /// <summary>The user may leave this step for later (GPU allowance); the page binds <see cref="HasSkip"/>.</summary>
+    public bool CanSkip
+    {
+        get => _canSkip;
+        private set
+        {
+            if (SetProperty(ref _canSkip, value))
+            {
+                OnPropertyChanged(nameof(HasSkip));
+            }
+        }
+    }
 
     /// <summary>"OK", "Fix", "Checking...", "Not checked yet" or "Skipped": the badge on the row.</summary>
     [ObservableProperty]
@@ -68,10 +135,6 @@ public sealed partial class SetupStepRow : ObservableObject
     [NotifyPropertyChangedFor(nameof(HasAction), nameof(HasLinkAction), nameof(HasCommandAction), nameof(HasRecheck))]
     private string _actionText = string.Empty;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasAction), nameof(HasLinkAction), nameof(HasCommandAction), nameof(HasRecheck))]
-    private SetupActionKind _actionKind;
-
     /// <summary>The page the link button opens (<see cref="SetupActionKind.OpenLink"/>), else null.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasLinkAction), nameof(HasCommandAction))]
@@ -79,11 +142,6 @@ public sealed partial class SetupStepRow : ObservableObject
 
     /// <summary>The message for an administrator or project owner, ready for the clipboard (<see cref="SetupActionKind.CopyText"/>).</summary>
     public string RequestText { get; private set; } = string.Empty;
-
-    /// <summary>The user may leave this step for later (GPU allowance).</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasSkip))]
-    private bool _canSkip;
 
     /// <summary>The last result, for the commands that act on it (the account to link, the code that failed).</summary>
     public SetupStepResult? Last { get; private set; }

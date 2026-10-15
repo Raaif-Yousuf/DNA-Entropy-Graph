@@ -59,11 +59,15 @@
                 The three caption buttons are 46 DIP wide each, so 154 clears
                 them with a 16 DIP gap, in DIPs so it holds at any scale.
             -->
-            <TextBlock
+            <!-- Issue #99: the pill is also the way back to the setup wizard (sign in, switch project, run the setup check again). -->
+            <HyperlinkButton
                 Grid.Column="1"
                 VerticalAlignment="Center"
                 Margin="0,0,154,0"
-                Text="{x:Bind ViewModel.StatusPillText, Mode=OneWay}" />
+                Content="{x:Bind ViewModel.StatusPillText, Mode=OneWay}"
+                Command="{x:Bind ViewModel.NavigateToCommand}"
+                CommandParameter="Wizard"
+                AutomationProperties.HelpText="{x:Bind ViewModel.StatusPillHelp}" />
         </Grid>
 
         <NavigationView

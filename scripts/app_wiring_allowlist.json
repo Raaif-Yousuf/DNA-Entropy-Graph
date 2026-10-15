@@ -3,17 +3,10 @@
   "_WHY_THIS_FILE_IS_LONG_TODAY": "Every entry below is the same fact said twenty-five times: app/ is a skeleton whose ViewModels exist and whose Views do not, so every command and every observable property is genuinely bound to nothing. That is not a false positive; it is the guard correctly describing an unfinished app. Each entry names the issue whose page will bind it, and the entry must be deleted in that issue's own PR.",
 
 
-  "CODE-ONLY-COMMAND:ShellViewModel.NavigateToCommand": "#62, done: NavigationView.SelectionChanged is an event, not a bindable Command= property in WinUI 3 - MainWindow.xaml.cs's handler is the only way to wire a NavigationView selection to a RelayCommand, so this stays C#-only by construction, not by omission.",
   "CODE-ONLY-COMMAND:NewRunViewModel.AddDroppedCommand": "#63, done: Drop is an event, not a bindable Command= property, so NewRunPage.xaml.cs forwards the dropped items to this command (the same shape as NavigateToCommand). Stays C#-only by construction.",
 
-  "TEST-ONLY-COMMAND:WizardViewModel.SignInCommand": "#99 builds the first-run wizard pages. No wizard page or any other XAML binds a sign-in button yet, so nothing in the shipped UI can start a sign-in; it was UNBOUND-COMMAND until #48 added tests that drive it, which changed the guard's classification, not the fact.",
-  "TEST-ONLY-OBSERVABLE:WizardViewModel.SignInErrorText": "#99 builds the first-run wizard pages; #48 added the property, no XAML shows it yet",
-  "TEST-ONLY-OBSERVABLE:WizardViewModel.SignInActionText": "#99 builds the first-run wizard pages; #48 added the property, no XAML shows it yet",
   "TEST-ONLY-COMMAND:WizardViewModel.ChooseProjectCommand": "#99 builds the first-run wizard pages, the Project step among them; #520 added the command that stores the chosen project on the account, and no page binds a project choice yet.",
-  "TEST-ONLY-OBSERVABLE:WizardViewModel.ProjectErrorText": "#99 builds the first-run wizard pages; #520 added the property, no XAML shows it yet",
-  "TEST-ONLY-OBSERVABLE:WizardViewModel.ProjectActionText": "#99 builds the first-run wizard pages; #520 added the property, no XAML shows it yet",
   "CODE-ONLY-OBSERVABLE:WizardViewModel.SelectedProjectId": "#99 builds the first-run wizard pages; the CODE-ONLY classification is a name collision with IGcpAccount.SelectedProjectId (read by JobEngine and ShellViewModel), see the script docstring on name matching.",
-  "CODE-ONLY-OBSERVABLE:WizardViewModel.IsSignedIn": "#99 builds the first-run wizard pages; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.IsSignedIn, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.IsSignedIn in Cloud.Tests.",
 
 
   "CODE-ONLY-OBSERVABLE:RunProgressViewModel.JobId": "#66; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",

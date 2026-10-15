@@ -9,6 +9,7 @@ using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.Runs;
+using DnaEntropyGraph.Core.Setup;
 using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
@@ -259,6 +260,11 @@ public static class ServiceRegistration
         // key-classes table). Transient: a fresh instance per page
         // navigation, per WinUI convention.
         services.AddTransient<ShellViewModel>();
+        // Issue #99: the wizard's steps 3 to 7 are plain calls over the cloud interfaces (real Google or FakeGcp, whichever the container was
+        // built over), so the same service backs the wizard page and, later, the Settings health report.
+        services.AddSingleton<BillingSetup>();
+        services.AddSingleton<ISetupCheckService, SetupCheckService>();
+        services.AddTransient<SetupStepsViewModel>();
         services.AddTransient<WizardViewModel>();
         services.AddTransient<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();

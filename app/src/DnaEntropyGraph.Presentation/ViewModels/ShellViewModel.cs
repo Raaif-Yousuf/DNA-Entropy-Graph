@@ -90,6 +90,7 @@ public sealed partial class ShellViewModel : ObservableObject
         "Runs" => "PageTitle_Runs",
         "Cloud" => "PageTitle_Cloud",
         "Settings" => "PageTitle_Settings",
+        "Wizard" => "PageTitle_Wizard",
         _ => null,
     };
 
@@ -100,6 +101,9 @@ public sealed partial class ShellViewModel : ObservableObject
 
     /// <summary>True when the app runs on a data folder given by <c>--profile</c> or <c>DEG_DATA_DIR</c> (issue #638), so the window must say it is not the real profile.</summary>
     /// <summary>True when the app runs over the simulated cloud (issue #69): the banner is permanent, never dismissible.</summary>
+    /// <summary>What the status pill does, for a screen reader: it opens the setup wizard (issue #99).</summary>
+    public string StatusPillHelp => _strings.GetString("StatusPillHelp");
+
     public bool HasSimulatedCloud => _simulatedCloud is not null;
 
     public string SimulatedCloudBannerText => _simulatedCloud is null ? string.Empty : _strings.GetString("SimulatedCloud_Banner");

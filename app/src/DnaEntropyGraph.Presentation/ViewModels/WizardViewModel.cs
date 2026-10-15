@@ -25,15 +25,24 @@ public sealed partial class WizardViewModel : ObservableObject
     private readonly IShellLauncher? _shell;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsNotSignedIn))]
     private bool _isSignedIn;
+
+    public bool IsNotSignedIn => !IsSignedIn;
 
     /// <summary>What went wrong, in the user's words and naming one action (Hard Rule 13); empty when the last sign-in did not fail.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSignInError))]
     private string _signInErrorText = string.Empty;
+
+    public bool HasSignInError => SignInErrorText.Length > 0;
 
     /// <summary>The label of the button that carries that action; empty when the message itself is the action.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSignInAction))]
     private string _signInActionText = string.Empty;
+
+    public bool HasSignInAction => SignInActionText.Length > 0;
 
     /// <summary>The project the current account has chosen, empty of meaning (null) until one is.</summary>
     [ObservableProperty]
@@ -41,11 +50,17 @@ public sealed partial class WizardViewModel : ObservableObject
 
     /// <summary>Why the last project choice was refused, in the user's words naming one action (Hard Rule 13); empty when it was not.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasProjectError))]
     private string _projectErrorText = string.Empty;
+
+    public bool HasProjectError => ProjectErrorText.Length > 0;
 
     /// <summary>The label of the button that carries that action; empty when the message itself is the action.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasProjectAction))]
     private string _projectActionText = string.Empty;
+
+    public bool HasProjectAction => ProjectActionText.Length > 0;
 
     public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null, ISetupCheckService? setup = null, SetupStepsViewModel? setupSteps = null, ISettingsStore? settings = null, IShellLauncher? shell = null)
     {
@@ -53,7 +68,7 @@ public sealed partial class WizardViewModel : ObservableObject
         _settings = settings;
         _shell = shell;
         SetupSteps = setupSteps;
-        ProjectRow = new SetupStepRow(SetupStep.Project, "Project", strings);
+        ProjectRow = new SetupStepRow(SetupStep.Project, strings);
         ProjectRow.ActionCommand = new AsyncRelayCommand(PerformProjectActionAsync);
         ProjectRow.RecheckCommand = new AsyncRelayCommand(ct => ContinueFromProjectAsync(ct));
         ProjectRow.PropertyChanged += (_, _) => FinishCommand.NotifyCanExecuteChanged();

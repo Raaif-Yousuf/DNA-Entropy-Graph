@@ -30,10 +30,10 @@ public sealed partial class SetupStepsViewModel : ObservableObject
         _strings = strings;
         Rows =
         [
-            Row(SetupStep.Billing, "Billing"),
-            Row(SetupStep.Services, "Services"),
-            Row(SetupStep.Storage, "Storage"),
-            Row(SetupStep.Quota, "Quota"),
+            Row(SetupStep.Billing),
+            Row(SetupStep.Services),
+            Row(SetupStep.Storage),
+            Row(SetupStep.Quota),
         ];
     }
 
@@ -53,9 +53,9 @@ public sealed partial class SetupStepsViewModel : ObservableObject
     /// <summary>Every row is green or skipped: the wizard may finish.</summary>
     public bool IsAllDone => Rows.All(r => r.Status is SetupStatus.Ok or SetupStatus.Skipped);
 
-    private SetupStepRow Row(SetupStep step, string key)
+    private SetupStepRow Row(SetupStep step)
     {
-        var row = new SetupStepRow(step, key, _strings);
+        var row = new SetupStepRow(step, _strings);
         row.ActionCommand = new AsyncRelayCommand(ct => PerformActionAsync(row, ct));
         row.RecheckCommand = new AsyncRelayCommand(ct => RunFromAsync(row.Step, ct));
         row.SkipCommand = new AsyncRelayCommand(() =>

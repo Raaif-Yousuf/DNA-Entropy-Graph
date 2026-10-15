@@ -1,0 +1,129 @@
+<Page
+    x:Class="DnaEntropyGraph.App.Views.WizardPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
+
+    <!--
+        Issue #99: the first-run wizard on one page, as a list of OK/Fix rows (docs/superpowers/specs Appendix A section 2.1). Step 1
+        (welcome) and step 2 (sign in) come first; step 3 (project) and steps 4 to 7 are SetupStepRow rows that check themselves in
+        order once the user is signed in; step 8 (test run) is a pointer to New run until the pipeline test exists; Finish goes to
+        New run. Every red row has one button and, always, "Do it by hand", which opens docs/gcp_setup_manual.md. Every string is in
+        Resources.resw (x:Uid, or a key the ViewModel resolves).
+    -->
+    <Page.Resources>
+        <Style x:Key="WizardCardStyle" TargetType="Border">
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="CornerRadius" Value="{StaticResource OverlayCornerRadius}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        </Style>
+
+        <DataTemplate x:Key="SetupRowTemplate" x:DataType="vm:SetupStepRow">
+            <Border Style="{StaticResource WizardCardStyle}" AutomationProperties.Name="{x:Bind Title}">
+                <StackPanel Spacing="6">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{x:Bind Title}" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
+                        <!-- The badge: the text carries the state (OK, Fix, ...), never colour alone. -->
+                        <TextBlock Grid.Column="1" Text="{x:Bind StatusText, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" AutomationProperties.LiveSetting="Polite" />
+                    </Grid>
+                    <TextBlock Text="{x:Bind Why}" TextWrapping="Wrap" Opacity="0.8" />
+                    <ProgressBar IsIndeterminate="True" Visibility="{x:Bind IsRunning, Mode=OneWay}" />
+                    <TextBlock Text="{x:Bind MessageText, Mode=OneWay}" Visibility="{x:Bind HasMessage, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock Text="{x:Bind NoteText, Mode=OneWay}" Visibility="{x:Bind HasNote, Mode=OneWay}" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="{x:Bind ActionText, Mode=OneWay}" Command="{x:Bind ActionCommand}" Visibility="{x:Bind HasCommandAction, Mode=OneWay}" />
+                        <HyperlinkButton Content="{x:Bind ActionText, Mode=OneWay}" NavigateUri="{x:Bind LinkUri, Mode=OneWay}" Visibility="{x:Bind HasLinkAction, Mode=OneWay}" />
+                        <Button x:Uid="WizardRecheckButton" Command="{x:Bind RecheckCommand}" Visibility="{x:Bind HasRecheck, Mode=OneWay}" />
+                        <Button x:Uid="WizardSkipButton" Command="{x:Bind SkipCommand}" Visibility="{x:Bind HasSkip, Mode=OneWay}" />
+                        <HyperlinkButton x:Uid="WizardDoItByHandLink" NavigateUri="{x:Bind ManualUri}" Visibility="{x:Bind ShowDoItByHand, Mode=OneWay}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+
+    <ScrollViewer>
+        <StackPanel Padding="24" Spacing="16" MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock x:Uid="WizardTitle" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock x:Uid="WizardWelcome" TextWrapping="Wrap" />
+
+            <!-- Step 2: sign in. -->
+            <Border Style="{StaticResource WizardCardStyle}">
+                <StackPanel Spacing="6">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Uid="WizardStep_SignIn_Title" Grid.Column="0" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock x:Uid="WizardSignedInBadge" Grid.Column="1" Style="{StaticResource BodyStrongTextBlockStyle}" Visibility="{x:Bind ViewModel.IsSignedIn, Mode=OneWay}" />
+                    </Grid>
+                    <TextBlock x:Uid="WizardStep_SignIn_Why" TextWrapping="Wrap" Opacity="0.8" />
+                    <TextBlock Text="{x:Bind ViewModel.SignInErrorText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasSignInError, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Uid="WizardSignInButton" Command="{x:Bind ViewModel.SignInCommand}" Visibility="{x:Bind ViewModel.IsNotSignedIn, Mode=OneWay}" />
+                        <Button Content="{x:Bind ViewModel.SignInActionText, Mode=OneWay}" Command="{x:Bind ViewModel.SignInCommand}" Visibility="{x:Bind ViewModel.HasSignInAction, Mode=OneWay}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Step 3: the project (a row, plus the list to choose from while the user has to choose). -->
+            <ContentControl Content="{x:Bind ViewModel.ProjectRow}" ContentTemplate="{StaticResource SetupRowTemplate}" HorizontalContentAlignment="Stretch" />
+            <StackPanel Spacing="8" Visibility="{x:Bind ViewModel.HasProjects, Mode=OneWay}">
+                <TextBlock x:Uid="WizardProjectListHeading" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Projects}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ProjectChoice">
+                            <Button Command="{x:Bind ChooseCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="0,0,0,4" AutomationProperties.Name="{x:Bind DisplayName}">
+                                <StackPanel>
+                                    <TextBlock Text="{x:Bind DisplayName}" />
+                                    <TextBlock Text="{x:Bind ProjectId}" Opacity="0.7" Style="{StaticResource CaptionTextBlockStyle}" />
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind ViewModel.IsSignedIn, Mode=OneWay}">
+                <Button x:Uid="WizardCreateProjectButton" Command="{x:Bind ViewModel.CreateProjectCommand}" />
+            </StackPanel>
+            <TextBlock Text="{x:Bind ViewModel.ProjectErrorText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasProjectError, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+            <TextBlock Text="{x:Bind ViewModel.ProjectActionText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasProjectAction, Mode=OneWay}" TextWrapping="Wrap" />
+
+            <!-- Steps 4 to 7: the OK/Fix rows. -->
+            <ItemsControl ItemsSource="{x:Bind ViewModel.SetupSteps.Rows}" ItemTemplate="{StaticResource SetupRowTemplate}">
+                <ItemsControl.ItemContainerTransitions>
+                    <TransitionCollection />
+                </ItemsControl.ItemContainerTransitions>
+            </ItemsControl>
+            <StackPanel Spacing="8" Visibility="{x:Bind ViewModel.SetupSteps.HasBillingChoices, Mode=OneWay}">
+                <TextBlock x:Uid="WizardBillingChoicesHeading" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.SetupSteps.BillingChoices}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:BillingAccountChoice">
+                            <Button Content="{x:Bind DisplayName}" Command="{x:Bind ChooseCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="0,0,0,4" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+            <Button x:Uid="WizardCheckAllButton" Command="{x:Bind ViewModel.SetupSteps.RunAllCommand}" />
+            <TextBlock Text="{x:Bind ViewModel.SetupSteps.NoticeText, Mode=OneWay}" Visibility="{x:Bind ViewModel.SetupSteps.HasNotice, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+
+            <!-- Step 8: the test run. The pipeline test is its own issue; until it exists the honest next step is a first run. -->
+            <Border Style="{StaticResource WizardCardStyle}">
+                <StackPanel Spacing="6">
+                    <TextBlock x:Uid="WizardStep_TestRun_Title" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock x:Uid="WizardStep_TestRun_Why" TextWrapping="Wrap" Opacity="0.8" />
+                </StackPanel>
+            </Border>
+
+            <Button x:Uid="WizardFinishButton" Command="{x:Bind ViewModel.FinishCommand}" Style="{StaticResource AccentButtonStyle}" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>
