@@ -73,8 +73,10 @@ status() {
   # container's own worker process (dna-entropy-worker) writes every stage from
   # restoring-cache through done/failed/cancelled and owns the real heartbeat cadence; this
   # function exists so the app sees SOMETHING before the container has even started.
-  printf '{"schema":1,"jobId":"%s","stage":"%s","updatedAt":"%s","heartbeatSeq":0,"vm":{"name":"%s","zone":"%s"},"worker":{"version":"","image":""},"percent":0,"detail":{},"error":%s}\n' \
-    "$JOB" "$1" "$(date -u +%FT%TZ)" "$NAME" "$ZONE" "${2:-null}" > /tmp/deg-status.json
+  local ts
+  ts="$(date -u +%FT%TZ)"
+  printf '{"schema":1,"jobId":"%s","stage":"%s","stageStartedAt":"%s","updatedAt":"%s","heartbeatSeq":0,"vm":{"name":"%s","zone":"%s"},"worker":{"version":"","image":""},"percent":0,"detail":{},"error":%s}\n' \
+    "$JOB" "$1" "$ts" "$ts" "$NAME" "$ZONE" "${2:-null}" > /tmp/deg-status.json
   put_object /tmp/deg-status.json "jobs/${JOB}/status.json" || true  # never fatal: a
     # failed status write must not itself take down the job — the heartbeat/death-detection
     # timeout on the app side is exactly the backstop for "the VM is unreachable".

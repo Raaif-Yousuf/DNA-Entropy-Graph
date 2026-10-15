@@ -131,6 +131,7 @@ public static class RunErrorCodes
         "BATCH_LIMIT_EXCEEDED" => BatchLimitExceeded,
         "INPUT_INVALID" => InputInvalid,
         "WORKER_VERSION_MISMATCH" => WorkerVersionMismatch,
+        "RUN_TIME_LIMIT" => RunTimeLimit,
         _ => null,
     };
 

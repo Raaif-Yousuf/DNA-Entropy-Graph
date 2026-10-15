@@ -1500,3 +1500,97 @@ def test_cancel_during_the_mirror_stops_it_without_a_marker(tmp_path: Path) -> N
     run_job(store, predictor_factory=_factory, cache_store=cache, hf_cache_dir=hf)
     assert is_cached(cache, "evo2_7b") is False
     assert any("mirror stopped" in p["message"] for p in _progress(store))
+
+
+# --- the user's run cap is enforced by the worker itself (issue #89 review) ------------
+
+
+class _FakeClock:
+    """A monotonic clock the test advances by hand, so no test sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _slow_predictor_factory(
+    clock: _FakeClock, calls: dict, seconds_per_call: float, *, slow_from_call: int = 2
+):
+    from dna_entropy.predictors.mock import MockPredictor
+
+    class _Slow:
+        def __init__(self) -> None:
+            self._inner = MockPredictor(seed=0)
+
+        def predict(self, seq):
+            calls["n"] += 1
+            if calls["n"] >= slow_from_call:
+                clock.now += seconds_per_call
+            return self._inner.predict(seq)
+
+    return lambda cfg: _Slow()
+
+
+def test_max_run_seconds_stops_a_slow_worker_with_a_named_code_and_keeps_partial_outputs(
+    tmp_path: Path,
+) -> None:
+    """The worker enforces limits.maxRunSeconds: past it, no further record starts, the work
+    already done is uploaded, and result.json says RUN_TIME_LIMIT (not a hang, not a crash)."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 1, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(store, predictor_factory=_slow_predictor_factory(clock, calls, 10.0), time_source=clock)
+
+    assert result.status == "failed"
+    assert result.error is not None and result.error["code"] == "RUN_TIME_LIMIT"
+    assert result.error["retriable"] is False
+    assert result.inputs[0].status == "failed"
+    assert result.inputs[0].error is not None and result.inputs[0].error["code"] == "RUN_TIME_LIMIT"
+    assert 1 <= calls["n"] < 3, "the cap did not stop the run between records"
+    assert result.inputs[0].outputs, "the records finished before the cap were not uploaded"
+    assert store.exists(RESULT_PATH)
+
+
+def test_a_run_inside_its_cap_is_untouched(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 3600})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(store, predictor_factory=_slow_predictor_factory(clock, calls, 10.0), time_source=clock)
+
+    assert result.status == "done"
+    assert result.error is None
+    assert calls["n"] == 3
+
+
+def test_max_run_seconds_stops_the_batch_before_the_next_input_starts(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(
+        store,
+        inputs=[
+            {"id": "in1", "path": "input/a.fasta", "name": "a"},
+            {"id": "in2", "path": "input/b.fasta", "name": "b"},
+        ],
+        limits={"maxRunSeconds": 1, "cancelPollSeconds": 0},
+    )
+    _seed_fasta_input(store, "input/a.fasta")
+    _seed_fasta_input(store, "input/b.fasta")
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(
+        store,
+        predictor_factory=_slow_predictor_factory(clock, calls, 10.0, slow_from_call=1),
+        time_source=clock,
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None and result.error["code"] == "RUN_TIME_LIMIT"
+    assert [r.id for r in result.inputs] == ["in1"], "a second input started after the cap"

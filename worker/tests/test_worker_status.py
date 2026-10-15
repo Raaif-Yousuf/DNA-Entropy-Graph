@@ -361,3 +361,31 @@ def test_write_local_fallback_writes_utf8_with_lf(tmp_path, monkeypatch) -> None
     raw = path.read_bytes()
     assert b"\r\n" not in raw  # newline="\n", never CRLF
     assert json.loads(raw.decode("utf-8"))["status"] == "done"
+
+
+def test_stage_started_at_moves_only_when_the_stage_changes(tmp_path: Path, monkeypatch) -> None:
+    """The app reads stage age from the worker's own clock (updatedAt - stageStartedAt), so a resumed
+    run does not grant a stuck stage a fresh allowance (#90 review)."""
+    clock = iter(f"2026-10-15T10:{m:02d}:00Z" for m in range(0, 59))
+    monkeypatch.setattr(status_module, "utc_now_iso", lambda: next(clock))
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job1", interval_seconds=999)
+    w.start()
+    try:
+        first = _status(store)
+        assert first["stageStartedAt"] == first["startedAt"]
+
+        w.update(stage="model-loading")
+        loading = _status(store)
+        assert loading["stage"] == "model-loading"
+        assert loading["stageStartedAt"] > first["stageStartedAt"]
+
+        w.update(percent=10.0)  # same stage again: the clock must not restart
+        again = _status(store)
+        assert again["stageStartedAt"] == loading["stageStartedAt"]
+        assert again["updatedAt"] > loading["updatedAt"]
+
+        w.update(stage="model-loading")  # naming the same stage is not a transition
+        assert _status(store)["stageStartedAt"] == loading["stageStartedAt"]
+    finally:
+        w.stop()
