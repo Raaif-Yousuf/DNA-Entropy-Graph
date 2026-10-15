@@ -278,23 +278,25 @@ public static class ServiceRegistration
     private static void AddGoogleCloud(IServiceCollection services)
     {
         services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<GoogleAccountService>());
-        services.AddSingleton<GoogleCloudOptions>(sp =>
+        services.AddSingleton<GoogleCloudOptions>(sp => new GoogleCloudOptions
         {
-            // The id is read when the first gateway is built (a run or the launch reconcile); an unusable settings folder
-            // leaves it null, and the storage gateway then refuses to create a bucket by name instead of crashing here.
-            string? installationId = null;
-            try
+            // Read at each use, never once at startup (#609 cold review): an unusable id file at the first run left the id null for the whole
+            // process even after the user repaired it. An unusable file answers null for now (the storage gateway then refuses to create a
+            // bucket by name instead of crashing; JobEngine reports installation_id_unusable before a run starts) and is read again next time.
+            InstallationIdSource = () =>
             {
-                installationId = InstallationId.GetOrCreate(sp.GetRequiredService<ISettingsStore>());
-            }
-            catch (InstallationIdUnusableException)
-            {
-                // JobEngine reports installation_id_unusable to the user before a run starts.
-            }
-
-            return new GoogleCloudOptions { InstallationId = installationId, AppVersion = JobEngine.AppVersion() };
+                try
+                {
+                    return InstallationId.GetOrCreate(sp.GetRequiredService<ISettingsStore>());
+                }
+                catch (InstallationIdUnusableException)
+                {
+                    return null;
+                }
+            },
+            AppVersion = JobEngine.AppVersion(),
         });
-        services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
+services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
             sp.GetRequiredService<IGcpAccessTokenSource>(),
             sp.GetRequiredService<CloudCallPipeline>(),
             sp.GetRequiredService<GoogleCloudOptions>(),
@@ -325,6 +327,10 @@ public static class ServiceRegistration
         services.AddSingleton<IQuotaGateway>(sp => new ResilientQuotaGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
         // Issue #606: never wrapped in a Resilient* decorator (the real gateway runs its own pipeline per HTTP call).
         services.AddSingleton<IWorkerIdentityGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        // The wizard's project list, billing and service-enablement gateways: every interface the Google build resolves resolves here too, so a ViewModel taking one never throws in fake mode only.
+        services.AddSingleton<IProjectCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
     }
 }
 
