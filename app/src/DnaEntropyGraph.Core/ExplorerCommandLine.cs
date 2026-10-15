@@ -1,0 +1,23 @@
+namespace DnaEntropyGraph.Core;
+
+/// <summary>
+/// The one place that builds Explorer's "reveal this file" switch (issue #677). Explorer reads <c>/select,"path"</c> with its own rules, not the C runtime's, so
+/// <c>ProcessStartInfo.ArgumentList</c> (which OpenFolder uses for a plain folder argument) is not a safe substitute: THEORY (unverified): it would send
+/// <c>"/select,C:\a b\f.txt"</c>, a form Explorer is not documented to accept. The proven form is kept, with the paths it cannot carry refused up front.
+/// </summary>
+public static class ExplorerCommandLine
+{
+    /// <summary>
+    /// <c>/select,"&lt;path&gt;"</c> for a rooted file path, or null when the path cannot be quoted safely: empty, relative (Explorer would resolve it against its own
+    /// working directory), containing a quote character (not legal in a Windows path), or ending in a backslash (a folder, and a quote after a trailing backslash is read as an escaped quote).
+    /// </summary>
+    public static string? Select(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || filePath.Contains('"') || filePath.EndsWith('\\') || !Path.IsPathRooted(filePath))
+        {
+            return null;
+        }
+
+        return "/select,\"" + filePath + "\"";
+    }
+}

@@ -19,4 +19,15 @@ public class FolderLauncherQuotingTests
         open.ShouldContain("ArgumentList");
         open.ShouldNotContain("\\\"{folderPath}");
     }
+
+    [Fact]
+    public void RevealFile_builds_its_switch_through_the_tested_helper_never_a_hand_quoted_interpolation()
+    {
+        // Issue #677: ExplorerCommandLine.Select is what the unit tests pin (spaces, trailing backslash, quotes).
+        var source = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "Services", "FolderLauncher.cs"));
+        var reveal = source[source.IndexOf("public bool RevealFile", StringComparison.Ordinal)..];
+
+        reveal.ShouldContain("ExplorerCommandLine.Select");
+        reveal.ShouldNotContain("/select,\\\"{");
+    }
 }
