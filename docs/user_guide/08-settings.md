@@ -22,6 +22,12 @@ Where the app keeps its own data: the app data folder, the run folders (each kee
 
 Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (off, so a finished run never pulls you away from what you are typing). They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
 
+## This PC
+
+Run the analysis on your own computer instead of a rented one. It needs an NVIDIA graphics card with about 24 GB of memory, an NVIDIA driver of version 550 or newer, and 30 GB of free disk space. The **Where to run** box chooses the default for new runs: **Cloud**, **This PC**, or **Auto** (This PC when it can run the model, the cloud when it cannot). If this PC cannot run the model, **This PC** is greyed out and the line under the box says why and what to do.
+
+The health check below it shows your graphics card, free disk space and whether the engine (the model software the app installs for this feature) is installed and working. **Install** sets the engine up in one step (it downloads several gigabytes and can be cancelled), **Repair** sets it up again, **Remove** deletes it (your results and input copies are not touched), and **Check again** looks at the computer again. A run on this PC never creates anything in Google Cloud and costs nothing but time.
+
 ## Diagnostics
 
 **Save diagnostics** writes one file you can send to support. It includes your run logs, run

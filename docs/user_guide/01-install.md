@@ -49,3 +49,7 @@ you close the app entirely.
 [02-connect-google-cloud.md](02-connect-google-cloud.md), the next step.
 [07-when-something-goes-wrong.md](07-when-something-goes-wrong.md), if the install itself
 does not go as described above.
+
+## Optional: running on this PC
+
+If your computer has an NVIDIA graphics card with about 24 GB of memory, the app can run the analysis there instead of on a rented computer. Open **Settings**, find **This PC**, and read the health check: it tells you whether your card, driver and disk space are enough. If they are, choose **Install**. If they are not, the app keeps using the cloud and nothing else changes. See [Settings](08-settings.md).
