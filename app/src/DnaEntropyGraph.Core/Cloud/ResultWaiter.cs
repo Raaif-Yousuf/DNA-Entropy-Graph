@@ -139,7 +139,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                         return text;
                     }
 
-                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vmCreatedAt).ConfigureAwait(false);
+                    // Only a VM that is GONE (not merely stopped or preempted) can be one the platform deleted at its limit.
+                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null ? vmCreatedAt : null).ConfigureAwait(false);
                 }
 
                 // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
