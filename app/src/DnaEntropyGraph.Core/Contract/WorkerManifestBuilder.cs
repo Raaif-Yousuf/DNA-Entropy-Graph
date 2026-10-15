@@ -138,6 +138,12 @@ public static class WorkerManifestBuilder
             },
         };
 
+        if (options.Topology != Topology.Auto)
+        {
+            // Optional on the wire (job_contract.md section 3): an older manifest without it means "auto", so auto is never sent.
+            root["analysis"]!["topology"] = options.Topology == Topology.Circular ? "circular" : "linear";
+        }
+
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
     }
 

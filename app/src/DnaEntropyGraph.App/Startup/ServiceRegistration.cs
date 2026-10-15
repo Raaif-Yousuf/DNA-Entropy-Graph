@@ -170,6 +170,7 @@ public static class ServiceRegistration
         services.AddSingleton<IResettableSettings>(sp => sp.GetRequiredService<SettingsStore>());
         services.AddSingleton<ICloudModeInfo>(_ => new DnaEntropyGraph.App.Services.FakeCloudModeInfo(cloud));
         services.AddSingleton<OutputSelectionStore>();
+        services.AddSingleton<DnaEntropyGraph.Core.Presets.PresetStore>();
 
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
@@ -286,6 +287,7 @@ public static class ServiceRegistration
         services.AddSingleton<ISetupCheckService, SetupCheckService>();
         services.AddTransient<SetupStepsViewModel>();
         services.AddTransient<WizardViewModel>();
+        services.AddTransient<PresetPickerViewModel>();
         services.AddTransient<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
