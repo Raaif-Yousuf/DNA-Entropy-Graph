@@ -120,7 +120,7 @@ public class JobEngineTests
                     Terminal.TrySetResult(m.Phase);
                 }
             });
-            var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, Runs, (id, phase) => Messenger.Send(new RunPhaseChangedMessage(id, phase)))
+            var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, Runs, (id, phase) => Messenger.Send(new RunPhaseChangedMessage(id, phase)))
             {
                 ResultPollInterval = TimeSpan.FromMilliseconds(1),
                 ResultTimeout = TimeSpan.FromSeconds(5),

@@ -672,7 +672,8 @@ def self_test() -> int:
             # The Git Bash backslash trap: literal backslashes must survive,
             # and a mangled path must fail open rather than guess.
             win = str(primary).replace("/", "\\")
-            check("unquoted backslash path in cd denies", verdict(f"cd {win}; git switch -c x", w) is not None)
+            if os.name == "nt":  # a backslash path is only a path on Windows (#662)
+                check("unquoted backslash path in cd denies", verdict(f"cd {win}; git switch -c x", w) is not None)
             check("mangled (backslashes eaten) cwd fails open", verdict("git switch -c x", "C:Usersnobodyprimary") is None)
 
             not_a_repo = pathlib.Path(tmp) / "not-a-repo"

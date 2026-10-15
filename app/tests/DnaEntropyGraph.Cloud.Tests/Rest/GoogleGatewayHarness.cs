@@ -38,13 +38,20 @@ internal sealed class StubTokenSource : IGcpAccessTokenSource, ICloudTokenRefres
 /// </summary>
 internal sealed class GoogleGatewayHarness
 {
-    public GoogleGatewayHarness(TimeSpan? operationDeadline = null, int retries = 3, string? installationId = "installation-1", int retentionDays = 30, string? selectedProjectId = "my-lab")
+    public GoogleGatewayHarness(TimeSpan? operationDeadline = null, int retries = 3, string? installationId = "installation-1", int retentionDays = 30, string? selectedProjectId = "my-lab", TimeProvider? retryClock = null, TimeSpan? attemptTimeout = null)
     {
         Tokens = new StubTokenSource();
         Handler = new ScriptedHttpHandler();
         Log = new CloudRetryLog();
         Pipeline = new CloudCallPipeline(
-            new CloudRetryOptions { MaxRetryAttempts = retries, BaseDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero },
+            new CloudRetryOptions
+            {
+                MaxRetryAttempts = retries,
+                BaseDelay = TimeSpan.Zero,
+                MaxDelay = TimeSpan.Zero,
+                TimeProvider = retryClock ?? TimeProvider.System,
+                AttemptTimeout = attemptTimeout ?? new CloudRetryOptions().AttemptTimeout,
+            },
             Tokens,
             Log);
         Gateways = GoogleCloudGateways.Create(
