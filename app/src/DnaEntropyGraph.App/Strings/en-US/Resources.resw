@@ -1283,6 +1283,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>At least one file must stay ticked. Tick another file first, then untick this one.</value>
   </data>
   <data name="RunDefaultsNotSaved" xml:space="preserve">
-    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then tick the file again.</value>
+    <value>This could not be saved because another copy of the app has the settings file open, so the box is back as it was. Close the other copies of the app, then change it again.</value>
   </data>
 </root>
