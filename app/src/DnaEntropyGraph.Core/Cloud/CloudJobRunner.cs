@@ -287,6 +287,15 @@ public sealed class CloudJobRunner
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested) && progress.VmMayExist && !VmEndNotes.AlreadyAttempted(ex))
         {
+            // Issue #687: a cancel that arrived while this run was provisioning set the row to Cancelling; when the in-flight create or reuse
+            // lands, this run's own next step is an illegal Cancelling -> Preparing transition. That is the cancel winning the race, not a
+            // failure: the run stands down, CancelAsync (which waits for the in-flight create and deletes by label) owns the VM and records
+            // the one terminal state, Cancelled.
+            if (ex is InvalidOperationException && await _rows.TryLatestRecordAsync(request.JobId).ConfigureAwait(false) is { Phase: JobPhase.Cancelling or JobPhase.Cancelled } standDown)
+            {
+                return RunRowStore.ResultFromRow(standDown);
+            }
+
             // Hard Rule 11: whatever fails once a VM may exist (a failed call, a bad transition, a failing repository),
             // the VM must not be left billing under a terminal Failed record nothing will ever look at again. The VM is
             // found by the zone when known and by its job-id label when not. Only the CALLER cancelling is not this (CancelAsync owns that
@@ -359,7 +368,7 @@ public sealed class CloudJobRunner
 
         progress.Zone = provisioned.Zone!;
         progress.VmName = provisioned.VmName ?? progress.VmName;
-        return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+        return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -384,7 +393,7 @@ public sealed class CloudJobRunner
     }
 
     /// <summary>Everything from the moment a VM exists. <see cref="RunCoreAsync"/> ends the VM for any exception that leaves here without having done so.</summary>
-    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken)
+    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null)
     {
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Preparing, cancellationToken).ConfigureAwait(false);
 
@@ -416,7 +425,7 @@ public sealed class CloudJobRunner
         // RUNNING is not working (CLAUDE.md Critical Pitfalls): the VM being up says nothing about the
         // job. result.json is the worker's own terminal signal (docs/job_contract.md section 7), so wait
         // for it, checking on the VM between looks so a lost VM ends the run instead of waiting it out.
-        var resultText = await _waiter.AwaitResultAsync(request, bucket, zone, cancellationToken).ConfigureAwait(false);
+        var resultText = await _waiter.AwaitResultAsync(request, bucket, zone, cancellationToken, vmStartMark).ConfigureAwait(false);
         return await _outcome.FinishAsync(request, bucket, zone, resultText, cancellationToken).ConfigureAwait(false);
     }
 

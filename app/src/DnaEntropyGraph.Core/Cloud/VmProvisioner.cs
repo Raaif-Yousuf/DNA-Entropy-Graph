@@ -104,6 +104,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
                         // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
                         // token (the same instant, so the poller's would win and hide the abandoned create).
+                        progress.VmStartMark = settings.StartClock();
                         createTask = compute.CreateVmAsync(spec, zone, cancellationToken);
                         TrackInflightCreate(request.JobId, createTask);
                         var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
@@ -245,6 +246,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             var started = await calls.CallAsync(
                 token =>
                 {
+                    progress.VmStartMark = settings.StartClock();
                     var reuse = compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token);
                     TrackInflightCreate(request.JobId, reuse);
                     return reuse;

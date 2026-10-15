@@ -279,7 +279,7 @@ public class CloudJobRunnerGuaranteesTests
         // maxRunDuration is 11 s, the default wait limit 5.5 s, and the VM reads RUNNING after 6 looks (6 s). Waiting 5.5 s
         // from Running would run past the platform's deletion at 11 s (vm_unhealthy); measured from creation the deadline
         // has already passed at the first look and the runner ends the VM itself.
-        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"));
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"), timestampFollowsClock: true); // the runner's own elapsed clock moves with the looks
         var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithBootStatusPolls(5).WithMaxRunDurationEnforced();
         var compute = new ScriptedCompute(gcp)
         {

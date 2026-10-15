@@ -638,6 +638,7 @@ public class GoogleComputeGatewayTests
         var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
 
         thrown.Error.HttpStatus.ShouldBe(412);
+        thrown.Kind.ShouldBe(CloudErrorKind.Other, "a lost claim is not an org-policy refusal (that would abort the run) nor a stockout");
         rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[(r.Uri.AbsolutePath.LastIndexOf('/') + 1)..])
             .ShouldBe(["setLabels"], "the winner's scheduling and metadata must not be overwritten by a racer that lost the claim");
     }
