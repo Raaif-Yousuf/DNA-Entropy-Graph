@@ -26,7 +26,7 @@ public sealed partial class MainWindow : Window
 {
     public ShellViewModel ViewModel { get; }
 
-    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService)
+    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService, WindowThemeApplier windowThemeApplier)
     {
         ViewModel = shellViewModel;
         InitializeComponent();
@@ -34,7 +34,9 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SystemBackdrop = new MicaBackdrop();
         SetTitleBar(AppTitleBar);
-        ThemeApplier.Apply(RootNavigationView, settingsStore);
+        // The window's content root, not the NavigationView: the title bar and the Mica backdrop sit outside the NavigationView (#639).
+        windowThemeApplier.Attach(RootGrid, AppWindow);
+        windowThemeApplier.Apply(ThemeApplier.ReadTheme(settingsStore) ?? "System");
         WindowPlacementApplier.Apply(this, windowPlacementService);
     }
 

@@ -23,7 +23,7 @@ public partial class App : Application
         InitializeComponent();
 
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph();
+        services.AddDnaEntropyGraph(StartupDataRoot.Current);
         Services = services.BuildServiceProvider();
     }
 
@@ -32,7 +32,8 @@ public partial class App : Application
         var window = new MainWindow(
             Services.GetRequiredService<Presentation.ViewModels.ShellViewModel>(),
             Services.GetRequiredService<Core.Abstractions.ISettingsStore>(),
-            Services.GetRequiredService<Services.WindowPlacementService>());
+            Services.GetRequiredService<Services.WindowPlacementService>(),
+            Services.GetRequiredService<Services.WindowThemeApplier>());
         var navigationService = Services.GetRequiredService<NavigationService>();
         navigationService.Initialize(window.RootFrame);
         Startup.NavigationRoutes.RegisterAll(navigationService);
