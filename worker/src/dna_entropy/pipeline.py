@@ -434,6 +434,7 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
                 name=cfg.name,
                 records=[(c.name, c.seq, c.features, dr.values, c.source_id) for c, dr in processed],
                 out_dir=cfg.out_dir,
+                circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
             )
         )
     if cfg.include_fasta:
@@ -659,7 +660,14 @@ def _write_standard_outputs(
             for (c, dr), g in zip(processed, genes_by_contig, strict=True):
                 gb_features = g or _try_annotate(c.seq)
                 records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
-            outputs.append(GenBankWriter().write_multi(name=cfg.name, records=records, out_dir=cfg.out_dir))
+            outputs.append(
+                GenBankWriter().write_multi(
+                    name=cfg.name,
+                    records=records,
+                    out_dir=cfg.out_dir,
+                    circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
+                )
+            )
         except Exception:
             pass  # GenBank is a bonus on this path; never fail the core run over it
     return outputs, genes
