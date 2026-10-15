@@ -1729,4 +1729,23 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunPillKind_SnapGene" xml:space="preserve">
     <value>SnapGene</value>
   </data>
+  <!-- #686 GFF3 pairing: notices -->
+  <data name="NewRunNotice_AnnotationLinesSkipped" xml:space="preserve">
+    <value>{0} lines of the GFF3 were skipped because they are not nine columns separated by tabs with a whole-number start and end (the first is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationLinesSkipped_One" xml:space="preserve">
+    <value>1 line of the GFF3 was skipped because it is not nine columns separated by tabs with a whole-number start and end (it is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames" xml:space="preserve">
+    <value>{0} sequence names in the GFF3 match no record in the FASTA file, so their genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames_One" xml:space="preserve">
+    <value>1 sequence name in the GFF3 matches no record in the FASTA file, so its genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd" xml:space="preserve">
+    <value>{0} genes in the GFF3 run past the end of their sequence and are left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
+    <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
 </root>
