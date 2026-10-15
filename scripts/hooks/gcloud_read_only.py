@@ -43,7 +43,7 @@ from block_git_stash import _strip_cat_heredoc_bodies  # one definition of the h
 _INVOCATION = re.compile(
     r"(?:^|[;&|\n(`]|&&|\|\|)\s*"
     r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
-    r"(?P<tool>gcloud|gsutil|bq)(?:\.cmd|\.ps1|\.exe)?(?=\s|$|[;&|)`])"
+    r"(?P<tool>gcloud|gsutil|bq)(?:\.cmd|\.ps1|\.exe)?(?![^\s;&|)`])"
     r"(?P<rest>[^;&|\n)`]*)",
     re.IGNORECASE,
 )
