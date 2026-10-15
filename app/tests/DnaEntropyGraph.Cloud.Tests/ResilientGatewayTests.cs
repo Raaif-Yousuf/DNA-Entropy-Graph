@@ -306,6 +306,16 @@ public class ResilientGatewayTests
             return Spec();
         }
 
+        if (type == typeof(QuotaIncreaseRequest))
+        {
+            return new QuotaIncreaseRequest(QuotaMetrics.GpusAllRegions, null, 1, "deg-sample", "sample");
+        }
+
+        if (parameter.Name == "metric")
+        {
+            return QuotaMetrics.GpusAllRegions;
+        }
+
         if (type == typeof(Stream))
         {
             return new MemoryStream();

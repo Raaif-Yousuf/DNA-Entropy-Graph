@@ -1,3 +1,7 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DnaEntropyGraph.Core.Cloud;
 using Google;
 using Google.Apis.Compute.v1;
@@ -17,14 +21,162 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// </summary>
 internal sealed class GoogleQuotaGateway : IQuotaGateway
 {
+    private const string QuotasHost = "https://cloudquotas.googleapis.com";
+    private const string ComputeServiceName = "compute.googleapis.com";
+
     private readonly ComputeService _service;
     private readonly CloudCallPipeline _pipeline;
+    private readonly HttpClient _quotas;
 
-    public GoogleQuotaGateway(ComputeService service, CloudCallPipeline pipeline)
+    public GoogleQuotaGateway(ComputeService service, CloudCallPipeline pipeline, HttpClient quotas)
     {
         _service = service;
         _pipeline = pipeline;
+        _quotas = quotas;
     }
+
+    /// <summary>
+    /// Issue #99: <c>GET quotaInfos/{quotaId}</c> of the Cloud Quotas API and its <c>quotaIncreaseEligibility</c>. No Google package for this API exists on NuGet
+    /// (only the gRPC Google.Cloud.CloudQuotas.V1, which would break the injectable HTTP stack every other gateway has), so this is the documented REST call over the
+    /// same bearer-token HTTP stack. A 404 (a quota id Google does not know) and a missing eligibility field are both an unknown answer, never "eligible".
+    /// THEORY (unverified, no live project): the two quota ids in <see cref="QuotaMetrics.QuotaIdFor"/>, and the field names. docs/ToTest.md carries the row.
+    /// </summary>
+    public async Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken)
+    {
+        var quotaId = QuotaMetrics.QuotaIdFor(metric) ?? throw new ArgumentException($"'{metric}' is not a quota this app asks more of.", nameof(metric));
+        var url = $"{QuotasHost}/v1/projects/{Uri.EscapeDataString(projectId)}/locations/global/services/{ComputeServiceName}/quotaInfos/{quotaId}";
+        string body;
+        try
+        {
+            body = await SendAsync("cloudquotas.quotaInfos.get", () => new HttpRequestMessage(HttpMethod.Get, url), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return new QuotaEligibility(metric, null, QuotaIneligibilityReason.None, "QUOTA_INFO_NOT_FOUND");
+        }
+
+        using var document = ParseObject(body);
+        if (!document.RootElement.TryGetProperty("quotaIncreaseEligibility", out var eligibility)
+            || eligibility.ValueKind != JsonValueKind.Object
+            || !eligibility.TryGetProperty("isEligible", out var isEligible)
+            || isEligible.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return new QuotaEligibility(metric, null, QuotaIneligibilityReason.None, "QUOTA_ELIGIBILITY_MISSING");
+        }
+
+        if (isEligible.GetBoolean())
+        {
+            return new QuotaEligibility(metric, true);
+        }
+
+        var reason = eligibility.TryGetProperty("ineligibilityReason", out var wire) && wire.ValueKind == JsonValueKind.String ? wire.GetString() : null;
+        return new QuotaEligibility(metric, false, reason switch
+        {
+            "NO_VALID_BILLING_ACCOUNT" => QuotaIneligibilityReason.NoValidBillingAccount,
+            "NOT_SUPPORTED" => QuotaIneligibilityReason.NotSupported,
+            "NOT_ENOUGH_USAGE_HISTORY" => QuotaIneligibilityReason.NotEnoughUsageHistory,
+            _ => QuotaIneligibilityReason.Other,
+        });
+    }
+
+    /// <summary>
+    /// Issue #99: <c>POST quotaPreferences?quotaPreferenceId=...</c>. One request per call; the caller-chosen preference id makes a replay after a lost answer an
+    /// already-exists answer, never a second request. The body names the service, the quota id, the preferred value (a string: it is an int64 in JSON), the
+    /// region dimension for a regional quota, the justification and the optional contact email.
+    /// </summary>
+    public async Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+        var preference = new JsonObject
+        {
+            ["service"] = ComputeServiceName,
+            ["quotaId"] = QuotaMetrics.QuotaIdFor(request.Metric),
+            ["quotaConfig"] = new JsonObject { ["preferredValue"] = request.PreferredValue.ToString(CultureInfo.InvariantCulture) },
+            ["justification"] = request.Justification,
+        };
+        if (!string.IsNullOrWhiteSpace(request.Region))
+        {
+            preference["dimensions"] = new JsonObject { ["region"] = request.Region };
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.ContactEmail))
+        {
+            preference["contactEmail"] = request.ContactEmail;
+        }
+
+        var url = $"{QuotasHost}/v1/projects/{Uri.EscapeDataString(projectId)}/locations/global/quotaPreferences?quotaPreferenceId={Uri.EscapeDataString(request.PreferenceId)}";
+        var payload = preference.ToJsonString();
+        var body = await SendAsync(
+            "cloudquotas.quotaPreferences.create",
+            () => new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(payload, Encoding.UTF8, "application/json") },
+            cancellationToken).ConfigureAwait(false);
+
+        using var document = ParseObject(body);
+        var root = document.RootElement;
+        var config = root.TryGetProperty("quotaConfig", out var c) && c.ValueKind == JsonValueKind.Object ? c : default;
+        return new QuotaIncreaseResult(
+            root.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String ? name.GetString()! : request.PreferenceId,
+            Int64Of(config, "preferredValue") ?? request.PreferredValue,
+            Int64Of(config, "grantedValue"),
+            root.TryGetProperty("reconciling", out var reconciling) && reconciling.ValueKind == JsonValueKind.True,
+            config.ValueKind == JsonValueKind.Object && config.TryGetProperty("stateDetail", out var detail) && detail.ValueKind == JsonValueKind.String ? detail.GetString() : null);
+    }
+
+    /// <summary>An int64 field as Google sends it (a JSON string) or a plain number; null when absent or not a number.</summary>
+    private static long? Int64Of(JsonElement parent, string name)
+    {
+        if (parent.ValueKind != JsonValueKind.Object || !parent.TryGetProperty(name, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String when long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+            JsonValueKind.Number when value.TryGetInt64(out var number) => number,
+            _ => null,
+        };
+    }
+
+    private static JsonDocument ParseObject(string body)
+    {
+        try
+        {
+            var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                return document;
+            }
+
+            document.Dispose();
+        }
+        catch (JsonException)
+        {
+            // Falls through to the same named error as a non-object answer.
+        }
+
+        throw new CloudOperationException(new CloudError("QUOTA_RESPONSE_UNREADABLE", null, "The Cloud Quotas API answered with something this app cannot read."), CloudErrorKind.Other);
+    }
+
+    /// <summary>One HTTP request through the pipeline (retry, token refresh, breaker); a non-success answer becomes the app's exception through the same error mapping as the other gateways.</summary>
+    private Task<string> SendAsync(string operation, Func<HttpRequestMessage> build, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync(
+            operation,
+            async token =>
+            {
+                using var message = build();
+                using var response = await _quotas.SendAsync(message, token).ConfigureAwait(false);
+                var text = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromHttpResponse((int)response.StatusCode, text));
+                }
+
+                return text;
+            },
+            cancellationToken,
+            singleRequest: true);
 
     public async Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
     {

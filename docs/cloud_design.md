@@ -313,6 +313,23 @@ requests (`regions.list` pages, `projects.get`) in one gateway method and the 60
 pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
 `FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
 
+### 6.x Asking for the quota (issue #99, the wizard's GPU step)
+
+`GpuQuotaRequester.RequestAsync(project, region, contactEmail)` asks Google for one `NVIDIA_L4_GPUS` in the region and one `GPUS_ALL_REGIONS`. Per quota, in
+this order: skip it when `ReadQuotaAsync` already shows at least one GPU (a failed read is unknown and does NOT count as present); read eligibility
+(`IQuotaGateway.GetQuotaIncreaseEligibilityAsync`, the Cloud Quotas API's `quotaInfos.get` and its `quotaIncreaseEligibility`); only an explicit yes creates
+the request (`RequestQuotaIncreaseAsync`, `quotaPreferences.create`). An ineligible project gets the reason (`NoValidBillingAccount`, `NotEnoughUsageHistory`,
+`NotSupported`, `Other`), and an eligibility that says neither yes nor no is a `Failed` with `QUOTA_ELIGIBILITY_UNKNOWN`, never permission. One quota's failure never
+stops the other. The preference id is `deg-<metric-slug>[-<region>]-<yyyyMMdd>`, so a second ask the same day is Google's 409 and reads as `AlreadyRequested`.
+The outcomes are `AlreadyAvailable`, `Granted` (approved at once), `Requested` (with Google, review can take days), `AlreadyRequested`, `NotEligible`, `Failed`.
+**DECISION (agent-made, reversible):** raw REST over the same bearer-token HTTP stack, not a package: NuGet has no discovery client for this API
+(`Google.Apis.CloudQuotas.v1` does not exist) and the gRPC `Google.Cloud.CloudQuotas.V1` would bring its own transport and break the injectable HTTP handler every other
+gateway and test uses. Quota preferences are not billable and carry no labels, so Hard Rules 9 and 10 do not apply to them. The API itself (`cloudquotas.googleapis.com`)
+must be enabled in the project: while it is not, both calls fail `api_disabled` (the wizard's service step does not enable it yet, issue #705).
+THEORY (unverified, no live project): the two quota ids (`NVIDIA-L4-GPUS-per-project-region`, `GPUS-ALL-REGIONS-per-project`), the request body field names, and that a
+fresh project is `isEligible: true` for them. `FakeGcp`: `WithQuotaEligibility`, `WithQuotaEligibilityFailure`, `WithQuotaRequestFailure`, `WithQuotaAutoGrant` (moves the
+table `GetGpuQuotaAsync` reads), `QuotaCalls` (the order of reads and creates), `QuotaRequests`.
+
 ## 7. Least-privilege IAM for the worker service account
 
 The VM runs as the service account `dna-entropy-worker@<project>.iam.gserviceaccount.com`

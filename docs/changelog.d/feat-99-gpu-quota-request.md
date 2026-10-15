@@ -1,0 +1,1 @@
+- Cloud: the wizard's GPU step can ask Google for the L4 and project-wide GPU quota (#99): `GpuQuotaRequester` skips a quota already there, reads Cloud Quotas eligibility first, and creates the request only for an eligible project, with a named reason otherwise.

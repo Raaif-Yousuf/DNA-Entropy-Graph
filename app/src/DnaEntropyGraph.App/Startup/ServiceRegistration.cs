@@ -231,6 +231,8 @@ public static class ServiceRegistration
         // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.
         // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
         services.AddSingleton<ActiveRuns>();
+        // Issue #99: the wizard's GPU step asks Google for the L4 and project-wide GPU quota through this (the app lane binds it).
+        services.AddSingleton<GpuQuotaRequester>(sp => new GpuQuotaRequester(sp.GetRequiredService<IQuotaGateway>()));
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();

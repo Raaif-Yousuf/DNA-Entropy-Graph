@@ -156,4 +156,11 @@ public sealed class ResilientQuotaGateway : IQuotaGateway
 
     public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Quota.ReadQuota", token => _inner.ReadQuotaAsync(projectId, token), cancellationToken);
+
+    // Issue #99. The create carries a caller-chosen preference id, so a replay after a lost answer is an already-exists answer, never a second request.
+    public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Quota.GetQuotaIncreaseEligibility", token => _inner.GetQuotaIncreaseEligibilityAsync(projectId, metric, token), cancellationToken);
+
+    public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Quota.RequestQuotaIncrease", token => _inner.RequestQuotaIncreaseAsync(projectId, request, token), cancellationToken);
 }

@@ -19,4 +19,18 @@ public interface IQuotaGateway
     /// Only cancellation throws.
     /// </summary>
     Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #99: whether the project may ask for more of <paramref name="metric"/> (<c>NVIDIA_L4_GPUS</c> or <c>GPUS_ALL_REGIONS</c>), read from the Cloud
+    /// Quotas API's <c>quotaInfos</c> BEFORE any request. A metric with no known quota id is an <see cref="ArgumentException"/>; a quota id Google does not
+    /// know, or an answer with no eligibility field, is <see cref="QuotaEligibility.IsEligible"/> null (unknown), never true.
+    /// </summary>
+    Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #99: creates the quota preference (the Cloud Quotas API's <c>quotaPreferences.create</c>) described by <paramref name="request"/>. The preference id
+    /// is the caller's, so a repeat is an <see cref="CloudErrorKind.AlreadyExists"/> failure the caller reads as "already asked". Read eligibility first
+    /// (<see cref="GetQuotaIncreaseEligibilityAsync"/>); <see cref="GpuQuotaRequester"/> is the one caller that does.
+    /// </summary>
+    Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken);
 }

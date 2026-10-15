@@ -29,6 +29,17 @@ public static class QuotaMetrics
             _ => null,
         };
 
+    /// <summary>
+    /// The Cloud Quotas API's <c>quotaId</c> for a metric this app may ask more of (issue #99), or null for any other. THEORY (unverified, no live project):
+    /// these two ids; an id Google does not know reads as an unknown eligibility (never "eligible"), so a wrong guess asks for nothing.
+    /// </summary>
+    public static string? QuotaIdFor(string metric) => metric switch
+    {
+        NvidiaL4Gpus => "NVIDIA-L4-GPUS-per-project-region",
+        GpusAllRegions => "GPUS-ALL-REGIONS-per-project",
+        _ => null,
+    };
+
     /// <summary>The Spot (preemptible) twin of a regional GPU metric: a Spot run draws on its own quota line, not the on-demand one. Null when there is no metric.</summary>
     private static string? Preemptible(string? metric) => metric is null ? null : "PREEMPTIBLE_" + metric;
 }
