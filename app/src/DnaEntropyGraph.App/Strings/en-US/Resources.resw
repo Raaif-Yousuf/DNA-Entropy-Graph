@@ -1647,6 +1647,39 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="WizardSkipButton.Content" xml:space="preserve">
     <value>Skip for now</value>
   </data>
+  <data name="WizardGpuAskButton.Content" xml:space="preserve">
+    <value>Ask Google for a GPU</value>
+  </data>
+  <data name="WizardGpuAsk_Requested" xml:space="preserve">
+    <value>Your request is with Google. A decision can take a day or two, and Google emails the address of this account. Press Check again later, or Skip for now and run on the computer's own graphics card.</value>
+  </data>
+  <data name="WizardGpuAsk_CheckAgain" xml:space="preserve">
+    <value>Check again</value>
+  </data>
+  <data name="WizardGpuAsk_NoBilling" xml:space="preserve">
+    <value>Google will not take a request until this project has a billing account. Press Check billing, then ask again.</value>
+  </data>
+  <data name="WizardGpuAsk_CheckBilling" xml:space="preserve">
+    <value>Check billing</value>
+  </data>
+  <data name="WizardGpuAsk_NoHistory" xml:space="preserve">
+    <value>Google only lets a project ask for a GPU after it has some past use. Open Google&apos;s quota page and ask there with a short note about your research, or press Skip for now.</value>
+  </data>
+  <data name="WizardGpuAsk_NotEligible" xml:space="preserve">
+    <value>Google would not let this app ask for a GPU on this project. Open Google&apos;s quota page and ask there, or press Skip for now.</value>
+  </data>
+  <data name="WizardGpuAsk_OpenQuotaPage" xml:space="preserve">
+    <value>Open Google&apos;s quota page</value>
+  </data>
+  <data name="WizardGpuAsk_Permission" xml:space="preserve">
+    <value>This account is not allowed to ask for more quota, or the quota service is switched off. Open Google&apos;s quota page, or ask the owner of the project to do it.</value>
+  </data>
+  <data name="WizardGpuAsk_Failed" xml:space="preserve">
+    <value>Google did not answer the request. Press Try again.</value>
+  </data>
+  <data name="WizardGpuAsk_TryAgain" xml:space="preserve">
+    <value>Try again</value>
+  </data>
   <data name="WizardDoItByHandLink.Content" xml:space="preserve">
     <value>Do it by hand</value>
   </data>
