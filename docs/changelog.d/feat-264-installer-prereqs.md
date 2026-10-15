@@ -1,0 +1,1 @@
+- Uninstall keeps your data by default (#264): the before-uninstall hook asks once "Remove your data too?" (default No) and only deletes `%LOCALAPPDATA%\DNAEntropyGraph` on Yes. WebView2 prerequisite and the packId/data-folder name collision are documented in packaging_design.md and the install guide.

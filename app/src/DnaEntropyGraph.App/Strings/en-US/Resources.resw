@@ -1689,4 +1689,10 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="AboutBuild_Text" xml:space="preserve">
     <value>Build {0}</value>
   </data>
+  <data name="UninstallRemoveData_Title" xml:space="preserve">
+    <value>Remove your data too?</value>
+  </data>
+  <data name="UninstallRemoveData_Body" xml:space="preserve">
+    <value>DNA Entropy Graph is being removed. Also delete your run history, settings and saved copies of your input files from this computer? Choose No to keep them for a later reinstall. Your result files in your output folder are never deleted.</value>
+  </data>
 </root>

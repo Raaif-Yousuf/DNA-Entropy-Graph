@@ -93,6 +93,24 @@ The short sha comes from `StampGitRevision` in the App csproj (`git rev-parse --
 `0.0.1+abc1234`; a `-p:SourceRevisionId=` from CI wins, and a checkout without git shows no sha). The simulated-cloud banner (#69) and the sandbox-profile
 badge (#638) are separate, and all three can show together.
 
+**Prerequisites and uninstall (issue #264).**
+
+- *WebView2.* The embedded viewer needs the Evergreen WebView2 Runtime. Windows 11 and current Windows 10 ship it, so the installer does
+  not bundle it. The app checks when the viewer opens (`WebViewRuntimeDecision`, issue #117) and shows the runtime-missing card with one
+  action, a link to Microsoft's Evergreen bootstrapper; a missing runtime never shows a blank pane. `vpk pack --framework webview2` would
+  make Setup.exe install it up front: not set in `release.yml` today (that file is not part of this change), recorded as an option.
+- *Uninstall keeps the user's data by default.* The data folder is `%LOCALAPPDATA%\DNAEntropyGraph` (history, settings, saved input copies,
+  logs, sign-in). Velopack's before-uninstall hook (`Program.OnBeforeUninstall`) now asks once, "Remove your data too?", default **No**
+  (`UninstallDataPrompt`, a plain message box because the uninstaller has no window); only Yes deletes the folder
+  (`UninstallDataCleanup`, tested with a fake prompt and delete). Result files in the output folder are never touched (Hard Rule 14).
+  A prompt that cannot be shown, or a locked file, keeps or leaves the data and never fails the uninstall.
+- *Collision, MEASURED 2026-10-15 from the files:* `release.yml` packs with `--packId DnaEntropyGraph`, so Velopack installs into
+  `%LOCALAPPDATA%\DnaEntropyGraph`, and the data folder is `%LOCALAPPDATA%\DNAEntropyGraph`. Windows paths are not case sensitive, so these are
+  the same folder. THEORY (unverified): Velopack's uninstaller deletes its whole root, which would remove the user's data whatever they answered; and
+  an update replaces only `current\`, so updates are safe. While the names collide the hook asks nothing (`SharedWithInstall`) because "keep"
+  would be a promise it cannot make. The fix is a different `--packId` (for example `DnaEntropyGraphApp`), which is a `release.yml` change; see the issue
+  filed for it. Until then ToTest verifies what an uninstall really leaves.
+
 ## 4. Update channel
 
 The in-app updater reads the GitHub **Releases** API, not the raw git tags. Two
