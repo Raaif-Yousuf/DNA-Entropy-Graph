@@ -425,8 +425,29 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     {
         try
         {
-            var instance = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-            return ToDescriptor(instance, zone);
+            // Issue #691: read the raw answer so its Date header (the platform's own clock) can ride on the descriptor.
+            (ComputeData.Instance instance, DateTimeOffset? serverNow) = await CallAsync(
+                "compute.instances.get",
+                async token =>
+                {
+                    using var message = _service.Instances.Get(project, zone, vmName).CreateRequest();
+                    using var response = await _service.HttpClient.SendAsync(message, token).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        // ExecuteAsync would have thrown this itself; the raw path must raise the same exception so the classification is unchanged. It is the ONLY
+                        // hand-rolled request (ExecuteAsync exposes no response headers), so there is no shared helper to drift from: the parity tests in
+                        // GoogleComputeGatewayTests compare its exceptions with the ExecuteAsync path's for each error shape.
+                        var error = await _service.DeserializeError(response).ConfigureAwait(false);
+                        throw new GoogleApiException(_service.Name, error?.Message) { Error = error, HttpStatusCode = response.StatusCode };
+                    }
+
+                    var read = await _service.DeserializeResponse<ComputeData.Instance>(response).ConfigureAwait(false);
+                    // A cached or proxied answer replays an old Date (its Age says how old): that is not the platform's time now, so it is dropped.
+                    // Precision of the rest: see PlatformClock.Read (one-second resolution, a round-trip behind).
+                    return (read, response.Headers.Age is { } age && age > TimeSpan.Zero ? null : response.Headers.Date);
+                },
+                cancellationToken).ConfigureAwait(false);
+            return ToDescriptor(instance, zone) with { ServerNow = serverNow };
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
