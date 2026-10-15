@@ -86,9 +86,27 @@ public sealed partial class PresetPickerViewModel : ObservableObject
         var files = outputs is { } o && o != OutputFileKinds.None
             ? string.Join(", ", OutputCatalog.Entries.Where(e => o.HasFlag(e.Kind)).Select(e => _strings.GetString(e.LabelKey)))
             : _strings.GetString("PresetSummary_NoFiles");
-        SummaryText = string.Format(CultureInfo.CurrentCulture, line, _strings.GetString("PresetDirection_" + Direction), _strings.GetString("PresetTopology_" + Topology), ContextLength, files);
+        SummaryText = string.Format(CultureInfo.CurrentCulture, line, _strings.GetString(DirectionKey(Direction)), _strings.GetString(TopologyKey(Topology)), ContextLength, files);
     }
 
+    // Literal keys (not "PresetDirection_" + name) so the wiring guard can see each string is read.
+    private static string DirectionKey(Direction direction) => direction switch
+    {
+        Direction.BothCombined => "PresetDirection_BothCombined",
+        Direction.BothAveraged => "PresetDirection_BothAveraged",
+        Direction.BothSeparate => "PresetDirection_BothSeparate",
+        Direction.ForwardOnly => "PresetDirection_ForwardOnly",
+        Direction.ReverseOnly => "PresetDirection_ReverseOnly",
+        _ => throw new ArgumentOutOfRangeException(nameof(direction)),
+    };
+
+    private static string TopologyKey(Topology topology) => topology switch
+    {
+        Topology.Auto => "PresetTopology_Auto",
+        Topology.Linear => "PresetTopology_Linear",
+        Topology.Circular => "PresetTopology_Circular",
+        _ => throw new ArgumentOutOfRangeException(nameof(topology)),
+    };
     /// <summary>The user changed the file boxes by hand: the options are no longer the preset's, so the preset is dropped (the other options stay as they were).</summary>
     public void NoteOutputsEdited()
     {

@@ -48,7 +48,19 @@ public static class BuiltInPresets
     public static IReadOnlyList<RunPreset> All { get; } = [QuickLook, Publication, PlasmidQc];
 
     /// <summary>The <c>Resources.resw</c> key of a built-in's name (and, with <c>_Detail</c>, its one-line description).</summary>
-    public static string NameKey(string id) => "Preset_" + id + "_Name";
+    public static string NameKey(string id) => id switch
+    {
+        "quick_look" => "Preset_quick_look_Name",
+        "publication" => "Preset_publication_Name",
+        "plasmid_qc" => "Preset_plasmid_qc_Name",
+        _ => "Preset_" + id + "_Name",
+    };
 
-    public static string DetailKey(string id) => "Preset_" + id + "_Detail";
+    public static string DetailKey(string id) => id switch
+    {
+        "quick_look" => "Preset_quick_look_Detail",
+        "publication" => "Preset_publication_Detail",
+        "plasmid_qc" => "Preset_plasmid_qc_Detail",
+        _ => "Preset_" + id + "_Detail",
+    };
 }
