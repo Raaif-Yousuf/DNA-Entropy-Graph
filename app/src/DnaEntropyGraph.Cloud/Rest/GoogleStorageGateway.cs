@@ -238,7 +238,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         return ours
             .OrderBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
             .ThenBy(b => b.Name, StringComparer.Ordinal)
-            .Select(b => new BucketDescriptor(b.Name, b.Location ?? string.Empty, new Dictionary<string, string>(b.Labels ?? new Dictionary<string, string>()), b.TimeCreatedDateTimeOffset))
+            .Select(b => new BucketDescriptor(b.Name, b.Location ?? string.Empty, new Dictionary<string, string>(b.Labels ?? new Dictionary<string, string>()), b.TimeCreatedDateTimeOffset, SoftDeleteDays(b)))
             .ToList();
     }
 
@@ -274,6 +274,14 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
         return ours;
     }
+
+    /// <summary>
+    /// The days a deleted object stays recoverable (and billed) in the bucket: <c>softDeletePolicy.retentionDurationSeconds</c> rounded up to whole days, 0 when soft delete
+    /// is off, null when the response carries no policy. MEASURED 2026-10-15 (cloud.google.com/storage/docs/soft-delete): a bucket created without a setting, including through
+    /// the JSON API, gets 7 days, and "soft-deleted objects continue to accrue storage charges". THEORY (unverified, ToTest #105): buckets.list returns the policy.
+    /// </summary>
+    internal static int? SoftDeleteDays(StorageData.Bucket bucket)
+        => bucket.SoftDeletePolicy?.RetentionDurationSeconds is { } seconds ? (int)Math.Ceiling(seconds / 86400d) : null;
 
     private static bool IsOurs(StorageData.Bucket bucket)
         => bucket.Labels is { } labels && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue;

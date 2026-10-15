@@ -267,4 +267,201 @@ public class InstallationCleanupTests
 
         (await gcp.ListAppVmsAsync(CancellationToken.None)).Count.ShouldBe(1);
     }
+
+    // ---------------------------------------------------------------- review findings (rc105)
+
+    private static string Describe(CleanupReport report) => string.Join("; ", report.Items.Select(i => $"{i.Kind} {i.Name} {i.Outcome} {i.Detail}"));
+
+    [Fact]
+    public async Task A_failing_read_back_of_a_VM_is_reported_and_the_disks_and_job_data_are_still_deleted()
+    {
+        var (gcp, bucket) = await RigAsync();
+        await gcp.CreateVmAsync(Spec("a"), Zone, CancellationToken.None);
+        gcp.WithDisk(Disk("d-1"));
+        Job(gcp, bucket, "a", Mine);
+        gcp.WithGetVmFailure(CloudErrorKind.Network);
+
+        var report = await new InstallationCleanup(gcp, gcp).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        var vm = report.Items.Single(i => i.Kind == CleanupKind.Vm);
+        vm.Outcome.ShouldBe(CleanupOutcome.NotVerified, Describe(report));
+        vm.ErrorKind.ShouldBe(CloudErrorKind.Network);
+        gcp.Disks.ShouldBeEmpty("the disk delete after the failed read back must still run");
+        gcp.ObjectKeys(bucket).ShouldBeEmpty("the job data delete after the failed read back must still run");
+    }
+
+    [Fact]
+    public async Task A_failing_second_disk_listing_or_prefix_read_back_is_reported_per_item_and_returns_a_report()
+    {
+        var (gcp, bucket) = await RigAsync();
+        gcp.WithDisk(Disk("d-1"));
+        Job(gcp, bucket, "a", Mine);
+        var compute = Substitute.For<IComputeGateway>();
+        var storage = Substitute.For<IStorageGateway>();
+        var disk = Disk("d-1");
+        var listCalls = 0;
+        compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([]);
+        compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            // 1: the up-front listing, 2: the one after the VMs, 3: the read back after the disk delete (fails).
+            listCalls++;
+            return listCalls >= 3 ? throw new CloudOperationException(new CloudError("X", 503, "boom"), CloudErrorKind.Network) : Task.FromResult<IReadOnlyList<DiskDescriptor>>([disk]);
+        });
+        storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns([new BucketDescriptor("b", "US", new Dictionary<string, string>(), null)]);
+        storage.ListChildPrefixesAsync("b", ResultsBucket.JobsPrefix, Arg.Any<CancellationToken>()).Returns(["jobs/a/"]);
+        storage.TryDownloadAsync("b", "jobs/a/manifest.json", Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult<Stream?>(new MemoryStream(Manifest(Mine))));
+        storage.GetPrefixUsageAsync("b", "jobs/a/", Arg.Any<CancellationToken>()).Returns<Task<PrefixUsage>>(_ => throw new CloudOperationException(new CloudError("X", 503, "boom"), CloudErrorKind.Network));
+
+        var report = await new InstallationCleanup(compute, storage).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        report.Items.Single(i => i.Kind == CleanupKind.Disk).Outcome.ShouldBe(CleanupOutcome.NotVerified, Describe(report));
+        report.Items.Single(i => i.Kind == CleanupKind.JobData).Outcome.ShouldBe(CleanupOutcome.NotVerified, Describe(report));
+        await storage.Received(1).DeletePrefixAsync("b", "jobs/a/", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_job_folder_whose_key_walks_out_of_jobs_is_reported_and_does_not_abort_the_sweep()
+    {
+        var (gcp, bucket) = await RigAsync();
+        gcp.PutObject(bucket, "jobs/../manifest.json", Manifest(Mine));
+        gcp.PutObject(bucket, "jobs/../output/t", new byte[5]);
+        Job(gcp, bucket, "good", Mine);
+
+        var report = await Cleanup(gcp).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        var forged = report.Items.Single(i => i.Name == "jobs/../");
+        forged.Outcome.ShouldBe(CleanupOutcome.Failed, Describe(report));
+        forged.Detail.ShouldBe(InstallationCleanup.PrefixRefusedCode);
+        report.Items.Single(i => i.Name == "jobs/good/").Outcome.ShouldBe(CleanupOutcome.Deleted);
+        gcp.ObjectKeys(bucket).ShouldBe(["jobs/../manifest.json", "jobs/../output/t"], "the refused prefix is left alone");
+    }
+
+    [Fact]
+    public async Task An_installation_id_that_is_a_prefix_of_another_matches_only_itself()
+    {
+        var (gcp, bucket) = await RigAsync();
+        await gcp.CreateVmAsync(Spec("a", "ab"), Zone, CancellationToken.None);
+        await gcp.CreateVmAsync(Spec("b", "abc"), Zone, CancellationToken.None);
+        gcp.WithDisk(Disk("d-ab", "ab")).WithDisk(Disk("d-abc", "abc"));
+        Job(gcp, bucket, "ja", "ab");
+        Job(gcp, bucket, "jb", "abc");
+
+        var report = await Cleanup(gcp).DeleteAllAsync(Project, "ab", CancellationToken.None);
+
+        report.Complete.ShouldBeTrue(Describe(report));
+        (await gcp.ListAppVmsAsync(CancellationToken.None)).Select(v => v.Name).ShouldBe(["deg-b"]);
+        gcp.Disks.Select(d => d.Name).ShouldBe(["d-abc"]);
+        gcp.ObjectKeys(bucket).ShouldAllBe(k => k.StartsWith("jobs/jb/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_cancel_in_the_middle_of_the_sweep_stops_it_and_deletes_nothing_more()
+    {
+        var (gcp, bucket) = await RigAsync();
+        Job(gcp, bucket, "a", Mine);
+        Job(gcp, bucket, "b", Mine);
+        using var cts = new CancellationTokenSource();
+        gcp.AfterPrefixDelete(_ => cts.Cancel());
+
+        await Should.ThrowAsync<OperationCanceledException>(() => new InstallationCleanup(gcp, gcp).DeleteAllAsync(Project, Mine, cts.Token));
+
+        gcp.ObjectKeys(bucket).ShouldBe(["jobs/b/manifest.json", "jobs/b/output/track.bedgraph"]);
+    }
+
+    [Fact]
+    public async Task Job_data_in_a_bucket_with_soft_delete_is_reported_deleted_with_the_days_Google_keeps_a_recoverable_copy()
+    {
+        var (gcp, bucket) = await RigAsync();
+        Job(gcp, bucket, "a", Mine);
+        gcp.WithBucketSoftDeleteDays(7);
+
+        var report = await Cleanup(gcp).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        var item = report.Items.Single();
+        item.Outcome.ShouldBe(CleanupOutcome.Deleted);
+        item.RecoverableForDays.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task Job_data_in_a_bucket_with_soft_delete_off_or_unknown_carries_no_recoverable_days()
+    {
+        var (gcp, bucket) = await RigAsync();
+        Job(gcp, bucket, "a", Mine);
+
+        var unknown = await Cleanup(gcp).DeleteAllAsync(Project, Mine, CancellationToken.None);
+        Job(gcp, bucket, "b", Mine);
+        gcp.WithBucketSoftDeleteDays(0);
+        var off = await Cleanup(gcp).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        unknown.Items.Single().RecoverableForDays.ShouldBeNull();
+        off.Items.Single().RecoverableForDays.ShouldBeNull();
+    }
+
+    // ---------------------------------------------------------------- run rows (Hard Rule 11)
+
+    private sealed class MemoryRuns : DnaEntropyGraph.Core.Abstractions.IRunRepository
+    {
+        public List<DnaEntropyGraph.Core.Abstractions.RunRecord> Rows { get; } = [];
+
+        public Task<IReadOnlyList<DnaEntropyGraph.Core.Abstractions.RunRecord>> GetAllAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<DnaEntropyGraph.Core.Abstractions.RunRecord>>(Rows.ToList());
+
+        public Task UpsertAsync(DnaEntropyGraph.Core.Abstractions.RunRecord run, CancellationToken cancellationToken)
+        {
+            Rows.RemoveAll(r => r.JobId == run.JobId);
+            Rows.Add(run);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Deleting_the_VM_of_a_running_job_marks_its_row_Cancelled_with_a_named_code_and_stops_its_driver_first()
+    {
+        var (gcp, _) = await RigAsync();
+        await gcp.CreateVmAsync(Spec("run-1"), Zone, CancellationToken.None);
+        await gcp.CreateVmAsync(Spec("done-1"), Zone, CancellationToken.None);
+        var runs = new MemoryRuns();
+        runs.Rows.Add(new DnaEntropyGraph.Core.Abstractions.RunRecord("run-1", DnaEntropyGraph.Core.JobPhase.Running, DateTimeOffset.UtcNow));
+        runs.Rows.Add(new DnaEntropyGraph.Core.Abstractions.RunRecord("done-1", DnaEntropyGraph.Core.JobPhase.Completed, DateTimeOffset.UtcNow));
+        var active = new ActiveRuns();
+        var stopped = new TaskCompletionSource();
+        var driver = active.TryStart("run-1", async token =>
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, token);
+            }
+            finally
+            {
+                stopped.SetResult();
+            }
+        });
+        var phases = new List<(string, DnaEntropyGraph.Core.JobPhase)>();
+
+        await new InstallationCleanup(gcp, gcp, runs, active, (id, phase) => phases.Add((id, phase))).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        stopped.Task.IsCompleted.ShouldBeTrue("the driver is stopped so it cannot write over the row");
+        var row = runs.Rows.Single(r => r.JobId == "run-1");
+        row.Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Cancelled);
+        row.ErrorCode.ShouldBe(RunErrorCodes.DeletedByCleanup);
+        row.FinishedAt.ShouldNotBeNull();
+        runs.Rows.Single(r => r.JobId == "done-1").Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Completed);
+        phases.ShouldBe([("run-1", DnaEntropyGraph.Core.JobPhase.Cancelling), ("run-1", DnaEntropyGraph.Core.JobPhase.Cancelled)]);
+        RunErrorCodes.All.ShouldContain(RunErrorCodes.DeletedByCleanup);
+        RunErrorCodes.ResourceKey(RunErrorCodes.DeletedByCleanup).ShouldNotBe("RunError_other");
+    }
+
+    [Fact]
+    public async Task A_row_is_not_marked_when_its_VM_delete_failed_because_the_run_may_still_be_going()
+    {
+        var (gcp, _) = await RigAsync();
+        await gcp.CreateVmAsync(Spec("run-1"), Zone, CancellationToken.None);
+        gcp.WithDeleteFailure("deg-run-1", CloudErrorKind.Permission);
+        var runs = new MemoryRuns();
+        runs.Rows.Add(new DnaEntropyGraph.Core.Abstractions.RunRecord("run-1", DnaEntropyGraph.Core.JobPhase.Running, DateTimeOffset.UtcNow));
+
+        await new InstallationCleanup(gcp, gcp, runs, new ActiveRuns()).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        runs.Rows.Single().Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Running);
+    }
 }

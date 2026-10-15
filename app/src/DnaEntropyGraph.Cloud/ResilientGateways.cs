@@ -115,7 +115,10 @@ public sealed class ResilientStorageGateway : IStorageGateway
     public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
     {
         StoragePrefixes.RequireDeletable(prefix);
-        return _pipeline.ExecuteAsync("Storage.DeletePrefix", token => _inner.DeletePrefixAsync(bucket, prefix, token), cancellationToken, bypassBreaker: true);
+        // A sweep: the real gateway lists and deletes object by object, each one a pipeline call of its own (retries, the 401 replay and the
+        // per-attempt deadline). Wrapping the sweep in one more retrying call would multiply those retries and replay a whole sweep for one
+        // blip, so this layer gives it the single attempt (replayable: false) and leaves the retrying to the per-request calls inside.
+        return _pipeline.ExecuteAsync("Storage.DeletePrefix", token => _inner.DeletePrefixAsync(bucket, prefix, token), cancellationToken, replayable: false, bypassBreaker: true);
     }
 }
 

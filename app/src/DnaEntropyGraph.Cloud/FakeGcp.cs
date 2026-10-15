@@ -1042,6 +1042,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             return HangAsync<VmDescriptor?>(cancellationToken);
         }
 
+        if (_getVmFailure is { } getVmFailure)
+        {
+            throw Build(getVmFailure, "SCRIPTED_GET_VM_FAILURE", null, "The VM read was scripted to fail.");
+        }
+
         ThrowIfScriptedTransient();
         ExpireOverdueVms();
         if (_getVmFailuresRemaining > 0 && _getVmError is not null)
@@ -1307,7 +1312,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfScriptedTransient();
         IReadOnlyList<BucketDescriptor> buckets = _bucketProjects.ContainsKey(projectId)
-            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null)]
+            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null, _bucketSoftDeleteDays)]
             : [];
         return Task.FromResult(buckets);
     }

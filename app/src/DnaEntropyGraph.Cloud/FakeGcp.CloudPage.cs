@@ -12,6 +12,9 @@ public sealed partial class FakeGcp
     private readonly ConcurrentDictionary<string, CloudErrorKind> _deleteFailures = new(StringComparer.Ordinal);
     private CloudErrorKind? _startFailure;
     private bool _silentNoOpDeletes;
+    private CloudErrorKind? _getVmFailure;
+    private Action<string>? _afterPrefixDelete;
+    private int? _bucketSoftDeleteDays;
 
     /// <summary>Every disk this fake holds, by name: the observable for "a disk was really deleted".</summary>
     public IReadOnlyList<DiskDescriptor> Disks => _disks.Values.OrderBy(d => d.Name, StringComparer.Ordinal).ToList();
@@ -47,6 +50,27 @@ public sealed partial class FakeGcp
     public FakeGcp WithSilentNoOpDeletes()
     {
         _silentNoOpDeletes = true;
+        return this;
+    }
+
+    /// <summary>Every <see cref="GetVmAsync"/> fails with <paramref name="kind"/>: a read back that cannot be made.</summary>
+    public FakeGcp WithGetVmFailure(CloudErrorKind kind)
+    {
+        _getVmFailure = kind;
+        return this;
+    }
+
+    /// <summary>Runs <paramref name="hook"/> with the prefix after each prefix delete (a test cancels mid-sweep with it).</summary>
+    public FakeGcp AfterPrefixDelete(Action<string> hook)
+    {
+        _afterPrefixDelete = hook;
+        return this;
+    }
+
+    /// <summary>The fake bucket reports this soft delete retention (<see cref="BucketDescriptor.SoftDeleteRetentionDays"/>); 0 is off. Unset: unknown (null).</summary>
+    public FakeGcp WithBucketSoftDeleteDays(int days)
+    {
+        _bucketSoftDeleteDays = days;
         return this;
     }
 
@@ -191,6 +215,7 @@ public sealed partial class FakeGcp
             }
         }
 
+        _afterPrefixDelete?.Invoke(prefix);
         return Task.FromResult(deleted);
     }
 }

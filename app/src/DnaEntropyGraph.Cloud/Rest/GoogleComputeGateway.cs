@@ -401,22 +401,32 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         return found;
     }
 
-    /// <summary>Issue #105: <c>disks.delete</c> (zonal), polled to <c>DONE</c>. Already gone is a success; a disk still attached is the platform's own 400, passed through.</summary>
+    /// <summary>
+    /// Issue #105: <c>disks.delete</c>, polled to <c>DONE</c>. <paramref name="zone"/> is the disk's scope as the listing returned it: a zone (<c>us-central1-a</c>) or,
+    /// for a regional disk, a region (<c>us-central1</c>), which goes to <c>regionDisks.delete</c> (a zonal delete of a regional disk is a 404, and a 404 here
+    /// means "already gone"). Already gone is a success; a disk still attached is the platform's own 400, passed through.
+    /// </summary>
     public async Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken)
     {
         var project = RequireProject();
+        var regional = !IsZoneName(zone);
         ComputeData.Operation operation;
         try
         {
-            operation = await CallAsync("compute.disks.delete", token => _service.Disks.Delete(project, zone, diskName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            operation = regional
+                ? await CallAsync("compute.regionDisks.delete", token => _service.RegionDisks.Delete(project, zone, diskName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)
+                : await CallAsync("compute.disks.delete", token => _service.Disks.Delete(project, zone, diskName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
             return;
         }
 
-        await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken).ConfigureAwait(false);
+        await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken, regional).ConfigureAwait(false);
     }
+
+    /// <summary>A zone name ends in one letter after the region (<c>us-central1-a</c>); a region (<c>us-central1</c>) does not.</summary>
+    internal static bool IsZoneName(string location) => System.Text.RegularExpressions.Regex.IsMatch(location ?? string.Empty, "-[a-z]$");
 
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);

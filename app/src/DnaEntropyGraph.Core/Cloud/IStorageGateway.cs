@@ -43,5 +43,9 @@ public interface IStorageGateway
     Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken);
 }
 
-/// <summary>A bucket as a gateway reports it: its name, its location (the region group, such as US), its labels and when it was created (null when unknown).</summary>
-public sealed record BucketDescriptor(string Name, string Location, IReadOnlyDictionary<string, string> Labels, DateTimeOffset? CreatedAt);
+/// <summary>
+/// A bucket as a gateway reports it: its name, its location (the region group, such as US), its labels and when it was created (null when unknown).
+/// <paramref name="SoftDeleteRetentionDays"/> is the days Cloud Storage keeps a deleted object recoverable (and billed) in this bucket: 0 when soft delete
+/// is off, null when the gateway does not know (issue #105: a delete is then reported without a promise either way).
+/// </summary>
+public sealed record BucketDescriptor(string Name, string Location, IReadOnlyDictionary<string, string> Labels, DateTimeOffset? CreatedAt, int? SoftDeleteRetentionDays = null);

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DnaEntropyGraph.Core.Abstractions;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
@@ -23,8 +24,8 @@ public enum CleanupOutcome
     Skipped,
 }
 
-/// <summary>One thing the cleanup looked at. <paramref name="Location"/> is the zone, or the bucket for job data; <paramref name="Detail"/> is a machine-readable code or note for the caller to turn into words.</summary>
-public sealed record CleanupItem(CleanupKind Kind, string Name, string Location, CleanupOutcome Outcome, string? Detail = null, CloudErrorKind? ErrorKind = null);
+/// <summary>One thing the cleanup looked at. <paramref name="RecoverableForDays"/> is set on a deleted job folder in a bucket with soft delete on: Google keeps a recoverable copy (and bills it) that many days, so "deleted" is never the whole truth. <paramref name="Location"/> is the zone, or the bucket for job data; <paramref name="Detail"/> is a machine-readable code or note for the caller to turn into words.</summary>
+public sealed record CleanupItem(CleanupKind Kind, string Name, string Location, CleanupOutcome Outcome, string? Detail = null, CloudErrorKind? ErrorKind = null, int? RecoverableForDays = null);
 
 /// <summary>The result of a cleanup. <see cref="Complete"/> is true only when every item was deleted and verified gone.</summary>
 public sealed record CleanupReport(IReadOnlyList<CleanupItem> Items)
@@ -61,11 +62,18 @@ public sealed class InstallationCleanup
 
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;
+    private readonly RunRowStore? _rows;
+    private readonly ActiveRuns? _active;
 
-    public InstallationCleanup(IComputeGateway compute, IStorageGateway storage)
+    /// <param name="runs">When given, a run whose VM is deleted is ended as Cancelled (<see cref="RunErrorCodes.DeletedByCleanup"/>) instead of being left Running (Hard Rule 11).</param>
+    /// <param name="activeRuns">When given, the run's driver is stopped before its VM is deleted, so it never writes over the row.</param>
+    /// <param name="onPhaseChanged">Told after a row's phase is committed, like the runner's callback.</param>
+    public InstallationCleanup(IComputeGateway compute, IStorageGateway storage, IRunRepository? runs = null, ActiveRuns? activeRuns = null, Action<string, JobPhase>? onPhaseChanged = null)
     {
         _compute = compute;
         _storage = storage;
+        _rows = runs is null ? null : new RunRowStore(runs, onPhaseChanged);
+        _active = activeRuns;
     }
 
     /// <summary>What this installation has now. A failed listing throws (<see cref="CloudOperationException"/>).</summary>
@@ -111,16 +119,16 @@ public sealed class InstallationCleanup
         var vmListing = await _compute.ListByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
         await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
         var buckets = await _storage.ListBucketsAsync(projectId, cancellationToken).ConfigureAwait(false);
-        var jobsByBucket = new List<(string Bucket, IReadOnlyList<string> Prefixes)>();
+        var jobsByBucket = new List<(BucketDescriptor Bucket, IReadOnlyList<string> Prefixes)>();
         foreach (var bucket in buckets)
         {
-            jobsByBucket.Add((bucket.Name, await OwnJobPrefixesAsync(bucket.Name, installationId, cancellationToken).ConfigureAwait(false)));
+            jobsByBucket.Add((bucket, await OwnJobPrefixesAsync(bucket.Name, installationId, cancellationToken).ConfigureAwait(false)));
         }
 
+        // From here on nothing aborts the sweep except the caller's cancellation: every step is contained and reported as its own item.
         var items = new List<CleanupItem>();
 
-        // --- VMs
-        var deletedVms = new List<VmDescriptor>();
+        // --- VMs: each is deleted and read back on its own, and the row of its run is ended once it is verified gone.
         foreach (var vm in vmListing)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -130,23 +138,22 @@ public sealed class InstallationCleanup
                 continue;
             }
 
-            if (await TryAsync(() => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), CleanupKind.Vm, vm.Name, vm.Zone, items).ConfigureAwait(false))
-            {
-                deletedVms.Add(vm);
-            }
-        }
-
-        foreach (var vm in deletedVms)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var still = await _compute.GetVmAsync(vm.Name, vm.Zone, cancellationToken).ConfigureAwait(false);
-            items.Add(new CleanupItem(CleanupKind.Vm, vm.Name, vm.Zone, still is null ? CleanupOutcome.Deleted : CleanupOutcome.NotVerified, still is null ? null : StillThereCode));
+            await DeleteVmAndEndItsRunAsync(vm, items, cancellationToken).ConfigureAwait(false);
         }
 
         // --- Disks: listed again now, so the ones a deleted VM held are seen detached.
-        var diskListing = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<DiskDescriptor>? diskListing = null;
+        try
+        {
+            diskListing = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex)
+        {
+            items.Add(new CleanupItem(CleanupKind.Disk, DiskListingName, string.Empty, CleanupOutcome.Failed, ex.Error.Code, ex.Kind));
+        }
+
         var deletedDisks = new List<DiskDescriptor>();
-        foreach (var disk in diskListing)
+        foreach (var disk in diskListing ?? [])
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!disk.BelongsTo(installationId))
@@ -169,9 +176,25 @@ public sealed class InstallationCleanup
 
         if (deletedDisks.Count > 0)
         {
-            var remaining = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<DiskDescriptor>? remaining = null;
+            CloudOperationException? readBackFailure = null;
+            try
+            {
+                remaining = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException ex)
+            {
+                readBackFailure = ex;
+            }
+
             foreach (var disk in deletedDisks)
             {
+                if (remaining is null)
+                {
+                    items.Add(new CleanupItem(CleanupKind.Disk, disk.Name, disk.Zone, CleanupOutcome.NotVerified, readBackFailure!.Error.Code, readBackFailure.Kind));
+                    continue;
+                }
+
                 var still = remaining.Any(r => r.Name == disk.Name && r.Zone == disk.Zone);
                 items.Add(new CleanupItem(CleanupKind.Disk, disk.Name, disk.Zone, still ? CleanupOutcome.NotVerified : CleanupOutcome.Deleted, still ? StillThereCode : null));
             }
@@ -183,13 +206,34 @@ public sealed class InstallationCleanup
             foreach (var prefix in prefixes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!await TryAsync(() => _storage.DeletePrefixAsync(bucket, prefix, cancellationToken), CleanupKind.JobData, prefix, bucket, items).ConfigureAwait(false))
+                try
+                {
+                    StoragePrefixes.RequireDeletable(prefix);
+                }
+                catch (ArgumentException)
+                {
+                    // A key such as jobs/../x/manifest.json can sit in a bucket anyone with write access filled: it is reported and never deleted.
+                    items.Add(new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.Failed, PrefixRefusedCode));
+                    continue;
+                }
+
+                if (!await TryAsync(() => _storage.DeletePrefixAsync(bucket.Name, prefix, cancellationToken), CleanupKind.JobData, prefix, bucket.Name, items).ConfigureAwait(false))
                 {
                     continue;
                 }
 
-                var left = await _storage.GetPrefixUsageAsync(bucket, prefix, cancellationToken).ConfigureAwait(false);
-                items.Add(new CleanupItem(CleanupKind.JobData, prefix, bucket, left.ObjectCount == 0 ? CleanupOutcome.Deleted : CleanupOutcome.NotVerified, left.ObjectCount == 0 ? null : StillThereCode));
+                var recoverable = bucket.SoftDeleteRetentionDays is > 0 ? bucket.SoftDeleteRetentionDays : null;
+                try
+                {
+                    var left = await _storage.GetPrefixUsageAsync(bucket.Name, prefix, cancellationToken).ConfigureAwait(false);
+                    items.Add(left.ObjectCount == 0
+                        ? new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.Deleted, RecoverableForDays: recoverable)
+                        : new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.NotVerified, StillThereCode));
+                }
+                catch (CloudOperationException ex)
+                {
+                    items.Add(new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.NotVerified, ex.Error.Code, ex.Kind));
+                }
             }
         }
 
@@ -201,6 +245,94 @@ public sealed class InstallationCleanup
 
     /// <summary>The detail code of a <see cref="CleanupOutcome.NotVerified"/> item: the delete was accepted and the read back still finds it.</summary>
     public const string StillThereCode = "STILL_THERE_AFTER_DELETE";
+
+    /// <summary>The detail code of a job folder whose key is not a folder path a delete may use (see <see cref="StoragePrefixes.RequireDeletable"/>): nothing was deleted.</summary>
+    public const string PrefixRefusedCode = "PREFIX_REFUSED";
+
+    /// <summary>The detail code of a VM left alone because a user cancel of its run was already in progress (that cancel owns the VM).</summary>
+    public const string CancelInProgressCode = "CANCEL_IN_PROGRESS";
+
+    /// <summary>The name of the <see cref="CleanupKind.Disk"/> item reported when the second disk listing failed (no disk could be looked at).</summary>
+    public const string DiskListingName = "(disk listing)";
+
+    /// <summary>
+    /// Deletes one VM and reads it back, contained: a failed delete or read back is an item, never an exception. When the VM carries a <c>job-id</c> the
+    /// work runs under <see cref="ActiveRuns.CancelAsync"/>, so the run's driver is stopped first and one writer owns the row; a VM verified gone then
+    /// ends the run's row (Hard Rule 11: a run whose VM is gone is never left Running).
+    /// </summary>
+    private async Task DeleteVmAndEndItsRunAsync(VmDescriptor vm, List<CleanupItem> items, CancellationToken cancellationToken)
+    {
+        var jobId = vm.Labels is { } labels && labels.TryGetValue("job-id", out var id) ? id : null;
+        var ran = false;
+
+        async Task BodyAsync()
+        {
+            ran = true;
+            if (!await TryAsync(() => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), CleanupKind.Vm, vm.Name, vm.Zone, items).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            VmDescriptor? still;
+            try
+            {
+                still = await _compute.GetVmAsync(vm.Name, vm.Zone, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException ex)
+            {
+                items.Add(new CleanupItem(CleanupKind.Vm, vm.Name, vm.Zone, CleanupOutcome.NotVerified, ex.Error.Code, ex.Kind));
+                return;
+            }
+
+            items.Add(new CleanupItem(CleanupKind.Vm, vm.Name, vm.Zone, still is null ? CleanupOutcome.Deleted : CleanupOutcome.NotVerified, still is null ? null : StillThereCode));
+            if (still is null && jobId is not null)
+            {
+                await EndRunRowAsync(jobId).ConfigureAwait(false);
+            }
+        }
+
+        if (_active is not null && jobId is not null)
+        {
+            await _active.CancelAsync(jobId, BodyAsync).ConfigureAwait(false);
+            if (!ran)
+            {
+                items.Add(new CleanupItem(CleanupKind.Vm, vm.Name, vm.Zone, CleanupOutcome.Skipped, CancelInProgressCode));
+            }
+        }
+        else
+        {
+            await BodyAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Ends a non-terminal run row as Cancelled under <see cref="RunErrorCodes.DeletedByCleanup"/>. A row already terminal, or none, is left alone; a failed write is not the cleanup's failure (the VM is gone and the reconciler looks again).</summary>
+    private async Task EndRunRowAsync(string jobId)
+    {
+        if (_rows is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var row = await _rows.LatestRecordAsync(jobId, CancellationToken.None).ConfigureAwait(false);
+            if (row is null || JobStateMachine.IsTerminal(row.Phase))
+            {
+                return;
+            }
+
+            if (row.Phase != JobPhase.Cancelling)
+            {
+                await _rows.SetPhaseAsync(jobId, JobPhase.Cancelling, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            await _rows.SetPhaseAsync(jobId, JobPhase.Cancelled, CancellationToken.None, RunErrorCodes.DeletedByCleanup).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // See the summary.
+        }
+    }
 
     /// <summary>Runs one delete; a cloud failure becomes a <see cref="CleanupOutcome.Failed"/> item (and false) so the rest still run. Cancellation is not caught.</summary>
     private static async Task<bool> TryAsync(Func<Task> delete, CleanupKind kind, string name, string location, List<CleanupItem> items)
@@ -215,11 +347,15 @@ public sealed class InstallationCleanup
             items.Add(new CleanupItem(kind, name, location, CleanupOutcome.Failed, ex.Error.Code, ex.Kind));
             return false;
         }
+        catch (ArgumentException)
+        {
+            items.Add(new CleanupItem(kind, name, location, CleanupOutcome.Failed, PrefixRefusedCode));
+            return false;
+        }
     }
 
     private static async Task<bool> TryAsync<T>(Func<Task<T>> delete, CleanupKind kind, string name, string location, List<CleanupItem> items)
         => await TryAsync(async () => { await delete().ConfigureAwait(false); }, kind, name, location, items).ConfigureAwait(false);
-
     private static bool BelongsTo(VmDescriptor vm, string installationId)
         => vm.Labels is { } labels
             && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue

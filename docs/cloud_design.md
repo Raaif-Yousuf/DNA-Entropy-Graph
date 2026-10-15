@@ -1366,3 +1366,24 @@ for when the in-app wizard cannot complete them), [`threat_model.md`](threat_mod
 (why the OAuth scope this whole design needs is a large ask, and what it does and does not
 expose), `docs/migration/2026-09-19-worker-migration-inventory.md` (the exhaustive,
 line-referenced prototype-behaviour inventory this doc summarizes for implementers).
+
+Review fixes (rc105, 2026-10-15):
+
+- Every step of `DeleteAllAsync` after the up-front listings is contained: a failed VM read back, second disk listing or prefix read back is an item (`NotVerified` / `Failed`
+  with the error kind) and the sweep goes on; only the caller's cancellation propagates. A job folder whose key is not a deletable folder path (`jobs/../`, which a
+  bucket writer can create) is `Failed` with `PREFIX_REFUSED` and never deleted. Ids are compared exactly (`ab` never matches `abc`).
+- Regional disks: the listing returns a region as the disk's scope, and `DeleteDiskAsync` sends a region (a name not ending in `-<letter>`) to `regionDisks.delete`;
+  the zonal call would 404, which reads as "already gone".
+- Soft delete. MEASURED 2026-10-15 (cloud.google.com/storage/docs/soft-delete): a bucket created without a setting, including through the JSON API, gets a 7 day soft delete
+  retention, "soft-deleted objects continue to accrue storage charges", and the only supported operations on them during retention are list and restore. So a deleted job folder
+  stays billed and recoverable for 7 days. `BucketDescriptor.SoftDeleteRetentionDays` carries the bucket's policy (null unknown, 0 off) and a deleted `JobData` item carries it as
+  `RecoverableForDays`: the Cloud page says "deleted; Google keeps a recoverable copy for N days" instead of a bare "deleted". **DECISION (agent-made, reversible):** the bucket is
+  NOT created with soft delete off. The same bucket holds the shared model cache (a multi-GB re-download if deleted by mistake) and recoverability is the safe default; the cost
+  is a week of storage for small outputs. Changing it is one field on the bucket insert if the owner wants the cleanup to stop billing at once.
+- A run whose VM the cleanup deletes is ended (Hard Rule 11): the VM carries `job-id`, the run's driver is stopped through `ActiveRuns.CancelAsync` first (one writer), and once
+  the VM reads back gone a non-terminal row becomes Cancelling then Cancelled with `RunErrorCodes.DeletedByCleanup` (`cleanup_deleted`, copy `RunError_cleanup_deleted`). A VM whose delete failed leaves its row alone.
+  A VM whose run has a user cancel in progress is `Skipped` (`CANCEL_IN_PROGRESS`).
+- `ResilientStorageGateway.DeletePrefixAsync` is one attempt at this layer (`replayable: false`): the real gateway already runs each list page and each object delete through the
+  pipeline with its own retries, 401 replay and per-attempt deadline, so a second retrying layer around the whole sweep multiplied retries and replayed whole sweeps.
+- `singleRequest:` on `CloudCallPipeline.ExecuteAsync` exists in this branch's base (`CloudCallPipeline.cs`, added before #105).
+- DI: `InstallationCleanup` is registered with the run repository, `ActiveRuns` and the phase callback in all three backends (`DiResolutionTests`); `IComputeGateway.StartVmAsync` resolves through the same registration.

@@ -254,7 +254,7 @@ public class ResilientGatewayTests
                 // ReuseVmAsync is a composite (read, claim, scheduling, metadata, start) and not idempotent as a whole: replaying it after
                 // a transient failure meets a VM that already started. It goes through the pipeline for the breaker and the token refresh
                 // but is attempted once, so the 503 reaches the caller (the provisioner then looks by label) and no retry is logged.
-                var isComposite = method.Name == nameof(IComputeGateway.ReuseVmAsync);
+                var isComposite = method.Name is nameof(IComputeGateway.ReuseVmAsync) or nameof(IStorageGateway.DeletePrefixAsync); // DeletePrefix: a sweep of per-object pipeline calls, attempted once here (#105 review)
                 if (isComposite)
                 {
                     var thrown = await Should.ThrowAsync<CloudOperationException>(() => task);

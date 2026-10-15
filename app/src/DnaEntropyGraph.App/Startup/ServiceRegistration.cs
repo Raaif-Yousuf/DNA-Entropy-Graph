@@ -232,7 +232,17 @@ public static class ServiceRegistration
         // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
         services.AddSingleton<ActiveRuns>();
         // Issue #105: what this installation has in the project, and "delete everything": for the Cloud page (the app lane binds it).
-        services.AddSingleton<InstallationCleanup>(sp => new InstallationCleanup(sp.GetRequiredService<IComputeGateway>(), sp.GetRequiredService<IStorageGateway>()));
+        services.AddSingleton<InstallationCleanup>(sp =>
+        {
+            // Run rows and the driver registry are what end a run whose VM the cleanup deletes (Hard Rule 11); without them it would leave the row Running.
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new InstallationCleanup(
+                sp.GetRequiredService<IComputeGateway>(),
+                sp.GetRequiredService<IStorageGateway>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<ActiveRuns>(),
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();

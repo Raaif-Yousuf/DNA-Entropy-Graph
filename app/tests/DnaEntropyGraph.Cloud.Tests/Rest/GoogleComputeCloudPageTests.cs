@@ -201,4 +201,20 @@ public class GoogleComputeCloudPageTests
 
         ex.Error.HttpStatus.ShouldBe(400);
     }
-}
+
+    [Fact]
+    public async Task DeleteDisk_of_a_regional_disk_uses_the_regional_API_not_the_zonal_one_whose_404_would_read_as_already_gone()
+    {
+        const string region = "us-central1";
+        var regionalPath = Base + "/regions/" + region + "/disks/deg-job1";
+        var regionOp = Base + "/regions/" + region + "/operations/operation-123";
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Delete, regionalPath, 200, Op("PENDING", "delete"))
+            .Returns(Get, regionOp, 200, Op("DONE", "delete"));
+
+        await rig.Gateways.Compute.DeleteDiskAsync("deg-job1", region, CancellationToken.None);
+
+        rig.Handler.To(Delete, regionalPath).Count.ShouldBe(1);
+        rig.Handler.Requests.Any(r => r.Uri.AbsolutePath.Contains("/zones/")).ShouldBeFalse("a zonal delete of a regional disk is a 404 that reads as success");
+    }}
