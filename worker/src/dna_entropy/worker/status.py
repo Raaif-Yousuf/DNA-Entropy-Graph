@@ -261,7 +261,7 @@ class StatusWriter:
         with self._lock:
             if stage is not None:
                 if stage != self._state["stage"]:
-                    # The app reads a stage's age as updatedAt - stageStartedAt (both the worker's clock) after a resume (#90).
+                    # The app reads a stage's age as updatedAt - stageStartedAt after a resume (#90).
                     self._state["stageStartedAt"] = utc_now_iso()
                 self._state["stage"] = stage
             if percent is not None:
