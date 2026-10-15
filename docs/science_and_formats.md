@@ -524,6 +524,34 @@ are re-emitted unchanged. SnapGene builds its locations itself and raises on a b
 SnapGene range is a refusal, not a notice. Test: `worker/tests/test_genbank_dropped_features.py`
 (fixture `malformed/genbank_unparseable_location.gb`).
 
+**Issue #694: CDS fallback per gene id, and two notices worded for what is wrong.** When a record
+uses `gene` features and one of them is dropped (unreadable location, or coordinates outside the
+record), the CDS feature with the same gene id stands in for it, per id, with one notice ("the CDS
+feature with the same gene id was used instead"; its span is the coding sequence, not the gene's).
+A gene whose id is only its feature key, or with no CDS of that id, is simply dropped as before. A
+between-bases site (`1^2`, which Biopython reads as a zero-length span) is named as "a location
+between two bases", and a position past 2**63-1 (`1..99999999999999999999`) as "too large to be a
+real coordinate", instead of both being called "outside the sequence length". The whole-file
+`ValueError` shapes above are unchanged.
+
+**Issue #694: a gene that crosses the origin is written as a join.** `begin..end` of such a feature
+is the outer span `1..L`; writing only that made the gene look like the whole molecule in SnapGene,
+Benchling and IGV. When the contig is circular (`cfg.topology.resolve(contig.circular)`, so
+`--topology` counts) and a feature has segments with one ending at base `L` and one starting at base
+1 (the rule the gene table and the readers use), the writers emit its real parts:
+
+- `<name>.gb`: `join(120..126,1..10)` (the segment ending at `L` first), `complement(join(...))` on
+  the minus strand, and the LOCUS line says `circular`. The `mean_entropy` note covers the gene's own
+  bases only. A spliced feature on a linear contig keeps its outer span (GenBank's own `gene`
+  feature is the full span).
+- `<name>.genes.gff3`: one row per segment, all sharing one `ID`, plus a `region` row with
+  `Is_circular=true` for every circular contig (the GFF3 convention for a discontinuous feature on a
+  circular molecule). Positions carry the run's `start` offset like every other row.
+
+Both read back as the same wrapping gene (`readers/genbank.py`, `readers/gff3.py` plus
+`fit_to_sequence`). Test: `worker/tests/test_origin_wrap_writers.py`. Known gap: the GenBank reader
+has no unstranded gene, so an unstranded gene (`.`) reads back from `.gb` as `+`.
+
 Every one of these five checks has a dedicated, deterministic test in
 `worker/tests/test_validation.py`; `docs/tests.md`'s neighbour-test set names the shapes a
 new validation test should also sweep (empty contig, ambiguity codes, multi-record files,

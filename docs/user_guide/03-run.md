@@ -31,6 +31,8 @@ The worker also reads EMBL files (`.embl`) and SnapGene files (`.dna`) the same 
 
 If a gene in a GenBank or EMBL file has a position the worker cannot read (for example `abc` or `1..?`), the run still finishes with the other genes and tells you, in its notices, how many genes were left out and what their positions said. Correct the position in the file (for example `1..42`) and run again to include them.
 
+If your sequence is circular (a plasmid) and a gene runs across the point where the sequence starts and ends, the .gb and genes.gff3 files the run writes show that gene in two pieces (for example join(120..126,1..10)) instead of as the whole plasmid, so SnapGene, Benchling and IGV draw it where it is. If a gene's own position cannot be read but its protein-coding (CDS) entry has the same gene name, the worker uses the CDS entry for that gene and says so in its notices.
+
 Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
 
 Each file you add gets its own small summary: how many records it contains, how many
