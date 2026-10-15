@@ -95,10 +95,20 @@ public static class ServiceRegistration
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserSuccess"),
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserFailure")),
         });
-        services.AddSingleton<GoogleAccountService>();
-        services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<GoogleAccountService>());
-        // The real gateways take their access token from here.
-        services.AddSingleton<IGcpAccessTokenSource>(sp => sp.GetRequiredService<GoogleAccountService>());
+        if (cloud == CloudBackend.Developer)
+        {
+            // Developer mode (issue #69): no real account service exists in this container at all, so nothing can reach Google through it.
+            services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
+            services.AddSingleton<IGcpAccessTokenSource, FakeCloudMode.FakeTokenSource>();
+            services.AddSingleton<DnaEntropyGraph.Presentation.Services.SimulatedCloudMode>();
+        }
+        else
+        {
+            services.AddSingleton<GoogleAccountService>();
+            services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<GoogleAccountService>());
+            // The real gateways take their access token from here.
+            services.AddSingleton<IGcpAccessTokenSource>(sp => sp.GetRequiredService<GoogleAccountService>());
+        }
 
         // Issue #258: every cloud call goes through the one resilience pipeline (retry with jitter on 429/5xx/transport, a
         // single token refresh on 401, a circuit breaker for the offline banner). The Google gateways run it themselves, per
@@ -120,9 +130,9 @@ public static class ServiceRegistration
             sp.GetRequiredService<ICloudCallObserver>()));
 
         // SWITCH POINT (#609, docs/cloud_design.md section 16): the one place production chooses Google or the fake.
-        if (cloud == CloudBackend.Fake)
+        if (cloud != CloudBackend.Google)
         {
-            AddFakeCloud(services);
+            AddFakeCloud(services, connected: cloud == CloudBackend.Developer);
         }
         else
         {
@@ -262,6 +272,13 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();
 
+        if (cloud == CloudBackend.Developer)
+        {
+            // Developer mode (issue #69), registered last so it wins over the shipped image list: the account is the fake too (registered above)
+            // (Sign in succeeds with no browser, its project is the fake project) and the worker image is a fixed fake reference.
+            services.AddSingleton<IWorkerImageProvider, FakeCloudMode.FakeWorkerImageProvider>();
+        }
+
         return services;
     }
 
@@ -313,9 +330,9 @@ public static class ServiceRegistration
     /// The simulated cloud, for tests and (issue #69) developer mode: <see cref="FakeGcp"/> behind the same resilience wrappers
     /// the fake-backed tests have always used. Not connected: a run fails at preflight with cloud_not_connected.
     /// </summary>
-    private static void AddFakeCloud(IServiceCollection services)
+    private static void AddFakeCloud(IServiceCollection services, bool connected)
     {
-        services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithCloudNotConnected());
+        services.AddSingleton<FakeGcp>(_ => connected ? new FakeGcp() : new FakeGcp().WithCloudNotConnected());
         // A 401 from a fake must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked about).
         services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IComputeGateway>(sp => new ResilientComputeGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
@@ -336,4 +353,7 @@ public enum CloudBackend
 {
     Google,
     Fake,
+
+    /// <summary>The connected fake with its own signed-in account and worker image: <c>--fake-cloud</c> (issue #69).</summary>
+    Developer,
 }

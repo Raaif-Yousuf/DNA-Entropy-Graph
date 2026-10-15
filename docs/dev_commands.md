@@ -103,8 +103,11 @@ command by hand from the repo root, which is exactly where the error reads as
 a broken test project rather than a wrong directory.
 
 ```powershell
-scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches against FakeGcp
+scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches against FakeGcp on a fresh profile
+# the same by hand: DnaEntropyGraph.App.exe --fake-cloud --fresh-profile   (or DEG_FAKE_CLOUD=1; --profile <dir> overrides --fresh-profile)
 ```
+
+A shipped build resolves the real Google gateways (#609); `--fake-cloud` is the only way back to the simulated cloud. In it, Sign in succeeds with no browser, the project is `fake-project`, the worker image is a fixed fake reference, and a run goes to Completed with the network off. The simulated cloud is refused on the real profile: it needs `--fresh-profile`, `--profile` or `DEG_DATA_DIR` pointing away from the real folder, so fake runs never write into the real history (a stray `DEG_FAKE_CLOUD=1` in a shipped build stops the launch with a message). While it runs, a permanent red "Simulated cloud" banner sits in the title bar. There is no Settings toggle yet (the issue asked for a hidden one; it is not built).
 
 ### Launching the app on a sandbox data folder (#638)
 
