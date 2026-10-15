@@ -1,11 +1,15 @@
 # UI conventions: WinUI patterns, copy rules, theme, and the state-to-UI table
 
-**Status: specification, not yet implemented.** `app/` does not exist yet (issue #61).
-This doc is what `DnaEntropyGraph.App`'s Views and `DnaEntropyGraph.Presentation`'s
-ViewModels are built against, and the reference for the `.resw`/em-dash guard once it
-exists (`docs/tests.md`'s note that a guard scanning every XAML-reachable string literal
-"is not yet built, needs `app/`"). Screen-by-screen detail beyond what is summarized here
-lives in [Appendix A, section 2](superpowers/specs/2026-09-18-appendix-a-app-design.md#2-screen-by-screen-ux).
+**Status (2026-10-15): partly built.** The app exists (issue #61). Built pages: New run,
+Run progress, Runs, Results, Viewer and Settings. The Cloud page and the first-run wizard
+screens are not built; the Cloud destination shows `PlaceholderPage`. This doc is what
+`DnaEntropyGraph.App`'s Views and `DnaEntropyGraph.Presentation`'s ViewModels are built
+against. The copy rules in section 2 are mechanically guarded by `Guards.Tests`
+(`ReswGuardTests`, `XamlInlineStringGuardTests`, `DialogStringLiteralGuardTests`,
+`StringResourceKeyGuardTests`, `CodeBehindBranchingGuardTests`). Screen-by-screen detail
+beyond what is summarized here lives in
+[Appendix A, section 2](superpowers/specs/2026-09-18-appendix-a-app-design.md#2-screen-by-screen-ux);
+the viewer page is described in [`viewer.md`](viewer.md).
 
 ---
 
@@ -33,7 +37,7 @@ first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the w
 
 - **Every user-visible string lives in `Strings/en-US/Resources.resw`**, referenced by
   `x:Uid`, never inline in XAML or C#. This is what makes the string set auditable and
-  localizable in one place, and is what a future `.resw`-scanning guard checks against.
+  localizable in one place, and is what the `.resw`-scanning guards (`ReswGuardTests`, `XamlInlineStringGuardTests`) check against.
 - **No jargon without the plain phrase first.** "A rented computer with a graphics card (a
   VM)" is the house example: a lab biologist has no reason to already know what "a VM" is,
   so the plain phrase always comes first and the technical term (if it appears at all)
