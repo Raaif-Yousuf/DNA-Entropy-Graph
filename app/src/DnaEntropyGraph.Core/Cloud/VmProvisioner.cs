@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// (<see cref="VmCanceller"/>) and the ladder wait for these through <see cref="SettleInflightCreatesAsync"/> before they
 /// record a terminal state. Nothing else touches the dictionary.
 /// </summary>
-internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, Task<bool>>? jobIsFinished = null, IQuotaGateway? quotaGateway = null, Func<RunProgress, CancellationToken, Task<string?>>? bucketLocation = null)
+internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, Task<bool>>? jobIsFinished = null, IQuotaGateway? quotaGateway = null, Func<RunProgress, CancellationToken, Task<string?>>? bucketLocation = null, Func<RunProgress, string, CancellationToken, Task>? claimZone = null)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, string> _inflightCreates = new();
 
@@ -69,8 +69,17 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         if (existing.Count > 0)
         {
             progress.VmMayExist = true;
-            progress.VmName = existing[0].Name;
-            return ProvisionResult.Ok(existing[0].Zone, existing[0].Name);
+
+            // A crash in the middle of a parallel batch can leave several VMs under the one job id: keep one, delete and verify the rest, or
+            // they bill until their maxRunDuration and write into the same job prefix.
+            var (kept, note) = await KeepOneOwnedVmAsync(request, existing, cancellationToken).ConfigureAwait(false);
+            if (note is not null)
+            {
+                return ProvisionResult.Failed(CloudErrorKind.Other, "More than one VM was found for this job and an extra could not be deleted.", note, RunErrorCodes.For(CloudErrorKind.Other));
+            }
+
+            progress.VmName = kept.Name;
+            return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
 
         var spec = await completeSpec(cancellationToken).ConfigureAwait(false);
@@ -92,8 +101,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// One zone's create attempt: the create under its own timeout, the classification of what it threw, and the clean-up of ITS zone only
     /// (a clean-up by job label would delete the winner of a parallel batch, #670). Never throws for a cloud failure.
     /// </summary>
-    private async Task<ZoneAttempt> TryZoneAsync(CloudJobRequest request, VmSpec spec, string zone, RunProgress progress, CancellationToken cancellationToken)
+    private async Task<ZoneAttempt> TryZoneAsync(CloudJobRequest request, VmSpec spec, AttemptState state, RunProgress progress, CancellationToken cancellationToken)
     {
+        var zone = state.Zone;
         var createTimeout = settings.CreateTimeout;
         {
             // The kind the gateway (or the resilience pipeline in front of
@@ -113,6 +123,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
                         // token (the same instant, so the poller's would win and hide the abandoned create).
                         createTask = compute.CreateVmAsync(spec, zone, cancellationToken);
+                        state.Create = createTask;
                         TrackInflightCreate(request.JobId, createTask);
                         var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
                         return new OperationPoll<VmDescriptor>(true, vm, null);
@@ -202,9 +213,17 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// the tier the request asked for, never a bigger one); the candidates are <see cref="ZoneCandidates.Build"/> over it with the quota read,
     /// the request's first zone as the preference and the bucket's location. A machine with no GPU, an offer that cannot be read or that comes
     /// back empty, and a quota that cannot be read each fall back to "do not narrow": unknown is not none, so the request's own zones are used.
+    /// A zone the user pinned (<see cref="RunOptions.ZonePreference"/>) is the only candidate.
     /// </summary>
     private async Task<ZonePlan> PlanZonesAsync(CloudJobRequest request, VmSpec spec, RunProgress progress, CancellationToken cancellationToken)
     {
+        // A zone the user chose (RunOptions.ZonePreference: Auto is null) is a constraint, not a preference: data may have to stay in one
+        // place (#149). The ladder never leaves it; a stockout there is reported as one and the user picks Auto or another zone.
+        if (request.Options?.ZonePreference is { Length: > 0 } pinned)
+        {
+            return new ZonePlan([pinned.Trim()], false);
+        }
+
         var accelerator = ZoneCandidates.AcceleratorFor(spec.MachineType);
         if (accelerator is null)
         {
@@ -260,10 +279,13 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     private static int BatchSize(int batch) => batch switch { < 3 => 1, 3 => 3, 4 => 5, _ => 7 };
 
     /// <summary>
-    /// Issue #670: the escalating ladder over the planned zones. Parallel attempts use the same VM name in different zones (names are zonal);
-    /// when more than one of a batch lands, the first in candidate order is kept and every other VM of the job is deleted by label and
-    /// verified. A project-wide error aborts at the first batch that sees it (a batch settles first: nothing is left in flight, and a winner
-    /// from the same batch is still kept). The tier is never escalated here: that needs the user's click.
+    /// Issue #670: the escalating ladder over the planned zones. Parallel attempts use the same VM name in different zones (names are zonal).
+    /// A batch is acted on at its FIRST winner, not when its slowest attempt ends: the stragglers are cancelled, and every other zone of the
+    /// batch (a zone another attempt landed in, or a straggler whose create may still land) is ended BY ZONE from what this batch knows, then
+    /// a listing by label sweeps for anything else as a backstop (a listing can lag, so it is never the only look). Every extra that cannot be
+    /// confirmed gone is named in the note. The kept zone is recorded in the bucket (<c>claimZone</c>) so a VM that boots in another zone anyway
+    /// refuses to touch the job prefix (<c>worker/vm/startup.sh</c>). A project-wide error aborts at the first batch that sees it (after the
+    /// batch is settled; a winner from the same batch is still kept). The tier is never escalated here: that needs the user's click.
     /// </summary>
     private async Task<ProvisionResult> RunLadderAsync(CloudJobRequest request, VmSpec spec, ZonePlan plan, RunProgress progress, CancellationToken cancellationToken)
     {
@@ -274,44 +296,165 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             var zones = plan.Zones.Skip(next).Take(BatchSize(batch)).ToList();
             next += zones.Count;
             progress.VmMayExist = true;
-            var attempts = zones.Count == 1
-                ? [await TryZoneAsync(request, spec, zones[0], progress, cancellationToken).ConfigureAwait(false)]
-                : await Task.WhenAll(zones.Select(zone => TryZoneAsync(request, spec, zone, progress, cancellationToken))).ConfigureAwait(false);
 
-            var winnerIndex = Array.FindIndex(attempts, a => a.Won);
-            if (winnerIndex >= 0)
+            if (zones.Count == 1)
             {
-                var winner = attempts[winnerIndex];
-                if (zones.Count > 1)
+                var single = await TryZoneAsync(request, spec, new AttemptState(zones[0]), progress, cancellationToken).ConfigureAwait(false);
+                if (single.Won)
                 {
-                    var extras = await DeleteOtherZonesAsync(request, winner.Zone, cancellationToken).ConfigureAwait(false);
-                    if (extras is not null)
-                    {
-                        var all = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
-                        return ProvisionResult.Failed(CloudErrorKind.Other, "More than one VM was created for this job in a parallel attempt and the extra could not be deleted.", extras + all, RunErrorCodes.For(CloudErrorKind.Other));
-                    }
+                    return ProvisionResult.Ok(single.Zone);
                 }
 
-                return ProvisionResult.Ok(winner.Zone);
+                if (single.Abort is not null)
+                {
+                    return single.Abort.Value;
+                }
+
+                lost.Add(single.Kind!.Value);
+                continue;
             }
 
-            var abortedIndex = Array.FindIndex(attempts, a => a.Abort is not null);
-            if (abortedIndex >= 0)
+            var parallel = await RunParallelBatchAsync(request, spec, zones, progress, cancellationToken).ConfigureAwait(false);
+            if (parallel.Result is { } decided)
             {
-                return attempts[abortedIndex].Abort!.Value;
+                return decided;
             }
 
-            lost.AddRange(attempts.Select(a => a.Kind!.Value));
+            lost.AddRange(parallel.Lost);
         }
 
-        // Every zone failed. Quota the user can fix is told apart from a stockout they can only wait out: when the read says there is none
-        // anywhere (every zone was still tried: the quota API can under-report), or every failure was a quota one, the kind is Quota.
-        var kind = plan.QuotaZeroEverywhere || (lost.Count > 0 && lost.All(k => k == CloudErrorKind.Quota)) ? CloudErrorKind.Quota : CloudErrorKind.Stockout;
+        // Every zone failed. What the creates answered decides the kind first: a real stockout is the transient one worth waiting out, and a
+        // quota READ of zero must not hide it (the read can under-report). Quota the user can fix is reported when every failure was a quota
+        // one, or, when the creates said neither, when the read says there is none anywhere.
+        var kind = lost.Any(k => k == CloudErrorKind.Stockout) ? CloudErrorKind.Stockout
+            : lost.Count > 0 && lost.All(k => k == CloudErrorKind.Quota) ? CloudErrorKind.Quota
+            : plan.QuotaZeroEverywhere ? CloudErrorKind.Quota
+            : CloudErrorKind.Stockout;
         var detail = kind == CloudErrorKind.Quota ? " The project has no GPU quota in them: raising it is something the user can do." : string.Empty;
         return ProvisionResult.Failed(kind, $"No zone in [{string.Join(", ", plan.Zones)}] could provision '{request.Spec.VmName}'.{detail}");
     }
 
-    /// <summary>Deletes every VM carrying this job's label outside <paramref name="keepZone"/> and verifies each is gone. Null when none is left, else why one is.</summary>
+    /// <summary>What one parallel batch came to: a decided result (a kept winner, or an abort), or the kinds its attempts lost with.</summary>
+    private readonly record struct BatchOutcome(ProvisionResult? Result, IReadOnlyList<CloudErrorKind> Lost);
+
+    private async Task<BatchOutcome> RunParallelBatchAsync(CloudJobRequest request, VmSpec spec, IReadOnlyList<string> zones, RunProgress progress, CancellationToken callerToken)
+    {
+        using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
+        var states = zones.Select(z => new AttemptState(z)).ToList();
+        var running = states.Select(s => AttemptAsync(request, spec, s, progress, batchCts.Token, callerToken)).ToList();
+        var pending = running.ToList();
+        var results = new List<ZoneAttempt>();
+        ZoneAttempt? winner = null;
+        ProvisionResult? abort = null;
+
+        // Act on the first attempt to finish with a win; attempts that finished at the same moment are taken in candidate order.
+        while (pending.Count > 0 && winner is null)
+        {
+            await Task.WhenAny(pending).ConfigureAwait(false);
+            var done = pending.Where(t => t.IsCompleted).OrderBy(t => running.IndexOf(t)).ToList();
+            foreach (var task in done)
+            {
+                pending.Remove(task);
+                var attempt = await task.ConfigureAwait(false);
+                results.Add(attempt);
+                if (attempt.Won && winner is null)
+                {
+                    winner = attempt;
+                }
+                else if (attempt.Abort is not null)
+                {
+                    abort ??= attempt.Abort;
+                }
+            }
+        }
+
+        // Stragglers (only when a winner ended the wait early): cancel them, then wait for their creates to settle.
+        var stragglers = states.Where(s => !results.Any(r => r.Zone == s.Zone)).ToList();
+        if (pending.Count > 0)
+        {
+            await batchCts.CancelAsync().ConfigureAwait(false);
+            await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+
+        if (winner is null)
+        {
+            // Nothing won. Whatever an attempt cleaned up was cleaned in its own zone already.
+            if (abort is not null)
+            {
+                return new BatchOutcome(abort, []);
+            }
+
+            return new BatchOutcome(null, results.Select(r => r.Kind ?? CloudErrorKind.Other).ToList());
+        }
+
+        // Every zone of the batch but the winner's is ended by name and zone: the ones another attempt landed in, and the stragglers.
+        var notes = new List<string>();
+        foreach (var other in states.Where(s => s.Zone != winner.Value.Zone))
+        {
+            string? note;
+            if (stragglers.Contains(other) && other.Create is { } createTask)
+            {
+                // A cancelled create can still land: wait for it (bounded), then delete what it made in this zone.
+                note = await SettleAbandonedCreateAsync(request, createTask, other.Zone).ConfigureAwait(false);
+            }
+            else
+            {
+                // Another attempt that landed, or one that failed (and cleaned its own zone) or never started: look once, by zone.
+                var error = await terminator.EnsureVmEndedAsync(request, other.Zone, AfterTaskAction.Delete, CancellationToken.None).ConfigureAwait(false);
+                note = error is null ? null : " (VM end not confirmed: " + error + ")";
+            }
+
+            if (note is not null)
+            {
+                notes.Add(note);
+            }
+        }
+
+        // Backstop: a VM the batch did not know about (a create that landed under another name's answer) is found by label. A listing can
+        // lag or fail, so it adds to what is known and never replaces it.
+        var sweep = await DeleteOtherZonesAsync(request, winner.Value.Zone, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+        if (sweep is not null)
+        {
+            notes.Add(sweep);
+        }
+
+        if (notes.Count > 0)
+        {
+            var all = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+            return new BatchOutcome(
+                ProvisionResult.Failed(CloudErrorKind.Other, "More than one VM was created for this job in a parallel attempt and an extra could not be deleted.", string.Concat(notes) + all, RunErrorCodes.For(CloudErrorKind.Other)),
+                []);
+        }
+
+        if (claimZone is not null)
+        {
+            try
+            {
+                await claimZone(progress, winner.Value.Zone, callerToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException)
+            {
+                // Best effort: the extras are already deleted, which is what ends them. The record only stops one that was mid-boot.
+            }
+        }
+
+        return new BatchOutcome(ProvisionResult.Ok(winner.Value.Zone), []);
+    }
+
+    /// <summary>One attempt of a parallel batch. A cancel of the BATCH (a winner was found) ends it as a lost attempt; the caller cancelling still propagates.</summary>
+    private async Task<ZoneAttempt> AttemptAsync(CloudJobRequest request, VmSpec spec, AttemptState state, RunProgress progress, CancellationToken batchToken, CancellationToken callerToken)
+    {
+        try
+        {
+            return await TryZoneAsync(request, spec, state, progress, batchToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (batchToken.IsCancellationRequested && !callerToken.IsCancellationRequested)
+        {
+            return ZoneAttempt.Lost(state.Zone, CloudErrorKind.Other);
+        }
+    }
+
+    /// <summary>Deletes every VM carrying this job's label outside <paramref name="keepZone"/> and verifies each is gone. Null when none is left, else why one is (every one that is not gone is named).</summary>
     private async Task<string?> DeleteOtherZonesAsync(CloudJobRequest request, string keepZone, CancellationToken cancellationToken)
     {
         IReadOnlyList<VmDescriptor> owned;
@@ -324,14 +467,45 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             return $" (VM end not confirmed: the VMs for this job could not be looked up: {ex.Message})";
         }
 
-        string? note = null;
-        foreach (var vm in owned.Where(v => !string.Equals(v.Zone, keepZone, StringComparison.Ordinal)))
+        return await EndExtrasAsync(request, owned.Where(v => !string.Equals(v.Zone, keepZone, StringComparison.Ordinal)).ToList(), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Deletes each of <paramref name="extras"/> under its own name and zone and verifies it is gone. Null when all are, else one note naming every one that is not.</summary>
+    private async Task<string?> EndExtrasAsync(CloudJobRequest request, IReadOnlyList<VmDescriptor> extras, CancellationToken cancellationToken)
+    {
+        var notes = new List<string>();
+        foreach (var vm in extras)
         {
             var error = await terminator.EnsureVmEndedAsync(request, vm.Zone, AfterTaskAction.Delete, cancellationToken, vm.Name).ConfigureAwait(false);
-            note ??= error is null ? null : " (VM end not confirmed: " + error + ")";
+            if (error is not null)
+            {
+                notes.Add(" (VM end not confirmed: " + error + ")");
+            }
         }
 
-        return note;
+        return notes.Count == 0 ? null : string.Concat(notes);
+    }
+
+    /// <summary>
+    /// A resume that finds several VMs labelled with the job (a crash in the middle of a parallel batch): keeps ONE, preferring a running VM,
+    /// then a booting one, then the earliest in the request's zone order, and deletes and verifies the rest. Returns the VM to continue on and
+    /// a note that is null when every extra is confirmed gone.
+    /// </summary>
+    public async Task<(VmDescriptor Kept, string? Note)> KeepOneOwnedVmAsync(CloudJobRequest request, IReadOnlyList<VmDescriptor> owned, CancellationToken cancellationToken)
+    {
+        var zoneOrder = request.Zones.ToList();
+        var kept = owned
+            .OrderBy(v => v.Status == "RUNNING" ? 0 : VmFacts.IsBooting(v) ? 1 : 2)
+            .ThenBy(v => zoneOrder.IndexOf(v.Zone) is var i and >= 0 ? i : int.MaxValue)
+            .ThenBy(v => v.Zone, StringComparer.Ordinal)
+            .First();
+        if (owned.Count == 1)
+        {
+            return (kept, null);
+        }
+
+        var note = await EndExtrasAsync(request, owned.Where(v => !ReferenceEquals(v, kept)).ToList(), cancellationToken).ConfigureAwait(false);
+        return (kept, note);
     }
 
     /// <summary>
@@ -492,6 +666,14 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         // This zone only: a label sweep would also delete the winner of a parallel batch (#670).
         return await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: true).ConfigureAwait(false);
     }
+}
+
+/// <summary>One zone of a batch and the create call made in it (set once started), so a batch can settle a create it abandoned.</summary>
+internal sealed class AttemptState(string zone)
+{
+    public string Zone { get; } = zone;
+
+    public Task<VmDescriptor>? Create { get; set; }
 }
 
 /// <summary>What one zone's attempt came to (#670): it won, it lost in a way another zone can fix (<see cref="Kind"/>), or it ends the whole ladder (<see cref="Abort"/>).</summary>

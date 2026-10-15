@@ -21,6 +21,9 @@ internal sealed class RunProgress
     /// <summary>The project the bucket lives in (set with <see cref="Bucket"/>).</summary>
     public string? ProjectId { get; set; }
 
+    /// <summary>The job id (set with <see cref="Bucket"/>): the zone claim of a parallel ladder is written under its prefix (#670).</summary>
+    public string? JobId { get; set; }
+
     /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
     public string? VmName { get; set; }
 

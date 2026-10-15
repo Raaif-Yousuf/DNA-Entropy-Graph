@@ -82,6 +82,21 @@ status() {
     # timeout on the app side is exactly the backstop for "the VM is unreachable".
 }
 
+foreign_zone_exit() {
+  # Issue #670: a parallel zone ladder creates this job's VM in several zones at once. The app deletes every zone but the one it kept and
+  # records that zone in jobs/<job>/control/zone; a VM that is not in it ends ITSELF here, before it writes status.json or the log under
+  # the job prefix (the winner owns both). No object yet means no parallel batch (or the claim has not landed): carry on. This does NOT
+  # go through cleanup(), which uploads the startup log into the job prefix.
+  local claimed
+  claimed=$(get_object "jobs/${JOB}/control/zone" 2>/dev/null || true)
+  if [ -n "$claimed" ] && [ "$claimed" != "$ZONE" ]; then
+    echo "zone ${ZONE} is not the zone this job kept (${claimed}): deleting this VM without touching the job prefix"
+    curl -sf -X DELETE -H "Authorization: Bearer $(token)" \
+      "https://compute.googleapis.com/compute/v1/projects/${PROJECT}/zones/${ZONE}/instances/${NAME}" || true
+    exit 0
+  fi
+}
+foreign_zone_exit
 # Relay startup.log to the bucket every 30s in the background for the whole life of this
 # script, so a human debugging a stuck VM can read it without a console session.
 relay() {
@@ -204,6 +219,7 @@ if [ "$EXPECT_GPU" = "true" ]; then
 fi
 
 status installing
+foreign_zone_exit  # the claim may have landed during the boot (#670)
 
 # Pull BY DIGEST (IMAGE is a full ref@sha256:<digest> from the manifest, never a mutable
 # tag) so every VM in a batch, and every retry, runs byte-identical bits.
@@ -227,6 +243,7 @@ fi
 # Issue #75: the worker image runs as uid 10001 (Dockerfile.cuda `USER worker`), so the
 # Hugging Face cache must be a folder that uid can write, and HF_HOME must point at it:
 # the old `/root/.cache/huggingface` mount was never read or written by that user.
+foreign_zone_exit  # last look before the worker container writes anything (#670)
 mkdir -p /var/cache/deg-hf
 chown 10001:10001 /var/cache/deg-hf
 # `--gpus all` only when a GPU is expected: the CPU smoke VM boots the same image with no GPU (issue #56), and docker run fails on it with the flag.

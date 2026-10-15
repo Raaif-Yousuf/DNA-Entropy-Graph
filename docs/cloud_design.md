@@ -154,15 +154,25 @@ per-region quota memory, persisted per project instead of the prototype's
   ladder never reads, and so never tries, a bigger tier (item 6 stays a click). A machine with no GPU, an offer that fails or comes back empty, fall back to
   `CloudJobRequest.Zones` ("unknown is not none"). The quota read is `IQuotaGateway.ReadQuotaAsync` (#88); a read that fails narrows nothing. The
   preference is the request's first zone; the bucket's location (`ListBucketsAsync`, by the run's bucket name) orders its continent next. The last-good zone
-  is not wired yet (null: #210).
+  is not wired yet (null: #210). **A zone the user chose is a constraint, not a preference** (`RunOptions.ZonePreference`; Auto is null): the ladder tries
+  that zone only and a stockout there is reported as one, because data may have to stay in one place (#149). The default zone list is not a pin.
 - Attempts run in batches of 1, 1, 1, then 3, 5 and 7 in parallel until the zones are used up, all with the same VM name in different zones. A failed
   attempt cleans up ITS zone only (`VmTerminator.EndVmAfterFailureAsync(request, zone)`); a sweep by job label would delete a parallel batch's winner.
-  When a parallel batch lands more than one VM, the first in candidate order is kept and every other VM carrying the job's label is deleted and verified
-  (`DeleteOtherZonesAsync`); an extra that cannot be confirmed deleted ends the run with `vm_end_unconfirmed` after ending everything by label.
+  A parallel batch is acted on at its FIRST winner, not when its slowest attempt ends: the stragglers are cancelled, and every other zone of the batch
+  (one another attempt landed in, or a straggler whose create may still land) is ended BY ZONE from what the batch knows (`SettleAbandonedCreateAsync`,
+  `VmTerminator.EnsureVmEndedAsync`), then a listing by label sweeps as a backstop (`DeleteOtherZonesAsync`; a listing can lag, so it never replaces the
+  known zones). Every extra that cannot be confirmed deleted is named in the note; the run then ends with `vm_end_unconfirmed` after ending everything by
+  label. The kept zone is written to `jobs/<jobId>/control/zone` (`CloudJobRunner.ClaimZoneAsync`); `worker/vm/startup.sh` reads it at the start, after the
+  boot and before the worker container, and a VM in any other zone deletes ITSELF without touching the job prefix, so an extra that boots before the API
+  deletes it cannot overwrite the winner's `status.json` or log. (Chosen over "the worker refuses by instance name": every zone's VM has the same name.)
+  A resume that finds several VMs labelled with the job (a crash mid-batch) keeps ONE, preferring a running one, then a booting one, then the request's
+  zone order, and deletes and verifies the rest (`KeepOneOwnedVmAsync`; also on the path that finds `result.json` already there).
 - A project-wide kind (billing, API off, permission, org policy) or a network failure aborts at the first batch that sees it (a batch settles first, so
   nothing is left in flight; a winner of the same batch is still kept). Quota and stockout move on.
-- Total failure: `quota` (the copy that names raising the allowance) when the quota read says there is none in any candidate zone (every zone is still
-  tried: the quota API can under-report) or every failure was a quota error; otherwise `stockout`. `ZoneCandidateResult.QuotaZeroEverywhere` is what carries this.
+- Total failure: what the creates answered decides first. Any real stockout makes it `stockout` (the transient one worth waiting out; a quota READ of zero
+  must not hide it, the quota API can under-report); every failure a quota error makes it `quota` (the copy that names raising the allowance); when the
+  creates said neither, a quota read of zero in every candidate zone (`ZoneCandidateResult.QuotaZeroEverywhere`) makes it `quota`, otherwise `stockout`.
+  Every zone is still tried.
 - Not built: the user-facing "other continents" toggle (the ladder walks every offered zone, the bucket's continent first), per-tier escalation on a click,
   and the last-good-zone memory (#210).
 

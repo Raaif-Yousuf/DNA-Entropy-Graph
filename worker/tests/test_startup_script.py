@@ -312,3 +312,22 @@ def test_infra_stage_snapshots_carry_stage_started_at() -> None:
     script writes for booting/installing carry stageStartedAt too (the same instant as updatedAt)."""
     text = _code_only()
     assert '"stageStartedAt":"%s"' in text
+
+
+def test_a_vm_in_a_zone_the_ladder_did_not_keep_refuses_before_writing_anything() -> None:
+    """#670: a parallel zone ladder creates the same job's VM in several zones at once and the app records the
+    kept one in control/zone. A VM booted in another zone must read it and delete itself BEFORE it writes
+    status.json or the startup log under the job prefix, and must not do so through cleanup(), which uploads it."""
+    text = _code_only()
+    assert "control/zone" in text
+    guard_at = text.index("control/zone")
+    for first_write in ("relay &", "status booting", "status installing"):
+        assert guard_at < text.index(first_write), f"the zone check must precede {first_write!r}"
+    guard = text[text.index("foreign_zone_exit()") : text.index("relay()")]
+    assert 'curl -sf -X DELETE -H "Authorization: Bearer $(token)"' in guard
+    assert "cleanup" not in guard, "cleanup() uploads the startup log into the job prefix"
+    assert "put_object" not in guard, "the refusal must write nothing under the job prefix"
+    # Checked again just before the worker container starts, in case the claim landed during the boot.
+    assert text.count("foreign_zone_exit") >= 4, (
+        "defined once, called at the start, after the boot and before docker run"
+    )
