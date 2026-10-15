@@ -1384,6 +1384,9 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   when every item is `Deleted`. The service role and the worker service account are not touched here.
 - Resilience: a start keeps the breaker; listing and deleting our disks and the bucket prefix calls bypass it (cleanup that stops the meter).
   `FakeGcp`: `WithDisk`, `WithStartFailure(kind)`, `WithDeleteFailure(name, kind)`, `WithSilentNoOpDeletes()`.
+## 17. Overrides in Settings (issue #644)
+
+Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
 ## Related
 

@@ -217,4 +217,5 @@ public class GoogleComputeCloudPageTests
 
         rig.Handler.To(Delete, regionalPath).Count.ShouldBe(1);
         rig.Handler.Requests.Any(r => r.Uri.AbsolutePath.Contains("/zones/")).ShouldBeFalse("a zonal delete of a regional disk is a 404 that reads as success");
-    }}
+    }
+}

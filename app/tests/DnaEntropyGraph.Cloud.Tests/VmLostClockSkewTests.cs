@@ -186,4 +186,5 @@ public class VmLostClockSkewTests
         var outcome = await LostAsync("job-absurd", TimeSpan.Zero, serverMinutesBeforeLoss, adopted: false, rewrite: vm => vm is null ? null : vm with { ServerNow = planted(vm.ServerNow ?? Start) });
 
         outcome.Code.ShouldBe(expected, outcome.Message);
-    }}
+    }
+}
