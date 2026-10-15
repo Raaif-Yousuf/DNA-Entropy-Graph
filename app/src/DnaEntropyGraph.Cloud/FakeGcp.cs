@@ -869,6 +869,25 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.FromResult(vm);
     }
 
+    private readonly ConcurrentDictionary<string, string[]> _acceleratorZones = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The zones that offer <paramref name="acceleratorType"/> (issue #670): what <see cref="ListAcceleratorZonesAsync"/> answers, in this order.
+    /// An accelerator nobody scripted answers an empty list ("not known"), so a test that names its zones in the request keeps its ladder.
+    /// </summary>
+    public FakeGcp WithAcceleratorZones(string acceleratorType, params string[] zones)
+    {
+        _acceleratorZones[acceleratorType] = zones;
+        return this;
+    }
+
+    public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        IReadOnlyList<string> zones = _acceleratorZones.TryGetValue(acceleratorType, out var scripted) ? scripted : [];
+        return Task.FromResult(zones);
+    }
+
     /// <summary>How many times <see cref="ReuseVmAsync"/> was called (issue #94).</summary>
     public int ReuseAttempts => Volatile.Read(ref _reuseAttempts);
 
@@ -1703,13 +1722,17 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     private static bool Consume(Dictionary<string, int> remainingByKey, string key)
     {
-        if (!remainingByKey.TryGetValue(key, out var remaining) || remaining <= 0)
+        // Parallel ladder attempts (#670) consume from the same dictionary.
+        lock (remainingByKey)
         {
-            return false;
-        }
+            if (!remainingByKey.TryGetValue(key, out var remaining) || remaining <= 0)
+            {
+                return false;
+            }
 
-        remainingByKey[key] = remaining - 1;
-        return true;
+            remainingByKey[key] = remaining - 1;
+            return true;
+        }
     }
 
     private static CloudOperationException Build(CloudErrorKind kind, string? code, int? httpStatus, string message)

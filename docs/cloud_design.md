@@ -146,6 +146,34 @@ per-region quota memory, persisted per project instead of the prototype's
  seen (not one line per zone tried), plus the applicable next steps: retry in ~10
  minutes, try Spot, wait with Flex-start, or try a bigger GPU tier explicitly.
 
+**What is built (issues #86a, #670).** `ZoneCandidates.Build` (pure: accelerator filter, the three-way quota rule, the ordering) and the ladder in
+`VmProvisioner` (`PlanZonesAsync`, `RunLadderAsync`, `TryZoneAsync`):
+
+- The zone universe is `IComputeGateway.ListAcceleratorZonesAsync(accelerator)` (`acceleratorTypes.aggregatedList` filtered on the name, partial success
+  asked for; `FakeGcp.WithAcceleratorZones` scripts it). The accelerator is the one the REQUESTED machine carries (`ZoneCandidates.AcceleratorFor`): the
+  ladder never reads, and so never tries, a bigger tier (item 6 stays a click). A machine with no GPU, an offer that fails or comes back empty, fall back to
+  `CloudJobRequest.Zones` ("unknown is not none"). The quota read is `IQuotaGateway.ReadQuotaAsync` (#88); a read that fails narrows nothing. The
+  preference is the request's first zone; the bucket's location (`ListBucketsAsync`, by the run's bucket name) orders its continent next. The last-good zone
+  is not wired yet (null: #210). **A zone the user chose is a constraint, not a preference** (`RunOptions.ZonePreference`; Auto is null): the ladder tries
+  that zone only and a stockout there is reported as one, because data may have to stay in one place (#149). The default zone list is not a pin.
+- Attempts run in batches of 1, 1, 1, then 3, 5 and 7 in parallel until the zones are used up, all with the same VM name in different zones. A failed
+  attempt cleans up ITS zone only (`VmTerminator.EndVmAfterFailureAsync(request, zone)`); a sweep by job label would delete a parallel batch's winner.
+  A parallel batch is acted on at its FIRST winner, not when its slowest attempt ends: the stragglers are cancelled, and every other zone of the batch
+  (one another attempt landed in, or a straggler whose create may still land) is ended BY ZONE from what the batch knows (`SettleAbandonedCreateAsync`,
+  `VmTerminator.EnsureVmEndedAsync`), then a listing by label sweeps as a backstop (`DeleteOtherZonesAsync`; a listing can lag, so it never replaces the
+  known zones). Every extra that cannot be confirmed deleted is named in the note; the run then ends with `vm_end_unconfirmed` after ending everything by
+  label. The claim `jobs/<jobId>/control/zone` (`CloudJobRunner.ClaimZoneAsync`, called through `VmProvisioner.ClaimAsync`) is set by EVERY provision before the VM it makes can read it: a single zone writes its own zone before the create, a parallel batch clears it (an empty object means no claim) before the first create and writes the winner THE MOMENT a winner exists, before anything is cancelled or deleted (so it is there in the one case it exists for, an extra that cannot be confirmed gone), a reuse writes the reused VM's zone before the start, and an adopted VM's zone is written too. A claim left by an earlier run of the job therefore never makes a legitimate VM delete itself. It is best effort: `GatewayCalls` turns a write that outlives its deadline into a `CloudOperationException` (Network), which is swallowed; the caller cancelling still propagates. `worker/vm/startup.sh` (`foreign_zone_exit`) reads it immediately before `status booting`, before `status installing` and before the worker container, and a VM in any other zone stops its relay, deletes ITSELF without touching the job prefix and, if that DELETE fails, shuts the guest down (the one other `shutdown -h`, a last resort besides the deadman), so an extra that boots before the API deletes it cannot overwrite the winner's `status.json` or log. THEORY (unverified): the window between a loser's first guard and the claim landing is seconds at most; a loser that writes `booting` in it is overwritten by the winner's next snapshot. (Chosen over "the worker refuses by instance name": every zone's VM has the same name.)
+  A resume that finds several VMs labelled with the job (a crash mid-batch) keeps ONE, preferring a running one, then a booting one, then the request's
+  zone order, and deletes and verifies the rest (`KeepOneOwnedVmAsync`; also on the path that finds `result.json` already there).
+- A project-wide kind (billing, API off, permission, org policy) or a network failure aborts at the first batch that sees it (a batch settles first, so
+  nothing is left in flight; a winner of the same batch is still kept). Quota and stockout move on.
+- Total failure: what the creates answered decides first. Any real stockout makes it `stockout` (the transient one worth waiting out; a quota READ of zero
+  must not hide it, the quota API can under-report); every failure a quota error makes it `quota` (the copy that names raising the allowance); when the
+  creates said neither, a quota read of zero in every candidate zone (`ZoneCandidateResult.QuotaZeroEverywhere`) makes it `quota`, otherwise `stockout`.
+  Every zone is still tried.
+- Not built: the user-facing "other continents" toggle (the ladder walks every offered zone, the bucket's continent first), per-tier escalation on a click,
+  and the last-good-zone memory (#210).
+
 ## 4. Labels and naming
 
 Covered field-by-field in [`job_contract.md`](job_contract.md) section 2 (identifiers) -
