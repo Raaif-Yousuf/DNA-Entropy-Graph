@@ -458,6 +458,19 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    private bool _runClockFromCreation;
+
+    /// <summary>
+    /// The other reading of the platform's <c>maxRunDuration</c>: its clock counts from the instance's CREATION and never restarts, so a VM
+    /// reused days later is deleted soon after it starts. THEORY (unverified, ToTest #94) which reading is real; the app must end such a
+    /// run in a recorded terminal state with nothing left billing under either. Needs <see cref="WithMaxRunDurationEnforced"/>.
+    /// </summary>
+    public FakeGcp WithRunClockFromCreation()
+    {
+        _runClockFromCreation = true;
+        return this;
+    }
+
     private void ExpireOverdueVms()
     {
         if (!_enforceMaxRunDuration)
@@ -468,8 +481,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var now = _timeProvider.GetUtcNow();
         foreach (var (key, vm) in _vms)
         {
-            // The platform limits a VM that is running; its clock restarts at each start (lastStartTimestamp), not at creation.
-            if (vm.Status is not ("STOPPED" or "TERMINATED" or "STOPPING") && vm.RunClockStart is { } clockStart && _maxRunByVm.TryGetValue(key, out var limit) && now >= clockStart + limit)
+            // The platform limits a VM that is running. THEORY (unverified, ToTest #94): its clock restarts at each start (lastStartTimestamp),
+            // not at creation. The other reading is available through WithRunClockFromCreation so the app is tested safe under either.
+            var basis = _runClockFromCreation ? vm.CreatedAt : vm.RunClockStart;
+            if (vm.Status is not ("STOPPED" or "TERMINATED" or "STOPPING") && basis is { } clockStart && _maxRunByVm.TryGetValue(key, out var limit) && now >= clockStart + limit)
             {
                 _vms.TryRemove(key, out _);
             }
@@ -843,6 +858,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow());
         _vms[key] = vm;
+        _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)
         {
@@ -914,14 +930,45 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>The <c>maxRunDuration</c> the VM was last given (create, or a reuse's scheduling write), or null when there is no such VM.</summary>
     public TimeSpan? MaxRunDurationOf(string vmName, string zone) => _maxRunByVm.TryGetValue((vmName, zone), out var limit) ? limit : null;
 
+    // The real labelFingerprint is fresh when an instance is created, moves on EVERY labels write (this app's claim, or anyone
+    // else's), and a deleted-and-recreated instance never shares one with its predecessor. A global counter gives the same three
+    // properties; an entry is dropped with its VM.
     private readonly ConcurrentDictionary<(string Name, string Zone), long> _labelFingerprints = new();
     private readonly object _claimLock = new();
+    private long _fingerprintClock;
+
+    private long NextFingerprint() => Interlocked.Increment(ref _fingerprintClock);
+
+    /// <summary>
+    /// Someone else (the console, gcloud, another tool) rewrote this VM's labels: merges <paramref name="labels"/> into them and moves the
+    /// labelFingerprint, as any real <c>setLabels</c> does, so a reuse that read the VM before it fails its claim with a 412. Issue #94 review.
+    /// </summary>
+    public FakeGcp SimulateExternalRelabel(string vmName, string zone, IReadOnlyDictionary<string, string> labels)
+    {
+        var key = (vmName, zone);
+        lock (_claimLock)
+        {
+            if (_vms.TryGetValue(key, out var vm))
+            {
+                var merged = new Dictionary<string, string>(vm.Labels ?? new Dictionary<string, string>());
+                foreach (var (k, v) in labels)
+                {
+                    merged[k] = v;
+                }
+
+                _vms[key] = vm with { Labels = merged };
+                _labelFingerprints[key] = NextFingerprint();
+            }
+        }
+
+        return this;
+    }
 
     /// <summary>
     /// Issue #94: claims and starts a stopped VM for <paramref name="spec"/>'s job, as the real gateway does: refuses a VM that is
     /// not stopped before any change, CLAIMS it first (rewrites the labels, which carry a fingerprint: of two jobs that read the same VM only
     /// one passes, the other gets a 412 and has written nothing), then rewrites the lifetime limit, then starts it (the VM then reads RUNNING;
-    /// its <c>creationTimestamp</c> stays, its <c>lastStartTimestamp</c> and so its <c>maxRunDuration</c> clock restart) and lets the simulated
+    /// its <c>creationTimestamp</c> stays and its <c>lastStartTimestamp</c> moves; THEORY (unverified, ToTest #94): its <c>maxRunDuration</c> clock restarts with it) and lets the simulated
     /// worker act for the new job. Under the VM's own, old name.
     /// </summary>
     public async Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
@@ -960,7 +1007,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 throw Build(CloudErrorKind.Other, "CONDITION_NOT_MET", 412, "The labels fingerprint is invalid: another job claimed this VM first.");
             }
 
-            _labelFingerprints[key] = readFingerprint + 1;
+            _labelFingerprints[key] = NextFingerprint();
             vm = vm with { Labels = reuse.ToLabels() };
             _vms[key] = vm;
             _maxRunByVm[key] = reuse.MaxRunDuration;
@@ -1100,6 +1147,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var existed = _vms.TryRemove((vmName, zone), out _);
+        _labelFingerprints.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
             _nextDeleteRacesAWorkerDelete = false;

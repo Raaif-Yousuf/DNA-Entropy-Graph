@@ -24,6 +24,13 @@ internal sealed class RunProgress
     /// <summary>The job id (set with <see cref="Bucket"/>): the zone claim of a parallel ladder is written under its prefix (#670).</summary>
     public string? JobId { get; set; }
 
+    /// <summary>
+    /// A moment on the runner's own clock taken just before THIS run asked for the VM it is on to be created or started (null for a VM it
+    /// adopted, whose age only the platform knows). The platform's limit clock starts at or just after it, so the result deadline measures
+    /// from here and never subtracts the platform's timestamps from the app's wall clock, which a skewed laptop clock would get wrong.
+    /// </summary>
+    public long? VmStartMark { get; set; }
+
     /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
     public string? VmName { get; set; }
 

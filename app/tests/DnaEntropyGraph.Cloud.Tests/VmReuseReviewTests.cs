@@ -156,6 +156,23 @@ public class VmReuseReviewTests
         vm.RunClockStart.ShouldBe(vm.StartedAt);
     }
 
+    [Fact]
+    public async Task If_the_platform_limit_counts_from_creation_a_reused_old_VM_ends_the_run_in_a_recorded_state_with_nothing_left()
+    {
+        // THEORY (unverified, ToTest #94): the limit restarts at each start. If it does not, a VM created days ago is deleted at once.
+        var time = new ManualTimeProvider(Start);
+        var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithMaxRunDurationEnforced().WithRunClockFromCreation();
+        var repo = new InMemoryRunRepository();
+        await SeedIdleVmAsync(gcp, repo, "job-old");
+        time.Advance(TimeSpan.FromDays(3));
+
+        var result = await Runner(gcp, gcp, repo, time).RunAsync(TestInputs.Request("job-new", Spec("job-new", TimeSpan.FromHours(4))), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldNotBeNull();
+        (await gcp.FindByJobIdAsync("job-new", CancellationToken.None)).ShouldBeEmpty();
+        repo.AllRecordedInOrder.Last(r => r.JobId == "job-new").Phase.ShouldBe(JobPhase.Failed);
+    }
     // ---- 2: a cancel between the claim steps must see the reuse ----
 
     [Fact]
@@ -188,11 +205,98 @@ public class VmReuseReviewTests
         var owned = await gcp.FindByJobIdAsync("job-new", CancellationToken.None);
         owned.ShouldBeEmpty("the reuse landed after the cancel looked: a VM of the cancelled job was left (billing, or a disk)");
         var last = repo.AllRecordedInOrder.Last(r => r.JobId == "job-new");
-        // Which terminal state wins the race between the cancel and the run's own next step is a separate matter (the run's illegal
-        // Cancelling -> Preparing step records Failed first); what this test owns is that nothing is left billing and the row ended.
-        last.Phase.ShouldBeOneOf(JobPhase.Cancelled, JobPhase.Failed);
+        last.Phase.ShouldBe(JobPhase.Cancelled, "the cancel won the race with the run's next phase step (#687): Cancelled, not an illegal-transition Failed");
     }
 
+    // ---- review: the run clock never compares the app's wall clock with the platform's ----
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_laptop_clock_an_hour_fast_does_not_fire_the_result_deadline_early(bool reused)
+    {
+        var app = new VirtualTimeProvider();
+        var platform = new ManualTimeProvider(app.GetUtcNow() - TimeSpan.FromHours(1)); // the app's clock reads an hour ahead of the platform's
+        var gcp = new FakeGcp(platform).WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        if (reused)
+        {
+            await SeedIdleVmAsync(gcp, repo, "job-old");
+            platform.Advance(TimeSpan.FromDays(3));
+            app.Advance(TimeSpan.FromDays(3));
+        }
+
+        var request = TestInputs.Request("job-new", Spec("job-new", TimeSpan.FromHours(4)));
+        var polls = 0;
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
+        {
+            TimeProvider = app,
+            ResultTimeout = null,
+            FirstHeartbeatTimeout = TimeSpan.FromDays(2), // this worker is silent on purpose: only the result deadline is under test
+            HeartbeatStaleTimeout = TimeSpan.FromDays(2),
+            CallTimeout = TimeSpan.FromSeconds(10),
+            CreateTimeout = TimeSpan.FromSeconds(10),
+            BootTimeout = TimeSpan.FromSeconds(10),
+            LifecycleTimeout = TimeSpan.FromSeconds(1),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            PollDelay = (_, _) =>
+            {
+                // One minute passes on BOTH clocks per poll; the worker finishes 3 h 20 min in, inside the 3 h 57 min limit.
+                platform.Advance(TimeSpan.FromMinutes(1));
+                app.Advance(TimeSpan.FromMinutes(1));
+                if (++polls == 200)
+                {
+                    gcp.SimulateWorkerFinishing(reused ? request.Spec with { ExistingVmName = "deg-job-old" } : request.Spec, Zone);
+                }
+
+                return Task.CompletedTask;
+            },
+        };
+
+        var result = await runner.RunAsync(request, CancellationToken.None);
+
+        polls.ShouldBeGreaterThanOrEqualTo(200, "the run ended before the worker did: the deadline fired early");
+        result.FailureCode.ShouldBeNull(result.FailureMessage);
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+    }
+    [Fact]
+    public async Task A_claim_on_a_VM_that_someone_relabelled_in_between_loses_like_a_real_setLabels()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        await SeedIdleVmAsync(gcp, repo, "job-old");
+        gcp.WithReuseBarrier(_ =>
+        {
+            gcp.SimulateExternalRelabel("deg-job-old", Zone, new Dictionary<string, string> { ["note"] = "edited in the console" });
+            return Task.CompletedTask;
+        });
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => gcp.ReuseVmAsync(Spec("job-new"), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(412, "any labels write moves the real labelFingerprint, not only a reuse");
+    }
+
+    [Fact]
+    public async Task A_claim_read_before_the_VM_was_deleted_and_recreated_does_not_claim_the_new_VM()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        await SeedIdleVmAsync(gcp, repo, "job-old");
+        // One claim moves the fingerprint of the first VM; then it is deleted and a new VM is made under the same name.
+        await gcp.ReuseVmAsync(Spec("job-first"), "deg-job-old", Zone, CancellationToken.None);
+        await gcp.StopVmAsync("deg-job-old", Zone, CancellationToken.None);
+        var racer = Spec("job-racer");
+        gcp.WithReuseBarrier(async _ =>
+        {
+            await gcp.DeleteVmAsync("deg-job-old", Zone, CancellationToken.None);
+            await gcp.CreateVmAsync(Spec("job-old"), Zone, CancellationToken.None);
+            await gcp.StopVmAsync("deg-job-old", Zone, CancellationToken.None);
+        });
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => gcp.ReuseVmAsync(racer, "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(412, "a recreated VM has a new labelFingerprint; the racer read the old one");
+    }
     // ---- 5: the answer of a successful start is lost ----
 
     private static CloudCallPipeline FastPipeline(FakeGcp gcp) => new(new CloudRetryOptions { MaxRetryAttempts = 4, BaseDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero }, gcp, new CloudRetryLog());
