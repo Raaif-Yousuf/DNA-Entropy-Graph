@@ -23,6 +23,8 @@ public static class RunErrorCodes
     public const string RunTimeLimit = "run_time_limit";
     /// <summary>The worker stayed in one stage past that stage's deadline while its heartbeat may still tick (#90).</summary>
     public const string WorkerStageStuck = "worker_stage_stuck";
+    /// <summary>The worker's heartbeat ticks in the running stage but <c>windowsDone</c> and <c>lastProgressAt</c> have not moved for the progress bound: a wedged compute thread (#723, the app half of #522).</summary>
+    public const string WorkerProgressStalled = "worker_progress_stalled";
     public const string WorkerNoHeartbeat = "worker_no_heartbeat";
     public const string WorkerHeartbeatStale = "worker_heartbeat_stale";
     public const string WorkerFailed = "worker_failed";
@@ -72,7 +74,7 @@ public static class RunErrorCodes
     public static IReadOnlyList<string> All { get; } =
     [
         NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
-        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
+        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
         InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup,
@@ -80,6 +82,15 @@ public static class RunErrorCodes
     ];
 
     /// <summary>The <c>CloudErrorKind</c> wire names from docs/cloud_design.md section 5.</summary>
+    /// <summary>
+    /// True for a run the user can fix by asking the project owner for the actAs role (issue #604): recorded as <see cref="PermissionActAs"/>, or as
+    /// <see cref="VmEndUnconfirmed"/> when the VM sweep after the refusal also failed (issue #665: the billing warning is the headline, but the
+    /// owner request is still the user's one action for the next run, and the original code is carried in the detail).
+    /// </summary>
+    public static bool IsActAsRefusal(string? code, string? detail)
+        => code == PermissionActAs
+            || (code == VmEndUnconfirmed && detail is not null && detail.Contains("Original code: " + PermissionActAs + ".", StringComparison.Ordinal));
+
     public static string For(CloudErrorKind kind) => kind switch
     {
         CloudErrorKind.Billing => "billing",
@@ -158,6 +169,7 @@ public static class RunErrorCodes
         ResultTimeout => "RunError_result_timeout",
         RunTimeLimit => "RunError_run_time_limit",
         WorkerStageStuck => "RunError_worker_stage_stuck",
+        WorkerProgressStalled => "RunError_worker_progress_stalled",
         WorkerNoHeartbeat => "RunError_worker_no_heartbeat",
         WorkerHeartbeatStale => "RunError_worker_heartbeat_stale",
         WorkerFailed => "RunError_worker_failed",

@@ -258,7 +258,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             VmProvisioner.ExpectsGpu(request.Spec.MachineType),
             settings.FirstHeartbeatTimeout,
             settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor),
-            settings.StageDeadlines);
+            settings.StageDeadlines,
+            settings.ProgressStallTimeout);
 
         while (true)
         {

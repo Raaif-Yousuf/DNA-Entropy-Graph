@@ -349,7 +349,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ShowRuns()=> _navigator.NavigateTo("Runs");
+    private void ShowRuns() => _navigator.NavigateTo("Runs");
 }
 
 

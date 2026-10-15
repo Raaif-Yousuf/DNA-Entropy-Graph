@@ -103,4 +103,5 @@ public class RunRowVmNameTests
         await Runner(gcp, repo, time).RunAsync(TestInputs.Request("job-new", Spec("job-new")), CancellationToken.None);
 
         repo.AllRecordedInOrder.Where(r => r.JobId == "job-new").Select(r => r.VmName).ShouldNotContain("deg-job-new", "the planned name of a VM that was never made is not the VM the run used");
-    }}
+    }
+}
