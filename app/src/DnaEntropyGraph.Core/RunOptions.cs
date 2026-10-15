@@ -119,8 +119,8 @@ public sealed record RunOptions
 
     // ---- Output ----
 
-    /// <summary>Which output files to write. Manifest: <c>outputs</c> (an empty/omitted array there means "everything", matching this default of every flag set).</summary>
-    public OutputFileKinds OutputFiles { get; init; } = OutputFileKinds.All;
+    /// <summary>Which output files to write. Manifest: <c>outputs</c> (an empty/omitted array there means "everything", so one is never sent). Defaults to <see cref="OutputCatalog.Defaults" />.</summary>
+    public OutputFileKinds OutputFiles { get; init; } = OutputCatalog.Defaults;
 
     /// <summary>
     /// The primary track's on-disk format when both are possible. Manifest:
@@ -162,19 +162,9 @@ public sealed record RunOptions
     /// <summary>Boot disk size for the VM. Not sent to the worker manifest; consumed by <c>VmSpec</c>.</summary>
     public int BootDiskGb { get; init; } = 150;
 
-    // ---- Local / notifications (Appendix A section 2.3's "Advanced - Output and notifications", finer-grained than spec 4.3's 3-item "Local" row) ----
-
-    /// <summary>Open the igv.js viewer automatically once a run finishes. Default On (spec 4.3's "open results").</summary>
-    public bool OpenViewerWhenDone { get; init; } = true;
-
-    /// <summary>Show a toast notification once a run finishes. Default On (spec 4.3's "Notify when done").</summary>
-    public bool ToastWhenDone { get; init; } = true;
-
-    /// <summary>Open the output folder in Explorer once a run finishes. Default Off.</summary>
-    public bool OpenFolderWhenDone { get; init; }
-
-    /// <summary>Play a sound once a run finishes. Default Off.</summary>
-    public bool PlaySoundWhenDone { get; init; }
+    // ---- Local ----
+    // The "when a run finishes" switches (toast, open folder, open results) are NOT run options: they are app settings
+    // (Presentation/Services/NotificationSettings, issue #643) and were removed from here as dead duplicates.
 
     /// <summary>
     /// Copy the worker log into the output folder as well as the app-data copy that is
@@ -240,6 +230,17 @@ public enum OutputFileKinds
     GenesGff3 = 1 << 5,
     Stats = 1 << 6,
     EntropyTsv = 1 << 7,
+    Smoothed = 1 << 8,
+    Regions = 1 << 9,
+    GeneSummary = 1 << 10,
+    Probs = 1 << 11,
+    ProbsNpy = 1 << 12,
+
+    /// <summary>
+    /// FROZEN at the eight files that existed before issue #103. A stored run says "All" by name (the JSON converter writes a
+    /// flags value that equals a named member by that name), so widening this would silently change what an old row meant.
+    /// New code uses <see cref="OutputCatalog.Defaults" /> or <see cref="OutputCatalog.Everything" />.
+    /// </summary>
     All = GenBank | Fasta | BedGraph | Wig | GeneiousGff3 | GenesGff3 | Stats | EntropyTsv,
 }
 

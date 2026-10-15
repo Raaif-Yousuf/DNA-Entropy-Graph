@@ -31,7 +31,7 @@ public class CloudJobRunnerVmActionsTests
     private static CloudJobRequest Request(string jobId, AfterTaskAction afterTask = AfterTaskAction.KeepAlive, string installationId = "install-1") => TestInputs.Request(jobId, Spec(jobId, installationId), null, afterTask);
 
     private static CloudJobRunner NewRunner(FakeGcp gcp, InMemoryRunRepository? repo = null)
-        => new(gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository());
+        => new(gcp, gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository());
 
     [Fact]
     public async Task StopVm_stops_the_VM_found_by_job_id()
@@ -154,7 +154,7 @@ public class CloudJobRunnerStartupMetadataTests
     public async Task A_run_with_a_worker_image_creates_the_VM_with_the_startup_script_and_attributes()
     {
         var gcp = new FakeGcp();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, new InMemoryRunRepository());
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository());
 
         var result = await runner.RunAsync(Request("job-m1", Digest), CancellationToken.None);
 
@@ -173,7 +173,7 @@ public class CloudJobRunnerStartupMetadataTests
     public async Task A_CPU_machine_type_does_not_expect_a_GPU()
     {
         var gcp = new FakeGcp();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, new InMemoryRunRepository());
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository());
 
         await runner.RunAsync(Request("job-m2", Digest, machineType: "e2-standard-4"), CancellationToken.None);
 
@@ -184,7 +184,7 @@ public class CloudJobRunnerStartupMetadataTests
     public async Task A_run_without_a_worker_image_adds_no_metadata()
     {
         var gcp = new FakeGcp();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, new InMemoryRunRepository());
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository());
 
         await runner.RunAsync(Request("job-m3", null), CancellationToken.None);
 
@@ -196,7 +196,7 @@ public class CloudJobRunnerStartupMetadataTests
     {
         var gcp = new FakeGcp();
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, repo);
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
 
         var result = await runner.RunAsync(Request("job-m4", "ghcr.io/x/y:latest"), CancellationToken.None);
 

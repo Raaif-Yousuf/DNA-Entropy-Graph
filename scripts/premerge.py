@@ -327,18 +327,39 @@ def _autocrlf_is_true(cwd: Path) -> bool:
     return proc.returncode == 0 and proc.stdout.decode("utf-8", errors="replace").strip().lower() == "true"
 
 
-def forgive_endofline(output: str, returncode: int, autocrlf_true: bool) -> str | None:
-    """A note when the whole failure is ENDOFLINE on an autocrlf checkout (#462), else None."""
-    if returncode == 0 or not autocrlf_true:
+def _tree_has_stale_crlf(cwd: Path) -> bool:
+    """True when `git ls-files --eol` shows a file the index holds as LF but the working tree holds as CRLF/mixed.
+    Unknown (git failed) counts as True: the old KNOWN behaviour, never a new silent FAIL."""
+    try:
+        proc = subprocess.run(["git", "ls-files", "--eol", "-z"], cwd=cwd, capture_output=True, check=False, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if proc.returncode != 0:
+        return True
+    # `eol=crlf` files (.ps1, .sln) are CRLF in the tree on purpose, so they do not count
+    return bool(re.search(rb"i/lf\s+w/(?:crlf|mixed)\s+attr/(?![^\t\0]*eol=crlf)", proc.stdout))
+
+
+def forgive_endofline(output: str, returncode: int, autocrlf_true: bool, crlf_tree: bool = True) -> str | None:
+    """A note when the whole failure is ENDOFLINE on a stale CRLF checkout (#462), else None.
+
+    `.gitattributes` makes a fresh checkout LF even with autocrlf=true (MEASURED 2026-10-15: the gate exits 0 in a
+    fresh worktree), so ENDOFLINE with no CRLF file in the tree is a real regression and stays a FAIL."""
+    if returncode == 0 or not autocrlf_true or not crlf_tree:
         return None
     ids = _DOTNET_DIAGNOSTIC.findall(output)
     if ids and set(ids) == {"ENDOFLINE"}:
-        return f"{len(ids)} ENDOFLINE finding(s) ignored: core.autocrlf=true on this checkout (#{ISSUE_ENDOFLINE})"
+        return (
+            f"{len(ids)} ENDOFLINE finding(s) ignored: this working tree has CRLF files git holds as LF "
+            f"(#{ISSUE_ENDOFLINE}); run scripts/fix_eol.py to make the gate real"
+        )
     return None
 
 
 def _dotnet_format_forgive(output: str, returncode: int, cwd: Path) -> str | None:
-    return forgive_endofline(output, returncode, _autocrlf_is_true(cwd))
+    if returncode == 0:
+        return None
+    return forgive_endofline(output, returncode, _autocrlf_is_true(cwd), _tree_has_stale_crlf(cwd))
 
 
 def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path | None = None) -> Result:

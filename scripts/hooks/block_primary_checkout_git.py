@@ -35,10 +35,20 @@ WHAT IT ALLOWS
 `merge --ff-only` (the orchestrator runs it in the primary checkout after every
 landing), `pull --ff-only`, `fetch`, `worktree add/remove/list/prune`,
 `checkout [<tree>] -- <paths>` and `checkout .` (path restores), path-only `reset -- <paths>` / `reset HEAD
-<paths>`, `merge|rebase|cherry-pick|revert --abort|--quit` (recovery), recovery of the
+<paths>`, `merge|rebase|cherry-pick|revert|am --abort|--quit` and `am --show-current-patch`
+(recovery; `am --skip` stays denied, it applies the remaining patches), recovery of the
 primary checkout onto `main` (`switch main`, `checkout main`, `checkout -B main origin/main`,
 `switch -C main origin/main`; no other branch), and every read-only command. Anything in a linked worktree. `git stash` is not handled
 here: `block_git_stash.py` owns it. Branch deletion/`branch -f` is left alone.
+
+SHELL CONSUMERS AND DIRECTORY WRAPPERS (#629)
+---------------------------------------------
+A heredoc body stays visible when its consumer executes it: a shell by name or path
+(`bash`, `/bin/bash`, a quoted `bash.exe`), `. /dev/stdin`, `source /dev/stdin`, `eval`.
+`env -C <dir>` / `env --chdir=<dir>` and `pwsh -WorkingDirectory <dir>` move the effective
+directory of that one command. A `#` that starts a word (outside quotes) is a comment to the
+end of the line and is skipped before quote tracking. `reset` modes are matched as git
+matches long options, by unambiguous prefix (`--har`).
 
 LIMITS (honest)
 ---------------
@@ -148,12 +158,15 @@ _WRAPPERS = {
     "exec",
 }
 # Git global options that consume the next argument.
-_GIT_VALUE_OPTS = {"-c", "--namespace", "--exec-path", "--super-prefix"}
+_GIT_VALUE_OPTS = {"-c", "--namespace", "--exec-path", "--super-prefix", "--config-env", "--attr-source"}
 _GIT_DIR_OPTS = ("--git-dir", "--work-tree")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SHELL_C_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 _RESET_MODES = {"--hard", "--soft", "--mixed", "--merge", "--keep"}
 _RECOVERY = {"--abort", "--quit"}
+# `git am` recovery. `--skip` is NOT here: it drops the bad patch and goes on to
+# apply (commit) the rest, so it moves HEAD like a plain `am`.
+_AM_SAFE = {"--abort", "--quit", "--show-current-patch"}
 _RECOVERY_BRANCH = "main"
 _RECOVERY_START = "origin/main"
 
@@ -161,7 +174,14 @@ _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 _FF_FLAGS = ("--ff-only", "--ff", "--no-ff")
 _QUIET_FLAGS = {"-f", "--force", "-q", "--quiet"}  # the only extra flags a recovery may carry
 _GIT_ENV_TARGETS = {"GIT_DIR", "GIT_WORK_TREE"}
-_SHELL_CONSUMER = re.compile(r"(?:^|[\s;&|(])(?:bash|sh|zsh|dash|pwsh|powershell)(?:\.exe)?(?=\s|$)", re.IGNORECASE)
+# A heredoc consumer that EXECUTES its body: a shell by name or path (`bash`, `/bin/bash`,
+# a quoted `"C:\...\bash.exe"`), `. /dev/stdin` / `source /dev/stdin`, and `eval`.
+_SHELL_CONSUMER = re.compile(
+    r"(?:(?:^|[\s;&|(/\\'\"])(?:bash|sh|zsh|dash|pwsh|powershell)(?:\.exe)?(?=[\s'\"<]|$)"
+    r"|(?:^|[\s;&|(])(?:\.|source)\s+/dev/(?:stdin|fd/0)(?=[\s<]|$)"
+    r"|(?:^|[\s;&|(])eval(?=[\s<]|$))",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +257,12 @@ def _split_segments(command: str) -> list[list[str]]:
     has_buf = False
     quote = ""
     i, n = 0, len(command)
+    # `(` kinds, innermost last: True for `$(`, `$((`, `<(`, `>(` (an expansion), False for a
+    # subshell or group. A `#` glued to the `)` of an EXPANSION continues that word (bash:
+    # `echo $(true)#x` prints `#x`), so it is not a comment start; after a plain `)` it is.
+    parens: list[bool] = []
+    expansion_close = -2
+    backtick = False  # inside an open `...` span: a comment there ends at the closing backtick
 
     def end_token() -> None:
         nonlocal buf, has_buf
@@ -260,11 +286,27 @@ def _split_segments(command: str) -> list[list[str]]:
                 buf.append(c)
             i += 1
             continue
+        if c == "#" and not has_buf and expansion_close != i - 1:
+            # A comment (a `#` that starts a word, outside quotes) runs to the end of
+            # the line. Skipping it BEFORE quote tracking stops an apostrophe in
+            # `# don't` from opening a quote that swallows the commands after it.
+            # Inside a backtick span the comment ends at the closing backtick (bash parses
+            # the span as its own script), so `echo `x #y`; git switch -c z` keeps its tail.
+            while i < n and command[i] != "\n" and not (backtick and command[i] == "`"):
+                i += 1
+            continue
+        if c == "`" and (i == 0 or command[i - 1] != "\\"):
+            backtick = not backtick
         if c in "'\"":
             quote, has_buf = c, True
         elif c in " \t\r":
             end_token()
         elif c in "\n;|()":
+            if c == "(":
+                prev = command[i - 1] if i else ""
+                parens.append(prev in "$<>" or (prev == "(" and bool(parens) and parens[-1]))
+            elif c == ")" and parens and parens.pop():
+                expansion_close = i
             end_segment()
         elif c == "&":
             # `&&`, a backgrounding `&`, but not a redirect (`2>&1`, `&>`) and not
@@ -302,13 +344,15 @@ def _resolve(current: str | None, target: str | None) -> str | None:
     return os.path.normpath(os.path.join(current, target))
 
 
-def _leading_call(tokens: list[str]) -> tuple[list[str], list[str]]:
-    """(directories named by GIT_DIR / GIT_WORK_TREE assignments, the command proper).
+def _leading_call(tokens: list[str]) -> tuple[list[str], str | None, list[str]]:
+    """(directories named by GIT_DIR / GIT_WORK_TREE assignments, the directory an
+    `env -C <dir>` / `env --chdir=<dir>` moves the command to, the command proper).
 
     Drops what precedes the command: env assignments, `env [-i] [VAR=x]`, shell
     keywords (`then`, `do`, `{`), `time`, `nohup`, `command`, PowerShell's `&` and
     an `rtk` proxy prefix."""
     env_targets: list[str] = []
+    chdir: str | None = None
 
     def note(assignment: str) -> None:
         name, _, value = assignment.partition("=")
@@ -326,12 +370,19 @@ def _leading_call(tokens: list[str]) -> tuple[list[str], list[str]]:
         elif low == "env":
             i += 1
             while i < len(tokens) and (tokens[i].startswith("-") or _ENV_ASSIGN.match(tokens[i])):
-                if _ENV_ASSIGN.match(tokens[i]):
-                    note(tokens[i])
-                i += 2 if tokens[i] in {"-u", "-C", "-S"} else 1
+                tok = tokens[i]
+                if _ENV_ASSIGN.match(tok):
+                    note(tok)
+                elif tok in {"-C", "--chdir"} and i + 1 < len(tokens):
+                    chdir = tokens[i + 1]
+                elif tok.startswith("--chdir="):
+                    chdir = tok.split("=", 1)[1]
+                elif tok.startswith("-C") and not tok.startswith("--") and len(tok) > 2:
+                    chdir = tok[2:]  # glued: -C<dir>
+                i += 2 if tok in {"-u", "-C", "-S", "--chdir", "--unset", "--split-string"} else 1
         else:
             break
-    return env_targets, tokens[i:]
+    return env_targets, chdir, tokens[i:]
 
 
 def _dir_argument(args: list[str]) -> str | None:
@@ -442,10 +493,15 @@ def _denied_subcommand(sub: str, args: list[str]) -> bool:
         return not (flags & _RECOVERY)
     if sub == "pull":
         return not _fast_forward_only(args)
+    if sub == "am" and flags & _AM_SAFE:
+        return False
     if sub in {"commit", "am"}:
         return "--dry-run" not in flags
     if sub == "reset":
-        if flags & _RESET_MODES:
+        # git accepts any unambiguous prefix of a long option (`--har`), so a flag that
+        # is a prefix of a mode counts as that mode; an ambiguous one is an error in
+        # git, so denying it costs nothing.
+        if any(f.startswith("--") and len(f) > 2 and any(m.startswith(f) for m in _RESET_MODES) for f in flags):
             return True
         if _has_paths_after_dashdash(args):
             return False  # path-only reset; HEAD does not move
@@ -484,46 +540,59 @@ def _check_segment(tokens: list[str], current: str | None, env_targets: list[str
     return None
 
 
-def _nested_command(head: str, tokens: list[str]) -> str | None:
-    """The command string a shell / cmd / PowerShell invocation will run, if any."""
+def _nested_command(head: str, tokens: list[str]) -> tuple[str, str | None] | None:
+    """(the command string a shell / cmd / PowerShell / eval invocation will run, the
+    directory it starts in if the invocation names one), or None."""
     if head in _SHELLS:
         for idx, tok in enumerate(tokens[1:-1], start=1):
             if _SHELL_C_FLAG.match(tok):  # -c, -lc, -ic ...
-                return tokens[idx + 1]
+                return tokens[idx + 1], None
     elif head in _POWERSHELLS:
+        workdir: str | None = None
         for idx, tok in enumerate(tokens[1:], start=1):
-            if len(tok) >= 2 and "-command".startswith(tok.lower()):  # -c, -co, ... -Command
-                return " ".join(tokens[idx + 1 :])
+            low = tok.lower()
+            if len(low) >= 3 and "-workingdirectory".startswith(low) or low == "-wd":
+                workdir = tokens[idx + 1] if idx + 1 < len(tokens) else None
+            elif len(tok) >= 2 and "-command".startswith(low):  # -c, -co, ... -Command
+                return " ".join(tokens[idx + 1 :]), workdir
     elif head == "cmd":
         for idx, tok in enumerate(tokens[1:], start=1):
             if tok.lower() in {"/c", "/k"}:
-                return " ".join(tokens[idx + 1 :])
+                return " ".join(tokens[idx + 1 :]), None
+    elif head == "eval":
+        return " ".join(tokens[1:]), None
     return None
 
 
-def _verdict(command: str, cwd: str | None, depth: int, classifier: _Classifier) -> str | None:
+def _verdict(command: str, cwd: str | None, depth: int, classifier: _Classifier, keep_heredocs: bool = False) -> str | None:
     current: str | None = cwd
     stack: list[str | None] = []
-    for raw in _split_segments(_strip_heredoc_bodies(command or "")):
-        env_targets, tokens = _leading_call(raw)
+    text = command or ""
+    for raw in _split_segments(text if keep_heredocs else _strip_heredoc_bodies(text)):
+        env_targets, chdir, tokens = _leading_call(raw)
         if not tokens:
             continue
+        # `env -C <dir>` moves only this one command, never the following segments.
+        here = _resolve(current, chdir) if chdir is not None else current
         head = os.path.basename(tokens[0].replace("\\", "/")).lower()
         head = head[:-4] if head.endswith(".exe") else head
         if head in _CD_COMMANDS or head in _PUSH_COMMANDS:
             if head in _PUSH_COMMANDS:
                 stack.append(current)
-            current = _resolve(current, _dir_argument(tokens[1:]))
+            current = _resolve(here, _dir_argument(tokens[1:]))
         elif head in _POP_COMMANDS:
             current = stack.pop() if stack else None
         elif head == "git":
-            reason = _check_segment(tokens, current, env_targets, classifier)
+            reason = _check_segment(tokens, here, env_targets, classifier)
             if reason:
                 return reason
         elif depth < 2:
             nested = _nested_command(head, tokens)
             if nested:
-                reason = _verdict(nested, current, depth + 1, classifier)
+                body, workdir = nested
+                start = _resolve(here, workdir) if workdir is not None else here
+                # An `eval` body that carries a heredoc executes it: keep it visible.
+                reason = _verdict(body, start, depth + 1, classifier, keep_heredocs=head == "eval")
                 if reason:
                     return reason
     return None
