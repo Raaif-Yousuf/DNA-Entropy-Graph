@@ -1,0 +1,1 @@
+- tests: the run-completion settings test proves the read is off the caller with a gate instead of comparing thread ids, which flaked when the pool reused the caller's thread (#725).

@@ -45,6 +45,13 @@ internal sealed class CloudRunSettings
     /// <summary>How long a heartbeat may stay unchanged before the worker process is called dead or frozen (a hung main thread under the free-running heartbeat thread is not caught, #522). Null means 20 times <c>limits.heartbeatSeconds</c> (600 s, docs/job_contract.md section 5).</summary>
     public TimeSpan? HeartbeatStaleTimeout { get; set; }
 
+    /// <summary>
+    /// How long the worker's forward-progress signal (<c>windowsDone</c>, <c>lastProgressAt</c>, <c>stage</c> in status.json) may stay unchanged across looks, while the heartbeat
+    /// still ticks in the <c>running</c> stage, before the compute thread is called wedged (#723, the app half of #522). Default 20 minutes, the bound docs/job_contract.md section 5
+    /// proposes. THEORY (unverified): 20 minutes is longer than any healthy window on an L4; the ToTest row for #522 confirms or raises it on a real VM.
+    /// </summary>
+    public TimeSpan ProgressStallTimeout { get; set; } = TimeSpan.FromMinutes(20);
+
     /// <summary>Per-stage deadlines that replace <see cref="HeartbeatWatch.DefaultStageDeadlines"/> for the stages named (#90). Null means the defaults.</summary>
     public IReadOnlyDictionary<string, TimeSpan>? StageDeadlines { get; set; }
 

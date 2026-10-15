@@ -273,7 +273,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     /// email is built from it).
     /// </summary>
     private RelayCommand? OwnerRequestFor(RunRecord run)
-        => run.ErrorCode == RunErrorCodes.PermissionActAs && !string.IsNullOrWhiteSpace(run.ProjectId)
+        => RunErrorCodes.IsActAsRefusal(run.ErrorCode, run.ErrorDetail) && !string.IsNullOrWhiteSpace(run.ProjectId)
             ? new RelayCommand(() => CopyOwnerRequest(run.ProjectId, WorkerAccountDetail.TryRead(run.ErrorDetail)))
             : null;
 

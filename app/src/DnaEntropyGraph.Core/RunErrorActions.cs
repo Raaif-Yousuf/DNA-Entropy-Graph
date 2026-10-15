@@ -43,6 +43,7 @@ public static class RunErrorActions
         [RunErrorCodes.RunTimeLimit] = RunErrorAction.StartAgain,
         [RunErrorCodes.DeletedByCleanup] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
+        [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         [RunErrorCodes.LifecycleUnverified] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.CancelFailed] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.InputMissing] = RunErrorAction.ChooseFile,
