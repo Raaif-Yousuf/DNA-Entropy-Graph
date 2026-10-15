@@ -65,6 +65,7 @@
                                                     <TextBlock Text="{x:Bind DetailText}" Opacity="0.7" />
                                                 </StackPanel>
                                                 <TextBlock Text="{x:Bind ReasonText}" Visibility="{x:Bind HasReason}" TextWrapping="Wrap" />
+                                                <Button x:Uid="RunsCopyOwnerRequestButton" Command="{x:Bind CopyOwnerRequestCommand}" Visibility="{x:Bind HasOwnerRequest}" HorizontalAlignment="Left" />
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <Button x:Uid="RunsOpenButton" Command="{x:Bind OpenCommand}" />
                                                     <Button x:Uid="RunsRerunButton" Command="{x:Bind RerunCommand}" />

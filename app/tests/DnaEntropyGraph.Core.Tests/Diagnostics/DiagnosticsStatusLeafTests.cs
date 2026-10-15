@@ -94,19 +94,19 @@ public sealed class DiagnosticsStatusLeafTests
 
     private static Dictionary<string, string> Build(RunRecord run)
     {
-        var files = new Dictionary<string, string> { ["runs/job-1/status.json"] = PlantedStatus() };
+        var files = new Dictionary<string, string> { ["runs/20261001-080000-abc234/status.json"] = PlantedStatus() };
         var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], Info);
         using var archive = new ZipArchive(new MemoryStream(zip), ZipArchiveMode.Read);
         return archive.Entries.ToDictionary(e => e.FullName, e => new StreamReader(e.Open(), Encoding.UTF8).ReadToEnd());
     }
 
     // An imported run: the row exists, but it carries no manifest and no options, so nothing about the inputs was harvested from it.
-    private static readonly RunRecord ImportedRun = new("job-1", JobPhase.Completed, new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero), Imported: true);
+    private static readonly RunRecord ImportedRun = new("20261001-080000-abc234", JobPhase.Completed, new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero), Imported: true);
 
     [Fact]
     public void The_status_leaves_that_ship_are_exactly_the_enum_number_and_id_leaves()
     {
-        var shipped = JsonNode.Parse(Build(ImportedRun)["files/runs/job-1/status.json"]);
+        var shipped = JsonNode.Parse(Build(ImportedRun)["files/runs/20261001-080000-abc234/status.json"]);
 
         LeafPaths(shipped, string.Empty).ShouldBe(ShippedLeaves, ignoreOrder: true);
         ShippedLeaves.Length.ShouldBeGreaterThan(10, "vacuity: the allowlist is being compared against something");

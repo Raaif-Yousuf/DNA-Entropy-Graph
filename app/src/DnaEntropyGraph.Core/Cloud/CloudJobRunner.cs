@@ -65,6 +65,7 @@ public sealed class CloudJobRunner
     private readonly GatewayCalls _calls;
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;
+    private readonly IWorkerIdentityGateway _workerIdentity;
     private readonly PreflightChecks _preflight;
     private readonly RunTransfer _transfer;
     private readonly VmTerminator _terminator;
@@ -109,8 +110,17 @@ public sealed class CloudJobRunner
     /// <summary>The longest one gateway call may take before the runner treats it as a transient failure and looks again.</summary>
     public TimeSpan CallTimeout { get => _settings.CallTimeout; init => _settings.CallTimeout = value; }
 
+    /// <summary>The longest <c>EnsureBucketAsync</c> may take: it is a sequence of requests, so it gets more than <see cref="CallTimeout"/> (see <see cref="CloudRunSettings.EnsureBucketTimeout"/>).</summary>
+    public TimeSpan EnsureBucketTimeout { get => _settings.EnsureBucketTimeout; init => _settings.EnsureBucketTimeout = value; }
+
     /// <summary>How long to wait for a stop or delete to land (verifying the VM's terminal state) before recording it unverified.</summary>
     public TimeSpan LifecycleTimeout { get => _settings.LifecycleTimeout; init => _settings.LifecycleTimeout = value; }
+
+    /// <summary>The budget for the whole worker-identity step (#606), which is many calls in one gateway method; see <see cref="CloudRunSettings.WorkerIdentityTimeout"/>.</summary>
+    public TimeSpan WorkerIdentityTimeout { get => _settings.WorkerIdentityTimeout; init => _settings.WorkerIdentityTimeout = value; }
+
+    /// <summary>The budget for the whole quota read (#88), which is several requests in one gateway method; see <see cref="CloudRunSettings.QuotaReadTimeout"/>.</summary>
+    public TimeSpan QuotaReadTimeout { get => _settings.QuotaReadTimeout; init => _settings.QuotaReadTimeout = value; }
 
     /// <summary>How long to wait between looks at a VM that is stopping or being deleted.</summary>
     public TimeSpan LifecyclePollInterval { get => _settings.LifecyclePollInterval; init => _settings.LifecyclePollInterval = value; }
@@ -126,8 +136,9 @@ public sealed class CloudJobRunner
         IStorageGateway storageGateway,
         IProjectSetupGateway projectSetupGateway,
         IQuotaGateway quotaGateway,
+        IWorkerIdentityGateway workerIdentityGateway,
         IRunRepository runRepository)
-        : this(computeGateway, storageGateway, projectSetupGateway, quotaGateway, runRepository, null)
+        : this(computeGateway, storageGateway, projectSetupGateway, quotaGateway, workerIdentityGateway, runRepository, null)
     {
     }
 
@@ -137,16 +148,18 @@ public sealed class CloudJobRunner
         IStorageGateway storageGateway,
         IProjectSetupGateway projectSetupGateway,
         IQuotaGateway quotaGateway,
+        IWorkerIdentityGateway workerIdentityGateway,
         IRunRepository runRepository,
         Action<string, JobPhase>? onPhaseChanged)
     {
+        _workerIdentity = workerIdentityGateway;
         // The collaborators share one settings object, so a timeout set by an object initializer after this constructor is
         // what every one of them reads. The in-flight create state has exactly one owner: _provisioner.
         _compute = computeGateway;
         _storage = storageGateway;
         _rows = new RunRowStore(runRepository, onPhaseChanged);
         _calls = new GatewayCalls(_settings, storageGateway);
-        _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls);
+        _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls, _settings);
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
         _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator);
@@ -191,7 +204,7 @@ public sealed class CloudJobRunner
             {
                 RunFailureException failure => (failure.Kind, failure.Code),
                 CloudOperationException { Error.Code: RunErrorCodes.NotConnectedGatewayCode } cloud => (cloud.Kind, RunErrorCodes.CloudNotConnected),
-                CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Kind)),
+                CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Error, cloud.Kind)),
                 OperationCanceledException => (CloudErrorKind.Network, RunErrorCodes.For(CloudErrorKind.Network)),
                 _ => (CloudErrorKind.Other, RunErrorCodes.For(CloudErrorKind.Other)),
             };
@@ -279,7 +292,7 @@ public sealed class CloudJobRunner
         await _transfer.PrepareRunFolderAsync(request, cancellationToken).ConfigureAwait(false);
 
         // Step 5 of the preflight order (docs/cloud_design.md section 2): the bucket exists.
-        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken).ConfigureAwait(false);
+        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
 
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Uploading, cancellationToken).ConfigureAwait(false);
 
@@ -317,15 +330,35 @@ public sealed class CloudJobRunner
         }
 
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
-        var spec = VmProvisioner.WithStartupMetadata(request, bucket);
-        var provisioned = await _provisioner.ProvisionAsync(request, spec, progress, cancellationToken).ConfigureAwait(false);
+        var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
         if (!provisioned.Success)
         {
-            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, RunErrorCodes.For(provisioned.FailureKind.Value), provisioned.FailureMessage, provisioned.VmEndNote).ConfigureAwait(false);
+            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
         }
 
         progress.Zone = provisioned.Zone!;
         return await RunOnVmAsync(request, bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Issue #606: the spec to create. The provisioner asks for it only when no VM exists for the job, so a run that adopts a VM
+    /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured
+    /// here, once, before the first create; a refusal throws a classified CloudOperationException and no VM is made.
+    /// </summary>
+    private async Task<VmSpec> CompleteSpecAsync(CloudJobRequest request, string bucket, RunProgress progress, CancellationToken cancellationToken)
+    {
+        var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken, _settings.WorkerIdentityTimeout).ConfigureAwait(false);
+        progress.WorkerAccountEmail = identity.ServiceAccountEmail;
+        if (identity.NoteCode == SetupErrorCodes.WorkerDefaultAccount)
+        {
+            // A yellow note, not a failure: the run carries on as the project's default account and its row says so.
+            await _rows.UpdateRowAsync(
+                request.JobId,
+                row => row with { ErrorCode = RunErrorCodes.WorkerDefaultAccount, ErrorDetail = SetupErrorCodes.WorkerDefaultAccount },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return VmProvisioner.WithStartupMetadata(request, bucket) with { ServiceAccountEmail = identity.ServiceAccountEmail };
     }
 
     /// <summary>Everything from the moment a VM exists. <see cref="RunCoreAsync"/> ends the VM for any exception that leaves here without having done so.</summary>
@@ -392,7 +425,7 @@ public sealed class CloudJobRunner
     /// </summary>
     public async Task UploadInputsAsync(CloudJobRequest request, CancellationToken cancellationToken)
     {
-        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken).ConfigureAwait(false);
+        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
         await _transfer.UploadAsync(request, bucket, cancellationToken).ConfigureAwait(false);
     }
 }
