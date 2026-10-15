@@ -85,6 +85,20 @@ built from arithmetic on the single-plasmid numbers above, not a measurement of 
 written. Treat it as a ballpark, and trust the app's own live estimate on your actual
 files over this number.
 
+**Twenty plasmids: one batch or twenty separate runs?** This is the question this page is most
+often opened to answer, so here are both, with the same arithmetic as above ($0.85 an hour is
+about 1.4 cents a minute on the default L4 computer):
+
+| How you run them | Computer time | Roughly what you pay |
+| --- | --- | --- |
+| One batch of 20 files | about 5 to 8 minutes to start, plus about half a minute per plasmid: **15 to 18 minutes** | **20 to 25 cents** |
+| Twenty separate runs, one after another | about 5 minutes each (the computer is stopped between runs and starts again in 2 to 5 minutes): **100 minutes** | **about $1.40** |
+
+Same plasmids, roughly six times the price, because each separate run pays the start-up wait
+again. If you have them all ready, put them in one run. As with the 40-file batch, both rows
+are estimates from the single-plasmid numbers, not measurements; the live estimate on the New
+run page is the figure to trust. On the A100 tier, multiply by four to six (see below).
+
 This is also why a batch has a ceiling (50 files or 20 million letters, by default, see
 [03-run.md](03-run.md)): cost scales with what you run, so a batch large enough to matter
 for your bill is worth catching before the computer even starts, not after.
