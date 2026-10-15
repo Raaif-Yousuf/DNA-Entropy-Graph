@@ -46,6 +46,9 @@ public partial class App : Application
         window.Closed += (_, _) => Startup.DesktopActivation.Unregister();
         Startup.DesktopActivation.Register(Services);
 
+        // Issue #179: the launch check (when the Settings switch is on). Not awaited: launch never waits on the network, and a failure stays silent.
+        _ = Services.GetRequiredService<Presentation.ViewModels.UpdateViewModel>().CheckOnLaunchAsync();
+
         // Issue #59: reattach runs a killed app left behind. Not awaited: launch never waits on a run.
         _ = Startup.AppStartup.BeginAsync(Services);
     }

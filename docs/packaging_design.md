@@ -88,11 +88,30 @@ The in-app updater reads the GitHub **Releases** API, not the raw git tags. Two
 consequences worth remembering: a **draft** release is invisible to the updater (so a
 `release.yml` run must publish, not merely create, the release once every asset is
 attached), and a **pre-release** is visible only if the update channel logic says so
-(none of this is wired yet; v1.0 ships stable-channel-only). The update check runs on
+(issue #145). The update check runs on
 launch (a setting, default on) and via a manual "Check now" in Settings; it never
 restarts the app during an active run, since a run continues on its own in the cloud
 regardless of whether the app is open (see the "you can close the app" banner in
 `ui_conventions.md` section 7).
+
+**How it is built (issues #179, #145).** `UpdateViewModel` (Presentation) is one singleton shared by
+the shell's `Update available: <version>` InfoBar (a non-blocking bar with a Restart to update button) and the
+Settings > About and updates group (version, channel, the launch switch, Check now, the release notes).
+It talks to `IAppUpdateSource`; the only implementation, `VelopackUpdateSource` (App), is
+`UpdateManager(new GithubSource(repoUrl, null, prerelease: channel == Beta))`, so the Beta channel is
+exactly `prerelease: true`, and Stable never sees a pre-release. Tests use a fake source. The release notes are the
+GitHub release body (`NotesMarkdown`), shown as plain text. A copy the installer did not put there (a dev build, a CI artifact)
+reports `NotInstalled` and tells the user to use the installer.
+
+**Never mid-run.** Restart to update asks `IActiveRunProbe` (over `ActiveRuns`, the one registry of run drivers,
+which the engine and the reattach both register in) before downloading and again after the download, because the
+download can take minutes. While a run is active the command only says so; it does not queue a restart. The launch check
+is silent on failure (no network is not the user's problem at start-up); only a press of Check now reports one.
+Channel and the launch switch are saved in `settings.json` (`update_channel`, `update_check_on_launch`) and go back to
+the defaults on Reset all settings. Changing channel drops an offer made on the other channel.
+
+THEORY (unverified): that `GithubSource` fills `NotesMarkdown` from the release body, and that `prerelease: true` also
+offers a newer full release (it should: Velopack picks the newest of both); both need a real installed build (ToTest).
 
 ## 5. Version lockstep
 

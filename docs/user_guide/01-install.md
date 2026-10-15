@@ -39,10 +39,15 @@ costs, then asks you to sign in with Google. That step is covered in the next pa
 
 ## Staying up to date
 
-The app checks for updates each time it opens (you can turn this off in Settings) and
-tells you when a newer version is available. Updates are small, download in the
-background, and never interrupt a run in progress, a run continues in the cloud even if
-you close the app entirely.
+The app checks for updates each time it opens (you can turn this off in Settings, under
+About and updates) and shows a bar at the top, "Update available: 1.2.0", when a newer version is out. Nothing happens
+until you press **Restart to update**; the app then downloads the update and restarts into it. It will not restart while a run
+is in progress: it tells you to press the button again when the run has finished. A run continues in the cloud even if you
+close the app entirely.
+
+You can also press **Check now** in Settings > About and updates, and pick the **Beta** updates there if you want early
+versions (the default, Stable, only offers finished releases). The same page shows what changes in the version on offer.
+A copy of the app that did not come from the installer cannot update itself; download the newest `Setup.exe` instead.
 
 ## Related
 
