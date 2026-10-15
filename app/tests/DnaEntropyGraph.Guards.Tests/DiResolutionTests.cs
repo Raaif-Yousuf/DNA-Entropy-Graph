@@ -101,6 +101,22 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void The_real_build_asks_NCBI_and_New_run_and_the_engine_share_that_one_lookup()
+    {
+        // Issue #684 / Hard Rule 2: the lookup is an optional argument of NewRunViewModel, so a missing registration would not fail resolution; the
+        // page would add accession pills with no check and no length. The shipped build must hold the NCBI one, and both consumers the same instance.
+        using var provider = BuildRealServiceProvider();
+
+        var lookup = provider.GetRequiredService<DnaEntropyGraph.Core.Inputs.IAccessionLookup>();
+        lookup.ShouldBeOfType<DnaEntropyGraph.Core.Inputs.NcbiAccessionLookup>();
+        var page = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>();
+        typeof(DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel).GetField("_accessionLookup", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(page).ShouldBeSameAs(lookup);
+        typeof(DnaEntropyGraph.App.JobEngine).GetField("_accessionLookup", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(provider.GetRequiredService<DnaEntropyGraph.App.JobEngine>()).ShouldBeSameAs(lookup);
+    }
+
+    [Fact]
     public void Every_Presentation_facing_and_Cloud_gateway_interface_resolves()
     {
         using var provider = BuildRealServiceProvider();

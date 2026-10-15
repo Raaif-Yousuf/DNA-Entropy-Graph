@@ -24,7 +24,10 @@ public sealed record AccessionCheck(bool IsValid, string Accession, string? Rang
 public static partial class AccessionInput
 {
     // [0-9], never \d: .NET's \d matches every Unicode decimal digit. \z, never $: $ also matches before a final newline.
-    [GeneratedRegex(@"^[A-Za-z]{1,6}_?[A-Za-z]{0,6}[0-9]{5,10}(?:\.[0-9]{1,3})?\z", RegexOptions.CultureInvariant)]
+    // Public so a test can read it: it must equal the worker's pattern (a guard reads entrez.py) and refuse a final newline and non-ASCII digits.
+    public const string PatternText = @"^[A-Za-z]{1,6}_?[A-Za-z]{0,6}[0-9]{5,10}(?:\.[0-9]{1,3})?\z";
+
+    [GeneratedRegex(PatternText, RegexOptions.CultureInvariant)]
     private static partial Regex Pattern();
 
     public static AccessionCheck Check(string? accession, string? rangeStart, string? rangeEnd)

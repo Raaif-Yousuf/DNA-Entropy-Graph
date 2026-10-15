@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -762,9 +763,13 @@ public sealed class JobReconciler
         }
 
         var staged = await FindInputAsync(row, options, cancellationToken).ConfigureAwait(false);
-        if (staged is null && !vmMayExist)
+        // An accession with no valid record would make the run provision a VM that fetches nothing, so it fails here even at Provisioning (a file
+        // run at Provisioning is left to the VM look above: its copy may be gone because the VM already has it).
+        if (staged is null && (!vmMayExist || (options.Accession is not null && imageRequired)))
         {
-            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputMissing, "No copy of the input remains under app data and the original is gone.", cancellationToken).ConfigureAwait(false);
+            return options.Accession is not null
+                ? await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputAccessionInvalid, "The recorded NCBI accession or range is not valid.", cancellationToken).ConfigureAwait(false)
+                : await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputMissing, "No copy of the input remains under app data and the original is gone.", cancellationToken).ConfigureAwait(false);
         }
 
         var appVersion = row.AppVersion ?? "0.0.0";
@@ -1005,8 +1010,10 @@ public sealed class JobReconciler
     {
         if (options.Accession is not null)
         {
-            // Issue #684: an accession is fetched by the worker; there is no copy to find and nothing to upload.
-            return StagedInput.ForAccession(options.Accession, options.AccessionRange);
+            // Issue #684: an accession is fetched by the worker; there is no copy to find and nothing to upload. The row is a file on disk
+            // that outlives the app, so what it recorded is checked again with the same rules as a new run (Hard Rule 2) before it can reach the cloud.
+            var accession = AccessionInput.Check(options.Accession, options.AccessionRange);
+            return accession.Problem is null ? StagedInput.ForAccession(accession.Accession, accession.Range) : null;
         }
 
         try

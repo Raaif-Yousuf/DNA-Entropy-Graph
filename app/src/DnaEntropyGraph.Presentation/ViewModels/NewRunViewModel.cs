@@ -47,6 +47,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
     private readonly OutputSelectionStore _outputStore;
     private readonly IDiagnosticsLog _log;
+    private readonly IAccessionLookup? _accessionLookup;
     private readonly IClipboardTextReader? _clipboard;
     private readonly Func<string, string, Topology, AnnotationCheckResult> _validateAnnotation;
     private bool _applyingPreset;
@@ -108,9 +109,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         PresetPickerViewModel? presets = null,
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
         bool? offerAnnotation = null,
-        bool? offerAccession = null)
+        bool? offerAccession = null,
+        IAccessionLookup? accessionLookup = null)
     {
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
+        _accessionLookup = accessionLookup;
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
         OffersAnnotation = offerAnnotation ?? WorkerManifestSupport.Annotation;
@@ -192,6 +195,17 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private string _accessionMessage = string.Empty;
 
     public bool HasAccessionMessage => AccessionMessage.Length > 0;
+
+    /// <summary>True while NCBI is being asked whether the typed record exists and fits (Hard Rule 2); the page shows a progress line and Add waits.</summary>
+    [ObservableProperty]
+    private bool _isCheckingAccession;
+
+    // A message is about what was typed when it was made: any edit makes it stale.
+    partial void OnAccessionTextChanged(string value) => AccessionMessage = string.Empty;
+
+    partial void OnAccessionStartTextChanged(string value) => AccessionMessage = string.Empty;
+
+    partial void OnAccessionEndTextChanged(string value) => AccessionMessage = string.Empty;
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -731,6 +745,18 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 
+    // Literal keys, so the wiring check (and a reader) can see every string a lookup problem can show.
+    private static string LookupProblemKey(AccessionLookupProblem problem) => problem switch
+    {
+        AccessionLookupProblem.NotFound => "NewRunAccessionLookup_NotFound",
+        AccessionLookupProblem.RangeOutsideRecord => "NewRunAccessionLookup_RangeOutsideRecord",
+        AccessionLookupProblem.TooLarge => "NewRunAccessionLookup_TooLarge",
+        AccessionLookupProblem.RateLimited => "NewRunAccessionLookup_RateLimited",
+        AccessionLookupProblem.NcbiTrouble => "NewRunAccessionLookup_NcbiTrouble",
+        AccessionLookupProblem.TimedOut => "NewRunAccessionLookup_TimedOut",
+        _ => "NewRunAccessionLookup_Unreachable",
+    };
+
     private bool CanAddAccession() => OffersAccession && !string.IsNullOrWhiteSpace(AccessionText);
 
     /// <summary>
@@ -738,12 +764,17 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// fetches on the VM. A problem stays in the box with one line to fix it; nothing is requested from NCBI on this PC.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanAddAccession))]
-    private void AddAccession()
+    private async Task AddAccessionAsync()
     {
         var check = AccessionInput.Check(AccessionText, AccessionStartText, AccessionEndText);
         if (check.Problem is { } problem)
         {
-            AccessionMessage = _strings.GetString("NewRunAccessionProblem_" + problem);
+            AccessionMessage = _strings.GetString(problem switch
+            {
+                AccessionProblem.RangeIncomplete => "NewRunAccessionProblem_RangeIncomplete",
+                AccessionProblem.RangeInvalid => "NewRunAccessionProblem_RangeInvalid",
+                _ => "NewRunAccessionProblem_NotAnAccession",
+            });
             return;
         }
 
@@ -753,7 +784,43 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             return;
         }
 
+        // Hard Rule 2: one small request to NCBI from this PC (the same one the run makes again before it starts), so a typo that happens to be a
+        // well-formed accession, or a record the worker will not read, is told here and not after a rented computer is billed. Its answer also gives
+        // the pill a length, which the cost estimate needs.
+        long? length = null;
+        if (_accessionLookup is not null)
+        {
+            AccessionMessage = string.Empty;
+            IsCheckingAccession = true;
+            try
+            {
+                var found = await _accessionLookup.LookupAsync(check.Accession, check.Range, CancellationToken.None);
+                if (found.Problem is { } lookupProblem)
+                {
+                    AccessionMessage = _strings.GetString(LookupProblemKey(lookupProblem));
+                    return;
+                }
+
+                length = found.Length;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _log.Warning("new-run", null, ErrorClass(exception));
+                AccessionMessage = _strings.GetString(LookupProblemKey(AccessionLookupProblem.Unreachable));
+                return;
+            }
+            finally
+            {
+                IsCheckingAccession = false;
+            }
+        }
+
         var pill = InputPillItem.ForAccession(check.Accession, check.Range, _strings);
+        if (length is { } bases)
+        {
+            pill.ApplyAccessionLength(bases);
+        }
+
         Items.Add(pill);
         SelectedItem ??= pill;
         AccessionText = string.Empty;

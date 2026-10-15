@@ -78,10 +78,14 @@
                         x:Uid="NewRunAccessionBox"
                         Text="{x:Bind ViewModel.AccessionText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <TextBox x:Uid="NewRunAccessionStart" Width="140" Text="{x:Bind ViewModel.AccessionStartText, Mode=TwoWay}" />
-                        <TextBox x:Uid="NewRunAccessionEnd" Width="140" Text="{x:Bind ViewModel.AccessionEndText, Mode=TwoWay}" />
+                        <TextBox x:Uid="NewRunAccessionStart" Width="140" Text="{x:Bind ViewModel.AccessionStartText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBox x:Uid="NewRunAccessionEnd" Width="140" Text="{x:Bind ViewModel.AccessionEndText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                     </StackPanel>
                     <Button x:Uid="NewRunAccessionAdd" Command="{x:Bind ViewModel.AddAccessionCommand}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind ViewModel.IsCheckingAccession, Mode=OneWay}">
+                        <ProgressRing IsActive="True" Width="16" Height="16" />
+                        <TextBlock x:Uid="NewRunAccessionChecking" />
+                    </StackPanel>
                     <TextBlock
                         Text="{x:Bind ViewModel.AccessionMessage, Mode=OneWay}"
                         Visibility="{x:Bind ViewModel.HasAccessionMessage, Mode=OneWay}"

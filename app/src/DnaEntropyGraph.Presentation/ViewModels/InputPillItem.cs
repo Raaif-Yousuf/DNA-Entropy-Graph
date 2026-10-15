@@ -42,6 +42,13 @@ public sealed partial class InputPillItem : ObservableObject
         return pill;
     }
 
+    /// <summary>Takes the length NCBI reported for the record (the range, if one was asked for): the cost estimate is sized from it and the summary says it.</summary>
+    public void ApplyAccessionLength(long bases)
+    {
+        TotalBases = bases;
+        SummaryText = Format("NewRunPillAccessionLength", bases);
+    }
+
     public string Path { get; }
 
     /// <summary>The NCBI accession this pill fetches, or null for a file or pasted sequence.</summary>

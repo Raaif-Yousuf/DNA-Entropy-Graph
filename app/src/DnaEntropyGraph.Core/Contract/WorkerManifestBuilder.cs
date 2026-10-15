@@ -18,6 +18,14 @@ public sealed record StagedInput(string LocalPath, string FileName, bool IsAnnot
     /// <summary>The path inside the job prefix, as <c>manifest.json</c> names it.</summary>
     public string ObjectName => "input/" + FileName;
 
+    /// <summary>
+    /// What names this input's outputs and the run's folder: the file name without its extension, or for an accession its version and range
+    /// (<c>NC_045512_2_100-500</c>; a dot would read as a file extension, and dropping the version or range made two different records collide).
+    /// </summary>
+    public string OutputStem => IsAccession
+        ? Accession!.Replace('.', '_') + (AccessionRange is null ? string.Empty : "_" + AccessionRange)
+        : Path.GetFileNameWithoutExtension(FileName);
+
     /// <summary>True for an input the worker fetches from NCBI: there is no local file to upload.</summary>
     public bool IsAccession => Accession is not null;
 
@@ -87,7 +95,7 @@ public static class WorkerManifestBuilder
             last = new JsonObject
             {
                 ["id"] = "in" + (inputEntries.Count + 1).ToString(CultureInfo.InvariantCulture),
-                ["name"] = inputs[i].IsAccession ? inputs[i].FileName.Replace('.', '_') : Path.GetFileNameWithoutExtension(inputs[i].FileName),
+                ["name"] = inputs[i].OutputStem,
                 ["informat"] = InFormat(options.Format),
                 ["start"] = options.StartCoordinate,
                 ["rna"] = options.TreatAsRna,

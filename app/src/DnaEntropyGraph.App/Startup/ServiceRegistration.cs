@@ -293,6 +293,19 @@ public static class ServiceRegistration
                 Services.KnownFolders.Downloads,
                 log: sp.GetRequiredService<IDiagnosticsLog>());
         });
+        // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
+        // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.
+        services.AddSingleton<IAccessionLookup>(_ =>
+        {
+            if (cloud != CloudBackend.Google)
+            {
+                return new ScriptedAccessionLookup();
+            }
+
+            var http = new HttpClient { MaxResponseContentBufferSize = 1024 * 1024 };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("dna-entropy-graph");
+            return new NcbiAccessionLookup(http);
+        });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IRunVmActions>(sp => sp.GetRequiredService<JobEngine>());

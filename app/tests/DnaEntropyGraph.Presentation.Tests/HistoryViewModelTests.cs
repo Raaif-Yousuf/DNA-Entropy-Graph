@@ -142,6 +142,25 @@ public sealed class HistoryViewModelTests
         vm.Groups.SelectMany(g => g.Items).Count().ShouldBe(4);
     }
 
+    [Theory]
+    [InlineData("NC_045512.2", "c3")]
+    [InlineData("nc_045512", "c3")]
+    [InlineData("045512.2", "c3")]
+    [InlineData("100-500", "c3")]
+    [InlineData("MN908947", "d4")]
+    public async Task Text_search_finds_an_accession_run_by_its_accession_or_range(string text, string expected)
+    {
+        // Issue #684: an accession run has no input file, so the file-name match alone could never find it.
+        var vm = await Loaded(
+            Row("c3", options: """{"Accession":"NC_045512.2","AccessionRange":"100-500","ModelId":"m","RunTarget":"cloud"}"""),
+            Row("d4", options: """{"Accession":"MN908947.3","ModelId":"m","RunTarget":"cloud"}"""),
+            Row("e5", options: """{"InputPath":"C:\\data\\Lambda.gb","ModelId":"m","RunTarget":"cloud"}"""));
+
+        vm.SearchText = text;
+
+        vm.Groups.SelectMany(g => g.Items).Select(i => i.JobId).ShouldBe([expected]);
+    }
+
     [Fact]
     public async Task Item_flags_reflect_local_folder_cloud_copy_and_phase()
     {

@@ -34,6 +34,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IProjectRepository _projects;
     private readonly IRunInputStore _inputs;
     private readonly IWorkerImageProvider _images;
+    private readonly IAccessionLookup _accessionLookup;
     private readonly Func<string?> _downloadsFolder;
 
     public JobEngine(
@@ -45,6 +46,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IProjectRepository projects,
         IRunInputStore inputs,
         IWorkerImageProvider images,
+        IAccessionLookup accessionLookup,
         ActiveRuns activeRuns,
         Func<string?>? downloadsFolder = null)
     {
@@ -58,6 +60,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         _projects = projects;
         _inputs = inputs;
         _images = images;
+        _accessionLookup = accessionLookup;
     }
 
     public IReadOnlyList<WorkerResult> CompletedRuns { get; } = Array.Empty<WorkerResult>();
@@ -101,7 +104,16 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             var accession = AccessionInput.Check(options.Accession, options.AccessionRange);
             if (accession.Problem is { } accessionProblem)
             {
-                await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputInvalid, cancellationToken, "Accession " + accessionProblem).ConfigureAwait(false);
+                await FailBeforeStartAsync(jobId, options, AccessionErrorCodes.For(accessionProblem), cancellationToken, AccessionErrorCodes.DetailFor(accessionProblem)).ConfigureAwait(false);
+                return jobId;
+            }
+
+            // Hard Rule 2: a well-formed accession can still name no record, or one over the worker's size limit. One small NCBI request from
+            // this PC finds that out before any bucket object or VM exists; the worker fetches the record itself on the VM.
+            var lookup = await _accessionLookup.LookupAsync(accession.Accession, accession.Range, cancellationToken).ConfigureAwait(false);
+            if (lookup.Problem is { } lookupProblem)
+            {
+                await FailBeforeStartAsync(jobId, options, AccessionErrorCodes.For(lookupProblem), cancellationToken, AccessionErrorCodes.DetailFor(lookupProblem)).ConfigureAwait(false);
                 return jobId;
             }
 

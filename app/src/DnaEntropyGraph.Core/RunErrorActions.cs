@@ -25,6 +25,8 @@ public enum RunErrorAction
     CheckInternet,
     CopyOwnerRequest,
     RestoreFile,
+    CheckAccession,
+    NarrowRange,
 }
 
 /// <summary>
@@ -70,6 +72,10 @@ public static class RunErrorActions
         [RunErrorCodes.InputNotUtf8] = RunErrorAction.ChooseFile,
         [RunErrorCodes.InputEmpty] = RunErrorAction.ChooseFile,
         [RunErrorCodes.InputTooLong] = RunErrorAction.SplitInput,
+        [RunErrorCodes.InputAccessionInvalid] = RunErrorAction.CheckAccession,
+        [RunErrorCodes.InputAccessionNotFound] = RunErrorAction.CheckAccession,
+        [RunErrorCodes.InputAccessionTooLarge] = RunErrorAction.NarrowRange,
+        [RunErrorCodes.InputAccessionUnreachable] = RunErrorAction.CheckInternet,
         [RunErrorCodes.InstallationIdUnusable] = RunErrorAction.RestoreFile,
         [RunErrorCodes.WorkerDefaultAccount] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.PermissionActAs] = RunErrorAction.CopyOwnerRequest,
@@ -121,6 +127,8 @@ public static class RunErrorActions
         RunErrorAction.CheckInternet => ["internet connection"],
         RunErrorAction.CopyOwnerRequest => [resources["RunsCopyOwnerRequestButton.Content"]],
         RunErrorAction.RestoreFile => ["Restore the id"],
+        RunErrorAction.CheckAccession => ["Check the accession"],
+        RunErrorAction.NarrowRange => ["smaller range"],
         _ => [],
     };
 }

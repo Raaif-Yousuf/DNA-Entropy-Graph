@@ -264,8 +264,21 @@ public class WorkerManifestBuilderTests
         input.GetProperty("accession").GetString().ShouldBe("NC_045512.2");
         input.GetProperty("accessionRange").GetString().ShouldBe("100-500");
         input.TryGetProperty("path", out _).ShouldBeFalse("the worker refuses an input with both a path and an accession");
-        input.GetProperty("name").GetString().ShouldBe("NC_045512_2", "the name keeps the version, and a dot would read as a file extension");
+        input.GetProperty("name").GetString().ShouldBe("NC_045512_2_100-500", "the name keeps the version and the range, and a dot would read as a file extension");
         input.GetProperty("informat").GetString().ShouldBe("auto");
+    }
+
+    [Theory]
+    [InlineData("NC_045512.1", null, "NC_045512_1")]
+    [InlineData("NC_045512.2", null, "NC_045512_2")]
+    [InlineData("NC_045512.2", "100-500", "NC_045512_2_100-500")]
+    [InlineData("NC_045512.2", "600-900", "NC_045512_2_600-900")]
+    [InlineData("MN908947", null, "MN908947")]
+    public void Two_versions_or_two_ranges_of_one_record_get_two_different_names(string accession, string? range, string stem)
+    {
+        StagedInput.ForAccession(accession, range).OutputStem.ShouldBe(stem);
+        Build(inputs: [StagedInput.ForAccession(accession, range)]).GetProperty("inputs")[0].GetProperty("name").GetString().ShouldBe(stem);
+        new StagedInput("C:\\x\\sample.v2.fa", "sample.v2.fa").OutputStem.ShouldBe("sample.v2");
     }
 
     [Fact]

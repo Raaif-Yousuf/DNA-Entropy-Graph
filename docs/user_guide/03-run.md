@@ -12,9 +12,12 @@ On the **New run** page, either:
   click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
   letters are saved in the app's own folder, never next to your files.
 - Open **Fetch from NCBI**, type an accession such as `NC_045512.2` (and, if you want only part of the
-  record, the first and last base), and click **Fetch record**. The record is downloaded by the rented
-  computer when the run starts, so the list shows it as an NCBI record with no base count yet. The app
-  checks the accession for typos before it rents anything.
+  record, the first and last base), and click **Fetch record**. The app asks NCBI, from your own PC,
+  whether that record exists and how long it is, so a mistyped accession, or a record too large for one
+  run, is refused on the spot and nothing is rented. The list then shows it as an NCBI record with its
+  base count, and the estimate uses that count. The record itself is downloaded by the rented computer
+  when the run starts. Its results go in a folder named after the accession, version and range
+  (for example `NC_045512_2_100-500`). The Runs page search finds the run by its accession.
 
 You can add more than one file at once. For now each press of **Run** runs the file you
 have selected in the list (running several files together as one batch is not built yet),
@@ -30,7 +33,7 @@ file extension, so a renamed file still works. An EMBL file (`.embl`) or a SnapG
 
 If you have a FASTA file and a GFF3 file that lists its genes, drop them together, or choose **Add GFF3** under the file list. The app pairs a GFF3 with the FASTA that has the same name (plasmid.fasta and plasmid.gff3), or with the only FASTA on the page. With several FASTA files and no matching name, select the FASTA file first and then choose **Add GFF3**. The file's line then shows how many genes the GFF3 has, and the run uses those genes instead of finding them itself. **Remove GFF3** takes it off again. A GFF3 whose sequence names do not match the FASTA, or whose genes all run past the end of the sequence, is refused before anything is created, with one thing to fix. Running again from the Runs page uses the same GFF3. This needs a worker version that reads GFF3 files; until then the button does not appear.
 
-If you have an NCBI accession (for example `NC_045512.2`) instead of a file, the worker can download the record for you and run it like a GenBank file: `dna-entropy run --accession NC_045512.2 --name my_run`. The accession and the download date are recorded in the run's `provenance.json`. An accession without a version (`NC_045512`) gets NCBI's current version, and the run records which version that was. If NCBI is busy the worker retries once, then tells you to wait and try again; a record larger than 64 MiB needs `--accession-range` to fetch just the part you want. A **Fetch from NCBI** button on this page is not built yet; until then, download the record from NCBI as a GenBank file and drop it in.
+If you have an NCBI accession (for example `NC_045512.2`) instead of a file, the worker can download the record for you and run it like a GenBank file: `dna-entropy run --accession NC_045512.2 --name my_run`. The accession and the download date are recorded in the run's `provenance.json`. An accession without a version (`NC_045512`) gets NCBI's current version, and the run records which version that was. If NCBI is busy the worker retries once, then tells you to wait and try again; a record larger than 64 MiB needs `--accession-range` to fetch just the part you want. In the app, use **Fetch from NCBI** on this page (above).
 
 If your genes come as a separate GFF3 file next to a FASTA file, the worker can use them instead of predicting genes: `dna-entropy run -i my.fasta --gff3 my.gff3 --name my_run`. The names in the GFF3's first column must match the names in the FASTA headers. If a sequence is circular, say so in the GFF3 (`Is_circular=true` on its `region` line) or run with `--topology circular`, so a gene that crosses the start of the sequence is kept instead of dropped. Pairing the two files in the app is not built yet.
 

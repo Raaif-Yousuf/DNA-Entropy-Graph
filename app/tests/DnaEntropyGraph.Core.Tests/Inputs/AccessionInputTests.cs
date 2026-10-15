@@ -28,7 +28,6 @@ public sealed class AccessionInputTests
     [InlineData("   ")]
     [InlineData("hello world")]
     [InlineData("NC_045512.2&db=nuccore")]
-    [InlineData("NC_045512.2\n")]
     [InlineData("../NC_045512")]
     [InlineData("NC_045512.1234")]
     [InlineData("12345")]
@@ -37,11 +36,49 @@ public sealed class AccessionInputTests
     {
         var check = AccessionInput.Check(typed, null, null);
 
-        check.IsValid.ShouldBe(typed.Trim() == "NC_045512.2\n".Trim(), "only the trailing-newline form is a real accession once trimmed");
-        if (!check.IsValid)
-        {
-            check.Problem.ShouldBe(AccessionProblem.NotAnAccession);
-        }
+        check.IsValid.ShouldBeFalse();
+        check.Problem.ShouldBe(AccessionProblem.NotAnAccession);
+    }
+
+    [Fact]
+    public void A_trailing_newline_is_trimmed_like_any_whitespace_and_the_accession_is_accepted()
+        => AccessionInput.Check("NC_045512.2\n", null, null).Accession.ShouldBe("NC_045512.2");
+
+    private static bool PatternMatches(string text)
+        => System.Text.RegularExpressions.Regex.IsMatch(text, AccessionInput.PatternText, System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    [Theory]
+    [InlineData("NC_045512.2\n")]
+    [InlineData("NC_045512.2\r\n")]
+    public void The_pattern_itself_refuses_a_trailing_newline(string text)
+        // Check trims first, so only the bare pattern can tell \z from $ (which also matches before a final newline).
+        => PatternMatches(text).ShouldBeFalse();
+
+    [Theory]
+    [InlineData("NC_045512.2")]
+    [InlineData("MN908947")]
+    [InlineData("NZ_CP012345.11")]
+    public void The_pattern_accepts_a_whole_accession(string text) => PatternMatches(text).ShouldBeTrue();
+
+    [Theory]
+    [InlineData("NC_٤٥٦٧٨٩.2")] // Arabic-Indic digits
+    [InlineData("NC_４５６７８９")] // full-width digits
+    [InlineData("NC_045512.٢")]
+    public void The_pattern_refuses_digits_of_other_scripts_so_it_is_zero_to_nine_and_not_backslash_d(string text)
+        // Check's own IsAscii test would hide a \d here, so the bare pattern is what this pins.
+        => PatternMatches(text).ShouldBeFalse();
+
+    [Fact]
+    public void The_pattern_is_the_workers_pattern_read_from_entrez_py()
+    {
+        var source = File.ReadAllText(Path.Combine(ContractFixtures.RepoRoot, "worker", "src", "dna_entropy", "readers", "entrez.py"), System.Text.Encoding.UTF8);
+        var match = System.Text.RegularExpressions.Regex.Match(source, "^_ACCESSION = re\\.compile\\(r\"(?<p>[^\"]+)\", re\\.ASCII\\)", System.Text.RegularExpressions.RegexOptions.Multiline);
+        match.Success.ShouldBeTrue("entrez.py no longer defines _ACCESSION as re.compile(r\"...\", re.ASCII); update this guard with the worker");
+
+        // Python's fullmatch with re.ASCII on \d is exactly [0-9], anchored at both ends (\z: no final-newline allowance).
+        var asDotNet = "^" + match.Groups["p"].Value.Replace("\\d", "[0-9]", StringComparison.Ordinal) + "\\z";
+
+        AccessionInput.PatternText.ShouldBe(asDotNet);
     }
 
     [Fact]

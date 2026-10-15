@@ -125,8 +125,10 @@ public class JobEngineTests
                 ResultPollInterval = TimeSpan.FromMilliseconds(1),
                 ResultTimeout = TimeSpan.FromSeconds(5),
             };
-            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), new LocalRunInputStore(AppData), ImageProvider, new ActiveRuns(), downloads);
+            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), new LocalRunInputStore(AppData), ImageProvider, Lookup, new ActiveRuns(), downloads);
         }
+
+        public ScriptedAccessionLookup Lookup { get; } = new();
 
         public StaticImageProvider ImageProvider { get; }
 
@@ -351,9 +353,10 @@ public class JobEngineTests
     }
 
     [Theory]
-    [InlineData("not an accession", null)]
-    [InlineData("NC_045512.2", "500-100")]
-    public async Task A_bad_accession_or_range_fails_locally_as_an_invalid_input_and_creates_nothing(string accession, string? range)
+    [InlineData("not an accession", null, "AccessionProblem=NotAnAccession")]
+    [InlineData("NC_045512.2", "500-100", "AccessionProblem=RangeInvalid")]
+    [InlineData("NC_045512.2", "100", "AccessionProblem=RangeInvalid")]
+    public async Task A_bad_accession_or_range_fails_locally_with_the_accession_code_and_creates_nothing(string accession, string? range, string detail)
     {
         var h = new Harness(new FakeGcp().WithSelectedProject(Project));
 
@@ -361,9 +364,50 @@ public class JobEngineTests
 
         (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
         var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
-        row.ErrorCode.ShouldBe(RunErrorCodes.InputInvalid);
+        row.ErrorCode.ShouldBe(RunErrorCodes.InputAccessionInvalid);
+        row.ErrorDetail.ShouldBe(detail);
+        h.Lookup.Asked.ShouldBeEmpty("a malformed accession never reaches NCBI");
         h.Gcp.CreateAttempts.ShouldBe(0);
         h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(AccessionLookupProblem.NotFound, RunErrorCodes.InputAccessionNotFound)]
+    [InlineData(AccessionLookupProblem.RangeOutsideRecord, RunErrorCodes.InputAccessionNotFound)]
+    [InlineData(AccessionLookupProblem.TooLarge, RunErrorCodes.InputAccessionTooLarge)]
+    [InlineData(AccessionLookupProblem.RateLimited, RunErrorCodes.InputAccessionUnreachable)]
+    [InlineData(AccessionLookupProblem.NcbiTrouble, RunErrorCodes.InputAccessionUnreachable)]
+    [InlineData(AccessionLookupProblem.TimedOut, RunErrorCodes.InputAccessionUnreachable)]
+    [InlineData(AccessionLookupProblem.Unreachable, RunErrorCodes.InputAccessionUnreachable)]
+    public async Task An_accession_NCBI_has_no_record_for_or_that_is_too_large_fails_before_any_cloud_resource_exists(AccessionLookupProblem problem, string code)
+    {
+        // Hard Rule 2: a well-formed accession that is not a record, or a record over the worker's size limit, must not bill a VM.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        h.Lookup.Script["NC_999999.9"] = AccessionLookupResult.Failed(problem);
+
+        var jobId = await h.Engine.StartRunAsync(AccessionOptions("NC_999999.9"), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(code);
+        row.ErrorDetail.ShouldBe("AccessionLookupProblem=" + problem);
+        h.Lookup.Asked.ShouldBe([("NC_999999.9", null)]);
+        h.Gcp.CreateAttempts.ShouldBe(0, "no VM was created");
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty("nothing was uploaded");
+    }
+
+    [Fact]
+    public async Task A_good_accession_is_looked_up_once_with_its_range_and_the_run_goes_on_and_its_folder_keeps_version_and_range()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var options = AccessionOptions("NC_045512.2", "100-500");
+
+        var jobId = await h.Engine.StartRunAsync(options, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        h.Lookup.Asked.ShouldBe([("NC_045512.2", "100-500")]);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        Path.GetFileName(row.OutputDir).ShouldBe("NC_045512_2_100-500", "the version and the range are in the folder name, so .1 and .2 of one record do not look alike");
     }
 
     [Fact]

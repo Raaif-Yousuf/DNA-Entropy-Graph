@@ -47,6 +47,18 @@ public static class RunErrorCodes
     public const string InputEmpty = "input_empty";
     public const string InputTooLong = "input_too_long";
 
+    /// <summary>The typed NCBI accession or range is not valid (issue #684), found on this PC before any cloud resource existed.</summary>
+    public const string InputAccessionInvalid = "input_accession_invalid";
+
+    /// <summary>NCBI has no record for the accession, or none that covers the range (issue #684).</summary>
+    public const string InputAccessionNotFound = "input_accession_not_found";
+
+    /// <summary>The record (or the range asked for) is bigger than the worker reads (issue #684).</summary>
+    public const string InputAccessionTooLarge = "input_accession_too_large";
+
+    /// <summary>NCBI could not be asked from this PC (offline, slow, limiting or in trouble) before the run started (issue #684).</summary>
+    public const string InputAccessionUnreachable = "input_accession_unreachable";
+
     /// <summary>The installation id file was unusable and set aside (#558). Minimal copy only; the recovery UX is owner-only DECISION #404.</summary>
     public const string InstallationIdUnusable = "installation_id_unusable";
 
@@ -75,7 +87,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -181,6 +193,10 @@ public static class RunErrorCodes
         InputNotUtf8 => "RunError_input_not_utf8",
         InputEmpty => "RunError_input_empty",
         InputTooLong => "RunError_input_too_long",
+        InputAccessionInvalid => "RunError_input_accession_invalid",
+        InputAccessionNotFound => "RunError_input_accession_not_found",
+        InputAccessionTooLarge => "RunError_input_accession_too_large",
+        InputAccessionUnreachable => "RunError_input_accession_unreachable",
         InstallationIdUnusable => "RunError_installation_id_unusable",
         WorkerDefaultAccount => "RunError_worker_default_account",
         PermissionActAs => "RunError_permission_actas",
