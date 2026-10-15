@@ -1722,4 +1722,11 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="Runs_PresetLine" xml:space="preserve">
     <value>Preset: {0}</value>
   </data>
+  <!-- app8 wave 2026-10-15: #685 EMBL and SnapGene inputs -->
+  <data name="NewRunPillKind_Embl" xml:space="preserve">
+    <value>EMBL</value>
+  </data>
+  <data name="NewRunPillKind_SnapGene" xml:space="preserve">
+    <value>SnapGene</value>
+  </data>
 </root>

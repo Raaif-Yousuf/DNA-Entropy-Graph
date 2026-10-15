@@ -193,13 +193,15 @@ public enum Topology
     Circular,
 }
 
-/// <summary>Spec 4.3 "Input / Format" row. Wire name: <c>inputs[].informat</c> ("auto" | "genbank" | "fasta" | "paste").</summary>
+/// <summary>Spec 4.3 "Input / Format" row. Wire name: <c>inputs[].informat</c> ("auto" | "genbank" | "fasta" | "paste" | "embl" | "snapgene").</summary>
 public enum InputFormat
 {
     Auto,
     GenBank,
     Fasta,
     Plain,
+    Embl,
+    SnapGene,
 }
 
 /// <summary>Spec 4.3 "Input / FASTA records" row. Wire name: <c>inputs[].fastaRecords</c> ("all" | "first").</summary>
