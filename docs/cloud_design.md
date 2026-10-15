@@ -7,8 +7,7 @@ reference - `CloudJobRunner` is this table's first production caller: it runs th
 continue rule in section 5 for real, over `FakeGcp`. Still not built: the escalating-
 parallelism zone ladder (`GpuPlanner`, issue #86 - `CloudJobRunner`'s own zone list is a
 plain sequential walk, not that ladder), the setup health checks (issue #204), and a real
-(non-fake) gateway implementation against `Google.Cloud.Compute.V1` -
-`DnaEntropyGraph.Cloud` today holds only `FakeGcp`. Authoritative detail lives in
+(non-fake) gateway implementation (`Google.Apis.Compute.v1`, section 16; `FakeGcp` is still what production resolves until #609). Authoritative detail lives in
 [Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this doc is the
 "what a developer needs while implementing" summary with the tables filled in, not a
 shorter copy of the whole appendix.
@@ -566,7 +565,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
     leaving the row in `Cancelling`. A row that is already terminal (a second cancel racing the first) is left alone and
     nothing throws. `RunAsync` on a row in `Cancelling` finishes the cancel (it used to attempt `Cancelling -> Validating`).
   - *The result wait is measured from the VM's creation.* `VmDescriptor.CreatedAt` is the instance's `creationTimestamp`;
-    the real Compute gateway MUST fill it (there is no real gateway yet, so this is a contract for it). The default deadline
+    the real Compute gateway fills it (`GoogleComputeGateway`, issue #56, from `creationTimestamp`). The default deadline
     is `maxRunDuration - 3 min` from that instant, so an 8 minute boot or a resume no longer lets the platform delete the VM
     before the runner gives up (it read as `vm_unhealthy`). A gateway that leaves it null falls back to "from Running".
     An explicit `ResultTimeout` still measures from Running. `FakeGcp.WithMaxRunDurationEnforced()` makes the fake delete a
@@ -658,8 +657,37 @@ than `idle_stopped_vm_hours` is deleted (default 72, range 1 to 720, no off swit
 `lastStopTimestamp`; a gateway that cannot fill it makes the sweep skip the VM, never delete it). Only VMs with our app label AND this
 installation's id are touched (two users may share one account). The pass runs at launch and again when the pipeline reports the
 connection is back (`ReconcileOnReconnect`, single-flight: reconnects while a pass runs coalesce into at most one follow-up pass, and a pass ends once the lifecycle and the sweep have run and the reattached runs are handed to their own drivers, not when those runs end (`JobReconciler.BeginReconcileAsync`; launch still awaits them through `ReconcileAsync`); the observer
-is rarely invoked today because reconciler calls bypass the breaker, #559). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
+is rarely invoked by the pipeline because reconciler calls bypass the breaker, so #559 adds the reconnect probe below). THEORY (unverified): `aggregatedList` returns `lastStopTimestamp` for a `TERMINATED` instance
 and its label filter matches as `FakeGcp` models it; nothing here has touched a real project (docs/ToTest.md).
+
+**Reconnect probe (issue #559)**: a launch with no network defers every run it could not look at, and the breaker's `OnClosed` (the only source of
+`OnConnectivityChanged(offline: false)`) almost never fires because every reconciler call passes `bypassBreaker: true`. `ReconcileOnReconnect` therefore
+also probes: while `JobReconciler.HasDeferred` is true (a reattach ended Deferred and no later pass judged that job, or the last lifecycle enforcement
+had a Deferred outcome) it runs the same pass again after 30 s, then 60 s, doubling up to a 5 minute cap, on the `TimeProvider` in the container (tests move virtual time);
+it stops when nothing is deferred and starts over at 30 s next time. The launch pass runs outside this class, so `AppStartup.BeginAsync` calls
+`StartProbeIfDeferred()` once the pass has judged every run (`BeginReconcileAsync`'s outer task now also waits for each run's look at the cloud, so `HasDeferred` is settled when
+it ends; a resumed run is judged as it is handed to its driver and does not hold it, and neither does a run whose half-done cancel is being finished: it is judged at the start of that work, so a stuck cancel never holds
+the single-flight slot, and `ReconcileOnReconnect` and `AppStartup` look at the probe again when the reattached runs end, because such a run can still end Deferred). The call is in a `finally`, so a launch pass that throws (a network
+timeout reading the run table) still arms the probe: the pass has already recorded itself deferred. Passes can overlap (the launch pass is outside the single flight): each takes a generation and only the latest-started pass may write
+the pass-level deferred state (`_lifecycleDeferred`, `_reattachDeferred`: the reattach could not even read the run table), so an older pass that ends last never overwrites a newer one's answer. A run's own mark (`_deferredRuns`) is different: the pass that DRIVES the run owns it whatever its generation, and a pass that was Skipped because another drives the run neither sets nor clears it. If `BeginReconcileAsync`'s lifecycle step throws, the failure is logged and the reattached runs are still returned (never orphaned). A probe whose own `hasDeferred` check throws re-arms on the current delay (logged) rather than stopping. DECISION (agent-made, reversible): a probe that re-runs the pass, over
+(a) `NetworkChange.NetworkAvailabilityChanged`, which cannot be tested without a network stack and fires on LAN changes that say nothing about Google reachability, and
+(b) feeding reconciler failures into the breaker, which changes what `bypassBreaker` means for every caller. Cost while offline: one pass (a few failing lookups, no retries beyond
+the pipeline's own) per backoff step, never while nothing is deferred. THEORY (unverified): the 30 s first delay and 5 minute cap are reasonable for a laptop waking from sleep; nothing measured them.
+What counts as deferred (DECISION, agent-made, reversible; two cold reviewers disagreed): a run or a lifecycle pass is deferred if and only if the failure is a
+network class (no connection, `CloudErrorKind.Network`, or a lookup deadline). Any other exception while judging a run ends as `ReattachAction.Errored`: logged
+by error class, row untouched, left for the next launch, and it does not keep the probe alive. A lifecycle pass that throws sets deferred by the same rule and
+rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
+
+**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
+because it is called from inside the reconciler's catch blocks. A rotation that cannot move the file (the copy is held open or read-only) keeps appending up to twice the cap, then drops lines until a rotation works, so a failing rotation cannot grow the log without bound; every control character and the Unicode line and paragraph separators in a field become a space, so one event is always one line. A lifecycle step that throws no longer orphans the reattach: `EnforceLifecycleAsync` itself rethrows, and `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
+`WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) was already delivered by #559, not #575: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
+(#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive; the test for it is a regression guard, green before #575. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
+
+**Reattach bounds (issue #551)**: a reattached run stopped by a user cancel waits for that cancel to settle for at most the mutation timeout plus a 30 s margin (5 min 30 s by default; `JobReconciler`'s `cancelSettleTimeout` overrides it; on its `TimeProvider`), so the report never gives up on the very edge of a legitimate slow cancel that succeeds;
+on expiry it logs the error class and reports the row as it is (non-terminal), so one cancel stuck in a gateway call that ignores its token holds back only its own run's outcome (the other runs are not blocked
+on a wait that never ends). The reported `ReattachAction` is derived from the row's final phase (`ActionForFinalPhase`): Cancelled is `CancelFinished`, and a `Failed*` action is reported only for a row that is Failed. A reattach that a user cancel took over (or that was finishing a cancel it found half done) and that reports a row which is not terminal is `CancelInterrupted`, never `CancelFinished` and never `Resumed` (`ActionAfterUserCancel`). The interruptions that reach it: the settle wait expired, the app began to shut down during the wait or while the cancel was being finished (the shutdown is reported, not thrown, so it does not hide the other runs' outcomes), the user cancel failed, or the terminal write did not land. The row stays non-terminal (normally Cancelling), so the next launch's reattach finishes the cancel and records the terminal state (Hard Rule 11; `ReattachOnStartupTests` checks this through the production container). Known gap, #610: a cancel cut short before `VmCanceller` records Cancelling (its driver hung) leaves the row Running, and the next launch resumes the run instead of finishing the cancel. `CancelInterrupted` is a snapshot, not a final answer: the cancel's delete cannot be cancelled once started (`VmCanceller` retries it with no token after a shutdown), so it may still complete after the report. A terminal row is reported from its phase; a Failed row from a cancel that could not confirm its VM gone (`cancel_failed`, or any Failed row reached while finishing a cancel) is `CancelFailed`, never `Resumed` or `CancelFinished` (DECISION #599, comment). DECISION #599 (agent-made, reversible) records `CancelInterrupted` and `Errored` as separate values over reusing `Deferred`, which would keep the reconnect probe alive for a run that is not waiting on the network.
+The settle deadline is DOCUMENTED, not derived (DECISION agent-made, reversible): a legitimate cancel is the sum of the in-flight create settle, one delete or stop (up to the mutation timeout), the verify and the token-less retry (`VmCanceller`), which can exceed mutation timeout plus 30 s, so `CancelInterrupted` can be reported for a cancel that then succeeds. That is safe because the report is only a snapshot and, since the same review, `ActiveRuns.TryStart` refuses to start a driver for a job while a user cancel of it is running (`_cancels`), so a later pass (a reconnect) reports that run `Skipped` and cannot resume it, and a VM the cancel is deleting is never re-provisioned (#551 review r4). A shutdown during a resumed (not cancelled) run is reported too, as `Resumed` with the non-terminal phase the row has, so it does not hide the other runs' outcomes (DECISION #599, comment); the next launch resumes it.
+Decision (agent-made, reversible): a per-run deadline over per-run outcome callbacks, because no consumer reads outcomes yet and the deadline is the smaller change.
 
 **Reached from the UI (issue #428)**: `JobEngine` (App) is the production caller; see
 `architecture.md` section 3. Three runner behaviours exist for that caller:
@@ -983,6 +1011,7 @@ creates the project's default network).
   and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
 - **Proven only by a real project:** `docs/ToTest.md`.
+
 ### The results bucket (issue #53, wizard step 5)
 
 `IStorageGateway` (`EnsureBucketAsync`, `UploadAsync`, `DownloadAsync`, `TryDownloadAsync`); the real one is
@@ -1044,6 +1073,57 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
 - **Retention is validated.** `ResultsRetentionDays` outside 1 to 3650 throws `ArgumentOutOfRangeException` before any request
   (0 would delete job results at once). The default is `ResultsBucket.DefaultRetentionDays`, which `RunOptions.CloudResultsRetentionDays` reuses.
 - **Proven only by a real project:** `docs/ToTest.md`.
+
+### Compute gateway (issue #56)
+
+`Rest/GoogleComputeGateway` implements `IComputeGateway` over `Google.Apis.Compute.v1` (Apache-2.0; the same REST-over-gRPC
+choice as above, DECISION #535) and `GoogleCloudGateways.Create(...).Compute` is it, NOT wrapped in `ResilientComputeGateway`:
+every HTTP request goes through `CloudCallPipeline` on its own (like the project and service gateways), so a transient error
+on one poll retries that poll and never replays the insert. A second wrapping layer would replay the whole create, so
+production DI must not add one (#609). **Production DI still resolves `IComputeGateway` to `FakeGcp` until #609**; nothing in
+the running app calls this class yet.
+
+- **Project.** Create carries `VmSpec.ProjectId`; get, stop, delete, find and list take the optional `selectedProjectId`
+  argument of `Create` (production will pass `IGcpAccount.SelectedProjectId`, #609); none selected throws
+  `InvalidOperationException` and sends nothing. A create whose `VmSpec.ProjectId` differs from the selected project (or with none
+  selected) is refused as `PROJECT_MISMATCH` before any request, so a VM can never be made where the later lookups do not look.
+- **Create.** `VmSpec.ToLabels()` runs first (Hard Rule 10; `VmSpec` also rejects any `TerminationAction` other than `DELETE`), then a spec with no
+  `ServiceAccountEmail` is refused by name (`WORKER_SERVICE_ACCOUNT_MISSING`, kind `other`) before any request: the run path fills it from the worker
+  identity (#54) via #606/#609, and nothing guesses `deg-worker@<project>`. Then `instances.insert` is built with: the six standard labels,
+  `scheduling.maxRunDuration` (seconds), `instanceTerminationAction` DELETE, `onHostMaintenance=TERMINATE`, `automaticRestart=false`, every
+  `VmSpec.Metadata` item (the startup script and `deg-*` keys) plus `block-project-ssh-keys=true` (section 9), a `pd-balanced` 150 GB boot disk with
+  `autoDelete` and the VM's labels on the disk (Hard Rule 10), the default network with an external address (the VM pulls its image), and the spec's service account with the `cloud-platform` scope.
+  `VmSpec` does not carry image or disk, so they are fixed in `ComputeVmShape`: the DLVM family for EVERY machine type, CPU included, because
+  `startup.sh` needs docker, python3 and a writable root (Container-Optimized OS has none of them; DECISION #615), and `startup.sh` passes `--gpus all` only
+  when `deg-expect-gpu` is true. Each `CreateVmAsync` call fixes ONE random `requestId` at its start and every pipeline replay of that insert POST carries it
+  (Compute answers a replay with the same operation); a NEW call gets a new id, never one derived from the VM name: Compute replays the
+  ORIGINAL operation for a repeated id within its idempotency window, so a derived id would return an old stockout to a retry, or an old DONE operation
+  (no VM made) to a re-create of the same `deg-<job>` after a delete. Instance names are unique per zone, so a new call after a lost response is answered 409
+  (`already_exists`), which the runner adopts. THEORY (unverified): an abandoned create (the provisioner gave up) can still be finishing in Compute,
+  so a later retry may adopt an instance whose original operation then fails; the run then ends `vm_unhealthy` rather than trying the next zone.
+- **Operations.** insert, stop and delete return a zone operation, polled with `OperationPoller` (1 s doubling to 10 s,
+  `OperationDeadline`) until `DONE`. `operation.error` becomes a `CloudOperationException` classified by
+  `CloudErrorClassifier` alone (code, `httpErrorStatusCode`, message), across EVERY entry of `errors` (the most specific kind wins: stockout, quota,
+  permission, billing, api_disabled, org_policy, already_exists, then generic), so `ZONE_RESOURCE_POOL_EXHAUSTED` is `stockout`
+  and `QUOTA_EXCEEDED` is `quota`. A refused HTTP call (billing off and API off arrive as a 403 on the insert) goes
+  through `GoogleApiErrors`, which uses the same classifier. A spent deadline is `OPERATION_POLL_TIMEOUT` (`network`), and a create whose operation said DONE but whose VM then reads 404 is
+  `CREATE_OUTCOME_UNKNOWN` (`network`): in both the VM MAY exist, so the error is retryable (a retry lands on 409 `already_exists` if it does) and **the runner
+  must list by label (`FindByJobIdAsync`) before trying another zone**.
+- **Get, stop, delete.** A 404 on get is `null`; a 404 on stop or delete, or an operation that reports not found, is
+  "already gone", not an error. A 404 on stop or delete means "not in that zone" (the caller may have the wrong zone), not "the VM does not exist anywhere":
+  `VmTerminator`'s label re-check (`FindByJobIdAsync`, sound because of the next point) is the authority on whether it is really gone.
+- **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
+  (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
+  (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
+  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
+  without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
+  the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
+  the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
+  `Labels` and `StoppedAt` (`lastStopTimestamp`) are filled, `CreatedAt` from `creationTimestamp`.
+- **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
+  scheduling settings; that the `labels.job-id = "x"` filter syntax matches; that the DLVM image family boots and runs docker on a machine with no GPU;
+  the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row.
+
 ### The worker identity (issue #54)
 
 `GoogleIamGateway` (IAM v1, Resource Manager v3 and Cloud Storage v1; `Google.Apis.Iam.v1` 1.77.0.4285, Apache-2.0, the

@@ -1,6 +1,7 @@
 using DnaEntropyGraph.Core.Cloud;
 using Google.Apis.Cloudbilling.v1;
 using Google.Apis.CloudResourceManager.v3;
+using Google.Apis.Compute.v1;
 using Google.Apis.Iam.v1;
 using Google.Apis.ServiceUsage.v1;
 using Google.Apis.Storage.v1;
@@ -18,6 +19,7 @@ public sealed record GoogleCloudGatewaySet(
     IServiceEnablementGateway Services,
     IProjectSetupGateway ProjectSetup,
     IStorageGateway Storage,
+    IComputeGateway Compute,
     IWorkerIdentityGateway WorkerIdentity);
 
 /// <summary>
@@ -29,7 +31,7 @@ public sealed record GoogleCloudGatewaySet(
 /// </summary>
 public static class GoogleCloudGateways
 {
-    public static GoogleCloudGatewaySet Create(IGcpAccessTokenSource tokens, CloudCallPipeline pipeline, GoogleCloudOptions? options = null)
+    public static GoogleCloudGatewaySet Create(IGcpAccessTokenSource tokens, CloudCallPipeline pipeline, GoogleCloudOptions? options = null, Func<string?>? selectedProjectId = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -57,9 +59,12 @@ public static class GoogleCloudGateways
             billing,
             services,
             new GoogleProjectSetupGateway(catalog, billing, services),
-            // Not wrapped either: EnsureBucketAsync is a list, a create, a read-back and a patch, and a whole-method retry would
+            // Not wrapped: EnsureBucketAsync is a list, a create, a read-back and a patch, and a whole-method retry would
             // replay the create. Each of its HTTP calls goes through the pipeline itself.
             storage,
+            // Not wrapped in ResilientComputeGateway: every HTTP request goes through the pipeline itself, so a transient poll error
+            // retries that poll and never replays the insert. Production DI must not wrap it either (#609).
+            new GoogleComputeGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options, selectedProjectId ?? (() => null)),
             // Not wrapped: the account, the role and the two policy edits are creates and read-modify-writes; each HTTP call goes through
             // the pipeline itself, and the policy writes carry the etag they read, so a replay conflicts instead of overwriting.
             workerIdentity);
