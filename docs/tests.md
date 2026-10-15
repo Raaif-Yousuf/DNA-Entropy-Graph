@@ -100,6 +100,18 @@ extra in `worker/pyproject.toml`; it is MPL-2.0, not MIT (see
 `docs/changelog.d/test-367-property-windowing-direction.md` and the `DECISION` issue this
 recorded under Hard Rule 21).
 
+## Reader parity fixture (issue #393)
+
+`tests/contract-fixtures/readers_parity.json` pins what `read_fasta` and `read_genbank` produce
+(records, notices, exact error text) for multi-record, duplicate-id, empty-after-header, all-empty,
+no-header, multi-record GenBank, skipped and truncated/malformed inputs. `worker/tests/
+test_readers_parity.py` replays it against the Python readers; the C# `FastaLiteTests` and
+`GenBankLiteTests` replay the same file against `FastaLite`/`GenBankLite`. Changing a notice's
+wording in `readers/fasta.py` fails the Python test; changing it in `FastaLite.cs` fails the C#
+test; the fixture is never edited to make a case pass. `GenBankLite` is a partial port, so a case
+may carry a `csharp_divergence` block (the port's own expected text, a reason, a tracking issue);
+those blocks are the list of known wording differences.
+
 ## Fixtures
 
 `worker/tests/conftest.py` carries shared fixtures (currently: `sample_seq`,
