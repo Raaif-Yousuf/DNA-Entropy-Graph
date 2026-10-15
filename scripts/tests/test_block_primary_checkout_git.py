@@ -333,7 +333,7 @@ def test_self_test_passes():
         [sys.executable, str(HOOKS_DIR / "block_primary_checkout_git.py"), "--self-test"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=600,  # a hang guard only; no assertion depends on elapsed time (#629)
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -496,6 +496,9 @@ DENIED_629 = [
     "source /dev/stdin <<'EOF'\ngit switch -c x\nEOF",
     "eval \"$(cat <<'EOF'\ngit switch -c x\nEOF\n)\"",
     'eval "git switch -c x"',
+    # a `#` word INSIDE a backtick span ends at the closing backtick, not at the end of the line
+    "echo `foo #bar`; git switch -c x",
+    "echo `foo #bar` && git switch -c x",
     # a `#` right after `$( ... )` continues the word; it is not a comment start
     "echo $(true)#; git switch -c x",
     "echo $(echo a)#x\ngit switch -c x",

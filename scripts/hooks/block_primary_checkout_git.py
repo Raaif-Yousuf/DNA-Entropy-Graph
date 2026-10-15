@@ -262,6 +262,7 @@ def _split_segments(command: str) -> list[list[str]]:
     # `echo $(true)#x` prints `#x`), so it is not a comment start; after a plain `)` it is.
     parens: list[bool] = []
     expansion_close = -2
+    backtick = False  # inside an open `...` span: a comment there ends at the closing backtick
 
     def end_token() -> None:
         nonlocal buf, has_buf
@@ -289,9 +290,13 @@ def _split_segments(command: str) -> list[list[str]]:
             # A comment (a `#` that starts a word, outside quotes) runs to the end of
             # the line. Skipping it BEFORE quote tracking stops an apostrophe in
             # `# don't` from opening a quote that swallows the commands after it.
-            while i < n and command[i] != "\n":
+            # Inside a backtick span the comment ends at the closing backtick (bash parses
+            # the span as its own script), so `echo `x #y`; git switch -c z` keeps its tail.
+            while i < n and command[i] != "\n" and not (backtick and command[i] == "`"):
                 i += 1
             continue
+        if c == "`" and (i == 0 or command[i - 1] != "\\"):
+            backtick = not backtick
         if c in "'\"":
             quote, has_buf = c, True
         elif c in " \t\r":
