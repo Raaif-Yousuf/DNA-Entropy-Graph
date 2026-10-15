@@ -31,6 +31,8 @@ The worker also reads EMBL files (`.embl`) and SnapGene files (`.dna`) the same 
 
 If a gene in a GenBank or EMBL file has a position the worker cannot read (for example `abc` or `1..?`), the run still finishes with the other genes and tells you, in its notices, how many genes were left out and what their positions said. Correct the position in the file (for example `1..42`) and run again to include them.
 
+Two optional extra files need no model and no graphics card: a GC-content track (`--gc`, how G/C-rich each stretch is) and a codon-usage table per gene (`--codons`). They are off by default. The app does not offer them as checkboxes yet.
+
 Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
 
 Each file you add gets its own small summary: how many records it contains, how many

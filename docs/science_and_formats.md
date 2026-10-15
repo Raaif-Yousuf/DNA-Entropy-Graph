@@ -697,6 +697,19 @@ are the file's own, Prodigal never runs). Differences worth knowing:
 - The app does not yet validate these two formats locally before creating a VM (rule 2); that
   port is tracked in a follow-up issue.
 
+### 5d. Model-free companion tracks: GC percent and codon usage (issue #191)
+
+Both are computed from the validated sequence alone (`analysis/composition.py`), cost nothing on
+the GPU, and are **off by default** (new files nobody asked for; see #411). `--gc` / `--gc-window`
+and `--codons` on the CLI, `RunConfig.include_gc` / `gc_window` / `include_codons`.
+
+| File | Format | Coordinates | What it contains |
+|---|---|---|---|
+| `<name>.gc.bedgraph` | bedGraph, always (not WIG) | **0-based, half-open**, like every bedGraph here | GC percent (0 to 100) at each base over a centred window (default 51, odd): `100 * (G+C) / (A+C+G+T)` in the window. Ambiguity codes are not counted in the denominator; a window with no unambiguous base is `0.0`. A linear molecule's window shrinks at the ends, a circular one wraps the origin (same rules as the smoothed entropy tracks). |
+| `<name>.codons.tsv` | TSV with a header row | `begin`/`end` are 1-based inclusive, the gene's own | One row per codon that occurs, per CDS-shaped gene (the file's own genes, a paired GFF3's, or Prodigal's): `contig gene_id begin end strand codon amino_acid count frequency rscu deviation`. Codons are read on the gene's strand (minus strand = reverse complement; compound genes join their segments, not the intron) and translated with the standard code (table 1; sense assignments equal table 11). `frequency` = count / codons counted; `rscu` = count / (that amino acid's total / its number of synonymous codons), so 1.0 means an even split among synonyms; `deviation` = `rscu - 1`. A codon with an ambiguity code is not counted. A feature whose length is not a multiple of three is skipped and counted in one run notice. |
+
+A poly-G sequence gives 100.0 across the whole GC track (the issue's observable, tested).
+
 ## 6. Viewer support matrix
 
 | Viewer | Loads | Notes |
