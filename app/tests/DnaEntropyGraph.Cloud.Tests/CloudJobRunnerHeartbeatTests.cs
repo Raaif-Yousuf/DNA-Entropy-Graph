@@ -28,7 +28,7 @@ public class CloudJobRunnerHeartbeatTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo) => new(gcp, gcp, gcp, gcp, repo)
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo) => new(gcp, gcp, gcp, gcp, gcp, repo)
     {
         ResultPollInterval = TimeSpan.FromMilliseconds(1),
         ResultTimeout = TimeSpan.FromSeconds(20),

@@ -501,8 +501,8 @@ public class SettingsStoreTests
         for (var round = 0; round < 25; round++)
         {
             using var paths = new TempPaths();
-            var a = new SettingsStore(paths.SettingsPath);
-            var b = new SettingsStore(paths.SettingsPath);
+            var a = RacingStore(paths);
+            var b = RacingStore(paths);
             string? seenByA = null;
             string? seenByB = null;
 
@@ -552,6 +552,49 @@ public class SettingsStoreTests
         }
     }
 
+    /// <summary>
+    /// A store for the tests that race writers (#673). These tests prove the mutex SERIALISES writers, not that a writer
+    /// meets the product's 300 ms UI-thread budget: MEASURED 2026-10-15 a loaded CI runner lost that race
+    /// (SettingsUnavailableException from RunConcurrently). The wait budget is therefore injected, so no test outcome depends on
+    /// how long a contended fsync takes. The budget itself is pinned by the slow-disk test below, with signalling instead of timing.
+    /// </summary>
+    private static SettingsStore RacingStore(TempPaths paths) => new(paths.SettingsPath) { WaitBudget = TimeSpan.FromMinutes(2) };
+
+    [Fact]
+    public void A_writer_that_waits_on_a_slow_disk_inside_the_product_budget_still_saves()
+    {
+        // The holder sits inside the mutex (a slow fsync) and is released only once the second store is provably about to
+        // wait on it, so the wait is the slow part by construction and the 300 ms product budget is measured on the waiter's own clock.
+        using var paths = new TempPaths();
+        using var holderInside = new ManualResetEventSlim();
+        using var waiterAboutToWait = new ManualResetEventSlim();
+        var holder = new SettingsStore(paths.SettingsPath)
+        {
+            FaultHook = op =>
+            {
+                if (op == "temp-create")
+                {
+                    holderInside.Set();
+                    waiterAboutToWait.Wait(TimeSpan.FromSeconds(30)).ShouldBeTrue("the waiter never reached the mutex");
+                }
+            },
+        };
+        var waiter = new SettingsStore(paths.SettingsPath) { FaultHook = op => { if (op == "mutex") { waiterAboutToWait.Set(); } } };
+        waiter.WaitBudget.ShouldBe(TimeSpan.FromMilliseconds(300), "the documented product budget");
+
+        RunConcurrently(
+            () => holder.SetString("a", "1"),
+            () =>
+            {
+                holderInside.Wait(TimeSpan.FromSeconds(30)).ShouldBeTrue();
+                waiter.SetString("b", "2");
+            });
+
+        var reopened = new SettingsStore(paths.SettingsPath);
+        reopened.GetString("a").ShouldBe("1");
+        reopened.GetString("b").ShouldBe("2");
+    }
+
     /// <summary>Starts every action on its own thread at the same instant and rethrows the first failure.</summary>
     private static void RunConcurrently(params Action[] actions)
     {
@@ -587,8 +630,8 @@ public class SettingsStoreTests
     public void Two_store_instances_on_one_path_never_drop_each_others_keys()
     {
         using var paths = new TempPaths();
-        var a = new SettingsStore(paths.SettingsPath);
-        var b = new SettingsStore(paths.SettingsPath);
+        var a = RacingStore(paths);
+        var b = RacingStore(paths);
         a.SetString("seed", "1");
         const int Count = 40;
 
@@ -615,5 +658,87 @@ public class SettingsStoreTests
             reopened.GetString($"a{i}").ShouldBe("x");
             reopened.GetString($"b{i}").ShouldBe("x");
         }
+    }
+
+    [Fact]
+    public void ResetAll_forgets_every_setting_and_keeps_the_installation_id()
+    {
+        using var paths = new TempPaths();
+        var store = new SettingsStore(paths.SettingsPath);
+        store.SetString("Theme", "Dark");
+        store.SetString("output_files_genbank", "stats");
+        var id = Guid.NewGuid().ToString();
+        store.SetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey, id);
+
+        store.ResetAll();
+
+        store.GetString("Theme").ShouldBeNull();
+        store.GetString("output_files_genbank").ShouldBeNull();
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+    }
+
+    [Fact]
+    public void ResetAll_on_a_store_with_no_file_is_not_an_error_and_a_later_write_still_works()
+    {
+        using var paths = new TempPaths();
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+        store.SetString("Theme", "Light");
+
+        store.GetString("Theme").ShouldBe("Light");
+    }
+
+    [Fact]
+    public void ResetAll_keeps_a_legacy_installation_id_that_still_sits_in_a_readable_settings_file()
+    {
+        using var paths = new TempPaths();
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(paths.SettingsPath, "{\"Theme\":\"Dark\",\"installation_id\":\"" + id + "\"}");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+
+        store.GetString("Theme").ShouldBeNull();
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+    }
+
+    [Fact]
+    public void ResetAll_on_a_truncated_settings_file_keeps_an_id_the_parser_never_reached()
+    {
+        // #644 cold review (12): the id sits after the corruption point (a missing comma), so the structured salvage does not
+        // see it; resetting must not forget it, or the next read mints a new id and orphans every labelled cloud resource.
+        using var paths = new TempPaths();
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(paths.SettingsPath, "{\"Theme\":\"Dark\" \"x\":1,\"installation_id\":\"" + id + "\"}");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+        store.GetString("Theme").ShouldBeNull();
+    }
+
+    [Fact]
+    public void ResetAll_on_a_truncated_file_whose_id_is_complete_keeps_it()
+    {
+        using var paths = new TempPaths();
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(paths.SettingsPath, "{\"installation_id\":\"" + id + "\"");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+    }
+
+    [Fact]
+    public void ResetAll_refuses_rather_than_forget_an_id_that_cannot_be_recovered()
+    {
+        using var paths = new TempPaths();
+        File.WriteAllText(paths.SettingsPath, "{\"installation_id\":\"not-an-id");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        Should.Throw<global::DnaEntropyGraph.Core.Abstractions.SettingsUnavailableException>(store.ResetAll);
     }
 }

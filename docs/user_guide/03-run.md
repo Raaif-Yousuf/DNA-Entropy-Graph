@@ -7,6 +7,7 @@ On the **New run** page, either:
 - Drag files, or a folder of them, onto the drop area (GenBank, FASTA, or plain text; from a
   folder the app takes the sequence files directly inside it, not those in sub-folders; a `.txt` file in a folder is taken only when its first line starts with `>` or `LOCUS`, so notes and logs are left alone. To add a plain-letters `.txt` file, use **Add files**), or
 - Click **Add files** (or press Ctrl+O), or
+- In File Explorer, right-click a `.gb`, `.gbk`, `.fasta`, `.fa` or `.fna` file, choose **Open with**, then **DNA Entropy Graph**. The file is added to **New run** in the window that is already open (or the app starts with it). The entry is listed only if you turned on "Show DNA Entropy Graph in Open with" in Settings (Files); it never becomes the program a file opens in when you double-click it. If New run is open, the file is added below what you already entered. Files on a network address (for example `\\server\share`) are not opened this way; copy them to this PC or a mapped drive first. Or,
 - Open **Paste a sequence**, type or paste letters, a FASTA record, or the path of a file, and
   click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
   letters are saved in the app's own folder, never next to your files.
@@ -22,6 +23,8 @@ numbers against the limit and lets you either split the batch or raise the limit
 see [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for why the ceiling is set where it
 is. GenBank and FASTA files are detected automatically by their contents, not just their
 file extension, so a renamed file still works.
+
+Two optional extra files need no model and no graphics card: a GC-content track (`--gc`, how G/C-rich each stretch is) and a codon-usage table per gene (`--codons`). They are off by default. The app does not offer them as checkboxes yet.
 
 Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
 
@@ -51,8 +54,13 @@ reasonable for most sequences.
 - **Find genes**: on by default for pasted or FASTA sequences (this predicts gene
   locations for you); off automatically for GenBank input, since a GenBank file already
   has its own genes recorded, and those are used instead.
-- **Output files**: which result files to produce. All of them are on by default; see
-  [04-view.md](04-view.md) for what each one is for.
+- **Files you get back**: under the file list there is one tick box for each result file you can ask for (the
+  list is the same for a GenBank file and for a FASTA or pasted sequence). Everything is ticked except the WIG
+  track and the two large tables of the model's probability for every base, which you tick only if you want them. Your choice is
+  remembered separately for GenBank files and for FASTA or pasted sequences, and the next time you add a file of
+  that kind the same boxes are ticked. If you clear every box, the page asks you to tick at least one file before
+  **Run** works. The entropy track comes in one format per run, so the IGV track and the WIG track are alternatives: ticking one clears the other. See
+  [04-view.md](04-view.md) for what each file is for.
 - **Save to**: where results land on your computer. Defaults to your Downloads folder.
 - **Where to run**: in the cloud (the normal choice) or on this computer, if you installed
   the local engine in [02-connect-google-cloud.md](02-connect-google-cloud.md)'s Step 8.

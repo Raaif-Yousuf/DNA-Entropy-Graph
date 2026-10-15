@@ -21,4 +21,10 @@ public sealed partial class NewRunPage : Page
         DropZone.DragOver += (_, e) => DropPaths.AcceptFiles(e);
         DropZone.Drop += async (_, e) => ViewModel.AddDroppedCommand.Execute(await DropPaths.ReadAsync(e));
     }
+
+    /// <summary>Files handed over by "Open with" (issue #108) arrive as the navigation parameter; the ViewModel decides whether it is one.</summary>
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e) => ViewModel.ReceiveNavigationParameterCommand.Execute(e.Parameter);
+
+    /// <summary>Leaving the page: later Open-with files must open a new New run page, not go to this one.</summary>
+    protected override void OnNavigatedFrom(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e) => ViewModel.DetachFromIntake();
 }

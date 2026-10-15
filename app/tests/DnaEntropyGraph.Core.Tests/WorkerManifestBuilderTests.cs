@@ -170,9 +170,9 @@ public class WorkerManifestBuilderTests
         all.ShouldContain("genbank");
         all.ShouldContain("bedgraph");
         all.ShouldNotContain("wig", "both track formats would let the worker pick the wrong one; TrackFormat decides");
-        all.Count.ShouldBe(7);
+        all.Count.ShouldBe(10);
 
-        var wig = Build(Opts(o => o with { TrackFormat = TrackFormat.Wig }));
+        var wig = Build(Opts(o => o with { TrackFormat = TrackFormat.Wig, OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Wig }));
         Outputs(wig).ShouldContain("wig");
         Outputs(wig).ShouldNotContain("bedgraph");
         wig.GetProperty("analysis").GetProperty("format").GetString().ShouldBe("wig");
@@ -184,6 +184,61 @@ public class WorkerManifestBuilderTests
     [Fact]
     public void An_empty_output_selection_is_refused_because_the_worker_reads_empty_as_everything()
         => Should.Throw<ArgumentException>(() => Build(Opts(o => o with { OutputFiles = OutputFileKinds.None })));
+
+    [Fact]
+    public void Unchecking_wig_leaves_it_out_of_outputs_and_every_catalog_file_reaches_the_wire_when_chosen()
+    {
+        // Observable for #103: a box the user clears is absent from outputs (the worker reads a non-empty list literally).
+        var noWig = Opts(o => o with { OutputFiles = OutputCatalog.Defaults & ~OutputFileKinds.Wig });
+        Outputs(Build(noWig)).ShouldNotContain("wig");
+
+        // Every catalog entry, chosen alone (with a track so gene-less runs are legal), is named on the wire: none is "wired to nothing".
+        foreach (var entry in OutputCatalog.Entries.Where(e => !e.NeedsGenes))
+        {
+            Outputs(Build(Opts(o => o with { OutputFiles = entry.Kind }))).ShouldBe([entry.WireName]);
+        }
+
+        foreach (var entry in OutputCatalog.Entries.Where(e => e.NeedsGenes))
+        {
+            Outputs(Build(Opts(o => o with { FindGenes = true, OutputFiles = entry.Kind }))).ShouldBe([entry.WireName]);
+        }
+    }
+
+    [Fact]
+    public void The_files_the_default_selection_adds_since_the_first_eight_are_all_requested()
+    {
+        var all = Outputs(Build());
+
+        all.ShouldContain("smoothed");
+        all.ShouldContain("regions");
+        all.ShouldContain("gene_summary");
+        all.ShouldNotContain("probs", "the 16-bytes-per-base matrix is opt-in");
+        all.ShouldNotContain("probs_npy");
+    }
+
+    [Fact]
+    public void The_probability_matrix_is_requested_only_when_chosen()
+    {
+        var chosen = Build(Opts(o => o with { OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Probs | OutputFileKinds.ProbsNpy }));
+
+        Outputs(chosen).ShouldContain("probs");
+        Outputs(chosen).ShouldContain("probs_npy");
+    }
+
+    [Fact]
+    public void Not_finding_genes_never_requests_the_gene_summary_either()
+    {
+        var outputs = Outputs(Build(Opts(o => o with { FindGenes = false })));
+
+        outputs.ShouldNotContain("gene_summary");
+        outputs.ShouldNotContain("genes_gff3");
+        outputs.ShouldContain("regions");
+    }
+
+    [Fact]
+    public void The_legacy_all_selection_still_sends_the_same_seven_names_it_always_did()
+        => Outputs(Build(Opts(o => o with { OutputFiles = OutputFileKinds.All })))
+            .ShouldBe(["genbank", "fasta", "bedgraph", "geneious_gff3", "genes_gff3", "stats", "tsv"]);
 
     [Fact]
     public void Predictor_uses_the_wire_kind_precision_and_device()
