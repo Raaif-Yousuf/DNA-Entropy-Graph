@@ -1351,6 +1351,30 @@ account and a role and edits two policies, and a whole-method retry would replay
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.
 
+### 16.x The Cloud page's gateway methods (issue #105)
+
+What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, `FakeGcp` and the `Resilient*` wrappers:
+
+- `IComputeGateway.StartVmAsync(vm, zone)`: `instances.start` on the VM as it is (no label, scheduling or metadata write: that is reuse, #94), polled
+  to `DONE`. A 404 is `VM_NOT_FOUND`; a stockout on the start is `stockout`. THEORY (unverified): a VM stopped past its `maxRunDuration` is accepted.
+- `IComputeGateway.ListDisksByInstallationAsync(installationId)`: `disks.aggregatedList` filtered on `labels.app` AND `labels.installation-id`
+  (`returnPartialSuccess=true`; an unreachable zone fails the listing as `ZONES_UNREACHABLE`, never a short list; every disk is re-checked for both
+  labels), returning `DiskDescriptor` (name, zone, size in GB, status, labels, creation time, the VMs holding it). `DeleteDiskAsync(disk, zone)`:
+  `disks.delete`, already gone is a success.
+- `IStorageGateway.GetPrefixUsageAsync`, `ListChildPrefixesAsync`, `DeletePrefixAsync`. The bucket has no per-installation prefix (objects live under
+  `jobs/<jobId>/`, one bucket per project shared by every installation), so an installation's footprint is the `jobs/<id>/` folders whose
+  `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
+  job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
+  `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
+  never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
+  every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),
+  one failed delete never stops the others (`Failed` with the error kind), and every delete is read back: `Deleted` means gone, `NotVerified` means the
+  platform accepted the delete and the read still finds it. A disk still held by a VM that is not ours is `Skipped`. `CleanupReport.Complete` is true only
+  when every item is `Deleted`. The service role and the worker service account are not touched here.
+- Resilience: a start keeps the breaker; listing and deleting our disks and the bucket prefix calls bypass it (cleanup that stops the meter).
+  `FakeGcp`: `WithDisk`, `WithStartFailure(kind)`, `WithDeleteFailure(name, kind)`, `WithSilentNoOpDeletes()`.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),
@@ -1359,3 +1383,24 @@ for when the in-app wizard cannot complete them), [`threat_model.md`](threat_mod
 (why the OAuth scope this whole design needs is a large ask, and what it does and does not
 expose), `docs/migration/2026-09-19-worker-migration-inventory.md` (the exhaustive,
 line-referenced prototype-behaviour inventory this doc summarizes for implementers).
+
+Review fixes (rc105, 2026-10-15):
+
+- Every step of `DeleteAllAsync` after the up-front listings is contained: a failed VM read back, second disk listing or prefix read back is an item (`NotVerified` / `Failed`
+  with the error kind) and the sweep goes on; only the caller's cancellation propagates. A job folder whose key is not a deletable folder path (`jobs/../`, which a
+  bucket writer can create) is `Failed` with `PREFIX_REFUSED` and never deleted. Ids are compared exactly (`ab` never matches `abc`).
+- Regional disks: the listing returns a region as the disk's scope, and `DeleteDiskAsync` sends a region (a name not ending in `-<letter>`) to `regionDisks.delete`;
+  the zonal call would 404, which reads as "already gone".
+- Soft delete. MEASURED 2026-10-15 (cloud.google.com/storage/docs/soft-delete): a bucket created without a setting, including through the JSON API, gets a 7 day soft delete
+  retention, "soft-deleted objects continue to accrue storage charges", and the only supported operations on them during retention are list and restore. So a deleted job folder
+  stays billed and recoverable for 7 days. `BucketDescriptor.SoftDeleteRetentionDays` carries the bucket's policy (null unknown, 0 off) and a deleted `JobData` item carries it as
+  `RecoverableForDays`: the Cloud page says "deleted; Google keeps a recoverable copy for N days" instead of a bare "deleted". **DECISION (agent-made, reversible):** the bucket is
+  NOT created with soft delete off. The same bucket holds the shared model cache (a multi-GB re-download if deleted by mistake) and recoverability is the safe default; the cost
+  is a week of storage for small outputs. Changing it is one field on the bucket insert if the owner wants the cleanup to stop billing at once.
+- A run whose VM the cleanup deletes is ended (Hard Rule 11): the VM carries `job-id`, the run's driver is stopped through `ActiveRuns.CancelAsync` first (one writer), and once
+  the VM reads back gone a non-terminal row becomes Cancelling then Cancelled with `RunErrorCodes.DeletedByCleanup` (`cleanup_deleted`, copy `RunError_cleanup_deleted`). A VM whose delete failed leaves its row alone.
+  A VM whose run has a user cancel in progress is `Skipped` (`CANCEL_IN_PROGRESS`).
+- `ResilientStorageGateway.DeletePrefixAsync` is one attempt at this layer (`replayable: false`): the real gateway already runs each list page and each object delete through the
+  pipeline with its own retries, 401 replay and per-attempt deadline, so a second retrying layer around the whole sweep multiplied retries and replayed whole sweeps.
+- `singleRequest:` on `CloudCallPipeline.ExecuteAsync` exists in this branch's base (`CloudCallPipeline.cs`, added before #105).
+- DI: `InstallationCleanup` is registered with the run repository, `ActiveRuns` and the phase callback in all three backends (`DiResolutionTests`); `IComputeGateway.StartVmAsync` resolves through the same registration.

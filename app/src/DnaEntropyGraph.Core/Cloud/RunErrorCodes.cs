@@ -64,6 +64,8 @@ public static class RunErrorCodes
 
     /// <summary>The <c>CloudError.Code</c> a gateway with no real cloud behind it throws; the runner records it as <see cref="CloudNotConnected"/>.</summary>
     public const string NotConnectedGatewayCode = "CLOUD_NOT_CONNECTED";
+    /// <summary>The run was ended because the user deleted everything this installation made in the project (issue #105): its VM is gone, so the row is Cancelled, never left Running.</summary>
+    public const string DeletedByCleanup = "cleanup_deleted";
     public const string Other = "other";
 
     /// <summary>Every code a run can be recorded under.</summary>
@@ -73,7 +75,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -184,6 +186,7 @@ public static class RunErrorCodes
         PermissionActAs => "RunError_permission_actas",
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
         WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",
+        DeletedByCleanup => "RunError_cleanup_deleted",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",
         "quota" => "RunError_quota",
