@@ -383,12 +383,13 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_recursive_delete.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py
 worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py
+worker\.venv\Scripts\python.exe scripts\hooks\gcloud_read_only.py
 ```
 
 Each reads the tool-call payload from stdin per `scripts/hooks/README.md`, so running one
 with no input will simply wait.
 
-All six, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
+All seven, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
 and exercises both the allow and the deny arm:
 
 ```powershell
@@ -398,6 +399,7 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_recursive_delete.py --self-t
 worker\.venv\Scripts\python.exe scripts\hooks\block_unlabelled_vm_create.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py --self-test
+worker\.venv\Scripts\python.exe scripts\hooks\gcloud_read_only.py --self-test
 ```
 
 That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing
