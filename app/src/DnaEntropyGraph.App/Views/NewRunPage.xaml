@@ -134,6 +134,26 @@
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
+            <StackPanel Spacing="4" Visibility="{x:Bind ViewModel.HasOutputChoices, Mode=OneWay}">
+                <TextBlock
+                    x:Uid="NewRunOutputsHeader"
+                    Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.OutputChoices}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:OutputChoiceItem">
+                            <CheckBox
+                                Content="{x:Bind Label}"
+                                IsChecked="{x:Bind IsChecked, Mode=TwoWay}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock
+                    x:Uid="NewRunOutputsNoneChosen"
+                    Visibility="{x:Bind ViewModel.HasNoOutputChosen, Mode=OneWay}"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+            </StackPanel>
+
             <Button
                 x:Uid="NewRunRun"
                 Style="{StaticResource AccentButtonStyle}"
