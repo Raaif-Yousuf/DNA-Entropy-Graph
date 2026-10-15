@@ -20,9 +20,6 @@ public sealed partial class FilesSettingsViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
 
     [ObservableProperty]
-    private long _inputsCacheBytes;
-
-    [ObservableProperty]
     private string _inputsCacheSizeText = string.Empty;
 
     [ObservableProperty]
@@ -35,6 +32,9 @@ public sealed partial class FilesSettingsViewModel : ObservableObject
         _strings = strings;
         Ready = MeasureAsync(dispatcher);
     }
+
+    /// <summary>The summed size of every saved input copy; the page shows <see cref="InputsCacheSizeText"/>.</summary>
+    public long InputsCacheBytes { get; private set; }
 
     /// <summary>Completes when the inputs cache size has been measured (off the UI thread: a large cache is many files).</summary>
     public Task Ready { get; }
@@ -79,6 +79,7 @@ public sealed partial class FilesSettingsViewModel : ObservableObject
         dispatcher.Enqueue(() =>
         {
             InputsCacheBytes = bytes;
+            OnPropertyChanged(nameof(InputsCacheBytes));
             InputsCacheSizeText = FormatSize(bytes);
         });
     }
