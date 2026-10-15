@@ -359,6 +359,7 @@ def _run_one_input(
     deadline.check_or_raise()
 
     def _on_window() -> None:
+        status.mark_progress()  # #522: the compute thread is alive and moving, unlike the heartbeat thread
         cancel.check_or_raise()
         deadline.check_or_raise()
 
