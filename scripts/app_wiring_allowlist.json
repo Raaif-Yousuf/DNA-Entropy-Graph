@@ -5,7 +5,7 @@
 
   "CODE-ONLY-COMMAND:NewRunViewModel.AddDroppedCommand": "#63, done: Drop is an event, not a bindable Command= property, so NewRunPage.xaml.cs forwards the dropped items to this command (the same shape as NavigateToCommand). Stays C#-only by construction.",
 
-  "TEST-ONLY-COMMAND:WizardViewModel.ChooseProjectCommand": "#99 builds the first-run wizard pages, the Project step among them; #520 added the command that stores the chosen project on the account, and no page binds a project choice yet.",
+  "TEST-ONLY-COMMAND:WizardViewModel.ChooseProjectCommand": "#99, done: the wizard page binds each project in the list to ProjectChoice.ChooseCommand (WizardPage.xaml), which calls this command inside WizardViewModel.cs. The guard only counts references outside the declaring file, so it still reads TEST-ONLY by name; the entry is not stale (MEASURED 2026-10-15: removing it fails check_app_wiring.py).",
   "CODE-ONLY-OBSERVABLE:WizardViewModel.SelectedProjectId": "#99 builds the first-run wizard pages; the CODE-ONLY classification is a name collision with IGcpAccount.SelectedProjectId (read by JobEngine and ShellViewModel), see the script docstring on name matching.",
 
 

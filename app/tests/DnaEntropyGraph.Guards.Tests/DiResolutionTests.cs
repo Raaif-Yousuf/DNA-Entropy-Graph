@@ -218,6 +218,28 @@ public class DiResolutionTests
             Directory.Delete(root, recursive: true);
         }
     }
+    [Theory]
+    [InlineData(DnaEntropyGraph.App.Startup.CloudBackend.Google)]
+    [InlineData(DnaEntropyGraph.App.Startup.CloudBackend.Fake)]
+    [InlineData(DnaEntropyGraph.App.Startup.CloudBackend.Developer)]
+    public void The_wizard_and_its_setup_service_resolve_from_the_real_container_in_every_cloud_backend(DnaEntropyGraph.App.Startup.CloudBackend backend)
+    {
+        // Cold review of #99 doubted that the project, billing, service and worker-identity gateways behind ISetupCheckService are
+        // registered; they are (#609), for every backend. This keeps it true: the wizard is built by the real registration.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: backend);
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IProjectCatalogGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IBillingGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IServiceEnablementGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IWorkerIdentityGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Setup.ISetupCheckService>().ShouldBeOfType<DnaEntropyGraph.Core.Setup.SetupCheckService>();
+        var wizard = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.WizardViewModel>();
+        wizard.SetupSteps.ShouldNotBeNull();
+        wizard.ProjectRow.ShouldNotBeNull();
+    }
+
     [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {

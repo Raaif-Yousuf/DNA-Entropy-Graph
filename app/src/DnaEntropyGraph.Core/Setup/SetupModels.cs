@@ -8,8 +8,10 @@ public enum SetupStep
     Project,
     Billing,
     Services,
-    Storage,
+
+    /// <summary>The GPU allowance is read before the bucket and the worker account are made: nobody gets resources in a project whose quota or permissions already rule a run out (CLAUDE.md preflight order).</summary>
     Quota,
+    Storage,
 }
 
 public enum SetupStatus
@@ -96,7 +98,7 @@ public sealed record SetupStepResult(SetupStep Step, SetupStatus Status)
 
     public IReadOnlyList<QuotaTierResult> Tiers { get; init; } = [];
 
-    /// <summary>True where the user may carry on without this step (GPU allowance: the pipeline test still works).</summary>
+    /// <summary>True where the user may carry on without this step: only a GPU allowance that was read and is zero, or could not be read for a reason with no action of its own. Never an abort-class error (permission, org policy, API off, billing).</summary>
     public bool CanSkip { get; init; }
 
     public bool IsOk => Status == SetupStatus.Ok;

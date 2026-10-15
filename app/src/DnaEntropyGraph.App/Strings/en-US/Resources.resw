@@ -1491,7 +1491,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Storage and worker account</value>
   </data>
   <data name="WizardStep_Storage_Why" xml:space="preserve">
-    <value>Creates a private results bucket that removes old runs by itself, and a limited account the rented computer runs as. The bucket costs a few cents a month.</value>
+    <value>Creates a private online folder for your results (a bucket) that removes old runs by itself, and a limited account the rented computer runs as. The folder costs a few cents a month.</value>
   </data>
   <data name="WizardStep_Quota_Title" xml:space="preserve">
     <value>GPU allowance</value>
@@ -1524,13 +1524,13 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>{0}: allowed in {1} regions.</value>
   </data>
   <data name="WizardQuota_NotYet" xml:space="preserve">
-    <value>{0}: not allowed yet.</value>
+    <value>{0}: not allowed yet. Press Request a GPU allowance.</value>
   </data>
   <data name="WizardQuota_Unknown" xml:space="preserve">
-    <value>{0}: could not be read.</value>
+    <value>{0}: could not be read. Press Check everything again.</value>
   </data>
   <data name="WizardStorage_Ok" xml:space="preserve">
-    <value>Results bucket ready: {0}</value>
+    <value>Your private online folder for results (a bucket) is ready: {0}</value>
   </data>
   <data name="WizardProject_Pick" xml:space="preserve">
     <value>Choose one of your projects below, or create a new one.</value>
@@ -1546,6 +1546,9 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="SetupHelpRequestText" xml:space="preserve">
     <value>Hello, I use DNA Entropy Graph, which needs to work in the Google Cloud project {project}. Google reports: {problem} Could you please allow this or give me the access it needs? Thank you.</value>
+  </data>
+  <data name="WizardRequest_NoProjectYet" xml:space="preserve">
+    <value>one of your organisation's projects (I have not chosen one yet)</value>
   </data>
   <data name="SetupAction_RequestGpuAllowance" xml:space="preserve">
     <value>Request a GPU allowance</value>

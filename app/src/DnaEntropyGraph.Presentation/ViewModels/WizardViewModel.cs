@@ -62,6 +62,30 @@ public sealed partial class WizardViewModel : ObservableObject
 
     public bool HasProjectAction => ProjectActionText.Length > 0;
 
+    /// <summary>"Copied" or why the clipboard would not take the project request (with the action); empty until the button is pressed.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasProjectNotice))]
+    private string _projectNoticeText = string.Empty;
+
+    public bool HasProjectNotice => ProjectNoticeText.Length > 0;
+
+    /// <summary>The project check, the list or a project being made is in flight: Finish waits.</summary>
+    private bool _isFlowBusy;
+
+    private void SetFlowBusy(bool busy)
+    {
+        _isFlowBusy = busy;
+        FinishCommand.NotifyCanExecuteChanged();
+    }
+
+    // One project flow at a time (a sign-in, a pick, a re-check and "pick another" all start one), and one token that an account change cancels.
+    private readonly SemaphoreSlim _flowGate = new(1, 1);
+    private CancellationTokenSource _flowCancellation = new();
+    private Task _flow = Task.CompletedTask;
+
+    /// <summary>Completes when the project flow started by the last sign-in or choice has ended (it is never fire-and-forget: a failure shows on the project row).</summary>
+    public Task WhenIdleAsync() => _flow;
+
     public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null, ISetupCheckService? setup = null, SetupStepsViewModel? setupSteps = null, ISettingsStore? settings = null, IShellLauncher? shell = null)
     {
         _setup = setup;
@@ -69,12 +93,13 @@ public sealed partial class WizardViewModel : ObservableObject
         _shell = shell;
         SetupSteps = setupSteps;
         ProjectRow = new SetupStepRow(SetupStep.Project, strings);
-        ProjectRow.ActionCommand = new AsyncRelayCommand(PerformProjectActionAsync);
-        ProjectRow.RecheckCommand = new AsyncRelayCommand(ct => ContinueFromProjectAsync(ct));
+        ProjectRow.ActionCommand = new AsyncRelayCommand(() => ObservedAsync(PerformProjectActionAsync));
+        ProjectRow.RecheckCommand = new AsyncRelayCommand(() => ObservedAsync(ContinueFromProjectAsync));
         ProjectRow.PropertyChanged += (_, _) => FinishCommand.NotifyCanExecuteChanged();
         if (setupSteps is not null)
         {
             setupSteps.PropertyChanged += (_, _) => FinishCommand.NotifyCanExecuteChanged();
+            setupSteps.ProjectActionHandler = (kind, _) => ObservedAsync(ct => kind == SetupActionKind.CreateProject ? CreateProjectCommand.ExecuteAsync(null) : PickAnotherProjectAsync(ct));
         }
 
         _strings = strings;
@@ -92,6 +117,10 @@ public sealed partial class WizardViewModel : ObservableObject
 
     private void RefreshAccountState()
     {
+        // Whose project this is has changed: checks still running are for the old one, so they stop (and leave no row "Checking...").
+        var old = _flowCancellation;
+        _flowCancellation = new CancellationTokenSource();
+        old.Cancel();
         SelectedProjectId = _gcpAccount.SelectedProjectId;
         ProjectErrorText = string.Empty;
         ProjectActionText = string.Empty;
@@ -120,7 +149,7 @@ public sealed partial class WizardViewModel : ObservableObject
             ProjectErrorText = string.Empty;
             ProjectActionText = string.Empty;
             SelectedProjectId = _gcpAccount.SelectedProjectId;
-            _ = ContinueFromProjectAsync(CancellationToken.None);
+            StartProjectFlow();
         });
     }
 
@@ -151,7 +180,7 @@ public sealed partial class WizardViewModel : ObservableObject
             SelectedProjectId = _gcpAccount.SelectedProjectId;
             if (IsSignedIn)
             {
-                _ = ContinueFromProjectAsync(CancellationToken.None);
+                StartProjectFlow();
             }
         });
     }
@@ -168,13 +197,14 @@ public sealed partial class WizardViewModel : ObservableObject
     public bool HasProjects => Projects.Count > 0;
 
     /// <summary>Checks the chosen project and, if it is fine, the steps after it; else asks the user to choose or make one.</summary>
-    private async Task ContinueFromProjectAsync(CancellationToken cancellationToken)
+    private Task ContinueFromProjectAsync(CancellationToken cancellationToken) => ExclusiveAsync(cancellationToken, async () =>
     {
         if (_setup is null)
         {
             return;
         }
 
+        ProjectNoticeText = string.Empty;
         SetProjects([]);
         if (_gcpAccount.SelectedProjectId is { Length: > 0 } project)
         {
@@ -193,7 +223,65 @@ public sealed partial class WizardViewModel : ObservableObject
         }
 
         await ShowProjectListAsync(cancellationToken);
+    });
+
+    /// <summary>"Pick an existing project": shows the list. It does not check the project that was just refused again.</summary>
+    private Task PickAnotherProjectAsync(CancellationToken cancellationToken) => ExclusiveAsync(cancellationToken, async () =>
+    {
+        if (_setup is null)
+        {
+            return;
+        }
+
+        if (!ProjectRow.IsFix)
+        {
+            ProjectRow.MarkChoose("WizardProject_Pick");
+        }
+
+        await ShowProjectListAsync(cancellationToken);
+    });
+
+    /// <summary>One project flow at a time; the gate is always given back and no row is left on "Checking..." (a cancelled flow, an error).</summary>
+    private async Task ExclusiveAsync(CancellationToken cancellationToken, Func<Task> work)
+    {
+        await _flowGate.WaitAsync(cancellationToken);
+        SetFlowBusy(true);
+        try
+        {
+            await work();
+        }
+        finally
+        {
+            if (ProjectRow.IsRunning)
+            {
+                ProjectRow.MarkPending();
+            }
+
+            SetFlowBusy(false);
+            _flowGate.Release();
+        }
     }
+
+    /// <summary>
+    /// Runs a project-flow step so that nothing escapes it: cancellation ends it quietly, and any other failure becomes the project row's
+    /// catch-all message with "Try again" (an unobserved exception would be silent, or end the app).
+    /// </summary>
+    private async Task ObservedAsync(Func<CancellationToken, Task> work)
+    {
+        try
+        {
+            await work(_flowCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            ProjectRow.Apply(new SetupStepResult(SetupStep.Project, SetupStatus.NeedsAction) { Action = new SetupAction(SetupActionKind.Retry, "SetupAction_TryAgain") }, _gcpAccount.SelectedProjectId ?? string.Empty);
+        }
+    }
+
+    private void StartProjectFlow() => _flow = ObservedAsync(ContinueFromProjectAsync);
 
     private async Task ShowProjectListAsync(CancellationToken cancellationToken)
     {
@@ -231,11 +319,13 @@ public sealed partial class WizardViewModel : ObservableObject
     }
 
     private Task RunRemainingStepsAsync(CancellationToken cancellationToken)
-        => SetupSteps is null ? Task.CompletedTask : SetupSteps.RunAllCommand.ExecuteAsync(null);
+        => SetupSteps is null ? Task.CompletedTask : SetupSteps.RunAllAsync(cancellationToken);
 
     /// <summary>Makes a project of the user's own (named DNA Entropy Graph, labelled for this app and this installation) and goes on with it.</summary>
     [RelayCommand]
-    private async Task CreateProjectAsync(CancellationToken cancellationToken)
+    private Task CreateProjectAsync() => ObservedAsync(MakeProjectAsync);
+
+    private async Task MakeProjectAsync(CancellationToken cancellationToken)
     {
         if (_setup is null)
         {
@@ -244,27 +334,43 @@ public sealed partial class WizardViewModel : ObservableObject
 
         var id = ProjectIdGenerator.Generate();
         var installation = _settings is null ? string.Empty : InstallationId.GetOrCreate(_settings);
-        ProjectRow.MarkRunning();
-        var made = await _setup.CreateProjectAsync(id, installation, cancellationToken);
-        if (!made.IsOk)
-        {
-            ProjectRow.Apply(made, id);
-            await ShowProjectListAsync(cancellationToken);
-            return;
-        }
+        string? chosen = null;
 
-        await ChooseProjectCommand.ExecuteAsync(made.ProjectId ?? id);
+        // The gate is held only while the project is made; choosing it starts the next flow, which takes the gate itself.
+        await ExclusiveAsync(cancellationToken, async () =>
+        {
+            ProjectRow.MarkRunning();
+            var made = await _setup.CreateProjectAsync(id, installation, cancellationToken);
+            if (!made.IsOk)
+            {
+                ProjectRow.Apply(made, id);
+                await ShowProjectListAsync(cancellationToken);
+                return;
+            }
+
+            chosen = made.ProjectId ?? id;
+        });
+
+        if (chosen is not null)
+        {
+            await ChooseProjectCommand.ExecuteAsync(chosen);
+        }
     }
 
     private async Task PerformProjectActionAsync(CancellationToken cancellationToken)
     {
         switch (ProjectRow.ActionKind)
         {
-            case SetupActionKind.CopyText when _shell is not null:
-                _shell.CopyText(ProjectRow.RequestText);
+            case SetupActionKind.CopyText:
+                ProjectNoticeText = _strings.GetString(_shell is not null && _shell.CopyText(ProjectRow.RequestText) ? "WizardCopied" : "WizardCopyFailed");
                 break;
             case SetupActionKind.CreateProject:
                 await CreateProjectCommand.ExecuteAsync(null);
+                break;
+            case SetupActionKind.PickProject:
+                await PickAnotherProjectAsync(cancellationToken);
+                break;
+            case SetupActionKind.None:
                 break;
             default:
                 await ContinueFromProjectAsync(cancellationToken);
@@ -276,7 +382,7 @@ public sealed partial class WizardViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanFinish))]
     private void Finish() => _navigator.NavigateTo("NewRun");
 
-    private bool CanFinish => ProjectRow.IsOk && SetupSteps is { IsAllDone: true };
+    private bool CanFinish => !_isFlowBusy && ProjectRow.IsOk && SetupSteps is { IsAllDone: true };
 
     private void OnUiThread(Action action)
     {

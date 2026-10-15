@@ -166,7 +166,7 @@ public sealed class SetupCheckService : ISetupCheckService
         }
         catch (CloudOperationException failure)
         {
-            return Failed(SetupStep.Quota, SetupErrorMapper.CodeFor(failure), projectId) with { CanSkip = true, Tiers = Unknown() };
+            return ReadFailed(projectId, SetupErrorMapper.CodeFor(failure));
         }
 
         var tiers = Tiers.Select(t => TierOf(read, t.TierKey, t.Metric)).ToList();
@@ -175,21 +175,34 @@ public sealed class SetupCheckService : ISetupCheckService
             return new SetupStepResult(SetupStep.Quota, SetupStatus.Ok) { ProjectId = projectId, Tiers = tiers, Link = QuotaLinks.ForProject(projectId), CanSkip = true };
         }
 
-        // A read that failed is never a zero: it keeps the failure's own code (permission and so on), a real zero names the quota page.
-        var code = read.Failures.Count > 0 ? SetupErrorMapper.CodeFor(read.Failures[0].Kind) : null;
-        var action = code is null
-            ? new SetupAction(SetupActionKind.OpenLink, "SetupAction_RequestGpuAllowance")
-            : new SetupAction(SetupActions.KindFor(code), SetupActions.ResourceKeyFor(code));
+        // A read that failed is never a zero: it keeps the failure's own code (permission and so on).
+        if (read.Failures.Count > 0)
+        {
+            return ReadFailed(projectId, SetupErrorMapper.CodeFor(read.Failures[0].Kind)) with { Tiers = tiers };
+        }
+
+        // Nothing failed but nothing could be told either (an unread cap beside a regional allowance): try again, never "zero".
+        if (tiers.All(t => t.State == QuotaState.Unknown))
+        {
+            return ReadFailed(projectId, null) with { Tiers = tiers };
+        }
+
         return new SetupStepResult(SetupStep.Quota, SetupStatus.NeedsAction)
         {
             ProjectId = projectId,
-            Code = code,
             Tiers = tiers,
             Link = QuotaLinks.ForProject(projectId),
-            Action = action,
+            Action = new SetupAction(SetupActionKind.OpenLink, "SetupAction_RequestGpuAllowance"),
             CanSkip = true,
         };
     }
+
+    /// <summary>
+    /// A quota read that could not answer. Permission, org policy, API off and billing abort with their own named action and cannot be skipped
+    /// (a run could not start either); any other failure has no action of its own, so it can be retried or skipped for now.
+    /// </summary>
+    private static SetupStepResult ReadFailed(string projectId, string? code)
+        => Failed(SetupStep.Quota, code, projectId) with { CanSkip = code is null, Tiers = Unknown() };
 
     private static QuotaTierResult TierOf(QuotaReadResult read, string tierKey, string metric)
     {
@@ -199,7 +212,8 @@ public sealed class SetupCheckService : ISetupCheckService
         }
 
         var allowed = read.Regions?.Keys.Count(region => read.GpuRemaining(region, metric) is >= 1) ?? 0;
-        var state = allowed > 0 ? QuotaState.Available : read.Regions is null ? QuotaState.Unknown : QuotaState.None;
+        var anyUnread = read.Regions is null || read.Regions.Keys.Any(region => read.GpuRemaining(region, metric) is null);
+        var state = allowed > 0 ? QuotaState.Available : anyUnread ? QuotaState.Unknown : QuotaState.None;
         return new QuotaTierResult(tierKey, metric, allowed, state);
     }
 

@@ -43,14 +43,14 @@ public class SetupStepsViewModelTests
 
         await viewModel.RunAllCommand.ExecuteAsync(null);
 
-        viewModel.Rows.Select(r => r.Step).ShouldBe([SetupStep.Billing, SetupStep.Services, SetupStep.Storage, SetupStep.Quota]);
+        viewModel.Rows.Select(r => r.Step).ShouldBe([SetupStep.Billing, SetupStep.Services, SetupStep.Quota, SetupStep.Storage]);
         viewModel.Rows.ShouldAllBe(r => r.Status == SetupStatus.Ok && r.StatusText == "WizardStatus_Ok");
         Received.InOrder(() =>
         {
             _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>());
             _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>());
-            _service.EnsureStorageAsync(Project, Arg.Any<CancellationToken>());
             _service.CheckQuotaAsync(Project, Arg.Any<CancellationToken>());
+            _service.EnsureStorageAsync(Project, Arg.Any<CancellationToken>());
         });
     }
 
@@ -194,7 +194,7 @@ public class SetupStepsViewModelTests
         var viewModel = NewViewModel();
         await viewModel.RunAllCommand.ExecuteAsync(null);
 
-        var quota = viewModel.Rows[3];
+        var quota = viewModel.Rows[2];
         quota.Status.ShouldBe(SetupStatus.NeedsAction);
         quota.MessageText.ShouldContain("WizardQuota_None");
         quota.MessageText.ShouldContain("WizardQuota_NotYet");
@@ -220,9 +220,9 @@ public class SetupStepsViewModelTests
 
         await viewModel.RunAllCommand.ExecuteAsync(null);
 
-        viewModel.Rows[3].MessageText.ShouldBe("L4: allowed in 3 regions");
-        viewModel.Rows[2].MessageText.ShouldBe("Results bucket deg-1-abcdef");
-        viewModel.Rows[2].NoteText.ShouldBe("SetupError_WORKER_DEFAULT_ACCOUNT");
+        viewModel.Rows[2].MessageText.ShouldBe("L4: allowed in 3 regions");
+        viewModel.Rows[3].MessageText.ShouldBe("Results bucket deg-1-abcdef");
+        viewModel.Rows[3].NoteText.ShouldBe("SetupError_WORKER_DEFAULT_ACCOUNT");
         viewModel.IsAllDone.ShouldBeTrue();
     }
 
@@ -239,5 +239,163 @@ public class SetupStepsViewModelTests
 
         viewModel.Rows[0].HasMessage.ShouldBeFalse();
         viewModel.Rows[0].HasAction.ShouldBeFalse();
+    }
+    private static SetupStepResult SkippableQuota() => new(SetupStep.Quota, SetupStatus.NeedsAction)
+    {
+        Link = QuotaLinks.ForProject(Project),
+        CanSkip = true,
+        Action = new SetupAction(SetupActionKind.OpenLink, "SetupAction_RequestGpuAllowance"),
+        Tiers = [new QuotaTierResult("L4", QuotaMetrics.NvidiaL4Gpus, 0, QuotaState.None)],
+    };
+
+    [Fact]
+    public async Task The_gpu_allowance_is_checked_before_the_bucket_and_the_worker_account_are_made_and_skipping_it_carries_on_to_storage()
+    {
+        _service.CheckQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(SkippableQuota());
+        var viewModel = NewViewModel();
+
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+
+        await _service.DidNotReceiveWithAnyArgs().EnsureStorageAsync(default!, Arg.Any<CancellationToken>());
+        viewModel.Rows[3].Status.ShouldBe(SetupStatus.Pending);
+        viewModel.IsAllDone.ShouldBeFalse();
+
+        await viewModel.Rows[2].SkipCommand!.ExecuteAsync(null);
+
+        await _service.Received(1).EnsureStorageAsync(Project, Arg.Any<CancellationToken>());
+        viewModel.Rows[3].Status.ShouldBe(SetupStatus.Ok);
+        viewModel.IsAllDone.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_abort_class_quota_failure_cannot_be_skipped_and_finish_stays_off()
+    {
+        _service.CheckQuotaAsync(Project, Arg.Any<CancellationToken>())
+            .Returns(Fix(SetupStep.Quota, SetupErrorCodes.Permission, SetupActionKind.CopyText, "SetupAction_CopyRequestForOwner"));
+        var viewModel = NewViewModel();
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+        var quota = viewModel.Rows[2];
+        quota.HasSkip.ShouldBeFalse();
+
+        await quota.SkipCommand!.ExecuteAsync(null);
+
+        quota.Status.ShouldBe(SetupStatus.NeedsAction);
+        viewModel.IsAllDone.ShouldBeFalse();
+        await _service.DidNotReceiveWithAnyArgs().EnsureStorageAsync(default!, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_quota_message_for_a_read_that_failed_never_says_the_allowance_is_zero()
+    {
+        _service.CheckQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Quota, SetupStatus.NeedsAction)
+        {
+            CanSkip = true,
+            Action = new SetupAction(SetupActionKind.Retry, "SetupAction_TryAgain"),
+            Tiers = [new QuotaTierResult("L4", QuotaMetrics.NvidiaL4Gpus, 0, QuotaState.Unknown)],
+        });
+        var viewModel = NewViewModel();
+
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+
+        viewModel.Rows[2].MessageText.ShouldNotContain("WizardQuota_None");
+        viewModel.Rows[2].MessageText.ShouldContain("SetupError_OTHER");
+        viewModel.Rows[2].HasSkip.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData(SetupActionKind.CreateProject)]
+    [InlineData(SetupActionKind.PickProject)]
+    public async Task A_project_action_on_a_step_row_is_handed_to_the_wizard_and_is_not_a_dead_button(SetupActionKind kind)
+    {
+        _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(Fix(SetupStep.Services, SetupErrorCodes.NotProjectOwner, kind, "SetupAction_CreateProject"));
+        var viewModel = NewViewModel();
+        var handled = new List<SetupActionKind>();
+        viewModel.ProjectActionHandler = (k, _) =>
+        {
+            handled.Add(k);
+            return Task.CompletedTask;
+        };
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+        viewModel.Rows[1].HasCommandAction.ShouldBeTrue();
+
+        await viewModel.Rows[1].ActionCommand!.ExecuteAsync(null);
+
+        handled.ShouldBe([kind]);
+    }
+
+    [Fact]
+    public async Task A_link_action_with_no_link_falls_back_to_the_manual_guide_instead_of_a_dead_button()
+    {
+        _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(Fix(SetupStep.Services, SetupErrorCodes.NoBilling, SetupActionKind.OpenLink, "SetupAction_LinkBilling"));
+        var viewModel = NewViewModel();
+
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+
+        var row = viewModel.Rows[1];
+        row.HasLinkAction.ShouldBeTrue();
+        row.LinkUri.ShouldBe(row.ManualUri);
+        row.HasCommandAction.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task The_billing_account_choice_is_the_list_below_so_the_row_shows_no_second_button()
+    {
+        _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>())
+            .Returns(new SetupStepResult(SetupStep.Billing, SetupStatus.NeedsAction) { Accounts = [new BillingAccountSummary("a1", "One")], Action = new SetupAction(SetupActionKind.PickBillingAccount, "SetupAction_PickAnotherBillingAccount") });
+        var viewModel = NewViewModel();
+
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+
+        viewModel.Rows[0].HasCommandAction.ShouldBeFalse();
+        viewModel.HasBillingChoices.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Finish_style_state_is_off_while_everything_is_checked_again_and_a_failure_that_is_not_a_google_error_does_not_leave_a_row_running()
+    {
+        var gate = new TaskCompletionSource<SetupStepResult>();
+        var viewModel = NewViewModel();
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+        viewModel.IsAllDone.ShouldBeTrue();
+        _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(gate.Task);
+
+        var again = viewModel.RunAllCommand.ExecuteAsync(null);
+
+        viewModel.IsBusy.ShouldBeTrue();
+        viewModel.IsAllDone.ShouldBeFalse();
+        gate.SetException(new InvalidOperationException("boom"));
+        await again;
+
+        viewModel.IsBusy.ShouldBeFalse();
+        viewModel.Rows.ShouldNotContain(r => r.Status == SetupStatus.Running);
+        viewModel.Rows[1].Status.ShouldBe(SetupStatus.NeedsAction);
+        viewModel.Rows[1].ActionKind.ShouldBe(SetupActionKind.Retry);
+        viewModel.IsAllDone.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_row_check_again_waits_for_run_all_instead_of_running_beside_it()
+    {
+        var gate = new TaskCompletionSource<SetupStepResult>();
+        var running = 0;
+        var maxRunning = 0;
+        _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            maxRunning = Math.Max(maxRunning, Interlocked.Increment(ref running));
+            await gate.Task;
+            Interlocked.Decrement(ref running);
+            return new SetupStepResult(SetupStep.Billing, SetupStatus.Ok);
+        });
+        var viewModel = NewViewModel();
+
+        var all = viewModel.RunAllCommand.ExecuteAsync(null);
+        var recheck = viewModel.Rows[0].RecheckCommand!.ExecuteAsync(null);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await _service.Received(1).CheckBillingAsync(Project, Arg.Any<CancellationToken>());
+        gate.SetResult(new SetupStepResult(SetupStep.Billing, SetupStatus.Ok));
+        await Task.WhenAll(all, recheck);
+
+        maxRunning.ShouldBe(1);
+        viewModel.Rows.ShouldAllBe(r => r.Status == SetupStatus.Ok);
     }
 }

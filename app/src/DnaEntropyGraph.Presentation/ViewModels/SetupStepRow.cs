@@ -160,7 +160,8 @@ public sealed partial class SetupStepRow : ObservableObject
 
     public bool HasLinkAction => HasAction && ActionKind == SetupActionKind.OpenLink && LinkUri is not null;
 
-    public bool HasCommandAction => HasAction && !HasLinkAction;
+    /// <summary>A button with a command behind it. Choosing a billing account is the list under the row, so that kind has no second button.</summary>
+    public bool HasCommandAction => HasAction && !HasLinkAction && ActionKind != SetupActionKind.PickBillingAccount;
 
     /// <summary>After a link the user did something on Google's page; "Check again" is the one way to tell the app.</summary>
     public bool HasRecheck => HasLinkAction;
@@ -226,6 +227,11 @@ public sealed partial class SetupStepRow : ObservableObject
         NoteText = result.NoteCode is { } note ? _strings.GetString(SetupErrorCodes.ResourceKey(note)) : string.Empty;
         CanSkip = result.CanSkip;
         LinkUri = result.Link is { } link && Uri.TryCreate(link, UriKind.Absolute, out var uri) ? uri : null;
+        if (result.Status != SetupStatus.Ok && result.Action.Kind == SetupActionKind.OpenLink && LinkUri is null)
+        {
+            // A "go to this page" button with no page would do nothing; the hand-written guide is always a real page.
+            LinkUri = ManualUri;
+        }
 
         if (result.Status == SetupStatus.Ok)
         {
@@ -235,7 +241,9 @@ public sealed partial class SetupStepRow : ObservableObject
             return;
         }
 
-        var message = result.Code is null && result.Step == SetupStep.Quota ? _strings.GetString("WizardQuota_None") : _strings.GetString(MessageKey(result.Code));
+        // "Not allowed yet" is said only when the allowance was read and is zero; a read that failed or could not be told keeps the catch-all.
+        var isZero = result.Code is null && result.Step == SetupStep.Quota && result.Tiers.Any(t => t.State == QuotaState.None);
+        var message = isZero ? _strings.GetString("WizardQuota_None") : _strings.GetString(MessageKey(result.Code));
         MessageText = result.Step == SetupStep.Quota ? (message + " " + string.Join(" ", result.Tiers.Select(TierLine))).Trim() : message;
         ActionText = result.Action.ResourceKey is { } key ? _strings.GetString(key) : string.Empty;
         ActionKind = result.Action.Kind;
@@ -276,8 +284,10 @@ public sealed partial class SetupStepRow : ObservableObject
             return BillingRequestText.Fill(_strings.GetString("SetupBillingRequestText"), projectId, result.AccountId ?? string.Empty);
         }
 
+        // Before a project is chosen (the list itself failed) there is no id to name; a blank would read as a broken message.
+        var named = projectId.Length > 0 ? projectId : _strings.GetString("WizardRequest_NoProjectYet");
         return _strings.GetString("SetupHelpRequestText")
-            .Replace("{project}", projectId, StringComparison.Ordinal)
+            .Replace("{project}", named, StringComparison.Ordinal)
             .Replace("{problem}", problem, StringComparison.Ordinal);
     }
 }

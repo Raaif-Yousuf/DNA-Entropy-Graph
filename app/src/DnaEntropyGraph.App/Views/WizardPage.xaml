@@ -95,6 +95,7 @@
             </StackPanel>
             <TextBlock Text="{x:Bind ViewModel.ProjectErrorText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasProjectError, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
             <TextBlock Text="{x:Bind ViewModel.ProjectActionText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasProjectAction, Mode=OneWay}" TextWrapping="Wrap" />
+            <TextBlock Text="{x:Bind ViewModel.ProjectNoticeText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasProjectNotice, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
 
             <!-- Steps 4 to 7: the OK/Fix rows. -->
             <ItemsControl ItemsSource="{x:Bind ViewModel.SetupSteps.Rows}" ItemTemplate="{StaticResource SetupRowTemplate}">
@@ -113,6 +114,7 @@
                 </ItemsControl>
             </StackPanel>
             <Button x:Uid="WizardCheckAllButton" Command="{x:Bind ViewModel.SetupSteps.RunAllCommand}" />
+            <ProgressBar IsIndeterminate="True" Visibility="{x:Bind ViewModel.SetupSteps.IsBusy, Mode=OneWay}" />
             <TextBlock Text="{x:Bind ViewModel.SetupSteps.NoticeText, Mode=OneWay}" Visibility="{x:Bind ViewModel.SetupSteps.HasNotice, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
 
             <!-- Step 8: the test run. The pipeline test is its own issue; until it exists the honest next step is a first run. -->

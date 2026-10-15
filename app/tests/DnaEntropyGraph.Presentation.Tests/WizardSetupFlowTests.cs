@@ -42,7 +42,7 @@ public class WizardSetupFlowTests
     private WizardViewModel NewViewModel()
     {
         var steps = new SetupStepsViewModel(_service, _account, _shell, _strings);
-        return new WizardViewModel(_account, Substitute.For<IDialogService>(), _navigator, _strings, null, _service, steps, _settings);
+        return new WizardViewModel(_account, Substitute.For<IDialogService>(), _navigator, _strings, null, _service, steps, _settings, _shell);
     }
 
     private static readonly ProjectSummary[] Listed =
@@ -204,5 +204,145 @@ public class WizardSetupFlowTests
 
         viewModel.SetupSteps.ShouldBeNull();
         viewModel.IsSignedIn.ShouldBeTrue();
+    }
+    private static SetupStepResult Gone() => new(SetupStep.Project, SetupStatus.NeedsAction)
+    {
+        Code = AuthErrorCodes.ProjectInvalid,
+        Action = new SetupAction(SetupActionKind.PickProject, "SetupAction_PickExistingProject"),
+    };
+
+    [Fact]
+    public async Task The_pick_another_project_button_shows_the_list_and_does_not_check_the_same_invalid_project_again()
+    {
+        _account.SelectedProjectId.Returns("gone-project");
+        _service.CheckProjectAsync("gone-project", Arg.Any<CancellationToken>()).Returns(Gone());
+        _service.ListProjectsAsync(Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Project, SetupStatus.Ok) { Projects = Listed });
+        var viewModel = NewViewModel();
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        viewModel.Projects.Clear();
+
+        await viewModel.ProjectRow.ActionCommand!.ExecuteAsync(null);
+
+        await _service.Received(1).CheckProjectAsync("gone-project", Arg.Any<CancellationToken>());
+        viewModel.HasProjects.ShouldBeTrue();
+        viewModel.ProjectRow.Status.ShouldBe(SetupStatus.NeedsAction);
+    }
+
+    [Fact]
+    public async Task A_create_project_action_on_a_step_row_makes_a_project()
+    {
+        _account.SelectedProjectId.Returns(Project);
+        _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Services, SetupStatus.NeedsAction)
+        {
+            Code = SetupErrorCodes.NotProjectOwner,
+            Action = new SetupAction(SetupActionKind.CreateProject, "SetupAction_CreateProject"),
+        });
+        _service.CreateProjectAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Project, SetupStatus.NeedsAction) { Code = SetupErrorCodes.ProjectQuota });
+        _service.ListProjectsAsync(Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Project, SetupStatus.Ok) { Projects = Listed });
+        var viewModel = NewViewModel();
+        await viewModel.SignInCommand.ExecuteAsync(null);
+
+        await viewModel.SetupSteps!.Rows[1].ActionCommand!.ExecuteAsync(null);
+
+        await _service.Received(1).CreateProjectAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_pick_project_action_on_a_step_row_shows_the_project_list()
+    {
+        _account.SelectedProjectId.Returns(Project);
+        _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Services, SetupStatus.NeedsAction)
+        {
+            Code = SetupErrorCodes.ProjectQuota,
+            Action = new SetupAction(SetupActionKind.PickProject, "SetupAction_PickExistingProject"),
+        });
+        _service.ListProjectsAsync(Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Project, SetupStatus.Ok) { Projects = Listed });
+        var viewModel = NewViewModel();
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        viewModel.HasProjects.ShouldBeFalse();
+
+        await viewModel.SetupSteps!.Rows[1].ActionCommand!.ExecuteAsync(null);
+
+        viewModel.HasProjects.ShouldBeTrue();
+        viewModel.FinishCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(true, "WizardCopied")]
+    [InlineData(false, "WizardCopyFailed")]
+    public async Task Copying_the_project_request_says_whether_it_worked_and_names_what_it_asks_about(bool copied, string notice)
+    {
+        _strings.GetString("SetupHelpRequestText").Returns("About {project}: {problem}");
+        _shell.CopyText(Arg.Any<string>()).Returns(copied);
+        _service.ListProjectsAsync(Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Project, SetupStatus.NeedsAction)
+        {
+            Code = SetupErrorCodes.Permission,
+            Action = new SetupAction(SetupActionKind.CopyText, "SetupAction_CopyRequestForOwner"),
+        });
+        var viewModel = NewViewModel();
+        await viewModel.SignInCommand.ExecuteAsync(null);
+
+        await viewModel.ProjectRow.ActionCommand!.ExecuteAsync(null);
+
+        _shell.Received(1).CopyText("About WizardRequest_NoProjectYet: SetupError_PERMISSION");
+        viewModel.ProjectNoticeText.ShouldBe(notice);
+        viewModel.HasProjectNotice.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Finish_is_off_while_everything_is_checked_again()
+    {
+        _account.SelectedProjectId.Returns(Project);
+        var viewModel = NewViewModel();
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        viewModel.FinishCommand.CanExecute(null).ShouldBeTrue();
+        var gate = new TaskCompletionSource<SetupStepResult>();
+        _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(gate.Task);
+
+        var again = viewModel.SetupSteps!.RunAllCommand.ExecuteAsync(null);
+
+        viewModel.FinishCommand.CanExecute(null).ShouldBeFalse();
+        gate.SetResult(new SetupStepResult(SetupStep.Billing, SetupStatus.Ok));
+        await again;
+        viewModel.FinishCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_failure_that_is_not_a_google_error_after_sign_in_is_shown_on_the_project_row_and_not_left_unobserved()
+    {
+        _account.SelectedProjectId.Returns(Project);
+        _service.CheckProjectAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<SetupStepResult>>(_ => throw new InvalidOperationException("boom"));
+        var viewModel = NewViewModel();
+
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        await viewModel.WhenIdleAsync();
+
+        viewModel.ProjectRow.Status.ShouldBe(SetupStatus.NeedsAction);
+        viewModel.ProjectRow.ActionKind.ShouldBe(SetupActionKind.Retry);
+        viewModel.FinishCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_account_change_cancels_the_checks_that_are_running_and_leaves_no_row_running()
+    {
+        _account.SelectedProjectId.Returns(Project);
+        var seen = CancellationToken.None;
+        var gate = new TaskCompletionSource<SetupStepResult>();
+        _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            seen = call.Arg<CancellationToken>();
+            return gate.Task;
+        });
+        var viewModel = NewViewModel();
+        await viewModel.SignInCommand.ExecuteAsync(null);
+        seen.CanBeCanceled.ShouldBeTrue("the token must reach the cloud call");
+
+        _account.AccountChanged += Raise.Event();
+
+        seen.IsCancellationRequested.ShouldBeTrue();
+        gate.SetCanceled(seen);
+        await viewModel.WhenIdleAsync();
+        viewModel.ProjectRow.IsRunning.ShouldBeFalse();
+        viewModel.SetupSteps!.Rows.ShouldNotContain(r => r.Status == SetupStatus.Running);
     }
 }

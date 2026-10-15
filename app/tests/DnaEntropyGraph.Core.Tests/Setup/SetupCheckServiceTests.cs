@@ -291,6 +291,68 @@ public class SetupCheckServiceTests
         result.Code.ShouldBe(SetupErrorCodes.Permission);
     }
 
+    [Theory]
+    [InlineData(CloudErrorKind.Permission)]
+    [InlineData(CloudErrorKind.OrgPolicy)]
+    [InlineData(CloudErrorKind.ApiDisabled)]
+    [InlineData(CloudErrorKind.Billing)]
+    public async Task A_quota_read_that_hits_an_abort_class_error_names_its_action_and_cannot_be_skipped(CloudErrorKind kind)
+    {
+        // CLAUDE.md Critical Pitfalls: billing, api_disabled, permission and org_policy abort immediately with a named action.
+        var failure = new QuotaReadFailure("regions.list", new CloudError(null, 403, "no"), kind);
+        _quota.ReadQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(QuotaReadResult.Failed(failure));
+
+        var read = await NewService().CheckQuotaAsync(Project, TestContext.Current.CancellationToken);
+        read.CanSkip.ShouldBeFalse();
+        read.Code.ShouldNotBeNull();
+        read.Action.Kind.ShouldNotBe(SetupActionKind.None);
+
+        _quota.ReadQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<QuotaReadResult>>(_ => throw new CloudOperationException(new CloudError(null, 403, "no"), kind));
+        var thrown = await NewService().CheckQuotaAsync(Project, TestContext.Current.CancellationToken);
+        thrown.CanSkip.ShouldBeFalse();
+        thrown.Code.ShouldBe(read.Code);
+    }
+
+    [Fact]
+    public async Task A_quota_read_that_failed_for_an_unclassified_reason_can_be_retried_or_skipped()
+    {
+        var failure = new QuotaReadFailure("regions.list", new CloudError(null, 503, "down"), CloudErrorKind.Network);
+        _quota.ReadQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(QuotaReadResult.Failed(failure));
+
+        var result = await NewService().CheckQuotaAsync(Project, TestContext.Current.CancellationToken);
+
+        result.Code.ShouldBeNull();
+        result.CanSkip.ShouldBeTrue();
+        result.Action.Kind.ShouldBe(SetupActionKind.Retry);
+    }
+
+    [Fact]
+    public async Task An_all_regions_cap_of_zero_overrides_a_regional_allowance_of_one()
+    {
+        // CLAUDE.md: GPUS_ALL_REGIONS=0 overrides a regional 1.
+        var regions = new Dictionary<string, IReadOnlyList<QuotaMetric>> { ["us-central1"] = [new QuotaMetric(QuotaMetrics.NvidiaL4Gpus, 1, 0)] };
+        _quota.ReadQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(new QuotaReadResult(regions, new QuotaMetric(QuotaMetrics.GpusAllRegions, 0, 0), []));
+
+        var result = await NewService().CheckQuotaAsync(Project, TestContext.Current.CancellationToken);
+
+        result.Status.ShouldBe(SetupStatus.NeedsAction);
+        result.Tiers.Single(t => t.Metric == QuotaMetrics.NvidiaL4Gpus).State.ShouldBe(QuotaState.None);
+        result.CanSkip.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_regional_allowance_with_an_unread_all_regions_cap_is_unknown_not_zero()
+    {
+        var regions = new Dictionary<string, IReadOnlyList<QuotaMetric>> { ["us-central1"] = [new QuotaMetric(QuotaMetrics.NvidiaL4Gpus, 1, 0), new QuotaMetric(QuotaMetrics.NvidiaA100Gpus, 1, 0)] };
+        _quota.ReadQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(new QuotaReadResult(regions, null, []));
+
+        var result = await NewService().CheckQuotaAsync(Project, TestContext.Current.CancellationToken);
+
+        result.Tiers.ShouldAllBe(t => t.State == QuotaState.Unknown);
+        result.Action.Kind.ShouldBe(SetupActionKind.Retry);
+        result.CanSkip.ShouldBeTrue();
+    }
+
     // ---- the error mapping every step shares ----
 
     [Theory]
