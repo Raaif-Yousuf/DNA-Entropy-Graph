@@ -18,7 +18,7 @@ public static class JobId
 {
     private const string Base32Alphabet = "abcdefghijklmnopqrstuvwxyz234567";
 
-    private static readonly Regex ConventionPattern = new(@"^\d{8}-\d{6}-[a-z2-7]{6}$", RegexOptions.Compiled);
+    private static readonly Regex ConventionPattern = new(@"\A[0-9]{8}-[0-9]{6}-[a-z2-7]{6}\z", RegexOptions.Compiled);
 
     /// <summary>
     /// Generates a new job id following the convention above.

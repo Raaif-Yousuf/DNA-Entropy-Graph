@@ -252,6 +252,18 @@
   <data name="RunError_installation_id_unusable" xml:space="preserve">
     <value>The file that identifies this installation could not be used, so the run did not start. A copy was set aside in the DNAEntropyGraph folder under Local AppData, named installation_id.invalid- or settings.json.unreadable- followed by a date. Restore the id from that copy, or send the copy to support.</value>
   </data>
+  <data name="RunError_worker_default_account" xml:space="preserve">
+    <value>Your organization does not let the app create its own worker identity (a service account), so this run used your project's default computer identity, which may have broad access to your project. To stop this, ask your Google Cloud administrator to allow service accounts, then run again.</value>
+  </data>
+  <data name="RunError_permission_actas" xml:space="preserve">
+    <value>Google will not let your account run a rented computer as the app's worker identity (a service account). The Service Account User role on that identity is missing. Choose Copy request for the project owner and send it to them, then run again.</value>
+  </data>
+  <data name="RunError_worker_default_account_missing" xml:space="preserve">
+    <value>Your organization does not let the app create its own worker identity (a service account), and your project's default computer identity, which the app would use instead, is missing or switched off. Ask your Google Cloud administrator to restore the default one or to allow the app to create its own, then run again.</value>
+  </data>
+  <data name="RunError_worker_identity_not_applied" xml:space="preserve">
+    <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
+  </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
@@ -471,8 +483,14 @@
   <data name="NewRunStatusDropVirtual" xml:space="preserve">
     <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
   </data>
-  <data name="NewRunStatusStartFailed" xml:space="preserve">
+  <data name="NewRunStatusStartFailedCloud" xml:space="preserve">
     <value>We could not start the run. Check your Google Cloud connection on the Cloud page, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedFile" xml:space="preserve">
+    <value>We could not read your file to start the run. Check that the file is still there and not open in another program, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedOther" xml:space="preserve">
+    <value>We could not start the run. Press Run again. Still failing? Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
   <data name="NewRunStatusBrowseFailed" xml:space="preserve">
     <value>The file chooser could not open. Drag your files onto the drop area instead, or choose Add files again.</value>
@@ -699,6 +717,27 @@
   <data name="RunsRemoveButton.Content" xml:space="preserve">
     <value>Remove from list</value>
   </data>
+  <data name="RunsCopyOwnerRequestButton.Content" xml:space="preserve">
+    <value>Copy request for the project owner</value>
+  </data>
+  <data name="Runs_OwnerRequest_ActAs" xml:space="preserve">
+    <value>Hello, please grant the role {0} (Service Account User) on the service account {1} in the Google Cloud project {2} to my Google account{3}. Without it, DNA Entropy Graph cannot start a run for me. In the Google Cloud console: IAM and Admin, Service Accounts, choose {1}, Permissions, Grant access.</value>
+  </data>
+  <data name="Runs_OwnerRequest_Grantee" xml:space="preserve">
+    <value> ({0})</value>
+  </data>
+  <data name="Runs_OwnerRequest_Copied_Title" xml:space="preserve">
+    <value>Request copied</value>
+  </data>
+  <data name="Runs_OwnerRequest_Copied_Body" xml:space="preserve">
+    <value>Paste it into a message to your project owner.</value>
+  </data>
+  <data name="Runs_OwnerRequest_CopyFailed_Title" xml:space="preserve">
+    <value>Could not copy the request</value>
+  </data>
+  <data name="Runs_OwnerRequest_CopyFailed_Body" xml:space="preserve">
+    <value>Windows would not let the app use the clipboard just now. Choose Copy request for the project owner to try again.</value>
+  </data>
   <data name="Dialog_Confirm_Primary" xml:space="preserve">
     <value>Continue</value>
   </data>
@@ -821,6 +860,51 @@
   </data>
   <data name="AuthError_SIGNIN_STORAGE" xml:space="preserve">
     <value>The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Sign in again.</value>
+  </data>
+  <data name="NewRunOutputsHeader.Text" xml:space="preserve">
+    <value>Files you get back</value>
+  </data>
+  <data name="NewRunOutputsNoneChosen.Text" xml:space="preserve">
+    <value>No file is ticked. Tick at least one file above to run.</value>
+  </data>
+  <data name="OutputChoice_genbank" xml:space="preserve">
+    <value>The sequence with its genes and a mean entropy note on each gene (GenBank, .gb)</value>
+  </data>
+  <data name="OutputChoice_fasta" xml:space="preserve">
+    <value>The plain sequence (FASTA, .fasta)</value>
+  </data>
+  <data name="OutputChoice_bedgraph" xml:space="preserve">
+    <value>Entropy at every base, for IGV (.bedgraph)</value>
+  </data>
+  <data name="OutputChoice_wig" xml:space="preserve">
+    <value>Entropy at every base, in the WIG track format (.wig). Tick this instead of the IGV track if your viewer wants WIG.</value>
+  </data>
+  <data name="OutputChoice_geneious_gff3" xml:space="preserve">
+    <value>Entropy at every base, for Geneious (.gff3)</value>
+  </data>
+  <data name="OutputChoice_genes_gff3" xml:space="preserve">
+    <value>The gene positions, for a genome viewer (.genes.gff3)</value>
+  </data>
+  <data name="OutputChoice_smoothed" xml:space="preserve">
+    <value>A smoothed entropy track, averaged over a stretch of bases so trends are easier to see (.smooth files)</value>
+  </data>
+  <data name="OutputChoice_gene_summary" xml:space="preserve">
+    <value>One row of entropy figures per gene, for a spreadsheet (.genes.tsv and .genes.csv)</value>
+  </data>
+  <data name="OutputChoice_regions" xml:space="preserve">
+    <value>Stretches of unusually low or high entropy, as a track (.regions.bed and .regions.gff3)</value>
+  </data>
+  <data name="OutputChoice_stats" xml:space="preserve">
+    <value>A short text summary: length, mean, lowest and highest entropy (.txt)</value>
+  </data>
+  <data name="OutputChoice_tsv" xml:space="preserve">
+    <value>Entropy at every base, as a table for a spreadsheet (.tsv)</value>
+  </data>
+  <data name="OutputChoice_probs" xml:space="preserve">
+    <value>The model's probability for each base, as a table (.probs.tsv.gz). Large, so it is off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_probs_npy" xml:space="preserve">
+    <value>The model's probability for each base, as a NumPy array (.probs.npy). Large, so it is off unless you tick it.</value>
   </data>
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
@@ -1217,5 +1301,3 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
   </data>
 </root>
-
-

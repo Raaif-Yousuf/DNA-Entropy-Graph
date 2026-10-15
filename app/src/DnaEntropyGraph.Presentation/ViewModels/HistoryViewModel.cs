@@ -28,6 +28,8 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly IToastService _toasts;
     private readonly IStringResourceProvider _strings;
+    private readonly IShellLauncher _launcher;
+    private readonly IGcpAccount _account;
     private readonly TimeProvider _time;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
@@ -55,6 +57,8 @@ public sealed partial class HistoryViewModel : ObservableObject
         IDialogService dialogs,
         IToastService toasts,
         IStringResourceProvider strings,
+        IShellLauncher launcher,
+        IGcpAccount account,
         TimeProvider time)
     {
         _runRepository = runRepository;
@@ -66,6 +70,8 @@ public sealed partial class HistoryViewModel : ObservableObject
         _dialogs = dialogs;
         _toasts = toasts;
         _strings = strings;
+        _launcher = launcher;
+        _account = account;
         _time = time;
         StatusFilters =
         [
@@ -182,7 +188,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             new AsyncRelayCommand(() => RedownloadAsync(run)),
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
-            new AsyncRelayCommand(() => RemoveAsync(run)));
+            new AsyncRelayCommand(() => RemoveAsync(run)),
+            OwnerRequestFor(run));
     }
 
     /// <summary>
@@ -199,6 +206,30 @@ public sealed partial class HistoryViewModel : ObservableObject
 
         var hasCode = !string.IsNullOrWhiteSpace(run.ErrorCode);
         return run.Phase == JobPhase.Failed || hasCode ? _strings.GetString(RunErrorCodes.ResourceKey(run.ErrorCode)) : null;
+    }
+
+    /// <summary>
+    /// Issue #604: the "Copy request for the project owner" action of a run that failed because the user's account may not
+    /// run a VM as the worker account. Null for every other run, and for a run whose project is unknown (the account's
+    /// email is built from it).
+    /// </summary>
+    private RelayCommand? OwnerRequestFor(RunRecord run)
+        => run.ErrorCode == RunErrorCodes.PermissionActAs && !string.IsNullOrWhiteSpace(run.ProjectId)
+            ? new RelayCommand(() => CopyOwnerRequest(run.ProjectId, WorkerAccountDetail.TryRead(run.ErrorDetail)))
+            : null;
+
+    /// <summary>
+    /// Copies the owner request for the account the refused VM was to run as (<paramref name="vmAccount"/>, read from the row;
+    /// the app's worker account when the row does not say), naming the signed-in user as the grantee when there is one. The
+    /// user's email goes to the clipboard only, never to a log.
+    /// </summary>
+    private void CopyOwnerRequest(string projectId, string? vmAccount)
+    {
+        var email = _account.CurrentAccount?.Email;
+        var grantee = string.IsNullOrWhiteSpace(email) ? string.Empty : string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.OwnerRequestGrantee), email);
+        var template = _strings.GetString(RunsCopy.OwnerRequestActAs);
+        var text = string.Format(CultureInfo.CurrentCulture, template, WorkerIdentityNames.ActAsRole, vmAccount ?? WorkerIdentityNames.ServiceAccountEmail(projectId), projectId, grantee);
+        Toast(_launcher.CopyText(text) ? RunsCopy.OwnerRequestCopied : RunsCopy.OwnerRequestCopyFailed);
     }
 
     /// <summary>Why Delete cloud copy is off for this run (one reason, one action), or empty when it is on.</summary>
