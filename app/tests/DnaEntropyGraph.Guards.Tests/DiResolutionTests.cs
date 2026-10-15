@@ -393,17 +393,24 @@ public class DiResolutionTests
         row.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.DeletedByCleanup);
     }
     [Fact]
-    public async Task The_production_runner_has_safe_stall_and_notice_defaults_that_need_no_UI()
+    public async Task The_production_runner_asks_the_UI_through_the_coordinator_and_a_missing_window_never_ends_a_run()
     {
-        // Issue #675: OnStall / OnNotice / CancelAckTimeout were wired to nothing in production. A stall with no UI must resolve by itself.
+        // Issue #675: OnStall / OnNotice / CancelAckTimeout were wired to nothing in production; now they are the RunStallCoordinator's. With no window attached the
+        // dialog cannot be shown, so the answer is Keep waiting (never a deletion), and the notice is published for the run page.
         using var provider = BuildRealServiceProvider();
         var runner = provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.CloudJobRunner>();
+        var notices = new List<DnaEntropyGraph.Presentation.Messaging.RunNoticeMessage>();
+        var recipient = new object();
+        provider.GetRequiredService<CommunityToolkit.Mvvm.Messaging.IMessenger>().Register<DnaEntropyGraph.Presentation.Messaging.RunNoticeMessage>(recipient, (_, m) => notices.Add(m));
 
         runner.OnStall.ShouldNotBeNull();
         var choice = await runner.OnStall!(new DnaEntropyGraph.Core.Cloud.StallPrompt("job-1", "worker_stage_stuck", "stuck", "model-loading", TimeSpan.FromMinutes(20)), CancellationToken.None);
-        choice.ShouldBe(DnaEntropyGraph.Core.Cloud.StallChoice.EndAsRunChose);
+        choice.ShouldBe(DnaEntropyGraph.Core.Cloud.StallChoice.KeepWaiting);
         runner.OnNotice.ShouldNotBeNull();
-        Should.NotThrow(() => runner.OnNotice!(new DnaEntropyGraph.Core.Cloud.RunNotice("job-1", DnaEntropyGraph.Core.Cloud.RunNoticeKind.SlowStage, "model-loading")));
+        runner.OnNotice!(new DnaEntropyGraph.Core.Cloud.RunNotice("job-1", DnaEntropyGraph.Core.Cloud.RunNoticeKind.SlowStage, "model-loading", TimeSpan.FromMinutes(9), TimeSpan.FromMinutes(12)));
+        notices.Count.ShouldBe(1);
+        notices[0].JobId.ShouldBe("job-1");
+        notices[0].Text.ShouldNotBeNullOrWhiteSpace();
         runner.CancelAckTimeout.ShouldBe(TimeSpan.FromSeconds(60));
     }
 }

@@ -275,9 +275,6 @@ One page (`WizardPage`, route `Wizard`, opened from the status pill in the title
 - The GPU row's **Ask Google for a GPU** (`SetupStepRow.AskCommand`, shown only when the allowance was read and is zero) runs `GpuQuotaRequester` (L4 in `SetupStepsViewModel.GpuAskRegion`, then the project-wide cap) and leaves one message and one button per outcome: granted checks the step again, requested offers Check again, no billing offers Check billing, ineligible or refused offers Google's quota page, a failure offers Try again.
 - Not built yet: the pipeline test and the real-GPU test step (step 8, #97), the local engine step, and "Run setup check again" in Settings.
 
-## 14. The Cloud page (issue #105)
-
-`CloudPage` (route `Cloud`) over `CloudResourcesViewModel`. Refresh lists through `InstallationCleanup.InventoryAsync` (this installation's computers and disks by label, job folders by manifest `createdBy.installationId`) and `IComputeGateway.ListAppVmsAsync` for the rest. A computer another installation labelled for this app is a read-only row tagged "Another computer" with no commands (Hard Rule 9; DECISION, reversible). Cost comes from `IPricingSource` (machine price while running, attached disks per day while stopped; empty when the price list cannot be read). Row commands live on `CloudVmRow`. Delete (one) and Delete everything go through `IDialogService.ConfirmAsync`; Delete everything names the counts and shows `CleanupReport` item by item, with the soft delete retention of job folders. Not built: typed confirmation, deleting the service account and role, a banner for a running computer with no run on this PC (the banner shows any running computer).
 ## 12. Windows notifications and activation (issue #107)
 
 A run that finishes (done, partly done) or fails while the app window is not in front shows a Windows notification with an **Open run** button; clicking the notification or the button opens that run's Results page, also when the app was closed. The in-app message bar (`IToastService`) is unchanged and still shows for done and partly done; a failed run is a desktop notification only. Both sit behind the Settings switch **Notify when done**.
@@ -306,6 +303,14 @@ A run that finishes (done, partly done) or fails while the app window is not in 
   multi-contig run (the first contig is shown).
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).
+
+## 14. The Cloud page (issue #105)
+
+`CloudPage` (route `Cloud`) over `CloudResourcesViewModel`. Refresh lists through `InstallationCleanup.InventoryAsync` (this installation's computers and disks by label, job folders by manifest `createdBy.installationId`) and `IComputeGateway.ListAppVmsAsync` for the rest. A computer another installation labelled for this app is a read-only row tagged "Another computer" with no commands (Hard Rule 9; DECISION, reversible). Cost comes from `IPricingSource` (machine price while running, attached disks per day while stopped; empty when the price list cannot be read). Row commands live on `CloudVmRow`. Delete (one) and Delete everything go through `IDialogService.ConfirmAsync`; Delete everything names the counts and shows `CleanupReport` item by item, with the soft delete retention of job folders. Not built: typed confirmation, deleting the service account and role, a banner for a running computer with no run on this PC (the banner shows any running computer).
+
+## 15. The slow-run notice and the stall question (issue #675)
+
+`RunStallCoordinator` (Presentation/Services) is the runner's `OnNotice` and `OnStall` in production (ServiceRegistration). A slow-stage notice is a `RunNoticeMessage` that `RunProgressViewModel` shows as a warning InfoBar for its own run only (cleared when the runner says the stall cleared and when the run ends). The stall question is `IChoiceDialogService.ChooseAsync` (a three-button `ContentDialog` on the main window's `XamlRoot`, implemented by `DialogService`): Stop, Delete, Keep waiting, with Keep waiting as the close button and default. A dialog that cannot be shown (no window yet) or that the runner withdrew answers Keep waiting, never a deletion; the runner's own answer timeout and run time limit still end a run nobody answers.
 
 ## Related
 

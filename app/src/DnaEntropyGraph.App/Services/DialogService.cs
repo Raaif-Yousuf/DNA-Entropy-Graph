@@ -14,7 +14,7 @@ namespace DnaEntropyGraph.App.Services;
 /// WinUI allows one open ContentDialog per window, so calls are queued one at a time; a caller whose token
 /// is cancelled while waiting gets <see cref="OperationCanceledException"/> and never shows a dialog.
 /// </summary>
-public sealed class DialogService : IDialogService
+public sealed class DialogService : IDialogService, IChoiceDialogService
 {
     private readonly IStringResourceProvider _strings;
     private readonly SemaphoreSlim _one = new(1, 1);
@@ -46,14 +46,69 @@ public sealed class DialogService : IDialogService
         }
     }
 
-    private static Task<bool> OnUiThreadAsync(Window window, Func<Task<bool>> show)
+    /// <summary>
+    /// Issue #675: up to three labelled buttons (primary, secondary, close). Returns the pressed index, or null when there is no window or root yet or the token closed the
+    /// dialog: no answer is never a choice. Shares the one-dialog-at-a-time gate with <see cref="ConfirmAsync"/>.
+    /// </summary>
+    public async Task<int?> ChooseAsync(string title, string message, IReadOnlyList<string> buttonLabels, CancellationToken cancellationToken)
+    {
+        var window = _window;
+        if (window is null || buttonLabels.Count is < 1 or > 3)
+        {
+            Trace.TraceWarning("DialogService: a choice was requested with no window attached or a bad button count; answering nothing.");
+            return null;
+        }
+
+        await _one.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return await OnUiThreadAsync(window, () => ShowChoiceAsync(window, title, message, buttonLabels, cancellationToken)).ConfigureAwait(false);
+        }
+        finally
+        {
+            _one.Release();
+        }
+    }
+
+    private static async Task<int?> ShowChoiceAsync(Window window, string title, string message, IReadOnlyList<string> labels, CancellationToken cancellationToken)
+    {
+        if (window.Content?.XamlRoot is not { } root)
+        {
+            Trace.TraceWarning("DialogService: the window has no XamlRoot yet; answering nothing.");
+            return null;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = root,
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = labels[0],
+            SecondaryButtonText = labels.Count > 1 ? labels[1] : string.Empty,
+            CloseButtonText = labels.Count > 2 ? labels[2] : string.Empty,
+            DefaultButton = labels.Count > 2 ? ContentDialogButton.Close : ContentDialogButton.Primary,
+        };
+
+        using var registration = cancellationToken.Register(() => window.DispatcherQueue.TryEnqueue(dialog.Hide));
+        var result = await dialog.ShowAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        return result switch
+        {
+            ContentDialogResult.Primary => 0,
+            ContentDialogResult.Secondary => 1,
+            _ => labels.Count > 2 ? 2 : null,
+        };
+    }
+
+    private static Task<T> OnUiThreadAsync<T>(Window window, Func<Task<T>> show)
     {
         if (window.DispatcherQueue.HasThreadAccess)
         {
             return show();
         }
 
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         var queued = window.DispatcherQueue.TryEnqueue(async () =>
         {
             try

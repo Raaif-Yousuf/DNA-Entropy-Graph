@@ -131,6 +131,17 @@ costs much less), or try a bigger computer tier. *(`GPU_STOCKOUT`)*
 
 ## The rented computer stopped working mid-run
 
+**A yellow note on the run page: "taking longer than usual".** A step has used three
+quarters of the time it normally gets. Nothing is wrong yet. Keep waiting, or press
+**Cancel run**.
+
+**A window: "This run looks stuck".** The computer has stopped reporting progress. Choose
+**Stop** (keeps the computer so you can start it again later; its disk costs a little),
+**Delete** (removes the computer and its disk), or **Keep waiting** (gives it more time;
+closing the window with Escape also keeps waiting). If it recovers by itself while the
+window is open, the window closes and the run carries on. If nobody answers for ten minutes,
+the app ends the run the way you set it to end.
+
 **"The computer was shut down before finishing"**, either a hardware issue on Google's
 side, or (if you chose the cheaper "Spot" option) the computer was reclaimed, since Spot
 computers can be interrupted at any time in exchange for a lower price. Whatever your
