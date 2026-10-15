@@ -441,6 +441,20 @@ gh run list
 gh run view <id>
 ```
 
+**Wave findings to draft issues: `scripts/wave_findings.py` (#477).** Paste each agent's "Suspected bugs / improvements"
+bullets (`- <text> (path:line)`) into a file, then:
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\wave_findings.py findings.md      # or pipe the text in; --gh <path> picks another gh
+```
+
+Per finding it prints either `DUPLICATE of #N (open|closed): <title>` (an existing issue title shares at least 3 words and
+60% of the finding's keywords, searched with `gh issue list --search ... --state all --limit 50`) or a `NEW` block: a
+PowerShell `$body = @'...'@` in the house shape and one `gh issue create ... --label 'P3' --label 'area:<guess>'` line.
+It only drafts: the single gh call is the read-only `issue list`; nothing is created, edited or closed. The area label
+is guessed from the path and P3 is a placeholder, so read each draft before running it. A failed search prints
+`WARNING ... unchecked` and still drafts. Tests: `scripts/tests/test_wave_findings.py` (stub gh).
+
 ## GPU test recipe
 
 **Never on the laptop.** `pytest -m "not gpu"` is the standing local command;
