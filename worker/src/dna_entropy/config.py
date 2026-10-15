@@ -192,3 +192,9 @@ class RunConfig:
     # or Prodigal's calls when `genes` is set) with mean/min/max entropy over the gene's bases.
     # Only written when the run actually has genes; on by default like every other writer.
     include_gene_summary: bool = True
+    # issue #191: model-free companion tracks. Both OFF by default (new files nobody asked for,
+    # the clutter issue #411 is about): <name>.gc.bedgraph (GC percent over an odd centred window
+    # of `gc_window` bases) and <name>.codons.tsv (codon usage per CDS-shaped gene).
+    include_gc: bool = False
+    gc_window: int = 51
+    include_codons: bool = False
