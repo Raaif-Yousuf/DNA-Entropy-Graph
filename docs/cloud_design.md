@@ -298,6 +298,8 @@ THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGION
 failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Switched on in production by #609. The request flow
 (`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
 
+**Spot quota (issue #718).** MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): the Spot twin of the L4 line is `PREEMPTIBLE_NVIDIA_L4_GPUS` (name confirmed), but without a preemptible grant Spot VMs "consume standard quota", and once one is granted they "can only consume preemptible quota". `QuotaMetrics.SpotRegionalMetric` therefore reads the preemptible line only when the region reports it with a limit above zero, else the standard line. No production path reads it yet (the provisioner uses the on-demand metric); a Spot preflight must call it. THEORY (unverified): whether an ungranted region lists the preemptible line as 0 or omits it; both read as standard.
+
 ### 6.2 What preflight does with a quota it cannot read (issue #88)
 
 DECISION (agent-made, reversible): an unreadable quota is UNKNOWN, and unknown is not "none". `PreflightChecks` calls `GetGpuQuotaAsync` and:
