@@ -191,21 +191,32 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             throw new CloudOperationException(new CloudError("VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{instance.Status}', not stopped."), CloudErrorKind.Other);
         }
 
+        // A reuse that cannot name the boot disk must not start: skipping would leave the old job's labels on a billed disk (Hard Rules 9-10).
+        var bootDisk = ParseBootDisk(instance)
+            ?? throw new CloudOperationException(new CloudError("VM_NO_BOOT_DISK", null, $"The VM '{existingVmName}' lists no boot disk this app can relabel, so it was not reused."), CloudErrorKind.Other);
+        var target = labels.ToDictionary(p => p.Key, p => p.Value);
+
         // The claim: the one write that carries a fingerprint of the labels, so of two jobs racing for this VM only one passes it.
-        var labelBody = new ComputeData.InstancesSetLabelsRequest { Labels = labels.ToDictionary(p => p.Key, p => p.Value), LabelFingerprint = instance.LabelFingerprint };
-        var claim = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(labelBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-        await AwaitOperationAsync(project, zone, claim, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+        // A lost ANSWER to our own write, then a retry, meets 412 because the fingerprint moved; if the labels already equal the target
+        // the write did land, so it is accepted (a rival's labels differ, so a lost claim still fails).
+        var labelBody = new ComputeData.InstancesSetLabelsRequest { Labels = target, LabelFingerprint = instance.LabelFingerprint };
+        try
+        {
+            var claim = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(labelBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            await AwaitOperationAsync(project, zone, claim, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
+        {
+            var current = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            if (!LabelsEqual(current.Labels, target))
+            {
+                throw;
+            }
+        }
 
         // Issue #678: the boot disk keeps the OLD job's labels from its creation; relabel it (a disk's own label fingerprint) so every resource
         // of this job carries its labels (Hard Rules 9-10). A failure here is a start failure: the VM is not started, the caller ends it.
-        if (BootDiskName(instance) is { } bootDisk)
-        {
-            var disk = await CallAsync("compute.disks.get", token => _service.Disks.Get(project, zone, bootDisk).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-            var diskBody = new ComputeData.ZoneSetLabelsRequest { Labels = labels.ToDictionary(p => p.Key, p => p.Value), LabelFingerprint = disk.LabelFingerprint };
-            var relabel = await CallAsync("compute.disks.setLabels", token => _service.Disks.SetLabels(diskBody, project, zone, bootDisk).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-            await AwaitOperationAsync(project, zone, relabel, goneIsDone: false, cancellationToken).ConfigureAwait(false);
-        }
-
+        await RelabelBootDiskAsync(project, bootDisk, target, cancellationToken).ConfigureAwait(false);
         var scheduling = await CallAsync("compute.instances.setScheduling", token => _service.Instances.SetScheduling(ComputeVmShape.Scheduling(reuse), project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         await AwaitOperationAsync(project, zone, scheduling, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
@@ -222,13 +233,78 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 CloudErrorKind.Network);
     }
 
-    /// <summary>The name of the instance's boot disk (the last segment of its <c>source</c> URL), or null when the instance lists none.</summary>
-    private static string? BootDiskName(ComputeData.Instance instance)
+    private readonly record struct BootDisk(string Name, string Location, bool Regional);
+
+    /// <summary>
+    /// The boot disk named by the instance's <c>source</c> URL: a zonal <c>.../zones/z/disks/name</c> or a regional <c>.../regions/r/disks/name</c>
+    /// (a query, a trailing slash and a relative or beta URL are tolerated), or null when the instance lists no boot disk or the URL names no disk.
+    /// </summary>
+    private static BootDisk? ParseBootDisk(ComputeData.Instance instance)
     {
         var source = instance.Disks?.FirstOrDefault(d => d.Boot == true)?.Source;
-        return string.IsNullOrEmpty(source) ? null : source[(source.LastIndexOf('/') + 1)..];
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return null;
+        }
+
+        var cut = source.IndexOfAny(['?', '#']);
+        var segments = (cut < 0 ? source : source[..cut]).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 2; i >= 2; i--)
+        {
+            if (segments[i] == "disks" && segments[i - 2] is "zones" or "regions")
+            {
+                return new BootDisk(segments[i + 1], segments[i - 1], segments[i - 2] == "regions");
+            }
+        }
+
+        return null;
     }
 
+    private async Task RelabelBootDiskAsync(string project, BootDisk disk, Dictionary<string, string> target, CancellationToken cancellationToken)
+    {
+        string? fingerprint;
+        if (disk.Regional)
+        {
+            var current = await CallAsync("compute.regionDisks.get", token => _service.RegionDisks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            fingerprint = current.LabelFingerprint;
+        }
+        else
+        {
+            var current = await CallAsync("compute.disks.get", token => _service.Disks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            fingerprint = current.LabelFingerprint;
+        }
+
+        try
+        {
+            ComputeData.Operation relabel;
+            if (disk.Regional)
+            {
+                var body = new ComputeData.RegionSetLabelsRequest { Labels = target, LabelFingerprint = fingerprint };
+                relabel = await CallAsync("compute.regionDisks.setLabels", token => _service.RegionDisks.SetLabels(body, project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var body = new ComputeData.ZoneSetLabelsRequest { Labels = target, LabelFingerprint = fingerprint };
+                relabel = await CallAsync("compute.disks.setLabels", token => _service.Disks.SetLabels(body, project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+
+            await AwaitOperationAsync(project, disk.Location, relabel, goneIsDone: false, cancellationToken, regional: disk.Regional).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
+        {
+            // A lost answer, then a retry: the fingerprint moved because the write landed. Accept only when the labels already equal the target.
+            IDictionary<string, string>? now = disk.Regional
+                ? (await CallAsync("compute.regionDisks.get", token => _service.RegionDisks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)).Labels
+                : (await CallAsync("compute.disks.get", token => _service.Disks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)).Labels;
+            if (!LabelsEqual(now, target))
+            {
+                throw;
+            }
+        }
+    }
+
+    private static bool LabelsEqual(IDictionary<string, string>? actual, IReadOnlyDictionary<string, string> target)
+        => actual is not null && actual.Count == target.Count && target.All(p => actual.TryGetValue(p.Key, out var value) && string.Equals(value, p.Value, StringComparison.Ordinal));
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);
 
@@ -359,7 +435,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>Polls the zone operation until <c>DONE</c> and throws its error. <paramref name="goneIsDone"/>: a stop or delete whose operation says the VM is not found has nothing left to do.</summary>
-    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken)
+    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken, bool regional = false)
     {
         if (!IsDone(operation))
         {
@@ -368,7 +444,9 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             var outcome = await OperationPoller.PollAsync(
                 async token =>
                 {
-                    latest = await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
+                    latest = regional
+                        ? await CallAsync("compute.regionOperations.get", pollToken => _service.RegionOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false)
+                        : await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
                     return new OperationPoll<bool>(IsDone(latest), true, null);
                 },
                 _options.OperationDeadline,
