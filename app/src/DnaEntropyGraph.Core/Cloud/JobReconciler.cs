@@ -744,15 +744,16 @@ public sealed class JobReconciler
 
             if (evidence == Evidence.Nothing && row.Phase != JobPhase.Provisioning)
             {
-                // Issue #679: a VM gone after its maxRunDuration was deleted by Compute Engine at its limit (Hard Rule 10's backstop), the same
-                // run_time_limit the live path (ResultWaiter.VmLostAsync) records. The VM's creation time is gone with it, so the basis is the
-                // row's own start time on this laptop's clock (one clock, so no skew). THEORY (unverified): the row starts before the VM does
-                // (bucket, upload and provisioning come first), so this can name the limit a few minutes early for a VM lost for another reason.
+                // Issue #679, reviewed: the same judgement as the live path (ResultWaiter.VmLostAsync). The worker's own status.json comes first: an
+                // error code it wrote is the cause. run_time_limit needs real evidence the VM lived to its limit: the worker's last heartbeat, on ITS
+                // clock (startedAt to updatedAt), reaching the limit. The row's own start time is NOT evidence: it counts every hour the app was closed
+                // after the VM had died. With no such evidence the honest answer is vm_unhealthy.
+                var (workerCode, lived) = await ReadWorkerEvidenceAsync(row, cancellationToken).ConfigureAwait(false);
                 var limit = TimeSpan.FromMinutes(options.MaxRunDurationMinutes) + CloudJobRequestFactory.VmGrace;
-                var pastLimit = row.StartedAt is { } started && _time.GetUtcNow() >= started + limit;
-                return await FailAsync(row, underway, ReattachAction.FailedVmMissing, pastLimit ? RunErrorCodes.RunTimeLimit : RunErrorCodes.VmUnhealthy, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
+                var code = RunErrorCodes.ForWorkerStatusCode(workerCode)
+                    ?? (lived is { } age && age + LimitHeartbeatWindow >= limit ? RunErrorCodes.RunTimeLimit : RunErrorCodes.VmUnhealthy);
+                return await FailAsync(row, underway, ReattachAction.FailedVmMissing, code, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
             }
-
             // Only a VM or a result actually SEEN means the run is not provisioned again, so the worker image (which only a new
             // VM's startup script needs) is not required, and an app update that dropped the old image must not strand it.
             // A look that failed is not evidence: a run that could still provision needs its image, or it would create a VM
@@ -875,6 +876,57 @@ public sealed class JobReconciler
             : underway;
     }
 
+    /// <summary>
+    /// How far before a VM's limit its last heartbeat may sit and still count as "lived to its limit": the worker starts after the VM boots (up to the
+    /// 8 minute boot deadline) and beats every 30 s, so the worker-clock age at the last heartbeat trails the VM's own age by about this much.
+    /// THEORY (unverified, no live project): ToTest measures the real gap.
+    /// </summary>
+    private static readonly TimeSpan LimitHeartbeatWindow = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// What the worker's <c>status.json</c> says about a VM that is gone: its error code (if any) and how long the VM had lived at the last heartbeat
+    /// (<c>updatedAt</c> minus <c>startedAt</c>, falling back to <c>stageStartedAt</c>; one clock, the worker's). Anything unreadable is no evidence.
+    /// </summary>
+    private async Task<(string? WorkerCode, TimeSpan? Lived)> ReadWorkerEvidenceAsync(RunRecord row, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(row.Bucket))
+        {
+            return (null, null);
+        }
+
+        try
+        {
+            var bucket = row.Bucket;
+            var stream = await Lookup(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "status.json", token), cancellationToken).ConfigureAwait(false);
+            if (stream is null)
+            {
+                return (null, null);
+            }
+
+            string text;
+            await using (stream.ConfigureAwait(false))
+            {
+                using var reader = new StreamReader(stream);
+                text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            var status = WorkerStatusReader.TryParseStatus(text);
+            TimeSpan? lived = null;
+            if (status is not null
+                && DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote)
+                && DateTimeOffset.TryParse(status.StartedAt ?? status.StageStartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var began)
+                && wrote >= began)
+            {
+                lived = wrote - began;
+            }
+
+            return (WorkerResultReader.TryReadStatusErrorCode(text), lived);
+        }
+        catch (Exception ex) when (ex is TimeoutException or CloudOperationException or IOException)
+        {
+            return (null, null); // A diagnostic read: no answer is no evidence, never a reason to leave the run unjudged.
+        }
+    }
     private enum Evidence
     {
         /// <summary>No VM carries the job's label and no result.json exists.</summary>

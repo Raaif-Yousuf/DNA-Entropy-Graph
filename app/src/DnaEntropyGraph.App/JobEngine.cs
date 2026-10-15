@@ -154,8 +154,8 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 StartedAt: DateTimeOffset.UtcNow,
                 OptionsJson: RunOptionsJson.Serialize(options),
                 ProjectId: projectId,
-                // No VM yet: the runner records the one it actually uses (a reused VM keeps its old name, issue #679).
-                VmName: null,
+                // The planned name: it keeps the diagnostics redaction key for a run that fails before any VM exists. The runner overwrites it with the VM the run actually uses (a reused VM keeps its old name, issue #679).
+                VmName: request.Spec.VmName,
                 MachineType: request.Spec.MachineType,
                 AppVersion: request.Spec.AppVersion,
                 InstallationId: installationId),
