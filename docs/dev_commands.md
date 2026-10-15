@@ -197,6 +197,16 @@ worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <ti
 
 Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh).
 
+## Landing a queue of worktree branches: `scripts/land_queue.py`
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\land_queue.py add feat/1-x <sha> 1 "feat: x (#1)" [--full] [--red "<check>"]
+worker\.venv\Scripts\python.exe scripts\land_queue.py run [--once]     # land_wt.py then merge when green, one item at a time
+worker\.venv\Scripts\python.exe scripts\land_queue.py status | stop | retry feat/1-x@<sha>
+```
+
+Tests: `scripts/tests/test_land_queue.py` (fake gh/git runner, no network). Details: `branching_and_prs.md`.
+
 ## Landing a PR from the shared checkout: `scripts/land_pr.py`
 
 One command for the seven git/gh steps, safe while other lanes have uncommitted edits in the same tree (#445):

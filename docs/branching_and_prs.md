@@ -142,6 +142,33 @@ branch.
 `land_pr.py` stays for the shared-checkout case (uncommitted edits, exact paths or hunks); it is a separate script because its
 input and its return-to-main step do not apply here. `--content-dir` is deferred to #576, only needed if a wave goes back to a
 shared checkout.
+
+## Landing many branches: `scripts/land_queue.py`
+
+The orchestrator's queue runner, in the repo. It takes `branch|sha|issue|full|title` lines (optional sixth field
+`red=<check>[,<check>]`, a KNOWN_RED override for that item only), runs `land_wt.py` for each, waits for the PR's checks, reruns
+the failed runs once (logged to `flakes.log`) and merges with `gh pr merge --merge`.
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\land_queue.py add feat/1-x <sha> 1 "feat: x (#1)" [--full] [--red "build and test"]
+worker\.venv\Scripts\python.exe scripts\land_queue.py run          # the loop; `run --once` drains and returns
+worker\.venv\Scripts\python.exe scripts\land_queue.py status       # pending, in flight, last results, recent flakes
+worker\.venv\Scripts\python.exe scripts\land_queue.py retry feat/1-x@<sha>   # an item already taken, again
+worker\.venv\Scripts\python.exe scripts\land_queue.py stop         # runner.stop: exits before the next item
+```
+
+State is under `--state` (default `%TEMP%\deg-land-queue`): `queue.txt`, `taken.log`, `done.log`, `flakes.log`,
+`inflight.json`, `body-<slug>-<sha7>.md`. MEASURED 2026-10-15 defects of the scratchpad scripts it replaces, each with a test:
+
+- Items are keyed `branch@sha`, not by the whole line, so editing a queued title (or a trailing space) never re-takes a landed
+  branch; a new sha of the same branch is a new item.
+- If `origin` already holds the branch (a closed PR), land_wt gets `--land-branch <branch>-<sha7>` instead of a failing push.
+- Before merging, `mergeStateStatus` is read (UNKNOWN is polled). A DIRTY PR (another PR was merged by hand while this one was
+  in CI, PR #674) is closed with its branch deleted and the same sha is re-landed once on `<branch>-<sha7>-r2`; DIRTY twice is
+  REFUSED.
+- The merge-when-green loop here overlaps PR #724 (`land_wt.py --merge-when-green`, #666). That one handles a single PR; this
+  one adds the queue, the recheck and per-item known-red. Once #724 is on main this runner can pass its flag instead.
+
 ## Closing keywords
 
 A commit message or PR body that says an issue is **not** fixed can still

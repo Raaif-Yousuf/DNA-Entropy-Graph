@@ -1,0 +1,1 @@
+- tooling: `scripts/land_queue.py` replaces the scratchpad land_queue.sh/merge_green.sh: items keyed branch@sha, existing remote branch handled with a suffixed land branch, a DIRTY PR is re-landed once from the same sha, per-item `red=` known-red, and a `status` command.
