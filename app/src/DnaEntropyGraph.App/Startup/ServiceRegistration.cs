@@ -147,7 +147,11 @@ public static class ServiceRegistration
         services.AddSingleton(_ => new SqliteDatabase(databasePath));
         services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
-        services.AddSingleton<ISettingsStore>(_ => new SettingsStore(settingsPath));
+        services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
+        services.AddSingleton<ISettingsStore>(sp => sp.GetRequiredService<SettingsStore>());
+        services.AddSingleton<IResettableSettings>(sp => sp.GetRequiredService<SettingsStore>());
+        services.AddSingleton<ICloudModeInfo>(_ => new DnaEntropyGraph.App.Services.FakeCloudModeInfo(cloud));
+        services.AddSingleton<OutputSelectionStore>();
 
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
@@ -280,6 +284,14 @@ public static class ServiceRegistration
         services.AddTransient<HistoryViewModel>();
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();
+        services.AddTransient<RunDefaultsSettingsViewModel>();
+        services.AddTransient<FilesSettingsViewModel>();
+        services.AddTransient<NotificationsSettingsViewModel>();
+        services.AddTransient<AdvancedSettingsViewModel>();
+        services.AddSingleton<NotificationSettings>();
+        services.AddSingleton<RunCompletionActions>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
+        services.AddTransient<ExternalViewersSettingsViewModel>();
 
         if (cloud == CloudBackend.Developer)
         {
@@ -319,7 +331,7 @@ public static class ServiceRegistration
             },
             AppVersion = JobEngine.AppVersion(),
         });
-services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
+        services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
             sp.GetRequiredService<IGcpAccessTokenSource>(),
             sp.GetRequiredService<CloudCallPipeline>(),
             sp.GetRequiredService<GoogleCloudOptions>(),

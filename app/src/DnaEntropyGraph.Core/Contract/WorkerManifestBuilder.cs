@@ -200,13 +200,19 @@ public static class WorkerManifestBuilder
 
         // The worker runs gene finding when "genes_gff3" is in outputs, whatever input.genes says
         // (worker manifest.py: genes = input.genes or "genes_gff3" in outputs). With gene finding
-        // off the file must never be requested, or "All outputs" would switch genes on.
+        // off the file must never be requested, or "All outputs" would switch genes on. "gene_summary" needs
+        // genes the same way (it is written only when the run has some), so every catalog entry that
+        // needs genes is held back together.
         if (!options.FindGenes)
         {
-            kinds &= ~OutputFileKinds.GenesGff3;
+            foreach (var entry in OutputCatalog.Entries.Where(e => e.NeedsGenes))
+            {
+                kinds &= ~entry.Kind;
+            }
+
             if (kinds == OutputFileKinds.None)
             {
-                throw new ArgumentException("Choose at least one output file besides the gene annotations when gene finding is off.", nameof(options));
+                throw new ArgumentException("Choose at least one output file besides the gene files when gene finding is off.", nameof(options));
             }
         }
 
@@ -216,22 +222,16 @@ public static class WorkerManifestBuilder
         }
 
         var names = new JsonArray();
-        void Add(OutputFileKinds kind, string wire)
+        foreach (var wire in OutputCatalog.ToWireNames(kinds))
         {
-            if (kinds.HasFlag(kind))
-            {
-                names.Add(wire);
-            }
+            names.Add(wire);
         }
 
-        Add(OutputFileKinds.GenBank, "genbank");
-        Add(OutputFileKinds.Fasta, "fasta");
-        Add(OutputFileKinds.BedGraph, "bedgraph");
-        Add(OutputFileKinds.Wig, "wig");
-        Add(OutputFileKinds.GeneiousGff3, "geneious_gff3");
-        Add(OutputFileKinds.GenesGff3, "genes_gff3");
-        Add(OutputFileKinds.Stats, "stats");
-        Add(OutputFileKinds.EntropyTsv, "tsv");
+        if (names.Count == 0)
+        {
+            throw new ArgumentException("Choose at least one output file.", nameof(options));
+        }
+
         return names;
     }
 }
