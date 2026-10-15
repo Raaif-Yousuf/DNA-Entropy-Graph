@@ -380,6 +380,7 @@ def _write_provenance(
         rna=cfg.rna,
         topology=cfg.topology.value,
         input_format=input_format or None,
+        preset={"id": cfg.preset_id, "name": cfg.preset_name or ""} if cfg.preset_id else None,
         contigs=contigs,
         wall_time_seconds=time.perf_counter() - t0,
         extra=extra,
