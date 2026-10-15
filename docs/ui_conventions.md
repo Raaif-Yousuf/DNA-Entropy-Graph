@@ -242,6 +242,17 @@ panel and keeps this one. The run-error strings say "Choose Save diagnostics in 
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
 `ToastService` is still a debug-output placeholder.
 
+## 11. The setup wizard (issue #99)
+
+One page (`WizardPage`, route `Wizard`, opened from the status pill in the title bar), not a stepper: welcome, sign in, then OK/Fix rows. `WizardViewModel` owns sign-in, the project step (a `SetupStepRow`, the list of projects, Create) and Finish; `SetupStepsViewModel` owns the rows for billing, services, storage and identity, and the GPU allowance, which are also the Settings health report ("Run setup check again"). All Google calls are `SetupCheckService` (`Core/Setup`), which never throws a Google failure: a failure is a `SetupStepResult` with a code (`SetupErrorCodes` or `AuthErrorCodes.ProjectInvalid`) and one `SetupAction` whose kind decides the button: Retry, OpenLink (a `HyperlinkButton`, plus **Check again**), CopyText (clipboard, with the billing request naming the account that was refused), PickProject, PickBillingAccount (a list of buttons, each linking that account), CreateProject.
+
+- A row never shows colour alone: the badge text says OK, Fix, Checking, Skipped or Not checked yet, and its live region announces changes.
+- Rows run in the preflight order of CLAUDE.md: billing, services (Compute API), GPU allowance, then storage and the worker account, so nothing is created in a project whose allowance or permissions already rule a run out. The chain stops at the first red row. **Skip for now** is offered only when the allowance was read and is zero (or could not be read for a reason with no action of its own); permission, org policy, API-off and billing errors abort with their one named action, and Finish never opens over one. Skipping carries on to storage.
+- Every button shown does something: project actions on a step row (Create project, Pick an existing project) are handed to the wizard's project step, a link action with no page opens the manual guide, and choosing a billing account is the list below the row (the row has no second button).
+- Checks are serialized (one gate in `SetupStepsViewModel`, one in `WizardViewModel`): a row's Check again waits for Run all, Finish is off while anything runs, an account change cancels running checks, and a failure that is not a Google error becomes a "Try again" row, never one stuck on Checking.
+- Every Fix row has **Do it by hand** (`docs/gcp_setup_manual.md`).
+- Lists and per-item buttons are commands on the item (`ProjectChoice`, `BillingAccountChoice`, `SetupStepRow.ActionCommand`), so the page has no code-behind logic (Hard Rule 8).
+- Not built yet: the pipeline test and the real-GPU test step (step 8, #97), the quota request through the Cloud Quotas API (needs a gateway method), the local engine step, and "Run setup check again" in Settings.
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text
