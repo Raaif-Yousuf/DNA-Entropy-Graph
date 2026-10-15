@@ -89,6 +89,18 @@
                 </Border>
             </StackPanel>
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsNotificationsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsNotificationsExplainer" TextWrapping="Wrap" />
+                        <CheckBox x:Uid="NotifyWhenDoneBox" IsChecked="{x:Bind Notifications.NotifyWhenDone, Mode=TwoWay}" />
+                        <CheckBox x:Uid="OpenFolderWhenDoneBox" IsChecked="{x:Bind Notifications.OpenFolderWhenDone, Mode=TwoWay}" />
+                        <CheckBox x:Uid="OpenResultsWhenDoneBox" IsChecked="{x:Bind Notifications.OpenResultsWhenDone, Mode=TwoWay}" />
+                        <TextBlock Text="{x:Bind Notifications.NotificationsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsDiagnosticsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">

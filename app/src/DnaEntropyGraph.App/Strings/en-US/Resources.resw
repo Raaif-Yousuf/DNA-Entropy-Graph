@@ -1267,4 +1267,34 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="FilesOpenFailed" xml:space="preserve">
     <value>Windows could not open that folder. It may not exist yet, so run a sequence once, then choose Open folder again.</value>
   </data>
+  <data name="SettingsNotificationsHeader.Text" xml:space="preserve">
+    <value>Notifications</value>
+  </data>
+  <data name="SettingsNotificationsExplainer.Text" xml:space="preserve">
+    <value>What the app does when a run finishes. A change applies from the next run that finishes.</value>
+  </data>
+  <data name="NotifyWhenDoneBox.Content" xml:space="preserve">
+    <value>Show a message when a run finishes</value>
+  </data>
+  <data name="OpenFolderWhenDoneBox.Content" xml:space="preserve">
+    <value>Open the folder with the results when a run finishes</value>
+  </data>
+  <data name="OpenResultsWhenDoneBox.Content" xml:space="preserve">
+    <value>Open the Results page when a run finishes</value>
+  </data>
+  <data name="NotificationsNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then change it again.</value>
+  </data>
+  <data name="RunDone_Title" xml:space="preserve">
+    <value>Your run has finished</value>
+  </data>
+  <data name="RunDone_Body" xml:space="preserve">
+    <value>The results are ready. Choose Results in the Runs list to look at them.</value>
+  </data>
+  <data name="RunPartial_Title" xml:space="preserve">
+    <value>Your run finished with some files missing</value>
+  </data>
+  <data name="RunPartial_Body" xml:space="preserve">
+    <value>Some result files could not be made. Choose Results in the Runs list to see which ones.</value>
+  </data>
 </root>

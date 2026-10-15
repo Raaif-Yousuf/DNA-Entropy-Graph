@@ -1,0 +1,1 @@
+- Settings has a Notifications group: show a message, open the results folder and open the Results page when a run finishes (On, Off, On by default). The app now reads them when any run finishes, on whatever page you are on (#643).

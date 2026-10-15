@@ -18,6 +18,10 @@ The files a new run starts with, one list for a GenBank file and one for a FASTA
 
 Where the app keeps its own data: the app data folder, the saved copy of every input file you ran (with how much space the copies take) and the log files. **Open folder** shows each in Windows Explorer. Nothing here deletes anything: your results and your input files stay until you remove them yourself. If a folder does not exist yet, run a sequence once and choose **Open folder** again.
 
+## Notifications
+
+Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (on). They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
+
 ## Diagnostics
 
 **Save diagnostics** writes one file you can send to support. It includes your run logs, run

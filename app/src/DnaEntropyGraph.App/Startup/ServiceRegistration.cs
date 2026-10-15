@@ -266,6 +266,9 @@ public static class ServiceRegistration
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<RunDefaultsSettingsViewModel>();
         services.AddTransient<FilesSettingsViewModel>();
+        services.AddTransient<NotificationsSettingsViewModel>();
+        services.AddSingleton<NotificationSettings>();
+        services.AddSingleton<RunCompletionActions>();
 
         return services;
     }
