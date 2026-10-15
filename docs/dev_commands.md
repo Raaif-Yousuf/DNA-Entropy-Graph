@@ -172,11 +172,16 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   reported both pytest gates as FAIL although every test passed, because both crashed in pytest's own
   `cleanup_dead_symlinks` on the shared default basetemp. A run that prints only passes and then exits
   non-zero is now an `ERROR` saying it was not a test failure and not a pass.
-- **`KNOWN` status.** `dotnet format --verify-no-changes` reports ENDOFLINE on every line of a CRLF checkout
-  (`core.autocrlf=true`, #462). Only when autocrlf is true AND every parsed diagnostic is ENDOFLINE is the
-  gate `KNOWN` (exit 0, printed with the issue number); any other diagnostic, an unparseable failure or
-  autocrlf off stays `FAIL`. THEORY (unverified, written without a dotnet run): the diagnostic line shape is
-  `path(line,col): error ENDOFLINE: ...`; if it differs the parse finds nothing and the gate fails safe.
+- **`KNOWN` status and the real fix for #462.** MEASURED 2026-10-15: `.gitattributes` (`* text=auto eol=lf`) makes a
+  fresh checkout or worktree LF even with `core.autocrlf=true`, and `dotnet format DnaEntropyGraph.sln
+  --verify-no-changes` exits 0 there. ENDOFLINE on every line only appears in a STALE tree (checked out before
+  `.gitattributes`, or a tool wrote CRLF). `python scripts/fix_eol.py` (`--check` lists without changing) rewrites
+  exactly the files git holds as LF but the tree holds as CRLF/mixed, as bytes; run it once and the gate is real.
+  The gate is `KNOWN` (exit 0, printed with the issue number) only when autocrlf is true, every parsed diagnostic is
+  ENDOFLINE AND `git ls-files --eol` shows such a stale file; ENDOFLINE in an LF tree, any other diagnostic, an
+  unparseable failure or autocrlf off is `FAIL`. THEORY (unverified, written without a dotnet run on a CRLF tree):
+  the diagnostic line shape is `path(line,col): error ENDOFLINE: ...`; if it differs the parse finds nothing and the
+  gate fails safe.
 - **The stamp.** A green, unfiltered run writes `<git-dir>/premerge-stamp.json` (HEAD sha, mode, time);
   `scripts/hooks/require_premerge_before_pr.py` refuses `gh pr create` and `gh pr merge` without a fresh
   stamp for the current HEAD (see `scripts/hooks/README.md`). Committing changes HEAD, so: commit, then run
