@@ -134,6 +134,20 @@ public sealed class LocalJobRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task An_input_the_store_already_put_in_the_job_folder_is_used_in_place_not_copied_onto_itself()
+    {
+        var inPlace = Path.Combine(RunsDirectory, JobId, "input", "locus.fasta");
+        Directory.CreateDirectory(Path.GetDirectoryName(inPlace)!);
+        File.WriteAllText(inPlace, ">locus\nACGT\n");
+        var request = Request() with { Input = new StagedInput(inPlace, "locus.fasta") };
+
+        var result = await Runner(HappyWorker()).RunAsync(request, CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed);
+        File.ReadAllText(inPlace).ShouldBe(">locus\nACGT\n");
+    }
+
+    [Fact]
     public async Task A_second_run_of_the_same_input_gets_its_own_folder()
     {
         await Runner(HappyWorker()).RunAsync(Request(), CancellationToken.None);

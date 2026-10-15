@@ -8,6 +8,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
@@ -206,9 +207,36 @@ public static class ServiceRegistration
             Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
-        // LocalEngine.
-        services.AddSingleton<LocalEngineManager>();
-        services.AddSingleton<RunTargetResolver>();
+        // LocalEngine (issues #120, #172, #173, #174): the This PC path. Everything that starts a program goes through the one
+        // IProcessLauncher (Hard Rule 6), so a test or a dev run can replace it.
+        services.AddSingleton<IProcessLauncher, SystemProcessLauncher>();
+        services.AddSingleton<IGpuDetector>(sp => new NvidiaSmiGpuDetector(sp.GetRequiredService<IProcessLauncher>(), NvidiaSmiGpuDetector.WindowsCandidates()));
+        services.AddSingleton<IFreeDiskSpace, DriveFreeDiskSpace>();
+        services.AddSingleton<LocalEngineLayout>(sp => LocalEngineSetup.Layout(sp.GetRequiredService<AppDataRoot>()));
+        services.AddSingleton<LocalEngineManager>(sp => new LocalEngineManager(
+            sp.GetRequiredService<IGpuDetector>(),
+            sp.GetRequiredService<IFreeDiskSpace>(),
+            sp.GetRequiredService<IProcessLauncher>(),
+            sp.GetRequiredService<LocalEngineLayout>(),
+            JobEngine.AppVersion()));
+        services.AddSingleton<ILocalReadinessSource>(sp => sp.GetRequiredService<LocalEngineManager>());
+        services.AddSingleton<IRunTargetResolver, RunTargetResolver>();
+        services.AddSingleton<ILocalEngineInstaller>(sp => LocalEngineSetup.Installer(
+            sp.GetRequiredService<IProcessLauncher>(),
+            sp.GetRequiredService<LocalEngineLayout>(),
+            sp.GetRequiredService<AppDataRoot>(),
+            sp.GetRequiredService<LocalEngineManager>()));
+        services.AddSingleton<LocalJobRunner>(sp =>
+        {
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new LocalJobRunner(
+                sp.GetRequiredService<IProcessLauncher>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<LocalEngineLayout>(),
+                sp.GetRequiredService<AppDataRoot>().RunsDirectory,
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
+        services.AddSingleton<LocalRunDriver>();
 
         // App-owned singleton that survives navigation (docs/architecture.md section 3).
         // Registered once as its own concrete type and exposed through both

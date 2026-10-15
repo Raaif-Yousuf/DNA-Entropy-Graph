@@ -146,7 +146,15 @@ public sealed class LocalJobRunner
     {
         var inputDir = Path.Combine(jobDir, "input");
         Directory.CreateDirectory(inputDir);
-        File.Copy(request.Input.LocalPath, Path.Combine(inputDir, request.Input.FileName), overwrite: true);
+        // The app's own copy of the input is normally ALREADY here: runs\<jobId>\input\<file> is where the input store keeps it
+        // (Hard Rule 14), and it is the job folder's own input\ path. Copying a file onto itself is an error, so only a copy from
+        // somewhere else is made.
+        var destination = Path.Combine(inputDir, request.Input.FileName);
+        if (!string.Equals(Path.GetFullPath(request.Input.LocalPath), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
+        {
+            File.Copy(request.Input.LocalPath, destination, overwrite: true);
+        }
+
 
         var manifest = WorkerManifestBuilder.Build(
             request.Options,
