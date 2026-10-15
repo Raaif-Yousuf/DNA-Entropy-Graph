@@ -644,6 +644,25 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void A_numeric_leaf_equal_to_a_withheld_numeric_id_does_not_ship_the_digits()
+    {
+        // Review round 2 of #637: a number leaf was DeepCloned, so `"id": 12` shipped the withheld id as it was.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/12/result.json"] = """{"jobId":"12","status":"failed","inputs":[{"id":12,"status":"ok"},{"id":120,"status":"ok"}]}""",
+            ["runs/12/progress.jsonl"] = """{"jobId":"12","stage":"failed","percent":12}""",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var result = entries["files/runs/withheldid1/result.json"];
+        result.ShouldContain("\"id\": \"withheldid1\"");
+        result.ShouldContain("\"id\": 120");
+        result.ShouldNotContain("\"id\": 12,");
+        entries["files/runs/withheldid1/progress.jsonl"].ShouldNotContain(":12}");
+    }
+
+    [Fact]
     public void A_character_that_only_case_folds_to_a_withheld_id_is_rewritten_and_never_crashes_the_build()
     {
         // U+212A (Kelvin sign) matches the pattern "k" under Unicode case folding but is not equal to it ordinally.

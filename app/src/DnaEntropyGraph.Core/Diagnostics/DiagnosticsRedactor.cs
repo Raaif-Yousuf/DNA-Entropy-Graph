@@ -167,7 +167,7 @@ internal sealed partial class DiagnosticsRedactor
     /// <param name="json">The file text.</param>
     /// <param name="spec">The keys it may carry.</param>
     /// <param name="jobId">When given, every <c>jobId</c> leaf is rewritten to it: the file's own run folder decides the id, not the file.</param>
-    /// <param name="rewrite">Applied to every kept string leaf before it is checked (never to a key or a number).</param>
+    /// <param name="rewrite">Applied to every kept string leaf before it is checked (never to a key; a number only when it is itself a withheld id).</param>
     public string? RedactJson(string json, KeySpec spec, string? jobId = null, Func<string, string>? rewrite = null)
     {
         try
@@ -228,6 +228,12 @@ internal sealed partial class DiagnosticsRedactor
             case JsonValue value when value.TryGetValue<string>(out var text):
                 text = rewrite is null ? text : rewrite(text);
                 return SafeValue().IsMatch(text) && !SequenceShape.IsSequenceLine(text, minLength: 20, out _) ? RedactText(text) : RedactedValue;
+            case JsonValue number when rewrite is not null:
+                // A number is not copied as it is: a withheld all-digit id (`"id": 12`) is a number leaf too. Only a leaf the
+                // rewrite changes becomes a string; any other number keeps its type and value.
+                var raw = number.ToJsonString();
+                var rewritten = rewrite(raw);
+                return rewritten == raw ? node.DeepClone() : JsonValue.Create(rewritten);
             case JsonValue:
                 return node.DeepClone();
             default:
