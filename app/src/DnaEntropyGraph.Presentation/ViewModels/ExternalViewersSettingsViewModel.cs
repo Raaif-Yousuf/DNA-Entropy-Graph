@@ -18,6 +18,10 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
     private readonly ISettingsStore _settings;
     private readonly IFilePicker _picker;
     private readonly IStringResourceProvider _strings;
+    private readonly IDispatcher _dispatcher;
+    private readonly IFileProbe _probe;
+    private int _igvCheck;
+    private int _geneiousCheck;
 
     [ObservableProperty]
     private string _igvPath;
@@ -39,8 +43,10 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _igvPortStatus = string.Empty;
 
-    public ExternalViewersSettingsViewModel(ISettingsStore settings, IFilePicker picker, IStringResourceProvider strings)
+    public ExternalViewersSettingsViewModel(ISettingsStore settings, IFilePicker picker, IStringResourceProvider strings, IDispatcher dispatcher, IFileProbe probe)
     {
+        _dispatcher = dispatcher;
+        _probe = probe;
         _settings = settings;
         _picker = picker;
         _strings = strings;
@@ -50,13 +56,45 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
         _geneiousPath = Read(ViewerSettingKeys.GeneiousPath) ?? string.Empty;
         _igvPortText = (TryParsePort(Read(ViewerSettingKeys.IgvPort), out var port) ? port : IgvBatchCommands.DefaultPort)
             .ToString(CultureInfo.InvariantCulture);
-        _igvPathStatus = PathStatus(_igvPath);
-        _geneiousPathStatus = PathStatus(_geneiousPath);
+        CheckPath(_igvPath, isIgv: true);
+        CheckPath(_geneiousPath, isIgv: false);
     }
 
-    partial void OnIgvPathChanged(string value) => IgvPathStatus = SavePath(ViewerSettingKeys.IgvPath, value);
+    partial void OnIgvPathChanged(string value)
+    {
+        if (!Normalize(value, out var path))
+        {
+            IgvPath = path; // writes back the trimmed form; this handler runs again and saves it
+            return;
+        }
 
-    partial void OnGeneiousPathChanged(string value) => GeneiousPathStatus = SavePath(ViewerSettingKeys.GeneiousPath, value);
+        if (!Write(ViewerSettingKeys.IgvPath, path))
+        {
+            _igvCheck++; // a pending check must not clear this message
+            IgvPathStatus = _strings.GetString("ViewerSettingNotSaved");
+            return;
+        }
+
+        CheckPath(path, isIgv: true);
+    }
+
+    partial void OnGeneiousPathChanged(string value)
+    {
+        if (!Normalize(value, out var path))
+        {
+            GeneiousPath = path;
+            return;
+        }
+
+        if (!Write(ViewerSettingKeys.GeneiousPath, path))
+        {
+            _geneiousCheck++; // a pending check must not clear this message
+            GeneiousPathStatus = _strings.GetString("ViewerSettingNotSaved");
+            return;
+        }
+
+        CheckPath(path, isIgv: false);
+    }
 
     partial void OnIgvPortTextChanged(string value)
     {
@@ -67,7 +105,14 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
             return;
         }
 
-        IgvPortStatus = Write(ViewerSettingKeys.IgvPort, port.ToString(CultureInfo.InvariantCulture)) ? string.Empty : _strings.GetString("ViewerSettingNotSaved");
+        var canonical = port.ToString(CultureInfo.InvariantCulture);
+        if (value != canonical)
+        {
+            IgvPortText = canonical; // "060151" becomes "60151"; this handler runs again and saves it
+            return;
+        }
+
+        IgvPortStatus = Write(ViewerSettingKeys.IgvPort, canonical) ? string.Empty : _strings.GetString("ViewerSettingNotSaved");
     }
 
     [RelayCommand]
@@ -105,22 +150,52 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>Saves the trimmed path and returns the status text: empty when fine, a warning when no file is there.</summary>
-    private string SavePath(string key, string value)
+    /// <summary>The trimmed, unquoted form of a typed path (a path pasted from Explorer's "Copy as path" arrives in quotes). True when it was already that form.</summary>
+    private static bool Normalize(string value, out string path)
     {
-        // A path pasted from Explorer's "Copy as path" arrives in quotes.
-        var path = value.Trim().Trim('"').Trim();
-        if (!Write(key, path))
-        {
-            return _strings.GetString("ViewerSettingNotSaved");
-        }
-
-        return PathStatus(path);
+        path = value.Trim().Trim('"').Trim();
+        return path == value;
     }
 
-    private string PathStatus(string path)
-        => string.IsNullOrWhiteSpace(path) || File.Exists(path) ? string.Empty : _strings.GetString("ViewerPathMissing");
+    /// <summary>
+    /// Looks for the program off the UI thread and sets the row's status when the answer comes back. An answer for a path the
+    /// row no longer holds is dropped, so a slow share cannot overwrite the status of what is typed now.
+    /// </summary>
+    private void CheckPath(string path, bool isIgv)
+    {
+        var ticket = isIgv ? ++_igvCheck : ++_geneiousCheck;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            Apply(isIgv, ticket, exists: true);
+            return;
+        }
 
+        _ = AwaitAsync();
+
+        async Task AwaitAsync()
+        {
+            var exists = await _probe.ExistsAsync(path).ConfigureAwait(false);
+            _dispatcher.Enqueue(() => Apply(isIgv, ticket, exists));
+        }
+    }
+
+    private void Apply(bool isIgv, int ticket, bool exists)
+    {
+        if (ticket != (isIgv ? _igvCheck : _geneiousCheck))
+        {
+            return;
+        }
+
+        var status = exists ? string.Empty : _strings.GetString("ViewerPathMissing");
+        if (isIgv)
+        {
+            IgvPathStatus = status;
+        }
+        else
+        {
+            GeneiousPathStatus = status;
+        }
+    }
     private static bool TryParsePort(string? text, out int port)
         => int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out port) && port is > 0 and <= 65535;
 

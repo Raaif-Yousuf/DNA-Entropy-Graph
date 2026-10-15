@@ -33,7 +33,7 @@ public sealed class ExternalViewersSettingsTests : IDisposable
         }
     }
 
-    private ExternalViewersSettingsViewModel Create() => new(_settings, _picker, _strings);
+    private ExternalViewersSettingsViewModel Create(IFileProbe? probe = null) => new(_settings, _picker, _strings, new InlineDispatcher(), probe ?? new FuncProbe(File.Exists));
 
     private static IReadOnlyList<RunOutputFile> IgvFiles() =>
     [
@@ -271,6 +271,159 @@ public sealed class ExternalViewersSettingsTests : IDisposable
         launcher.Received(1).Launch(program, Arg.Any<IReadOnlyList<string>>());
     }
 
+    [Fact]
+    public void A_pasted_path_is_written_back_to_the_box_trimmed_and_unquoted()
+    {
+        var program = RealProgram();
+        var vm = Create();
+
+        vm.IgvPath = "  \"" + program + "\" ";
+
+        vm.IgvPath.ShouldBe(program);
+        vm.IgvPathStatus.ShouldBeEmpty();
+        _settings.Values[ViewerSettingKeys.IgvPath].ShouldBe(program);
+    }
+
+    [Fact]
+    public void A_port_with_leading_zeros_is_shown_as_the_number_that_was_saved()
+    {
+        var vm = Create();
+
+        vm.IgvPortText = "060151";
+
+        vm.IgvPortText.ShouldBe("60151");
+        _settings.Values[ViewerSettingKeys.IgvPort].ShouldBe("60151");
+        vm.IgvPortStatus.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Opening_the_page_does_not_wait_for_a_path_on_a_slow_share()
+    {
+        _settings.Values[ViewerSettingKeys.IgvPath] = @"\\nas\share\igv.bat";
+        var probe = new GatedProbe();
+
+        var vm = Create(probe);
+
+        // The constructor returned while the probe is still pending: nothing waited for the share.
+        probe.Pending.Count.ShouldBe(1);
+        vm.IgvPathStatus.ShouldBeEmpty();
+
+        probe.Pending[0].SetResult(false);
+
+        vm.IgvPathStatus.ShouldBe("ViewerPathMissing");
+    }
+
+    [Fact]
+    public void Typing_a_path_does_not_wait_for_the_check_and_the_status_follows_it()
+    {
+        var probe = new GatedProbe();
+        var vm = Create(probe);
+
+        vm.GeneiousPath = @"\\nas\share\Geneious.exe";
+
+        probe.Pending.Count.ShouldBe(1);
+        vm.GeneiousPathStatus.ShouldBeEmpty();
+        _settings.Values[ViewerSettingKeys.GeneiousPath].ShouldBe(@"\\nas\share\Geneious.exe");
+
+        probe.Pending[0].SetResult(false);
+        vm.GeneiousPathStatus.ShouldBe("ViewerPathMissing");
+    }
+
+    [Fact]
+    public void A_late_answer_for_an_earlier_path_does_not_overwrite_the_status_of_the_current_one()
+    {
+        var probe = new GatedProbe();
+        var vm = Create(probe);
+
+        vm.IgvPath = @"\\nas\a\igv.bat";
+        vm.IgvPath = @"\\nas\b\igv.bat";
+        probe.Pending[1].SetResult(true);
+        probe.Pending[0].SetResult(false);
+
+        vm.IgvPathStatus.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_saved_path_blanked_after_a_failed_launch_is_gone_the_next_time_Settings_opens()
+    {
+        // Settings pages are not cached (no NavigationCacheMode anywhere in the app), so every visit builds a new view
+        // model that reads the store; Open in IGV is on another page, so the Settings page cannot be open during a launch.
+        var program = RealProgram();
+        _settings.Values[ViewerSettingKeys.IgvPath] = program;
+        var launcher = Substitute.For<IViewerProcessLauncher>();
+        launcher.Launch(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>()).Returns(false);
+        var client = Substitute.For<IIgvBatchClient>();
+        client.SendAsync(Arg.Any<int>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(IgvBatchOutcome.NotListening);
+        var opener = new ExternalViewerOpener(client, launcher, Substitute.For<IViewerLocator>(), _settings, _picker);
+        Create().IgvPath.ShouldBe(program);
+
+        await opener.OpenInIgvAsync(IgvFiles(), TestContext.Current.CancellationToken);
+
+        Create().IgvPath.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Reset_port_writes_the_default_when_the_box_already_shows_it_but_the_store_holds_another()
+    {
+        var vm = Create();
+        vm.IgvPortText.ShouldBe("60151");
+        _settings.Values[ViewerSettingKeys.IgvPort] = "60999";
+
+        vm.ResetIgvPortCommand.Execute(null);
+
+        _settings.Values[ViewerSettingKeys.IgvPort].ShouldBe("60151");
+        vm.IgvPortStatus.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_locked_settings_file_is_reported_for_a_path_write()
+    {
+        var vm = Create();
+        _settings.Unavailable = true;
+
+        vm.IgvPath = @"C:\igv\igv.bat";
+
+        vm.IgvPathStatus.ShouldBe("ViewerSettingNotSaved");
+    }
+
+    [Fact]
+    public void A_locked_settings_file_is_reported_for_a_reset_port_write_in_both_branches()
+    {
+        var vm = Create();
+        _settings.Unavailable = true;
+
+        vm.ResetIgvPortCommand.Execute(null); // box already shows the default
+        vm.IgvPortStatus.ShouldBe("ViewerSettingNotSaved");
+
+        _settings.Unavailable = false;
+        vm.IgvPortText = "60152";
+        _settings.Unavailable = true;
+        vm.ResetIgvPortCommand.Execute(null); // box differs from the default
+        vm.IgvPortText.ShouldBe("60151");
+        vm.IgvPortStatus.ShouldBe("ViewerSettingNotSaved");
+    }
+
+    private sealed class InlineDispatcher : IDispatcher
+    {
+        public void Enqueue(Action action) => action();
+    }
+
+    private sealed class FuncProbe(Func<string, bool> exists) : IFileProbe
+    {
+        public Task<bool> ExistsAsync(string path) => Task.FromResult(exists(path));
+    }
+
+    private sealed class GatedProbe : IFileProbe
+    {
+        public List<TaskCompletionSource<bool>> Pending { get; } = [];
+
+        public Task<bool> ExistsAsync(string path)
+        {
+            var gate = new TaskCompletionSource<bool>();
+            Pending.Add(gate);
+            return gate.Task;
+        }
+    }
     private sealed class MemorySettings : ISettingsStore
     {
         public Dictionary<string, string> Values { get; } = [];

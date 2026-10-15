@@ -1167,10 +1167,10 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>IGV program</value>
   </data>
   <data name="ViewerPathMissing" xml:space="preserve">
-    <value>No program was found at this path. Choose Browse to pick it again, or choose Reset to default to have the app look for it.</value>
+    <value>No program was found at this path. Choose Browse to pick the program again.</value>
   </data>
   <data name="ViewerPortInvalid" xml:space="preserve">
-    <value>The port must be a whole number from 1 to 65535. Type one, or choose Reset to default to use 60151.</value>
+    <value>The port must be a whole number from 1 to 65535. Choose Reset to default to use 60151.</value>
   </data>
   <data name="ViewerGeneiousBrowseButton.Content" xml:space="preserve">
     <value>Browse...</value>
