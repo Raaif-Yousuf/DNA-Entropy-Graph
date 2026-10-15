@@ -57,7 +57,7 @@ public class CloudJobRunnerEnsureBucketTimeoutTests
         var gcp = new FakeGcp();
         var clock = new VirtualTimeProvider();
         var storage = new SlowBucketStorage(gcp, clock);
-        var runner = new CloudJobRunner(gcp, storage, gcp, gcp, new InMemoryRunRepository())
+        var runner = new CloudJobRunner(gcp, storage, gcp, gcp, gcp, new InMemoryRunRepository())
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromSeconds(5),

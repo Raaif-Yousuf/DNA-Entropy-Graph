@@ -91,7 +91,8 @@ ask IT, or use a personal account. *(`NO_EXTERNAL_IP`)*
 
 **"You are not allowed to run computers as the worker identity"**, a narrower permission
 problem than being a non-Owner; ask your project's Owner for the specific role named in
-the message. Choose **Copy request for the project owner** and send it to them. *(`PERMISSION_ACTAS`)*
+the message. Choose **Copy request for the project owner** and send it to them. The same
+button appears on the failed run in the Runs list. *(`PERMISSION_ACTAS`)*
 
 **"Using the default computer identity"**, a yellow note, not a failure: your organization does
 not let apps create their own worker identity (a service account), so the rented computer
@@ -195,6 +196,16 @@ space and cost. If you still have a local copy, use it; otherwise, re-run the an
 your internet connection and click **Retry**; your results are safe in the cloud for your
 full retention period regardless of when you manage to download them.
 *(`DOWNLOAD_FAILED`)*
+
+## The Run button could not start the run
+
+The line under the file list says which kind of problem it was, and what to do.
+
+**"We could not read your file to start the run"**, the file moved, is open in another program, or the app is not allowed to read it. Check that it is still there and closed elsewhere, then press **Run** again.
+
+**"We could not start the run. Check your Google Cloud connection"**, sign-in or the project has a problem. Open the Cloud page, fix what it shows, then press **Run** again.
+
+**"We could not start the run. Press Run again"**, anything else, for example the app's own settings or history file. Press **Run** again; if it fails again, choose **Save diagnostics** in Settings and send the file to support.
 
 ## The app stopped me from running something
 

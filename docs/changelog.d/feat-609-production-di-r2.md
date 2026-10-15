@@ -1,0 +1,1 @@
+- Production now builds every cloud call from the real Google gateways (compute, storage, project setup, worker identity, quota, project list, billing, service enablement) and the real account refreshes tokens; FakeGcp is no longer registered in a shipped build (#609). Signed in with no project chosen, a run fails naming Choose a project.

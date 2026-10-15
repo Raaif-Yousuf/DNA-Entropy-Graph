@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 
+from .analysis.composition import codon_usage, gc_percent
 from .analysis.direction import DirectionResult, analyze_direction
 from .analysis.gene_summary import GeneRow, summarize_genes
 from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
@@ -33,6 +34,7 @@ from .readers.paste import PasteReader
 from .validation.validators import ValidatedSequence, validate_sequence
 from .writers.base import Writer
 from .writers.bedgraph import BedGraphWriter
+from .writers.composition import CodonUsageWriter
 from .writers.fasta import FastaWriter
 from .writers.genbank import GenBankWriter
 from .writers.gene_summary import GeneSummaryWriter
@@ -413,7 +415,49 @@ def _write_separate_tracks(
     return outputs
 
 
-def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> list[str]:
+def _write_composition(
+    cfg: RunConfig,
+    processed: list[tuple[Contig, DirectionResult]],
+    genes_by_contig: list[list[GeneFeature]],
+    notices: list[str] | None,
+) -> list[str]:
+    """Write ``<name>.gc.bedgraph`` and ``<name>.codons.tsv`` (issue #191), each only when asked
+    for. GC percent is per contig, wrapping the origin only for a circular contig (issue #128).
+    Codon usage covers each contig's genes (the file's own, GFF3's, or Prodigal's); a feature
+    that is not CDS-shaped is skipped and counted in one notice, never silently."""
+    outputs: list[str] = []
+    if cfg.include_gc:
+        blocks = [
+            (c.name, gc_percent(c.seq, cfg.gc_window, circular=cfg.topology.resolve(c.circular)))
+            for c, _ in processed
+        ]
+        outputs.append(
+            BedGraphWriter().write_multi(
+                name=cfg.name, blocks=blocks, start=cfg.start, out_dir=cfg.out_dir, metric="gc"
+            )
+        )
+    if cfg.include_codons:
+        rows = []
+        skipped = 0
+        for (c, _), feats in zip(processed, genes_by_contig, strict=True):
+            for f in feats:
+                usage = codon_usage(c.seq, f)
+                if usage is None:
+                    skipped += 1
+                else:
+                    rows.extend((c.name, r) for r in usage)
+        if skipped and notices is not None:
+            notices.append(
+                f"Codon usage skipped {skipped} feature(s) whose length is not a multiple of three "
+                "(partial or non-coding genes)."
+            )
+        outputs.append(CodonUsageWriter().write_multi(name=cfg.name, rows=rows, out_dir=cfg.out_dir))
+    return outputs
+
+
+def _write_genbank_outputs(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], notices: list[str] | None = None
+) -> list[str]:
     """GenBank input -> ONE GenBank (all records, genes preserved + entropy notes), a
     FASTA + one track format (bedGraph or WIG, per ``cfg.track_format``) + Geneious track (a block
     per record), and ONE stats.txt.
@@ -529,12 +573,14 @@ def _write_genbank_outputs(cfg: RunConfig, processed: list[tuple[Contig, Directi
         outputs.append(genes_gff)
     if cfg.include_gene_summary:
         outputs += _write_gene_summary(cfg, processed, [c.features for c, _ in processed])
+    outputs += _write_composition(cfg, processed, [c.features for c, _ in processed], notices)
     return outputs
 
 
 def _write_standard_outputs(
     cfg: RunConfig,
     processed: list[tuple[Contig, DirectionResult]],
+    notices: list[str] | None = None,
 ) -> tuple[list[str], list[GeneFeature]]:
     """FASTA/paste input -> the existing files, plus a bonus GenBank when possible.
 
@@ -651,6 +697,7 @@ def _write_standard_outputs(
 
     if cfg.include_gene_summary and cfg.genes:
         outputs += _write_gene_summary(cfg, processed, genes_by_contig)
+    outputs += _write_composition(cfg, processed, genes_by_contig, notices)
 
     # Bonus GenBank "if possible": reuse --genes features per contig, else best-effort
     # Prodigal per contig. One .gb file holding every record, like the GenBank input path.
@@ -722,6 +769,8 @@ def run(
     try:
         if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
             validate_smoothing_windows(cfg.smoothing_windows)
+        if cfg.include_gc:
+            validate_smoothing_windows([cfg.gc_window])
         validate_region_options(
             threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
         )
@@ -797,10 +846,10 @@ def run(
         raise
 
     if loaded.source_kind == detect.GENBANK:
-        outputs = _write_genbank_outputs(cfg, processed)
+        outputs = _write_genbank_outputs(cfg, processed, notices)
         genes = [f for c, _ in processed for f in c.features]
     else:
-        outputs, genes = _write_standard_outputs(cfg, processed)
+        outputs, genes = _write_standard_outputs(cfg, processed, notices)
     outputs.append(_write_provenance(cfg, processed, t0, provenance_extra))
 
     first_contig, first_dr = processed[0]

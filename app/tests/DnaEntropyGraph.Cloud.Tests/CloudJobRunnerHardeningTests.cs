@@ -34,7 +34,7 @@ public class CloudJobRunnerHardeningTests
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
     private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, TimeSpan? resultTimeout = null, bool defaultWait = false)
-        => new(gcp, gcp, gcp, gcp, repo, onPhase)
+        => new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = defaultWait ? null : resultTimeout ?? TimeSpan.FromMilliseconds(80),
@@ -95,7 +95,7 @@ public class CloudJobRunnerHardeningTests
         // the outcome, see CloudJobRunnerGuaranteesTests), so the unexpected exception is a repository that fails at Running.
         var gcp = new FakeGcp();
         var repo = new FailingAtRunningRepository(new InMemoryRunRepository());
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, repo)
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
