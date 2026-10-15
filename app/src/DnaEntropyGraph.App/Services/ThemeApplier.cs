@@ -21,8 +21,6 @@ public static class ThemeApplier
         _ => ElementTheme.Default,
     };
 
-    public static void Apply(FrameworkElement root, ISettingsStore settingsStore) => root.RequestedTheme = Resolve(ReadTheme(settingsStore));
-
     /// <summary>The saved theme, or null when the settings file is locked (#558): a launch never fails over the theme.</summary>
     public static string? ReadTheme(ISettingsStore settingsStore)
     {
