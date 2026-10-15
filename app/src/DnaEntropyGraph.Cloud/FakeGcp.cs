@@ -1313,9 +1313,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ThrowIfScriptedTransient();
+        ThrowIfUploadScripted(objectKey);
         using var copy = new MemoryStream();
         await content.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
         _objects[(bucket, objectKey)] = copy.ToArray();
+        OnObjectStored(bucket, objectKey);
     }
 
     public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)

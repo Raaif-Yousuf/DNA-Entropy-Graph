@@ -5,7 +5,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// delete every VM this job's id owns (by label lookup, not a remembered zone), then record exactly one terminal state.
 /// The in-flight state stays owned by <see cref="VmProvisioner"/>; this only asks it to settle.
 /// </summary>
-internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, VmTerminator terminator)
+internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, VmTerminator terminator, GracefulCancel graceful)
 {
     public async Task CancelAsync(string jobId, CancellationToken cancellationToken)
     {
@@ -35,6 +35,13 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         // A create the caller gave up on can still land. Wait for it (bounded) before looking, or the VM appears
         // after the run is recorded Cancelled and nothing ever deletes it.
         var settled = await provisioner.SettleInflightCreatesAsync(jobId).ConfigureAwait(false);
+
+        // Issue #675: ask the worker to stop first so the outputs it already has are kept; every way out of the wait ends in the delete below.
+        if (existing.Bucket is { Length: > 0 } bucket)
+        {
+            await graceful.AskAsync(jobId, bucket, cancellationToken).ConfigureAwait(false);
+        }
+
         string? failure;
         try
         {

@@ -343,6 +343,11 @@ actually emit these two stages, is an open question for whoever picks it up next
 - If no heartbeat arrives within **60 s** of the app writing `control/cancel`, the app
  calls `instances.stop`/`instances.delete` on the VM directly rather than continuing to
  wait for a worker that may already be gone.
+- **Implemented 2026-10-15 (issue #675; DECISION, agent-made, reversible):** `CloudJobRunner.CancelAsync` writes `control/cancel` first, but only for a run whose row knows its bucket, whose
+ VM is RUNNING and whose `status.json` is worker-written (a worker that never started has nobody to answer, so no wait). It then waits up to `CancelAckTimeout` (60 s; zero turns
+ the graceful step off) for a sign of life (`heartbeatSeq`/`updatedAt` change, a terminal stage, or `result.json`), then, once acknowledged, up to `CancelFinishTimeout` (2 minutes,
+ THEORY unverified) for a terminal stage, and only then deletes the VM exactly as before and records `Cancelled`. A request that cannot be written, a caller that gives up, or a
+ worker that never answers all end in the delete: the graceful step can never keep a VM alive. No worker change was needed: `worker/src/dna_entropy/worker/cancel.py` already honours the object.
 
 ---
 

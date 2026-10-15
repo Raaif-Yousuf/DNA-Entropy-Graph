@@ -1,0 +1,1 @@
+- Cloud: the runner raises a "taking longer than usual" notice at 75 percent of a stage's deadline, offers Stop / Delete / Keep waiting when the heartbeat watch fires (`OnNotice`, `OnStall`), and a cancel now writes `control/cancel` and waits up to 60 s for the worker before deleting the VM (#675).

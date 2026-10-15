@@ -836,6 +836,16 @@ quota check also uses a placeholder accelerator-type string (`"gpu"`), because `
 no accelerator-type field yet (only `MachineType`) - see this round's changelog fragment
 and issue tracker for the follow-up.
 
+### 11.x Slow stages and stalls: the notice and the three-way choice (issue #675)
+
+`CloudJobRunner.OnNotice` (`Action<RunNotice>`) is told `SlowStage` once per stage when it passes 75 percent of its deadline (`HeartbeatWatch.SlowFraction`, stage, time in stage,
+deadline), `StallDetected` when the heartbeat watch fires and a question is opened, and `StallCleared` when the worker recovers while it is open. `CloudJobRunner.OnStall`
+(`StallDecision`: `StallPrompt` in, `StallChoice` out: `Stop`, `Delete`, `KeepWaiting`) replaces "end the VM at once" for `worker_stage_stuck`, `worker_heartbeat_stale` and `worker_no_heartbeat`;
+null keeps the old behaviour. While the question is open `ResultWaiter` keeps polling `result.json` and does not repeat it; Stop and Delete end the run under the same code with the VM
+stopped or deleted whatever the run's own end choice was; `KeepWaiting` restarts every watch allowance (`HeartbeatWatch.Snooze`) so the question comes back after a fresh one; the result
+limit still applies, so waiting is never unbounded (Hard Rule 11); a handler that throws or is cancelled counts as no answer and the VM is ended the run's own way. A box with no GPU is never
+asked about. The question's token is cancelled on every exit. Graceful cancel: `docs/job_contract.md` section 6. `FakeGcp`: `WithWorkerIgnoringCancel`, `WithUploadFailure`.
+
 ## 12. Retry, token refresh and the offline breaker (issue #258)
 
 **Implemented**: `CloudCallPipeline` (`app/src/DnaEntropyGraph.Cloud/CloudCallPipeline.cs`,
