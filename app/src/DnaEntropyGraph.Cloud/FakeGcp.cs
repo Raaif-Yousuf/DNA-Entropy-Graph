@@ -121,6 +121,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
     private int? _allRegionsGpuCap;
+    private readonly Dictionary<(string Region, string Accelerator), int> _regionalUsed = new();
     private CloudErrorKind? _quotaReadFailure;
     private const int DefaultRegionalQuota = 1;
 
@@ -703,6 +704,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    /// <summary>Sets the regional GPU quota to a limit of <paramref name="limit"/> with <paramref name="used"/> already in use (the quota read then reports limit and usage, so the remainder is their difference).</summary>
+    public FakeGcp WithGpuQuotaUsed(string region, string acceleratorType, int limit, int used)
+    {
+        _regionalQuota[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = limit;
+        _regionalUsed[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = used;
+        return this;
+    }
+
     /// <summary>
     /// Sets the project-wide <c>GPUS_ALL_REGIONS</c> cap, which
     /// <see cref="GetGpuQuotaAsync"/> then applies as a ceiling under every
@@ -1042,6 +1051,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             return HangAsync<VmDescriptor?>(cancellationToken);
         }
 
+        if (_getVmFailure is { } getVmFailure)
+        {
+            throw Build(getVmFailure, "SCRIPTED_GET_VM_FAILURE", null, "The VM read was scripted to fail.");
+        }
+
         ThrowIfScriptedTransient();
         ExpireOverdueVms();
         if (_getVmFailuresRemaining > 0 && _getVmError is not null)
@@ -1146,7 +1160,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        ThrowIfDeleteScripted(vmName);
+        if (_silentNoOpDeletes)
+        {
+            return;
+        }
+
         var existed = _vms.TryRemove((vmName, zone), out _);
+        if (existed)
+        {
+            DetachDisksOf(vmName);
+        }
+
         _labelFingerprints.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
@@ -1296,7 +1321,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfScriptedTransient();
         IReadOnlyList<BucketDescriptor> buckets = _bucketProjects.ContainsKey(projectId)
-            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null)]
+            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null, _bucketSoftDeleteDays)]
             : [];
         return Task.FromResult(buckets);
     }
@@ -1656,9 +1681,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var scripted = new Dictionary<(string Region, string Metric), int>();
+        var used = new Dictionary<(string Region, string Metric), int>();
         foreach (var ((region, accelerator), available) in _regionalQuota)
         {
             scripted[(region, MetricOf(accelerator))] = available;
+        }
+
+        foreach (var ((region, accelerator), inUse) in _regionalUsed)
+        {
+            used[(region, MetricOf(accelerator))] = inUse;
         }
 
         var regionNames = new HashSet<string>(DefaultQuotaRegions, StringComparer.OrdinalIgnoreCase);
@@ -1679,7 +1710,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
 
             table[region] = metricNames
-                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, 0))
+                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, used.GetValueOrDefault((region.ToLowerInvariant(), m))))
                 .ToList();
         }
 
