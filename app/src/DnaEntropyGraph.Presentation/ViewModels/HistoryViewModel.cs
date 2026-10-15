@@ -236,8 +236,17 @@ public sealed partial class HistoryViewModel : ObservableObject
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
             new AsyncRelayCommand(() => RemoveAsync(run)),
-            OwnerRequestFor(run));
+            OwnerRequestFor(run))
+        {
+            PresetText = PresetLine(run),
+        };
     }
+
+    /// <summary>The "Preset: name" line of a run started from an option preset (issue #136), read from the options the run recorded.</summary>
+    private string? PresetLine(RunRecord run)
+        => RunOptionsJson.TryDeserialize(run.OptionsJson)?.PresetName is { Length: > 0 } name
+            ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.PresetLine), name)
+            : null;
 
     /// <summary>
     /// The reason line for a finished run (issue #459). A Failed run always has one (an unknown or missing code gets the

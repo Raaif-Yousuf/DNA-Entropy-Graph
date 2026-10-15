@@ -111,6 +111,11 @@ public sealed partial class RunListItem : CommunityToolkit.Mvvm.ComponentModel.O
 
     public bool HasReason => ReasonText is not null;
 
+    /// <summary>"Preset: Plasmid QC" for a run started from an option preset (issue #136); null for a run set by hand.</summary>
+    public string? PresetText { get; init; }
+
+    public bool HasPreset => PresetText is not null;
+
     public IAsyncRelayCommand OpenCommand { get; }
 
     public IAsyncRelayCommand RerunCommand { get; }

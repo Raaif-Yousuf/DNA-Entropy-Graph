@@ -49,6 +49,20 @@ public sealed class HistoryViewModelTests
     private static RunRecord Row(string id, JobPhase phase = JobPhase.Completed, DateTimeOffset? created = null, string? name = null, string? outputDir = null, string? options = null, string? notes = null)
         => new(id, phase, created ?? Now.AddHours(-1), Name: name, OutputDir: outputDir, OptionsJson: options ?? "{}", Notes: notes, Bucket: "b", JobPrefix: $"jobs/{id}/");
 
+    [Fact]
+    public async Task A_run_started_from_a_preset_shows_its_name_on_the_card_and_a_hand_set_run_shows_none()
+    {
+        _strings.GetString(RunsCopy.PresetLine).Returns("Preset: {0}");
+        var options = DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(
+            DnaEntropyGraph.Core.Presets.BuiltInPresets.PlasmidQc.ApplyTo(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }));
+
+        var vm = await Loaded(Row("preset", options: options), Row("plain"));
+
+        Item(vm, "preset").PresetText.ShouldBe("Preset: Plasmid QC");
+        Item(vm, "preset").HasPreset.ShouldBeTrue();
+        Item(vm, "plain").HasPreset.ShouldBeFalse();
+    }
+
     private async Task<HistoryViewModel> Loaded(params RunRecord[] rows)
     {
         _rows = [.. rows];

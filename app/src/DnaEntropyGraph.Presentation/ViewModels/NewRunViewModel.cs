@@ -47,6 +47,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly OutputSelectionStore _outputStore;
     private readonly IDiagnosticsLog _log;
     private readonly IClipboardTextReader? _clipboard;
+    private bool _applyingPreset;
 
     // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
     // kept while the user switches between pills, and written back to the store only when a run starts.
@@ -101,9 +102,16 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null,
         NewRunIntake? intake = null,
-        IClipboardTextReader? clipboard = null)
+        IClipboardTextReader? clipboard = null,
+        PresetPickerViewModel? presets = null)
     {
         _clipboard = clipboard;
+        Presets = presets;
+        if (presets is not null)
+        {
+            presets.OutputsChosen += ApplyPresetOutputs;
+        }
+
         _intake = intake;
         _outputStore = outputStore;
         _log = log;
@@ -150,6 +158,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// <summary>The "Files you get back" boxes for the selected file's kind (a GenBank file or a FASTA/pasted sequence); empty while the kind is not known.</summary>
     public ObservableCollection<OutputChoiceItem> OutputChoices { get; } = [];
 
+    /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
+    public PresetPickerViewModel? Presets { get; }
+
     public bool HasOutputChoices => OutputChoices.Count > 0;
 
     /// <summary>True when every box is cleared: the page then says to choose a file, and Run waits.</summary>
@@ -192,6 +203,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             return;
         }
 
+        if (!_applyingPreset)
+        {
+            Presets?.NoteOutputsEdited();
+        }
+
         var selection = _outputSelections[group];
         _outputSelections[group] = choice.IsChecked ? selection | choice.Entry.Kind : selection & ~choice.Entry.Kind;
 
@@ -205,8 +221,41 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         NotifyOutputChoicesChanged();
     }
 
+    /// <summary>A preset chose these files: they become the choice for each kind of input, and the boxes shown now follow.</summary>
+    private void ApplyPresetOutputs(OutputFileKinds outputs)
+    {
+        foreach (var group in new[] { OutputInputKinds.GenBank, OutputInputKinds.Sequence })
+        {
+            var offered = OutputCatalog.For(group).Aggregate(OutputFileKinds.None, (all, e) => all | e.Kind);
+            var chosen = OutputCatalog.Normalize(outputs & offered);
+            if (chosen != OutputFileKinds.None)
+            {
+                _outputSelections[group] = chosen;
+            }
+        }
+
+        _applyingPreset = true;
+        try
+        {
+            if (_shownOutputGroup is { } shown)
+            {
+                foreach (var box in OutputChoices)
+                {
+                    box.IsChecked = _outputSelections[shown].HasFlag(box.Entry.Kind);
+                }
+            }
+        }
+        finally
+        {
+            _applyingPreset = false;
+        }
+
+        NotifyOutputChoicesChanged();
+    }
+
     private void NotifyOutputChoicesChanged()
     {
+        Presets?.UpdateSummary(_shownOutputGroup is { } shown && _outputSelections.TryGetValue(shown, out var current) ? current : null);
         OnPropertyChanged(nameof(HasOutputChoices));
         OnPropertyChanged(nameof(HasNoOutputChosen));
         StartRunCommand.NotifyCanExecuteChanged();
@@ -564,6 +613,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             RunTarget = "Cloud",
             InputPath = SelectedItem!.Path,
             TreatAsRna = IsTreatingAsRna,
+            Direction = Presets?.Direction ?? Direction.BothCombined,
+            ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
+            Topology = Presets?.Topology ?? Topology.Auto,
+            PresetId = Presets?.PresetId,
+            PresetName = Presets?.PresetName,
             OutputFiles = outputs,
             // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
             TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
