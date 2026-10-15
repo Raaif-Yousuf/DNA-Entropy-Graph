@@ -298,6 +298,8 @@ THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGION
 failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Switched on in production by #609. The request flow
 (`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
 
+**Spot quota (issue #718).** MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): the Spot twin of the L4 line is `PREEMPTIBLE_NVIDIA_L4_GPUS` (name confirmed), but without a preemptible grant Spot VMs "consume standard quota", and once one is granted they "can only consume preemptible quota". `QuotaMetrics.SpotRegionalMetric` therefore reads the preemptible line only when the region reports it with a limit above zero, else the standard line. No production path reads it yet (the provisioner uses the on-demand metric); a Spot preflight must call it. THEORY (unverified): whether an ungranted region lists the preemptible line as 0 or omits it; both read as standard.
+
 ### 6.2 What preflight does with a quota it cannot read (issue #88)
 
 DECISION (agent-made, reversible): an unreadable quota is UNKNOWN, and unknown is not "none". `PreflightChecks` calls `GetGpuQuotaAsync` and:
@@ -606,7 +608,11 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   writer: the startup script's `booting`/`installing` count). A stage past its deadline (`booting` 8 min, `installing` 15, `restoring-cache` 15,
   `model-loading` 15, `uploading` 10; `CloudJobRunner.StageDeadlines` overrides them) ends the run as `worker_stage_stuck` and the VM per the
   user's choice, whatever the heartbeat says: this catches a hung main thread under a ticking heartbeat thread while it is in one of those
-  stages (#522's remaining case is a hang inside `running`). Numbers are the contract's (THEORY, unverified on a real VM).
+  stages (a hang inside `running` is the progress rule below). Numbers are the contract's (THEORY, unverified on a real VM).
+- **Forward progress (issue #723, app half of #522).** `WorkerStatusReader` reads `windowsDone` and `lastProgressAt`. In the `running` stage, when either field is present and
+  `(stage, windowsDone, lastProgressAt)` has not changed across looks for `ProgressStallTimeout` (default 20 min, job_contract.md section 5; compared between looks, never with the
+  app's clock) while the heartbeat keeps changing, the watch returns `worker_progress_stalled` (stop, via the same stall prompt). A status with neither field (an older worker) is never
+  judged by it. THEORY (unverified): 20 min is above any healthy L4 window; ToTest #522.
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
@@ -857,7 +863,7 @@ and issue tracker for the follow-up.
 
 `CloudJobRunner.OnNotice` (`Action<RunNotice>`) is told `SlowStage` once per stage when it passes 75 percent of its deadline (`HeartbeatWatch.SlowFraction`, stage, time in stage,
 deadline), `StallDetected` when the heartbeat watch fires and a question is opened, and `StallCleared` when the worker recovers while it is open. `CloudJobRunner.OnStall`
-(`StallDecision`: `StallPrompt` in, `StallChoice` out: `Stop`, `Delete`, `KeepWaiting`) replaces "end the VM at once" for `worker_stage_stuck`, `worker_heartbeat_stale` and `worker_no_heartbeat`;
+(`StallDecision`: `StallPrompt` in, `StallChoice` out: `Stop`, `Delete`, `KeepWaiting`) replaces "end the VM at once" for `worker_stage_stuck`, `worker_progress_stalled`, `worker_heartbeat_stale` and `worker_no_heartbeat`;
 null keeps the old behaviour. While the question is open `ResultWaiter` keeps polling `result.json` and does not repeat it; Stop and Delete end the run under the same code with the VM
 stopped or deleted whatever the run's own end choice was; `KeepWaiting` restarts every watch allowance (`HeartbeatWatch.Snooze`) so the question comes back after a fresh one; the result
 limit still applies, so waiting is never unbounded (Hard Rule 11); a handler that throws or is cancelled counts as no answer and the VM is ended the run's own way. A box with no GPU is never
@@ -1361,10 +1367,6 @@ account and a role and edits two policies, and a whole-method retry would replay
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.
 
-## 17. Overrides in Settings (issue #644)
-
-Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
-
 ### 16.x The Cloud page's gateway methods (issue #105)
 
 What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, `FakeGcp` and the `Resilient*` wrappers:
@@ -1388,6 +1390,9 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   when every item is `Deleted`. The service role and the worker service account are not touched here.
 - Resilience: a start keeps the breaker; listing and deleting our disks and the bucket prefix calls bypass it (cleanup that stops the meter).
   `FakeGcp`: `WithDisk`, `WithStartFailure(kind)`, `WithDeleteFailure(name, kind)`, `WithSilentNoOpDeletes()`.
+## 17. Overrides in Settings (issue #644)
+
+Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
 ## Related
 
