@@ -130,6 +130,15 @@ sequence, a GenBank record with ambiguity codes, a multi-record file
 (many windows), and — once the cloud classifier exists in Python or C# — one
 case per `CloudError` class.
 
+**Finding the repo from a C# test (#495).** A test that reads a source-controlled file (a fixture, `Resources.resw`,
+`worker/vm/startup.sh`) must find the repo root by walking up from `AppContext.BaseDirectory` first and then from its own
+source file (`[CallerFilePath]`), and must throw loudly when neither finds it. A lane builds with a private
+`--artifacts-path` (`$env:TEMP\deg-art\<lane>`), where the binary has no repo ancestor, so a binary-only walk throws there.
+The helpers: `Guards.Tests/RepoPaths`, `Cloud.Tests/FixturePaths`, `Core.Tests/Inputs/ContractFixtures.RepoRoot`,
+`Presentation.Tests/TestPaths`; each project has one test asserting its root contains `app/DnaEntropyGraph.sln`.
+MEASURED 2026-10-15: Guards (116), Cloud (70, filtered), Core (44, filtered) and Presentation (18, filtered) are green
+under `dotnet test <project> --artifacts-path "$env:TEMP\deg-art\x"`. A new test project that needs the repo copies one of those helpers.
+
 ## Guards
 
 `app/tests/DnaEntropyGraph.Guards.Tests` is where the C# half of Hard Rules
