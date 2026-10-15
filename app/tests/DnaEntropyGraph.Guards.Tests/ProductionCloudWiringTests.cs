@@ -83,19 +83,25 @@ public class ProductionCloudWiringTests : IDisposable
         provider.GetService<FakeGcp>().ShouldBeNull();
     }
 
+    public static TheoryData<Type, string> UnwrappedGateways() => new()
+    {
+        { typeof(IComputeGateway), "DnaEntropyGraph.Cloud.Rest.GoogleComputeGateway" },
+        { typeof(IStorageGateway), "DnaEntropyGraph.Cloud.Rest.GoogleStorageGateway" },
+        { typeof(IWorkerIdentityGateway), "DnaEntropyGraph.Cloud.Rest.GoogleIamGateway" },
+        { typeof(IProjectCatalogGateway), "DnaEntropyGraph.Cloud.Rest.GoogleProjectCatalogGateway" },
+        { typeof(IServiceEnablementGateway), "DnaEntropyGraph.Cloud.Rest.GoogleServiceUsageGateway" },
+    };
+
     [Theory]
-    [InlineData(typeof(IComputeGateway))]
-    [InlineData(typeof(IStorageGateway))]
-    [InlineData(typeof(IWorkerIdentityGateway))]
-    public void The_real_gateways_that_run_their_own_pipeline_are_not_wrapped_a_second_time(Type serviceType)
+    [MemberData(nameof(UnwrappedGateways))]
+    public void The_real_gateways_that_run_their_own_pipeline_are_exactly_the_real_type_never_wrapped_a_second_time(Type serviceType, string expected)
     {
         using var provider = Build();
 
         // A Resilient* decorator around a gateway whose every HTTP call already goes through the pipeline would replay a whole
         // create on a transient error (GoogleComputeGateway and GoogleStorageGateway class docs).
-        provider.GetRequiredService(serviceType).GetType().Name.ShouldStartWith("Google");
+        provider.GetRequiredService(serviceType).GetType().FullName.ShouldBe(expected);
     }
-
     [Fact]
     public void The_token_refresher_is_the_real_account_and_the_token_source_is_the_same_account()
     {
@@ -140,6 +146,8 @@ public class ProductionCloudWiringTests : IDisposable
         var input = Path.Combine(_root, "seq.fa");
         File.WriteAllText(input, ">s\nACGTACGTACGTACGTACGT\n");
         await using var provider = Build();
+        // Signed out also answers NoProject: the seeded token must have been read, or this test proves nothing.
+        provider.GetRequiredService<IGcpAccount>().IsSignedIn.ShouldBeTrue();
 
         var jobId = await provider.GetRequiredService<IJobEngine>().StartRunAsync(
             new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = input },
@@ -149,6 +157,48 @@ public class ProductionCloudWiringTests : IDisposable
         run.ErrorCode.ShouldBe(RunErrorCodes.NoProject);
     }
 
+    [Fact]
+    public void An_installation_id_that_was_unusable_at_first_use_is_read_again_after_the_user_repairs_the_file()
+    {
+        // Issue #609 cold review: the options were built once, so one failed read left the id null for the whole process.
+        var reads = 0;
+        var settings = Substitute.For<ISettingsStore>();
+        settings.GetString(Arg.Any<string>()).Returns(_ =>
+        {
+            if (reads++ == 0)
+            {
+                throw new InstallationIdUnusableException("the id file is unreadable");
+            }
+
+            return "0123456789abcdef0123456789abcdef";
+        });
+        using var provider = Build(services => services.AddSingleton(settings));
+
+        var options = provider.GetRequiredService<GoogleCloudOptions>();
+
+        options.CurrentInstallationId.ShouldBeNull("the first read failed");
+        options.CurrentInstallationId.ShouldBe("0123456789abcdef0123456789abcdef", "the file was repaired: the next use reads it again");
+    }
+
+    public static TheoryData<CloudBackend> Backends() => new() { CloudBackend.Google, CloudBackend.Fake };
+
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public void Every_cloud_gateway_interface_of_Core_resolves_in_every_backend(CloudBackend backend)
+    {
+        var gateways = typeof(IComputeGateway).Assembly.GetTypes()
+            .Where(t => t.IsInterface && t.Namespace == "DnaEntropyGraph.Core.Cloud" && t.Name.EndsWith("Gateway", StringComparison.Ordinal))
+            .ToList();
+        gateways.Count.ShouldBeGreaterThanOrEqualTo(8, "the scan must find the gateways, or this test is vacuous");
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: backend);
+        using var provider = services.BuildServiceProvider();
+
+        foreach (var gateway in gateways)
+        {
+            provider.GetService(gateway).ShouldNotBeNull($"{gateway.Name} does not resolve in {backend}: a ViewModel taking it would throw there");
+        }
+    }
     [Fact]
     public async Task With_a_project_chosen_the_first_compute_request_goes_to_compute_googleapis_com_with_the_account_token()
     {
