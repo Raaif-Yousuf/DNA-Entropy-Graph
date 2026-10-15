@@ -347,6 +347,7 @@ def _write_provenance(
     processed: list[tuple[Contig, DirectionResult]],
     t0: float,
     extra: dict[str, Any] | None,
+    input_format: str = "",
 ) -> str:
     """Build and write ``provenance.json`` (issue #82). Always called, never gated by an
     ``include_*`` flag -- see :func:`run`'s own docstring."""
@@ -376,6 +377,7 @@ def _write_provenance(
         ambiguity_policy=cfg.ambiguity_policy.value,
         rna=cfg.rna,
         topology=cfg.topology.value,
+        input_format=input_format or None,
         contigs=contigs,
         wall_time_seconds=time.perf_counter() - t0,
         extra=extra,
@@ -781,7 +783,7 @@ def run(
                     _write_genbank_outputs(cfg, processed)
                 else:
                     _write_standard_outputs(cfg, processed)
-                _write_provenance(cfg, processed, t0, provenance_extra)
+                _write_provenance(cfg, processed, t0, provenance_extra, loaded.input_format)
             except Exception as write_exc:
                 # Best-effort salvage: never mask the original exception (re-raised below).
                 # One ASCII line, class name only (no path or message), so losing the
@@ -797,7 +799,7 @@ def run(
         genes = [f for c, _ in processed for f in c.features]
     else:
         outputs, genes = _write_standard_outputs(cfg, processed)
-    outputs.append(_write_provenance(cfg, processed, t0, provenance_extra))
+    outputs.append(_write_provenance(cfg, processed, t0, provenance_extra, loaded.input_format))
 
     first_contig, first_dr = processed[0]
     all_values = np.concatenate([dr.values for _, dr in processed])

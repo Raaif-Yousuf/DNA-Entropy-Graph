@@ -501,6 +501,29 @@ must each individually fit inside the record regardless of a partial marker; a
 legitimate origin-wrapping feature on a circular plasmid record (the intended shape for
 issue #128) already satisfies this per-segment, so this check does not affect it.
 
+**A feature whose location cannot be read is reported, not dropped (issue #543, MEASURED
+2026-10-15, Biopython 1.88).** The bad-location shapes split in two:
+
+- `LocationParserError`: Biopython warns and sets the feature's location to `None`. Covered
+  shapes include `abc`, `0..42`, `-1`, `1..?`, `?..5`, `1..`, `<<1..5`, `gap(10)`, `1.5..9`, and
+  `42..1` / `5..3` / `complement(42..1)` on a record that is **not** circular. On a circular record
+  `42..1` is a valid join across the origin, so nothing is dropped.
+- a plain `ValueError` (`join()`, `order()`, `complement(1..3)..5`, `99999999999999999999..5`, an
+  unterminated `join(1..5,`) or a bare `AssertionError` (`1..5,9..12`, `1..3)`): Biopython raises out
+  of the record and cannot resume, so the whole file is refused with the reader's own named action
+  (`GenBankReadError`). The notice cannot cover these.
+
+For the first kind, GenBank and EMBL (one shared mapper) add ONE notice per record: the count of
+dropped features that would have become genes (a record's `gene` features, else its `CDS`
+features; a CDS beside a readable `gene` set is not counted) and the key and location text of the
+first three (the rest as "and N more"), with a good location shown as the action. The location text
+is shown through `ascii()` and cut at 40 characters (Hard Rule 5). When the number of Biopython
+warnings does not match the number of unreadable features, only the feature key is named. The
+readable features are still used; the unreadable gene is not repaired. Biopython's other warnings
+are re-emitted unchanged. SnapGene builds its locations itself and raises on a bad range, so a bad
+SnapGene range is a refusal, not a notice. Test: `worker/tests/test_genbank_dropped_features.py`
+(fixture `malformed/genbank_unparseable_location.gb`).
+
 Every one of these five checks has a dedicated, deterministic test in
 `worker/tests/test_validation.py`; `docs/tests.md`'s neighbour-test set names the shapes a
 new validation test should also sweep (empty contig, ambiguity codes, multi-record files,
@@ -601,6 +624,37 @@ so the viewer and IGV keep every record's track aligned to its own sequence.
 - Outputs: `<name>.genes.gff3` (source `gff3`), the gene summary tables, and the bonus `<name>.gb`
   carry these genes. Auto-pairing `<name>.fasta` with `<name>.gff3` in one drop, and a pairing UI
   when ambiguous, are app work (follow-up issue); the manifest field is `worker/manifest.py`'s.
+
+### 5b. Input formats beyond GenBank and FASTA (issue #134)
+
+`readers/embl.py` (EMBL flat file, `.embl`/`.emb`, or an `ID   ` first line) and
+`readers/snapgene.py` (SnapGene `.dna`, detected by its magic bytes: a type-0x09 packet whose
+data starts `SnapGene`, so a renamed file still works and a text file named `.dna` is not
+claimed) are parsed by Biopython (BSD-3-Clause; the `snapgene` SeqIO parser needs no new
+dependency) and mapped by the same `genbank.records_from_parsed` as GenBank: the file's own
+`gene` (else `CDS`) features become `GeneFeature`s, a circular topology is kept, a record with no
+sequence is skipped with a notice. The loaded input takes the GenBank output set (the genes
+are the file's own, Prodigal never runs). Differences worth knowing:
+
+- EMBL record ids are `accession.version`; a non-ASCII letter in the `SQ` block is refused (the
+  GenBank #492 case-folding trap applies, so it is checked before Biopython upper-cases).
+- SnapGene names features by `label`; the reader uses it as the gene id when there is no
+  `gene`/`locus_tag`/`product` (this also applies to GenBank features that only have a `label`).
+- SnapGene keeps one sequence per file and is capped at 64 MiB. The reader walks the packets
+  itself before Biopython: a cut-off packet, any non-DNA packet over 8 MiB, any `DOCTYPE` or
+  `ENTITY` declaration (SnapGene never writes one) and a non-ASCII DNA byte are each a named
+  refusal, never a traceback. MEASURED 2026-10-15 (Python 3.12.10, expat 2.7.1): this build's
+  expat already stops a billion-laughs document in 0.36 s, but that is a property of the Python
+  build, so the refusal does not rely on it.
+- A feature crossing the origin of a circular record (SnapGene range `120-10`, EMBL
+  `join(120..126,1..10)`) is mapped exactly like GenBank's: outer span `1..L` plus its
+  `segments`; the gene table reads the segments and reports `wraps_origin`. The notice says the
+  feature wraps the origin (not "intron") only when the record is circular and one segment ends at
+  the last base while another starts at base 1; otherwise it is a spliced join.
+- `provenance.json` carries `run.input_format` (`genbank`, `embl`, `snapgene`, `fasta`, `paste`).
+  `source_kind` stays `genbank` for EMBL and SnapGene so they take the GenBank output set.
+- The app does not yet validate these two formats locally before creating a VM (rule 2); that
+  port is tracked in a follow-up issue.
 
 ## 6. Viewer support matrix
 

@@ -96,7 +96,7 @@ def run(
     informat: str | None = typer.Option(
         None,
         "--informat",
-        help="Force input format: genbank|fasta|paste (default: auto-detect by extension/content).",
+        help="Force input format: genbank|embl|snapgene|fasta|paste (default: auto-detect).",
     ),
     gff3: str | None = typer.Option(
         None,
