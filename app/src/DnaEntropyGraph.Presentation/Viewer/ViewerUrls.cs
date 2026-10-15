@@ -30,9 +30,6 @@ public static class ViewerUrls
             && parsed.IsDefaultPort
             && parsed.UserInfo.Length == 0;
     }
-
-    /// <summary>WebView2's profile folder: under the app's own folder in <c>%LOCALAPPDATA%</c>, never next to the exe.</summary>
-    public static string UserDataFolder(string localAppData) => Path.Combine(localAppData, "DNAEntropyGraph", "webview2");
 }
 
 /// <summary>Decides whether the Evergreen WebView2 Runtime is installed from its version-string probe.</summary>
