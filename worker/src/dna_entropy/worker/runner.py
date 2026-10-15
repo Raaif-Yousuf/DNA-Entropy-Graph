@@ -42,6 +42,7 @@ from .gpu import detect_gpu
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError, StoreSpec
 from .result import InputResult, JobResult, ResultFile, ResultGpu, ResultStats, ResultTiming
+from .stage import stage_input
 from .status import (
     DEFAULT_INTERVAL_SECONDS,
     GpuInfo,
@@ -322,12 +323,12 @@ def _measure_batch_total_nt(store: Blobstore, manifest: JobManifest, tmp: Path) 
     total = 0
     for input_spec in manifest.inputs:
         try:
-            local_input = tmp / "prescan" / Path(input_spec.path).name
-            store.download_file(input_spec.path, local_input)
+            staged = stage_input(store, input_spec, tmp / "prescan", cache_dir=tmp / "entrez-cache")
             cfg = manifest.build_run_config(
                 input_spec,
-                local_input_path=str(local_input),
+                local_input_path=str(staged.local_input),
                 local_out_dir=str(tmp / "prescan-out"),
+                local_annotation_path=str(staged.local_annotation) if staged.local_annotation else None,
             )
             loaded = load_input(cfg)
             total += sum(len(c.seq) for c in loaded.contigs)
@@ -376,13 +377,14 @@ def _run_one_input(
     # same as a bad sequence inside it — not crash the whole job (job_contract.md §7,
     # regression-tested by test_missing_input_file_fails_that_input_not_the_whole_job).
     try:
-        local_input = tmp / "input" / Path(input_spec.path).name
-        store.download_file(input_spec.path, local_input)
+        staged = stage_input(store, input_spec, tmp / "input", cache_dir=tmp / "entrez-cache")
+        local_input = staged.local_input
 
         cfg = manifest.build_run_config(
             input_spec,
             local_input_path=str(local_input),
             local_out_dir=str(local_out),
+            local_annotation_path=str(staged.local_annotation) if staged.local_annotation else None,
         )
         predictor = shared_predictor.get(cfg, status)
         status.update(stage="running", detail={"input": input_spec.id})
@@ -390,7 +392,10 @@ def _run_one_input(
             cfg,
             on_window=_on_window,
             on_contig=_on_contig,
-            provenance_extra={"input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest()},
+            provenance_extra={
+                "input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest(),
+                **staged.provenance_extra,
+            },
             predictor=predictor,
         )
     except JobCancelledError:

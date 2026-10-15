@@ -12,6 +12,7 @@ from pathlib import Path
 import typer
 
 from . import __version__, pipeline
+from .analysis.composition import DEFAULT_GC_WINDOW
 from .analysis.regions import DEFAULT_MERGE_GAP, DEFAULT_MIN_LENGTH, DEFAULT_THRESHOLD_BITS
 from .analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS
 from .analysis.windowing import WindowingError
@@ -29,6 +30,7 @@ from .config import (
 )
 from .pipeline import PipelineError, load_and_validate, sanitize_run_name
 from .predictors.base import PredictorError
+from .readers import entrez
 from .validation.validators import ValidationError
 from .worker.blobstore import BlobstoreError, GcsBlobstore, LocalBlobstore
 from .worker.manifest import ManifestError
@@ -79,6 +81,16 @@ def keep_gpu() -> None:
     raise typer.Exit(code=1)
 
 
+def _parse_accession_range(text: str | None) -> tuple[int, int] | None:
+    """``"100-500"`` -> ``(100, 500)``; ``None`` -> ``None``."""
+    if text is None:
+        return None
+    parts = text.replace("..", "-").split("-")
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        raise ValidationError("The range must look like 100-500. Correct --accession-range and try again.")
+    return int(parts[0]), int(parts[1])
+
+
 @app.command()
 def run(
     input: str | None = typer.Option(
@@ -96,7 +108,31 @@ def run(
     informat: str | None = typer.Option(
         None,
         "--informat",
-        help="Force input format: genbank|fasta|paste (default: auto-detect by extension/content).",
+        help="Force input format: genbank|embl|snapgene|fasta|paste (default: auto-detect).",
+    ),
+    gff3: str | None = typer.Option(
+        None,
+        "--gff3",
+        help="Pair a GFF3 annotation with a FASTA --input: its genes are used and Prodigal never "
+        "runs (issue #135). Sequence names (first column) must match the FASTA header names.",
+    ),
+    accession: str | None = typer.Option(
+        None,
+        "--accession",
+        help="Fetch the record from NCBI by accession (e.g. NC_045512.2) instead of reading --input "
+        "(issue #133). Cached; the accession and retrieval date go into provenance.json.",
+    ),
+    accession_range: str | None = typer.Option(
+        None, "--accession-range", help="With --accession: fetch only START-END (1-based, inclusive)."
+    ),
+    ncbi_api_key: str | None = typer.Option(
+        None,
+        "--ncbi-api-key",
+        envvar="NCBI_API_KEY",
+        help="Optional NCBI API key (raises NCBI's rate limit). Never stored.",
+    ),
+    cache_dir: str | None = typer.Option(
+        None, "--cache-dir", help="Where fetched records are cached (default: a per-user cache folder)."
     ),
     predictor: str = typer.Option("mock", "--predictor", help="Predictor backend: mock|evo."),
     model: str = typer.Option("evo2_7b", "--model", help="Evo model id (evo predictor only)."),
@@ -210,6 +246,20 @@ def run(
         help="Also write <name>.genes.tsv and <name>.genes.csv: one row per gene with its mean, "
         "min and max entropy (needs genes: a GenBank input, or --genes; issue #124).",
     ),
+    gc: bool = typer.Option(
+        False,
+        "--gc/--no-gc",
+        help="Also write <name>.gc.bedgraph: GC percent over a rolling window; no model needed (issue #191).",
+    ),
+    gc_window: int = typer.Option(
+        DEFAULT_GC_WINDOW, "--gc-window", help="GC window in bases, an odd number (with --gc)."
+    ),
+    codons: bool = typer.Option(
+        False,
+        "--codons/--no-codons",
+        help="Also write <name>.codons.tsv: codon usage per gene (needs genes: a GenBank input, "
+        "a --gff3, or --genes; issue #191).",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -225,11 +275,38 @@ def run(
     base_dir = Path(out) if out else Path.home() / "Downloads"
     run_dir = base_dir / safe_name
 
+    # issue #133: everything that can be checked without the network is checked BEFORE the fetch,
+    # so a run that could never start (a bad option, a conflicting flag, a malformed accession)
+    # never costs a request. The fetch itself comes after the RunConfig is built, below.
+    start_end: tuple[int, int] | None = None
+    if accession is not None:
+        try:
+            if input is not None:
+                raise ValidationError("Use either --accession or --input, not both. Drop one of them.")
+            if informat not in (None, "genbank"):
+                raise ValidationError(
+                    f"--accession always gives a GenBank record, so --informat {informat} does not "
+                    "apply. Drop --informat (or add the file with --input instead)."
+                )
+            start_end = _parse_accession_range(accession_range)
+            entrez.validate_request(
+                accession, start_end[0] if start_end else None, start_end[1] if start_end else None
+            )
+        except ValidationError as exc:
+            typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+    elif accession_range is not None:
+        typer.secho(
+            "ERROR: --accession-range needs --accession. Add --accession.", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(code=1)
+
     try:
         cfg = RunConfig(
             name=safe_name,
             input_path=input,
             informat=informat,
+            annotation_path=gff3,
             predictor=PredictorKind(predictor),
             model=model,
             device=device,
@@ -257,14 +334,35 @@ def run(
             region_min_length=region_min_length,
             region_merge_gap=region_merge_gap,
             include_gene_summary=gene_summary,
+            include_gc=gc,
+            gc_window=gc_window,
+            include_codons=codons,
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 
+    provenance_extra = None
+    if accession is not None:
+        try:
+            pipeline.validate_run_options(cfg)
+            fetched = entrez.fetch_genbank(
+                accession,
+                cache_dir=cache_dir or entrez.default_cache_dir(),
+                start=start_end[0] if start_end else None,
+                stop=start_end[1] if start_end else None,
+                api_key=ncbi_api_key,
+            )
+        except (ValidationError, PipelineError) as exc:
+            typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        cfg.input_path = fetched.path
+        cfg.informat = "genbank"
+        provenance_extra = {"input_source": fetched.provenance()}
+
     try:
-        result = pipeline.run(cfg)
+        result = pipeline.run(cfg, provenance_extra=provenance_extra)
     except (ValidationError, PredictorError, AnnotatorError, WindowingError, PipelineError) as exc:
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc

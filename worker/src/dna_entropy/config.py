@@ -104,6 +104,9 @@ class RunConfig:
     name: str = "user_locus"
     input_path: str | None = None  # None => read from stdin
     informat: str | None = None  # "genbank"|"fasta"|"paste" override; None => auto-detect
+    # issue #135: a GFF3 file paired with a FASTA input. Its genes replace Prodigal (which then
+    # never runs). Only valid with FASTA input; None => no pairing.
+    annotation_path: str | None = None
     predictor: PredictorKind = PredictorKind.MOCK
     model: str = "evo2_7b"
     device: str = "cuda"
@@ -192,3 +195,13 @@ class RunConfig:
     # or Prodigal's calls when `genes` is set) with mean/min/max entropy over the gene's bases.
     # Only written when the run actually has genes; on by default like every other writer.
     include_gene_summary: bool = True
+    # issue #191: model-free companion tracks. Both OFF by default (new files nobody asked for,
+    # the clutter issue #411 is about): <name>.gc.bedgraph (GC percent over an odd centred window
+    # of `gc_window` bases) and <name>.codons.tsv (codon usage per CDS-shaped gene).
+    include_gc: bool = False
+    gc_window: int = 51
+    include_codons: bool = False
+    # issue #704 / #136: the app's option preset, recorded in provenance.json's run section and
+    # read by nothing else (a preset is the app's own shorthand for options it already sent).
+    preset_id: str | None = None
+    preset_name: str | None = None
