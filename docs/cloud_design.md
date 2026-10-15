@@ -236,6 +236,55 @@ Two distinct quota reads matter, and conflating them is a real bug shape:
  the C# port must preserve it (see the comment on issue #86 filed as part of #287's
  survey).
 
+### 6.1 The real read (issue #88, item 1)
+
+`GoogleQuotaGateway` (`app/src/DnaEntropyGraph.Cloud/Rest/`, `GoogleCloudGateways.Create(...).Quota`, not wrapped in
+`ResilientQuotaGateway`) implements `IQuotaGateway` over two Compute v1 calls, each a single small HTTP request through
+`CloudCallPipeline` with `singleRequest: true`:
+
+- `regions.list` (`compute.regions.list`, paged by `pageToken`; a repeated token fails the read instead of returning a partial
+  table): every region's `quotas[]` (`metric`, `limit`, `usage`), kept whole, so `NVIDIA_L4_GPUS` and the other GPU metrics, `CPUS`
+  and `SSD_TOTAL_GB` are all in the table.
+- `projects.get` (`compute.projects.get`): the project-wide `GPUS_ALL_REGIONS` line.
+
+`ReadQuotaAsync(projectId)` returns a `QuotaReadResult` (Core, `QuotaReadResult.cs`): the region table, the global line, and a
+`Failures` list. The two reads fail independently and **a failed read is a value, never a zero**. `GpuState(region, metric)` is the
+three-way answer:
+
+| Situation | State |
+| --- | --- |
+| Smaller of (regional limit minus usage, global limit minus usage) is at least 1 | `Available` |
+| Either known remainder is below 1 (a global 0 overrides a regional 1; a regional 0 binds without the cap) | `None` |
+| The region is listed but has no such metric | `None` (that region offers none of it) |
+| `regions.list` failed, the region is not in the reply, the `projects.get` read failed or lacks `GPUS_ALL_REGIONS`, and no known value is below 1 | `Unknown` |
+
+`GetGpuQuotaAsync` keeps its `int` answer (the smaller remainder) and **throws the classified `CloudOperationException`** when the state is
+`Unknown`, so a preflight can never read an unreadable quota as "no quota". The accelerator type maps to its regional metric in
+`QuotaMetrics.ForAccelerator` (`gpu` and `nvidia-l4` are `NVIDIA_L4_GPUS`); an unmapped type throws rather than guessing.
+A metric line the reply carries without a `limit` is `Unknown` for that metric (`QuotaMetric.Limit` and `Remaining` are null), never zero and never dropped
+from the table; only a definite zero elsewhere (a global cap of 0) still wins. `FakeGcp` answers both `ReadQuotaAsync` and `GetGpuQuotaAsync` from ONE table
+built from `WithGpuQuota`, `WithAllRegionsGpuCap` and `WithQuotaReadFailing(kind)`, so they agree: a scripted read failure makes `GetGpuQuotaAsync` throw the
+classified `CloudOperationException` (code `QUOTA_READ_FAILED`) as the real gateway does, and a region or accelerator nobody scripted is the always-succeeds
+default of 1 through either.
+THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGIONS` for a project that never raised it (when absent it is a
+failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Not yet switched on in production (#609). The request flow
+(`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
+
+### 6.2 What preflight does with a quota it cannot read (issue #88)
+
+DECISION (agent-made, reversible): an unreadable quota is UNKNOWN, and unknown is not "none". `PreflightChecks` calls `GetGpuQuotaAsync` and:
+
+| The read | The run |
+| --- | --- |
+| Returns a number of 0 or less | Fails with `quota`, as before. |
+| Fails with a project-wide kind (`permission`, `billing`, `api_disabled`, `org_policy`) | Fails at once with that classified error (its own run error code), before any bucket, upload or VM: the create would fail the same way. |
+| Fails any other way (`network`, a 5xx, the read's own budget running out, `other`) | UNKNOWN: preflight passes and provisioning goes on. The prototype tried every zone when quota was unknown; quota is pre-filterable, not a stop sign, and a real shortage still surfaces as a classified `quota` error on the create, which the zone ladder handles. |
+
+The whole read has its own budget, `CloudRunSettings.QuotaReadTimeout` (5 minutes; `CloudJobRunner.QuotaReadTimeout`), because it is several sequential
+requests (`regions.list` pages, `projects.get`) in one gateway method and the 60 s `CallTimeout` is sized for one. THEORY (unverified, sized from the
+pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
+`FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
+
 ## 7. Least-privilege IAM for the worker service account
 
 The VM runs as the service account `dna-entropy-worker@<project>.iam.gserviceaccount.com`
@@ -1031,8 +1080,8 @@ creates the project's default network).
   already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
   already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
-  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute gateway
-  and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; the quota read does since #88 (section 6.1), the storage gateway since #53,
+  and the token refresher does not, so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
 - **Proven only by a real project:** `docs/ToTest.md`.
 
