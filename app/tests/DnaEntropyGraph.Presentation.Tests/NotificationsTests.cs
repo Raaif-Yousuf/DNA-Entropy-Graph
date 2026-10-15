@@ -19,6 +19,7 @@ public sealed class NotificationsTests
     private readonly INavigator _navigator = Substitute.For<INavigator>();
     private readonly IRunRepository _runs = Substitute.For<IRunRepository>();
     private readonly IStringResourceProvider _strings = Substitute.For<IStringResourceProvider>();
+    private readonly IDesktopNotifier _desktop = Substitute.For<IDesktopNotifier>();
 
     public NotificationsTests()
     {
@@ -28,7 +29,7 @@ public sealed class NotificationsTests
             Task.FromResult<IReadOnlyList<RunRecord>>([new RunRecord("job-1", JobPhase.Completed, DateTimeOffset.UnixEpoch, OutputDir: @"C:\out\job-1")]));
     }
 
-    private RunCompletionActions Actions() => new(new NotificationSettings(_settings), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher());
+    private RunCompletionActions Actions() => new(new NotificationSettings(_settings), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher(), _desktop);
 
     private static async Task Finish(RunCompletionActions actions, JobPhase phase = JobPhase.Completed)
         => await actions.OnRunFinishedAsync("job-1", phase);
@@ -163,6 +164,71 @@ public sealed class NotificationsTests
         _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!, default);
         _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
         shell.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_finished_run_also_goes_to_the_desktop_notifier_with_the_run_to_open()
+    {
+        await Finish(Actions());
+
+        _desktop.Received(1).Notify("RunDone_Title", "RunDone_Body", "job-1");
+    }
+
+    [Fact]
+    public async Task A_partly_finished_run_is_a_desktop_notification_too()
+    {
+        await Finish(Actions(), JobPhase.PartiallyCompleted);
+
+        _desktop.Received(1).Notify("RunPartial_Title", "RunPartial_Body", "job-1");
+    }
+
+    [Fact]
+    public async Task Turning_off_Notify_when_done_means_no_desktop_notification_either()
+    {
+        new NotificationSettings(_settings).NotifyWhenDone = false;
+
+        await Finish(Actions());
+        await Actions().OnRunFailedAsync("job-1");
+
+        _desktop.DidNotReceiveWithAnyArgs().Notify(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task A_failed_run_is_a_desktop_notification_only_and_never_opens_a_page_or_a_folder()
+    {
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
+        new NotificationSettings(_settings).OpenFolderWhenDone = true;
+
+        await Actions().OnRunFailedAsync("job-1");
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
+        _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!, default);
+        _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
+        _folders.DidNotReceive().OpenFolder(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task A_desktop_notifier_that_throws_never_stops_the_in_app_toast_or_Results()
+    {
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
+        _desktop.When(d => d.Notify(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>())).Do(_ => throw new InvalidOperationException("no toast"));
+
+        await Finish(Actions());
+
+        _toasts.Received(1).ShowToast("RunDone_Title", "RunDone_Body", ToastSeverity.Success);
+        _navigator.Received(1).NavigateTo(ResultsViewModel.PageKey, "job-1");
+    }
+
+    [Fact]
+    public async Task The_shell_sends_a_failed_run_to_the_desktop_notifier()
+    {
+        var messenger = new WeakReferenceMessenger();
+        var shell = new ShellViewModel(_navigator, Substitute.For<IGcpAccount>(), messenger, _strings, TestMessages.Center(), Actions());
+
+        messenger.Send(new RunPhaseChangedMessage("job-1", JobPhase.Failed));
+        await shell.CompletionWork;
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
     }
 
     [Fact]

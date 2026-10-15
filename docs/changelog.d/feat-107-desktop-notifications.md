@@ -1,0 +1,1 @@
+- Windows notifications (#107): a run that finishes or fails while the window is not in front shows a Windows notification with an Open run button, and clicking it opens that run's Results page even if the app was closed. A second launch of the app now hands over to the running one instead of opening another window.

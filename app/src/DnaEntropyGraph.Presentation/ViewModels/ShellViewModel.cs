@@ -141,6 +141,11 @@ public sealed partial class ShellViewModel : ObservableObject
         {
             CompletionWork = _completion.OnRunFinishedAsync(message.JobId, message.Phase);
         }
+        else if (message.Phase == JobPhase.Failed)
+        {
+            // Issue #107: a failed run is worth a Windows notification too (desktop only; the run's own page says why).
+            CompletionWork = _completion.OnRunFailedAsync(message.JobId);
+        }
     }
 
     /// <summary>The last run-finished work started by <see cref="OnRunPhaseChanged"/>; tests await it.</summary>

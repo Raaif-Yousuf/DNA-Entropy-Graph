@@ -26,6 +26,13 @@ public static class Program
         }
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
+
+        // Issue #107/#108: a second launch (a clicked notification, a double-clicked file) goes to the running app and ends here.
+        if (SingleInstance.HandedToRunningInstance(StartupDataRoot.Current.Path))
+        {
+            return;
+        }
+
         Application.Start(p =>
         {
             SynchronizationContext.SetSynchronizationContext(
