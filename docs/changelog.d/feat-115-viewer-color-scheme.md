@@ -1,0 +1,1 @@
+- The genome viewer's own page now follows the app's Light/Dark setting (menus, scroll bars and dialogs inside it), set when the viewer opens and every time the theme changes (#115).

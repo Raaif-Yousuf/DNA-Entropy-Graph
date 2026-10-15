@@ -1,0 +1,1 @@
+- A run refused for the actAs role whose VM sweep also failed keeps the Copy request for the project owner button next to the unconfirmed-VM warning (#665).
