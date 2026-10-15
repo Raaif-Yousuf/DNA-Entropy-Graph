@@ -958,6 +958,21 @@
   <data name="Results_CopyFailed" xml:space="preserve">
     <value>The path could not be copied because Windows would not let the app use the clipboard. Close other programs that copy text, then choose Copy path again.</value>
   </data>
+  <data name="Results_ExportPngFailed" xml:space="preserve">
+    <value>The picture could not be saved. Check that the results folder still exists and has free space, then choose Save picture again.</value>
+  </data>
+  <data name="ResultsExportPngButton.Content" xml:space="preserve">
+    <value>Save picture</value>
+  </data>
+  <data name="ResultsOverviewChart.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along the sequence</value>
+  </data>
+  <data name="RunsSparkline.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along this run's first sequence, as a small line</value>
+  </data>
+  <data name="ResultsOverviewSeam.Text" xml:space="preserve">
+    <value>The dashed line marks where the two reading directions were joined.</value>
+  </data>
   <data name="Results_Direction_BothCombined" xml:space="preserve">
     <value>Both directions, combined</value>
   </data>
