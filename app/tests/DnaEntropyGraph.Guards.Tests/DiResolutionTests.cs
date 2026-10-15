@@ -144,7 +144,7 @@ public class DiResolutionTests
         // gateways were registered without the resilience wrapper, the first
         // 503 would surface as an exception here.
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value);
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
         services.AddSingleton(new DnaEntropyGraph.Cloud.CloudRetryOptions { BaseDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero });
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<DnaEntropyGraph.Cloud.FakeGcp>().WithTransientFailures(503, 2);
@@ -170,10 +170,9 @@ public class DiResolutionTests
         var failure = await Should.ThrowAsync<DnaEntropyGraph.Core.Cloud.AccountAuthException>(() => account.SignInAsync(CancellationToken.None));
         failure.Code.ShouldBe(DnaEntropyGraph.Core.Cloud.AuthErrorCodes.OAuthClientMissing);
 
-        // The access-token source is the real account (the real gateways, #56, will read it). The refresher stays the
-        // fake while every gateway is the fake: a fake 401 must not call Google's real token endpoint.
+        // The access-token source and the refresher are the real account (#609): a 401 from a real gateway refreshes the real token.
         provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IGcpAccessTokenSource>().ShouldBeSameAs(account);
-        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.ICloudTokenRefresher>().ShouldBeOfType<DnaEntropyGraph.Cloud.FakeGcp>();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.ICloudTokenRefresher>().ShouldBeSameAs(account);
     }
 
     [Fact]
@@ -197,7 +196,7 @@ public class DiResolutionTests
             File.WriteAllText(input, ">s\nACGTACGTACGTACGTACGT\n");
 
             var services = new ServiceCollection();
-            services.AddDnaEntropyGraph(appDataRoot: root);
+            services.AddDnaEntropyGraph(appDataRoot: root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
             await using var provider = services.BuildServiceProvider();
             var account = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IGcpAccount>();
             account.IsSignedIn.ShouldBeTrue();

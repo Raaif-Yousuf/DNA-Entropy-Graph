@@ -128,6 +128,28 @@ public class ProductionCloudWiringTests : IDisposable
     }
 
     [Fact]
+    public async Task A_run_started_signed_in_with_no_project_chosen_fails_no_project_not_with_a_fake_success()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the seeded token file is DPAPI-protected");
+        var auth = Path.Combine(_root, "auth");
+        Directory.CreateDirectory(auth);
+        File.WriteAllBytes(Path.Combine(auth, "1001.tok"), new DpapiSecretProtector().Protect(Encoding.UTF8.GetBytes("{\"access_token\":\"a\",\"refresh_token\":\"r\"}")));
+        File.WriteAllText(
+            Path.Combine(auth, "accounts.json"),
+            "{\"activeSub\":\"1001\",\"accounts\":[{\"sub\":\"1001\",\"email\":\"user@example.test\",\"needsSignIn\":false}]}");
+        var input = Path.Combine(_root, "seq.fa");
+        File.WriteAllText(input, ">s\nACGTACGTACGTACGTACGT\n");
+        await using var provider = Build();
+
+        var jobId = await provider.GetRequiredService<IJobEngine>().StartRunAsync(
+            new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = input },
+            CancellationToken.None);
+
+        var run = (await provider.GetRequiredService<IRunRepository>().GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        run.ErrorCode.ShouldBe(RunErrorCodes.NoProject);
+    }
+
+    [Fact]
     public async Task With_a_project_chosen_the_first_compute_request_goes_to_compute_googleapis_com_with_the_account_token()
     {
         var handler = new RecordingHandler();
