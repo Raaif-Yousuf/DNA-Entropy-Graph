@@ -135,6 +135,19 @@ public sealed partial class SetupStepRow : ObservableObject
         CanSkip = false;
     }
 
+    /// <summary>A red row with no failure behind it: the user has to choose (the project list), so the message says what to choose.</summary>
+    public void MarkChoose(string messageKey)
+    {
+        Status = SetupStatus.NeedsAction;
+        StatusText = _strings.GetString("WizardStatus_Fix");
+        MessageText = _strings.GetString(messageKey);
+        NoteText = string.Empty;
+        ActionText = string.Empty;
+        ActionKind = SetupActionKind.None;
+        LinkUri = null;
+        CanSkip = false;
+    }
+
     public void MarkSkipped()
     {
         Status = SetupStatus.Skipped;

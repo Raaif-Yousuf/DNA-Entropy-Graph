@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Setup;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -9,8 +10,8 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// <summary>
 /// The first-run wizard's eight steps (Welcome, Sign in, Project, Billing,
 /// APIs, Storage, Quota, Test run, Done) - docs/superpowers/specs Appendix A
-/// section 2.1. The skeleton models sign-in only; the remaining steps are a
-/// follow-up issue.
+/// section 2.1. This ViewModel owns steps 2 and 3 (sign in, find or make the project) and the finish; steps 4 to 7 are the OK/Fix
+/// rows of <see cref="SetupStepsViewModel"/> (issue #99), which run once a project is in place.
 /// </summary>
 public sealed partial class WizardViewModel : ObservableObject
 {
@@ -19,6 +20,9 @@ public sealed partial class WizardViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IStringResourceProvider _strings;
     private readonly IDispatcher? _dispatcher;
+    private readonly ISetupCheckService? _setup;
+    private readonly ISettingsStore? _settings;
+    private readonly IShellLauncher? _shell;
 
     [ObservableProperty]
     private bool _isSignedIn;
@@ -43,8 +47,21 @@ public sealed partial class WizardViewModel : ObservableObject
     [ObservableProperty]
     private string _projectActionText = string.Empty;
 
-    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null)
+    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null, ISetupCheckService? setup = null, SetupStepsViewModel? setupSteps = null, ISettingsStore? settings = null, IShellLauncher? shell = null)
     {
+        _setup = setup;
+        _settings = settings;
+        _shell = shell;
+        SetupSteps = setupSteps;
+        ProjectRow = new SetupStepRow(SetupStep.Project, "Project", strings);
+        ProjectRow.ActionCommand = new AsyncRelayCommand(PerformProjectActionAsync);
+        ProjectRow.RecheckCommand = new AsyncRelayCommand(ct => ContinueFromProjectAsync(ct));
+        ProjectRow.PropertyChanged += (_, _) => FinishCommand.NotifyCanExecuteChanged();
+        if (setupSteps is not null)
+        {
+            setupSteps.PropertyChanged += (_, _) => FinishCommand.NotifyCanExecuteChanged();
+        }
+
         _strings = strings;
         _dispatcher = dispatcher;
         _gcpAccount = gcpAccount;
@@ -88,6 +105,7 @@ public sealed partial class WizardViewModel : ObservableObject
             ProjectErrorText = string.Empty;
             ProjectActionText = string.Empty;
             SelectedProjectId = _gcpAccount.SelectedProjectId;
+            _ = ContinueFromProjectAsync(CancellationToken.None);
         });
     }
 
@@ -118,10 +136,132 @@ public sealed partial class WizardViewModel : ObservableObject
             SelectedProjectId = _gcpAccount.SelectedProjectId;
             if (IsSignedIn)
             {
-                _navigator.NavigateTo("Wizard/Project");
+                _ = ContinueFromProjectAsync(CancellationToken.None);
             }
         });
     }
+
+    /// <summary>The OK/Fix rows of steps 4 to 7; null in a wizard built without them (the sign-in tests).</summary>
+    public SetupStepsViewModel? SetupSteps { get; }
+
+    /// <summary>Step 3 as a row: green once the chosen project is checked, red with the list (or the make-one button) until then.</summary>
+    public SetupStepRow ProjectRow { get; }
+
+    /// <summary>The projects the account can use, this app's own first; shown only while the user has to choose.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ProjectChoice> Projects { get; } = [];
+
+    public bool HasProjects => Projects.Count > 0;
+
+    /// <summary>Checks the chosen project and, if it is fine, the steps after it; else asks the user to choose or make one.</summary>
+    private async Task ContinueFromProjectAsync(CancellationToken cancellationToken)
+    {
+        if (_setup is null)
+        {
+            return;
+        }
+
+        SetProjects([]);
+        if (_gcpAccount.SelectedProjectId is { Length: > 0 } project)
+        {
+            ProjectRow.MarkRunning();
+            var checkedProject = await _setup.CheckProjectAsync(project, cancellationToken);
+            ProjectRow.Apply(checkedProject, project);
+            if (checkedProject.IsOk)
+            {
+                await RunRemainingStepsAsync(cancellationToken);
+                return;
+            }
+        }
+        else
+        {
+            ProjectRow.MarkRunning();
+        }
+
+        await ShowProjectListAsync(cancellationToken);
+    }
+
+    private async Task ShowProjectListAsync(CancellationToken cancellationToken)
+    {
+        if (_setup is null)
+        {
+            return;
+        }
+
+        var listed = await _setup.ListProjectsAsync(cancellationToken);
+        if (!listed.IsOk)
+        {
+            ProjectRow.Apply(listed, string.Empty);
+            return;
+        }
+
+        // A failed check above keeps its own message (the project cannot be used); the list only adds the choices.
+        if (!ProjectRow.IsFix)
+        {
+            ProjectRow.MarkChoose(listed.Projects.Count > 0 ? "WizardProject_Pick" : "WizardProject_None");
+        }
+
+        SetProjects(listed.Projects);
+    }
+
+    private void SetProjects(IEnumerable<ProjectSummary> projects)
+    {
+        Projects.Clear();
+        foreach (var project in projects)
+        {
+            var id = project.ProjectId;
+            Projects.Add(new ProjectChoice(id, project.DisplayName, project.IsAppProject, new AsyncRelayCommand(() => ChooseProjectCommand.ExecuteAsync(id))));
+        }
+
+        OnPropertyChanged(nameof(HasProjects));
+    }
+
+    private Task RunRemainingStepsAsync(CancellationToken cancellationToken)
+        => SetupSteps is null ? Task.CompletedTask : SetupSteps.RunAllCommand.ExecuteAsync(null);
+
+    /// <summary>Makes a project of the user's own (named DNA Entropy Graph, labelled for this app and this installation) and goes on with it.</summary>
+    [RelayCommand]
+    private async Task CreateProjectAsync(CancellationToken cancellationToken)
+    {
+        if (_setup is null)
+        {
+            return;
+        }
+
+        var id = ProjectIdGenerator.Generate();
+        var installation = _settings is null ? string.Empty : InstallationId.GetOrCreate(_settings);
+        ProjectRow.MarkRunning();
+        var made = await _setup.CreateProjectAsync(id, installation, cancellationToken);
+        if (!made.IsOk)
+        {
+            ProjectRow.Apply(made, id);
+            await ShowProjectListAsync(cancellationToken);
+            return;
+        }
+
+        await ChooseProjectCommand.ExecuteAsync(made.ProjectId ?? id);
+    }
+
+    private async Task PerformProjectActionAsync(CancellationToken cancellationToken)
+    {
+        switch (ProjectRow.ActionKind)
+        {
+            case SetupActionKind.CopyText when _shell is not null:
+                _shell.CopyText(ProjectRow.RequestText);
+                break;
+            case SetupActionKind.CreateProject:
+                await CreateProjectCommand.ExecuteAsync(null);
+                break;
+            default:
+                await ContinueFromProjectAsync(cancellationToken);
+                break;
+        }
+    }
+
+    /// <summary>Done: every step is green (or the GPU allowance was skipped), so go and make the first run.</summary>
+    [RelayCommand(CanExecute = nameof(CanFinish))]
+    private void Finish() => _navigator.NavigateTo("NewRun");
+
+    private bool CanFinish => ProjectRow.IsOk && SetupSteps is { IsAllDone: true };
 
     private void OnUiThread(Action action)
     {
@@ -134,3 +274,6 @@ public sealed partial class WizardViewModel : ObservableObject
         _dispatcher.Enqueue(action);
     }
 }
+
+/// <summary>One project the user can pick, with the command that chooses it (a command on the item, so the list needs no code-behind).</summary>
+public sealed record ProjectChoice(string ProjectId, string DisplayName, bool IsAppProject, IAsyncRelayCommand ChooseCommand);
