@@ -42,7 +42,7 @@ public class ReattachCancelTests : IDisposable
     private async Task<(ServiceProvider Provider, FakeGcp Gcp)> BuildWithRunningRowAsync(string jobId)
     {
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph(appDataRoot: _root);
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
         services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithWorker(FakeWorkerMode.Never));
         var provider = services.BuildServiceProvider();
         var gcp = provider.GetRequiredService<FakeGcp>();

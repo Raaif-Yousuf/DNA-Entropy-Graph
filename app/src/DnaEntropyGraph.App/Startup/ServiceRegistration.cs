@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.App.Services;
 using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Cloud.Auth;
+using DnaEntropyGraph.Cloud.Rest;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
@@ -34,8 +35,8 @@ public static class ServiceRegistration
     /// The production entry point: <paramref name="root"/> is the one resolved data folder (issue #638: the default, or the
     /// <c>--profile</c> / <c>DEG_DATA_DIR</c> override), and every service that owns a path takes it from there.
     /// </summary>
-    public static IServiceCollection AddDnaEntropyGraph(this IServiceCollection services, AppDataRoot root)
-        => services.Register(root, hermetic: false);
+    public static IServiceCollection AddDnaEntropyGraph(this IServiceCollection services, AppDataRoot root, CloudBackend cloud = CloudBackend.Google)
+        => services.Register(root, hermetic: false, cloud);
 
     /// <summary>
     /// <paramref name="appDataRoot"/> lets a test redirect all app state away from the real
@@ -45,12 +46,12 @@ public static class ServiceRegistration
     /// <c>%LOCALAPPDATA%\DNAEntropyGraph\</c> on this machine. A test root is also hermetic: the OAuth client is looked for only
     /// inside it, never in the repo's secrets folder.
     /// </summary>
-    public static IServiceCollection AddDnaEntropyGraph(this IServiceCollection services, string? appDataRoot = null)
+    public static IServiceCollection AddDnaEntropyGraph(this IServiceCollection services, string? appDataRoot = null, CloudBackend cloud = CloudBackend.Google)
         => appDataRoot is null
-            ? services.Register(AppDataRoot.Default(), hermetic: false)
-            : services.Register(AppDataRoot.FromPath(appDataRoot), hermetic: true);
+            ? services.Register(AppDataRoot.Default(), hermetic: false, cloud)
+            : services.Register(AppDataRoot.FromPath(appDataRoot), hermetic: true, cloud);
 
-    private static IServiceCollection Register(this IServiceCollection services, AppDataRoot root, bool hermetic)
+    private static IServiceCollection Register(this IServiceCollection services, AppDataRoot root, bool hermetic, CloudBackend cloud)
     {
         var databasePath = root.DatabaseFile;
         var settingsPath = root.SettingsFile;
@@ -75,15 +76,8 @@ public static class ServiceRegistration
         services.AddSingleton<WindowPlacementService>();
         services.AddSingleton<ILogTailReader, FileLogTailReader>();
 
-        // Cloud (Hard Rule 7: the only project allowed to reference
-        // Google.*). FakeGcp is the always-succeeds baseline until the real
-        // gateways land; it backs every Core/Cloud interface at once.
-        // WithCloudNotConnected: nothing real is behind this yet, so a run must fail at preflight with
-        // cloud_not_connected rather than "complete" with simulated results in the user's output folder
-        // (cold review finding 12). The switch that turns the full simulation back on is issue #69.
-        services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithCloudNotConnected());
-        // Issue #48: the account is the real Google sign-in (loopback + PKCE, DPAPI token files keyed by sub). The
-        // gateways below stay FakeGcp until the real ones land, but who is signed in is already real. A build with no
+        // Cloud (Hard Rule 7: the only project allowed to reference Google.*). Issue #48: the account is the real Google sign-in
+        // (loopback + PKCE, DPAPI token files keyed by sub), in both backends. A build with no
         // oauth_client.local.json cannot sign in and says so by code (OAUTH_CLIENT_MISSING), never by crashing.
         // Every path is resolved lazily on first use, so building this graph (Guards.Tests) touches no disk.
         services.AddSingleton<GoogleAccountOptions>(sp => new GoogleAccountOptions
@@ -94,26 +88,22 @@ public static class ServiceRegistration
                 : OAuthClientLoader.DefaultCandidates(root.Path, AppContext.BaseDirectory)),
             Browser = new SystemBrowserLauncher(),
 
-            // Only a fallback since #520 (a project the account chose wins): while every gateway is FakeGcp, an account
-            // with no chosen project still reaches the not-connected gateways and fails as cloud_not_connected rather than
-            // as no_project, which names a project picker the app has no page for yet. Remove with the real gateways (#609).
-            ProjectIdUntilSelectionExists = "fake-project",
+            // Only the fake backend answers a project nobody chose (a project the account chose wins, #520). The Google backend
+            // answers null: no chosen project means a run fails with no_project, which names the one way out (#609).
+            ProjectIdUntilSelectionExists = cloud == CloudBackend.Fake ? "fake-project" : null,
             Pages = new LoopbackPages(
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserSuccess"),
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserFailure")),
         });
         services.AddSingleton<GoogleAccountService>();
         services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<GoogleAccountService>());
-        // No consumer yet: the real gateways (#56) take their access token from here. Registered now so that swap
-        // touches only the gateways.
+        // The real gateways take their access token from here.
         services.AddSingleton<IGcpAccessTokenSource>(sp => sp.GetRequiredService<GoogleAccountService>());
 
-        // Issue #258: every gateway the app resolves is wrapped in the one
-        // resilience pipeline (retry with jitter on 429/5xx/transport, a
-        // single token refresh on 401, a circuit breaker for the offline
-        // banner). The real Google-backed gateways replace FakeGcp INSIDE
-        // these wrappers. A test that needs fast retries registers its own
-        // CloudRetryOptions after calling this method (the last one wins).
+        // Issue #258: every cloud call goes through the one resilience pipeline (retry with jitter on 429/5xx/transport, a
+        // single token refresh on 401, a circuit breaker for the offline banner). The Google gateways run it themselves, per
+        // HTTP request; the fake backend gets it through the Resilient* wrappers. A test that needs fast retries registers
+        // its own CloudRetryOptions after calling this method (the last one wins).
         services.AddSingleton<CloudRetryOptions>(_ => new CloudRetryOptions());
         services.AddSingleton<CloudRetryLog>();
         // Issue #530: the pipeline reports to this wrapper, which forwards to the log (the offline banner) and runs the reconciler again when the
@@ -124,21 +114,20 @@ public static class ServiceRegistration
             sp.GetRequiredService<IDiagnosticsLog>(),
             sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<ICloudCallObserver>(sp => sp.GetRequiredService<ReconcileOnReconnect>());
-        // SWITCH POINT (#56): while every gateway is FakeGcp the refresher is FakeGcp too, because a 401 from a fake
-        // must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked
-        // about). When the first real gateway is wrapped, register GoogleAccountService here instead.
-        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<CloudCallPipeline>(sp => new CloudCallPipeline(
             sp.GetRequiredService<CloudRetryOptions>(),
             sp.GetRequiredService<ICloudTokenRefresher>(),
             sp.GetRequiredService<ICloudCallObserver>()));
-        services.AddSingleton<IComputeGateway>(sp => new ResilientComputeGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
-        services.AddSingleton<IStorageGateway>(sp => new ResilientStorageGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
-        services.AddSingleton<IProjectSetupGateway>(sp => new ResilientProjectSetupGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
-        services.AddSingleton<IQuotaGateway>(sp => new ResilientQuotaGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
-        // Issue #606: the runner ensures the worker identity before any VM is created. Never wrapped in a Resilient* decorator:
-        // the real gateway is creates and read-modify-writes whose every HTTP call goes through the pipeline itself (#54, #609).
-        services.AddSingleton<IWorkerIdentityGateway>(sp => sp.GetRequiredService<FakeGcp>());
+
+        // SWITCH POINT (#609, docs/cloud_design.md section 16): the one place production chooses Google or the fake.
+        if (cloud == CloudBackend.Fake)
+        {
+            AddFakeCloud(services);
+        }
+        else
+        {
+            AddGoogleCloud(services);
+        }
 
         // Persistence (issue #67: real SQLite + settings.json under
         // %LOCALAPPDATA%\DNAEntropyGraph\, docs/architecture.md section 6).
@@ -275,4 +264,76 @@ public static class ServiceRegistration
 
         return services;
     }
+
+    /// <summary>
+    /// The real build: every cloud interface is the Google-backed gateway from <see cref="GoogleCloudGateways.Create"/>, and
+    /// <see cref="FakeGcp"/> is not registered at all. Each gateway is registered as built: the Compute, Storage, worker-identity,
+    /// project-catalog and service-enablement gateways run every HTTP request through the pipeline themselves (their class docs say
+    /// they are never wrapped: a second layer would replay a whole create or enable), and the billing gateway is already
+    /// wrapped by <see cref="GoogleCloudGateways"/>. The project setup gateway only composes those three.
+    /// </summary>
+    private static void AddGoogleCloud(IServiceCollection services)
+    {
+        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<GoogleAccountService>());
+        services.AddSingleton<GoogleCloudOptions>(sp => new GoogleCloudOptions
+        {
+            // Read at each use, never once at startup (#609 cold review): an unusable id file at the first run left the id null for the whole
+            // process even after the user repaired it. An unusable file answers null for now (the storage gateway then refuses to create a
+            // bucket by name instead of crashing; JobEngine reports installation_id_unusable before a run starts) and is read again next time.
+            InstallationIdSource = () =>
+            {
+                try
+                {
+                    return InstallationId.GetOrCreate(sp.GetRequiredService<ISettingsStore>());
+                }
+                catch (InstallationIdUnusableException)
+                {
+                    return null;
+                }
+            },
+            AppVersion = JobEngine.AppVersion(),
+        });
+        services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
+            sp.GetRequiredService<IGcpAccessTokenSource>(),
+            sp.GetRequiredService<CloudCallPipeline>(),
+            sp.GetRequiredService<GoogleCloudOptions>(),
+            () => sp.GetRequiredService<IGcpAccount>().SelectedProjectId));
+        services.AddSingleton<IComputeGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Compute);
+        services.AddSingleton<IStorageGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Storage);
+        services.AddSingleton<IProjectSetupGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().ProjectSetup);
+        services.AddSingleton<IWorkerIdentityGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().WorkerIdentity);
+        services.AddSingleton<IProjectCatalogGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().ProjectCatalog);
+        services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Billing);
+        services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Services);
+        services.AddSingleton<IQuotaGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Quota);
+
+    }
+
+    /// <summary>
+    /// The simulated cloud, for tests and (issue #69) developer mode: <see cref="FakeGcp"/> behind the same resilience wrappers
+    /// the fake-backed tests have always used. Not connected: a run fails at preflight with cloud_not_connected.
+    /// </summary>
+    private static void AddFakeCloud(IServiceCollection services)
+    {
+        services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithCloudNotConnected());
+        // A 401 from a fake must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked about).
+        services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IComputeGateway>(sp => new ResilientComputeGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        services.AddSingleton<IStorageGateway>(sp => new ResilientStorageGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        services.AddSingleton<IProjectSetupGateway>(sp => new ResilientProjectSetupGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        services.AddSingleton<IQuotaGateway>(sp => new ResilientQuotaGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        // Issue #606: never wrapped in a Resilient* decorator (the real gateway runs its own pipeline per HTTP call).
+        services.AddSingleton<IWorkerIdentityGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        // The wizard's project list, billing and service-enablement gateways: every interface the Google build resolves resolves here too, so a ViewModel taking one never throws in fake mode only.
+        services.AddSingleton<IProjectCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
+    }
+}
+
+/// <summary>Which cloud the container is built over: the real Google gateways (every shipped build), or the scripted fake (tests, and developer mode, issue #69).</summary>
+public enum CloudBackend
+{
+    Google,
+    Fake,
 }

@@ -7,7 +7,7 @@ reference - `CloudJobRunner` is this table's first production caller: it runs th
 continue rule in section 5 for real, over `FakeGcp`. Still not built: the escalating-
 parallelism zone ladder (`GpuPlanner`, issue #86 - `CloudJobRunner`'s own zone list is a
 plain sequential walk, not that ladder), the setup health checks (issue #204), and a real
-(non-fake) gateway implementation (`Google.Apis.Compute.v1`, section 16; `FakeGcp` is still what production resolves until #609). Authoritative detail lives in
+(non-fake) gateway implementation (`Google.Apis.Compute.v1`, section 16; production resolves these real gateways since #609; `FakeGcp` is tests and developer mode only). Authoritative detail lives in
 [Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this doc is the
 "what a developer needs while implementing" summary with the tables filled in, not a
 shorter copy of the whole appendix.
@@ -267,7 +267,7 @@ built from `WithGpuQuota`, `WithAllRegionsGpuCap` and `WithQuotaReadFailing(kind
 classified `CloudOperationException` (code `QUOTA_READ_FAILED`) as the real gateway does, and a region or accelerator nobody scripted is the always-succeeds
 default of 1 through either.
 THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGIONS` for a project that never raised it (when absent it is a
-failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Not yet switched on in production (#609). The request flow
+failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Switched on in production by #609. The request flow
 (`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
 
 ### 6.2 What preflight does with a quota it cannot read (issue #88)
