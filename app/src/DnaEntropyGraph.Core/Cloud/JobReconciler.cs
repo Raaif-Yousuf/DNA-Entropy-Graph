@@ -744,7 +744,13 @@ public sealed class JobReconciler
 
             if (evidence == Evidence.Nothing && row.Phase != JobPhase.Provisioning)
             {
-                return await FailAsync(row, underway, ReattachAction.FailedVmMissing, RunErrorCodes.VmUnhealthy, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
+                // Issue #679: a VM gone after its maxRunDuration was deleted by Compute Engine at its limit (Hard Rule 10's backstop), the same
+                // run_time_limit the live path (ResultWaiter.VmLostAsync) records. The VM's creation time is gone with it, so the basis is the
+                // row's own start time on this laptop's clock (one clock, so no skew). THEORY (unverified): the row starts before the VM does
+                // (bucket, upload and provisioning come first), so this can name the limit a few minutes early for a VM lost for another reason.
+                var limit = TimeSpan.FromMinutes(options.MaxRunDurationMinutes) + CloudJobRequestFactory.VmGrace;
+                var pastLimit = row.StartedAt is { } started && _time.GetUtcNow() >= started + limit;
+                return await FailAsync(row, underway, ReattachAction.FailedVmMissing, pastLimit ? RunErrorCodes.RunTimeLimit : RunErrorCodes.VmUnhealthy, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
             }
 
             // Only a VM or a result actually SEEN means the run is not provisioned again, so the worker image (which only a new

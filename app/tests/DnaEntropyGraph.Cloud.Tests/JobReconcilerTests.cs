@@ -213,6 +213,36 @@ public class JobReconcilerTests
         env.Gcp.CreateAttempts.ShouldBe(0, "a lost VM is not silently replaced: the user chooses to run again");
     }
 
+    // Issue #679 (b): a VM that Compute Engine deleted at its maxRunDuration is run_time_limit on the live path; the reconciler (the app was
+    // restarted, the common case for a run that outlived it) must say the same, using the row's own start time (the VM's creation time is gone with it).
+    private static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }.MaxRunDurationMinutes) + CloudJobRequestFactory.VmGrace;
+
+    [Theory]
+    [InlineData(1, RunErrorCodes.RunTimeLimit)]
+    [InlineData(0, RunErrorCodes.RunTimeLimit)]
+    [InlineData(-1, RunErrorCodes.VmUnhealthy)]
+    [InlineData(-200, RunErrorCodes.VmUnhealthy)]
+    public async Task A_gone_VM_is_run_time_limit_only_once_the_runs_limit_has_passed_since_its_start(int minutesPastLimit, string expected)
+    {
+        var env = new Env();
+        await env.SeedAsync("job-l", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { StartedAt = Launch - RunLimit - TimeSpan.FromMinutes(minutesPastLimit) });
+
+        var outcome = await OneAsync(env.Reconciler(), "job-l");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedVmMissing);
+        env.Row("job-l").ErrorCode.ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task A_gone_VM_of_a_row_with_no_start_time_stays_vm_unhealthy()
+    {
+        var env = new Env();
+        await env.SeedAsync("job-n0", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { StartedAt = null });
+
+        await OneAsync(env.Reconciler(), "job-n0");
+
+        env.Row("job-n0").ErrorCode.ShouldBe(RunErrorCodes.VmUnhealthy, "with no start time there is no basis to call it the limit");
+    }
     [Fact]
     public async Task A_run_whose_VM_stopped_without_a_result_fails_and_the_VM_is_ended()
     {

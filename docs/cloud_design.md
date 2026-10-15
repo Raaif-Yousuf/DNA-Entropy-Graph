@@ -582,6 +582,7 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `maxRunDuration` has passed with no `result.json` and no worker error code in `status.json` is recorded `run_time_limit` (not `vm_unhealthy`):
   the run hit its limit while the app was not looking (a closed laptop lid, a resume). When the app is looking it ends the run first
   (`result_timeout`, above). THEORY (unverified): Compute Engine deletes at exactly `creationTimestamp + maxRunDuration`; ToTest #89 measures it.
+  The reconciler (a run found after an app restart) applies the same rule when the VM is gone with no result: the basis is the row's `StartedAt` plus the run's `maxRunDuration` (the VM's creation time left with it), both on this laptop's clock; a row with no `StartedAt` stays `vm_unhealthy` (issue #679). The row's `VmName` is written by the runner once the VM is known (a reused VM keeps its old name), not by `JobEngine`.
   Already built before #89 and now covered by name: labels and `DELETE` guard (`VmSpec`), the Insert fields (`GoogleComputeGateway`),
   the post-result stop/delete verification (`VmTerminator.EnsureVmEndedAsync`, `lifecycle_unverified` / `vm_end_unconfirmed`).
 - **Per-stage deadlines (issue #90).** `HeartbeatWatch` also remembers the `stage` in `status.json` and when it last CHANGED (on the app's clock, any

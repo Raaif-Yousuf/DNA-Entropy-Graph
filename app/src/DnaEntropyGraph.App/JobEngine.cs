@@ -154,7 +154,8 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 StartedAt: DateTimeOffset.UtcNow,
                 OptionsJson: RunOptionsJson.Serialize(options),
                 ProjectId: projectId,
-                VmName: request.Spec.VmName,
+                // No VM yet: the runner records the one it actually uses (a reused VM keeps its old name, issue #679).
+                VmName: null,
                 MachineType: request.Spec.MachineType,
                 AppVersion: request.Spec.AppVersion,
                 InstallationId: installationId),

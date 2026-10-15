@@ -1,0 +1,1 @@
+- Cloud: the run row names the VM actually used (a reused VM keeps its old name), and a run found after an app restart whose VM is gone past its limit is run_time_limit, not vm_unhealthy (#679).

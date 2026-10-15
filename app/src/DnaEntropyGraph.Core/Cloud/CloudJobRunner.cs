@@ -404,6 +404,7 @@ public sealed class CloudJobRunner
 
                 progress.Zone = owned.Count > 0 ? owned[0].Zone : null;
                 progress.VmName = owned.Count > 0 ? owned[0].Name : null;
+                await RecordVmNameAsync(request.JobId, progress.VmName ?? request.Spec.VmName, cancellationToken).ConfigureAwait(false);
                 return await _outcome.FinishAsync(progress.Resolve(request), bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -417,9 +418,18 @@ public sealed class CloudJobRunner
 
         progress.Zone = provisioned.Zone!;
         progress.VmName = provisioned.VmName ?? progress.VmName;
+        await RecordVmNameAsync(request.JobId, progress.VmName ?? request.Spec.VmName, cancellationToken).ConfigureAwait(false);
         return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Issue #679: the run row names the VM the run actually used. A reused VM (#94) keeps the name of the job that made it, so the planned
+    /// <c>deg-&lt;jobId&gt;</c> the row was written with is wrong; the diagnostics bundle and the Cloud page read this column.
+    /// </summary>
+    private Task RecordVmNameAsync(string jobId, string? vmName, CancellationToken cancellationToken)
+        => string.IsNullOrWhiteSpace(vmName)
+            ? Task.CompletedTask
+            : _rows.UpdateRowAsync(jobId, row => row with { VmName = vmName }, cancellationToken);
     /// <summary>
     /// Issue #606: the spec to create. The provisioner asks for it only when no VM exists for the job, so a run that adopts a VM
     /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured
