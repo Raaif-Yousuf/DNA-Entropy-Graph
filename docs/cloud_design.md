@@ -1245,7 +1245,7 @@ the running app calls this class yet.
   (`CloudJobRunner.JobIsFinishedAsync`; a history that cannot be read answers "not finished", so a VM that may belong to a run underway is never taken).
   `IComputeGateway.ReuseVmAsync` then does, in this order: `instances.get` (refuses a VM that is not stopped with `VM_NOT_STOPPED` before any change),
   `setLabels` (the CLAIM, FIRST: the `job-id` label becomes this job's, with the label fingerprint read at the start, so of two jobs racing for one VM only
-  one passes and the loser, answered 412, has written nothing), `setScheduling` (this job's `maxRunDuration` and `DELETE`; it has no fingerprint, so a racer
+  one passes and the loser, answered 412, has written nothing), `disks.setLabels` on the BOOT disk (issue #678: the disk keeps the old job's labels from its creation, so it is read for its own label fingerprint and relabelled (a regional disk through the regional API; no boot disk found throws before any write; a 412 on either label write is re-read and accepted when the labels already equal the target, which is a lost answer to our own write); a failure is a start failure and nothing later is written), `setScheduling` (this job's `maxRunDuration` and `DELETE`; it has no fingerprint, so a racer
   that lost the claim must never have written it), `setMetadata` (the new startup script and `deg-*` attributes, with the fingerprint read at the start), then
   `start`. The composite is NOT idempotent as a whole: `ResilientComputeGateway` attempts it once (no retries, no 401 replay; the real gateway already retries each
   HTTP request itself), because a replay after a lost answer meets a RUNNING VM, answers `VM_NOT_STOPPED` and used to delete the VM that had just started. A

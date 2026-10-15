@@ -622,8 +622,61 @@ public class GoogleComputeGatewayTests
         => "{\"kind\":\"compute#instance\",\"name\":\"deg-job-old\",\"status\":\"" + status + "\","
             + "\"zone\":\"https://www.googleapis.com/compute/v1/projects/my-lab/zones/" + Zone + "\",\"creationTimestamp\":\"2026-10-03T01:02:03.000-07:00\","
             + "\"machineType\":\"https://www.googleapis.com/compute/v1/projects/my-lab/zones/" + Zone + "/machineTypes/g2-standard-8\","
-            + "\"labelFingerprint\":\"lf1\",\"metadata\":{\"fingerprint\":\"mf1\",\"items\":[{\"key\":\"deg-job-id\",\"value\":\"job-old\"}]},"
+            + "\"labelFingerprint\":\"lf1\",\"disks\":[{\"boot\":true,\"source\":\"" + DiskSource + "\"}],\"metadata\":{\"fingerprint\":\"mf1\",\"items\":[{\"key\":\"deg-job-id\",\"value\":\"job-old\"}]},"
             + "\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}}";
+
+    private const string OldDisk = Base + "/zones/" + Zone + "/disks/deg-job-old";
+
+    private const string DiskSource = "https://www.googleapis.com/compute/v1/projects/my-lab/zones/" + Zone + "/disks/deg-job-old";
+
+    private static string OldDiskBody()
+        => "{\"kind\":\"compute#disk\",\"name\":\"deg-job-old\",\"labelFingerprint\":\"df1\",\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}}";
+
+    // Issue #678. FakeGcp does not model disks, so this gateway test (the request itself) is the only proof.
+    [Fact]
+    public async Task Reuse_rewrites_the_boot_disk_labels_to_the_new_job_after_the_claim_and_before_the_start()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start"))
+            .Returns(Get, OldInstance, 200, Vm("deg-job-old", Zone, "RUNNING", job: "job1"));
+
+        await rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None);
+
+        rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[r.Uri.AbsolutePath.IndexOf("/zones/", StringComparison.Ordinal)..])
+            .ShouldBe(
+                [$"/zones/{Zone}/instances/deg-job-old/setLabels", $"/zones/{Zone}/disks/deg-job-old/setLabels", $"/zones/{Zone}/instances/deg-job-old/setScheduling", $"/zones/{Zone}/instances/deg-job-old/setMetadata", $"/zones/{Zone}/instances/deg-job-old/start"],
+                "the disk is relabelled after the instance claim and before anything else or the start");
+        using var body = JsonDocument.Parse(rig.Handler.To(Post, OldDisk + "/setLabels").Single().Body);
+        body.RootElement.GetProperty("labelFingerprint").GetString().ShouldBe("df1");
+        var sent = body.RootElement.GetProperty("labels").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
+        sent["job-id"].ShouldBe("job1", "a reused VM's boot disk must not keep the old job's id");
+        sent["app"].ShouldBe("dna-entropy-graph");
+        sent.Count.ShouldBe(6);
+    }
+
+    [Fact]
+    public async Task A_failed_disk_relabel_is_a_start_failure_and_the_VM_is_never_started()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 403, RpcError(403, "PERMISSION_DENIED", "denied", "forbidden"));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(403, "the disk's own refusal, not a later missing stub");
+        rig.Handler.Requests.Any(r => r.Uri.AbsolutePath.EndsWith("/setScheduling", StringComparison.Ordinal)).ShouldBeFalse();
+        rig.Handler.Requests.Any(r => r.Uri.AbsolutePath.EndsWith("/start", StringComparison.Ordinal)).ShouldBeFalse();
+    }
 
     [Fact]
     public async Task Reuse_claims_a_stopped_VM_by_labels_first_then_scheduling_then_metadata_then_start_each_with_its_fingerprint()
@@ -631,6 +684,8 @@ public class GoogleComputeGatewayTests
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 200, Op("DONE", "setLabels"))
             .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
             .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
             .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
@@ -641,7 +696,7 @@ public class GoogleComputeGatewayTests
 
         vm.Name.ShouldBe("deg-job-old");
         rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[(r.Uri.AbsolutePath.LastIndexOf('/') + 1)..])
-            .ShouldBe(["setLabels", "setScheduling", "setMetadata", "start"], "the claim (labels, fingerprinted) comes first: setScheduling has no fingerprint, so a racer that lost the claim must not have written it");
+            .ShouldBe(["setLabels", "setLabels", "setScheduling", "setMetadata", "start"], "the claim (labels, fingerprinted) comes first: setScheduling has no fingerprint, so a racer that lost the claim must not have written it");
 
         using var scheduling = JsonDocument.Parse(rig.Handler.To(Post, OldInstance + "/setScheduling").Single().Body);
         scheduling.RootElement.GetProperty("maxRunDuration").GetProperty("seconds").GetInt64().ShouldBe(5400);
@@ -661,13 +716,164 @@ public class GoogleComputeGatewayTests
         sent.Count.ShouldBe(6);
     }
 
+    private static string Labelled(string body, VmSpec spec)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(body)!.AsObject();
+        node["labelFingerprint"] = "lf2";
+        node["labels"] = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(spec.ToLabels()));
+        return node.ToJsonString();
+    }
+
+    private static string WithDiskSource(string source)
+        => StoppedOld().Replace(DiskSource, source);
+
+    // Issue #678 review: an instance with no boot disk cannot be relabelled; skipping would leave the old job's labels on a disk.
+    [Fact]
+    public async Task A_reuse_that_sees_no_boot_disk_throws_before_any_write()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, OldInstance, 200, StoppedOld().Replace("\"disks\":[{\"boot\":true,\"source\":\"" + DiskSource + "\"}],", string.Empty));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.Code.ShouldBe("VM_NO_BOOT_DISK");
+        rig.Handler.Requests.ShouldAllBe(r => r.Method == Get, "nothing is written when the boot disk cannot be found");
+    }
+
+    [Fact]
+    public async Task A_precondition_failure_on_the_instance_labels_is_accepted_when_the_labels_already_equal_the_target()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint", "conditionNotMet"))
+            .Returns(Get, OldInstance, 200, Labelled(StoppedOld(), Spec()))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start"))
+            .Returns(Get, OldInstance, 200, Vm("deg-job-old", Zone, "RUNNING", job: "job1"));
+
+        var vm = await rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None);
+
+        vm.Name.ShouldBe("deg-job-old");
+        rig.Handler.To(Post, OldInstance + "/start").Count.ShouldBe(1, "a lost answer to our own label write must not kill the reuse");
+    }
+
+    [Fact]
+    public async Task A_precondition_failure_on_the_instance_labels_stays_a_lost_claim_when_another_job_holds_them()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint", "conditionNotMet"))
+            .Returns(Get, OldInstance, 200, StoppedOld().Replace("job-old", "job-rival"));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(412);
+        rig.Handler.Requests.Where(r => r.Method == Post).Count().ShouldBe(1, "the rival's VM is not edited further");
+    }
+
+    [Fact]
+    public async Task A_precondition_failure_on_the_disk_labels_is_accepted_when_the_disk_already_carries_the_target()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint", "conditionNotMet"))
+            .Returns(Get, OldDisk, 200, Labelled(OldDiskBody(), Spec()))
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start"))
+            .Returns(Get, OldInstance, 200, Vm("deg-job-old", Zone, "RUNNING", job: "job1"));
+
+        await rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None);
+
+        rig.Handler.To(Post, OldInstance + "/start").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_precondition_failure_on_the_disk_labels_with_other_labels_present_still_fails()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint", "conditionNotMet"))
+            .Returns(Get, OldDisk, 200, OldDiskBody());
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(412);
+        rig.Handler.Requests.Any(r => r.Uri.AbsolutePath.EndsWith("/start", StringComparison.Ordinal)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_regional_boot_disk_is_relabelled_through_the_regional_disk_API()
+    {
+        const string regionalDisk = Base + "/regions/us-central1/disks/deg-job-old";
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, WithDiskSource("https://www.googleapis.com/compute/v1/projects/my-lab/regions/us-central1/disks/deg-job-old"))
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, regionalDisk, 200, OldDiskBody())
+            .Returns(Post, regionalDisk + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start"))
+            .Returns(Get, OldInstance, 200, Vm("deg-job-old", Zone, "RUNNING", job: "job1"));
+
+        await rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None);
+
+        rig.Handler.To(Post, regionalDisk + "/setLabels").Count.ShouldBe(1, "a regional disk has no zonal URL; the zonal call would 404");
+    }
+
+    [Theory]
+    [InlineData("projects/my-lab/zones/us-central1-a/disks/deg-job-old")]
+    [InlineData("https://compute.googleapis.com/compute/beta/projects/my-lab/zones/us-central1-a/disks/deg-job-old/")]
+    [InlineData("https://www.googleapis.com/compute/v1/projects/my-lab/zones/us-central1-a/disks/deg-job-old?x=1")]
+    public async Task An_odd_but_valid_boot_disk_source_still_reaches_the_zonal_disk(string source)
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, WithDiskSource(source))
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start"))
+            .Returns(Get, OldInstance, 200, Vm("deg-job-old", Zone, "RUNNING", job: "job1"));
+
+        await rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None);
+
+        rig.Handler.To(Post, OldDisk + "/setLabels").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_boot_disk_source_that_names_no_disk_throws_rather_than_skipping()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, OldInstance, 200, WithDiskSource("https://www.googleapis.com/compute/v1/projects/my-lab/zones/us-central1-a/"));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.Code.ShouldBe("VM_NO_BOOT_DISK");
+    }
+
     [Fact]
     public async Task A_lost_claim_changes_nothing_else_about_the_VM()
     {
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, OldInstance, 200, StoppedOld())
-            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "Labels fingerprint either invalid or resource labels have changed", "conditionNotMet"));
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "Labels fingerprint either invalid or resource labels have changed", "conditionNotMet"))
+            .Returns(Get, OldInstance, 200, StoppedOld());
 
         var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
 
@@ -709,6 +915,8 @@ public class GoogleComputeGatewayTests
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 200, Op("DONE", "setLabels"))
             .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
             .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
             .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
