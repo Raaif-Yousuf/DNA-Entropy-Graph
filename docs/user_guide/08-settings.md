@@ -28,6 +28,8 @@ Run the analysis on your own computer instead of a rented one. It needs an NVIDI
 
 The health check below it shows your graphics card, free disk space and whether the engine (the model software the app installs for this feature) is installed and working. **Install** sets the engine up in one step (it downloads several gigabytes and can be cancelled), **Repair** sets it up again, **Remove** deletes it (your results and input copies are not touched), and **Check again** looks at the computer again. A run on this PC never creates anything in Google Cloud and costs nothing but time.
 
+If the health check says the NVIDIA driver is not working, reinstall or update the driver from the NVIDIA website, restart the PC, then choose **Check again**. A run on this PC that stops reporting in, or runs past its time limit, is stopped by the app and shows a message telling you what to do. If you close the app while a run is going, the run stops, and the next time you open the app it shows that run as not finished so you can start it again. If you have two NVIDIA cards, the app uses the one with the most memory.
+
 ## Diagnostics
 
 **Save diagnostics** writes one file you can send to support. It includes your run logs, run

@@ -19,11 +19,27 @@ The same contract as a cloud run, with the job folder in place of the bucket pre
 
 `LocalJobRunner` (`DnaEntropyGraph.LocalEngine`) writes the manifest, starts
 `<engine>\.venv\Scripts\python.exe -m dna_entropy.worker.cli run --manifest <m> --store localdir --root <job folder>`,
-reads `status.json` every 500 ms into the run row (heartbeat, worker version), and when the process ends reads
+reads `status.json` every 500 ms (on a `TimeProvider`, so every deadline below is tested on virtual time) into the run row (heartbeat, worker version), and when the process ends reads
 `result.json` and copies every file it lists, verified against its sha256 and byte count, into a fresh folder in the
 chosen output folder (default Downloads), the same as the cloud download. A run with no `result.json` is
 `local_worker_crashed` (WORKER_CRASH). Phases: Draft, Preparing, Running, Finalizing, Downloading, then Completed or
 PartiallyCompleted or Failed. There are no Uploading or Provisioning phases and no cloud resource of any kind.
+
+**Guard rails (a This PC run always ends).** The app does not rely on the worker to stop itself. The runner kills the whole
+process tree and records a terminal row with a named code when: no first heartbeat within 10 minutes
+(`local_worker_no_heartbeat`), the heartbeat does not change for 10 minutes (`local_worker_stalled`, 20 beats of 30 s), or
+the run passes its `MaxRunDurationMinutes` plus a 5 minute margin (`local_worker_timed_out`; the worker's own
+`limits.maxRunSeconds` cap, enforced by #89, gets to fire first and say why). THEORY (unverified): ten minutes covers a cold
+start of Python and torch on a PC with a virus scanner. A nonzero exit code after a finished `result.json` still completes the run
+(the files are verified against it) with the note `local_worker_exit_nonzero` on the row and the exit code in the log; DECISION
+(agent-made, reversible). Any other exception, and a start that is refused, ends the row `Failed` with `other`.
+The worker starts with `CUDA_VISIBLE_DEVICES` set to the uuid of the card the readiness check judged, and with `PYTHONPATH`,
+`PYTHONHOME` and `VIRTUAL_ENV` removed from its environment (a development `PYTHONPATH` set by `LocalEngineSetup` is kept).
+
+**Killed app.** Every child is started inside one Windows Job Object with `KILL_ON_JOB_CLOSE` (`WindowsKillOnCloseJob`), so a
+killed app takes its worker with it. At launch (`AppStartup.BeginAsync`) `LocalJobRunner.ReconcileInterruptedAsync` judges every local row
+that is not terminal (#734): a `result.json` and an output folder finish the run from the result; otherwise it ends
+`Failed` as `local_run_interrupted`; a Cancelling row ends Cancelled.
 
 **Cancel.** `control/cancel` is written; the worker checks it between windows and writes a cancelled result. If the
 process has not ended after 30 seconds its whole process tree is killed. Whatever the worker had finished is copied
@@ -47,10 +63,10 @@ The choice is saved under the settings key `run.target` by `RunTargetPickerViewM
 
 ## 3. Detection and health (#120, #173)
 
-* GPU: `NvidiaSmiGpuDetector` runs `nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits`
-  (PATH, then System32, then `Program Files\NVIDIA Corporation\NVSMI`). Chosen over NVML P/Invoke because the worker reads the
+* GPU: `NvidiaSmiGpuDetector` runs `nvidia-smi --query-gpu=uuid,name,memory.total,driver_version --format=csv,noheader,nounits`
+  by full path (System32, then `Program Files\NVIDIA Corporation\NVSMI`, then the absolute folders of PATH; never a bare name, so the current folder is never searched). Chosen over NVML P/Invoke because the worker reads the
   GPU the same way (`worker/gpu.py`) and there is no native binding to ship. No tool is `NoNvidia` (this laptop's Intel
-  Arc); a tool that fails is `ToolFailed`; neither is an error.
+  Arc); a tool that is there but fails (a driver that is not loaded, exit 9) is `ToolFailed` and has its own blocker, `GpuToolFailed`, whose action is to reinstall or update the NVIDIA driver. Neither is an error. With several cards the one with the most memory is judged, and the worker is pinned to it.
 * Thresholds (`LocalCapabilityEvaluator`): GPU memory at least 22000 MiB, driver major at least 550, free disk at least
   30 GB where the engine lives. DECISION (agent-made, reversible): the floor is 22000 MiB and not 24576, because cards sold
   as 24 GB report 23034 MiB (L4, A10G) to 24564 MiB (RTX 4090). A 16 GB card is still refused.
@@ -78,11 +94,10 @@ generated without a measurement on a real NVIDIA Windows PC; see
 Environment variables read by `LocalEngineSetup`: `DEG_LOCAL_ENGINE_PYTHON` (use this python as the engine) and
 `DEG_LOCAL_ENGINE_WORKER_SRC` (set as `PYTHONPATH`). With both set, This PC with the mock predictor runs end to end on any
 PC. The real-worker test (`RealWorkerTests`) runs the real Python worker with the mock predictor when
-`DEG_TEST_WORKER_PYTHON` (and optionally `DEG_TEST_WORKER_SRC`) are set, and does nothing otherwise.
+`DEG_TEST_WORKER_PYTHON` (and optionally `DEG_TEST_WORKER_SRC`) are set, and is reported as skipped otherwise.
 
 ## 6. Known gaps
 
-* A This PC row left non-terminal by a killed app is not reattached or failed on relaunch (the reconciler is cloud only).
-* The New run page does not show the picker yet (the choice is read from the Settings default); see the issue filed with
+* The New run page does not show the picker yet (the choice is read from the one picker Settings and New run share); see the issue filed with
   this change.
 * The Runs list does not show the target column (issue #225 covers the ledger and the column).
