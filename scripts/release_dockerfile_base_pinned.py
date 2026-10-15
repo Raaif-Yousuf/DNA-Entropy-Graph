@@ -1,6 +1,6 @@
-"""scripts/check_dockerfile_base_pinned.py -- every FROM in a Dockerfile is pinned by digest (#255, #178).
+"""scripts/release_dockerfile_base_pinned.py -- every FROM in a Dockerfile is pinned by digest (#255, #178).
 
-    python scripts/check_dockerfile_base_pinned.py worker/Dockerfile.cuda [more Dockerfiles]
+    python scripts/release_dockerfile_base_pinned.py worker/Dockerfile.cuda [more Dockerfiles]
 
 Every `FROM` must carry a literal `@sha256:<64 lowercase hex>`, except `FROM scratch` and `FROM <alias of an EARLIER
 stage>`. A multi-stage file with one pinned stage and one tag-only stage fails. A `${ARG}` in the image reference is not a
