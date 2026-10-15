@@ -18,11 +18,122 @@
   <data name="ShellTitle.Text" xml:space="preserve">
     <value>DNA Entropy Graph</value>
   </data>
-  <data name="ConfirmDeleteResource_Title" xml:space="preserve">
-    <value>Delete this cloud resource?</value>
+  <data name="CloudPageHeading.Text" xml:space="preserve">
+    <value>What this app has in your Google Cloud project</value>
   </data>
-  <data name="ConfirmDeleteResource_Body" xml:space="preserve">
-    <value>This stops billing for it. This cannot be undone.</value>
+  <data name="CloudRefreshButton.Content" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="CloudEmptyText.Text" xml:space="preserve">
+    <value>Nothing of this app is in your project right now, so nothing is costing you money.</value>
+  </data>
+  <data name="CloudVmsHeading.Text" xml:space="preserve">
+    <value>Rented computers (VMs)</value>
+  </data>
+  <data name="CloudDisksHeading.Text" xml:space="preserve">
+    <value>Disks</value>
+  </data>
+  <data name="CloudStopButton.Content" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="CloudStartButton.Content" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="CloudDeleteButton.Content" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="CloudDeleteAllButton.Content" xml:space="preserve">
+    <value>Delete everything this app created</value>
+  </data>
+  <data name="CloudPage_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen yet. Open Set up Google Cloud and choose one.</value>
+  </data>
+  <data name="CloudPage_ListFailed" xml:space="preserve">
+    <value>Google did not answer, so this list may be out of date. Press Refresh.</value>
+  </data>
+  <data name="CloudPage_ActionFailed" xml:space="preserve">
+    <value>Google would not do that to {0}. Press Refresh to see where it stands, then try again.</value>
+  </data>
+  <data name="CloudPage_DeleteAllFailed" xml:space="preserve">
+    <value>Google stopped the cleanup before it began, so nothing was deleted. Press Refresh, then try Delete everything again.</value>
+  </data>
+  <data name="CloudPage_RunningBanner" xml:space="preserve">
+    <value>{0} rented computer(s) running now and costing money. Press Stop on it below if you are not waiting for a result.</value>
+  </data>
+  <data name="CloudPage_Summary" xml:space="preserve">
+    <value>Results online: {0} job folder(s), {1}, in {2}. Shared download cache: {3}.</value>
+  </data>
+  <data name="CloudPage_SummaryNoBucket" xml:space="preserve">
+    <value>No results folder online yet. Shared download cache: {0}.</value>
+  </data>
+  <data name="CloudVm_Running" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="CloudVm_Stopped" xml:space="preserve">
+    <value>Stopped (its disk still costs a little)</value>
+  </data>
+  <data name="CloudVm_Changing" xml:space="preserve">
+    <value>Starting or stopping</value>
+  </data>
+  <data name="CloudVm_AnotherComputer" xml:space="preserve">
+    <value>Another computer: created from a different copy of this app in the same project. You can see it here but not change it. Use that computer, or Google Cloud Console.</value>
+  </data>
+  <data name="CloudVm_CostRunning" xml:space="preserve">
+    <value>Up to about ${0} per hour while it runs.</value>
+  </data>
+  <data name="CloudVm_CostStopped" xml:space="preserve">
+    <value>About ${0} per day for its disk until you delete it.</value>
+  </data>
+  <data name="CloudDisk_Attached" xml:space="preserve">
+    <value>{0} GB, in use by a computer ({1})</value>
+  </data>
+  <data name="CloudDisk_Detached" xml:space="preserve">
+    <value>{0} GB, not in use ({1})</value>
+  </data>
+  <data name="CloudDisk_Cost" xml:space="preserve">
+    <value>About ${0} per day.</value>
+  </data>
+  <data name="CloudDeleteVm_Title" xml:space="preserve">
+    <value>Delete this rented computer?</value>
+  </data>
+  <data name="CloudDeleteVm_Body" xml:space="preserve">
+    <value>{0} and its disk will be deleted and billing for them stops. A run still using it ends as cancelled. This cannot be undone.</value>
+  </data>
+  <data name="CloudDeleteAll_Title" xml:space="preserve">
+    <value>Delete everything this app created?</value>
+  </data>
+  <data name="CloudDeleteAll_Body" xml:space="preserve">
+    <value>This deletes {0} rented computer(s), {1} disk(s) and {2} job folder(s) with their results online ({3}). Runs still going end as cancelled. Results already downloaded to this PC stay. Google may keep deleted job folders for a few days before they are gone for good. This cannot be undone.</value>
+  </data>
+  <data name="CloudKind_Vm" xml:space="preserve">
+    <value>computer</value>
+  </data>
+  <data name="CloudKind_Disk" xml:space="preserve">
+    <value>disk</value>
+  </data>
+  <data name="CloudKind_JobData" xml:space="preserve">
+    <value>job folder</value>
+  </data>
+  <data name="CloudReport_Complete" xml:space="preserve">
+    <value>Done. Everything this app created in your project is deleted.</value>
+  </data>
+  <data name="CloudReport_Incomplete" xml:space="preserve">
+    <value>Some items are still there. Read the list below, then press Delete everything again.</value>
+  </data>
+  <data name="CloudReport_Deleted" xml:space="preserve">
+    <value>Deleted: {0}</value>
+  </data>
+  <data name="CloudReport_DeletedRecoverable" xml:space="preserve">
+    <value>Deleted: {0}. Google keeps a copy for {1} days in case you change your mind (ask Google to restore it in Google Cloud Console).</value>
+  </data>
+  <data name="CloudReport_Failed" xml:space="preserve">
+    <value>Could not delete: {0}. Press Delete everything again, or delete it in Google Cloud Console.</value>
+  </data>
+  <data name="CloudReport_NotVerified" xml:space="preserve">
+    <value>Asked Google to delete {0} but it is still listed. Press Refresh in a minute.</value>
+  </data>
+  <data name="CloudReport_Skipped" xml:space="preserve">
+    <value>Left alone: {0}. Press Refresh, then Delete everything again if it is still listed.</value>
   </data>
   <data name="ThemeUpdated_Title" xml:space="preserve">
     <value>Theme updated</value>

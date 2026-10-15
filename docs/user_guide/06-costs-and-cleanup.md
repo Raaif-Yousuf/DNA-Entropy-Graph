@@ -115,11 +115,16 @@ time from the Cloud page.
 
 - The **status bar at the top of the app** always shows your estimated spending so far
   this month.
-- The **Cloud page** lists every computer and every storage bucket this app has ever
-  created for you, whether it is running, stopped, or gone, with an estimated cost for
-  each. From there you can stop, start, or delete anything, or use **Delete everything
-  this app created** to remove it all at once (this asks you to type your project's name
-  first, so it cannot happen by accident).
+- The **Cloud page** lists every rented computer, every disk and the size of your results
+  online that this copy of the app created in your project, with an estimated cost for each.
+  From there you can **Stop**, **Start** or **Delete** a computer, or use **Delete everything
+  this app created** to remove it all at once. That asks first and says exactly how many
+  computers, disks and job folders will go. Afterwards it lists every item with what became
+  of it, and says how many days Google keeps a deleted job folder in case you change your
+  mind.
+- If someone else uses another copy of this app on the same Google project, their computers
+  show up on your Cloud page tagged **Another computer**. You can see them (they cost money
+  on the same bill) but not stop or delete them from here.
 - If you close the app while a computer is still running with no job attached to it, a
   message tells you exactly how many minutes until it stops itself, and offers to stop or
   delete it right then instead of waiting.
