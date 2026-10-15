@@ -27,13 +27,17 @@ public interface IComputeGateway
     Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Issue #94: starts a STOPPED VM this installation left behind for <paramref name="spec"/>'s job: replaces its scheduling limits and its
-    /// metadata (the startup script and <c>deg-*</c> attributes) with the spec's, then claims it by rewriting its labels to the spec's
-    /// (so discovery by <c>job-id</c> finds it, Hard Rule 9), then starts it. The claim is the LAST edit before the start, so a failure
-    /// before it leaves the VM labelled as its old job. A VM that is not stopped is refused (<c>VM_NOT_STOPPED</c>) before any change, and
-    /// a VM someone else claimed first fails the label write (precondition failed). Failures are classified like a create's: a stockout on
-    /// the start is <see cref="CloudErrorKind.Stockout"/>. A failure AFTER the claim leaves the VM labelled for this job: the caller ends it.
+    /// Issue #94: starts a STOPPED VM this installation left behind for <paramref name="spec"/>'s job: claims it FIRST by rewriting its labels to
+    /// the spec's (so discovery by <c>job-id</c> finds it, Hard Rule 9), then replaces its scheduling limits and its metadata (the startup script
+    /// and <c>deg-*</c> attributes) with the spec's, then starts it. The claim is first and fingerprinted, so of two jobs racing for one VM
+    /// only one passes it, and a loser has written nothing (the scheduling write has no fingerprint of its own). A VM that is not stopped is
+    /// refused (<c>VM_NOT_STOPPED</c>) before any change, and a VM someone else claimed first fails the label write (precondition failed, 412).
+    /// Failures are classified like a create's: a stockout on the start is <see cref="CloudErrorKind.Stockout"/>. A failure AFTER the claim leaves
+    /// the VM labelled for this job: the caller ends it. The call is NOT idempotent as a whole (a replay meets a VM that already started), so a
+    /// resilience layer must not replay it; a <see cref="CloudErrorKind.Network"/> failure means the outcome is unknown and the caller looks by label.
     /// </summary>
+    Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
+
     /// <summary>
     /// Issue #670: the zones that offer <paramref name="acceleratorType"/> (<c>nvidia-l4</c>, see <see cref="ZoneCandidates.AcceleratorFor"/>),
     /// the zone universe the ladder builds its candidates from. A real gateway implements this with <c>acceleratorTypes.aggregatedList</c>
@@ -41,8 +45,6 @@ public interface IComputeGateway
     /// zones the request names. A failure throws like any other read; the caller treats it the same as an empty answer.
     /// </summary>
     Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken);
-
-    Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
 
     Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 

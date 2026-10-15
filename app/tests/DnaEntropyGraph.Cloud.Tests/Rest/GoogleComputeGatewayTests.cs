@@ -626,7 +626,7 @@ public class GoogleComputeGatewayTests
             + "\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}}";
 
     [Fact]
-    public async Task Reuse_claims_a_stopped_VM_by_scheduling_then_metadata_then_labels_then_start_each_with_its_fingerprint()
+    public async Task Reuse_claims_a_stopped_VM_by_labels_first_then_scheduling_then_metadata_then_start_each_with_its_fingerprint()
     {
         var rig = new GoogleGatewayHarness();
         rig.Handler
@@ -641,7 +641,7 @@ public class GoogleComputeGatewayTests
 
         vm.Name.ShouldBe("deg-job-old");
         rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[(r.Uri.AbsolutePath.LastIndexOf('/') + 1)..])
-            .ShouldBe(["setScheduling", "setMetadata", "setLabels", "start"], "the claim (labels) must come after the harmless edits and before the start");
+            .ShouldBe(["setLabels", "setScheduling", "setMetadata", "start"], "the claim (labels, fingerprinted) comes first: setScheduling has no fingerprint, so a racer that lost the claim must not have written it");
 
         using var scheduling = JsonDocument.Parse(rig.Handler.To(Post, OldInstance + "/setScheduling").Single().Body);
         scheduling.RootElement.GetProperty("maxRunDuration").GetProperty("seconds").GetInt64().ShouldBe(5400);
@@ -659,6 +659,35 @@ public class GoogleComputeGatewayTests
         sent["job-id"].ShouldBe("job1");
         sent["app"].ShouldBe("dna-entropy-graph");
         sent.Count.ShouldBe(6);
+    }
+
+    [Fact]
+    public async Task A_lost_claim_changes_nothing_else_about_the_VM()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "Labels fingerprint either invalid or resource labels have changed", "conditionNotMet"));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(412);
+        rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[(r.Uri.AbsolutePath.LastIndexOf('/') + 1)..])
+            .ShouldBe(["setLabels"], "the winner's scheduling and metadata must not be overwritten by a racer that lost the claim");
+    }
+
+    [Fact]
+    public async Task A_reused_VM_reports_its_last_start_apart_from_its_creation()
+    {
+        var rig = new GoogleGatewayHarness();
+        var started = StoppedOld("RUNNING").Replace("\"creationTimestamp\":\"2026-10-03T01:02:03.000-07:00\",", "\"creationTimestamp\":\"2026-10-03T01:02:03.000-07:00\",\"lastStartTimestamp\":\"2026-10-09T05:06:07.000-07:00\",");
+        rig.Handler.Returns(Get, OldInstance, 200, started);
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.CreatedAt.ShouldBe(new DateTimeOffset(2026, 10, 3, 1, 2, 3, TimeSpan.FromHours(-7)));
+        vm.StartedAt.ShouldBe(new DateTimeOffset(2026, 10, 9, 5, 6, 7, TimeSpan.FromHours(-7)));
+        vm.RunClockStart.ShouldBe(vm.StartedAt);
     }
 
     [Fact]

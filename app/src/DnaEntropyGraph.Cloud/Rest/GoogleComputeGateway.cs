@@ -155,10 +155,12 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>
-    /// Issue #94. Order matters: scheduling and metadata first (harmless on an idle stopped VM that still carries its old job's label),
-    /// the label rewrite (the claim) last before the start, each write carrying the fingerprint read at the start so two installations'
-    /// jobs racing for one VM cannot both win (the loser's write fails with a precondition error). THEORY (unverified, no live project):
-    /// that <c>instances.setScheduling</c> accepts <c>maxRunDuration</c> and <c>instanceTerminationAction</c> on a stopped instance.
+    /// Issue #94. Order matters: the label rewrite (the claim) comes FIRST, carrying the label fingerprint read at the start, so of two jobs
+    /// racing for one VM only one passes it (the loser fails with a precondition error before it has written anything). Only the winner then
+    /// replaces the scheduling limits (<c>setScheduling</c> has no fingerprint, so written first a loser could overwrite the winner's
+    /// <c>maxRunDuration</c>) and the metadata (fingerprinted), and starts it. A failure after the claim leaves the VM labelled for this job and
+    /// stopped: the caller ends it. THEORY (unverified, no live project): that <c>instances.setScheduling</c> accepts <c>maxRunDuration</c> and
+    /// <c>instanceTerminationAction</c> on a stopped instance.
     /// </summary>
     public async Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
     {
@@ -189,16 +191,17 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             throw new CloudOperationException(new CloudError("VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{instance.Status}', not stopped."), CloudErrorKind.Other);
         }
 
+        // The claim: the one write that carries a fingerprint of the labels, so of two jobs racing for this VM only one passes it.
+        var labelBody = new ComputeData.InstancesSetLabelsRequest { Labels = labels.ToDictionary(p => p.Key, p => p.Value), LabelFingerprint = instance.LabelFingerprint };
+        var claim = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(labelBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        await AwaitOperationAsync(project, zone, claim, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+
         var scheduling = await CallAsync("compute.instances.setScheduling", token => _service.Instances.SetScheduling(ComputeVmShape.Scheduling(reuse), project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         await AwaitOperationAsync(project, zone, scheduling, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
         var metadataBody = new ComputeData.Metadata { Items = ComputeVmShape.MetadataItems(reuse), Fingerprint = instance.Metadata?.Fingerprint };
         var metadata = await CallAsync("compute.instances.setMetadata", token => _service.Instances.SetMetadata(metadataBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         await AwaitOperationAsync(project, zone, metadata, goneIsDone: false, cancellationToken).ConfigureAwait(false);
-
-        var labelBody = new ComputeData.InstancesSetLabelsRequest { Labels = labels.ToDictionary(p => p.Key, p => p.Value), LabelFingerprint = instance.LabelFingerprint };
-        var claim = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(labelBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-        await AwaitOperationAsync(project, zone, claim, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
         var start = await CallAsync("compute.instances.start", token => _service.Instances.Start(project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         await AwaitOperationAsync(project, zone, start, goneIsDone: false, cancellationToken).ConfigureAwait(false);
@@ -423,7 +426,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             ParseTime(instance.CreationTimestamp),
             instance.Labels is null ? null : new Dictionary<string, string>(instance.Labels),
             ParseTime(instance.LastStopTimestamp),
-            ZoneName(instance.MachineType));
+            ZoneName(instance.MachineType),
+            ParseTime(instance.LastStartTimestamp));
 
     /// <summary>The zone name from a zone URL (<c>.../zones/us-central1-a</c>) or an aggregated-list key (<c>zones/us-central1-a</c>).</summary>
     private static string? ZoneName(string? url)

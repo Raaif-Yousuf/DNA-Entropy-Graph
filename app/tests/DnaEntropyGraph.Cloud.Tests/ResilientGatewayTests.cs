@@ -246,18 +246,24 @@ public class ResilientGatewayTests
 
                 var args = method.GetParameters().Select(ArgumentFor).ToArray();
                 var task = (Task)method.Invoke(gateway, args)!;
-                try
+                // ReuseVmAsync is a composite (read, claim, scheduling, metadata, start) and not idempotent as a whole: replaying it after
+                // a transient failure meets a VM that already started. It goes through the pipeline for the breaker and the token refresh
+                // but is attempted once, so the 503 reaches the caller (the provisioner then looks by label) and no retry is logged.
+                var isComposite = method.Name == nameof(IComputeGateway.ReuseVmAsync);
+                if (isComposite)
+                {
+                    var thrown = await Should.ThrowAsync<CloudOperationException>(() => task);
+                    thrown.Kind.ShouldBe(CloudErrorKind.Network, "the one 503 must reach the caller unreplayed");
+                }
+                else
                 {
                     await task;
                 }
-                catch (CloudOperationException) when (method.Name == nameof(IComputeGateway.ReuseVmAsync))
-                {
-                    // The default arguments name no stopped VM, so the retried call is refused (VM_NOT_FOUND): only that the 503 was retried matters here.
-                }
 
-                if (rig.Log.Retries.Count != 1)
+                var expectedRetries = isComposite ? 0 : 1;
+                if (rig.Log.Retries.Count != expectedRetries)
                 {
-                    failures.Add($"{type.Name}.{method.Name} logged {rig.Log.Retries.Count} retries");
+                    failures.Add($"{type.Name}.{method.Name} logged {rig.Log.Retries.Count} retries, expected {expectedRetries}");
                 }
             }
         }

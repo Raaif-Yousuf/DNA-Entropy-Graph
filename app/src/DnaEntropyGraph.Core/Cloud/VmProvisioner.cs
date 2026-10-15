@@ -387,12 +387,30 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         progress.VmMayExist = true;
         try
         {
-            var started = await calls.CallAsync(token => compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token), cancellationToken, settings.CreateTimeout).ConfigureAwait(false);
+            // Tracked like a create: a cancel that arrives between the claim and the start must wait for this to land, or the start
+            // goes on after the cancel looked and leaves a billing VM under a Cancelled record.
+            var started = await calls.CallAsync(
+                token =>
+                {
+                    var reuse = compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token);
+                    TrackInflightCreate(request.JobId, reuse);
+                    return reuse;
+                },
+                cancellationToken,
+                settings.CreateTimeout).ConfigureAwait(false);
             progress.VmName = started.Name;
             return ProvisionResult.Ok(started.Zone, started.Name);
         }
         catch (CloudOperationException ex)
         {
+            // A Network failure is an UNKNOWN outcome (the composite is never replayed, and its last answer may have been lost after the
+            // start worked): a VM this job's label now finds and that is booting or running is the reuse having succeeded. Adopt it.
+            if (ex.Kind == CloudErrorKind.Network && await TryAdoptReusedAsync(request, cancellationToken).ConfigureAwait(false) is { } adopted)
+            {
+                progress.VmName = adopted.Name;
+                return ProvisionResult.Ok(adopted.Zone, adopted.Name);
+            }
+
             // The claim may already have been made: whatever carries this job's label is ended before anything else is tried.
             var note = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
             if (note is not null || VmFacts.IsProjectWide(ex.Kind) || ex.Kind == CloudErrorKind.Network)
@@ -404,6 +422,19 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         }
     }
 
+    /// <summary>The one VM the job's label finds, when it is booting or running (the reuse's start worked and only its answer was lost); else null. A failure of the look is "not found".</summary>
+    private async Task<VmDescriptor?> TryAdoptReusedAsync(CloudJobRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var found = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+            return found is [{ } only] && (only.Status == "RUNNING" || VmFacts.IsBooting(only)) ? only : null;
+        }
+        catch (CloudOperationException)
+        {
+            return null;
+        }
+    }
     /// <summary>Waits, bounded by <see cref="CloudRunSettings.CreateSettleTimeout"/>, for every create this instance started for the job to land or fail. False when one is still in flight.</summary>
     public async Task<bool> SettleInflightCreatesAsync(string jobId)
     {
