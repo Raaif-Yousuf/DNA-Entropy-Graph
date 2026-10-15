@@ -371,6 +371,13 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// What the page forwards from its navigation parameter (issue #108): files handed over by "Open with" in Explorer arrive as
+    /// <see cref="DroppedItems"/> and are added like a drop; any other parameter (none, the usual case) is ignored.
+    /// </summary>
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private Task ReceiveNavigationParameterAsync(object? parameter) => parameter is DroppedItems dropped ? AddDroppedAsync(dropped) : Task.CompletedTask;
+
     [RelayCommand]
     private async Task BrowseAsync(CancellationToken cancellationToken)
     {

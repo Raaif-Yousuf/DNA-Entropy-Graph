@@ -38,6 +38,26 @@ public class ActivationRouterTests
         _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
     }
 
+    [Fact]
+    public void A_launch_with_a_sequence_file_opens_New_run_with_that_file_added()
+    {
+        _router.Handle("\"C:\\data\\my seq.gb\"").ShouldBeFalse("it named a file, not a run");
+
+        _window.Received(1).BringToFront();
+        _navigator.Received(1).NavigateTo(
+            ShellViewModel.InitialPageKeyValue,
+            Arg.Is<DroppedItems>(d => d.Paths.SequenceEqual(new[] { @"C:\data\my seq.gb" }) && !d.Failed && d.SkippedVirtual == 0));
+    }
+
+    [Fact]
+    public void A_run_link_wins_over_a_file_in_the_same_launch()
+    {
+        _router.Handle("run=job-3;\"C:\\data\\a.gb\"").ShouldBeTrue();
+
+        _navigator.Received(1).NavigateTo(ResultsViewModel.PageKey, "job-3");
+        _navigator.DidNotReceive().NavigateTo(ShellViewModel.InitialPageKeyValue, Arg.Any<object?>());
+    }
+
     private sealed class InlineDispatcher : IDispatcher
     {
         public void Enqueue(Action action) => action();

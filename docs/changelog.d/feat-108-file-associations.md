@@ -1,0 +1,1 @@
+- Open with (#108): a Settings switch adds "DNA Entropy Graph" to File Explorer's Open with list for GenBank and FASTA files (for you only, never as the default program); opening a file that way adds it to New run in the window that is already open.

@@ -7,7 +7,8 @@ namespace DnaEntropyGraph.Presentation.Services;
 /// <summary>
 /// What the app does when it is activated from outside (issue #107): a click on a Windows notification, or a second launch of the exe
 /// that was handed over to this one. The window always comes to the front; a "run=ID" argument also opens that run's Results page.
-/// The arguments arrive from outside the app, so only <see cref="AppDeepLink"/>'s plain job id is acted on.
+/// A launch that names sequence files (Open with, issue #108) opens New run with them added. The arguments arrive from outside the app,
+/// so only <see cref="AppDeepLink"/>'s plain job id and local sequence-file paths are acted on.
 /// </summary>
 public sealed class ActivationRouter(INavigator navigator, IAppWindow window, IDispatcher dispatcher)
 {
@@ -15,12 +16,18 @@ public sealed class ActivationRouter(INavigator navigator, IAppWindow window, ID
     public bool Handle(string? arguments)
     {
         var hasRun = AppDeepLink.TryGetRunId(arguments, out var jobId);
+        var hasFiles = AppDeepLink.TryGetInputFiles(arguments, out var inputFiles);
         dispatcher.Enqueue(() =>
         {
             window.BringToFront();
             if (hasRun)
             {
                 navigator.NavigateTo(ResultsViewModel.PageKey, jobId);
+            }
+            else if (hasFiles)
+            {
+                // "Open with" from Explorer (issue #108): New run, with the file added as if it had been dropped there.
+                navigator.NavigateTo(ShellViewModel.InitialPageKeyValue, new DroppedItems(inputFiles, 0, false));
             }
         });
         return hasRun;

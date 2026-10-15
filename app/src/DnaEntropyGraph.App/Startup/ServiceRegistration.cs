@@ -76,6 +76,11 @@ public static class ServiceRegistration
         services.AddSingleton<IAppWindow>(sp => sp.GetRequiredService<AppWindowService>());
         services.AddSingleton<IDesktopNotifier, AppNotifier>();
         services.AddSingleton<ActivationRouter>();
+
+        // Issue #108: "Open with" entries, written under the current user only; the Settings switch is the only caller.
+        services.AddSingleton<IClassesRegistry, CurrentUserClasses>();
+        services.AddSingleton(sp => new FileAssociationService(sp.GetRequiredService<IClassesRegistry>(), () => Environment.ProcessPath));
+        services.AddTransient<FileAssociationSettingsViewModel>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
         services.AddSingleton<IDialogService>(sp => sp.GetRequiredService<DialogService>());

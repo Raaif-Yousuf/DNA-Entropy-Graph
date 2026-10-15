@@ -37,6 +37,60 @@ public static class AppDeepLink
         return false;
     }
 
+    /// <summary>
+    /// The sequence files in a launch's arguments (a double-clicked or "Open with" file arrives as the command line, quoted when it has
+    /// spaces). Only a local full path to a sequence type is kept: never a relative path, a UNC share (opening one would reach out to
+    /// another machine), a wildcard, or another file type.
+    /// </summary>
+    public static bool TryGetInputFiles(string? arguments, out IReadOnlyList<string> paths)
+    {
+        var found = new List<string>();
+        paths = found;
+        if (string.IsNullOrWhiteSpace(arguments))
+        {
+            return false;
+        }
+
+        var token = new System.Text.StringBuilder();
+        var quoted = false;
+        void Flush()
+        {
+            if (token.Length > 0 && found.Count < MaxFiles && IsLocalSequenceFile(token.ToString()))
+            {
+                found.Add(token.ToString());
+            }
+
+            token.Clear();
+        }
+
+        foreach (var c in arguments)
+        {
+            if (c == '"')
+            {
+                quoted = !quoted;
+            }
+            else if (char.IsWhiteSpace(c) && !quoted)
+            {
+                Flush();
+            }
+            else
+            {
+                token.Append(c);
+            }
+        }
+
+        Flush();
+        return found.Count > 0;
+    }
+
+    private const int MaxFiles = 20;
+
+    private static bool IsLocalSequenceFile(string text)
+        => text.IndexOfAny(['*', '?', '<', '>', '|']) < 0
+            && !text.StartsWith(@"\\", StringComparison.Ordinal)
+            && Path.IsPathFullyQualified(text)
+            && FileAssociations.IsSequenceFile(text);
+
     private static bool IsPlainId(string? value)
         => !string.IsNullOrEmpty(value) && value.Length <= MaxJobIdLength && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 }
