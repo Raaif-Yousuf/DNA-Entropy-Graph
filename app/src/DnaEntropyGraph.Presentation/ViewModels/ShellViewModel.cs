@@ -28,7 +28,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IGcpAccount _gcpAccount;
     private readonly IDispatcher? _dispatcher;
-    private readonly RunCompletionActions? _completion;
+    private readonly RunCompletionActions _completion;
     private readonly IStringResourceProvider _strings;
     private readonly AppDataRoot? _dataRoot;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
@@ -46,7 +46,7 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The in-app message bar state (issue #585): the InfoBar in MainWindow binds to this, and it is the same instance the DI-registered <c>IToastService</c> writes to.</summary>
     public InAppMessageCenter Messages { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, RunCompletionActions? completion = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null)
     {
         _completion = completion;
         _dataRoot = dataRoot;
@@ -126,7 +126,7 @@ public sealed partial class ShellViewModel : ObservableObject
         HasActiveRun = _activeJobIds.Count > 0;
 
         // Issue #643: what happens at the end of a run (toast, open folder, open Results) is decided by the Notifications settings.
-        if (_completion is not null && message.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted)
+        if (message.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted)
         {
             CompletionWork = _completion.OnRunFinishedAsync(message.JobId, message.Phase);
         }

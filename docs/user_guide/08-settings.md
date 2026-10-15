@@ -31,3 +31,18 @@ your sequences, file names, results, email address or sign-in.
 ## Advanced
 
 A collapsed group. **Reset all settings** asks first, then puts every setting back to its starting value; your runs, results and input files are not touched. Close the app and open it again to finish. A note says whether this copy is using a pretend cloud for testing. The analysis program image box is for developers: it works only when developer mode is already on in the settings file.
+## External viewers
+
+The buttons **Open in IGV** and **Open in Geneious** on the Results page start those programs
+for you. This group tells the app where they are and how to talk to IGV.
+
+- **IGV program** and **Geneious program**: the full path of the program. Leave it empty and the
+  app looks in the usual install folders itself. **Browse...** lets you pick the file, and you can
+  also paste a path. If nothing is at the path you typed, the row says so; choose **Browse...** to
+  pick the program again.
+- **IGV batch port**: the number IGV listens on for commands (IGV: View, Preferences, Advanced,
+  Enable port). The default is 60151. Type a whole number from 1 to 65535; anything else is refused
+  and the last good port stays in effect.
+- **Reset to default** on each row clears that row only.
+
+A change applies the next time you press the button; there is nothing to restart.
