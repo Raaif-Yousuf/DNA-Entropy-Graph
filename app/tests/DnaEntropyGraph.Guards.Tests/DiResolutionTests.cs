@@ -296,4 +296,5 @@ public class DiResolutionTests
         var row = (await runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "job-di");
         row.Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Cancelled);
         row.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.DeletedByCleanup);
-    }}
+    }
+}
