@@ -273,6 +273,8 @@ location instead.
 input path is never opened for write is the natural guard once `app/`
 exists.
 
+**Data-folder guard (issue #638):** app state hangs off the one `AppDataRoot`, so `--profile <dir>` / `DEG_DATA_DIR` moves all of it. `Guards.Tests/DataFolderOverrideTests` fails any C# file that names `SpecialFolder.LocalApplicationData` except `AppDataRoot.cs` and the carve-out `Core/Viewers/ViewerLocator.cs`, which only *reads* the per-user `Programs` folder to find an installed IGV or Geneious (an install location, not app state).
+
 ---
 
 ### The process (inherited discipline, carried from the prototype work)

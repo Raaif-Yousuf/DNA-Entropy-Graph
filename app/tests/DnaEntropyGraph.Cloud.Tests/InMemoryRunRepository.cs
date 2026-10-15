@@ -43,9 +43,16 @@ internal sealed class InMemoryRunRepository : IRunRepository
         return _runs.ToList();
     }
 
-    public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
+    /// <summary>Runs before each write (the row is not stored until it returns): a test parks a write here, honouring its token. Null: writes pass straight through.</summary>
+    public Func<RunRecord, CancellationToken, Task>? BeforeUpsert { get; set; }
+
+    public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
+        if (BeforeUpsert is { } hook)
+        {
+            await hook(run, cancellationToken).ConfigureAwait(false);
+        }
+
         _runs.Enqueue(run);
-        return Task.CompletedTask;
     }
 }
