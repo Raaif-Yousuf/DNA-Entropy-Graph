@@ -19,7 +19,7 @@ from ..validation.validators import ValidationError, validate_sequence
 from . import detect
 from .fasta import read_fasta
 from .genbank import read_genbank
-from .gff3 import read_gff3
+from .gff3 import fit_to_sequence, read_gff3
 from .paste import PasteReader
 
 
@@ -168,20 +168,6 @@ def _assert_unique_contig_names(contigs: list[Contig]) -> None:
         )
 
 
-def _fit_to_length(feats: list[GeneFeature], seq_len: int) -> tuple[list[GeneFeature], list[str]]:
-    """Drop a paired GFF3 feature that runs past its sequence's own length (the pair disagree:
-    wrong FASTA, or a trimmed one), counted in one notice, never kept with a wrong span."""
-    kept = [f for f in feats if f.end <= seq_len]
-    dropped = len(feats) - len(kept)
-    notes = []
-    if dropped:
-        notes.append(
-            f"{dropped} GFF3 feature(s) fall outside their sequence's length of {seq_len} nt and were "
-            "dropped. Check the GFF3 belongs to this FASTA."
-        )
-    return kept, notes
-
-
 def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     """Read + validate the configured input into a :class:`LoadedInput`.
 
@@ -222,12 +208,14 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     if kind == detect.FASTA:
         records, notices = read_fasta(cfg.input_path)
         paired: dict[str, list[GeneFeature]] = {}
+        gff_circular: set[str] = set()
         if cfg.annotation_path is not None:
-            paired, gff_notices = read_gff3(cfg.annotation_path)
+            paired, gff_notices, gff_circular = read_gff3(cfg.annotation_path)
             notices += gff_notices
         contigs: list[Contig] = []
         running_total = 0
         matched: set[str] = set()
+        declared_circular = 0
         for i, rec in enumerate(records):
             v = validate_sequence(
                 rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
@@ -237,9 +225,14 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
             _check_whole_input_cap(running_total, cfg.max_total_len)
             features: list[GeneFeature] = []
             seqid = rec.header.split(None, 1)[0] if rec.header else ""
+            # The GFF3's Is_circular=true is the input declaring a circular molecule, like a GenBank
+            # LOCUS line; the run's own --topology still decides (linear overrides it).
+            is_circular = seqid in gff_circular
             if seqid in paired:
                 matched.add(seqid)
-                features, fit_notices = _fit_to_length(paired[seqid], len(v.seq))
+                analysed_circular = cfg.topology.resolve(is_circular)
+                declared_circular += int(is_circular and analysed_circular)
+                features, fit_notices = fit_to_sequence(paired[seqid], len(v.seq), analysed_circular)
                 notices += fit_notices
             contigs.append(
                 Contig(
@@ -247,7 +240,13 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
                     seq=v.seq,
                     features=features,
                     source_id=rec.header,
+                    circular=is_circular and seqid in paired,
                 )
+            )
+        if declared_circular:
+            notices.append(
+                f"The GFF3 declares {declared_circular} sequence(s) circular (Is_circular=true), so "
+                "they are analysed as circular. Run with --topology linear to analyse them as linear."
             )
         if paired:
             if not matched:

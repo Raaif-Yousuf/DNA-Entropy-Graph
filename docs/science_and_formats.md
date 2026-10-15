@@ -569,15 +569,35 @@ so the viewer and IGV keep every record's track aligned to its own sequence.
 `readers/gff3.py`). The GFF3's genes are the file's own, so **Prodigal never runs**, even with
 `--genes`. Rules:
 
-- Rows are matched to FASTA records by the GFF3's first column against the record id (the header
-  text up to the first space). If no name matches, the run is refused; if some do not, one counted
-  notice says so. A GFF3 with a non-FASTA input is refused.
+- Rows are matched to FASTA records by the GFF3's first column, **percent-decoded** (GFF3 escapes
+  reserved characters, so `gnl%7Cx` is `gnl|x`), against the record id (the header text up to the
+  first space). If no name matches, the run is refused; if some do not, one counted notice says
+  so. A multi-record FASTA where only some records have GFF3 rows gives the others no genes, and
+  Prodigal still never runs for them (MEASURED 2026-10-15: `test_multi_record_fasta_with_gff3_rows...`).
+  A GFF3 with a non-FASTA input is refused.
 - Per sequence name, `gene` features are used, else `CDS` (the same preference as the GenBank
-  reader). Coordinates are GFF3's 1-based inclusive, the same as `GeneFeature`. Several `CDS` rows
-  sharing one `ID` are one feature: outer span in `begin..end`, real parts in `segments`, with a
-  notice (like a GenBank `join`). The gene id is `Name`, else `gene`, `locus_tag`, `product`, `ID`.
-- A feature past the end of its sequence is dropped with a counted notice; a malformed line is
-  skipped with a counted notice naming the first line number; the `##FASTA` section is ignored.
+  reader). Several rows (`gene` or `CDS`) sharing one `ID` are one feature: outer span in
+  `begin..end`, real parts in `segments`, with a notice (like a GenBank `join`). The gene id is
+  `Name`, else `gene`, `locus_tag`, `product`, `ID`.
+- **Coordinates** are GFF3's 1-based inclusive positions counted over the sequence letters, so
+  FASTA line wrapping and case do not shift them. The bounds check uses the validated sequence's
+  length (the letters; whitespace is not part of it, an ambiguity code keeps its position and
+  `--ambiguity-policy` never deletes a base). `--start` only relabels the outputs; it does not shift
+  how GFF3 positions are read.
+- **Strand** stays `+`, `-` or `.`: `.` and `?` are both unstranded, never turned into `+`. The
+  GenBank output writes an unstranded gene as a plain `begin..end` (GenBank has no unstranded
+  location), never as `complement(...)`.
+- **Circular sequences.** `Is_circular=true` on any row of a sequence (normally its `region` row)
+  is the input declaring a circular molecule, like a GenBank `LOCUS` line: the contig is analysed
+  as circular, with one notice, unless `--topology linear` says otherwise (`--topology circular`
+  forces it for the others). On a circular sequence a feature crosses the origin when either two
+  rows share an `ID` and touch both ends, or one row's end is past the sequence length (and the
+  wrapped part does not overlap the start). Both become the outer span `1..L` with `segments`, like
+  a GenBank origin join, and the gene table reports `wraps_origin`. On a linear sequence a feature
+  running past the end is dropped; the notice names both causes (an undeclared circular sequence, or
+  a GFF3 for a different FASTA).
+- A malformed line is skipped with a counted notice naming the first line number; the `##FASTA`
+  section is ignored.
 - Outputs: `<name>.genes.gff3` (source `gff3`), the gene summary tables, and the bonus `<name>.gb`
   carry these genes. Auto-pairing `<name>.fasta` with `<name>.gff3` in one drop, and a pairing UI
   when ambiguous, are app work (follow-up issue); the manifest field is `worker/manifest.py`'s.
