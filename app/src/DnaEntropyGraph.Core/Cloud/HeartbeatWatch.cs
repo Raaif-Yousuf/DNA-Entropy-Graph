@@ -19,8 +19,11 @@ internal sealed record SlowStageNotice(string Stage, TimeSpan InStage, TimeSpan 
 /// by minutes); only whether <c>heartbeatSeq</c>/<c>updatedAt</c> CHANGED between looks is used, so skew cannot fake or hide a death.
 /// One instance per wait; holds that wait's observations.
 /// </summary>
-internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTimeout, TimeSpan staleTimeout, IReadOnlyDictionary<string, TimeSpan>? stageDeadlines = null)
+internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTimeout, TimeSpan staleTimeout, IReadOnlyDictionary<string, TimeSpan>? stageDeadlines = null, TimeSpan? progressStallTimeout = null)
 {
+    /// <summary>How long the progress fields may stay unchanged in the running stage when none is passed (docs/job_contract.md section 5, issue #723).</summary>
+    public static TimeSpan DefaultProgressStallTimeout { get; } = TimeSpan.FromMinutes(20);
+
     /// <summary>
     /// How long one stage may last, by <c>status.json</c> <c>stage</c> (docs/job_contract.md section 5, #90). A stage with no entry
     /// (<c>running</c>: its length depends on the input; <c>idle</c>; the terminal ones) has no deadline here: the result limit and the
@@ -49,6 +52,9 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
     private long? _lastSeq;
     private string? _lastUpdatedAt;
     private TimeSpan _lastChange;
+    private bool _progressSeen;
+    private string? _progressKey;
+    private TimeSpan _progressChange;
 
     /// <summary>True when the caller should also read <c>progress.jsonl</c>: a GPU tier whose worker is up and whose GPU is not yet confirmed.</summary>
     public bool NeedsProgress => expectsGpu && _workerSeen && !_gpuVerified;
@@ -76,6 +82,16 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
                 _lastChange = elapsed;
             }
 
+            // Issue #723: the forward-progress signal (windowsDone, lastProgressAt) moves only when the compute thread does, unlike the heartbeat. Judged by CHANGE
+            // between looks (with the stage), never against the app's clock. An older worker's status has neither field, so it has no progress signal at all.
+            _progressSeen = status.WindowsDone is not null || status.LastProgressAt is not null;
+            var progressKey = $"{status.Stage}|{status.WindowsDone}|{status.LastProgressAt}";
+            if (_progressSeen && !string.Equals(progressKey, _progressKey, StringComparison.Ordinal))
+            {
+                _progressChange = elapsed;
+            }
+
+            _progressKey = progressKey;
             _workerSeen = true;
             _lastSeq = status.HeartbeatSeq;
             _lastUpdatedAt = status.UpdatedAt;
@@ -110,6 +126,17 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
             return new HeartbeatVerdict(
                 RunErrorCodes.WorkerStageStuck,
                 $"The worker stayed in stage '{_stage}' for {Format(elapsed - _stageSince)}, past that stage's {Format(deadline)} deadline.",
+                DeleteVm: false) { Stage = _stage };
+        }
+
+        // A heartbeat that ticks while the compute thread is wedged inside the running stage (a hung CUDA call, a deadlock; #522): the stage deadlines do not
+        // cover running (its length depends on the input), so its progress fields do.
+        var progressBound = progressStallTimeout ?? DefaultProgressStallTimeout;
+        if (_workerSeen && _progressSeen && string.Equals(_stage, "running", StringComparison.Ordinal) && elapsed - _progressChange >= progressBound)
+        {
+            return new HeartbeatVerdict(
+                RunErrorCodes.WorkerProgressStalled,
+                $"The worker's heartbeat is moving but it finished no window and changed no stage for {Format(elapsed - _progressChange)} (windowsDone {_progressKey?.Split('|')[1]}), past the {Format(progressBound)} progress bound.",
                 DeleteVm: false) { Stage = _stage };
         }
 
@@ -149,6 +176,7 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
         _stageSince = elapsed;
         _lastChange = elapsed;
         _firstHeartbeatBase = elapsed;
+        _progressChange = elapsed;
     }
 
     private static TimeSpan StageAgeAtLastWrite(WorkerStatusSnapshot status)

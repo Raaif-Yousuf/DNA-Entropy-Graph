@@ -1,0 +1,1 @@
+- cloud: a run whose heartbeat ticks in the running stage while the worker's windowsDone and lastProgressAt stay unchanged for 20 minutes (CloudRunSettings.ProgressStallTimeout) ends as worker_progress_stalled through the existing stall prompt; an older worker without those fields is never judged by it; FakeWorkerMode.StuckInRunning (#723, app half of #522).
