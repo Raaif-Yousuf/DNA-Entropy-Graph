@@ -1401,7 +1401,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Analysis program image</value>
   </data>
   <data name="WorkerImageNotPinned" xml:space="preserve">
-    <value>That is not an image address with a fingerprint (it must contain @sha256: and 64 letters or digits). Paste the full address from your build, or clear the box to use the shipped one.</value>
+    <value>That is not a full image address: the fingerprint is missing (it is written @sha256: followed by 64 letters or numbers). The shipped image is used until you paste the full address from your build.</value>
   </data>
   <data name="FakeCloudOn" xml:space="preserve">
     <value>This copy is using a pretend cloud for testing, so no computer is rented and nothing is billed.</value>
@@ -1416,7 +1416,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Reset all settings?</value>
   </data>
   <data name="AdvancedResetConfirmBody" xml:space="preserve">
-    <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Yes to reset, or No to keep your settings.</value>
+    <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Continue to reset, or Cancel to keep your settings.</value>
   </data>
   <data name="AdvancedResetDone" xml:space="preserve">
     <value>Settings were reset. Close the app and open it again to finish.</value>

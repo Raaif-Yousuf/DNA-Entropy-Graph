@@ -182,6 +182,20 @@ public sealed class SettingsStore : ISettingsStore, IResettableSettings
                     {
                         kept[InstallationId.SettingsKey] = legacy.DeepClone();
                     }
+                    else if (state.ParseFailed && state.Raw is { } raw && ReadIdFile() is null)
+                    {
+                        // The id may sit after the corruption point, where the structured salvage never reaches. Forgetting it would
+                        // let the next read mint a new one and orphan every labelled cloud resource (Hard Rules 9 and 10).
+                        var recovered = IdMention.Matches(raw).Select(m => m.Groups["id"].Value).FirstOrDefault(InstallationId.IsValid);
+                        if (recovered is not null)
+                        {
+                            kept[InstallationId.SettingsKey] = recovered;
+                        }
+                        else if (raw.Contains(InstallationId.SettingsKey, StringComparison.Ordinal))
+                        {
+                            throw new SettingsUnavailableException("The settings could not be reset: an installation id in the unreadable file could not be recovered. Nothing was changed.");
+                        }
+                    }
 
                     WriteSettingsNoLock(kept);
                 }

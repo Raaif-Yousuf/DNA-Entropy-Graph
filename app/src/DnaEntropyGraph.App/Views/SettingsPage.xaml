@@ -123,7 +123,7 @@
                     <StackPanel Spacing="12">
                         <StackPanel Spacing="4">
                             <TextBlock x:Uid="AdvancedWorkerImageExplainer" TextWrapping="Wrap" />
-                            <TextBox x:Uid="AdvancedWorkerImageBox" Text="{x:Bind Advanced.WorkerImage, Mode=TwoWay}" IsEnabled="{x:Bind Advanced.IsDeveloperMode}" />
+                            <TextBox x:Uid="AdvancedWorkerImageBox" Text="{x:Bind Advanced.WorkerImage, Mode=TwoWay}" IsEnabled="{x:Bind Advanced.IsDeveloperMode, Mode=OneWay}" />
                             <TextBlock Text="{x:Bind Advanced.WorkerImageStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
                         <TextBlock Text="{x:Bind Advanced.FakeCloudText}" TextWrapping="Wrap" />

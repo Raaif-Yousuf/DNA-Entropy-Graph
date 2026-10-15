@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
@@ -68,5 +69,26 @@ public sealed class AdvancedSettingsWiringTests : IDisposable
 
         provider.GetRequiredService<ICloudModeInfo>().IsFakeCloud.ShouldBe(backend != CloudBackend.Google);
         provider.GetRequiredService<IResettableSettings>().ShouldBeSameAs(provider.GetRequiredService<ISettingsStore>());
+    }
+
+    [Fact]
+    public void The_Settings_groups_resolved_from_the_real_container_hear_the_reset_message()
+    {
+        // #644 cold review (2), wired-to-nothing: an optional messenger parameter that DI does not fill would leave every group
+        // deaf to Reset all settings and pass every unit test that builds the groups by hand.
+        using var provider = Build();
+        var settings = provider.GetRequiredService<ISettingsStore>();
+        settings.SetString("notify_when_done", "false");
+        settings.SetString(WorkerImageSettingKeys.DeveloperMode, "true");
+        var notifications = provider.GetRequiredService<NotificationsSettingsViewModel>();
+        var advanced = provider.GetRequiredService<AdvancedSettingsViewModel>();
+        notifications.NotifyWhenDone.ShouldBeFalse();
+        advanced.IsDeveloperMode.ShouldBeTrue();
+
+        provider.GetRequiredService<IResettableSettings>().ResetAll();
+        provider.GetRequiredService<CommunityToolkit.Mvvm.Messaging.IMessenger>().Send(new DnaEntropyGraph.Presentation.Messaging.SettingsResetMessage());
+
+        notifications.NotifyWhenDone.ShouldBeTrue();
+        advanced.IsDeveloperMode.ShouldBeFalse();
     }
 }

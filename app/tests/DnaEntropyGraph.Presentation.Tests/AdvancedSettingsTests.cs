@@ -63,6 +63,33 @@ public sealed class AdvancedSettingsTests
     }
 
     [Fact]
+    public void A_refused_image_also_clears_the_override_saved_before_so_the_box_never_disagrees_with_what_runs()
+    {
+        // #644 cold review (3): the box showed the refused text while the earlier override stayed saved and active.
+        _settings.Values[WorkerImageSettingKeys.DeveloperMode] = "true";
+        _settings.Values[WorkerImageSettingKeys.WorkerImage] = Pinned;
+        var vm = Create();
+
+        vm.WorkerImage = "ghcr.io/raaif-yousuf/dna-entropy-worker:latest";
+
+        _settings.Values[WorkerImageSettingKeys.WorkerImage].ShouldBeEmpty();
+        vm.WorkerImageStatus.ShouldBe("WorkerImageNotPinned");
+    }
+
+    [Fact]
+    public void A_refused_image_that_cannot_clear_the_saved_one_says_the_file_is_locked()
+    {
+        _settings.Values[WorkerImageSettingKeys.DeveloperMode] = "true";
+        _settings.Values[WorkerImageSettingKeys.WorkerImage] = Pinned;
+        var vm = Create();
+        _settings.Unavailable = true;
+
+        vm.WorkerImage = "not an image";
+
+        vm.WorkerImageStatus.ShouldBe("AdvancedNotSaved");
+    }
+
+    [Fact]
     public void Clearing_the_box_removes_the_override_so_the_shipped_image_is_used()
     {
         _settings.Values[WorkerImageSettingKeys.DeveloperMode] = "true";
