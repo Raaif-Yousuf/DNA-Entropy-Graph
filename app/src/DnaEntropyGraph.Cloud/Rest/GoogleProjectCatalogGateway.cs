@@ -125,7 +125,7 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
                     throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
                 }
             },
-            cancellationToken);
+            cancellationToken, singleRequest: true);
 
     public async Task<ProjectSummary> CreateProjectAsync(string projectId, string displayName, string installationId, CancellationToken cancellationToken)
     {

@@ -33,7 +33,7 @@ public class ShellViewModelTests
         navigator = Substitute.For<INavigator>();
         gcpAccount = Substitute.For<IGcpAccount>();
         messenger = new WeakReferenceMessenger();
-        return new ShellViewModel(navigator, gcpAccount, messenger, CreatePassthroughStrings(), TestMessages.Center());
+        return new ShellViewModel(navigator, gcpAccount, messenger, CreatePassthroughStrings(), TestMessages.Center(), TestMessages.Completion());
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class ShellViewModelTests
         var scratch = Path.Combine(Path.GetTempPath(), "deg-shell-" + Guid.NewGuid().ToString("N"));
         var root = AppDataRoot.FromPath(scratch);
 
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), dataRoot: root);
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion(), dataRoot: root);
 
         viewModel.HasProfileOverride.ShouldBeTrue();
         viewModel.ProfileBannerText.ShouldBe("Sandbox profile: " + scratch);
@@ -54,9 +54,25 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public void A_simulated_cloud_always_shows_its_banner_and_a_real_one_never_does()
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
+        strings.GetString("SimulatedCloud_Banner").Returns("Simulated cloud: nothing here is real");
+
+        var simulated = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion(), simulatedCloud: new SimulatedCloudMode());
+        var real = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
+
+        simulated.HasSimulatedCloud.ShouldBeTrue();
+        simulated.SimulatedCloudBannerText.ShouldBe("Simulated cloud: nothing here is real");
+        real.HasSimulatedCloud.ShouldBeFalse();
+        real.SimulatedCloudBannerText.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void The_real_data_folder_shows_no_banner_and_the_plain_title()
     {
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), CreatePassthroughStrings(), TestMessages.Center(), dataRoot: AppDataRoot.Default());
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), CreatePassthroughStrings(), TestMessages.Center(), TestMessages.Completion(), dataRoot: AppDataRoot.Default());
 
         viewModel.HasProfileOverride.ShouldBeFalse();
         viewModel.ProfileBannerText.ShouldBeEmpty();
@@ -71,7 +87,7 @@ public class ShellViewModelTests
         gcpAccount.IsSignedIn.Returns(false);
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("StatusPillNotSignedIn").Returns("Not signed in");
-        var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.StatusPillText.ShouldBe("Not signed in");
     }
@@ -85,7 +101,7 @@ public class ShellViewModelTests
         gcpAccount.SelectedProjectId.Returns("deg-123-abc");
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("StatusPillSignedIn").Returns("Signed in - {0}");
-        var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.StatusPillText.ShouldBe("Signed in - deg-123-abc");
     }
@@ -102,7 +118,7 @@ public class ShellViewModelTests
         gcpAccount.IsSignedIn.Returns(false);
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("StatusPillNotSignedIn").Returns("(from resw) Not signed in");
-        var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.StatusPillText.ShouldBe("(from resw) Not signed in");
         strings.Received(1).GetString("StatusPillNotSignedIn");
@@ -116,7 +132,7 @@ public class ShellViewModelTests
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("PageTitle_NewRun").Returns("New run");
         strings.GetString("PageTitle_Cloud").Returns("Cloud services");
-        var viewModel = new ShellViewModel(navigator, Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(navigator, Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.CurrentPageTitle.ShouldBe("New run");
         viewModel.NavigateToCommand.Execute("Cloud");
@@ -140,7 +156,7 @@ public class ShellViewModelTests
     {
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("AppDisplayName").Returns("DNA Entropy Graph");
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.WindowTitle.ShouldBe("DNA Entropy Graph");
     }
@@ -150,7 +166,7 @@ public class ShellViewModelTests
     {
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("PageTitle_NewRun").Returns("New run");
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.CurrentPageTitle.ShouldBe("New run");
         ShellViewModel.InitialPageKey.ShouldBe("NewRun");
@@ -162,7 +178,7 @@ public class ShellViewModelTests
         var navigator = Substitute.For<INavigator>();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("PageTitle_Cloud").Returns("Cloud");
-        var viewModel = new ShellViewModel(navigator, Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(navigator, Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.NavigateToCommand.Execute("Cloud");
 
@@ -185,7 +201,7 @@ public class ShellViewModelTests
     {
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center());
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
 
         viewModel.NavigateToCommand.Execute("SomethingUnbuilt");
 
@@ -252,7 +268,7 @@ public class ShellViewModelTests
     public void The_shell_exposes_the_message_center_it_was_given()
     {
         var messages = TestMessages.Center();
-        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), CreatePassthroughStrings(), messages);
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), CreatePassthroughStrings(), messages, TestMessages.Completion());
 
         viewModel.Messages.ShouldBeSameAs(messages);
     }

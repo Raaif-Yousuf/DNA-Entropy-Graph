@@ -66,7 +66,7 @@ namespace DnaEntropyGraph.Persistence;
 /// No logger in Persistence: the event is the flag, the kept files and the
 /// typed exceptions, never file content.
 /// </summary>
-public sealed class SettingsStore : ISettingsStore
+public sealed class SettingsStore : ISettingsStore, IResettableSettings
 {
     internal const int ReadAttemptLimit = 5;
 
@@ -155,6 +155,49 @@ public sealed class SettingsStore : ISettingsStore
 
                     state.Values[key] = JsonValue.Create(value);
                     WriteSettingsNoLock(state.Values);
+                }
+
+                return null;
+            });
+        }
+    }
+
+    /// <summary>Writes an empty settings.json. The installation id lives in its own file and is untouched; a legacy id still inside settings.json is kept so it can migrate.</summary>
+    public void ResetAll()
+    {
+        lock (_gate)
+        {
+            Guarded<object?>(() =>
+            {
+                using (AcquireMutex())
+                {
+                    var state = ReadSettingsNoLock();
+                    if (state.ParseFailed)
+                    {
+                        KeepUnreadableCopyNoLock(state.Raw);
+                    }
+
+                    var kept = new JsonObject();
+                    if (state.Values.TryGetPropertyValue(InstallationId.SettingsKey, out var legacy) && legacy is not null)
+                    {
+                        kept[InstallationId.SettingsKey] = legacy.DeepClone();
+                    }
+                    else if (state.ParseFailed && state.Raw is { } raw && ReadIdFile() is null)
+                    {
+                        // The id may sit after the corruption point, where the structured salvage never reaches. Forgetting it would
+                        // let the next read mint a new one and orphan every labelled cloud resource (Hard Rules 9 and 10).
+                        var recovered = IdMention.Matches(raw).Select(m => m.Groups["id"].Value).FirstOrDefault(InstallationId.IsValid);
+                        if (recovered is not null)
+                        {
+                            kept[InstallationId.SettingsKey] = recovered;
+                        }
+                        else if (raw.Contains(InstallationId.SettingsKey, StringComparison.Ordinal))
+                        {
+                            throw new SettingsUnavailableException("The settings could not be reset: an installation id in the unreadable file could not be recovered. Nothing was changed.");
+                        }
+                    }
+
+                    WriteSettingsNoLock(kept);
                 }
 
                 return null;
