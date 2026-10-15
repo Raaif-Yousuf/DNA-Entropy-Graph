@@ -253,6 +253,15 @@ One page (`WizardPage`, route `Wizard`, opened from the status pill in the title
 - Every Fix row has **Do it by hand** (`docs/gcp_setup_manual.md`).
 - Lists and per-item buttons are commands on the item (`ProjectChoice`, `BillingAccountChoice`, `SetupStepRow.ActionCommand`), so the page has no code-behind logic (Hard Rule 8).
 - Not built yet: the pipeline test and the real-GPU test step (step 8, #97), the quota request through the Cloud Quotas API (needs a gateway method), the local engine step, and "Run setup check again" in Settings.
+## 12. Windows notifications and activation (issue #107)
+
+A run that finishes (done, partly done) or fails while the app window is not in front shows a Windows notification with an **Open run** button; clicking the notification or the button opens that run's Results page, also when the app was closed. The in-app message bar (`IToastService`) is unchanged and still shows for done and partly done; a failed run is a desktop notification only. Both sit behind the Settings switch **Notify when done**.
+
+- `IDesktopNotifier` (Core) is implemented by `AppNotifier` (App, Windows App SDK `AppNotificationManager`, which works unpackaged once `DesktopActivation.Register` has run). It stays silent while the window is in front (`IAppWindow.IsInForeground`).
+- The click carries `run=<job id>` (`AppDeepLink`, Core). The text comes from outside the app, so only a plain job id (letters, digits, `-`, `_`, at most 64) is acted on. `ActivationRouter` (Presentation) brings the window forward and navigates; every route into the app (notification click while running, launch from a notification, a later launch) ends there.
+- `SingleInstance` (Program.Main) keeps one app per data folder: a second launch hands its arguments to the first and exits. The key includes the data folder, so a `--profile` sandbox is its own instance. #108 (file association) reuses it.
+- Not built: the idle-VM and keep-alive-expiry notifications (the reconciler in Core/Cloud has no event for them yet).
+
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text

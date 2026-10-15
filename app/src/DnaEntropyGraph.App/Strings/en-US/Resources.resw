@@ -1385,6 +1385,15 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunPartial_Title" xml:space="preserve">
     <value>Your run finished with some files missing</value>
   </data>
+  <data name="RunFailed_Title" xml:space="preserve">
+    <value>Your run did not finish</value>
+  </data>
+  <data name="RunFailed_Body" xml:space="preserve">
+    <value>Open the run to see what went wrong and what to do next.</value>
+  </data>
+  <data name="RunToast_OpenResults" xml:space="preserve">
+    <value>Open run</value>
+  </data>
   <data name="RunPartial_Body" xml:space="preserve">
     <value>Some result files could not be made. Choose Results in the Runs list to see which ones.</value>
   </data>

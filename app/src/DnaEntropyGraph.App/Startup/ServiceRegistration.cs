@@ -70,6 +70,13 @@ public static class ServiceRegistration
         services.AddSingleton<WindowThemeApplier>();
         services.AddSingleton<IThemeApplier>(sp => sp.GetRequiredService<WindowThemeApplier>());
         services.AddSingleton<WindowHandleProvider>();
+
+        // Issue #107: the window as Presentation sees it, the Windows notification, and what a click on one (or a second launch) does.
+        services.AddSingleton<AppWindowService>();
+        services.AddSingleton<IAppWindow>(sp => sp.GetRequiredService<AppWindowService>());
+        services.AddSingleton<INotificationSink, WindowsNotificationSink>();
+        services.AddSingleton<IDesktopNotifier, AppNotifier>();
+        services.AddSingleton<ActivationRouter>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
         services.AddSingleton<IDialogService>(sp => sp.GetRequiredService<DialogService>());

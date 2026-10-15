@@ -241,6 +241,36 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public async Task The_run_completion_path_reaches_the_registered_desktop_notifier_and_a_click_is_routed()
+    {
+        // Issue #107, wired-to-nothing: the Windows notifier and the activation router are the real App types, and the completion
+        // path the shell calls really hands a finished run to whatever IDesktopNotifier is registered.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
+        using (var real = services.BuildServiceProvider())
+        {
+            real.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IDesktopNotifier>().ShouldBeOfType<DnaEntropyGraph.App.Services.AppNotifier>();
+            real.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IAppWindow>().ShouldBeSameAs(real.GetRequiredService<DnaEntropyGraph.App.Services.AppWindowService>());
+            real.GetRequiredService<DnaEntropyGraph.Presentation.Services.ActivationRouter>().ShouldNotBeNull();
+            real.GetRequiredService<DnaEntropyGraph.App.Services.INotificationSink>().ShouldBeOfType<DnaEntropyGraph.App.Services.WindowsNotificationSink>();
+        }
+
+        var seen = new List<(string Title, string? JobId)>();
+        services.AddSingleton<DnaEntropyGraph.Core.Abstractions.IDesktopNotifier>(new RecordingNotifier(seen));
+        await using var provider = services.BuildServiceProvider();
+
+        await provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.RunCompletionActions>().OnRunFailedAsync("job-42");
+
+        seen.Count.ShouldBe(1);
+        seen[0].JobId.ShouldBe("job-42");
+    }
+
+    private sealed class RecordingNotifier(List<(string Title, string? JobId)> seen) : DnaEntropyGraph.Core.Abstractions.IDesktopNotifier
+    {
+        public void Notify(string title, string body, string? jobId) => seen.Add((title, jobId));
+    }
+
+    [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {
         Should.NotThrow(() =>
