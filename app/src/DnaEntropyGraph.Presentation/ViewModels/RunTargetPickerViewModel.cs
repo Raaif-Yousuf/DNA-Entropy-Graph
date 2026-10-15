@@ -177,6 +177,7 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
     private static string BlockerReasonKey(LocalBlocker blocker) => blocker switch
     {
         LocalBlocker.NoNvidiaGpu => "RunTargetReason_NoNvidiaGpu",
+        LocalBlocker.GpuToolFailed => "RunTargetReason_GpuToolFailed",
         LocalBlocker.NotEnoughGpuMemory => "RunTargetReason_NotEnoughGpuMemory",
         LocalBlocker.DriverTooOld => "RunTargetReason_DriverTooOld",
         _ => "RunTargetReason_NotEnoughDisk",

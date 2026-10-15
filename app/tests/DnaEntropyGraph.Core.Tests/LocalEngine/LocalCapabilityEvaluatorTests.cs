@@ -60,18 +60,35 @@ public sealed class LocalCapabilityEvaluatorTests
         LocalCapabilityEvaluator.Evaluate(Found(24564), 29 * Gib).Blockers.ShouldBe([LocalBlocker.NotEnoughDisk]);
     }
 
-    [Theory]
-    [InlineData(GpuDetectionStatus.NoNvidia)]
-    [InlineData(GpuDetectionStatus.ToolFailed)]
-    public void No_nvidia_gpu_is_blocked_and_says_nothing_about_memory_or_driver(GpuDetectionStatus status)
+    [Fact]
+    public void No_nvidia_tool_at_all_is_NoNvidiaGpu_and_says_nothing_about_memory_or_driver()
     {
-        var result = LocalCapabilityEvaluator.Evaluate(new GpuDetection(status, []), 100 * Gib);
+        var result = LocalCapabilityEvaluator.Evaluate(new GpuDetection(GpuDetectionStatus.NoNvidia, []), 100 * Gib);
 
         result.Eligible.ShouldBeFalse();
         result.Blockers.ShouldBe([LocalBlocker.NoNvidiaGpu]);
         result.Gpu.ShouldBeNull();
     }
 
+    [Fact]
+    public void A_tool_that_is_there_but_fails_is_its_own_blocker_not_NoNvidiaGpu()
+    {
+        // MEASURED 2026-10-15 (review of #119-#174): nvidia-smi present with the driver not loaded exits 9; the user HAS a card, so
+        // "this PC has no NVIDIA card" would send them to the wrong fix.
+        var result = LocalCapabilityEvaluator.Evaluate(new GpuDetection(GpuDetectionStatus.ToolFailed, []), 100 * Gib);
+
+        result.Eligible.ShouldBeFalse();
+        result.Blockers.ShouldBe([LocalBlocker.GpuToolFailed]);
+        result.Gpu.ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_judged_card_keeps_its_uuid_so_the_worker_can_be_pinned_to_it()
+    {
+        var detection = new GpuDetection(GpuDetectionStatus.Found, [new GpuInfo("small", 8192, "551.61", "GPU-a"), new GpuInfo("big", 24564, "551.61", "GPU-b")]);
+
+        LocalCapabilityEvaluator.Evaluate(detection, 100 * Gib).Gpu!.Uuid.ShouldBe("GPU-b");
+    }
     [Fact]
     public void With_several_cards_the_one_with_the_most_memory_is_judged()
     {

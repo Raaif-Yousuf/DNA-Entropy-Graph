@@ -82,4 +82,34 @@ public sealed class NvidiaSmiGpuDetectorTests
         result.Status.ShouldBe(GpuDetectionStatus.ToolFailed);
         hung.KilledTree.ShouldBeTrue();
     }
-}
+
+    [Fact]
+    public void Candidates_are_full_paths_system_folder_first_then_program_files_then_path_folders()
+    {
+        var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            @"C:\Windows\System32\nvidia-smi.exe",
+            @"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+            @"D:\tools\nvidia-smi.exe",
+        };
+
+        var list = NvidiaSmiGpuDetector.CandidatesFor(@"C:\Windows\System32", @"C:\Program Files", @"C:\Windows;D:\tools;E:\nothing", present.Contains);
+
+        list.ShouldBe(
+        [
+            @"C:\Windows\System32\nvidia-smi.exe",
+            @"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+            @"D:\tools\nvidia-smi.exe",
+        ]);
+    }
+
+    [Fact]
+    public void A_relative_or_empty_path_entry_is_never_searched_so_the_current_folder_cannot_supply_nvidia_smi()
+    {
+        var list = NvidiaSmiGpuDetector.CandidatesFor(@"C:\Windows\System32", @"C:\Program Files", @".;;bin;..\x;D:\tools", _ => true);
+
+        list.ShouldAllBe(p => Path.IsPathFullyQualified(p));
+        list.ShouldNotContain("nvidia-smi");
+        list.Any(p => p.StartsWith(@"D:\tools", StringComparison.OrdinalIgnoreCase)).ShouldBeTrue();
+        list.Count.ShouldBe(3);
+    }}

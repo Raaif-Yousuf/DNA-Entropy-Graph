@@ -10,7 +10,7 @@ namespace DnaEntropyGraph.LocalEngine.Tests;
 /// <summary>
 /// Issue #174's test: the REAL Python worker with the mock predictor, through the real <see cref="SystemProcessLauncher"/>. It needs a
 /// Python that can import <c>dna_entropy</c>, so it runs only when <c>DEG_TEST_WORKER_PYTHON</c> names one (and, for a source checkout,
-/// <c>DEG_TEST_WORKER_SRC</c> names <c>worker\src</c>); otherwise it does nothing and says so by passing no assertions.
+/// <c>DEG_TEST_WORKER_SRC</c> names <c>worker\src</c>); otherwise the tests are reported as skipped (never green with no assertions).
 /// <c>scripts/heavy.py</c> callers set both: <c>$env:DEG_TEST_WORKER_PYTHON = "...\worker\.venv\Scripts\python.exe"</c>.
 /// </summary>
 public sealed class RealWorkerTests : IDisposable
@@ -46,11 +46,9 @@ public sealed class RealWorkerTests : IDisposable
     [Fact]
     public async Task The_real_worker_runs_a_mock_job_and_its_tracks_reach_the_output_folder()
     {
-        var layout = RealLayout();
-        if (layout is null)
-        {
-            return;
-        }
+        var found = RealLayout();
+        Assert.SkipUnless(found is not null, "DEG_TEST_WORKER_PYTHON does not name a python that can import dna_entropy");
+        var layout = found!;
 
         Directory.CreateDirectory(_root);
         var input = Path.Combine(_root, "staged.fasta");
@@ -77,11 +75,9 @@ public sealed class RealWorkerTests : IDisposable
     [Fact]
     public async Task The_real_worker_answers_the_health_check_with_the_apps_version()
     {
-        var layout = RealLayout();
-        if (layout is null)
-        {
-            return;
-        }
+        var found = RealLayout();
+        Assert.SkipUnless(found is not null, "DEG_TEST_WORKER_PYTHON does not name a python that can import dna_entropy");
+        var layout = found!;
 
         var manager = new LocalEngineManager(new NoGpu(), new FixedDisk(), new SystemProcessLauncher(), layout, "0.0.1");
 

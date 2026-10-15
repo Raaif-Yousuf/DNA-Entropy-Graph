@@ -53,6 +53,17 @@ public sealed class ThisPcSettingsTests
     }
 
     [Fact]
+    public async Task The_health_card_for_a_driver_that_is_not_working_names_the_driver_not_a_missing_card()
+    {
+        Ready(new LocalCapability(false, [LocalBlocker.GpuToolFailed], null, 50L << 30), Healthy);
+        var vm = Create();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.BlockersText.ShouldBe("ThisPcBlocker_GpuToolFailed");
+    }
+
+    [Fact]
     public async Task The_health_card_for_a_capable_PC_names_the_card_its_memory_and_driver()
     {
         Ready(Capable, Healthy);

@@ -175,6 +175,7 @@ public sealed partial class ThisPcSettingsViewModel : ObservableObject
     private static string BlockerKey(LocalBlocker blocker) => blocker switch
     {
         LocalBlocker.NoNvidiaGpu => "ThisPcBlocker_NoNvidiaGpu",
+        LocalBlocker.GpuToolFailed => "ThisPcBlocker_GpuToolFailed",
         LocalBlocker.NotEnoughGpuMemory => "ThisPcBlocker_NotEnoughGpuMemory",
         LocalBlocker.DriverTooOld => "ThisPcBlocker_DriverTooOld",
         _ => "ThisPcBlocker_NotEnoughDisk",

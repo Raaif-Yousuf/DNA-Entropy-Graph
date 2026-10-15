@@ -18,6 +18,18 @@ public sealed class NvidiaSmiParserTests
     }
 
     [Fact]
+    public void The_query_asks_for_the_uuid_first_and_a_four_field_line_carries_it()
+    {
+        NvidiaSmiParser.QueryArguments[0].ShouldBe("--query-gpu=uuid,name,memory.total,driver_version");
+
+        var gpus = NvidiaSmiParser.Parse("GPU-1f2e3d4c-aaaa-bbbb-cccc-0123456789ab, NVIDIA L4, 23034, 550.90\n");
+
+        gpus.Single().Uuid.ShouldBe("GPU-1f2e3d4c-aaaa-bbbb-cccc-0123456789ab");
+        gpus.Single().Name.ShouldBe("NVIDIA L4");
+        gpus.Single().MemoryMiB.ShouldBe(23034);
+    }
+
+    [Fact]
     public void Two_gpus_give_two_entries_in_order()
     {
         var gpus = NvidiaSmiParser.Parse("NVIDIA RTX A4000, 16376, 550.90.07\nNVIDIA L4, 23034, 550.90.07\n");

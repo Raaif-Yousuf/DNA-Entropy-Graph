@@ -1476,10 +1476,13 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The graphics card in this PC has less than 24 GB of memory, which the model needs. Choose Cloud.</value>
   </data>
   <data name="RunTargetReason_DriverTooOld" xml:space="preserve">
-    <value>The NVIDIA driver on this PC is too old. Update it from the NVIDIA website, then choose Refresh.</value>
+    <value>The NVIDIA driver on this PC is too old. Update it from the NVIDIA website, then choose Check again.</value>
+  </data>
+  <data name="RunTargetReason_GpuToolFailed" xml:space="preserve">
+    <value>The NVIDIA driver on this PC is not working. Reinstall or update the NVIDIA driver from the NVIDIA website, restart the PC, then choose Check again.</value>
   </data>
   <data name="RunTargetReason_NotEnoughDisk" xml:space="preserve">
-    <value>This PC has less than 30 GB of free disk space. Free some space, then choose Refresh.</value>
+    <value>This PC has less than 30 GB of free disk space. Free some space, then choose Check again.</value>
   </data>
   <data name="RunTargetReason_NoCuda" xml:space="preserve">
     <value>The engine on this PC cannot use the graphics card. Choose Repair under This PC.</value>
@@ -1491,7 +1494,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The engine on this PC is not working. Choose Repair under This PC.</value>
   </data>
   <data name="RunTargetReason_unknown" xml:space="preserve">
-    <value>This PC could not be checked. Choose Refresh under This PC.</value>
+    <value>This PC could not be checked. Choose Check again under This PC.</value>
   </data>
   <data name="ThisPcNoGpu" xml:space="preserve">
     <value>Graphics card: no NVIDIA graphics card was found.</value>
@@ -1526,11 +1529,14 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="ThisPcBlocker_DriverTooOld" xml:space="preserve">
     <value>The NVIDIA driver needs to be version 550 or newer.</value>
   </data>
+  <data name="ThisPcBlocker_GpuToolFailed" xml:space="preserve">
+    <value>The NVIDIA driver is not working. Reinstall or update the NVIDIA driver, restart the PC, then choose Check again.</value>
+  </data>
   <data name="ThisPcBlocker_NotEnoughDisk" xml:space="preserve">
     <value>At least 30 GB of free disk space is needed.</value>
   </data>
   <data name="ThisPcCheckFailed" xml:space="preserve">
-    <value>This PC could not be checked. Choose Refresh to try again.</value>
+    <value>This PC could not be checked. Choose Check again to try once more.</value>
   </data>
   <data name="ThisPcStep_CreatingEnvironment" xml:space="preserve">
     <value>Setting up Python...</value>

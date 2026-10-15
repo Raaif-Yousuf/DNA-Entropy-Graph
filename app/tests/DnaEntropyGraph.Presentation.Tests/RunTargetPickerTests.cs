@@ -101,6 +101,17 @@ public sealed class RunTargetPickerTests
     }
 
     [Fact]
+    public async Task A_graphics_driver_that_is_not_working_is_greyed_out_for_the_driver_not_for_a_missing_card()
+    {
+        Readiness(Blocked(LocalBlocker.GpuToolFailed), Healthy());
+        var vm = Create();
+
+        await vm.RefreshAsync(TestContext.Current.CancellationToken);
+
+        vm.Options.Single(o => o.Value == "This PC").Reason.ShouldBe("RunTargetReason_GpuToolFailed");
+    }
+
+    [Fact]
     public async Task A_capable_PC_with_no_engine_says_to_install_it()
     {
         Readiness(Capable(), LocalEngineHealth.NotInstalled());

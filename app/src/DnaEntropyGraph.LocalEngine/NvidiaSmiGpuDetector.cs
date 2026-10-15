@@ -16,7 +16,7 @@ public sealed class NvidiaSmiGpuDetector : IGpuDetector
     private readonly IReadOnlyList<string> _candidates;
     private readonly TimeSpan _timeout;
 
-    /// <param name="candidates">Programs to try in order: the PATH name first, then the install folders the driver uses.</param>
+    /// <param name="candidates">Programs to try in order; full paths (see <see cref="WindowsCandidates"/>).</param>
     public NvidiaSmiGpuDetector(IProcessLauncher launcher, IReadOnlyList<string> candidates, TimeSpan? timeout = null)
     {
         _launcher = launcher;
@@ -24,19 +24,37 @@ public sealed class NvidiaSmiGpuDetector : IGpuDetector
         _timeout = timeout ?? DefaultTimeout;
     }
 
-    /// <summary>The places the NVIDIA driver puts nvidia-smi on Windows.</summary>
+    /// <summary>
+    /// The places the NVIDIA driver puts nvidia-smi on Windows, as full paths: the system folder, the NVSMI folder, then the folders of
+    /// <c>PATH</c>. Never a bare name and never a relative <c>PATH</c> entry: a bare name makes Windows look in the app's own folder and the current
+    /// folder first, and a program there would run as the user the moment the app looks at the graphics card.
+    /// </summary>
     public static IReadOnlyList<string> WindowsCandidates()
-    {
-        var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
-        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        return
-        [
-            "nvidia-smi",
-            Path.Combine(system, "nvidia-smi.exe"),
-            Path.Combine(programFiles, "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
-        ];
-    }
+        => CandidatesFor(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetEnvironmentVariable("PATH"),
+            File.Exists);
 
+    /// <summary>The testable form of <see cref="WindowsCandidates"/>: only paths for which <paramref name="exists"/> is true, in search order.</summary>
+    public static IReadOnlyList<string> CandidatesFor(string systemFolder, string programFiles, string? pathVariable, Func<string, bool> exists)
+    {
+        var all = new List<string>
+        {
+            Path.Combine(systemFolder, "nvidia-smi.exe"),
+            Path.Combine(programFiles, "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+        };
+        foreach (var entry in (pathVariable ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var folder = entry.Trim('"');
+            if (Path.IsPathFullyQualified(folder))
+            {
+                all.Add(Path.Combine(folder, "nvidia-smi.exe"));
+            }
+        }
+
+        return all.Distinct(StringComparer.OrdinalIgnoreCase).Where(exists).ToList();
+    }
     public async Task<GpuDetection> DetectAsync(CancellationToken cancellationToken)
     {
         foreach (var candidate in _candidates)

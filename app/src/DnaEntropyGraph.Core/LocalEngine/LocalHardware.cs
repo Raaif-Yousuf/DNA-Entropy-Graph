@@ -3,7 +3,8 @@ using System.Globalization;
 namespace DnaEntropyGraph.Core.LocalEngine;
 
 /// <summary>One NVIDIA GPU as <c>nvidia-smi</c> reports it. <see cref="MemoryMiB"/> is the card's total memory.</summary>
-public sealed record GpuInfo(string Name, long MemoryMiB, string DriverVersion);
+/// <param name="Uuid">The card's <c>GPU-...</c> id, which <c>CUDA_VISIBLE_DEVICES</c> accepts; null when the tool did not give one.</param>
+public sealed record GpuInfo(string Name, long MemoryMiB, string DriverVersion, string? Uuid = null);
 
 public enum GpuDetectionStatus
 {
@@ -35,13 +36,13 @@ public interface IFreeDiskSpace
     long FreeBytes(string path);
 }
 
-/// <summary>Parses <c>nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits</c>.</summary>
+/// <summary>Parses <c>nvidia-smi --query-gpu=uuid,name,memory.total,driver_version --format=csv,noheader,nounits</c> (the older three-field form, without the uuid, is read too).</summary>
 public static class NvidiaSmiParser
 {
     /// <summary>The arguments the parser's input is produced with.</summary>
     public static readonly string[] QueryArguments =
     [
-        "--query-gpu=name,memory.total,driver_version",
+        "--query-gpu=uuid,name,memory.total,driver_version",
         "--format=csv,noheader,nounits",
     ];
 
@@ -52,18 +53,19 @@ public static class NvidiaSmiParser
         foreach (var line in (text ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var parts = line.Split(',', StringSplitOptions.TrimEntries);
-            if (parts.Length != 3 || parts[0].Length == 0 || parts[2].Length == 0)
+            if (parts.Length is not (3 or 4) || parts.Any(p => p.Length == 0))
             {
                 continue;
             }
 
-            var digits = new string(parts[1].TakeWhile(char.IsAsciiDigit).ToArray());
+            var uuid = parts.Length == 4 ? parts[0] : null;
+            var fields = parts.Length == 4 ? parts[1..] : parts;
+            var digits = new string(fields[1].TakeWhile(char.IsAsciiDigit).ToArray());
             if (digits.Length == 0 || !long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var mib))
             {
                 continue;
             }
-
-            gpus.Add(new GpuInfo(parts[0], mib, parts[2]));
+            gpus.Add(new GpuInfo(fields[0], mib, fields[2], uuid));
         }
 
         return gpus;
@@ -76,6 +78,9 @@ public enum LocalBlocker
     NotEnoughGpuMemory,
     DriverTooOld,
     NotEnoughDisk,
+
+    /// <summary>The NVIDIA tool is on this PC but gave no answer (a driver that is not loaded, exit 9): the card exists, the driver does not work.</summary>
+    GpuToolFailed,
 }
 
 /// <summary>What this PC can do. <see cref="Eligible"/> is false when any <see cref="Blockers"/> remain.</summary>
@@ -99,7 +104,8 @@ public static class LocalCapabilityEvaluator
         var gpu = detection.Status == GpuDetectionStatus.Found ? detection.Gpus.OrderByDescending(g => g.MemoryMiB).FirstOrDefault() : null;
         if (gpu is null)
         {
-            return new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, freeDiskBytes);
+            var missing = detection.Status == GpuDetectionStatus.ToolFailed ? LocalBlocker.GpuToolFailed : LocalBlocker.NoNvidiaGpu;
+            return new LocalCapability(false, [missing], null, freeDiskBytes);
         }
 
         var blockers = new List<LocalBlocker>();
