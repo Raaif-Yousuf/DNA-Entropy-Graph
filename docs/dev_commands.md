@@ -106,6 +106,28 @@ a broken test project rather than a wrong directory.
 scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches against FakeGcp
 ```
 
+### Launching the app on a sandbox data folder (#638)
+
+Every piece of app state (settings.json, installation_id, app.db, auth, logs, run inputs, the
+WebView2 profile, the diagnostics source) hangs off one folder, `AppDataRoot`. By default that is
+`%LOCALAPPDATA%\DNAEntropyGraph`. An agent or a dev that launches the app to look at it MUST point it
+elsewhere, so the owner's real history, sign-in and settings are never touched:
+
+```powershell
+$exe = "app\.artifacts\<lane>\bin\DnaEntropyGraph.App\debug_win-x64\DnaEntropyGraph.App.exe"
+& $exe --profile "$env:TEMP\deg-sandbox"          # command-line switch
+$env:DEG_DATA_DIR = "$env:TEMP\deg-sandbox"; & $exe   # or the environment variable
+```
+
+- The command line wins when both are set. A relative path resolves against the current directory.
+- A missing folder is created. A path that is a file, or a `--profile` with no folder after it,
+  stops the launch with a message box naming one action; it never falls back to the real folder.
+- A sandboxed window says so: a "Sandbox profile: <folder>" badge in the title bar and
+  "DNA Entropy Graph - sandbox profile" as the OS window title. No badge means the real profile.
+- `logs\app.log` appears only when something writes a warning; its absence after a quiet launch is normal.
+- New code never calls `Environment.SpecialFolder.LocalApplicationData`: take the `AppDataRoot`
+  (Guards.Tests/DataFolderOverrideTests fails the build of any other source file that does).
+
 **A .NET SDK is required, not just a runtime.** MEASURED on the owner's dev
 machine, 2026-09-19: `dotnet --list-runtimes` showed 8.0/9.0/10.0 present,
 but `dotnet --list-sdks` was empty. See `onboarding.md` step 4.

@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.App.Services;
@@ -16,8 +17,8 @@ public sealed class FileLogTailReader : ILogTailReader
 {
     private readonly string _rootPath;
 
-    public FileLogTailReader()
-        : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DNAEntropyGraph", "runs"))
+    public FileLogTailReader(AppDataRoot root)
+        : this(root.RunsDirectory)
     {
     }
 

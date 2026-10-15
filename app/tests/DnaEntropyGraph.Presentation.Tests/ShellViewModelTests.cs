@@ -37,6 +37,33 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public void A_sandbox_data_folder_shows_in_the_banner_and_the_window_title()
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
+        strings.GetString("ProfileBanner_Text").Returns("Sandbox profile: {0}");
+        strings.GetString("ProfileTitleSuffix").Returns("sandbox profile");
+        var scratch = Path.Combine(Path.GetTempPath(), "deg-shell-" + Guid.NewGuid().ToString("N"));
+        var root = AppDataRoot.FromPath(scratch);
+
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), dataRoot: root);
+
+        viewModel.HasProfileOverride.ShouldBeTrue();
+        viewModel.ProfileBannerText.ShouldBe("Sandbox profile: " + scratch);
+        viewModel.WindowTitle.ShouldBe("AppDisplayName - sandbox profile");
+    }
+
+    [Fact]
+    public void The_real_data_folder_shows_no_banner_and_the_plain_title()
+    {
+        var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), CreatePassthroughStrings(), TestMessages.Center(), dataRoot: AppDataRoot.Default());
+
+        viewModel.HasProfileOverride.ShouldBeFalse();
+        viewModel.ProfileBannerText.ShouldBeEmpty();
+        viewModel.WindowTitle.ShouldBe("AppDisplayName");
+    }
+
+    [Fact]
     public void The_status_pill_reads_Not_signed_in_when_no_account_is_signed_in()
     {
         var navigator = Substitute.For<INavigator>();
