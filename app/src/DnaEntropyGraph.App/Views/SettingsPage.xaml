@@ -1,7 +1,8 @@
 <Page
     x:Class="DnaEntropyGraph.App.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
 
     <!--
         Titled groups (docs/ui_conventions.md section 10): a header, then a card holding that group's controls. The page has
@@ -36,6 +37,32 @@
                 </Border>
             </StackPanel>
 
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsRunDefaultsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsRunDefaultsExplainer" TextWrapping="Wrap" />
+                        <TextBlock x:Uid="SettingsRunDefaultsGenBankHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <ItemsControl ItemsSource="{x:Bind RunDefaults.GenBankChoices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:OutputChoiceItem">
+                                    <CheckBox Content="{x:Bind Label}" IsChecked="{x:Bind IsChecked, Mode=TwoWay}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{x:Bind RunDefaults.GenBankStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <TextBlock x:Uid="SettingsRunDefaultsSequenceHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <ItemsControl ItemsSource="{x:Bind RunDefaults.SequenceChoices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:OutputChoiceItem">
+                                    <CheckBox Content="{x:Bind Label}" IsChecked="{x:Bind IsChecked, Mode=TwoWay}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{x:Bind RunDefaults.SequenceStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
             <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsDiagnosticsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">

@@ -1300,4 +1300,22 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="DataFolderUnusable_CannotCreate" xml:space="preserve">
     <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
   </data>
+  <data name="SettingsRunDefaultsHeader.Text" xml:space="preserve">
+    <value>Run defaults</value>
+  </data>
+  <data name="SettingsRunDefaultsExplainer.Text" xml:space="preserve">
+    <value>The files a new run starts with. The New run page shows these ticked, and you can still change them for one run there.</value>
+  </data>
+  <data name="SettingsRunDefaultsGenBankHeader.Text" xml:space="preserve">
+    <value>When the input is a GenBank file</value>
+  </data>
+  <data name="SettingsRunDefaultsSequenceHeader.Text" xml:space="preserve">
+    <value>When the input is a FASTA file or a pasted sequence</value>
+  </data>
+  <data name="RunDefaultsNoneChosen" xml:space="preserve">
+    <value>At least one file must stay ticked. Tick another file first, then untick this one.</value>
+  </data>
+  <data name="RunDefaultsNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open, so the box is back as it was. Close the other copies of the app, then change it again.</value>
+  </data>
 </root>

@@ -10,6 +10,10 @@ including the genome viewer, and the choice is remembered the next time you open
 choice (another copy of the app has the settings file open), it tells you; the theme still
 changes for now. Close the other copies, then choose it again.
 
+## Run defaults
+
+The files a new run starts with, one list for a GenBank file and one for a FASTA file or a pasted sequence. Tick or untick a file and it is remembered at once; the New run page shows the same ticks, and a choice you make there for a run is remembered here too. At least one file must stay ticked. WIG and the IGV track are alternatives (the worker writes one track format per run), so ticking one unticks the other.
+
 ## Diagnostics
 
 **Save diagnostics** writes one file you can send to support. It includes your run logs, run
