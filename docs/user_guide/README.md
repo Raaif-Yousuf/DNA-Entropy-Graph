@@ -37,6 +37,7 @@ always lives in the [glossary](glossary.md).
 Two more pages you can jump to any time:
 
 - [08-settings.md](08-settings.md), the Settings page: appearance (light, dark or follow Windows) and saving a diagnostics file.
+- [09-citing.md](09-citing.md), how to cite the app and the model in a paper.
 - [glossary.md](glossary.md), every term this guide uses, one paragraph each.
 - [faq.md](faq.md), the questions almost everyone asks before their first run.
 
