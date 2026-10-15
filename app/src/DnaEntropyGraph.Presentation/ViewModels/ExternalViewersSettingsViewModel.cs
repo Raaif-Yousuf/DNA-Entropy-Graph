@@ -1,8 +1,10 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Viewers;
+using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -22,6 +24,7 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
     private readonly IFileProbe _probe;
     private int _igvCheck;
     private int _geneiousCheck;
+    private bool _loading;
 
     [ObservableProperty]
     private string _igvPath;
@@ -43,7 +46,7 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _igvPortStatus = string.Empty;
 
-    public ExternalViewersSettingsViewModel(ISettingsStore settings, IFilePicker picker, IStringResourceProvider strings, IDispatcher dispatcher, IFileProbe probe)
+    public ExternalViewersSettingsViewModel(ISettingsStore settings, IFilePicker picker, IStringResourceProvider strings, IDispatcher dispatcher, IFileProbe probe, IMessenger? messenger = null)
     {
         _dispatcher = dispatcher;
         _probe = probe;
@@ -58,10 +61,37 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
             .ToString(CultureInfo.InvariantCulture);
         CheckPath(_igvPath, isIgv: true);
         CheckPath(_geneiousPath, isIgv: false);
+        messenger?.Register<ExternalViewersSettingsViewModel, SettingsResetMessage>(this, static (vm, _) => vm.Reload());
+    }
+
+    /// <summary>Re-reads the three values after Reset all settings, without saving what was just read.</summary>
+    private void Reload()
+    {
+        _loading = true;
+        try
+        {
+            IgvPath = Read(ViewerSettingKeys.IgvPath) ?? string.Empty;
+            GeneiousPath = Read(ViewerSettingKeys.GeneiousPath) ?? string.Empty;
+            IgvPortText = (TryParsePort(Read(ViewerSettingKeys.IgvPort), out var port) ? port : IgvBatchCommands.DefaultPort)
+                .ToString(CultureInfo.InvariantCulture);
+            IgvPortStatus = string.Empty;
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        CheckPath(IgvPath, isIgv: true);
+        CheckPath(GeneiousPath, isIgv: false);
     }
 
     partial void OnIgvPathChanged(string value)
     {
+        if (_loading)
+        {
+            return;
+        }
+
         if (!Normalize(value, out var path))
         {
             IgvPath = path; // writes back the trimmed form; this handler runs again and saves it
@@ -80,6 +110,11 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
 
     partial void OnGeneiousPathChanged(string value)
     {
+        if (_loading)
+        {
+            return;
+        }
+
         if (!Normalize(value, out var path))
         {
             GeneiousPath = path;
@@ -98,6 +133,11 @@ public sealed partial class ExternalViewersSettingsViewModel : ObservableObject
 
     partial void OnIgvPortTextChanged(string value)
     {
+        if (_loading)
+        {
+            return;
+        }
+
         if (!TryParsePort(value, out var port))
         {
             // Not saved: the last good port stays in effect, and the message says what to type.

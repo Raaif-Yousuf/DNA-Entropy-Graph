@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -26,13 +28,14 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _sequenceStatus = string.Empty;
 
-    public RunDefaultsSettingsViewModel(OutputSelectionStore store, IStringResourceProvider strings, IDispatcher dispatcher)
+    public RunDefaultsSettingsViewModel(OutputSelectionStore store, IStringResourceProvider strings, IDispatcher dispatcher, IMessenger? messenger = null)
     {
         _store = store;
         _strings = strings;
         _dispatcher = dispatcher;
         Build(GenBankChoices, OutputInputKinds.GenBank);
         Build(SequenceChoices, OutputInputKinds.Sequence);
+        messenger?.Register<RunDefaultsSettingsViewModel, SettingsResetMessage>(this, static (vm, _) => vm.Reload());
     }
 
     /// <summary>The boxes for a GenBank input.</summary>
@@ -40,6 +43,46 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
 
     /// <summary>The boxes for a FASTA file or a pasted sequence.</summary>
     public ObservableCollection<OutputChoiceItem> SequenceChoices { get; } = [];
+
+    /// <summary>Re-reads both lists after Reset all settings: the same boxes, set in place so the page's bindings stay attached, and nothing is saved.</summary>
+    private void Reload()
+    {
+        _applying = true;
+        try
+        {
+            Refresh(GenBankChoices, OutputInputKinds.GenBank);
+            Refresh(SequenceChoices, OutputInputKinds.Sequence);
+            GenBankStatus = string.Empty;
+            SequenceStatus = string.Empty;
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    private void Refresh(ObservableCollection<OutputChoiceItem> list, OutputInputKinds group)
+    {
+        var selection = LoadOrDefaults(group);
+        _saved[group] = selection;
+        foreach (var item in list)
+        {
+            item.IsChecked = selection.HasFlag(item.Entry.Kind);
+        }
+    }
+
+    private OutputFileKinds LoadOrDefaults(OutputInputKinds group)
+    {
+        try
+        {
+            return _store.Load(group);
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while reading run defaults: {ex.GetType().Name}");
+            return OutputCatalog.Defaults;
+        }
+    }
 
     private void Build(ObservableCollection<OutputChoiceItem> list, OutputInputKinds group)
     {
