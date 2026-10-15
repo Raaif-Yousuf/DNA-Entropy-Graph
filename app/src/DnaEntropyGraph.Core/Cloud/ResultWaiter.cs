@@ -122,13 +122,57 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     {
         // Issue #675: a stall question opened to the caller is withdrawn however the wait ends (the result arrived, the run was ended, the run was cancelled).
         using var stall = new StallState();
-        return await AwaitResultCoreAsync(request, bucket, zone, cancellationToken, vmStartMark, stall).ConfigureAwait(false);
+        try
+        {
+            return await AwaitResultCoreAsync(request, bucket, zone, cancellationToken, vmStartMark, stall).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Notices run off the poll loop (a blocking handler must not hang it); the ones already given are let finish, but never for longer than a moment.
+            await stall.DrainNoticesAsync(NoticeDrainTimeout).ConfigureAwait(false);
+        }
     }
 
     /// <summary>The question put to the caller when the heartbeat watch fires (issue #675): the open task, its token source, and the verdict it was asked about.</summary>
     private sealed class StallState : IDisposable
     {
+        private readonly object _noticeGate = new();
+        private Task _notices = Task.CompletedTask;
         private CancellationTokenSource? _cts;
+
+        /// <summary>Runs <paramref name="handler"/> with the notice on the thread pool, after the notices given before it (in order), never on the caller's thread.</summary>
+        public void Enqueue(Action<RunNotice> handler, RunNotice notice)
+        {
+            lock (_noticeGate)
+            {
+                _notices = _notices.ContinueWith(
+                    _ =>
+                    {
+                        try
+                        {
+                            handler(notice);
+                        }
+                        catch (Exception)
+                        {
+                            // Whoever shows the notice failing must never end the run.
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+            }
+        }
+
+        public async Task DrainNoticesAsync(TimeSpan limit)
+        {
+            Task pending;
+            lock (_noticeGate)
+            {
+                pending = _notices;
+            }
+
+            await Task.WhenAny(pending, Task.Delay(limit, TimeProvider.System)).ConfigureAwait(false);
+        }
 
         public Task<StallChoice>? Choice { get; private set; }
 
@@ -136,19 +180,17 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
         public bool IsOpen => Choice is not null;
 
-        public void Open(StallDecision ask, StallPrompt prompt, HeartbeatVerdict verdict, CancellationToken runToken)
+        public void Open(StallDecision ask, StallPrompt prompt, HeartbeatVerdict verdict, CancellationToken runToken, TimeSpan? answerTimeout, TimeProvider time)
         {
             _cts = CancellationTokenSource.CreateLinkedTokenSource(runToken);
             Verdict = verdict;
-            try
-            {
-                Choice = ask(prompt, _cts.Token);
-            }
-            catch (Exception ex)
-            {
-                // A handler that throws before it returns a task is the same as one whose task faults: no answer.
-                Choice = Task.FromException<StallChoice>(ex);
-            }
+            var token = _cts.Token;
+
+            // The handler runs on the thread pool, never on the poll loop: one that blocks synchronously (a modal dialog on the wrong thread, a lock) would otherwise
+            // freeze the poll and the result limit with it. Its task is also cut at the answer timeout. Throwing, faulting, cancelling and timing out are all
+            // "no answer", and the run then ends the way it chose.
+            var asked = Task.Run(() => ask(prompt, token), token);
+            Choice = answerTimeout is { } limit && limit > TimeSpan.Zero ? asked.WaitAsync(limit, time, token) : asked;
         }
 
         /// <summary>What the caller chose, or null when its task faulted or was cancelled (no answer).</summary>
@@ -172,15 +214,14 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         public void Dispose() => Close();
     }
 
-    private void Notify(RunNotice notice)
+    /// <summary>How long the end of a wait lets the notices already given finish: a handler that blocks costs the run this much, never more.</summary>
+    private static readonly TimeSpan NoticeDrainTimeout = TimeSpan.FromSeconds(2);
+
+    private void Notify(StallState stall, RunNotice notice)
     {
-        try
+        if (settings.OnNotice is { } handler)
         {
-            settings.OnNotice?.Invoke(notice);
-        }
-        catch (Exception)
-        {
-            // Whoever shows the notice failing must never end the run.
+            stall.Enqueue(handler, notice);
         }
     }
 
@@ -263,13 +304,20 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart));
                 if (watch.TakeSlowNotice() is { } slow)
                 {
-                    Notify(new RunNotice(request.JobId, RunNoticeKind.SlowStage, slow.Stage, slow.InStage, slow.Deadline));
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.SlowStage, slow.Stage, slow.InStage, slow.Deadline));
                 }
 
                 // Issue #675: with a stall handler the verdict is a question for the person (Stop, Delete, Keep waiting), asked once while it is open; the polling for
                 // result.json goes on meanwhile. A box with no GPU is never asked about (it is deleted at once, as startup.sh does).
                 var forceStop = false;
                 var forceDelete = false;
+                if (verdict is { DeleteVm: true } && stall.IsOpen)
+                {
+                    // A box with no GPU is deleted at once whatever a question open about something else was waiting for: withdraw the question, the delete below wins.
+                    stall.Close();
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallCleared));
+                }
+
                 if (stall.IsOpen)
                 {
                     if (stall.Choice!.IsCompleted)
@@ -291,15 +339,16 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                                 verdict = asked;
                                 forceDelete = true;
                                 break;
+                            case StallChoice.EndAsRunChose:
                             default:
-                                verdict = asked; // no answer: the default end, never a VM left billing
+                                verdict = asked; // no answer (or none wanted): the default end, never a VM left billing
                                 break;
                         }
                     }
                     else if (verdict is null)
                     {
                         stall.Close();
-                        Notify(new RunNotice(request.JobId, RunNoticeKind.StallCleared));
+                        Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallCleared));
                     }
                     else
                     {
@@ -309,8 +358,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 else if (verdict is not null && !verdict.DeleteVm && settings.OnStall is { } ask)
                 {
                     var waited = settings.ElapsedSince(clockStart);
-                    stall.Open(ask, new StallPrompt(request.JobId, verdict.Code, verdict.Message, verdict.Stage, waited), verdict, cancellationToken);
-                    Notify(new RunNotice(request.JobId, RunNoticeKind.StallDetected, verdict.Stage, Code: verdict.Code));
+                    stall.Open(ask, new StallPrompt(request.JobId, verdict.Code, verdict.Message, verdict.Stage, waited), verdict, cancellationToken, settings.StallAnswerTimeout, settings.TimeProvider);
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallDetected, verdict.Stage, Code: verdict.Code));
                     verdict = null;
                 }
 

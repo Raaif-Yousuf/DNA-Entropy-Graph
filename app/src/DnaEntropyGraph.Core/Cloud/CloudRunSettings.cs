@@ -61,6 +61,12 @@ internal sealed class CloudRunSettings
     public TimeSpan CancelAckTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// How long a stall question may stay unanswered before it counts as no answer (the run then ends the way it chose). A handler that never returns, or blocks, must not hold a stalled VM for
+    /// ever: the question runs off the poll loop and is cut here. Default 10 minutes; null never cuts it (the run's own time limit still bounds the wait, Hard Rule 11).
+    /// </summary>
+    public TimeSpan? StallAnswerTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// After the worker has acknowledged a cancel, how long to wait for it to reach a terminal stage (it stops between windows, one window is at most about
     /// 15 s, then it uploads what it has) before the VM is deleted anyway. THEORY (unverified): 2 minutes covers the window plus the upload, not measured on a real VM.
     /// </summary>

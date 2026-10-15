@@ -257,4 +257,90 @@ public class CloudJobRunnerStallTests
         notices.Select(n => n.Kind).ShouldContain(RunNoticeKind.StallDetected);
         result.FailureCode.ShouldNotBe(RunErrorCodes.WorkerHeartbeatStale, "the heartbeat recovered, so the stale verdict was withdrawn");
     }
+
+    // ---------------------------------------------------------------- #675 review
+
+    [Fact]
+    public async Task A_no_GPU_verdict_while_a_stall_question_is_open_wins_the_VM_is_deleted_at_once_and_the_question_is_withdrawn()
+    {
+        // The worker is up with a stale heartbeat and its GPU is neither confirmed nor denied: the stall question opens. The handler (a person reading a dialog) then
+        // sees the worker's real first line arrive, "no GPU detected": that verdict must not be swallowed because a question is open.
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatStopsAfterRunning).WithWorkerGpuLineMissing();
+        var bucket = await gcp.EnsureBucketAsync(Project, CancellationToken.None);
+        var noGpuLine = "{\"seq\":2,\"stage\":\"restoring-cache\",\"level\":\"notice\",\"message\":\"worker starting; GPU: no GPU detected; free disk 90 GB\"}\n";
+        var withdrawn = new TaskCompletionSource();
+        var notices = new ConcurrentQueue<RunNotice>();
+
+        var result = await StaleRunner(
+            gcp,
+            new InMemoryRunRepository(),
+            async (_, token) =>
+            {
+                gcp.PutObject(bucket, "jobs/job-race/progress.jsonl", Encoding.UTF8.GetBytes(noGpuLine));
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    withdrawn.TrySetResult();
+                    throw;
+                }
+
+                return StallChoice.KeepWaiting;
+            },
+            notices.Enqueue).RunAsync(TestInputs.Request("job-race", Spec("job-race")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        result.FailureCode.ShouldBe(RunErrorCodes.GpuNotVisible);
+        (await VmStatusAsync(gcp, "job-race")).ShouldBeNull("a box with no GPU is deleted, not stopped and not kept waiting");
+        await withdrawn.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        notices.Select(n => n.Kind).ShouldContain(RunNoticeKind.StallCleared);
+    }
+
+    [Fact]
+    public async Task A_stall_handler_that_blocks_its_thread_does_not_hang_the_run_the_question_times_out_and_the_run_ends_as_it_chose()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
+        using var release = new ManualResetEventSlim();
+        var request = TestInputs.Request("job-block", Spec("job-block"), afterTask: AfterTaskAction.Stop);
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromSeconds(20),
+            HeartbeatStaleTimeout = TimeSpan.FromSeconds(20),
+            StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(80) },
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            StallAnswerTimeout = TimeSpan.FromMilliseconds(100),
+            OnStall = (_, _) =>
+            {
+                release.Wait();
+                return Task.FromResult(StallChoice.KeepWaiting);
+            },
+        };
+
+        try
+        {
+            var result = await runner.RunAsync(request, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
+            (await VmStatusAsync(gcp, "job-block")).ShouldBe("STOPPED", "no answer: the run ends the way it chose");
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task The_production_default_answers_a_stall_at_once_with_no_UI_and_the_run_ends_as_it_chose()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
+
+        var result = await StuckRunner(gcp, new InMemoryRunRepository(), StallDecisions.EndAsRunChose).RunAsync(TestInputs.Request("job-default", Spec("job-default")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
+        (await VmStatusAsync(gcp, "job-default")).ShouldBe("STOPPED");
+    }
 }

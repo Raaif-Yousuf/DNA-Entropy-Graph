@@ -31,6 +31,9 @@ public enum StallChoice
 
     /// <summary>Do not end anything: look again after a fresh allowance. The run's own time limit still applies.</summary>
     KeepWaiting,
+
+    /// <summary>No opinion: end the run the way the run itself chose (its after-task action), exactly as if nobody had been asked. What a production default answers when no UI is there to ask (<see cref="StallDecisions"/>).</summary>
+    EndAsRunChose,
 }
 
 /// <summary>What the heartbeat watch decided, handed to the caller so the person can choose.</summary>
@@ -43,3 +46,13 @@ public sealed record StallPrompt(string JobId, string Code, string Message, stri
 /// handler can never leave a VM billing. A box with no GPU is never asked about: it is deleted at once.
 /// </summary>
 public delegate Task<StallChoice> StallDecision(StallPrompt prompt, CancellationToken cancellationToken);
+
+/// <summary>The production defaults of the stall and notice hooks (issue #675 review): safe with no UI attached, replaced by the app lane's real ones.</summary>
+public static class StallDecisions
+{
+    /// <summary>
+    /// Answers at once with <see cref="StallChoice.EndAsRunChose"/>: with nobody to ask, a stall ends the way it did before the question existed (the VM is ended
+    /// as the run chose and the run fails with its stuck code), never a VM left running because a question had no listener.
+    /// </summary>
+    public static Task<StallChoice> EndAsRunChose(StallPrompt prompt, CancellationToken cancellationToken) => Task.FromResult(StallChoice.EndAsRunChose);
+}

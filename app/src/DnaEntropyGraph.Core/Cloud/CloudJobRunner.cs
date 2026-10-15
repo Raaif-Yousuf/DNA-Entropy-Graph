@@ -116,6 +116,9 @@ public sealed class CloudJobRunner
     /// <summary>Issue #675: asked to choose Stop, Delete or Keep waiting when the heartbeat watch fires, instead of the VM being ended at once; see <see cref="StallDecision"/>. Null keeps the old behaviour.</summary>
     public StallDecision? OnStall { get => _settings.OnStall; init => _settings.OnStall = value; }
 
+    /// <summary>Issue #675 review: how long a stall question may stay unanswered before it counts as no answer; see <see cref="CloudRunSettings.StallAnswerTimeout"/>.</summary>
+    public TimeSpan? StallAnswerTimeout { get => _settings.StallAnswerTimeout; init => _settings.StallAnswerTimeout = value; }
+
     /// <summary>How long a cancel waits for the worker to show a sign of life after <c>control/cancel</c> is written (default 60 s, docs/job_contract.md section 6); zero turns the graceful step off.</summary>
     public TimeSpan CancelAckTimeout { get => _settings.CancelAckTimeout; init => _settings.CancelAckTimeout = value; }
 

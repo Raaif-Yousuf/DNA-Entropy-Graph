@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.Contract;
+
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
@@ -37,14 +39,38 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         var settled = await provisioner.SettleInflightCreatesAsync(jobId).ConfigureAwait(false);
 
         // Issue #675: ask the worker to stop first so the outputs it already has are kept; every way out of the wait ends in the delete below.
-        if (existing.Bucket is { Length: > 0 } bucket)
-        {
-            await graceful.AskAsync(jobId, bucket, cancellationToken).ConfigureAwait(false);
-        }
-
+        // The ask sits INSIDE the same guard as the delete: whatever it throws (a caller who gave up, an unexpected failure of a look), the VM is still deleted and the row
+        // still ends terminal. Nothing in the ask may skip the delete.
+        var outcome = GracefulOutcome.NotAsked;
         string? failure;
         try
         {
+            if (existing.Bucket is { Length: > 0 } bucket)
+            {
+                try
+                {
+                    outcome = await graceful.AskAsync(jobId, bucket, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    // The ask is best effort: not a reason to leave the VM.
+                }
+
+                // Hard Rule 14: the partial outputs a worker uploaded before it stopped stay reachable. The row keeps where the job lives (bucket and job folder), so
+                // "download again" works while the objects exist; a row from before the folder was recorded gets it now.
+                if (outcome is GracefulOutcome.Acknowledged or GracefulOutcome.Finished && existing.JobPrefix is null)
+                {
+                    try
+                    {
+                        await rows.UpdateRowAsync(jobId, row => row with { Bucket = row.Bucket ?? bucket, JobPrefix = row.JobPrefix ?? WorkerManifestBuilder.JobPrefix(jobId) }, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // A row that cannot be annotated must not stop the delete.
+                    }
+                }
+            }
+
             failure = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)

@@ -225,7 +225,13 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IQuotaGateway>(),
                 sp.GetRequiredService<IWorkerIdentityGateway>(),
                 sp.GetRequiredService<IRunRepository>(),
-                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
+            {
+                // Issue #675: safe production defaults until the app lane binds a real question and a real notice. With no UI a stall is answered at once with "end it as the
+                // run chose" (never a question nobody can answer, never a VM left billing), and a notice is logged by id and kind (never a sequence, a file name or an email).
+                OnStall = StallDecisions.EndAsRunChose,
+                OnNotice = notice => sp.GetRequiredService<IDiagnosticsLog>().Warning("run-notice", notice.JobId, notice.Kind.ToString()),
+            };
         });
         // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
         // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.

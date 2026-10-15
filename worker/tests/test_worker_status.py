@@ -389,3 +389,23 @@ def test_stage_started_at_moves_only_when_the_stage_changes(tmp_path: Path, monk
         assert _status(store)["stageStartedAt"] == loading["stageStartedAt"]
     finally:
         w.stop()
+
+
+# --- issue #675 review: cancelSeen is the worker's explicit acknowledgement of control/cancel ---
+
+
+def test_cancel_seen_is_false_until_the_worker_marks_it_and_then_written_at_once(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    writer = StatusWriter(store, "job-1", interval_seconds=3600)
+    writer.start()
+    try:
+        assert json.loads(store.read_text("status.json"))["cancelSeen"] is False
+        before = json.loads(store.read_text("status.json"))["heartbeatSeq"]
+
+        writer.mark_cancel_seen()
+
+        doc = json.loads(store.read_text("status.json"))
+        assert doc["cancelSeen"] is True
+        assert doc["heartbeatSeq"] > before
+    finally:
+        writer.stop()

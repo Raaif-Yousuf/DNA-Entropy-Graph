@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
@@ -29,14 +28,28 @@ public class CloudJobRunnerGracefulCancelTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, TimeSpan ackTimeout, TimeSpan? finishTimeout = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
+    /// <summary>
+    /// The runner on VIRTUAL time (#525, #675 review): the ack and finish windows are measured on <paramref name="clock"/>, which moves only when the runner sleeps between looks,
+    /// so a loaded machine cannot stretch a window and a test never waits real milliseconds. <paramref name="onSleep"/> sees each sleep (a test cancels the caller from it).
+    /// </summary>
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, VirtualTimeProvider clock, TimeSpan ackTimeout, TimeSpan? finishTimeout = null, Action? onSleep = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
     {
         ResultPollInterval = TimeSpan.FromMilliseconds(1),
         CancelAckTimeout = ackTimeout,
         CancelFinishTimeout = finishTimeout ?? TimeSpan.FromSeconds(5),
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+        TimeProvider = clock,
+        PollDelay = (span, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            clock.Advance(span);
+            onSleep?.Invoke();
+            return Task.CompletedTask;
+        },
     };
+
+    private static TimeSpan Elapsed(VirtualTimeProvider clock) => TimeSpan.FromTicks(clock.GetTimestamp());
 
     /// <summary>A run that is Running: its VM exists (the fake starts the simulated worker for it), its manifest is in the bucket, and its row says where.</summary>
     private static async Task<(string Bucket, string Prefix)> SeedRunningAsync(FakeGcp gcp, InMemoryRunRepository repo, string jobId, bool bucketInRow = true)
@@ -60,14 +73,14 @@ public class CloudJobRunnerGracefulCancelTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
         var repo = new InMemoryRunRepository();
         var (bucket, prefix) = await SeedRunningAsync(gcp, repo, "job-live");
-        var clock = Stopwatch.StartNew();
+        var clock = new VirtualTimeProvider();
 
-        await Runner(gcp, repo, TimeSpan.FromSeconds(5)).CancelAsync("job-live", CancellationToken.None);
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(5)).CancelAsync("job-live", CancellationToken.None);
 
         gcp.GetObjectBytes(bucket, prefix + "control/cancel").ShouldBeEmpty("the cancel request is a 0-byte object (job_contract.md section 6)");
         Encoding.UTF8.GetString(gcp.GetObjectBytes(bucket, prefix + "status.json")).ShouldContain("\"stage\":\"cancelled\"", Case.Sensitive, "the worker saw the request and wrote its cancelled stage");
         Encoding.UTF8.GetString(gcp.GetObjectBytes(bucket, prefix + "result.json")).ShouldContain("cancelled");
-        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(3), "an answering worker does not cost the whole window");
+        Elapsed(clock).ShouldBeLessThan(TimeSpan.FromSeconds(3), "an answering worker does not cost the whole window");
         (await VmStatusAsync(gcp, "job-live")).ShouldBeNull();
         LastRow(repo, "job-live").Phase.ShouldBe(JobPhase.Cancelled);
     }
@@ -78,13 +91,13 @@ public class CloudJobRunnerGracefulCancelTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatStopsAfterRunning);
         var repo = new InMemoryRunRepository();
         var (bucket, prefix) = await SeedRunningAsync(gcp, repo, "job-dead");
-        var clock = Stopwatch.StartNew();
+        var clock = new VirtualTimeProvider();
 
-        await Runner(gcp, repo, TimeSpan.FromMilliseconds(150)).CancelAsync("job-dead", CancellationToken.None);
+        await Runner(gcp, repo, clock, TimeSpan.FromMilliseconds(150)).CancelAsync("job-dead", CancellationToken.None);
 
         gcp.ObjectKeys(bucket).ShouldContain(prefix + "control/cancel");
-        clock.Elapsed.ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(140), "the dead worker was given its whole ack window");
-        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        Elapsed(clock).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(150), "the dead worker was given its whole ack window");
+        Elapsed(clock).ShouldBeLessThan(TimeSpan.FromSeconds(5));
         (await VmStatusAsync(gcp, "job-dead")).ShouldBeNull();
         LastRow(repo, "job-dead").Phase.ShouldBe(JobPhase.Cancelled);
     }
@@ -92,15 +105,15 @@ public class CloudJobRunnerGracefulCancelTests
     [Fact]
     public async Task A_worker_that_answers_but_never_finishes_is_given_the_finish_window_then_the_VM_is_deleted_anyway()
     {
-        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone).WithWorkerIgnoringCancel();
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading).WithWorkerIgnoringCancel();
         var repo = new InMemoryRunRepository();
         await SeedRunningAsync(gcp, repo, "job-slow");
-        var clock = Stopwatch.StartNew();
+        var clock = new VirtualTimeProvider();
 
-        await Runner(gcp, repo, TimeSpan.FromSeconds(5), finishTimeout: TimeSpan.FromMilliseconds(150)).CancelAsync("job-slow", CancellationToken.None);
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(5), finishTimeout: TimeSpan.FromMilliseconds(150)).CancelAsync("job-slow", CancellationToken.None);
 
-        clock.Elapsed.ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(140));
-        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(4));
+        Elapsed(clock).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(150));
+        Elapsed(clock).ShouldBeLessThan(TimeSpan.FromSeconds(4));
         (await VmStatusAsync(gcp, "job-slow")).ShouldBeNull();
         LastRow(repo, "job-slow").Phase.ShouldBe(JobPhase.Cancelled);
     }
@@ -111,11 +124,11 @@ public class CloudJobRunnerGracefulCancelTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.NoHeartbeat);
         var repo = new InMemoryRunRepository();
         await SeedRunningAsync(gcp, repo, "job-boot");
-        var clock = Stopwatch.StartNew();
+        var clock = new VirtualTimeProvider();
 
-        await Runner(gcp, repo, TimeSpan.FromSeconds(30)).CancelAsync("job-boot", CancellationToken.None);
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(30)).CancelAsync("job-boot", CancellationToken.None);
 
-        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(3), "no worker status means no ack window");
+        Elapsed(clock).ShouldBeLessThan(TimeSpan.FromSeconds(3), "no worker status means no ack window");
         (await VmStatusAsync(gcp, "job-boot")).ShouldBeNull();
         LastRow(repo, "job-boot").Phase.ShouldBe(JobPhase.Cancelled);
     }
@@ -126,8 +139,9 @@ public class CloudJobRunnerGracefulCancelTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
         var repo = new InMemoryRunRepository();
         var (bucket, prefix) = await SeedRunningAsync(gcp, repo, "job-nobucket", bucketInRow: false);
+        var clock = new VirtualTimeProvider();
 
-        await Runner(gcp, repo, TimeSpan.FromSeconds(30)).CancelAsync("job-nobucket", CancellationToken.None);
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(30)).CancelAsync("job-nobucket", CancellationToken.None);
 
         gcp.ObjectKeys(bucket).ShouldNotContain(prefix + "control/cancel");
         (await VmStatusAsync(gcp, "job-nobucket")).ShouldBeNull();
@@ -140,8 +154,9 @@ public class CloudJobRunnerGracefulCancelTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone).WithUploadFailure("control/cancel", CloudErrorKind.Permission);
         var repo = new InMemoryRunRepository();
         await SeedRunningAsync(gcp, repo, "job-nowrite");
+        var clock = new VirtualTimeProvider();
 
-        await Runner(gcp, repo, TimeSpan.FromSeconds(30)).CancelAsync("job-nowrite", CancellationToken.None);
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(30)).CancelAsync("job-nowrite", CancellationToken.None);
 
         (await VmStatusAsync(gcp, "job-nowrite")).ShouldBeNull();
         LastRow(repo, "job-nowrite").Phase.ShouldBe(JobPhase.Cancelled);
@@ -153,12 +168,13 @@ public class CloudJobRunnerGracefulCancelTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatStopsAfterRunning);
         var repo = new InMemoryRunRepository();
         await SeedRunningAsync(gcp, repo, "job-giveup");
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        var clock = Stopwatch.StartNew();
+        using var cts = new CancellationTokenSource();
+        var clock = new VirtualTimeProvider();
+        var sleeps = 0;
 
-        await Runner(gcp, repo, TimeSpan.FromSeconds(30)).CancelAsync("job-giveup", cts.Token);
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(30), onSleep: () => { if (++sleeps == 50) { cts.Cancel(); } }).CancelAsync("job-giveup", cts.Token);
 
-        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5), "the 30 s window was cut by the caller");
+        Elapsed(clock).ShouldBeLessThan(TimeSpan.FromSeconds(5), "the 30 s window was cut by the caller");
         (await VmStatusAsync(gcp, "job-giveup")).ShouldBeNull("a VM that may be billing must not outlive a caller who gave up");
         LastRow(repo, "job-giveup").Phase.ShouldBe(JobPhase.Cancelled);
     }
@@ -169,10 +185,148 @@ public class CloudJobRunnerGracefulCancelTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
         var repo = new InMemoryRunRepository();
         var (bucket, prefix) = await SeedRunningAsync(gcp, repo, "job-off");
+        var clock = new VirtualTimeProvider();
 
-        await Runner(gcp, repo, TimeSpan.Zero).CancelAsync("job-off", CancellationToken.None);
+        await Runner(gcp, repo, clock, TimeSpan.Zero).CancelAsync("job-off", CancellationToken.None);
 
         gcp.ObjectKeys(bucket).ShouldNotContain(prefix + "control/cancel");
         (await VmStatusAsync(gcp, "job-off")).ShouldBeNull();
+    }
+
+    // ---------------------------------------------------------------- #675 review
+
+    [Fact]
+    public async Task A_heartbeat_that_keeps_ticking_is_not_an_acknowledgement_the_worker_must_say_it_saw_the_request()
+    {
+        // A live worker (its heartbeat moves on every look) that never reports cancelSeen: before the explicit acknowledgement, the moving heartbeat alone ended the wait as "answered".
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading).WithWorkerNeverAcknowledgingCancel();
+        var repo = new InMemoryRunRepository();
+        var (bucket, prefix) = await SeedRunningAsync(gcp, repo, "job-tick");
+        var clock = new VirtualTimeProvider();
+
+        await Runner(gcp, repo, clock, TimeSpan.FromMilliseconds(150), finishTimeout: TimeSpan.FromHours(1)).CancelAsync("job-tick", CancellationToken.None);
+
+        gcp.ObjectKeys(bucket).ShouldContain(prefix + "control/cancel");
+        Elapsed(clock).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(150), "no cancelSeen: the whole ack window passed");
+        Elapsed(clock).ShouldBeLessThan(TimeSpan.FromMinutes(1), "and the finish window (an hour here) was never entered");
+        (await VmStatusAsync(gcp, "job-tick")).ShouldBeNull();
+        LastRow(repo, "job-tick").Phase.ShouldBe(JobPhase.Cancelled);
+        LastRow(repo, "job-tick").JobPrefix.ShouldBeNull("nothing was acknowledged, so nothing is promised about partial outputs");
+    }
+
+    [Fact]
+    public async Task An_acknowledged_cancel_keeps_the_row_pointing_at_the_job_folder_so_the_partial_outputs_can_be_downloaded_again()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
+        var repo = new InMemoryRunRepository();
+        var (bucket, prefix) = await SeedRunningAsync(gcp, repo, "job-keep");
+        gcp.PutObject(bucket, prefix + "output/in1/track.bedgraph", [1, 2, 3]); // what the worker uploaded before it stopped
+        var clock = new VirtualTimeProvider();
+
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(5)).CancelAsync("job-keep", CancellationToken.None);
+
+        var row = LastRow(repo, "job-keep");
+        row.Phase.ShouldBe(JobPhase.Cancelled);
+        row.Bucket.ShouldBe(bucket);
+        row.JobPrefix.ShouldBe(prefix);
+        gcp.ObjectKeys(bucket).ShouldContain(prefix + "output/in1/track.bedgraph", "the VM delete never touches the bucket");
+    }
+
+    [Fact]
+    public async Task An_acknowledged_worker_that_is_slow_to_stop_still_costs_only_the_finish_window()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading).WithWorkerIgnoringCancel();
+        var repo = new InMemoryRunRepository();
+        await SeedRunningAsync(gcp, repo, "job-ack-slow");
+        var clock = new VirtualTimeProvider();
+
+        await Runner(gcp, repo, clock, TimeSpan.FromSeconds(5), finishTimeout: TimeSpan.FromMilliseconds(200)).CancelAsync("job-ack-slow", CancellationToken.None);
+
+        Elapsed(clock).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(200));
+        Elapsed(clock).ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        (await VmStatusAsync(gcp, "job-ack-slow")).ShouldBeNull();
+        LastRow(repo, "job-ack-slow").JobPrefix.ShouldBe("jobs/job-ack-slow/");
+    }
+
+    /// <summary>The fake behind the compute interface, except that the FIRST look by job id (the graceful step's) throws something that is not a cloud error.</summary>
+    private sealed class FirstFindThrows(FakeGcp inner) : IComputeGateway
+    {
+        private int _finds;
+
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+            => Interlocked.Increment(ref _finds) == 1 ? throw new InvalidOperationException("an unexpected failure of the look") : inner.FindByJobIdAsync(jobId, cancellationToken);
+
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+
+        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+
+        public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(vmName, zone, cancellationToken);
+
+        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+
+        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+    }
+
+    [Fact]
+    public async Task Any_exception_from_the_graceful_ask_still_deletes_the_VM_and_leaves_the_row_terminal()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
+        var repo = new InMemoryRunRepository();
+        await SeedRunningAsync(gcp, repo, "job-throws");
+        var runner = new CloudJobRunner(new FirstFindThrows(gcp), gcp, gcp, gcp, gcp, repo)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+        };
+
+        await runner.CancelAsync("job-throws", CancellationToken.None);
+
+        (await VmStatusAsync(gcp, "job-throws")).ShouldBeNull("a VM that may be billing is deleted whatever the ask threw");
+        LastRow(repo, "job-throws").Phase.ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task A_cancel_racing_a_driver_that_is_finishing_leaves_one_terminal_row_and_no_VM_billing()
+    {
+        for (var round = 0; round < 15; round++)
+        {
+            var jobId = $"job-race-{round}";
+            var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
+            var repo = new InMemoryRunRepository();
+            var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
+            {
+                ResultPollInterval = TimeSpan.FromMilliseconds(1),
+                CancelAckTimeout = TimeSpan.FromMilliseconds(50),
+                LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+                LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            };
+            var active = new ActiveRuns();
+            var driver = active.TryStart(jobId, token => runner.RunAsync(TestInputs.Request(jobId, Spec(jobId)), token)).ShouldNotBeNull();
+
+            await Task.Delay(round % 5, CancellationToken.None); // a different moment of the run each round
+            await active.CancelAsync(jobId, () => runner.CancelAsync(jobId, CancellationToken.None));
+            await driver;
+
+            // A cancel that wins before the driver recorded anything leaves no row and so nothing to end; any row that exists is terminal.
+            if (repo.AllRecordedInOrder.LastOrDefault(r => r.JobId == jobId) is { } last)
+            {
+                JobStateMachine.IsTerminal(last.Phase).ShouldBeTrue($"round {round}: the row ended {last.Phase}");
+            }
+            var vm = await VmStatusAsync(gcp, jobId);
+            (vm is null || vm == "STOPPED").ShouldBeTrue($"round {round}: the VM is {vm}, never left running");
+        }
     }
 }

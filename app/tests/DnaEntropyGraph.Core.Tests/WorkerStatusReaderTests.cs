@@ -70,4 +70,14 @@ public class WorkerStatusReaderTests
     [InlineData("{\"message\":\"something else entirely\"}\n")]
     public void Without_the_worker_starting_line_the_report_is_unknown(string jsonl)
         => WorkerStatusReader.ReadGpuReport(jsonl).ShouldBe(WorkerGpuReport.Unknown);
+
+    [Theory]
+    [InlineData("{\"stage\":\"running\",\"worker\":{\"version\":\"1\"},\"cancelSeen\":true}", true)]
+    [InlineData("{\"stage\":\"running\",\"worker\":{\"version\":\"1\"},\"cancelSeen\":false}", false)]
+    [InlineData("{\"stage\":\"running\",\"worker\":{\"version\":\"1\"}}", false)]
+    [InlineData("{\"stage\":\"running\",\"cancelSeen\":\"true\"}", false)]
+    public void CancelSeen_is_true_only_for_a_JSON_true(string json, bool expected)
+    {
+        WorkerStatusReader.TryParseStatus(json)!.CancelSeen.ShouldBe(expected);
+    }
 }
