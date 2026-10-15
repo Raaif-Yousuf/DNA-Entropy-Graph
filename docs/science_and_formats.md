@@ -297,7 +297,10 @@ allowed (it wraps several times) and gets a notice saying so instead of the line
 reaches full context" one. The mock predictor seeds on
 window content, so rotation invariance (rotating a circular input rotates the output) is
 tested with a pure-local-context stub (`worker/tests/test_circular.py`), not the mock. The
-output GenBank keeps writing a linear `LOCUS` (not changed here).
+output GenBank carries the topology each contig was analyzed with (issue #524): a circular contig
+writes `circular` in its `LOCUS` line (so a plasmid stays a plasmid in SnapGene/Benchling and
+`read_genbank` reads it back as circular); a linear one writes no topology word, exactly as before,
+so every linear file is byte-identical. `--topology` decides, not only the input's word.
 
 ---
 
