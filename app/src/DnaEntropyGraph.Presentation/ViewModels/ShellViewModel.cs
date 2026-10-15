@@ -123,6 +123,15 @@ public sealed partial class ShellViewModel : ObservableObject
         OnPropertyChanged(nameof(CurrentPageTitle));
     }
 
+    /// <summary>Alt+Left (issue #110): back to the previous page; nothing when there is none.</summary>
+    public void GoBack()
+    {
+        if (_navigator.CanGoBack)
+        {
+            _navigator.GoBack();
+        }
+    }
+
     private void OnRunPhaseChanged(RunPhaseChangedMessage message)
     {
         if (IsTerminal(message.Phase))
