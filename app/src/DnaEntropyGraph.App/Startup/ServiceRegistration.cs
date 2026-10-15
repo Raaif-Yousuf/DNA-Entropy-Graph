@@ -120,9 +120,9 @@ public static class ServiceRegistration
             sp.GetRequiredService<ICloudCallObserver>()));
 
         // SWITCH POINT (#609, docs/cloud_design.md section 16): the one place production chooses Google or the fake.
-        if (cloud == CloudBackend.Fake)
+        if (cloud != CloudBackend.Google)
         {
-            AddFakeCloud(services);
+            AddFakeCloud(services, connected: cloud == CloudBackend.Developer);
         }
         else
         {
@@ -257,6 +257,14 @@ public static class ServiceRegistration
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();
 
+        if (cloud == CloudBackend.Developer)
+        {
+            // Developer mode (issue #69), registered last so it wins over the real account and image list: the account is the fake too
+            // (Sign in succeeds with no browser, its project is the fake project) and the worker image is a fixed fake reference.
+            services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
+            services.AddSingleton<IWorkerImageProvider, FakeCloudMode.FakeWorkerImageProvider>();
+        }
+
         return services;
     }
 
@@ -306,9 +314,9 @@ public static class ServiceRegistration
     /// The simulated cloud, for tests and (issue #69) developer mode: <see cref="FakeGcp"/> behind the same resilience wrappers
     /// the fake-backed tests have always used. Not connected: a run fails at preflight with cloud_not_connected.
     /// </summary>
-    private static void AddFakeCloud(IServiceCollection services)
+    private static void AddFakeCloud(IServiceCollection services, bool connected)
     {
-        services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithCloudNotConnected());
+        services.AddSingleton<FakeGcp>(_ => connected ? new FakeGcp() : new FakeGcp().WithCloudNotConnected());
         // A 401 from a fake must not call the real token endpoint (it would throw SIGNIN_EXPIRED for an account nothing real asked about).
         services.AddSingleton<ICloudTokenRefresher>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IComputeGateway>(sp => new ResilientComputeGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
@@ -325,4 +333,7 @@ public enum CloudBackend
 {
     Google,
     Fake,
+
+    /// <summary>The connected fake with its own signed-in account and worker image: <c>--fake-cloud</c> (issue #69).</summary>
+    Developer,
 }
