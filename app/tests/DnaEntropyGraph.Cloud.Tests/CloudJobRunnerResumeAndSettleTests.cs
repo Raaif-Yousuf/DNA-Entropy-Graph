@@ -31,11 +31,12 @@ public class CloudJobRunnerResumeAndSettleTests
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
     private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null)
-        => new(gcp, gcp, gcp, gcp, repo, onPhase)
+        => new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
             CallTimeout = TimeSpan.FromMilliseconds(50),
+            EnsureBucketTimeout = TimeSpan.FromMilliseconds(50),
             CreateTimeout = TimeSpan.FromMilliseconds(50),
             CreateSettleTimeout = TimeSpan.FromSeconds(2),
             UploadTimeout = TimeSpan.FromMilliseconds(50),
@@ -141,7 +142,7 @@ public class CloudJobRunnerResumeAndSettleTests
     {
         var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, repo);
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
         using var cts = new CancellationTokenSource();
         var run = runner.RunAsync(TestInputs.Request("job-s2", Spec("job-s2")), cts.Token);
         await gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);

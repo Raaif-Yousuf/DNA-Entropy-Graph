@@ -103,8 +103,11 @@ command by hand from the repo root, which is exactly where the error reads as
 a broken test project rather than a wrong directory.
 
 ```powershell
-scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches against FakeGcp
+scripts\dev_app.ps1                          # sets DEG_FAKE_CLOUD=1, launches against FakeGcp on a fresh profile
+# the same by hand: DnaEntropyGraph.App.exe --fake-cloud --fresh-profile   (or DEG_FAKE_CLOUD=1; --profile <dir> overrides --fresh-profile)
 ```
+
+A shipped build resolves the real Google gateways (#609); `--fake-cloud` is the only way back to the simulated cloud. In it, Sign in succeeds with no browser, the project is `fake-project`, the worker image is a fixed fake reference, and a run goes to Completed with the network off. The simulated cloud is refused on the real profile: it needs `--fresh-profile`, `--profile` or `DEG_DATA_DIR` pointing away from the real folder, so fake runs never write into the real history (a stray `DEG_FAKE_CLOUD=1` in a shipped build stops the launch with a message). While it runs, a permanent red "Simulated cloud" banner sits in the title bar. There is no Settings toggle yet (the issue asked for a hidden one; it is not built).
 
 ### Launching the app on a sandbox data folder (#638)
 
@@ -172,11 +175,16 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   reported both pytest gates as FAIL although every test passed, because both crashed in pytest's own
   `cleanup_dead_symlinks` on the shared default basetemp. A run that prints only passes and then exits
   non-zero is now an `ERROR` saying it was not a test failure and not a pass.
-- **`KNOWN` status.** `dotnet format --verify-no-changes` reports ENDOFLINE on every line of a CRLF checkout
-  (`core.autocrlf=true`, #462). Only when autocrlf is true AND every parsed diagnostic is ENDOFLINE is the
-  gate `KNOWN` (exit 0, printed with the issue number); any other diagnostic, an unparseable failure or
-  autocrlf off stays `FAIL`. THEORY (unverified, written without a dotnet run): the diagnostic line shape is
-  `path(line,col): error ENDOFLINE: ...`; if it differs the parse finds nothing and the gate fails safe.
+- **`KNOWN` status and the real fix for #462.** MEASURED 2026-10-15: `.gitattributes` (`* text=auto eol=lf`) makes a
+  fresh checkout or worktree LF even with `core.autocrlf=true`, and `dotnet format DnaEntropyGraph.sln
+  --verify-no-changes` exits 0 there. ENDOFLINE on every line only appears in a STALE tree (checked out before
+  `.gitattributes`, or a tool wrote CRLF). `python scripts/fix_eol.py` (`--check` lists without changing) rewrites
+  exactly the files git holds as LF but the tree holds as CRLF/mixed, as bytes; run it once and the gate is real.
+  The gate is `KNOWN` (exit 0, printed with the issue number) only when autocrlf is true, every parsed diagnostic is
+  ENDOFLINE AND `git ls-files --eol` shows such a stale file; ENDOFLINE in an LF tree, any other diagnostic, an
+  unparseable failure or autocrlf off is `FAIL`. THEORY (unverified, written without a dotnet run on a CRLF tree):
+  the diagnostic line shape is `path(line,col): error ENDOFLINE: ...`; if it differs the parse finds nothing and the
+  gate fails safe.
 - **The stamp.** A green, unfiltered run writes `<git-dir>/premerge-stamp.json` (HEAD sha, mode, time);
   `scripts/hooks/require_premerge_before_pr.py` refuses `gh pr create` and `gh pr merge` without a fresh
   stamp for the current HEAD (see `scripts/hooks/README.md`). Committing changes HEAD, so: commit, then run
@@ -189,8 +197,10 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
 For lanes that work in their own worktree (#510). Flow and refusals: [branching_and_prs.md](branching_and_prs.md).
 
 ```powershell
-worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <tip-sha> --title "feat: ..." --body-file body.md [--full]
+worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <tip-sha> --title "feat: ..." --body-file body.md [--full] [--merge-when-green [--checks-timeout 1800] [--checks-poll 20] [--no-rerun-failed-once]]
 ```
+
+`--merge-when-green` waits for the PR checks and merges only if none failed (exit 5 failed, 6 pending at the timeout).
 
 Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh).
 
@@ -455,6 +465,36 @@ It only drafts: the single gh call is the read-only `issue list`; nothing is cre
 is guessed from the path and P3 is a placeholder, so read each draft before running it. A failed search prints
 `WARNING ... unchecked` and still drafts. Tests: `scripts/tests/test_wave_findings.py` (stub gh).
 
+## CloudCli: the console host for cloud resources (#60)
+
+`app/tools/DnaEntropyGraph.CloudCli` is the app's own cloud layer from a console (gcloud is denied in this repo). It uses the real
+gateways and **the account the app signed in** (DPAPI token files under `%LOCALAPPDATA%\DNAEntropyGraph\auth`, so run it as the same
+Windows user); it never reads a key file and never signs in itself. Run from `app/`:
+
+```powershell
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- resources list --project <id> [--install <id>] [--kind vm|bucket|all] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- bucket describe --project <id> [--name <bucket>] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm create --project <id> --zone <zone> --install <id> --service-account <email> [--job <id>] [--model <m>] [--machine-type <t>] [--lifecycle <l>] [--app-version <v>] [--max-run-duration 90|90s|30m|2h] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> --zone <zone> --name deg-<job id> [--json]
+```
+
+- `resources list` prints every VM labelled `app=dna-entropy-graph` (or only `--install`'s) and every labelled `deg-` bucket as a plain
+  table ending in `OK: <n> resource(s)`; `--json` prints an array of `{kind,name,zone,location,status,installation,job}` and nothing else.
+  The results bucket is meant to outlive a run, so a leak scan uses `--kind vm` (that is what `scripts/cloud_gpu_test.ps1` runs).
+- `vm create` only builds a `VmSpec`, so the six labels, `maxRunDuration` (default 30m) and termination action DELETE are always set;
+  there is no flag to weaken them. A missing `--job` generates one.
+- `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label. A name not
+  found in the given zone is exit 5 (never "already gone"): the error names the zone it was found in, or says to check
+  `resources list --kind vm`. `resources list --install <id>` filters VMs only; the shared results bucket is always listed.
+- Output is ASCII: `OK:` lines on stdout, one `ERROR:` line on stderr naming an action.
+- Exit codes: `0` ok, `1` Google refused or could not be reached (or Ctrl+C), or any other unexpected failure (one `ERROR:` line naming
+  the exception class and an action, never a stack trace), `2` bad command line or a value `VmSpec` rejects, `3` no account signed in
+  ("Sign in with the app first") or the sign-in expired (only that: a network failure while refreshing the sign-in is `1`, and a missing
+  or invalid OAuth client file is `1` with its own message), `4` a safety guard refused, `5` the named bucket, or the VM in that zone, is not there. A Google call that times out is `1` ("timed out"), not "Cancelled".
+- `--json` takes no value, or `--json=true` / `--json=false`; any other value is exit 2.
+- There is no GCP access from agent sessions: tests run the same code over a scripted HTTP handler
+  (`app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/`); `docs/ToTest.md` carries the row that needs a real project.
+
 ## GPU test recipe
 
 **Never on the laptop.** `pytest -m "not gpu"` is the standing local command;
@@ -467,20 +507,23 @@ scripts\cloud_gpu_test.ps1 -Apply            # NOT functional yet — see below
 scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
-**Updated 2026-09-19: the script exists (issue #317), dry-run is real,
-`-Apply` deliberately is not yet.** The dry-run path (labels, cost/duration
-math, the leak-check and interrupt-safety contract) is provable today with
-zero cloud spend and is exercised by `-SelfTest`. `-Apply` looks for a built
-`CloudCli` (issue #60, itself built from `app/`, issue #61) and fails
-clearly, naming #60/#61/#24, rather than silently falling back to a raw
-`gcloud` call — Appendix C's permission design denies `gcloud` to an agent
-on purpose, and a script that quietly substitutes it under the hood would
-defeat that. `docs/ToTest.md` carries the row for exercising `-Apply` for
-real once `CloudCli` exists. Once it works: launches a labelled VM in the
+**Updated 2026-10-03: the script exists (issue #317), dry-run is real,
+`CloudCli` exists (issue #60), and `-Apply` is still UNVERIFIED.** The dry-run
+path (labels, cost/duration math, the leak-check and interrupt-safety contract)
+is provable today with zero cloud spend and is exercised by `-SelfTest`.
+`-Apply` calls the built `CloudCli` (see "CloudCli" above) and fails clearly,
+naming #60/#61/#24, if the executable is not built, rather than silently
+falling back to a raw `gcloud` call: Appendix C's permission design denies
+`gcloud` to an agent on purpose. The `vm create` arguments the script builds
+do not yet match the CLI's real flags (#619), so `-Apply` refuses (exit 3, naming
+#619) before it invokes the CLI, even when a built CloudCli exists; #619 removes
+that gate. The leak check treats unparsable output or a non-zero exit as a failed
+check, never as "nothing left running". `docs/ToTest.md` carries the row for
+exercising it for real. Once it works: launches a labelled VM in the
 owner's GCP project (blocked on `OWNER_TODO.md` item 2 / issue #24 until a
 project and GPU quota exist), runs `pytest -m gpu` on it, and tears the VM
-down. Read `working-on-gcp` before running it for real even once `-Apply`
-works — it creates real, billed cloud resources. Launch detached and poll
+down. Read `working-on-gcp` before running it for real: it creates real,
+billed cloud resources. Launch detached and poll
 rather than blocking a single tool call on it (a real run is 6-20 minutes;
 see the `a-tool-call-caps-at-600s` memory seed).
 

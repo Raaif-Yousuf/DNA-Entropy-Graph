@@ -616,4 +616,86 @@ public class SettingsStoreTests
             reopened.GetString($"b{i}").ShouldBe("x");
         }
     }
+
+    [Fact]
+    public void ResetAll_forgets_every_setting_and_keeps_the_installation_id()
+    {
+        using var paths = new TempPaths();
+        var store = new SettingsStore(paths.SettingsPath);
+        store.SetString("Theme", "Dark");
+        store.SetString("output_files_genbank", "stats");
+        var id = Guid.NewGuid().ToString();
+        store.SetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey, id);
+
+        store.ResetAll();
+
+        store.GetString("Theme").ShouldBeNull();
+        store.GetString("output_files_genbank").ShouldBeNull();
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+    }
+
+    [Fact]
+    public void ResetAll_on_a_store_with_no_file_is_not_an_error_and_a_later_write_still_works()
+    {
+        using var paths = new TempPaths();
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+        store.SetString("Theme", "Light");
+
+        store.GetString("Theme").ShouldBe("Light");
+    }
+
+    [Fact]
+    public void ResetAll_keeps_a_legacy_installation_id_that_still_sits_in_a_readable_settings_file()
+    {
+        using var paths = new TempPaths();
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(paths.SettingsPath, "{\"Theme\":\"Dark\",\"installation_id\":\"" + id + "\"}");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+
+        store.GetString("Theme").ShouldBeNull();
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+    }
+
+    [Fact]
+    public void ResetAll_on_a_truncated_settings_file_keeps_an_id_the_parser_never_reached()
+    {
+        // #644 cold review (12): the id sits after the corruption point (a missing comma), so the structured salvage does not
+        // see it; resetting must not forget it, or the next read mints a new id and orphans every labelled cloud resource.
+        using var paths = new TempPaths();
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(paths.SettingsPath, "{\"Theme\":\"Dark\" \"x\":1,\"installation_id\":\"" + id + "\"}");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+        store.GetString("Theme").ShouldBeNull();
+    }
+
+    [Fact]
+    public void ResetAll_on_a_truncated_file_whose_id_is_complete_keeps_it()
+    {
+        using var paths = new TempPaths();
+        var id = Guid.NewGuid().ToString();
+        File.WriteAllText(paths.SettingsPath, "{\"installation_id\":\"" + id + "\"");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+    }
+
+    [Fact]
+    public void ResetAll_refuses_rather_than_forget_an_id_that_cannot_be_recovered()
+    {
+        using var paths = new TempPaths();
+        File.WriteAllText(paths.SettingsPath, "{\"installation_id\":\"not-an-id");
+        var store = new SettingsStore(paths.SettingsPath);
+
+        Should.Throw<global::DnaEntropyGraph.Core.Abstractions.SettingsUnavailableException>(store.ResetAll);
+    }
 }

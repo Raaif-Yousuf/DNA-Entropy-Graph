@@ -112,7 +112,7 @@ public static partial class DiagnosticsBundleBuilder
         var logCounters = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var file in loaded)
         {
-            entries[EntryName(file, ids, logCounters)] = Copy(file with { Text = ids.Rewrite(file.Text) }, redactor, ids.FolderId(file.Path)) ?? OmittedUnreadable;
+            entries[EntryName(file, ids, logCounters)] = Copy(file, redactor, ids) ?? OmittedUnreadable;
         }
 
         // The scan backstops the redactor on the user's own identifiers (the same list the redactor used, plus the profile
@@ -246,17 +246,20 @@ public static partial class DiagnosticsBundleBuilder
         }
     }
 
-    private static string? Copy(Loaded file, DiagnosticsRedactor redactor, string? folderJobId)
+    // A withheld job id is rewritten where it can be read as text: in the parsed string leaves of a JSON file (never a key or a
+    // number, so `"percent": 100` survives an id of "1", and an escaped spelling is already decoded) and on token boundaries in
+    // a log. A file that does not parse is omitted whole, so its raw text is never shipped (the leak scan still backstops).
+    private static string? Copy(Loaded file, DiagnosticsRedactor redactor, JobIdWithholder ids)
     {
         var spec = SpecFor(file.Kind);
         if (file.Kind is FileKind.Status or FileKind.Result)
         {
-            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!, folderJobId);
+            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!, ids.FolderId(file.Path), ids.Rewrite, ids.ExactPlaceholder);
         }
 
         // A cut file starts mid-line: drop that partial line and say so.
         var text = file.Truncated ? file.Text[(file.Text.IndexOf('\n', StringComparison.Ordinal) + 1)..] : file.Text;
-        var body = file.Kind == FileKind.Progress ? redactor.RedactJsonLines(text, spec!) : redactor.RedactText(text);
+        var body = file.Kind == FileKind.Progress ? redactor.RedactJsonLines(text, spec!, ids.Rewrite, ids.ExactPlaceholder) : redactor.RedactText(ids.Rewrite(text));
         return file.Truncated ? $"[truncated: only the last {MaxFileBytes} bytes were read]\n{body}" : body;
     }
 
@@ -351,12 +354,23 @@ public static partial class DiagnosticsBundleBuilder
 internal sealed class JobIdWithholder(ISet<string> scrub)
 {
     private readonly Dictionary<string, string> _placeholders = new(StringComparer.OrdinalIgnoreCase);
+    private Regex? _pattern;
+    private string[] _alternativePlaceholders = [];
+    private int _patternCount;
+
+    /// <summary>What a blank id (an empty or whitespace-only row id) ships as. Never part of the rewrite pattern: it would match everywhere.</summary>
+    private const string BlankPlaceholder = "withheldid0";
 
     public string Map(string id)
     {
         if (JobId.MatchesConvention(id))
         {
             return id;
+        }
+
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return BlankPlaceholder;
         }
 
         if (!_placeholders.TryGetValue(id, out var placeholder))
@@ -370,18 +384,57 @@ internal sealed class JobIdWithholder(ISet<string> scrub)
     }
 
     /// <summary>
-    /// Replaces every withheld id in <paramref name="text"/> with its placeholder (exact, case-insensitive, whatever the id is:
-    /// the scrub list drops an all-digit or 1-character value, a record number among them, and this does not).
+    /// Replaces every withheld id in <paramref name="text"/> with its placeholder, case-insensitively and only as a whole token
+    /// (not glued to a letter or digit on either side), whatever the id is: the scrub list drops an all-digit or 1-character
+    /// value, a record number among them, and this does not. One pass, longest id first, so a placeholder is never rewritten
+    /// again and an id inside a longer one loses to the longer one. A longer word that merely contains a short id ("quota"
+    /// for "q") is left alone; the scrub list checks substrings of 3 or more characters.
     /// </summary>
     public string Rewrite(string text)
     {
-        foreach (var (id, placeholder) in _placeholders.OrderByDescending(pair => pair.Key.Length))
+        if (_placeholders.Count == 0)
         {
-            text = text.Replace(id, placeholder, StringComparison.OrdinalIgnoreCase);
+            return text;
         }
 
-        return text;
+        if (_pattern is null || _patternCount != _placeholders.Count)
+        {
+            // One numbered group per id, longest first. The placeholder is found by WHICH group matched, never by looking the
+            // matched text up: the regex folds case by Unicode rules (a Kelvin sign matches "k") and a dictionary does not.
+            var ordered = _placeholders.OrderByDescending(pair => pair.Key.Length).ThenBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
+            _alternativePlaceholders = [.. ordered.Select(pair => pair.Value)];
+            // A lookaround guards an edge only when the id's own edge character is a letter or digit: an id of "#1" must be found
+            // in "job#1" (nothing to be "glued" to at a symbol edge).
+            _pattern = new Regex(
+                string.Join('|', ordered.Select(pair => "(" + EdgeGuard(pair.Key[0], behind: true) + Regex.Escape(pair.Key) + EdgeGuard(pair.Key[^1], behind: false) + ")")),
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            _patternCount = _placeholders.Count;
+        }
+
+        return _pattern.Replace(text, match =>
+        {
+            for (var i = 0; i < _alternativePlaceholders.Length; i++)
+            {
+                if (match.Groups[i + 1].Success)
+                {
+                    return _alternativePlaceholders[i];
+                }
+            }
+
+            // Cannot happen (every match is one group), but a miss must never ship the raw text.
+            return "withheldid-unknown";
+        });
     }
+
+    private static string EdgeGuard(char edge, bool behind) =>
+        char.IsLetterOrDigit(edge) ? (behind ? @"(?<![\p{L}\p{N}])" : @"(?![\p{L}\p{N}])") : string.Empty;
+
+    /// <summary>
+    /// The placeholder when <paramref name="text"/> is, as a whole and ordinally ignoring case, a withheld id; otherwise null.
+    /// Used for a JSON number leaf, where a token match would split <c>0.1</c> at the dot.
+    /// </summary>
+    public string? ExactPlaceholder(string text) =>
+        _placeholders.TryGetValue(text, out var placeholder) ? placeholder : null;
 
     /// <summary>The id a file under <c>runs/&lt;id&gt;/</c> belongs to, as shipped (the placeholder for a withheld one); null elsewhere.</summary>
     public string? FolderId(string path)
