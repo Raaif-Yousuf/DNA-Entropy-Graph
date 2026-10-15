@@ -34,36 +34,37 @@ public sealed class NotificationsTests
         => await actions.OnRunFinishedAsync("job-1", phase);
 
     [Fact]
-    public void Defaults_are_notify_on_open_folder_off_open_results_on()
+    public void Defaults_are_notify_on_open_folder_off_open_results_off()
     {
         var settings = new NotificationSettings(_settings);
 
         settings.NotifyWhenDone.ShouldBeTrue();
         settings.OpenFolderWhenDone.ShouldBeFalse();
-        settings.OpenResultsWhenDone.ShouldBeTrue();
+        settings.OpenResultsWhenDone.ShouldBeFalse();
     }
 
     [Fact]
     public void A_saved_value_is_read_back_and_a_locked_file_reads_as_the_defaults()
     {
         var settings = new NotificationSettings(_settings);
-        settings.OpenResultsWhenDone = false;
+        settings.OpenResultsWhenDone = true;
         settings.OpenFolderWhenDone = true;
 
-        new NotificationSettings(_settings).OpenResultsWhenDone.ShouldBeFalse();
+        new NotificationSettings(_settings).OpenResultsWhenDone.ShouldBeTrue();
         new NotificationSettings(_settings).OpenFolderWhenDone.ShouldBeTrue();
 
         _settings.Unavailable = true;
-        new NotificationSettings(_settings).OpenResultsWhenDone.ShouldBeTrue();
+        new NotificationSettings(_settings).OpenResultsWhenDone.ShouldBeFalse();
     }
 
     [Fact]
-    public async Task A_finished_run_with_the_defaults_shows_one_toast_and_opens_Results_but_not_the_folder()
+    public async Task A_finished_run_with_the_defaults_shows_one_toast_and_leaves_the_user_where_they_are()
     {
+        // #643 cold review (4): a page that jumps away while the user is mid-edit on New run loses their place, so it is opt-in.
         await Finish(Actions());
 
         _toasts.Received(1).ShowToast("RunDone_Title", "RunDone_Body", ToastSeverity.Success);
-        _navigator.Received(1).NavigateTo(ResultsViewModel.PageKey, "job-1");
+        _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
         _folders.DidNotReceive().OpenFolder(Arg.Any<string>());
     }
 
@@ -71,6 +72,7 @@ public sealed class NotificationsTests
     public async Task Turning_off_Notify_when_done_means_no_toast()
     {
         new NotificationSettings(_settings).NotifyWhenDone = false;
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
 
         await Finish(Actions());
 
@@ -79,14 +81,29 @@ public sealed class NotificationsTests
     }
 
     [Fact]
-    public async Task Turning_off_Open_results_when_done_leaves_the_user_on_the_current_page()
+    public async Task Turning_on_Open_results_when_done_opens_the_Results_page_for_that_run()
     {
-        new NotificationSettings(_settings).OpenResultsWhenDone = false;
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
 
         await Finish(Actions());
 
-        _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
+        _navigator.Received(1).NavigateTo(ResultsViewModel.PageKey, "job-1");
         _toasts.Received(1).ShowToast("RunDone_Title", "RunDone_Body", ToastSeverity.Success);
+    }
+
+    [Fact]
+    public async Task The_settings_are_read_once_and_off_the_thread_that_reported_the_run_finished()
+    {
+        // #643 cold review (6): the settings store is a mutex with a 300 ms budget; the run-driving thread must not wait on it.
+        var callerThread = Environment.CurrentManagedThreadId;
+        var store = new ThreadRecordingSettings(_settings);
+
+        await new RunCompletionActions(new NotificationSettings(store), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher())
+            .OnRunFinishedAsync("job-1", JobPhase.Completed);
+
+        store.ReadThreads.ShouldNotBeEmpty();
+        store.ReadThreads.ShouldAllBe(t => t != callerThread);
+        store.ReadThreads.Count.ShouldBe(3, "one read per switch, not one per use");
     }
 
     [Fact]
@@ -123,6 +140,7 @@ public sealed class NotificationsTests
     public async Task A_repository_that_throws_never_stops_the_toast_or_Results()
     {
         new NotificationSettings(_settings).OpenFolderWhenDone = true;
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
         _runs.GetAllAsync(Arg.Any<CancellationToken>()).Returns<IReadOnlyList<RunRecord>>(_ => throw new IOException("db"));
 
         await Finish(Actions());
@@ -150,6 +168,7 @@ public sealed class NotificationsTests
     [Fact]
     public async Task The_shell_runs_the_completion_actions_when_a_run_finishes()
     {
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
         var messenger = new WeakReferenceMessenger();
         var shell = new ShellViewModel(_navigator, Substitute.For<IGcpAccount>(), messenger, _strings, TestMessages.Center(), Actions());
 
@@ -167,16 +186,16 @@ public sealed class NotificationsTests
 
         vm.NotifyWhenDone.ShouldBeTrue();
         vm.OpenFolderWhenDone.ShouldBeFalse();
-        vm.OpenResultsWhenDone.ShouldBeTrue();
+        vm.OpenResultsWhenDone.ShouldBeFalse();
 
         vm.NotifyWhenDone = false;
         vm.OpenFolderWhenDone = true;
-        vm.OpenResultsWhenDone = false;
+        vm.OpenResultsWhenDone = true;
 
         var read = new NotificationSettings(_settings);
         read.NotifyWhenDone.ShouldBeFalse();
         read.OpenFolderWhenDone.ShouldBeTrue();
-        read.OpenResultsWhenDone.ShouldBeFalse();
+        read.OpenResultsWhenDone.ShouldBeTrue();
         vm.NotificationsStatus.ShouldBeEmpty();
     }
 
@@ -205,6 +224,23 @@ public sealed class NotificationsTests
     private sealed class InlineDispatcher : IDispatcher
     {
         public void Enqueue(Action action) => action();
+    }
+
+    private sealed class ThreadRecordingSettings(ISettingsStore inner) : ISettingsStore
+    {
+        public List<int> ReadThreads { get; } = [];
+
+        public string? GetString(string key)
+        {
+            lock (ReadThreads)
+            {
+                ReadThreads.Add(Environment.CurrentManagedThreadId);
+            }
+
+            return inner.GetString(key);
+        }
+
+        public void SetString(string key, string value) => inner.SetString(key, value);
     }
 
     private sealed class MemorySettings : ISettingsStore

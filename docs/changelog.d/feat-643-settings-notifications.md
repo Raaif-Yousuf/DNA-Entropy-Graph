@@ -1,1 +1,2 @@
-- Settings has a Notifications group: show a message, open the results folder and open the Results page when a run finishes (On, Off, On by default). The app now reads them when any run finishes, on whatever page you are on (#643).
+- Settings has a Notifications group: show a message, open the results folder and open the Results page when a run finishes (On, Off, Off by default). The app now reads them when any run finishes, on whatever page you are on (#643).
+- Open the Results page when a run finishes is now Off by default, the four dead run-option copies of the switches are gone, and the settings are read off the run-driving thread (#643).

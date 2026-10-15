@@ -4,7 +4,7 @@ namespace DnaEntropyGraph.Presentation.Services;
 
 /// <summary>
 /// The three "when a run finishes" switches (issue #643), read where a run finishes (<see cref="RunCompletionActions"/>) and
-/// edited in Settings: Notify when done (default On), Open the output folder when done (Off), Open results when done (On).
+/// edited in Settings: Notify when done (default On), Open the output folder when done (Off), Open results when done (Off: a page that jumps away mid-edit loses the user's place).
 /// One class, so the page and the completion path cannot disagree about a key or a default. A read of a locked settings file
 /// is the default; a write of one throws <see cref="SettingsUnavailableException"/> for the caller to report.
 /// </summary>
@@ -30,9 +30,15 @@ public sealed class NotificationSettings(ISettingsStore store)
 
     public bool OpenResultsWhenDone
     {
-        get => Read(OpenResultsKey, defaultValue: true);
+        get => Read(OpenResultsKey, defaultValue: false);
         set => Write(OpenResultsKey, value);
     }
+
+    /// <summary>
+    /// The three switches as they are now, read once. The settings store is a mutex with a 300 ms budget, so a caller on a
+    /// run-driving thread reads this from the thread pool (<see cref="RunCompletionActions"/>) instead of the properties.
+    /// </summary>
+    public NotificationChoices Snapshot() => new(NotifyWhenDone, OpenFolderWhenDone, OpenResultsWhenDone);
 
     private bool Read(string key, bool defaultValue)
     {
@@ -48,3 +54,6 @@ public sealed class NotificationSettings(ISettingsStore store)
 
     private void Write(string key, bool value) => store.SetString(key, value ? "true" : "false");
 }
+
+/// <summary>One read of <see cref="NotificationSettings"/>: a stable answer for the whole completion path.</summary>
+public readonly record struct NotificationChoices(bool NotifyWhenDone, bool OpenFolderWhenDone, bool OpenResultsWhenDone);

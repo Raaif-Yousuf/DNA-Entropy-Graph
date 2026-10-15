@@ -20,7 +20,7 @@ Where the app keeps its own data: the app data folder, the run folders (each kee
 
 ## Notifications
 
-Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (on). They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
+Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (off, so a finished run never pulls you away from what you are typing). They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
 
 ## Diagnostics
 
