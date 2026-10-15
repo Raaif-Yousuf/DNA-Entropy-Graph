@@ -578,8 +578,19 @@ are the file's own, Prodigal never runs). Differences worth knowing:
   GenBank #492 case-folding trap applies, so it is checked before Biopython upper-cases).
 - SnapGene names features by `label`; the reader uses it as the gene id when there is no
   `gene`/`locus_tag`/`product` (this also applies to GenBank features that only have a `label`).
-- SnapGene keeps one sequence per file and is capped at 64 MiB; a non-ASCII sequence byte or a
-  truncated packet is a named refusal, never a traceback.
+- SnapGene keeps one sequence per file and is capped at 64 MiB. The reader walks the packets
+  itself before Biopython: a cut-off packet, any non-DNA packet over 8 MiB, any `DOCTYPE` or
+  `ENTITY` declaration (SnapGene never writes one) and a non-ASCII DNA byte are each a named
+  refusal, never a traceback. MEASURED 2026-10-15 (Python 3.12.10, expat 2.7.1): this build's
+  expat already stops a billion-laughs document in 0.36 s, but that is a property of the Python
+  build, so the refusal does not rely on it.
+- A feature crossing the origin of a circular record (SnapGene range `120-10`, EMBL
+  `join(120..126,1..10)`) is mapped exactly like GenBank's: outer span `1..L` plus its
+  `segments`; the gene table reads the segments and reports `wraps_origin`. The notice says the
+  feature wraps the origin (not "intron") only when the record is circular and one segment ends at
+  the last base while another starts at base 1; otherwise it is a spliced join.
+- `provenance.json` carries `run.input_format` (`genbank`, `embl`, `snapgene`, `fasta`, `paste`).
+  `source_kind` stays `genbank` for EMBL and SnapGene so they take the GenBank output set.
 - The app does not yet validate these two formats locally before creating a VM (rule 2); that
   port is tracked in a follow-up issue.
 

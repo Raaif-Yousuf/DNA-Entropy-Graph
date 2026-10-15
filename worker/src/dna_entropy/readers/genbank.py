@@ -147,7 +147,7 @@ def _feature_id(feature) -> str:
     return feature.type
 
 
-def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
+def _features_of(record, label: str = "GenBank") -> tuple[list[GeneFeature], list[str]]:
     """Map a record's ``gene`` (preferred) or ``CDS`` features to :class:`GeneFeature`.
 
     Returns ``(features, notices)``. Issue #295: Biopython's ``CompoundLocation`` (a
@@ -166,6 +166,7 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
     cds_feats = [f for f in record.features if f.type == "CDS"]
     source = gene_feats or cds_feats
     seq_len = len(record.seq)
+    circular = record.annotations.get("topology") == "circular"
 
     features: list[GeneFeature] = []
     notices: list[str] = []
@@ -203,7 +204,7 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
         )
         if malformed:
             notices.append(
-                f"GenBank feature {gene_id!r} has coordinates {begin}..{end}, which fall "
+                f"{label} feature {gene_id!r} has coordinates {begin}..{end}, which fall "
                 f"outside record {record.id!r}'s own sequence length of {seq_len} nt; "
                 "dropped from the gene features (not reported) rather than kept with a "
                 "wrong span. This means the file's feature table disagrees with its own "
@@ -220,14 +221,32 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
             parts = sorted((int(p.start) + 1, int(p.end)) for p in loc.parts)
             segments = tuple(parts)  # issue #124: the gene table summarises these, not the outer span
             parts_desc = ", ".join(f"{a}..{b}" for a, b in parts)
-            notices.append(
-                f"GenBank feature {gene_id!r} has a compound (spliced) location with "
-                f"{len(parts)} segments ({parts_desc}). Its reported boundary "
-                f"{begin}..{end} is the OUTER SPAN and includes the intron sequence "
-                "between segments; a per-gene mean entropy computed over that span is "
-                "not exon-only. Use the segment coordinates above if exon-only entropy "
-                "is needed (docs/science_and_formats.md)."
+            # Same rule as analysis/gene_summary.py::_wraps_origin, which is what reads these
+            # segments: a circular record with one part ending at the last base and another
+            # starting at base 1 is a gene crossing the origin, not a spliced gene.
+            wraps = (
+                circular
+                and len(parts) > 1
+                and any(b == 1 for b, _ in parts)
+                and any(e == seq_len for _, e in parts)
             )
+            if wraps:
+                notices.append(
+                    f"{label} feature {gene_id!r} wraps the origin of this circular record, "
+                    f"in {len(parts)} segments ({parts_desc}). Its reported boundary "
+                    f"{begin}..{end} is the OUTER SPAN, the whole molecule; the gene table "
+                    "uses the segment coordinates above, so its length and mean entropy cover "
+                    "only the gene's own bases (docs/science_and_formats.md)."
+                )
+            else:
+                notices.append(
+                    f"{label} feature {gene_id!r} has a compound (spliced) location with "
+                    f"{len(parts)} segments ({parts_desc}). Its reported boundary "
+                    f"{begin}..{end} is the OUTER SPAN and includes the intron sequence "
+                    "between segments; a per-gene mean entropy computed over that span is "
+                    "not exon-only. Use the segment coordinates above if exon-only entropy "
+                    "is needed (docs/science_and_formats.md)."
+                )
         features.append(
             GeneFeature(
                 begin=begin, end=end, strand=strand, partial=partial, gene_id=gene_id, segments=segments
@@ -337,7 +356,7 @@ def records_from_parsed(parsed: list, label: str) -> tuple[list[GenBankRecord], 
                 f"Skipped {label} record {idx} (id {describe_len(str(rec.id))}): no nucleotide sequence."
             )
             continue
-        feats, feat_notices = _features_of(rec)
+        feats, feat_notices = _features_of(rec, label)
         notices += feat_notices
         total_features += len(feats)
         records.append(

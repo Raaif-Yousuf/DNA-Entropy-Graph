@@ -47,7 +47,8 @@ class LoadedInput:
 
     contigs: list[Contig]
     notices: list[str] = field(default_factory=list)
-    source_kind: str = detect.PASTE
+    source_kind: str = detect.PASTE  # which output set the pipeline takes (EMBL and SnapGene use GENBANK)
+    input_format: str = ""  # the REAL format read (genbank|embl|snapgene|fasta|paste), for provenance
 
     @property
     def seq(self) -> str:
@@ -207,7 +208,7 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
         _assert_unique_contig_names(contigs)
         # EMBL and SnapGene are annotated flat files read into the same records as GenBank
         # (issue #134), so they take the GenBank output set: their own genes, never Prodigal.
-        return LoadedInput(contigs=contigs, notices=notices, source_kind=detect.GENBANK)
+        return LoadedInput(contigs=contigs, notices=notices, source_kind=detect.GENBANK, input_format=kind)
 
     if kind == detect.FASTA:
         records, notices = read_fasta(cfg.input_path)
@@ -228,9 +229,11 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
                 )
             )
         _assert_unique_contig_names(contigs)
-        return LoadedInput(contigs=contigs, notices=notices, source_kind=kind)
+        return LoadedInput(contigs=contigs, notices=notices, source_kind=kind, input_format=kind)
 
     text = raw if raw is not None else PasteReader(cfg.input_path).read()
     v = validate_sequence(text, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy)
     contig = Contig(name=_safe_contig_name(cfg.name, 0, 1, out_dir=cfg.out_dir), seq=v.seq)
-    return LoadedInput(contigs=[contig], notices=v.notices, source_kind=detect.PASTE)
+    return LoadedInput(
+        contigs=[contig], notices=v.notices, source_kind=detect.PASTE, input_format=detect.PASTE
+    )
