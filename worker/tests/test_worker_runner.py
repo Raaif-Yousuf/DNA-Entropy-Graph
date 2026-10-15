@@ -1594,3 +1594,86 @@ def test_max_run_seconds_stops_the_batch_before_the_next_input_starts(tmp_path: 
     assert result.status == "failed"
     assert result.error is not None and result.error["code"] == "RUN_TIME_LIMIT"
     assert [r.id for r in result.inputs] == ["in1"], "a second input started after the cap"
+
+
+class _ClockAdvancingStore(LocalBlobstore):
+    """A store whose output uploads take ``seconds`` of (fake) time, like a slow link."""
+
+    def __init__(self, root: Path, clock: _FakeClock, seconds: float) -> None:
+        super().__init__(root)
+        self._clock = clock
+        self._seconds = seconds
+
+    def upload_file(self, local_src: Path, path: str) -> None:
+        if path.startswith("output/"):
+            self._clock.now += self._seconds
+        super().upload_file(local_src, path)
+
+
+def test_an_upload_that_crosses_the_cap_after_the_last_window_is_not_a_failed_run(tmp_path: Path) -> None:
+    """Issue #89 review: the verdict comes from the checkpoint state, not from a live clock re-read
+    after the work finished. Every window ran in time; only the upload took past the cap."""
+    clock = _FakeClock()
+    store = _ClockAdvancingStore(tmp_path, clock, 500.0)
+    _write_manifest(store, limits={"maxRunSeconds": 100, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    calls = {"n": 0}
+
+    result = run_job(store, predictor_factory=_slow_predictor_factory(clock, calls, 0.0), time_source=clock)
+
+    assert result.status == "done"
+    assert result.error is None
+    assert result.inputs[0].status == "done"
+    assert clock.now - 1000.0 >= 500.0, "the fake upload never advanced the clock: the test is vacuous"
+
+
+def test_the_cap_counts_from_vm_start_not_from_the_worker_start(tmp_path: Path) -> None:
+    """Issue #89 review: the platform's maxRunDuration counts from VM start, so boot and image pull
+    (already elapsed when the worker starts) come out of the worker's own budget."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 1000, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(
+        store,
+        predictor_factory=_slow_predictor_factory(clock, calls, 20.0, slow_from_call=1),
+        time_source=clock,
+        vm_uptime_seconds=lambda: 990.0,
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None and result.error["code"] == "RUN_TIME_LIMIT"
+    assert calls["n"] < 3
+
+
+def test_without_a_vm_uptime_the_cap_counts_from_the_worker_start(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 1000, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(
+        store,
+        predictor_factory=_slow_predictor_factory(clock, calls, 20.0, slow_from_call=1),
+        time_source=clock,
+        vm_uptime_seconds=lambda: 0.0,
+    )
+
+    assert result.status == "done"
+
+
+def test_vm_uptime_reads_proc_uptime_only_on_a_vm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dna_entropy.worker.runner import _default_vm_uptime_seconds
+
+    proc = tmp_path / "uptime"
+    proc.write_text("1234.56 4000.00\n", encoding="utf-8")
+    monkeypatch.delenv("DEG_VM_NAME", raising=False)
+    assert _default_vm_uptime_seconds(proc) == 0.0, "a laptop's uptime must never shorten a local run"
+    monkeypatch.setenv("DEG_VM_NAME", "deg-abc")
+    assert _default_vm_uptime_seconds(proc) == pytest.approx(1234.56)
+    assert _default_vm_uptime_seconds(tmp_path / "missing") == 0.0
+    proc.write_text("garbage", encoding="utf-8")
+    assert _default_vm_uptime_seconds(proc) == 0.0
