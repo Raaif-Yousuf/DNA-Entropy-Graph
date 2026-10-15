@@ -1090,7 +1090,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _vms[key] = vm;
         }
 
-        return Task.FromResult<VmDescriptor?>(vm);
+        return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });
     }
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)

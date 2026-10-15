@@ -746,6 +746,36 @@ public class GoogleComputeGatewayTests
         vm.RunClockStart.ShouldBe(vm.StartedAt);
     }
 
+    // Issue #691: the platform's own clock rides on every answer (the HTTP Date header), so the app can judge a VM's age without trusting the laptop's clock.
+    [Fact]
+    public async Task A_VM_read_carries_the_servers_own_time_from_the_Date_header()
+    {
+        var rig = new GoogleGatewayHarness();
+        var serverTime = new DateTimeOffset(2026, 10, 9, 12, 30, 15, TimeSpan.Zero);
+        rig.Handler.Calls(Get, OldInstance, _ =>
+        {
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(StoppedOld("RUNNING"), System.Text.Encoding.UTF8, "application/json") };
+            response.Headers.Date = serverTime;
+            return Task.FromResult(response);
+        });
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.ServerNow.ShouldBe(serverTime);
+    }
+
+    [Fact]
+    public async Task A_VM_read_without_a_Date_header_has_no_server_time_and_is_still_read()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, OldInstance, 200, StoppedOld("RUNNING"));
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.ServerNow.ShouldBeNull();
+        vm.Name.ShouldBe("deg-job-old");
+    }
+
     [Fact]
     public async Task Reuse_of_a_VM_that_is_not_stopped_is_refused_before_any_change()
     {

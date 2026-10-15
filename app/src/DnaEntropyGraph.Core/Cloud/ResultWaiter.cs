@@ -3,6 +3,9 @@ using DnaEntropyGraph.Core.Contract;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
+/// <summary>When a VM's platform run-limit clock started (platform time) and how far the platform's clock is ahead of this laptop's when last measured (issue #691).</summary>
+internal readonly record struct VmClockBasis(DateTimeOffset RunClockStart, TimeSpan Skew);
+
 internal enum BootOutcome
 {
     Running,
@@ -93,7 +96,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
         var clockStart = settings.StartClock();
         string? lastTransient = null;
-        DateTimeOffset? vmCreatedAt = null; // when the platform's limit clock last started (see VmDescriptor.RunClockStart)
+        DateTimeOffset? vmCreatedAt = null; // when the platform's limit clock last started, on the PLATFORM's clock (see VmDescriptor.RunClockStart)
+        var skew = TimeSpan.Zero; // platform time minus this laptop's time, from the last look that found the VM (issue #691); zero until one does
 
         // The VM's maxRunDuration started when Compute Engine last STARTED it (its creation, for a new VM; the start of the reuse, for a VM
         // created days ago, #94), not when it reached Running: a boot of several minutes, or a resume, has already used part of it. With the
@@ -136,10 +140,11 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 lastTransient = null;
                 vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
+                skew = vm?.ServerNow is { } serverNow ? serverNow - settings.TimeProvider.GetUtcNow() : skew;
                 if (!ageKnown && vm?.RunClockStart is { } clockBegan)
                 {
                     ageKnown = true;
-                    var age = settings.TimeProvider.GetUtcNow() - clockBegan - settings.ElapsedSince(clockStart);
+                    var age = settings.TimeProvider.GetUtcNow() + skew - clockBegan - settings.ElapsedSince(clockStart);
                     elapsedBeforeClock = age > TimeSpan.Zero ? (age < request.Spec.MaxRunDuration ? age : request.Spec.MaxRunDuration) : TimeSpan.Zero;
                 }
 
@@ -154,7 +159,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                     }
 
                     // Only a VM that is GONE (not merely stopped or preempted) can be one the platform deleted at its limit.
-                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null ? vmCreatedAt : null).ConfigureAwait(false);
+                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null && vmCreatedAt is { } clockStartedAt ? new VmClockBasis(clockStartedAt, skew) : null).ConfigureAwait(false);
                 }
 
                 // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
@@ -204,15 +209,16 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// <c>status.json</c> and end the VM without ever writing result.json, so the cause is read from there
     /// rather than reported as a lost computer.
     /// </summary>
-    public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, DateTimeOffset? vmCreatedAt = null)
+    public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, VmClockBasis? clock = null)
     {
         var workerCode = await TryReadWorkerErrorCodeAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json", cancellationToken).ConfigureAwait(false);
         var note = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
         var mapped = RunErrorCodes.ForWorkerStatusCode(workerCode);
 
         // #89: a VM that was seen created, is gone, and whose maxRunDuration has now passed was deleted by Compute Engine at its limit
-        // (Hard Rule 10's backstop), not lost. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
-        var pastLimit = vmCreatedAt is { } created && settings.TimeProvider.GetUtcNow() >= created + request.Spec.MaxRunDuration;
+        // (Hard Rule 10's backstop), not lost. Issue #691: "now passed" is judged on the platform's clock (this laptop's now plus the skew last measured
+        // against the server's own time), because the laptop's clock may be an hour out; no measured skew (a gateway that reports no server time) is a skew of zero. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
+        var pastLimit = clock is { } basis && settings.TimeProvider.GetUtcNow() + basis.Skew >= basis.RunClockStart + request.Spec.MaxRunDuration;
         return VmEndNotes.Apply(
             mapped is not null
                 ? new RunFailureException(CloudErrorKind.Other, mapped, $"The worker reported {workerCode} in status.json and no result.json followed. {reason}")

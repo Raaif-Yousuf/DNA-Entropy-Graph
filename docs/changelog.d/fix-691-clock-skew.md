@@ -1,0 +1,1 @@
+- Cloud: a lost VM's run limit and an adopted VM's age are judged on the platform's clock (skew from the HTTP Date header), not the laptop's (#691).
