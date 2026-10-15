@@ -189,6 +189,7 @@ public class JobEngineTests
         row.InstallationId.ShouldBe(InstallationId.GetOrCreate(h.Settings));
         row.OptionsJson.ShouldContain("evo2_7b");
         row.Target.ShouldBe("cloud");
+        row.VmName.ShouldBe((await h.Gcp.FindByJobIdAsync(jobId, CancellationToken.None)).Single().Name, "the row names the VM the run used (issue #679)");
     }
 
     [Fact]
