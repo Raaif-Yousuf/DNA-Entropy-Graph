@@ -28,7 +28,7 @@ for you. This group tells the app where they are and how to talk to IGV.
 - **IGV program** and **Geneious program**: the full path of the program. Leave it empty and the
   app looks in the usual install folders itself. **Browse...** lets you pick the file, and you can
   also paste a path. If nothing is at the path you typed, the row says so; choose **Browse...** to
-  pick it again, or **Reset to default** to have the app look for it.
+  pick the program again.
 - **IGV batch port**: the number IGV listens on for commands (IGV: View, Preferences, Advanced,
   Enable port). The default is 60151. Type a whole number from 1 to 65535; anything else is refused
   and the last good port stays in effect.
