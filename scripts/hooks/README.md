@@ -89,6 +89,49 @@ decision; it is read-only.
 their decision space is a single boolean (deny/allow) with no third "could not
 tell" state to distinguish, so there is nothing an `--explain` mode would add.
 
+## The moved-cwd trap and the identity signal (#618)
+
+MEASURED 2026-10-03 (twice, lane orchestrators): an orchestrator launched in the primary
+checkout dispatches a Sonnet with `isolation: "worktree"`; when it completes, the harness
+moves the orchestrator's session cwd into that Sonnet's worktree
+(`.claude/worktrees/agent-<sonnetAgentId>`, id identical to the Sonnet's agent id). A hook
+that only asked "is cwd a linked worktree" then denied every further `Agent` call. A
+`Set-Location` or `cd` does not change the cwd the hook sees; it cleared by itself minutes
+later.
+
+`block_agent_dispatch_in_worktree.py` therefore decides on WHO is calling, not only where.
+In a linked worktree it allows a caller only on positive proof: the caller's id is known
+AND it owns no `agent-<id>` worktree anywhere in the repo (a listing of
+`<git-common-dir>/worktrees/`; a name minus `agent-` that equals, starts with or is a
+prefix of the id, case-insensitive, so a truncated, collision-suffixed or re-cased admin
+name still counts as owned). A Sonnet always owns `agent-<its id>`, so it is denied
+whichever worktree its cwd is in. Caller id = payload `agent_id`, else the `agent-<id>.jsonl`
+basename of `transcript_path`. Unknown identity is denied (fail closed): a top-level session
+(no `agent_id`, main-session transcript) whose cwd moves is still blocked until the log
+below shows its shape.
+
+A fork or subagent that shares a Sonnet's cwd has its own id and owns no worktree, so the
+rule would allow it. That fork can only exist if the Sonnet dispatched it, and the Sonnet's
+own dispatch is denied, so the route is closed at its source (tested).
+
+- MEASURED 2026-10-03: the Claude Code hooks reference lists `agent_id` and `agent_type` as
+  common input fields "present only inside subagents", next to `session_id`,
+  `transcript_path`, `cwd`. The session transcript's `hook_success` records keep the hook's
+  stdout only, never its stdin, so no real payload could be recovered from disk.
+- THEORY (unverified): an orchestrator that is itself a subagent receives its own
+  `agent_id` (different from the Sonnet's). If its payload carries no agent field it falls
+  through to "unknown" and stays denied (today's behaviour, no regression).
+
+Payload-shape log (always on): every decision appends one JSON line to
+`%TEMP%\deg-hooks\agent_dispatch_payload_shapes.jsonl` (rotated to `.1` past 256 KB; a
+failed write never affects the decision). Fields: `keys` (payload key names), `agent_id`,
+`agent_type`, `transcript_basename`, `cwd_basename`, `verdict` (`allow`/`deny`). Never
+`tool_input`. To read it after a moved-cwd occurrence: open the last lines and look at the
+deny line whose `cwd_basename` is `agent-<someone else's id>`; if `agent_id` is null and
+`transcript_basename` is a bare session uuid, the orchestrator has no agent identity and a
+different signal is needed (file a follow-up). `DEG_HOOK_PAYLOAD_SHAPE_LOG` redirects the
+file (tests only).
+
 ## Probing `block_unlabelled_vm_create.py`
 
 ```
