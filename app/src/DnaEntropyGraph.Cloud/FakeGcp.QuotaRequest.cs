@@ -11,7 +11,7 @@ public sealed partial class FakeGcp
     private readonly List<QuotaIncreaseRequest> _quotaRequests = [];
     private readonly Dictionary<string, (bool? Eligible, QuotaIneligibilityReason Reason)> _quotaEligibility = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CloudErrorKind> _quotaRequestFailures = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _quotaPreferenceIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Metric, string? Region), (string Id, long Value)> _quotaPreferences = new();
     private CloudErrorKind? _quotaEligibilityFailure;
     private bool _quotaAutoGrant;
 
@@ -50,6 +50,13 @@ public sealed partial class FakeGcp
     public FakeGcp WithQuotaEligibilityFailure(CloudErrorKind kind)
     {
         _quotaEligibilityFailure = kind;
+        return this;
+    }
+
+    /// <summary>A preference for <paramref name="metric"/> (in <paramref name="region"/> for the L4) already exists under <paramref name="preferenceId"/>, asking for <paramref name="value"/>: what an earlier day's request, or the console, left behind.</summary>
+    public FakeGcp WithExistingQuotaPreference(string metric, string? region, string preferenceId, long value)
+    {
+        _quotaPreferences[(metric, region?.ToLowerInvariant())] = (preferenceId, value);
         return this;
     }
 
@@ -108,15 +115,29 @@ public sealed partial class FakeGcp
             throw Build(kind, "QUOTA_REQUEST_FAILED", kind == CloudErrorKind.Permission ? 403 : null, "The quota request failed.");
         }
 
+        (string Id, long Value) existing;
+        var prefKey = (request.Metric, request.Region?.ToLowerInvariant());
+        bool found;
         lock (_quotaRequestGate)
         {
-            if (!_quotaPreferenceIds.Add(request.PreferenceId))
+            found = _quotaPreferences.TryGetValue(prefKey, out existing);
+            if (!found && _quotaPreferences.Values.Any(p => p.Id == request.PreferenceId))
             {
                 throw Build(CloudErrorKind.AlreadyExists, "ALREADY_EXISTS", 409, "Requested entity already exists");
             }
+
+            if (!found || existing.Value < request.PreferredValue)
+            {
+                _quotaPreferences[prefKey] = (found ? existing.Id : request.PreferenceId, request.PreferredValue);
+            }
         }
 
-        var name = $"projects/{projectId}/locations/global/quotaPreferences/{request.PreferenceId}";
+        var name = $"projects/{projectId}/locations/global/quotaPreferences/{(found ? existing.Id : request.PreferenceId)}";
+        if (found && existing.Value >= request.PreferredValue)
+        {
+            return Task.FromResult(new QuotaIncreaseResult(name, existing.Value, null, true, "Pending review", AlreadyExisted: true));
+        }
+
         if (!_quotaAutoGrant)
         {
             return Task.FromResult(new QuotaIncreaseResult(name, request.PreferredValue, null, true, "Pending review"));

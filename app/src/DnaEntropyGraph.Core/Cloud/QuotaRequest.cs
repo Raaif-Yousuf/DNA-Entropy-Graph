@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -54,8 +53,8 @@ public sealed record QuotaIncreaseRequest(string Metric, string? Region, long Pr
     }
 }
 
-/// <summary>What Google answered to a request: the preference's name, what was asked, what is granted now (null while pending), and whether it is still being reviewed.</summary>
-public sealed record QuotaIncreaseResult(string PreferenceName, long PreferredValue, long? GrantedValue, bool Reconciling, string? StateDetail)
+/// <summary>What Google answered to a request: the preference's name, what was asked, what is granted now (null while pending), and whether it is still being reviewed. <paramref name="AlreadyExisted"/> is true when a preference for the same quota and dimensions was already there (under any id) and already asked for at least this much: nothing was created.</summary>
+public sealed record QuotaIncreaseResult(string PreferenceName, long PreferredValue, long? GrantedValue, bool Reconciling, string? StateDetail, bool AlreadyExisted = false)
 {
     /// <summary>True when the granted value already meets the request (Google approved it at once).</summary>
     public bool Granted => GrantedValue is { } granted && granted >= PreferredValue;
@@ -104,50 +103,60 @@ public sealed record GpuQuotaRequestReport(IReadOnlyList<QuotaRequestItem> Items
 }
 
 /// <summary>
-/// Issue #99, the setup wizard's GPU step: asks Google for one L4 GPU in the chosen region and one GPU project-wide. Per quota, in this order: skip it when
-/// the quota read already shows a GPU (a failed read is unknown and does not count as present), read whether the project may ask (an unknown answer is a
-/// failure, never permission), and only then create the request. A failure on one quota never stops the other. A request made twice in a day reuses the same
-/// preference id, so the second is <see cref="QuotaRequestOutcome.AlreadyRequested"/> and not an error. Quota preferences are not billable and carry no labels.
+/// Issue #99, the setup wizard's GPU step: asks Google for one more L4 GPU in the chosen region and one more GPU project-wide, only when needed. Per quota, in
+/// this order: skip it when the quota read already shows a GPU still free (limit minus usage, at least one); stop when the quota read failed (its limit is unknown,
+/// and a request built on an unknown limit could ask for LESS than the project has: the user retries); read whether the project may ask (an unknown answer is a
+/// failure, never permission); and only then ask for <c>max(1, limit + 1)</c>, one more than the project has now. The gateway looks for an existing preference for the same
+/// quota and dimensions (under any id) and raises it instead of creating a second one, so the same ask on another day is <see cref="QuotaRequestOutcome.AlreadyRequested"/>,
+/// not a conflict. A failure on one quota never stops the other. Quota preferences are not billable and carry no labels. No Spot (preemptible) request is made: MEASURED
+/// 2026-10-15 (docs.cloud.google.com/compute/resource-usage) Spot VMs "consume standard quota" until a preemptible quota is requested, and "after a request, the applicable
+/// resources can only consume preemptible quota", so asking for the standard L4 is what a Spot run needs and asking for the preemptible one would move the project off it.
 /// </summary>
-public sealed partial class GpuQuotaRequester
+public sealed class GpuQuotaRequester
 {
     /// <summary>The justification sent to Google with every request: a reviewer reads it.</summary>
     public const string Justification = "Running the Evo 2 genomic language model (DNA Entropy Graph, a lab research tool) on one GPU per job.";
 
-    private const long WantedGpus = 1;
+    /// <summary>The <see cref="QuotaRequestItem.Detail"/> of a quota left alone because its current limit could not be read.</summary>
+    public const string QuotaReadFailedCode = "QUOTA_READ_FAILED";
 
     private readonly IQuotaGateway _quota;
-    private readonly TimeProvider _time;
 
-    public GpuQuotaRequester(IQuotaGateway quota, TimeProvider? time = null)
+    public GpuQuotaRequester(IQuotaGateway quota)
     {
         _quota = quota;
-        _time = time ?? TimeProvider.System;
     }
 
-    [GeneratedRegex(@"\A[a-z]+-[a-z]+[0-9]+\z")]
-    private static partial Regex RegionName();
+    private static readonly Regex RegionName = new(@"\A[a-z]+-[a-z]+[0-9]+\z", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public async Task<GpuQuotaRequestReport> RequestAsync(string projectId, string region, string? contactEmail, CancellationToken cancellationToken)
     {
-        if (region is null || !RegionName().IsMatch(region))
+        if (region is null || !RegionName.IsMatch(region))
         {
             throw new ArgumentException("The region is not a Google Cloud region name such as us-central1.", nameof(region));
         }
 
         var read = await _quota.ReadQuotaAsync(projectId, cancellationToken).ConfigureAwait(false);
-        var day = _time.GetUtcNow().ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var readFailure = read.Failures.FirstOrDefault();
         var items = new List<QuotaRequestItem>
         {
             await RequestOneAsync(
                 projectId,
-                new QuotaIncreaseRequest(QuotaMetrics.NvidiaL4Gpus, region, WantedGpus, $"deg-{Slug(QuotaMetrics.NvidiaL4Gpus)}-{region}-{day}", Justification, contactEmail),
-                RegionalRemaining(read, region),
+                QuotaMetrics.NvidiaL4Gpus,
+                region,
+                $"deg-{Slug(QuotaMetrics.NvidiaL4Gpus)}-{region}",
+                RegionalLine(read, region),
+                readFailure,
+                contactEmail,
                 cancellationToken).ConfigureAwait(false),
             await RequestOneAsync(
                 projectId,
-                new QuotaIncreaseRequest(QuotaMetrics.GpusAllRegions, null, WantedGpus, $"deg-{Slug(QuotaMetrics.GpusAllRegions)}-{day}", Justification, contactEmail),
-                read.AllRegionsGpus?.Remaining,
+                QuotaMetrics.GpusAllRegions,
+                null,
+                $"deg-{Slug(QuotaMetrics.GpusAllRegions)}",
+                read.AllRegionsGpus,
+                readFailure,
+                contactEmail,
                 cancellationToken).ConfigureAwait(false),
         };
         return new GpuQuotaRequestReport(items);
@@ -155,8 +164,8 @@ public sealed partial class GpuQuotaRequester
 
     private static string Slug(string metric) => metric.ToLowerInvariant().Replace('_', '-');
 
-    /// <summary>The L4 GPUs this region still offers: null when the read does not say, 0 for a region present without the metric.</summary>
-    private static double? RegionalRemaining(QuotaReadResult read, string region)
+    /// <summary>The L4 line of the region: null when the read does not say, a zero line for a region present without the metric.</summary>
+    private static QuotaMetric? RegionalLine(QuotaReadResult read, string region)
     {
         var match = read.Regions?.FirstOrDefault(r => string.Equals(r.Key, region, StringComparison.OrdinalIgnoreCase));
         if (match?.Value is null)
@@ -164,49 +173,66 @@ public sealed partial class GpuQuotaRequester
             return null;
         }
 
-        var line = match.Value.Value.FirstOrDefault(m => string.Equals(m.Metric, QuotaMetrics.NvidiaL4Gpus, StringComparison.Ordinal));
-        return line is null ? 0 : line.Remaining;
+        return match.Value.Value.FirstOrDefault(m => string.Equals(m.Metric, QuotaMetrics.NvidiaL4Gpus, StringComparison.Ordinal))
+            ?? new QuotaMetric(QuotaMetrics.NvidiaL4Gpus, 0, 0);
     }
 
-    private async Task<QuotaRequestItem> RequestOneAsync(string projectId, QuotaIncreaseRequest request, double? remaining, CancellationToken cancellationToken)
+    private async Task<QuotaRequestItem> RequestOneAsync(
+        string projectId,
+        string metric,
+        string? region,
+        string preferenceId,
+        QuotaMetric? line,
+        QuotaReadFailure? readFailure,
+        string? contactEmail,
+        CancellationToken cancellationToken)
     {
-        if (remaining is >= 1)
+        if (line?.Remaining is >= 1)
         {
-            return new QuotaRequestItem(request.Metric, request.Region, QuotaRequestOutcome.AlreadyAvailable);
+            return new QuotaRequestItem(metric, region, QuotaRequestOutcome.AlreadyAvailable);
+        }
+
+        if (line?.Limit is not { } limit)
+        {
+            // The limit is unknown: asking for "1" could be asking for less than the project has. Nothing is created; the user retries.
+            return new QuotaRequestItem(metric, region, QuotaRequestOutcome.Failed, Detail: QuotaReadFailedCode, ErrorKind: readFailure?.Kind ?? CloudErrorKind.Other);
         }
 
         QuotaEligibility eligibility;
         try
         {
-            eligibility = await _quota.GetQuotaIncreaseEligibilityAsync(projectId, request.Metric, cancellationToken).ConfigureAwait(false);
+            eligibility = await _quota.GetQuotaIncreaseEligibilityAsync(projectId, metric, cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex)
         {
-            return new QuotaRequestItem(request.Metric, request.Region, QuotaRequestOutcome.Failed, Detail: ex.Error.Code, ErrorKind: ex.Kind);
+            return new QuotaRequestItem(metric, region, QuotaRequestOutcome.Failed, Detail: ex.Error.Code, ErrorKind: ex.Kind);
         }
 
         if (eligibility.IsEligible is null)
         {
-            return new QuotaRequestItem(request.Metric, request.Region, QuotaRequestOutcome.Failed, Detail: "QUOTA_ELIGIBILITY_UNKNOWN", ErrorKind: CloudErrorKind.Other);
+            return new QuotaRequestItem(metric, region, QuotaRequestOutcome.Failed, Detail: "QUOTA_ELIGIBILITY_UNKNOWN", ErrorKind: CloudErrorKind.Other);
         }
 
         if (eligibility.IsEligible is false)
         {
-            return new QuotaRequestItem(request.Metric, request.Region, QuotaRequestOutcome.NotEligible, eligibility.Reason, eligibility.Detail);
+            return new QuotaRequestItem(metric, region, QuotaRequestOutcome.NotEligible, eligibility.Reason, eligibility.Detail);
         }
 
+        // One more than the project has now (at least one): the smallest ask that frees a GPU.
+        var request = new QuotaIncreaseRequest(metric, region, Math.Max(1, (long)Math.Floor(limit) + 1), preferenceId, Justification, contactEmail);
         try
         {
             var result = await _quota.RequestQuotaIncreaseAsync(projectId, request, cancellationToken).ConfigureAwait(false);
-            return new QuotaRequestItem(request.Metric, request.Region, result.Granted ? QuotaRequestOutcome.Granted : QuotaRequestOutcome.Requested, Result: result);
+            var outcome = result.Granted ? QuotaRequestOutcome.Granted : result.AlreadyExisted ? QuotaRequestOutcome.AlreadyRequested : QuotaRequestOutcome.Requested;
+            return new QuotaRequestItem(metric, region, outcome, Result: result);
         }
         catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.AlreadyExists)
         {
-            return new QuotaRequestItem(request.Metric, request.Region, QuotaRequestOutcome.AlreadyRequested);
+            return new QuotaRequestItem(metric, region, QuotaRequestOutcome.AlreadyRequested);
         }
         catch (CloudOperationException ex)
         {
-            return new QuotaRequestItem(request.Metric, request.Region, QuotaRequestOutcome.Failed, Detail: ex.Error.Code, ErrorKind: ex.Kind);
+            return new QuotaRequestItem(metric, region, QuotaRequestOutcome.Failed, Detail: ex.Error.Code, ErrorKind: ex.Kind);
         }
     }
 }

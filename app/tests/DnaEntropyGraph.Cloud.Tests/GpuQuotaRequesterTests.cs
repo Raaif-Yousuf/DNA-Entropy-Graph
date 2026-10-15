@@ -15,12 +15,7 @@ public class GpuQuotaRequesterTests
     private const string Project = "my-project";
     private const string Region = "us-central1";
 
-    private sealed class ClockAt(DateTimeOffset now) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => now;
-    }
-
-    private static GpuQuotaRequester Requester(FakeGcp gcp) => new(gcp, new ClockAt(new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero)));
+    private static GpuQuotaRequester Requester(FakeGcp gcp) => new(gcp);
 
     private static FakeGcp NoQuota() => new FakeGcp().WithGpuQuota(Region, "nvidia-l4", 0).WithAllRegionsGpuCap(0);
 
@@ -158,23 +153,72 @@ public class GpuQuotaRequesterTests
     }
 
     [Fact]
-    public async Task The_preference_ids_are_stable_for_a_day_and_legal_resource_ids()
+    public async Task The_preference_ids_are_stable_across_days_and_legal_resource_ids()
     {
         var gcp = NoQuota();
 
         await Requester(gcp).RequestAsync(Project, Region, null, CancellationToken.None);
 
-        gcp.QuotaRequests.Select(r => r.PreferenceId).ShouldBe(["deg-nvidia-l4-gpus-us-central1-20261015", "deg-gpus-all-regions-20261015"]);
+        gcp.QuotaRequests.Select(r => r.PreferenceId).ShouldBe(["deg-nvidia-l4-gpus-us-central1", "deg-gpus-all-regions"]);
     }
 
     [Fact]
-    public async Task A_quota_read_that_failed_does_not_count_as_quota_present_so_the_ask_still_happens()
+    public async Task A_quota_read_that_failed_does_not_count_as_quota_present_and_creates_no_request_so_the_user_retries()
     {
         var gcp = NoQuota().WithQuotaReadFailing(CloudErrorKind.Network);
 
         var report = await Requester(gcp).RequestAsync(Project, Region, null, CancellationToken.None);
 
-        report.Items.ShouldAllBe(i => i.Outcome == QuotaRequestOutcome.Requested);
+        report.Items.ShouldAllBe(i => i.Outcome == QuotaRequestOutcome.Failed && i.Detail == GpuQuotaRequester.QuotaReadFailedCode && i.ErrorKind == CloudErrorKind.Network);
+        gcp.QuotaRequests.ShouldBeEmpty("a request built on an unknown limit could ask for less than the project has");
+        gcp.QuotaCalls.ShouldBeEmpty();
+        report.Sufficient.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_limit_of_one_fully_used_asks_for_two_not_a_constant_one()
+    {
+        var gcp = new FakeGcp().WithGpuQuotaUsed(Region, "nvidia-l4", limit: 1, used: 1).WithAllRegionsGpuCap(0);
+
+        var report = await Requester(gcp).RequestAsync(Project, Region, null, CancellationToken.None);
+
+        gcp.QuotaRequests.Single(r => r.Metric == QuotaMetrics.NvidiaL4Gpus).PreferredValue.ShouldBe(2);
+        gcp.QuotaRequests.Single(r => r.Metric == QuotaMetrics.GpusAllRegions).PreferredValue.ShouldBe(1, "a cap of 0 asks for 1");
+        Item(report, QuotaMetrics.NvidiaL4Gpus).Outcome.ShouldBe(QuotaRequestOutcome.Requested);
+    }
+
+    [Fact]
+    public async Task A_limit_of_one_with_nothing_used_asks_for_nothing()
+    {
+        var gcp = new FakeGcp().WithGpuQuotaUsed(Region, "nvidia-l4", limit: 1, used: 0);
+
+        var report = await Requester(gcp).RequestAsync(Project, Region, null, CancellationToken.None);
+
+        Item(report, QuotaMetrics.NvidiaL4Gpus).Outcome.ShouldBe(QuotaRequestOutcome.AlreadyAvailable);
+        gcp.QuotaRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_preference_another_day_or_the_console_left_under_a_different_id_is_reused_not_conflicted_with()
+    {
+        var gcp = NoQuota().WithExistingQuotaPreference(QuotaMetrics.NvidiaL4Gpus, Region, "deg-nvidia-l4-gpus-us-central1-20261014", 1);
+
+        var report = await Requester(gcp).RequestAsync(Project, Region, null, CancellationToken.None);
+
+        Item(report, QuotaMetrics.NvidiaL4Gpus).Outcome.ShouldBe(QuotaRequestOutcome.AlreadyRequested);
+        Item(report, QuotaMetrics.GpusAllRegions).Outcome.ShouldBe(QuotaRequestOutcome.Requested);
+    }
+
+    [Fact]
+    public async Task A_Spot_run_is_covered_by_the_standard_L4_request_and_no_preemptible_quota_is_ever_asked_for()
+    {
+        // MEASURED 2026-10-15 (compute/resource-usage): Spot consumes standard quota until a preemptible quota is requested.
+        QuotaMetrics.QuotaIdFor(QuotaMetrics.ForAccelerator("nvidia-l4", spot: true)!).ShouldBeNull();
+        var gcp = NoQuota();
+
+        await Requester(gcp).RequestAsync(Project, Region, null, CancellationToken.None);
+
+        gcp.QuotaRequests.ShouldAllBe(r => !r.Metric.StartsWith("PREEMPTIBLE", StringComparison.Ordinal));
     }
 
     [Theory]

@@ -121,6 +121,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
     private int? _allRegionsGpuCap;
+    private readonly Dictionary<(string Region, string Accelerator), int> _regionalUsed = new();
     private CloudErrorKind? _quotaReadFailure;
     private const int DefaultRegionalQuota = 1;
 
@@ -700,6 +701,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public FakeGcp WithGpuQuota(string region, string acceleratorType, int available)
     {
         _regionalQuota[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = available;
+        return this;
+    }
+
+    /// <summary>Sets the regional GPU quota to a limit of <paramref name="limit"/> with <paramref name="used"/> already in use (the quota read then reports limit and usage, so the remainder is their difference).</summary>
+    public FakeGcp WithGpuQuotaUsed(string region, string acceleratorType, int limit, int used)
+    {
+        _regionalQuota[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = limit;
+        _regionalUsed[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = used;
         return this;
     }
 
@@ -1670,9 +1679,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var scripted = new Dictionary<(string Region, string Metric), int>();
+        var used = new Dictionary<(string Region, string Metric), int>();
         foreach (var ((region, accelerator), available) in _regionalQuota)
         {
             scripted[(region, MetricOf(accelerator))] = available;
+        }
+
+        foreach (var ((region, accelerator), inUse) in _regionalUsed)
+        {
+            used[(region, MetricOf(accelerator))] = inUse;
         }
 
         var regionNames = new HashSet<string>(DefaultQuotaRegions, StringComparer.OrdinalIgnoreCase);
@@ -1693,7 +1708,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
 
             table[region] = metricNames
-                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, 0))
+                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, used.GetValueOrDefault((region.ToLowerInvariant(), m))))
                 .ToList();
         }
 

@@ -28,9 +28,11 @@ public interface IQuotaGateway
     Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Issue #99: creates the quota preference (the Cloud Quotas API's <c>quotaPreferences.create</c>) described by <paramref name="request"/>. The preference id
-    /// is the caller's, so a repeat is an <see cref="CloudErrorKind.AlreadyExists"/> failure the caller reads as "already asked". Read eligibility first
-    /// (<see cref="GetQuotaIncreaseEligibilityAsync"/>); <see cref="GpuQuotaRequester"/> is the one caller that does.
+    /// Issue #99: asks for the quota <paramref name="request"/> describes, idempotently. The API allows one preference per quota and dimensions, so this first looks for
+    /// an existing one (any id, matched on service, quota id and dimensions): one that already asks for at least the value is returned as it is
+    /// (<see cref="QuotaIncreaseResult.AlreadyExisted"/>, nothing written); a lower one is raised in place (<c>PATCH</c> with its etag); none is created under the
+    /// caller's preference id (a create that meets an existing id is an <see cref="CloudErrorKind.AlreadyExists"/> failure the caller reads as "already asked").
+    /// Read eligibility first (<see cref="GetQuotaIncreaseEligibilityAsync"/>); <see cref="GpuQuotaRequester"/> is the one caller that does.
     /// </summary>
     Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken);
 }

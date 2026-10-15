@@ -14,7 +14,7 @@ namespace DnaEntropyGraph.Cloud.Tests.Rest;
 public class GoogleQuotaRequestTests
 {
     private const string Base = "/v1/projects/my-lab/locations/global";
-    private const string L4Info = Base + "/services/compute.googleapis.com/quotaInfos/NVIDIA-L4-GPUS-per-project-region";
+    private const string L4Info = Base + "/services/compute.googleapis.com/quotaInfos/GPUS-PER-GPU-FAMILY-per-project-region";
     private const string AllInfo = Base + "/services/compute.googleapis.com/quotaInfos/GPUS-ALL-REGIONS-per-project";
     private const string Preferences = Base + "/quotaPreferences";
 
@@ -27,9 +27,9 @@ public class GoogleQuotaRequestTests
 
     private static string Info(string? eligibility) => "{\"name\":\"projects/123/locations/global/services/compute.googleapis.com/quotaInfos/x\",\"quotaId\":\"x\"" + (eligibility is null ? string.Empty : ",\"quotaIncreaseEligibility\":" + eligibility) + "}";
 
-    private static QuotaIncreaseRequest L4Request() => new(QuotaMetrics.NvidiaL4Gpus, "us-central1", 1, "deg-nvidia-l4-gpus-us-central1-20261015", "Evo 2 inference for lab research.", "lab@example.org");
+    private static QuotaIncreaseRequest L4Request() => new(QuotaMetrics.NvidiaL4Gpus, "us-central1", 1, "deg-nvidia-l4-gpus-us-central1", "Evo 2 inference for lab research.", "lab@example.org");
 
-    private static QuotaIncreaseRequest AllRequest() => new(QuotaMetrics.GpusAllRegions, null, 1, "deg-gpus-all-regions-20261015", "Evo 2 inference for lab research.", null);
+    private static QuotaIncreaseRequest AllRequest() => new(QuotaMetrics.GpusAllRegions, null, 1, "deg-gpus-all-regions", "Evo 2 inference for lab research.", null);
 
     // ---------------------------------------------------------------- eligibility
 
@@ -118,21 +118,23 @@ public class GoogleQuotaRequestTests
     public async Task A_regional_request_posts_the_preference_with_service_quota_id_region_and_value()
     {
         var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, "{}");
         rig.Handler.Returns(Post, Preferences, 200,
-            "{\"name\":\"projects/123/locations/global/quotaPreferences/deg-nvidia-l4-gpus-us-central1-20261015\",\"reconciling\":true,\"quotaConfig\":{\"preferredValue\":\"1\",\"stateDetail\":\"Pending review\"}}");
+            "{\"name\":\"projects/123/locations/global/quotaPreferences/deg-nvidia-l4-gpus-us-central1\",\"reconciling\":true,\"quotaConfig\":{\"preferredValue\":\"1\",\"stateDetail\":\"Pending review\"}}");
 
         var result = await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None);
 
         var post = rig.Handler.To(Post, Preferences).Single();
         post.Uri.Host.ShouldBe("cloudquotas.googleapis.com");
         post.Authorization.ShouldBe("Bearer " + rig.Tokens.CurrentToken);
-        HttpUtility.ParseQueryString(post.Uri.Query)["quotaPreferenceId"].ShouldBe("deg-nvidia-l4-gpus-us-central1-20261015");
+        HttpUtility.ParseQueryString(post.Uri.Query)["quotaPreferenceId"].ShouldBe("deg-nvidia-l4-gpus-us-central1");
         using var body = JsonDocument.Parse(post.Body);
         var root = body.RootElement;
         root.GetProperty("service").GetString().ShouldBe("compute.googleapis.com");
-        root.GetProperty("quotaId").GetString().ShouldBe("NVIDIA-L4-GPUS-per-project-region");
+        root.GetProperty("quotaId").GetString().ShouldBe("GPUS-PER-GPU-FAMILY-per-project-region");
         root.GetProperty("quotaConfig").GetProperty("preferredValue").GetString().ShouldBe("1");
         root.GetProperty("dimensions").GetProperty("region").GetString().ShouldBe("us-central1");
+        root.GetProperty("dimensions").GetProperty("gpu_family").GetString().ShouldBe("NVIDIA_L4");
         root.GetProperty("justification").GetString().ShouldBe("Evo 2 inference for lab research.");
         root.GetProperty("contactEmail").GetString().ShouldBe("lab@example.org");
         result.PreferredValue.ShouldBe(1);
@@ -140,13 +142,14 @@ public class GoogleQuotaRequestTests
         result.Reconciling.ShouldBeTrue();
         result.StateDetail.ShouldBe("Pending review");
         result.Granted.ShouldBeFalse();
-        result.PreferenceName.ShouldEndWith("deg-nvidia-l4-gpus-us-central1-20261015");
+        result.PreferenceName.ShouldEndWith("deg-nvidia-l4-gpus-us-central1");
     }
 
     [Fact]
     public async Task The_project_wide_request_has_no_dimensions_and_no_contact_email_when_none_is_given()
     {
         var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, "{}");
         rig.Handler.Returns(Post, Preferences, 200, "{\"name\":\"n\",\"quotaConfig\":{\"preferredValue\":\"1\",\"grantedValue\":\"1\"}}");
 
         var result = await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", AllRequest(), CancellationToken.None);
@@ -163,6 +166,7 @@ public class GoogleQuotaRequestTests
     public async Task A_repeat_of_the_same_preference_id_is_an_already_exists_error()
     {
         var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler.Returns(Get, Preferences, 200, "{}");
         rig.Handler.Returns(Post, Preferences, 409, RpcError(409, "ALREADY_EXISTS", "Requested entity already exists"));
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None));
@@ -171,15 +175,142 @@ public class GoogleQuotaRequestTests
     }
 
     [Fact]
-    public async Task A_request_is_one_post_a_failure_after_it_is_not_replayed_by_us()
+    public async Task A_permission_failure_on_the_create_is_not_retried_by_the_real_retry_policy()
     {
-        var rig = new GoogleGatewayHarness(retries: 0);
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, "{}");
         rig.Handler.Returns(Post, Preferences, 403, RpcError(403, "PERMISSION_DENIED", "Permission 'cloudquotas.quotaPreferences.create' denied on resource (or it may not exist)."));
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        rig.Handler.To(Post, Preferences).Count.ShouldBe(1, "a permanent failure is one POST even with the production retry count");
+    }
+
+    [Fact]
+    public async Task A_503_on_the_create_is_retried_with_the_same_preference_id_so_a_lost_answer_can_only_be_an_already_exists()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, "{}");
+        rig.Handler.Returns(Post, Preferences, 503, RpcError(503, "UNAVAILABLE", "try again"));
+        rig.Handler.Returns(Post, Preferences, 200, "{\"name\":\"projects/123/locations/global/quotaPreferences/deg-nvidia-l4-gpus-us-central1\",\"quotaConfig\":{\"preferredValue\":\"1\"}}");
+
+        var result = await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None);
+
+        var posts = rig.Handler.To(Post, Preferences);
+        posts.Count.ShouldBe(2);
+        posts.Select(p => HttpUtility.ParseQueryString(p.Uri.Query)["quotaPreferenceId"]).Distinct().Single().ShouldBe("deg-nvidia-l4-gpus-us-central1");
+        result.PreferredValue.ShouldBe(1);
+        rig.Handler.To(Get, Preferences).Count.ShouldBe(1, "the lookup is not repeated by the retry of the create");
+    }
+
+    [Fact]
+    public async Task A_replayed_create_whose_first_answer_was_lost_reads_as_already_exists()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, "{}");
+        rig.Handler.Returns(Post, Preferences, 503, RpcError(503, "UNAVAILABLE", "answer lost"));
+        rig.Handler.Returns(Post, Preferences, 409, RpcError(409, "ALREADY_EXISTS", "Requested entity already exists"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.AlreadyExists);
+        rig.Handler.To(Post, Preferences).Count.ShouldBe(2);
+    }
+
+    private const string ExistingName = "projects/123/locations/global/quotaPreferences/console-made-id";
+
+    private static string Existing(long preferred, string quotaId = "GPUS-PER-GPU-FAMILY-per-project-region", string region = "us-central1", string family = "NVIDIA_L4", string etag = "etag-1")
+        => "{\"quotaPreferences\":[{\"name\":\"" + ExistingName + "\",\"etag\":\"" + etag + "\",\"service\":\"compute.googleapis.com\",\"quotaId\":\"" + quotaId
+            + "\",\"dimensions\":{\"region\":\"" + region + "\",\"gpu_family\":\"" + family + "\"},\"reconciling\":true,\"quotaConfig\":{\"preferredValue\":\"" + preferred + "\",\"stateDetail\":\"Pending review\"}}]}";
+
+    [Fact]
+    public async Task An_existing_preference_under_another_id_that_already_asks_for_enough_is_returned_and_nothing_is_written()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, Existing(5));
+
+        var result = await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None);
+
+        result.AlreadyExisted.ShouldBeTrue();
+        result.PreferenceName.ShouldBe(ExistingName);
+        result.PreferredValue.ShouldBe(5);
+        rig.Handler.Requests.Count.ShouldBe(1, "only the lookup: no POST, no PATCH");
+    }
+
+    [Fact]
+    public async Task An_existing_preference_asking_for_less_is_raised_in_place_with_its_etag_not_replaced_by_a_second_one()
+    {
+        var rig = new GoogleGatewayHarness();
+        var request = L4Request() with { PreferredValue = 2 };
+        rig.Handler.Returns(Get, Preferences, 200, Existing(1));
+        rig.Handler.Returns(HttpMethod.Patch, "/v1/" + ExistingName, 200, "{\"name\":\"" + ExistingName + "\",\"reconciling\":true,\"quotaConfig\":{\"preferredValue\":\"2\"}}");
+
+        var result = await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", request, CancellationToken.None);
+
+        rig.Handler.To(Post, Preferences).ShouldBeEmpty("a second preference for the same dimensions would conflict");
+        var patch = rig.Handler.To(HttpMethod.Patch, "/v1/" + ExistingName).Single();
+        using var body = JsonDocument.Parse(patch.Body);
+        body.RootElement.GetProperty("etag").GetString().ShouldBe("etag-1");
+        body.RootElement.GetProperty("quotaConfig").GetProperty("preferredValue").GetString().ShouldBe("2");
+        result.PreferredValue.ShouldBe(2);
+        result.AlreadyExisted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_patch_that_fails_is_not_replayed_because_its_etag_would_no_longer_match()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, Existing(1));
+        rig.Handler.Returns(HttpMethod.Patch, "/v1/" + ExistingName, 503, RpcError(503, "UNAVAILABLE", "try again"));
+
+        await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request() with { PreferredValue = 2 }, CancellationToken.None));
+
+        rig.Handler.To(HttpMethod.Patch, "/v1/" + ExistingName).Count.ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("GPUS-ALL-REGIONS-per-project", "us-central1", "NVIDIA_L4")]
+    [InlineData("GPUS-PER-GPU-FAMILY-per-project-region", "us-east1", "NVIDIA_L4")]
+    [InlineData("GPUS-PER-GPU-FAMILY-per-project-region", "us-central1", "NVIDIA_A100")]
+    public async Task A_preference_for_another_quota_region_or_family_is_not_this_one_so_a_create_follows(string quotaId, string region, string family)
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, Existing(9, quotaId, region, family));
+        rig.Handler.Returns(Post, Preferences, 200, "{\"name\":\"n\",\"quotaConfig\":{\"preferredValue\":\"1\"}}");
+
+        var result = await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None);
+
+        result.AlreadyExisted.ShouldBeFalse();
         rig.Handler.To(Post, Preferences).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_preference_list_is_paged_so_a_match_on_the_second_page_is_found_before_any_create()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, Preferences, 200, "{\"quotaPreferences\":[],\"nextPageToken\":\"p2\"}");
+        rig.Handler.Returns(Get, Preferences, 200, Existing(5));
+
+        var result = await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request(), CancellationToken.None);
+
+        result.AlreadyExisted.ShouldBeTrue();
+        rig.Handler.To(Get, Preferences).Select(r => HttpUtility.ParseQueryString(r.Uri.Query)["pageToken"]).ShouldBe([null, "p2"]);
+    }
+
+    [Fact]
+    public async Task Every_Cloud_Quotas_call_names_the_selected_project_as_its_quota_project()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, L4Info, 200, Info("{\"isEligible\":true}"));
+        rig.Handler.Returns(Get, Preferences, 200, Existing(1));
+        rig.Handler.Returns(HttpMethod.Patch, "/v1/" + ExistingName, 200, "{\"name\":\"" + ExistingName + "\",\"quotaConfig\":{\"preferredValue\":\"2\"}}");
+
+        await rig.Gateways.Quota.GetQuotaIncreaseEligibilityAsync("my-lab", QuotaMetrics.NvidiaL4Gpus, CancellationToken.None);
+        await rig.Gateways.Quota.RequestQuotaIncreaseAsync("my-lab", L4Request() with { PreferredValue = 2 }, CancellationToken.None);
+
+        rig.Handler.Requests.Count.ShouldBe(3);
+        rig.Handler.Requests.ShouldAllBe(r => r.UserProject == "my-lab", string.Join(", ", rig.Handler.Requests.Select(r => r.Method + " " + r.Uri.AbsolutePath + " " + r.UserProject)));
     }
 
     [Theory]
