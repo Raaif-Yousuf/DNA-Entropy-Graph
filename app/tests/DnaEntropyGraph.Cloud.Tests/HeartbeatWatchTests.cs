@@ -153,4 +153,44 @@ public class HeartbeatWatchTests
         watch.NeedsProgress.ShouldBeTrue();
         Watch(expectsGpu: false).NeedsProgress.ShouldBeFalse();
     }
+
+    // ---- #90 review: a resume does not grant a stuck stage a fresh allowance ----
+
+    private static string AgedStageStatus(string stage, long seq, string stageStartedAt, string updatedAt)
+        => $$$"""{"schema":1,"stage":"{{{stage}}}","stageStartedAt":"{{{stageStartedAt}}}","heartbeatSeq":{{{seq}}},"updatedAt":"{{{updatedAt}}}","worker":{"version":"1.0.0"}}""";
+
+    [Fact]
+    public void A_stage_already_old_at_the_first_look_is_stuck_after_only_the_time_it_has_left()
+    {
+        // model-loading's deadline is 15 minutes. The worker says the stage began 14 minutes before its last write.
+        var watch = Watch();
+        var status = AgedStageStatus("model-loading", 40, "2026-09-18T15:06:03Z", "2026-09-18T15:20:03Z");
+
+        watch.Observe(status, null, TimeSpan.Zero).ShouldBeNull("14 of 15 minutes used");
+        watch.Observe(AgedStageStatus("model-loading", 41, "2026-09-18T15:06:03Z", "2026-09-18T15:20:33Z"), null, TimeSpan.FromSeconds(30)).ShouldBeNull();
+
+        var verdict = watch.Observe(AgedStageStatus("model-loading", 42, "2026-09-18T15:06:03Z", "2026-09-18T15:21:03Z"), null, TimeSpan.FromSeconds(60));
+
+        verdict.ShouldNotBeNull("a resumed watch must count the stage's age on the worker's own clock, not restart at 0");
+        verdict.Code.ShouldBe(RunErrorCodes.WorkerStageStuck);
+    }
+
+    [Fact]
+    public void A_status_without_a_stage_start_time_still_starts_the_clock_at_the_first_look()
+    {
+        var watch = Watch();
+        watch.Observe(StageStatus("model-loading", 1), null, TimeSpan.Zero).ShouldBeNull();
+        watch.Observe(StageStatus("model-loading", 2), null, TimeSpan.FromMinutes(14)).ShouldBeNull();
+        watch.Observe(StageStatus("model-loading", 3), null, TimeSpan.FromMinutes(15))!.Code.ShouldBe(RunErrorCodes.WorkerStageStuck);
+    }
+
+    [Fact]
+    public void An_unparseable_or_future_stage_start_time_is_ignored_not_trusted()
+    {
+        var watch = Watch();
+        watch.Observe(AgedStageStatus("model-loading", 1, "garbage", "2026-09-18T15:20:03Z"), null, TimeSpan.Zero).ShouldBeNull();
+        var future = Watch();
+        future.Observe(AgedStageStatus("model-loading", 1, "2026-09-18T16:00:00Z", "2026-09-18T15:20:03Z"), null, TimeSpan.Zero).ShouldBeNull();
+        future.Observe(AgedStageStatus("model-loading", 2, "2026-09-18T16:00:00Z", "2026-09-18T15:20:33Z"), null, TimeSpan.FromMinutes(14)).ShouldBeNull("a stage start after the last write is nonsense: age is 0");
+    }
 }

@@ -213,6 +213,7 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
     "direction": "forward"
   },
   "startedAt": "2026-09-18T14:23:10Z",
+  "stageStartedAt": "2026-09-18T14:31:44Z",
   "updatedAt": "2026-09-18T15:20:03Z",
   "heartbeatSeq": 118,
   "vm": {
@@ -310,7 +311,7 @@ actually emit these two stages, is an open question for whoever picks it up next
  at least every 20 x `limits.heartbeatSeconds` (600 s at the 30 s default), judged by change between the app's looks and not
  by comparing `updatedAt` with the app's clock; and the worker's first progress line (`worker starting; GPU: ...`) must not
  say `no GPU detected` on a GPU machine type. Failures are `worker_no_heartbeat`, `worker_heartbeat_stale` and
- `gpu_not_visible`, each ending the VM. Per-stage deadlines are enforced too (issue #90, `HeartbeatWatch.DefaultStageDeadlines`): the stage name in `status.json` (written by the startup script or the worker) restarts a clock when it changes, and `booting` 8 min, `installing` 15 min, `restoring-cache` 15 min, `model-loading` 15 min and `uploading` 10 min end the run as `worker_stage_stuck` even while the heartbeat ticks. `running` has no stage deadline (the result limit and the heartbeat judge it). The 180 s rule is covered by the runner's own `instances.get` look on every poll: a VM that is not RUNNING ends the wait at once (`VmLostAsync`), earlier than 180 s. Not built: the 60 s cancel-ack rule (the app's cancel deletes the VM directly and writes no `control/cancel`), and the soft "taking longer than usual" warnings and the Stop / Delete / Keep waiting choice (a UI half, filed separately).
+ `gpu_not_visible`, each ending the VM. Per-stage deadlines are enforced too (issue #90, `HeartbeatWatch.DefaultStageDeadlines`): the stage name in `status.json` (written by the startup script or the worker) restarts a clock when it changes (a stage already running when the app first looks, after a resume, counts its age as `updatedAt` minus `stageStartedAt`, both the worker's clock, so a resume does not grant a stuck stage a fresh allowance; `stageStartedAt` is written by the worker when the stage name changes and by `startup.sh` with each infra snapshot, and a status without it starts the clock at the first look), and `booting` 8 min, `installing` 15 min, `restoring-cache` 15 min, `model-loading` 15 min and `uploading` 10 min end the run as `worker_stage_stuck` even while the heartbeat ticks. `running` has no stage deadline (the result limit and the heartbeat judge it). The 180 s rule is covered by the runner's own `instances.get` look on every poll: a VM that is not RUNNING ends the wait at once (`VmLostAsync`), earlier than 180 s. Not built: the 60 s cancel-ack rule (the app's cancel deletes the VM directly and writes no `control/cancel`), and the soft "taking longer than usual" warnings and the Stop / Delete / Keep waiting choice (a UI half, filed separately).
 - On death, the app offers "Delete VM and show logs" - `logs/startup.log` (uploaded by the
  startup script's own trap) and, as a last resort before any worker log exists,
  `instances.getSerialPortOutput`.

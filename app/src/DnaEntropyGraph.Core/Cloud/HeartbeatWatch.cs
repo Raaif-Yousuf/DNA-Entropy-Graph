@@ -46,10 +46,13 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
         var status = statusJson is null ? null : WorkerStatusReader.TryParseStatus(statusJson);
 
         // The stage clock restarts whenever the stage NAME changes, whoever wrote it (the startup script writes booting and installing).
+        // A stage already running when this watch first sees it (a resume, a reattach) has already used part of its allowance: the worker
+        // reports when the stage began (stageStartedAt) and when it last wrote (updatedAt), both on ITS clock, so the difference is the
+        // stage's age with no skew against the app's clock. A status without them (an older worker) starts the clock at this look.
         if (status?.Stage is { Length: > 0 } stage && !string.Equals(stage, _stage, StringComparison.Ordinal))
         {
             _stage = stage;
-            _stageSince = elapsed;
+            _stageSince = elapsed - StageAgeAtLastWrite(status);
         }
 
         if (status is { WorkerOwned: true })
@@ -105,6 +108,18 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
                 $"The worker's heartbeat in status.json has not changed for {Format(staleTimeout)} (last heartbeatSeq {_lastSeq?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}).",
                 DeleteVm: false)
             : null;
+    }
+
+    private static TimeSpan StageAgeAtLastWrite(WorkerStatusSnapshot status)
+    {
+        if (DateTimeOffset.TryParse(status.StageStartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var began)
+            && DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote)
+            && wrote >= began)
+        {
+            return wrote - began;
+        }
+
+        return TimeSpan.Zero;
     }
 
     private TimeSpan? DeadlineFor(string stage)
