@@ -13,11 +13,11 @@ namespace DnaEntropyGraph.App.Services;
 /// </summary>
 public sealed class PinnedWorkerImageProvider : IWorkerImageProvider
 {
-    /// <summary>Settings key whose value <c>true</c> allows a <see cref="WorkerImageOverrideSettingsKey"/> outside the pinned list. Read from <c>settings.json</c>; there is no UI for it on purpose.</summary>
-    public const string DeveloperModeSettingsKey = "developer_mode";
+    /// <summary>Settings key whose value <c>true</c> allows a <see cref="WorkerImageOverrideSettingsKey"/> outside the pinned list. Read from <c>settings.json</c>; there is no switch for it in the app on purpose (the Settings Advanced group only shows the image box when it is already on).</summary>
+    public const string DeveloperModeSettingsKey = DnaEntropyGraph.Core.WorkerImageSettingKeys.DeveloperMode;
 
     /// <summary>Settings key holding a developer's own digest-pinned worker image. Accepted only when it is the pinned image for this version and variant, or developer mode is on.</summary>
-    public const string WorkerImageOverrideSettingsKey = "worker_image";
+    public const string WorkerImageOverrideSettingsKey = DnaEntropyGraph.Core.WorkerImageSettingKeys.WorkerImage;
 
     private const string ResourceName = "worker-images.json";
 

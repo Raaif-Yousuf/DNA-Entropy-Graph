@@ -17,7 +17,7 @@ public class ProjectSelectionWiringTests
     private static ServiceProvider Build(string root)
     {
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph(appDataRoot: root);
+        services.AddDnaEntropyGraph(appDataRoot: root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
         return services.BuildServiceProvider();
     }
 

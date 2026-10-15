@@ -5,4 +5,7 @@ public interface IFolderLauncher
 {
     /// <summary>Shows <paramref name="filePath"/> selected in its folder. False when Windows could not open it (never throws for that).</summary>
     bool RevealFile(string filePath);
+
+    /// <summary>Opens <paramref name="folderPath"/> in Explorer. False when the folder does not exist or Windows could not open it (never throws for that).</summary>
+    bool OpenFolder(string folderPath);
 }
