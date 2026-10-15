@@ -16,6 +16,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     public const string SaveDiagnosticsLabel = "Save diagnostics";
 
     private const string ThemeKey = "Theme";
+    private const int SystemThemeIndex = 2;
+
+    // The saved strings, in the order the Appearance radio buttons list them.
+    private static readonly string[] ThemeNames = ["Light", "Dark", "System"];
+
+    // Literal resw keys, index-aligned with ThemeNames: scripts/check_app_wiring.py's ORPHAN-RESOURCE scan, and a grep, see only literal names.
+    private static readonly string[] ThemeChoiceKeys = ["ThemeChoice_Light", "ThemeChoice_Dark", "ThemeChoice_System"];
 
     private readonly ISettingsStore _settingsStore;
     private readonly IToastService _toastService;
@@ -24,10 +31,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly IFilePicker _filePicker;
     private readonly IFolderLauncher _folderLauncher;
     private readonly TimeProvider _time;
+    private readonly IThemeApplier _themeApplier;
 
+    /// <summary>
+    /// The chosen theme as the position of the Appearance RadioButtons item (0 Light, 1 Dark, 2 Use system). The control's
+    /// selection is the single source: a click, an arrow key or a touch all arrive as this property changing, which applies
+    /// the theme at once and saves it (#639). Anything saved that is not "Light" or "Dark" reads as Use system.
+    /// </summary>
     [ObservableProperty]
-    private string _theme;
-
+    private int _themeIndex;
     /// <summary>The plain-words result of the last Save diagnostics, shown under the button. Empty before the first one.</summary>
     [ObservableProperty]
     private string _diagnosticsStatus = string.Empty;
@@ -46,7 +58,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         IDiagnosticsExporter diagnostics,
         IFilePicker filePicker,
         IFolderLauncher folderLauncher,
-        TimeProvider time)
+        TimeProvider time,
+        IThemeApplier themeApplier)
     {
         _settingsStore = settingsStore;
         _toastService = toastService;
@@ -55,7 +68,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         _filePicker = filePicker;
         _folderLauncher = folderLauncher;
         _time = time;
-        _theme = ReadTheme(settingsStore) ?? "System";
+        _themeApplier = themeApplier;
+        // The field, not the property: opening the page must not re-apply or re-save what was just read.
+        // What is on screen wins over what is saved: a choice that could not be saved (#558) is still applied, and the radio must say so.
+        var shown = Array.IndexOf(ThemeNames, themeApplier.CurrentTheme);
+        _themeIndex = shown >= 0 ? shown : Array.IndexOf(ThemeNames, ReadTheme(settingsStore)) is var i and >= 0 ? i : SystemThemeIndex;
     }
 
     private static string? ReadTheme(ISettingsStore settingsStore)
@@ -72,10 +89,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private void SetTheme(string theme)
+    partial void OnThemeIndexChanged(int value)
     {
-        Theme = theme;
+        if (value < 0 || value >= ThemeNames.Length)
+        {
+            // A RadioButtons control reports -1 when nothing is selected; there is no theme to apply.
+            return;
+        }
+
+        var theme = ThemeNames[value];
+        // Applied before the save: a locked settings file (#558) must not stop the window changing for this session.
+        _themeApplier.Apply(theme);
         try
         {
             _settingsStore.SetString(ThemeKey, theme);
@@ -84,12 +108,13 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             // The theme still applies for this session; it just is not remembered (#558), so say so.
             System.Diagnostics.Trace.TraceWarning($"settings_unavailable while saving theme: {ex.GetType().Name}");
-            _toastService.ShowToast(_strings.GetString("ThemeNotSaved_Title"), _strings.GetString("ThemeNotSaved_Body"));
+            _toastService.ShowToast(_strings.GetString("ThemeNotSaved_Title"), _strings.GetString("ThemeNotSaved_Body"), ToastSeverity.Warning);
             return;
         }
 
         // Plain (non-dotted) resw key: see ShellViewModel.BuildStatusPillText's comment.
-        _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), theme);
+        // The body is the choice in the radio button's own words ("Use system"), not the saved code ("System").
+        _toastService.ShowToast(_strings.GetString("ThemeUpdated_Title"), _strings.GetString(ThemeChoiceKeys[value]), ToastSeverity.Info);
     }
 
     /// <summary>Asks where to save, builds the zip off the UI thread, and says what happened. Never throws to the caller.</summary>
@@ -112,7 +137,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken), CancellationToken.None);
             _lastDiagnosticsPath = path;
             OpenDiagnosticsFolderCommand.NotifyCanExecuteChanged();
-            Report("DiagnosticsSaved_Title", string.Format(_strings.GetString("DiagnosticsSaved_Body"), path));
+            Report("DiagnosticsSaved_Title", string.Format(_strings.GetString("DiagnosticsSaved_Body"), path), ToastSeverity.Success);
         }
         catch (OperationCanceledException)
         {
@@ -120,18 +145,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
         catch (DiagnosticsLeakException)
         {
-            Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Refused"));
+            Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Refused"), ToastSeverity.Error);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Write"));
+            Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Write"), ToastSeverity.Error);
         }
         catch (Exception ex)
         {
             // The picker, the history database or anything else: a command must never throw into the UI. Only the class
             // is traced (a message can carry a path or a name).
             System.Diagnostics.Trace.TraceError($"Save diagnostics failed: {ex.GetType().Name}");
-            Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Other"));
+            Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Other"), ToastSeverity.Error);
         }
         finally
         {
@@ -156,15 +181,15 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         if (!opened)
         {
-            Report("DiagnosticsOpenFailed_Title", string.Format(_strings.GetString("DiagnosticsOpenFailed_Body"), _lastDiagnosticsPath));
+            Report("DiagnosticsOpenFailed_Title", string.Format(_strings.GetString("DiagnosticsOpenFailed_Body"), _lastDiagnosticsPath), ToastSeverity.Error);
         }
     }
 
     private bool HasSavedDiagnostics() => _lastDiagnosticsPath is not null;
 
-    private void Report(string titleKey, string body)
+    private void Report(string titleKey, string body, ToastSeverity severity)
     {
         DiagnosticsStatus = body;
-        _toastService.ShowToast(_strings.GetString(titleKey), body);
+        _toastService.ShowToast(_strings.GetString(titleKey), body, severity);
     }
 }

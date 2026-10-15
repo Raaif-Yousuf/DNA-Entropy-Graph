@@ -32,7 +32,7 @@ public class SettingsDiagnosticsTests
         strings.GetString("DiagnosticsFileNamePrefix").Returns("prefix-from-resw");
         _viewModel = new SettingsViewModel(
             Substitute.For<ISettingsStore>(), _toasts, strings, _exporter, _picker, _launcher,
-            new FixedClock(new DateTimeOffset(2026, 10, 3, 9, 0, 0, TimeSpan.Zero)));
+            new FixedClock(new DateTimeOffset(2026, 10, 3, 9, 0, 0, TimeSpan.Zero)), Substitute.For<IThemeApplier>());
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class SettingsDiagnosticsTests
         await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
 
         await _exporter.DidNotReceiveWithAnyArgs().ExportAsync(default!, TestContext.Current.CancellationToken);
-        _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!);
+        _toasts.DidNotReceive().ShowToast(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ToastSeverity>());
         _viewModel.DiagnosticsStatus.ShouldBeEmpty();
     }
 
@@ -82,7 +82,7 @@ public class SettingsDiagnosticsTests
 
         exportThread.ShouldNotBeNull();
         exportThread.ShouldNotBe(callerThread);
-        _toasts.Received(1).ShowToast("DiagnosticsSaved_Title|{0}", Arg.Is<string>(b => b.Contains(@"C:\Out\d.zip")));
+        _toasts.Received(1).ShowToast("DiagnosticsSaved_Title|{0}", Arg.Is<string>(b => b.Contains(@"C:\Out\d.zip")), ToastSeverity.Success);
         _viewModel.DiagnosticsStatus.ShouldContain(@"C:\Out\d.zip");
         _viewModel.OpenDiagnosticsFolderCommand.CanExecute(null).ShouldBeTrue();
 
@@ -112,7 +112,7 @@ public class SettingsDiagnosticsTests
             repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Array.Empty<RunRecord>());
             var real = new DiagnosticsExporter(new NoFiles(), repository, () => new DiagnosticsInfo("0", "os", "net", null, Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "x"), [], DateTimeOffset.UnixEpoch, "readme"));
             var viewModel = new SettingsViewModel(
-                Substitute.For<ISettingsStore>(), _toasts, Substitute.For<IStringResourceProvider>(), real, _picker, _launcher, TimeProvider.System);
+                Substitute.For<ISettingsStore>(), _toasts, Substitute.For<IStringResourceProvider>(), real, _picker, _launcher, TimeProvider.System, Substitute.For<IThemeApplier>());
             _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
             {
                 File.WriteAllBytes(path, []);
@@ -138,7 +138,7 @@ public class SettingsDiagnosticsTests
 
         await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Refused|{0}");
+        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Refused|{0}", ToastSeverity.Error);
         _viewModel.OpenDiagnosticsFolderCommand.CanExecute(null).ShouldBeFalse();
         _viewModel.IsSavingDiagnostics.ShouldBeFalse();
     }
@@ -151,7 +151,7 @@ public class SettingsDiagnosticsTests
 
         await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Write|{0}");
+        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Write|{0}", ToastSeverity.Error);
         _viewModel.SaveDiagnosticsCommand.CanExecute(null).ShouldBeTrue();
     }
 
@@ -163,7 +163,7 @@ public class SettingsDiagnosticsTests
 
         await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Other|{0}");
+        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Other|{0}", ToastSeverity.Error);
         _viewModel.DiagnosticsStatus.ShouldBe("DiagnosticsSaveFailed_Other|{0}");
         _viewModel.IsSavingDiagnostics.ShouldBeFalse();
         _viewModel.SaveDiagnosticsCommand.CanExecute(null).ShouldBeTrue();
@@ -176,7 +176,7 @@ public class SettingsDiagnosticsTests
 
         await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Other|{0}");
+        _toasts.Received(1).ShowToast("DiagnosticsSaveFailed_Title|{0}", "DiagnosticsSaveFailed_Other|{0}", ToastSeverity.Error);
         await _exporter.DidNotReceiveWithAnyArgs().ExportAsync(default!, TestContext.Current.CancellationToken);
     }
 
@@ -199,7 +199,7 @@ public class SettingsDiagnosticsTests
 
         _viewModel.OpenDiagnosticsFolderCommand.Execute(null);
 
-        _toasts.Received(1).ShowToast("DiagnosticsOpenFailed_Title|{0}", Arg.Is<string>(b => b.StartsWith("DiagnosticsOpenFailed_Body", StringComparison.Ordinal)));
+        _toasts.Received(1).ShowToast("DiagnosticsOpenFailed_Title|{0}", Arg.Is<string>(b => b.StartsWith("DiagnosticsOpenFailed_Body", StringComparison.Ordinal)), ToastSeverity.Error);
     }
 
     [Fact]

@@ -29,11 +29,18 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock
-                x:Uid="ShellTitle"
-                Grid.Column="0"
-                VerticalAlignment="Center"
-                Margin="16,0,0,0" />
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                <TextBlock x:Uid="ShellTitle" VerticalAlignment="Center" />
+                <!-- Issue #638: a sandboxed data folder (the profile switch or DEG_DATA_DIR) is named here, so it cannot be mistaken for the real profile. -->
+                <Border
+                    Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasProfileOverride)}"
+                    Margin="12,0,0,0"
+                    Padding="8,2"
+                    CornerRadius="4"
+                    Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                    <TextBlock Text="{x:Bind ViewModel.ProfileBannerText}" TextTrimming="CharacterEllipsis" />
+                </Border>
+            </StackPanel>
             <!--
                 MEASURED 2026-09-20: with a 16 DIP right margin the status pill
                 sat directly underneath the minimise, maximise and close
@@ -89,5 +96,23 @@
 
             <Frame x:Name="RootFrame" x:FieldModifier="public" />
         </NavigationView>
+
+        <!--
+            Issue #585: the in-app message bar behind IToastService. One message at a time, floating over the
+            page at the bottom; info and success close themselves, errors stay until the user closes the bar.
+            IsOpen is TwoWay so the close button clears the ViewModel state too.
+        -->
+        <InfoBar
+            x:Name="MessageBar"
+            Grid.Row="1"
+            VerticalAlignment="Bottom"
+            HorizontalAlignment="Center"
+            MaxWidth="640"
+            Margin="16"
+            IsClosable="True"
+            Title="{x:Bind ViewModel.Messages.Title, Mode=OneWay}"
+            Message="{x:Bind ViewModel.Messages.Message, Mode=OneWay}"
+            Severity="{x:Bind converters:InfoBarSeverityHelper.From(ViewModel.Messages.Severity), Mode=OneWay}"
+            IsOpen="{x:Bind ViewModel.Messages.IsOpen, Mode=TwoWay}" />
     </Grid>
 </Window>

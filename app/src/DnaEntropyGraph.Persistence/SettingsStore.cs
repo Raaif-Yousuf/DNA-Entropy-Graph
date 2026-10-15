@@ -95,12 +95,6 @@ public sealed class SettingsStore : ISettingsStore
         _mutexName = $@"Local\DnaEntropyGraph.Settings.{hash}";
     }
 
-    /// <summary>The default per-user location, per docs/architecture.md section 6.</summary>
-    public static string DefaultPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DNAEntropyGraph",
-        "settings.json");
-
     /// <summary>True once this instance saw a settings.json that did not parse. Sticky; see class remarks.</summary>
     public bool RecoveredFromUnreadableFile { get; private set; }
 
@@ -115,6 +109,12 @@ public sealed class SettingsStore : ISettingsStore
 
     /// <summary>Total wait one public call may spend on locks and retries (see class remarks, rule 7).</summary>
     internal TimeSpan WaitBudget { get; set; } = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>Test seam (#625): the clock the wait budget is measured on. A test supplies virtual time so the retry count never depends on machine load.</summary>
+    internal TimeProvider Clock { get; set; } = TimeProvider.System;
+
+    /// <summary>Test seam (#625): how the retry loop waits between attempts. Production sleeps the thread; a test advances its virtual <see cref="Clock"/> instead.</summary>
+    internal Action<TimeSpan> Pause { get; set; } = Thread.Sleep;
 
     public string? GetString(string key)
     {
@@ -168,7 +168,7 @@ public sealed class SettingsStore : ISettingsStore
     /// </summary>
     private T Guarded<T>(Func<T> action)
     {
-        _deadlineUtc = DateTime.UtcNow + WaitBudget;
+        _deadlineUtc = Clock.GetUtcNow().UtcDateTime + WaitBudget;
         try
         {
             return action();
@@ -184,7 +184,7 @@ public sealed class SettingsStore : ISettingsStore
     {
         get
         {
-            var left = _deadlineUtc - DateTime.UtcNow;
+            var left = _deadlineUtc - Clock.GetUtcNow().UtcDateTime;
             return left > TimeSpan.Zero ? left : TimeSpan.Zero;
         }
     }
@@ -566,7 +566,7 @@ public sealed class SettingsStore : ISettingsStore
                         "The settings file is in use or not accessible; nothing was changed.", ex);
                 }
 
-                Thread.Sleep(RetryDelay);
+                Pause(RetryDelay);
             }
         }
     }

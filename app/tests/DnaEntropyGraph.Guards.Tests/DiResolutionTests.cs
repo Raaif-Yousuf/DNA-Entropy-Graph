@@ -228,4 +228,25 @@ public class DiResolutionTests
             using var provider = BuildRealServiceProvider();
         });
     }
+
+    [Fact]
+    public void Open_in_igv_and_open_in_geneious_are_registered_real_services_and_are_bound_by_the_results_page()
+    {
+        using var provider = BuildRealServiceProvider();
+
+        // Issue #586, wired-to-nothing: the opener, its socket client, its locator and its process launcher resolve to the
+        // production types, and each button's command is a property of the ViewModel that ResultsPage.xaml binds.
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.IExternalViewerOpener>()
+            .ShouldBeOfType<DnaEntropyGraph.Presentation.Services.ExternalViewerOpener>();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Viewers.IIgvBatchClient>().ShouldBeOfType<DnaEntropyGraph.Core.Viewers.TcpIgvBatchClient>();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Viewers.IViewerLocator>().ShouldBeOfType<DnaEntropyGraph.Core.Viewers.ViewerLocator>();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Viewers.IViewerProcessLauncher>().ShouldNotBeNull();
+
+        var xaml = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "Views", "ResultsPage.xaml"));
+        foreach (var command in new[] { "OpenInIgvCommand", "OpenInGeneiousCommand" })
+        {
+            typeof(DnaEntropyGraph.Presentation.ViewModels.ResultsViewModel).GetProperty(command).ShouldNotBeNull(command);
+            xaml.ShouldContain("{x:Bind ViewModel." + command + "}");
+        }
+    }
 }

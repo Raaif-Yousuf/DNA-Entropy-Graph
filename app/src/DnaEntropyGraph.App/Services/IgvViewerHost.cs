@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.Viewer;
 using DnaEntropyGraph.Presentation.ViewModels;
@@ -20,11 +21,11 @@ public sealed class WebView2RuntimeProbe : IWebViewRuntimeProbe
 /// <see cref="ViewerViewModel"/> / <see cref="IgvLoadPlanner"/>; this class only wires the control to it:
 /// <c>viewer.deg</c> -> Assets/viewer, <c>run.deg</c> -> the run folder (remapped on every change of
 /// <see cref="ViewerViewModel.MapRunFolder"/>), DevTools off in release builds, web messages on (from the
-/// viewer.deg origin only), navigation locked to viewer.deg, profile under %LOCALAPPDATA%\DNAEntropyGraph.
+/// viewer.deg origin only), navigation locked to viewer.deg, profile under the app data root's webview2 folder (<see cref="AppDataRoot.WebView2Directory"/>).
 /// <see cref="AttachAsync"/> never throws: a failure to start the control becomes the ViewModel's named-action
 /// error, and a page left during the start-up never gets subscribed (<see cref="ViewerAttachGate"/>).
 /// </summary>
-public sealed class IgvViewerHost
+public sealed class IgvViewerHost(AppDataRoot dataRoot)
 {
     private readonly ViewerAttachGate _gate = new();
     private ViewerViewModel? _viewModel;
@@ -46,8 +47,7 @@ public sealed class IgvViewerHost
 
         try
         {
-            var userData = ViewerUrls.UserDataFolder(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
-            var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, userData, new CoreWebView2EnvironmentOptions());
+            var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, dataRoot.WebView2Directory, new CoreWebView2EnvironmentOptions());
             if (!_gate.IsCurrent(generation))
             {
                 return;
