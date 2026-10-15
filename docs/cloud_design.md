@@ -38,7 +38,12 @@ gives a user an actionable, specific answer instead of "no capacity anywhere":
 ```
 project ACTIVE -> billing enabled -> Compute Engine API enabled (auto-enable, idempotent)
                -> GPU quota > 0 in at least one region -> bucket exists and is readable
+               -> worker identity ensured (issue #606; after the bucket, because it binds the bucket)
 ```
+
+Step 6, the worker identity, is not a project-wide precondition the Insert error can be confused with; it runs in
+`CloudJobRunner` right after step 5 and before the VM is created, and its account email is what the VM runs as
+(section 16, "The worker identity").
 
 MEASURED, carried forward from the prototype's own recorded field experience
 (`docs/entry_points.md`'s seeded disproven-diagnosis row, and CLAUDE.md's Critical
@@ -458,9 +463,14 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   carry on without the app, so a network blip of a minute must not cost the user a second run.
   Pinned by `More_transient_503s_than_the_retry_pipeline_absorbs...` (14 scripted 503s behind the real
   retry pipeline and breaker, then a valid result: Completed with the track on disk).
+- **`EnsureBucket` budget (issue #600).** `EnsureBucketAsync` is a sequence of up to about ten requests (project get, list, insert, read-back,
+  second list, loser delete or config write, patch), each with its own retry backoff inside the gateway, so it runs under its own
+  `EnsureBucketTimeout` (5 min, `CloudRunSettings`) and not the 60 s of one request. A cut still lands as a network failure; the next call finds
+  the bucket by label and writes a missing config (`GoogleStorageGateway.ConvergeAsync`, proven by
+  `A_second_listing_that_keeps_failing_strands_a_created_bucket_and_the_next_call_adopts_and_configures_it`). The duplicate a lost
+  two-PC race leaves is not cleaned up by a cut; it stays an empty labelled bucket. A request that never answers is not left to that 5 minutes: see the per-attempt cap in section 12.
 - **Per-call deadline.** Every gateway call the runner makes runs under `CallTimeout` (60 s) through
-  `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, `EnsureBucket`,
-  every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
+  `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
   `StopVmAsync` and `DeleteVmAsync`, and each read of a downloaded file. A call that outlives it is a
   network failure: the wait loops look again, anywhere else the run (or the cancel) is recorded Failed
   instead of hanging. **Uploads** have their own deadline, `UploadTimeout`, default a floor of 2 minutes plus
@@ -735,6 +745,8 @@ the policy for free.
 | HTTP 401 | `ICloudTokenRefresher.RefreshAsync` once, then the call is replayed once. A second 401 becomes kind `permission` (sign in again) |
 | 403, 409, 412, stockout, anything else | Untouched: `CloudErrorClassifier` and the zone ladder own them |
 | Most recent calls failed (6+ calls in 30s, 80% transient failures) | The breaker opens for 30s. Calls fail fast as kind `network` with code `OFFLINE` and are not sent. **Cleanup bypasses the breaker**: `StopVm`, `DeleteVm` and `FindByJobId` go through a second pipeline with the same retries and no breaker, because they are what stops the meter; if a cancel's cleanup still fails the run is recorded `Failed` with code `cancel_failed`, never left in `Cancelling`. `CloudCallPipeline.IsOffline`/`OfflineChanged` report it; it closes after a successful half-open call |
+
+**Per-attempt cap (issue #600).** A request that never answers would otherwise wait for the caller's own deadline (the 5 minute `EnsureBucketTimeout`) or the HTTP client's 100 s default. `CloudCallPipeline.ExecuteAsync(..., singleRequest: true)` adds an innermost Polly timeout of `CloudRetryOptions.AttemptTimeout` (30 s) to that call, so each hung attempt is cut (a `TimeoutRejectedException`, transient: retried, counted by the breaker) and the call ends as kind `network`, code `TIMEOUT`, after the retries. Only the single small metadata requests pass it: `GoogleStorageGateway` list, insert, get, delete, patch and the ~300 byte config write (`GoogleStorageGateway.cs`, `singleRequest: true` sites) and `GoogleProjectCatalogGateway.FetchAsync`. **Never capped:** `GoogleStorageGateway.UploadAsync` and the two downloads (a large input or result must be allowed to take as long as the link needs; the runner's size-scaled `UploadTimeout` and the result wait bound them), and anything that wraps several requests (the `Resilient*` wrappers).
 
 Retrying a mutating call is safe only because of two earlier decisions: `CreateVmAsync`
 carries a deterministic request id (issue #257, so a replay is idempotent) and stop/delete
@@ -1172,9 +1184,24 @@ account and a role and edits two policies, and a whole-method retry would replay
   either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
   per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers
   labels on these two, so there is no allowlist entry. Everything that bills (the VM, the bucket) keeps its labels.
-- **No production caller yet.** `IWorkerIdentityGateway` has no registration in `ServiceRegistration` and nothing calls
-  `EnsureWorkerIdentityAsync`: only `GoogleCloudGateways.Create` builds it (and tests use it). Calling it from the setup flow
-  before a VM is created, and registering it, is issue #606 (P1). Until then no VM runs as the worker account. `FakeGcp`
+- **Caller (issue #606).** `CloudJobRunner.CompleteSpecAsync` calls `EnsureWorkerIdentityAsync(projectId, bucket)` after
+  `EnsureBucketAsync`, and `VmProvisioner.ProvisionAsync` invokes it only after its adoption lookup (`FindByJobIdAsync`) found
+  no VM, once, before the first create. It sets the returned `ServiceAccountEmail` on the spec it creates with
+  (`with { ServiceAccountEmail = ... }`); without it `GoogleComputeGateway` refuses the create (`WORKER_SERVICE_ACCOUNT_MISSING`).
+  A run that adopts a VM, or whose job already finished, never calls IAM, so an IAM failure can never end a healthy working
+  VM (cold review of #606). The step runs under its own `CloudRunSettings.WorkerIdentityTimeout` (5 minutes, not the 60 s
+  `CallTimeout`), because the gateway is a dozen or more HTTP calls in one method (account create, up to 6 tries with 2 s to 12 s
+  visibility waits, role create and read-back, two policy edits of up to 5 attempts) and abandoning it at 60 s would leave it
+  writing policies after the run failed `network`. THEORY (unverified): 5 minutes is sized from that worst case, not measured. A refusal is a `CloudOperationException` that ends the
+  run through the ordinary classifier (`permission`, `org_policy`, ...) before any VM is created. `WORKER_DEFAULT_ACCOUNT` is a
+  note: the run continues and the row carries `RunErrorCodes.WorkerDefaultAccount` (`worker_default_account`, copy
+  `RunError_worker_default_account`) as an `ErrorCode` on a row that still completes, which the Runs list shows as its warning line
+  (#459); a later failure or `lifecycle_unverified` replaces it. DI registers `IWorkerIdentityGateway` as `FakeGcp` (never wrapped
+  in a `Resilient*` decorator); the real gateway switch is #609.
+  **DECISION (agent-made, reversible):** the call lives in the runner, not a setup-wizard step, because this codebase has no
+  bucket step in the wizard (the bucket is made in the runner) and the account binds the bucket, so the bucket must exist first;
+  the wizard may also call it for early feedback later. It is not run from `UploadInputsAsync` (no VM there).
+  `FakeGcp`
   implements the member
   with scripted failures (`WithServiceAccountCreationBlockedByOrgPolicy`, `WithWorkerIdentityPermissionDenied`,
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.

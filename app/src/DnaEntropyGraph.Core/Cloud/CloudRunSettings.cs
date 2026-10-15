@@ -47,7 +47,27 @@ internal sealed class CloudRunSettings
 
     public TimeSpan CallTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// The budget of the one gateway call that is a whole sequence, <see cref="IStorageGateway.EnsureBucketAsync"/> (project get, list, insert,
+    /// read-back, second list, loser delete or config write, patch: up to about ten requests, each with its own retries inside the gateway), so one
+    /// <see cref="CallTimeout"/> could cut it between the insert and the config write (#600). Sizing from the retry defaults (4 retries, backoff about
+    /// 1 + 2 + 4 + 8 = 15 s, each attempt capped at 30 s): a bad stretch where every one of 10 requests needs all its retries costs about 150 s of backoff
+    /// plus request time, so 300 s leaves about twice that; a single request that never answers uses at most 5 x 30 s + 15 s = 165 s of it. This is the
+    /// cap on the whole sequence, not the hung-request guard (that is the per-attempt cap). THEORY (unverified): a cut happens in practice; the next call
+    /// repairs an unconfigured bucket either way.
+    /// </summary>
+    public TimeSpan EnsureBucketTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
     public TimeSpan LifecycleTimeout { get; set; } = TimeSpan.FromMinutes(3);
 
     public TimeSpan LifecyclePollInterval { get; set; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// The budget for the whole worker-identity step (#606), which is many HTTP calls in one gateway method. THEORY (unverified,
+    /// sized from the gateway's worst case, not measured): a project read, an account create, up to 6 tries with 5 waits of
+    /// 2 s growing to 12 s for a new account to become visible, a role create and read-back, and two policy read-modify-writes
+    /// of up to 5 attempts each is under 40 calls; at the pipeline's per-call limits that is well over the 60 s
+    /// <see cref="CallTimeout"/>, so it gets 5 minutes. Abandoning it earlier would leave the gateway writing policies after the run failed.
+    /// </summary>
+    public TimeSpan WorkerIdentityTimeout { get; set; } = TimeSpan.FromMinutes(5);
 }

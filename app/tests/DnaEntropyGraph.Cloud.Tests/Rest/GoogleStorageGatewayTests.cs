@@ -122,9 +122,9 @@ public class GoogleStorageGatewayTests
     private static void ScriptCreatedListing(ScriptedHttpHandler handler, string created)
         => handler.Returns(Get, Buckets, 200, List(BucketJson(created)));
 
-    private static GoogleGatewayHarness NewRig(int retentionDays = 30, string? installationId = "installation-1")
+    private static GoogleGatewayHarness NewRig(int retentionDays = 30, string? installationId = "installation-1", TimeProvider? retryClock = null, TimeSpan? attemptTimeout = null)
     {
-        var rig = new GoogleGatewayHarness(retries: 2, installationId: installationId, retentionDays: retentionDays);
+        var rig = new GoogleGatewayHarness(retries: 2, installationId: installationId, retentionDays: retentionDays, retryClock: retryClock, attemptTimeout: attemptTimeout);
         rig.Handler.Returns(Get, Project, 200, ProjectBody());
         return rig;
     }
@@ -997,5 +997,165 @@ public class GoogleStorageGatewayTests
 
         using var reader = new StreamReader(stream);
         (await reader.ReadToEndAsync(TestContext.Current.CancellationToken)).ShouldBe("{\"done\":true}");
+    }
+
+    // ---- issue #600: 503s inside the multi-request sequence ----
+
+    private static void Script503(ScriptedHttpHandler handler, HttpMethod method, string path, int times)
+    {
+        for (var i = 0; i < times; i++)
+        {
+            handler.Returns(method, path, 503, RpcError(503, "UNAVAILABLE", "try again"));
+        }
+    }
+
+    [Fact]
+    public async Task A_503_on_the_insert_and_on_the_second_listing_is_retried_per_request_and_the_sequence_finishes_configured()
+    {
+        var rig = NewRig();
+        var name = Name(0);
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        Script503(rig.Handler, Post, Buckets, 1);
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
+        Script503(rig.Handler, Get, Buckets, 1);
+        ScriptCreatedListing(rig.Handler, name);
+        ScriptUpload(rig.Handler, name);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
+
+        rig.Handler.To(Post, Buckets).Count.ShouldBe(2, "one 503 then the insert that landed");
+        rig.Handler.To(Get, Buckets).Count.ShouldBe(3, "first listing, the 503, the second listing");
+        rig.Handler.To(HttpMethod.Delete, BucketPath(name)).ShouldBeEmpty();
+        rig.Handler.To(Post, UploadPath(name)).Count.ShouldBe(1, "the config write ran: the bucket is not left unconfigured");
+    }
+
+    [Fact]
+    public async Task A_second_listing_that_keeps_failing_strands_a_created_bucket_and_the_next_call_adopts_and_configures_it()
+    {
+        // MEASURED 2026-10-03 (this test): when the sequence is cut after the insert, the bucket exists without app-config.json;
+        // the next call finds it by label (oldest first) and ConvergeAsync writes the config, so an unconfigured bucket is repaired, not stranded.
+        var rig = NewRig();
+        var name = Name(0);
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        rig.Handler.Returns(Post, Buckets, 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(name), 200, BucketJson(name));
+        Script503(rig.Handler, Get, Buckets, 3);
+        var first = async () => await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+        await first.ShouldThrowAsync<CloudOperationException>();
+        rig.Handler.To(Post, UploadPath(name)).ShouldBeEmpty("cut before the config write");
+
+        rig.Handler.Returns(Get, Project, 200, ProjectBody());
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(name)));
+        ScriptUpload(rig.Handler, name);
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(name);
+
+        rig.Handler.To(Post, Buckets).Count.ShouldBe(1, "no second bucket was inserted");
+        rig.Handler.To(Post, UploadPath(name)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_insert_that_keeps_returning_503_fails_cleanly_with_no_bucket_to_orphan()
+    {
+        var rig = NewRig();
+        rig.Handler.Returns(Get, Buckets, 200, List());
+        Script503(rig.Handler, Post, Buckets, 3);
+
+        var call = async () => await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        await call.ShouldThrowAsync<CloudOperationException>();
+        rig.Handler.To(Post, UploadPath(Name(0))).ShouldBeEmpty();
+        rig.Handler.To(HttpMethod.Delete, BucketPath(Name(0))).ShouldBeEmpty();
+    }
+
+    // ---- issue #600, round 2: a per-attempt cap on single requests, none on media transfers ----
+    // The retry pipeline runs on a clock the test moves by hand. A request that is "slow" moves it past the cap while the request is in flight, so
+    // a cap that applies cuts the request at once and one that does not lets it finish.
+
+    private static readonly TimeSpan PastTheCap = TimeSpan.FromMinutes(10);
+
+    [Fact]
+    public async Task A_bucket_listing_that_never_answers_is_cut_per_attempt_and_fails_as_a_network_TIMEOUT()
+    {
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
+        for (var i = 0; i < 3; i++)
+        {
+            rig.Handler.Calls(Get, Buckets, async ct =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(30));
+                await Task.Delay(Timeout.Infinite, ct);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+        }
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(
+            () => rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+
+        failure.Kind.ShouldBe(CloudErrorKind.Network);
+        failure.Error.Code.ShouldBe("TIMEOUT");
+        rig.Handler.To(Get, Buckets).Count.ShouldBe(3, "every attempt was sent and cut, then the retries ran out");
+        rig.Handler.To(Post, Buckets).ShouldBeEmpty("a hung listing must not reach the insert");
+    }
+
+    [Fact]
+    public async Task A_slow_upload_is_not_cut_by_the_per_attempt_cap()
+    {
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
+        rig.Handler.Calls(Post, UploadPath("deg-b"), async ct =>
+        {
+            clock.Advance(PastTheCap);
+            await Task.Delay(50, ct);
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+            response.Headers.Location = new Uri("https://storage.googleapis.com" + UploadPath("deg-b") + "?uploadType=resumable&upload_id=sess-1");
+            return response;
+        });
+        rig.Handler.Calls(Put, UploadPath("deg-b"), async ct =>
+        {
+            clock.Advance(PastTheCap);
+            await Task.Delay(50, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"name\":\"x\",\"bucket\":\"deg-b\"}", Encoding.UTF8, "application/json") };
+        });
+
+        await rig.Gateways.Storage.UploadAsync("deg-b", "jobs/j1/input.gb", new MemoryStream(new byte[1024]), CancellationToken.None);
+
+        rig.Handler.To(Put, UploadPath("deg-b")).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_slow_download_is_not_cut_by_the_per_attempt_cap()
+    {
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
+        rig.Handler.Calls(Get, ObjectPath, async ct =>
+        {
+            clock.Advance(PastTheCap);
+            await Task.Delay(50, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json") };
+        });
+
+        await using var stream = await rig.Gateways.Storage.DownloadAsync("deg-b", "jobs/j1/result.json", CancellationToken.None);
+
+        using var reader = new StreamReader(stream);
+        (await reader.ReadToEndAsync(TestContext.Current.CancellationToken)).ShouldBe("{\"ok\":true}");
+    }
+
+    [Fact]
+    public async Task A_slow_but_answering_metadata_request_inside_the_cap_is_not_cut()
+    {
+        var clock = new VirtualTimeProvider();
+        var rig = NewRig(retryClock: clock, attemptTimeout: TimeSpan.FromSeconds(30));
+        rig.Handler.Calls(Get, Buckets, async ct =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(20));
+            await Task.Delay(20, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(List(BucketJson(Name(0))), Encoding.UTF8, "application/json") };
+        });
+        rig.Handler.Returns(Get, BucketPath(Name(0)), 200, BucketJson(Name(0)));
+        ScriptUpload(rig.Handler, Name(0));
+
+        (await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None)).ShouldBe(Name(0));
     }
 }
