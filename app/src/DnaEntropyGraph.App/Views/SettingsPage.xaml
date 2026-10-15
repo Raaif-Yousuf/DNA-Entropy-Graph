@@ -114,6 +114,49 @@
                     </StackPanel>
                 </Border>
             </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsViewersHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="16">
+                        <TextBlock x:Uid="SettingsViewersExplainer" TextWrapping="Wrap" />
+                        <!-- Each value saves when the box loses focus or Browse picks a file, under the Viewer.* keys the Results page reads at each press. -->
+                        <StackPanel Spacing="4">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Uid="ViewerIgvPathBox" Text="{x:Bind ExternalViewers.IgvPath, Mode=TwoWay}" />
+                                <Button Grid.Column="1" x:Uid="ViewerIgvBrowseButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.BrowseIgvCommand}" />
+                                <Button Grid.Column="2" x:Uid="ViewerIgvPathResetButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.ResetIgvPathCommand}" />
+                            </Grid>
+                            <TextBlock Text="{x:Bind ExternalViewers.IgvPathStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <StackPanel Spacing="4">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Uid="ViewerIgvPortBox" Width="160" Text="{x:Bind ExternalViewers.IgvPortText, Mode=TwoWay}" />
+                                <Button x:Uid="ViewerIgvPortResetButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.ResetIgvPortCommand}" />
+                            </StackPanel>
+                            <TextBlock Text="{x:Bind ExternalViewers.IgvPortStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <StackPanel Spacing="4">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Uid="ViewerGeneiousPathBox" Text="{x:Bind ExternalViewers.GeneiousPath, Mode=TwoWay}" />
+                                <Button Grid.Column="1" x:Uid="ViewerGeneiousBrowseButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.BrowseGeneiousCommand}" />
+                                <Button Grid.Column="2" x:Uid="ViewerGeneiousPathResetButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.ResetGeneiousPathCommand}" />
+                            </Grid>
+                            <TextBlock Text="{x:Bind ExternalViewers.GeneiousPathStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </Page>

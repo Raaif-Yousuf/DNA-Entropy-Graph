@@ -269,6 +269,8 @@ public static class ServiceRegistration
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         services.AddSingleton<RunCompletionActions>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
+        services.AddTransient<ExternalViewersSettingsViewModel>();
 
         return services;
     }

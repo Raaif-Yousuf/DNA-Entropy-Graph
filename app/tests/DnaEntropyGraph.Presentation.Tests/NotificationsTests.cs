@@ -138,7 +138,7 @@ public sealed class NotificationsTests
     public void Only_a_completed_or_partly_completed_run_triggers_anything_through_the_shell(JobPhase phase)
     {
         var messenger = new WeakReferenceMessenger();
-        var shell = new ShellViewModel(_navigator, Substitute.For<IGcpAccount>(), messenger, _strings, TestMessages.Center(), completion: Actions());
+        var shell = new ShellViewModel(_navigator, Substitute.For<IGcpAccount>(), messenger, _strings, TestMessages.Center(), Actions());
 
         messenger.Send(new RunPhaseChangedMessage("job-1", phase));
 
@@ -151,7 +151,7 @@ public sealed class NotificationsTests
     public async Task The_shell_runs_the_completion_actions_when_a_run_finishes()
     {
         var messenger = new WeakReferenceMessenger();
-        var shell = new ShellViewModel(_navigator, Substitute.For<IGcpAccount>(), messenger, _strings, TestMessages.Center(), completion: Actions());
+        var shell = new ShellViewModel(_navigator, Substitute.For<IGcpAccount>(), messenger, _strings, TestMessages.Center(), Actions());
 
         messenger.Send(new RunPhaseChangedMessage("job-1", JobPhase.Completed));
         await shell.CompletionWork;
