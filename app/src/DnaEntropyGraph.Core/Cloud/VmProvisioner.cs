@@ -56,6 +56,14 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// docs/cloud_design.md section 5's abort-vs-continue rule.
     /// </summary>
     public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, VmSpec spec, RunProgress progress, CancellationToken cancellationToken)
+        => await ProvisionAsync(request, _ => Task.FromResult(spec), progress, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// As above, but the spec is made by <paramref name="completeSpec"/> only once the adoption lookup has found nothing, so
+    /// whatever it needs (issue #606: the worker identity, an IAM call that can fail) is never asked of a run that adopts
+    /// a VM, and a failure there can never end a healthy VM. It runs once, before the first create.
+    /// </summary>
+    public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, CancellationToken cancellationToken)
     {
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
         if (existing.Count > 0)
@@ -63,6 +71,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             progress.VmMayExist = true;
             return ProvisionResult.Ok(existing[0].Zone);
         }
+
+        var spec = await completeSpec(cancellationToken).ConfigureAwait(false);
 
         // One value for both the create's own timeout and the poller's deadline, so they cannot drift apart: the create's
         // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the

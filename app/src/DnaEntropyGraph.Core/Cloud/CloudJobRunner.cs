@@ -65,6 +65,7 @@ public sealed class CloudJobRunner
     private readonly GatewayCalls _calls;
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;
+    private readonly IWorkerIdentityGateway _workerIdentity;
     private readonly PreflightChecks _preflight;
     private readonly RunTransfer _transfer;
     private readonly VmTerminator _terminator;
@@ -115,6 +116,9 @@ public sealed class CloudJobRunner
     /// <summary>How long to wait for a stop or delete to land (verifying the VM's terminal state) before recording it unverified.</summary>
     public TimeSpan LifecycleTimeout { get => _settings.LifecycleTimeout; init => _settings.LifecycleTimeout = value; }
 
+    /// <summary>The budget for the whole worker-identity step (#606), which is many calls in one gateway method; see <see cref="CloudRunSettings.WorkerIdentityTimeout"/>.</summary>
+    public TimeSpan WorkerIdentityTimeout { get => _settings.WorkerIdentityTimeout; init => _settings.WorkerIdentityTimeout = value; }
+
     /// <summary>How long to wait between looks at a VM that is stopping or being deleted.</summary>
     public TimeSpan LifecyclePollInterval { get => _settings.LifecyclePollInterval; init => _settings.LifecyclePollInterval = value; }
 
@@ -129,8 +133,9 @@ public sealed class CloudJobRunner
         IStorageGateway storageGateway,
         IProjectSetupGateway projectSetupGateway,
         IQuotaGateway quotaGateway,
+        IWorkerIdentityGateway workerIdentityGateway,
         IRunRepository runRepository)
-        : this(computeGateway, storageGateway, projectSetupGateway, quotaGateway, runRepository, null)
+        : this(computeGateway, storageGateway, projectSetupGateway, quotaGateway, workerIdentityGateway, runRepository, null)
     {
     }
 
@@ -140,9 +145,11 @@ public sealed class CloudJobRunner
         IStorageGateway storageGateway,
         IProjectSetupGateway projectSetupGateway,
         IQuotaGateway quotaGateway,
+        IWorkerIdentityGateway workerIdentityGateway,
         IRunRepository runRepository,
         Action<string, JobPhase>? onPhaseChanged)
     {
+        _workerIdentity = workerIdentityGateway;
         // The collaborators share one settings object, so a timeout set by an object initializer after this constructor is
         // what every one of them reads. The in-flight create state has exactly one owner: _provisioner.
         _compute = computeGateway;
@@ -320,8 +327,7 @@ public sealed class CloudJobRunner
         }
 
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
-        var spec = VmProvisioner.WithStartupMetadata(request, bucket);
-        var provisioned = await _provisioner.ProvisionAsync(request, spec, progress, cancellationToken).ConfigureAwait(false);
+        var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, token), progress, cancellationToken).ConfigureAwait(false);
         if (!provisioned.Success)
         {
             return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, RunErrorCodes.For(provisioned.FailureKind.Value), provisioned.FailureMessage, provisioned.VmEndNote).ConfigureAwait(false);
@@ -329,6 +335,26 @@ public sealed class CloudJobRunner
 
         progress.Zone = provisioned.Zone!;
         return await RunOnVmAsync(request, bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Issue #606: the spec to create. The provisioner asks for it only when no VM exists for the job, so a run that adopts a VM
+    /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured
+    /// here, once, before the first create; a refusal throws a classified CloudOperationException and no VM is made.
+    /// </summary>
+    private async Task<VmSpec> CompleteSpecAsync(CloudJobRequest request, string bucket, CancellationToken cancellationToken)
+    {
+        var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken, _settings.WorkerIdentityTimeout).ConfigureAwait(false);
+        if (identity.NoteCode == SetupErrorCodes.WorkerDefaultAccount)
+        {
+            // A yellow note, not a failure: the run carries on as the project's default account and its row says so.
+            await _rows.UpdateRowAsync(
+                request.JobId,
+                row => row with { ErrorCode = RunErrorCodes.WorkerDefaultAccount, ErrorDetail = SetupErrorCodes.WorkerDefaultAccount },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return VmProvisioner.WithStartupMetadata(request, bucket) with { ServiceAccountEmail = identity.ServiceAccountEmail };
     }
 
     /// <summary>Everything from the moment a VM exists. <see cref="RunCoreAsync"/> ends the VM for any exception that leaves here without having done so.</summary>

@@ -38,7 +38,12 @@ gives a user an actionable, specific answer instead of "no capacity anywhere":
 ```
 project ACTIVE -> billing enabled -> Compute Engine API enabled (auto-enable, idempotent)
                -> GPU quota > 0 in at least one region -> bucket exists and is readable
+               -> worker identity ensured (issue #606; after the bucket, because it binds the bucket)
 ```
+
+Step 6, the worker identity, is not a project-wide precondition the Insert error can be confused with; it runs in
+`CloudJobRunner` right after step 5 and before the VM is created, and its account email is what the VM runs as
+(section 16, "The worker identity").
 
 MEASURED, carried forward from the prototype's own recorded field experience
 (`docs/entry_points.md`'s seeded disproven-diagnosis row, and CLAUDE.md's Critical
@@ -1179,9 +1184,24 @@ account and a role and edits two policies, and a whole-method retry would replay
   either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
   per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers
   labels on these two, so there is no allowlist entry. Everything that bills (the VM, the bucket) keeps its labels.
-- **No production caller yet.** `IWorkerIdentityGateway` has no registration in `ServiceRegistration` and nothing calls
-  `EnsureWorkerIdentityAsync`: only `GoogleCloudGateways.Create` builds it (and tests use it). Calling it from the setup flow
-  before a VM is created, and registering it, is issue #606 (P1). Until then no VM runs as the worker account. `FakeGcp`
+- **Caller (issue #606).** `CloudJobRunner.CompleteSpecAsync` calls `EnsureWorkerIdentityAsync(projectId, bucket)` after
+  `EnsureBucketAsync`, and `VmProvisioner.ProvisionAsync` invokes it only after its adoption lookup (`FindByJobIdAsync`) found
+  no VM, once, before the first create. It sets the returned `ServiceAccountEmail` on the spec it creates with
+  (`with { ServiceAccountEmail = ... }`); without it `GoogleComputeGateway` refuses the create (`WORKER_SERVICE_ACCOUNT_MISSING`).
+  A run that adopts a VM, or whose job already finished, never calls IAM, so an IAM failure can never end a healthy working
+  VM (cold review of #606). The step runs under its own `CloudRunSettings.WorkerIdentityTimeout` (5 minutes, not the 60 s
+  `CallTimeout`), because the gateway is a dozen or more HTTP calls in one method (account create, up to 6 tries with 2 s to 12 s
+  visibility waits, role create and read-back, two policy edits of up to 5 attempts) and abandoning it at 60 s would leave it
+  writing policies after the run failed `network`. THEORY (unverified): 5 minutes is sized from that worst case, not measured. A refusal is a `CloudOperationException` that ends the
+  run through the ordinary classifier (`permission`, `org_policy`, ...) before any VM is created. `WORKER_DEFAULT_ACCOUNT` is a
+  note: the run continues and the row carries `RunErrorCodes.WorkerDefaultAccount` (`worker_default_account`, copy
+  `RunError_worker_default_account`) as an `ErrorCode` on a row that still completes, which the Runs list shows as its warning line
+  (#459); a later failure or `lifecycle_unverified` replaces it. DI registers `IWorkerIdentityGateway` as `FakeGcp` (never wrapped
+  in a `Resilient*` decorator); the real gateway switch is #609.
+  **DECISION (agent-made, reversible):** the call lives in the runner, not a setup-wizard step, because this codebase has no
+  bucket step in the wizard (the bucket is made in the runner) and the account binds the bucket, so the bucket must exist first;
+  the wizard may also call it for early feedback later. It is not run from `UploadInputsAsync` (no VM there).
+  `FakeGcp`
   implements the member
   with scripted failures (`WithServiceAccountCreationBlockedByOrgPolicy`, `WithWorkerIdentityPermissionDenied`,
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.

@@ -136,6 +136,9 @@ public static class ServiceRegistration
         services.AddSingleton<IStorageGateway>(sp => new ResilientStorageGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
         services.AddSingleton<IProjectSetupGateway>(sp => new ResilientProjectSetupGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
         services.AddSingleton<IQuotaGateway>(sp => new ResilientQuotaGateway(sp.GetRequiredService<FakeGcp>(), sp.GetRequiredService<CloudCallPipeline>()));
+        // Issue #606: the runner ensures the worker identity before any VM is created. Never wrapped in a Resilient* decorator:
+        // the real gateway is creates and read-modify-writes whose every HTTP call goes through the pipeline itself (#54, #609).
+        services.AddSingleton<IWorkerIdentityGateway>(sp => sp.GetRequiredService<FakeGcp>());
 
         // Persistence (issue #67: real SQLite + settings.json under
         // %LOCALAPPDATA%\DNAEntropyGraph\, docs/architecture.md section 6).
@@ -221,6 +224,7 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IStorageGateway>(),
                 sp.GetRequiredService<IProjectSetupGateway>(),
                 sp.GetRequiredService<IQuotaGateway>(),
+                sp.GetRequiredService<IWorkerIdentityGateway>(),
                 sp.GetRequiredService<IRunRepository>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
         });
