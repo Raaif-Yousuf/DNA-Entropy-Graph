@@ -46,6 +46,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
     private readonly OutputSelectionStore _outputStore;
     private readonly IDiagnosticsLog _log;
+    private readonly IClipboardTextReader? _clipboard;
 
     // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
     // kept while the user switches between pills, and written back to the store only when a run starts.
@@ -60,6 +61,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AddPastedCommand))]
     private string _pasteText = string.Empty;
+
+    /// <summary>Whether the Paste sequence section is open; Ctrl+Shift+V opens it (issue #110).</summary>
+    [ObservableProperty]
+    private bool _isPasteOpen;
 
     /// <summary>The live "N bases" counter under the Paste sequence box.</summary>
     [ObservableProperty]
@@ -95,8 +100,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         IDiagnosticsLog log,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null,
-        NewRunIntake? intake = null)
+        NewRunIntake? intake = null,
+        IClipboardTextReader? clipboard = null)
     {
+        _clipboard = clipboard;
         _intake = intake;
         _outputStore = outputStore;
         _log = log;
@@ -492,6 +499,23 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         await RemoveItemAsync(pill);
         return false;
     }
+
+    /// <summary>Ctrl+Shift+V (issue #110): puts the clipboard's text in the Paste sequence box and opens it. Does not add it; the user still presses Add.</summary>
+    public async Task PasteFromClipboardAsync()
+    {
+        var text = _clipboard is null ? null : await _clipboard.ReadTextAsync();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            PostStatus([_strings.GetString("NewRunStatusClipboardEmpty")]);
+            return;
+        }
+
+        PasteText = text;
+        IsPasteOpen = true;
+    }
+
+    /// <summary>The void form of <see cref="PasteFromClipboardAsync"/> that the Ctrl+Shift+V KeyboardAccelerator's Invoked event binds to with x:Bind (an event handler cannot return a Task).</summary>
+    public async void PasteFromClipboard() => await PasteFromClipboardAsync();
 
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 

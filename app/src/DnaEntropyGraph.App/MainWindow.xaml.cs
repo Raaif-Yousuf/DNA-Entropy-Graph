@@ -42,6 +42,8 @@ public sealed partial class MainWindow : Window
         windowThemeApplier.Attach(RootGrid, AppWindow);
         windowThemeApplier.Apply(ThemeApplier.ReadTheme(settingsStore) ?? "System");
         WindowPlacementApplier.Apply(this, windowPlacementService);
+        // Ctrl+, (issue #110): the comma has no VirtualKey name, so XAML cannot spell it; 188 is VK_OEM_COMMA.
+        SettingsNavItem.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = (Windows.System.VirtualKey)188, Modifiers = Windows.System.VirtualKeyModifiers.Control });
     }
 
     // Issue #490: Loaded fires after App.OnLaunched has handed RootFrame to NavigationService,

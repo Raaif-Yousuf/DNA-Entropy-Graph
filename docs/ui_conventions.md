@@ -111,6 +111,23 @@ requirement, section 5 below) works without a second code path.
   button twin, since drag-and-drop alone is not discoverable or operable for everyone.
 - No fixed heights on text-bearing controls, so text scaling (a Windows accessibility
   setting) does not clip content.
+- Keyboard (issue #110, Appendix A section 6): Alt+Left is a `KeyboardAccelerator` on
+  `RootGrid` in `MainWindow.xaml` with `Invoked="{x:Bind ViewModel.GoBack}"` (x:Bind can
+  bind an event to a parameterless ViewModel method). Ctrl+N is on the New run nav item and
+  Ctrl+, on the Settings nav item (invoking an accelerator on a `NavigationViewItem` selects
+  it); the comma has no `VirtualKey` name, so it is added in `MainWindow.xaml.cs` as
+  `(VirtualKey)188`. Ctrl+O, Ctrl+Enter and F5 sit on the button they press. Ctrl+Shift+V
+  runs `NewRunViewModel.PasteFromClipboard` through `IClipboardTextReader`. Esc closing a
+  `ContentDialog` is the platform default. Nav `AccessKey`s live in the .resw
+  (`NavX.AccessKey`). Not done: Ctrl+L (the locus box belongs to igv.js inside WebView2, not
+  to a XAML control) and F5 on Cloud (that page is still the placeholder).
+- Guards: `IconOnlyAutomationNameGuardTests` fails on an icon-only button with no
+  `AutomationProperties.Name` (attribute, or `<Uid>.AutomationProperties.Name` in the .resw);
+  `KeyboardShortcutWiringTests` fails if a shortcut or the progress page's live regions
+  leave the XAML. The progress page marks the stage title and the detail line
+  `LiveSetting=Polite`.
+- High contrast: only theme resources for colours (`ThemeResource`), never a hard-coded
+  brush; the walkthrough is a ToTest row.
 
 ## 6. Toasts and file associations
 

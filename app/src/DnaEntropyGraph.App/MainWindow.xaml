@@ -18,6 +18,10 @@
         an issue; see this session's report.
     -->
     <Grid x:Name="RootGrid">
+        <!-- Issue #110: window-wide shortcuts (Appendix A section 6). Alt+Left goes back; Ctrl+N and Ctrl+, are on the nav items below. -->
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Left" Modifiers="Menu" Invoked="{x:Bind ViewModel.GoBack}" />
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />
@@ -81,6 +85,9 @@
             Loaded="RootNavigationView_Loaded">
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Uid="NavNewRun" Tag="NewRun">
+                    <NavigationViewItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Key="N" Modifiers="Control" />
+                    </NavigationViewItem.KeyboardAccelerators>
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE710;" />
                     </NavigationViewItem.Icon>
@@ -100,7 +107,7 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem x:Uid="NavSettings" Tag="Settings">
+                <NavigationViewItem x:Name="SettingsNavItem" x:Uid="NavSettings" Tag="Settings">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE713;" />
                     </NavigationViewItem.Icon>

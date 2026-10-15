@@ -33,6 +33,22 @@
   <data name="ThemeNotSaved_Body" xml:space="preserve">
     <value>The theme changed for now but could not be remembered. Close other copies of the app, then choose the theme again.</value>
   </data>
+  <!-- Issue #110: Alt, then the letter, jumps to the destination. -->
+  <data name="NavNewRun.AccessKey" xml:space="preserve">
+    <value>N</value>
+  </data>
+  <data name="NavRuns.AccessKey" xml:space="preserve">
+    <value>R</value>
+  </data>
+  <data name="NavCloud.AccessKey" xml:space="preserve">
+    <value>C</value>
+  </data>
+  <data name="NavSettings.AccessKey" xml:space="preserve">
+    <value>S</value>
+  </data>
+  <data name="NewRunStatusClipboardEmpty" xml:space="preserve">
+    <value>The clipboard has no text to paste. Copy your sequence, then press Ctrl+Shift+V again.</value>
+  </data>
   <data name="NavNewRun.Content" xml:space="preserve">
     <value>New run</value>
   </data>
