@@ -501,8 +501,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     }
 
     /// <summary>Ctrl+Shift+V (issue #110): puts the clipboard's text in the Paste sequence box and opens it. Does not add it; the user still presses Add.</summary>
-    [RelayCommand]
-    private async Task PasteFromClipboardAsync()
+    public async Task PasteFromClipboardAsync()
     {
         var text = _clipboard is null ? null : await _clipboard.ReadTextAsync();
         if (string.IsNullOrWhiteSpace(text))
@@ -515,8 +514,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         IsPasteOpen = true;
     }
 
-    /// <summary>The same as <see cref="PasteFromClipboardCommand"/>, parameterless so a KeyboardAccelerator's Invoked event can bind to it with x:Bind.</summary>
-    public void PasteFromClipboard() => PasteFromClipboardCommand.Execute(null);
+    /// <summary>The void form of <see cref="PasteFromClipboardAsync"/> that the Ctrl+Shift+V KeyboardAccelerator's Invoked event binds to with x:Bind (an event handler cannot return a Task).</summary>
+    public async void PasteFromClipboard() => await PasteFromClipboardAsync();
 
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 
