@@ -43,6 +43,15 @@ public static class RunErrorCodes
     public const string InputEmpty = "input_empty";
     public const string InputTooLong = "input_too_long";
 
+    /// <summary>A This PC run was chosen but the local engine is not installed or did not pass its health check (issues #173, #174).</summary>
+    public const string LocalEngineNotReady = "local_engine_not_ready";
+
+    /// <summary>A This PC run with a real model was chosen but this PC has no usable NVIDIA GPU for it (issue #120).</summary>
+    public const string LocalGpuNotUsable = "local_gpu_not_usable";
+
+    /// <summary>The worker process on this PC ended without writing a result (WORKER_CRASH for a local run, issue #174).</summary>
+    public const string LocalWorkerCrashed = "local_worker_crashed";
+
     /// <summary>The installation id file was unusable and set aside (#558). Minimal copy only; the recovery UX is owner-only DECISION #404.</summary>
     public const string InstallationIdUnusable = "installation_id_unusable";
 
@@ -69,7 +78,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -182,6 +191,9 @@ public static class RunErrorCodes
         InputEmpty => "RunError_input_empty",
         InputTooLong => "RunError_input_too_long",
         InstallationIdUnusable => "RunError_installation_id_unusable",
+        LocalEngineNotReady => "RunError_local_engine_not_ready",
+        LocalGpuNotUsable => "RunError_local_gpu_not_usable",
+        LocalWorkerCrashed => "RunError_local_worker_crashed",
         WorkerDefaultAccount => "RunError_worker_default_account",
         PermissionActAs => "RunError_permission_actas",
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",

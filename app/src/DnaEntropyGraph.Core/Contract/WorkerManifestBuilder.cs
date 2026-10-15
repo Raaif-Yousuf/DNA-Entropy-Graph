@@ -52,7 +52,8 @@ public static class WorkerManifestBuilder
         string? workerImage,
         string bucket,
         IReadOnlyList<StagedInput> inputs,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        string? localRoot = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(inputs);
@@ -133,12 +134,19 @@ public static class WorkerManifestBuilder
                 ["keepAliveMinutes"] = options.KeepAliveMinutes,
                 ["afterKeepAlive"] = options.AfterKeepAlive == AfterKeepAliveAction.Delete ? "delete" : "stop",
             },
-            ["store"] = new JsonObject
-            {
-                ["kind"] = "gcs",
-                ["bucket"] = bucket,
-                ["prefix"] = JobPrefix(jobId),
-            },
+            // A This PC run (issue #174) is the same manifest with the store a folder: docs/job_contract.md section 3.
+            ["store"] = localRoot is null
+                ? new JsonObject
+                {
+                    ["kind"] = "gcs",
+                    ["bucket"] = bucket,
+                    ["prefix"] = JobPrefix(jobId),
+                }
+                : new JsonObject
+                {
+                    ["kind"] = "localdir",
+                    ["root"] = localRoot,
+                },
         };
 
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });

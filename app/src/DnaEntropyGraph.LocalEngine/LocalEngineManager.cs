@@ -6,16 +6,24 @@ namespace DnaEntropyGraph.LocalEngine;
 /// <summary>Where everything in the engine folder is (issue #172): one venv, nothing else, so Remove is one folder.</summary>
 public sealed class LocalEngineLayout
 {
-    public LocalEngineLayout(string engineFolder)
+    private readonly string? _pythonOverride;
+
+    /// <param name="pythonOverride">A python to use instead of the engine's own venv (development and the real-worker test only).</param>
+    /// <param name="environment">Variables added to every program started in the engine (for example <c>PYTHONPATH</c> in a development checkout).</param>
+    public LocalEngineLayout(string engineFolder, string? pythonOverride = null, IReadOnlyDictionary<string, string>? environment = null)
     {
         EngineFolder = engineFolder;
+        _pythonOverride = pythonOverride;
+        Environment = environment;
     }
 
     public string EngineFolder { get; }
 
+    public IReadOnlyDictionary<string, string>? Environment { get; }
+
     public string VenvFolder => Path.Combine(EngineFolder, ".venv");
 
-    public string PythonExe => Path.Combine(VenvFolder, "Scripts", "python.exe");
+    public string PythonExe => _pythonOverride ?? Path.Combine(VenvFolder, "Scripts", "python.exe");
 }
 
 /// <summary>
@@ -65,7 +73,7 @@ public sealed class LocalEngineManager : ILocalReadinessSource
             return LocalEngineHealth.NotInstalled("no python in the engine folder");
         }
 
-        var spec = new ProcessSpec(_layout.PythonExe, ["-m", "dna_entropy.worker.cli", "health"]);
+        var spec = new ProcessSpec(_layout.PythonExe, ["-m", "dna_entropy.worker.cli", "health"], Environment: _layout.Environment);
         var output = await _launcher.RunToEndAsync(spec, cancellationToken, HealthTimeout).ConfigureAwait(false);
         if (!output.Started)
         {
