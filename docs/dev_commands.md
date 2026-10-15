@@ -236,8 +236,8 @@ The machine limit lives in one place, `<lock dir>\slots.txt`, set with `heavy.py
 For `dotnet build|test|run|pack|publish` it adds `--artifacts-path <repo>\app\.artifacts\<lane>` unless one is
 given (not for `dotnet format`), so concurrent lanes never share `obj/`. `--lane <name>` is **required** for
 those commands (exit 2 without it; a shared default lane would put two agents back in one `obj/`).
-The folder is inside the repo on purpose: Cloud.Tests `FixturePaths` and Core.Tests `StartupMetadataTests`
-find the repo by walking up from the test binary, which fails under `%TEMP%`. `bin/`, `obj/` and `publish/`
+The folder is inside the repo as a convenience, no longer a requirement (#495): every test project's repo-root helper
+falls back to its own source file's path, so `--artifacts-path "$env:TEMP\deg-art\<lane>"` also works (see tests.md). `bin/`, `obj/` and `publish/`
 under it are gitignored; `dotnet pack` would also create `package/`, which is not. `dotnet test` still needs
 `app\` as the working directory (see above).
 
