@@ -1,0 +1,1 @@
+- Settings has a Files group: the app data folder, the saved input copies with their size, and the log files, each with an Open folder button. Nothing in it deletes anything (#642).

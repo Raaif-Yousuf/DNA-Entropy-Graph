@@ -81,8 +81,8 @@ public class DiResolutionTests
         // because the directory it scans is empty" is not a pass).
         viewModelTypes.ShouldNotBeEmpty();
         viewModelTypes.Count.ShouldBe(
-            10,
-            "docs/superpowers/specs Appendix A section 1 names 9 ViewModels, plus RunDefaultsSettingsViewModel (#640, a Settings group); " +
+            11,
+            "docs/superpowers/specs Appendix A section 1 names 9 ViewModels, plus the Settings group ViewModels RunDefaultsSettingsViewModel (#640) and FilesSettingsViewModel (#642); " +
             "update this count deliberately alongside that table, not by accident.");
 
         foreach (var viewModelType in viewModelTypes)

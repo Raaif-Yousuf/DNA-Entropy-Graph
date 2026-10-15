@@ -64,6 +64,31 @@
                 </Border>
             </StackPanel>
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsFilesHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Uid="SettingsFilesExplainer" TextWrapping="Wrap" />
+                        <StackPanel Spacing="4">
+                            <TextBlock x:Uid="FilesDataLabel" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind Files.DataFolderPath}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                            <Button x:Uid="FilesDataOpenButton" Command="{x:Bind Files.OpenDataFolderCommand}" />
+                        </StackPanel>
+                        <StackPanel Spacing="4">
+                            <TextBlock x:Uid="FilesInputsLabel" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind Files.InputsFolderPath}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind Files.InputsCacheSizeText, Mode=OneWay}" />
+                            <Button x:Uid="FilesInputsOpenButton" Command="{x:Bind Files.OpenInputsFolderCommand}" />
+                        </StackPanel>
+                        <StackPanel Spacing="4">
+                            <TextBlock x:Uid="FilesLogsLabel" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind Files.LogsFolderPath}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                            <Button x:Uid="FilesLogsOpenButton" Command="{x:Bind Files.OpenLogsFolderCommand}" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind Files.FilesStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsDiagnosticsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">

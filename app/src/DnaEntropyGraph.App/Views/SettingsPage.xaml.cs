@@ -11,10 +11,13 @@ public sealed partial class SettingsPage : Page
 
     public RunDefaultsSettingsViewModel RunDefaults { get; }
 
+    public FilesSettingsViewModel Files { get; }
+
     public SettingsPage()
     {
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
+        Files = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FilesSettingsViewModel>();
         InitializeComponent();
     }
 }

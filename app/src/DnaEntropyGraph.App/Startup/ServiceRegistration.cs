@@ -265,6 +265,7 @@ public static class ServiceRegistration
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<RunDefaultsSettingsViewModel>();
+        services.AddTransient<FilesSettingsViewModel>();
 
         return services;
     }

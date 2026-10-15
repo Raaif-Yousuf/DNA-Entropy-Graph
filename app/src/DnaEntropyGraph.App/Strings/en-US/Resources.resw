@@ -1240,4 +1240,31 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunDefaultsNotSaved" xml:space="preserve">
     <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then tick the file again.</value>
   </data>
+  <data name="SettingsFilesHeader.Text" xml:space="preserve">
+    <value>Files</value>
+  </data>
+  <data name="SettingsFilesExplainer.Text" xml:space="preserve">
+    <value>Where the app keeps its own data on this computer. Nothing here deletes your results or your input files.</value>
+  </data>
+  <data name="FilesDataLabel.Text" xml:space="preserve">
+    <value>App data folder</value>
+  </data>
+  <data name="FilesInputsLabel.Text" xml:space="preserve">
+    <value>Saved copies of your input files (used to run a file again)</value>
+  </data>
+  <data name="FilesLogsLabel.Text" xml:space="preserve">
+    <value>Log files</value>
+  </data>
+  <data name="FilesDataOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesInputsOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesLogsOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesOpenFailed" xml:space="preserve">
+    <value>Windows could not open that folder. It may not exist yet, so run a sequence once, then choose Open folder again.</value>
+  </data>
 </root>
