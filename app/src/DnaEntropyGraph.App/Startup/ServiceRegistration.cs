@@ -302,6 +302,8 @@ public static class ServiceRegistration
         services.AddTransient<FilesSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
+        services.AddTransient<RunTargetPickerViewModel>();
+        services.AddTransient<ThisPcSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();

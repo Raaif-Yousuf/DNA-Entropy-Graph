@@ -102,6 +102,46 @@
                 </Border>
             </StackPanel>
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsThisPcHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Uid="SettingsThisPcExplainer" TextWrapping="Wrap" />
+                        <!-- Where to run (issues #120, #173). A choice that cannot work right now is greyed out and the reason is the line under the box. -->
+                        <StackPanel Spacing="4">
+                            <ComboBox x:Uid="RunTargetBox" ItemsSource="{x:Bind ThisPc.Picker.Options}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{x:Bind ThisPc.Picker.SelectedTarget, Mode=TwoWay}">
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem">
+                                        <!-- {Binding} on purpose: a container style has no x:DataType; RunTargetOption.IsEnabled is a real property. -->
+                                        <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
+                            </ComboBox>
+                            <TextBlock Text="{x:Bind ThisPc.Picker.ThisPcReason, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.Picker.Note, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock Text="{x:Bind ThisPc.Picker.SaveStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <!-- The health card. -->
+                        <StackPanel Spacing="4">
+                            <TextBlock x:Uid="ThisPcHealthHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind ThisPc.GpuText, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.DiskText, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.EngineText, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.BlockersText, Mode=OneWay}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button x:Uid="ThisPcRefreshButton" Command="{x:Bind ThisPc.RefreshCommand}" />
+                            <Button x:Uid="ThisPcInstallButton" Command="{x:Bind ThisPc.InstallCommand}" />
+                            <Button x:Uid="ThisPcRepairButton" Command="{x:Bind ThisPc.RepairCommand}" />
+                            <Button x:Uid="ThisPcRemoveButton" Command="{x:Bind ThisPc.RemoveCommand}" />
+                            <Button x:Uid="ThisPcCancelButton" Command="{x:Bind ThisPc.CancelInstallCommand}" />
+                            <ProgressRing IsActive="{x:Bind ThisPc.IsBusy, Mode=OneWay}" Width="20" Height="20" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind ThisPc.ProgressText, Mode=OneWay}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ThisPc.StatusText, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsDiagnosticsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">

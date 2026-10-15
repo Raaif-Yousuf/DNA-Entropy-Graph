@@ -83,6 +83,9 @@ public sealed partial class NewRunViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
     private string _statusMessage = string.Empty;
 
+    /// <summary>The Cloud / This PC / Auto choice (issues #120 and #173); null in a host that has none, which means Cloud.</summary>
+    public RunTargetPickerViewModel? RunTarget { get; }
+
     public NewRunViewModel(
         IFilePicker filePicker,
         IJobEngine jobEngine,
@@ -93,8 +96,10 @@ public sealed partial class NewRunViewModel : ObservableObject
         OutputSelectionStore outputStore,
         IDiagnosticsLog log,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
-        IInputFileSystem? files = null)
+        IInputFileSystem? files = null,
+        RunTargetPickerViewModel? runTarget = null)
     {
+        RunTarget = runTarget;
         _outputStore = outputStore;
         _log = log;
         _filePicker = filePicker;
@@ -515,7 +520,7 @@ public sealed partial class NewRunViewModel : ObservableObject
         var options = new RunOptions
         {
             ModelId = DefaultModelId,
-            RunTarget = "Cloud",
+            RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
             InputPath = SelectedItem!.Path,
             TreatAsRna = IsTreatingAsRna,
             OutputFiles = outputs,
