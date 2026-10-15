@@ -53,21 +53,37 @@ public sealed partial class FileAssociationSettingsViewModel : ObservableObject
 
             OpenWithStatus = string.Empty;
         }
+        catch (FileAssociationRefusedException refused)
+        {
+            // Nothing was written: say why, by reason, and show what is really registered.
+            System.Diagnostics.Trace.TraceInformation($"file association change refused: {refused.Reason}");
+            SetBackToWhatIsRegistered(refused.Reason switch
+            {
+                FileAssociationRefusal.NotTheAppExecutable => "OpenWithNotInstalled",
+                FileAssociationRefusal.SandboxProfile => "OpenWithSandbox",
+                _ => "OpenWithNotSaved",
+            });
+        }
         catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException or InvalidOperationException)
         {
             System.Diagnostics.Trace.TraceWarning($"file association could not be changed: {ex.GetType().Name}");
-            _loading = true;
-            try
-            {
-                OpenWithEnabled = SafeIsEnabled();
-            }
-            finally
-            {
-                _loading = false;
-            }
-
-            OpenWithStatus = _strings.GetString("OpenWithNotSaved");
+            SetBackToWhatIsRegistered("OpenWithNotSaved");
         }
+    }
+
+    private void SetBackToWhatIsRegistered(string statusKey)
+    {
+        _loading = true;
+        try
+        {
+            OpenWithEnabled = SafeIsEnabled();
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        OpenWithStatus = _strings.GetString(statusKey);
     }
 
     private bool SafeIsEnabled()

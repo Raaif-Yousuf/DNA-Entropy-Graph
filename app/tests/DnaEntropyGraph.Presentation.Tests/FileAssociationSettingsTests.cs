@@ -15,8 +15,8 @@ public class FileAssociationSettingsTests
 
     public FileAssociationSettingsTests() => _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
 
-    private FileAssociationSettingsViewModel NewViewModel(string? exe = @"C:\app\app.exe")
-        => new(new FileAssociationService(_registry, () => exe), _strings);
+    private FileAssociationSettingsViewModel NewViewModel(string? exe = @"C:\app\DnaEntropyGraph.App.exe", bool sandbox = false)
+        => new(new FileAssociationService(_registry, () => exe, () => sandbox), _strings);
 
     [Fact]
     public void The_switch_shows_what_is_registered_now_and_opening_the_page_writes_nothing()
@@ -36,7 +36,7 @@ public class FileAssociationSettingsTests
         var viewModel = NewViewModel();
 
         viewModel.OpenWithEnabled = true;
-        _registry.Received().SetValue(Arg.Is<string>(k => k.EndsWith(@"\shell\open\command", StringComparison.Ordinal)), Arg.Is<string?>(n => n == null), "\"C:\\app\\app.exe\" \"%1\"");
+        _registry.Received().SetValue(Arg.Is<string>(k => k.EndsWith(@"\shell\open\command", StringComparison.Ordinal)), Arg.Is<string?>(n => n == null), "\"C:\\app\\DnaEntropyGraph.App.exe\" \"%1\"");
 
         viewModel.OpenWithEnabled = false;
         _registry.Received(1).DeleteSubKeyTree(Arg.Is<string>(k => k.EndsWith(FileAssociations.ProgId, StringComparison.Ordinal)));
@@ -54,5 +54,31 @@ public class FileAssociationSettingsTests
         viewModel.OpenWithEnabled.ShouldBeFalse();
         viewModel.OpenWithStatus.ShouldBe("OpenWithNotSaved");
         viewModel.HasOpenWithStatus.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_build_run_through_dotnet_says_open_with_needs_the_installed_app_and_writes_nothing()
+    {
+        var viewModel = NewViewModel(exe: @"C:\Program Files\dotnet\dotnet.exe");
+
+        viewModel.OpenWithEnabled = true;
+
+        viewModel.OpenWithEnabled.ShouldBeFalse();
+        viewModel.OpenWithStatus.ShouldBe("OpenWithNotInstalled");
+        _registry.DidNotReceiveWithAnyArgs().SetValue(default!, default, default!);
+    }
+
+    [Fact]
+    public void A_sandbox_profile_says_so_and_never_touches_the_real_users_registry()
+    {
+        _registry.ValueExists(Arg.Any<string>(), Arg.Any<string?>()).Returns(true);
+        var viewModel = NewViewModel(sandbox: true);
+
+        viewModel.OpenWithEnabled = false;
+
+        viewModel.OpenWithEnabled.ShouldBeTrue("the switch goes back to what is really registered");
+        viewModel.OpenWithStatus.ShouldBe("OpenWithSandbox");
+        _registry.DidNotReceiveWithAnyArgs().DeleteSubKeyTree(default!);
+        _registry.DidNotReceiveWithAnyArgs().DeleteValue(default!, default!);
     }
 }

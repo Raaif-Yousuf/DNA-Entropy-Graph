@@ -25,4 +25,25 @@ public sealed class CurrentUserClasses : IClassesRegistry
         using var key = Registry.CurrentUser.OpenSubKey(subKeyPath);
         return key?.GetValue(valueName) is not null;
     }
+
+    public bool KeyExists(string subKeyPath)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(subKeyPath);
+        return key is not null;
+    }
+
+    public bool DeleteSubKeyIfEmpty(string subKeyPath)
+    {
+        using (var key = Registry.CurrentUser.OpenSubKey(subKeyPath))
+        {
+            if (key is null || key.ValueCount > 0 || key.SubKeyCount > 0)
+            {
+                return false;
+            }
+        }
+
+        // DeleteSubKey (not the Tree form) never removes a key that has sub keys, so a key that gained one in between survives.
+        Registry.CurrentUser.DeleteSubKey(subKeyPath, throwOnMissingSubKey: false);
+        return true;
+    }
 }

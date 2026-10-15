@@ -10,14 +10,22 @@ namespace DnaEntropyGraph.Presentation.Services;
 /// A launch that names sequence files (Open with, issue #108) opens New run with them added. The arguments arrive from outside the app,
 /// so only <see cref="AppDeepLink"/>'s plain job id and local sequence-file paths are acted on.
 /// </summary>
-public sealed class ActivationRouter(INavigator navigator, IAppWindow window, IDispatcher dispatcher)
+public sealed class ActivationRouter(
+    INavigator navigator,
+    IAppWindow window,
+    IDispatcher dispatcher,
+    ShellReadiness? readiness = null,
+    NewRunIntake? intake = null)
 {
-    /// <summary>Handles one activation (from any thread). True when it named a run and the page was opened.</summary>
+    /// <summary>
+    /// Handles one activation (from any thread). True when it named a run. Nothing is done until the shell has made its first
+    /// navigation (<paramref name="readiness"/>), because that navigation would otherwise land after ours and replace it.
+    /// </summary>
     public bool Handle(string? arguments)
     {
         var hasRun = AppDeepLink.TryGetRunId(arguments, out var jobId);
         var hasFiles = AppDeepLink.TryGetInputFiles(arguments, out var inputFiles);
-        dispatcher.Enqueue(() =>
+        void Act() => dispatcher.Enqueue(() =>
         {
             window.BringToFront();
             if (hasRun)
@@ -26,10 +34,24 @@ public sealed class ActivationRouter(INavigator navigator, IAppWindow window, ID
             }
             else if (hasFiles)
             {
-                // "Open with" from Explorer (issue #108): New run, with the file added as if it had been dropped there.
-                navigator.NavigateTo(ShellViewModel.InitialPageKeyValue, new DroppedItems(inputFiles, 0, false));
+                // "Open with" from Explorer (issue #108): into the New run screen that is showing, so its draft survives; else a new one.
+                var items = new DroppedItems(inputFiles, 0, false);
+                if (intake?.TryAdd(items) != true)
+                {
+                    navigator.NavigateTo(ShellViewModel.InitialPageKeyValue, items);
+                }
             }
         });
+
+        if (readiness is null)
+        {
+            Act();
+        }
+        else
+        {
+            readiness.WhenReady(Act);
+        }
+
         return hasRun;
     }
 }
