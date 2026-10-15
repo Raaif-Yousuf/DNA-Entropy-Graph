@@ -16,7 +16,7 @@ The files a new run starts with, one list for a GenBank file and one for a FASTA
 
 ## Files
 
-Where the app keeps its own data: the app data folder, the saved copy of every input file you ran (with how much space the copies take) and the log files. **Open folder** shows each in Windows Explorer. Nothing here deletes anything: your results and your input files stay until you remove them yourself. If a folder does not exist yet, run a sequence once and choose **Open folder** again.
+Where the app keeps its own data: the app data folder, the run folders (each keeps a saved copy of the input file it ran, with how much space those copies and your pasted sequences take) and the log files. **Open folder** shows each in Windows Explorer. Nothing here deletes anything: your results and your input files stay until you remove them yourself. If Windows cannot open a folder, open File Explorer and paste the folder path shown on the page into its address bar.
 
 ## Notifications
 

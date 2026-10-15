@@ -35,7 +35,7 @@ public sealed class FilesSettingsTests : IDisposable
 
     private AppDataRoot Root => AppDataRoot.FromPath(_root);
 
-    private FilesSettingsViewModel Create() => new(Root, _launcher, _strings, new InlineDispatcher());
+    private FilesSettingsViewModel Create(Func<long>? measure = null) => new(Root, _launcher, _strings, new InlineDispatcher(), measure);
 
     private void SaveInput(string job, string name, int bytes)
     {
@@ -71,6 +71,30 @@ public sealed class FilesSettingsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_pasted_sequence_copy_counts_toward_the_saved_input_size()
+    {
+        SaveInput("job-a", "a.fasta", 1000);
+        var pasted = Path.Combine(_root, "pasted");
+        Directory.CreateDirectory(pasted);
+        File.WriteAllBytes(Path.Combine(pasted, "paste-1.txt"), new byte[500]);
+
+        var vm = Create();
+        await vm.Ready;
+
+        vm.InputsCacheBytes.ShouldBe(1500);
+    }
+
+    [Fact]
+    public async Task An_unexpected_failure_while_measuring_is_shown_not_left_as_a_faulted_task()
+    {
+        var vm = Create(() => throw new InvalidOperationException("boom with a secret file name"));
+
+        await Should.NotThrowAsync(() => vm.Ready);
+
+        vm.InputsCacheSizeText.ShouldBe("FilesSizeUnknown");
+    }
+
+    [Fact]
     public async Task No_saved_inputs_reads_as_zero_not_as_an_error()
     {
         var vm = Create();
@@ -85,6 +109,10 @@ public sealed class FilesSettingsTests : IDisposable
     [InlineData(1L, "1 KB")]
     [InlineData(1024L, "1 KB")]
     [InlineData(1536L, "1.5 KB")]
+    [InlineData(1048575L, "1 MB")]
+    [InlineData(1048576L, "1 MB")]
+    [InlineData(1073741823L, "1 GB")]
+    [InlineData(1020L * 1024, "1020 KB")]
     [InlineData(5L * 1024 * 1024, "5 MB")]
     [InlineData(3L * 1024 * 1024 * 1024, "3 GB")]
     public void Sizes_read_in_plain_units(long bytes, string expected) => FilesSettingsViewModel.FormatSize(bytes).ShouldBe(expected);

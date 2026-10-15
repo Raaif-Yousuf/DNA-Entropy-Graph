@@ -1283,7 +1283,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>At least one file must stay ticked. Tick another file first, then untick this one.</value>
   </data>
   <data name="RunDefaultsNotSaved" xml:space="preserve">
-    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then tick the file again.</value>
+    <value>This could not be saved because another copy of the app has the settings file open, so the box is back as it was. Close the other copies of the app, then change it again.</value>
   </data>
   <data name="SettingsFilesHeader.Text" xml:space="preserve">
     <value>Files</value>
@@ -1295,7 +1295,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>App data folder</value>
   </data>
   <data name="FilesInputsLabel.Text" xml:space="preserve">
-    <value>Saved copies of your input files (used to run a file again)</value>
+    <value>Run folders (each keeps a saved copy of its input file, used to run a file again)</value>
   </data>
   <data name="FilesLogsLabel.Text" xml:space="preserve">
     <value>Log files</value>
@@ -1309,8 +1309,14 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="FilesLogsOpenButton.Content" xml:space="preserve">
     <value>Open folder</value>
   </data>
+  <data name="FilesInputsSizeLabel.Text" xml:space="preserve">
+    <value>Space used by saved input copies, pasted sequences included:</value>
+  </data>
+  <data name="FilesSizeUnknown" xml:space="preserve">
+    <value>Not measured. Close Settings and open it again to measure it.</value>
+  </data>
   <data name="FilesOpenFailed" xml:space="preserve">
-    <value>Windows could not open that folder. It may not exist yet, so run a sequence once, then choose Open folder again.</value>
+    <value>Windows could not open that folder. Open File Explorer, then paste the folder path shown above into its address bar.</value>
   </data>
   <data name="SettingsNotificationsHeader.Text" xml:space="preserve">
     <value>Notifications</value>

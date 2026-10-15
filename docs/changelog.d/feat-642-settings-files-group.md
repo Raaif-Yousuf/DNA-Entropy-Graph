@@ -1,1 +1,2 @@
 - Settings has a Files group: the app data folder, the saved input copies with their size, and the log files, each with an Open folder button. Nothing in it deletes anything (#642).
+- The Files group counts pasted sequences in the saved-copies size, never shows 1024 KB, labels the run folders it opens, opens a drive root correctly, and shows a message instead of a silent blank when the size cannot be measured (#642).
