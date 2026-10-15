@@ -201,7 +201,7 @@ public sealed class CloudJobRunner
             {
                 RunFailureException failure => (failure.Kind, failure.Code),
                 CloudOperationException { Error.Code: RunErrorCodes.NotConnectedGatewayCode } cloud => (cloud.Kind, RunErrorCodes.CloudNotConnected),
-                CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Kind)),
+                CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Error, cloud.Kind)),
                 OperationCanceledException => (CloudErrorKind.Network, RunErrorCodes.For(CloudErrorKind.Network)),
                 _ => (CloudErrorKind.Other, RunErrorCodes.For(CloudErrorKind.Other)),
             };
@@ -327,10 +327,10 @@ public sealed class CloudJobRunner
         }
 
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
-        var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, token), progress, cancellationToken).ConfigureAwait(false);
+        var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
         if (!provisioned.Success)
         {
-            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, RunErrorCodes.For(provisioned.FailureKind.Value), provisioned.FailureMessage, provisioned.VmEndNote).ConfigureAwait(false);
+            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
         }
 
         progress.Zone = provisioned.Zone!;
@@ -342,9 +342,10 @@ public sealed class CloudJobRunner
     /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured
     /// here, once, before the first create; a refusal throws a classified CloudOperationException and no VM is made.
     /// </summary>
-    private async Task<VmSpec> CompleteSpecAsync(CloudJobRequest request, string bucket, CancellationToken cancellationToken)
+    private async Task<VmSpec> CompleteSpecAsync(CloudJobRequest request, string bucket, RunProgress progress, CancellationToken cancellationToken)
     {
         var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken, _settings.WorkerIdentityTimeout).ConfigureAwait(false);
+        progress.WorkerAccountEmail = identity.ServiceAccountEmail;
         if (identity.NoteCode == SetupErrorCodes.WorkerDefaultAccount)
         {
             // A yellow note, not a failure: the run carries on as the project's default account and its row says so.

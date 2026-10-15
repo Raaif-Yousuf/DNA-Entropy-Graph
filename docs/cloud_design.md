@@ -277,9 +277,21 @@ is the `PERMISSION_ACTAS` error: `CloudErrorClassifier.IsActAsDenial` recognises
 `iam.serviceAccounts.actAs` or `roles/iam.serviceAccountUser`, `GoogleApiErrors.ToException`
 (used for an HTTP error body and for the `error` of a polled operation alike, which `FromOperationError` converts first)
 gives it the code `PERMISSION_ACTAS` (still the `permission` bucket, so it still aborts), and the
-one action is Copy request for the project owner. **Reachable only once #604 lands:** there is no Compute insert path yet, so today only tests produce
-this code, and the Copy request action does not yet name `roles/iam.serviceAccountUser` on the worker account's email (it would
-copy the generic request); both are #604's Done when.
+one action is Copy request for the project owner. **Run row (#604):** the specific code travels on `CloudError.Code`
+(`CloudOperationException.Error`), not in a new field. `RunErrorCodes.For(CloudError, kind)` maps `PERMISSION_ACTAS`,
+`WORKER_DEFAULT_ACCOUNT_MISSING` and `WORKER_IDENTITY_NOT_APPLIED` to the run codes `permission_actas`,
+`worker_default_account_missing` and `worker_identity_not_applied` (each with its own `RunError_*` text), and treats a 403
+whose text names actAs as `permission_actas` even when the gateway did not label it. Both ways a run can meet one of these use
+it: `VmProvisioner` puts the code on `ProvisionResult.FailureCode` for a refused create, and `CloudJobRunner`'s catch maps an
+exception from the worker-identity step. The Runs page shows the message and a **Copy request for the project owner** button
+(`RunListItem.CopyOwnerRequestCommand`, only for `permission_actas` with a known project) that copies
+`Runs_OwnerRequest_ActAs`, which names `roles/iam.serviceAccountUser` (`WorkerIdentityNames.ActAsRole`) on
+`WorkerIdentityNames.ServiceAccountEmail(project)`, or, when an organization policy made the VM run as the project's default
+Compute Engine account (`<number>-compute@developer.gserviceaccount.com`), that account: the runner records the account the VM was
+asked to run as on the failed row as a trailing `[vm-account=...]` mark in `ErrorDetail` (`WorkerAccountDetail`, no new column) and the
+request reads it back. The request also names the signed-in Google account as the grantee (`Runs_OwnerRequest_Grantee`, clipboard only,
+never logged) and leaves that clause out when nobody is signed in. THEORY (unverified, no live project): Compute's exact wording for an actAs
+refusal; docs/ToTest.md carries the row for the real insert.
 
 ## 8. Termination semantics - the pitfall this project has already been burned by once
 
