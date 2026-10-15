@@ -1,7 +1,10 @@
 # Release runbook: cutting a DNA Entropy Graph release
 
-> Written 2026-09-19, before the thing it prepares for was done: no release has shipped
-> yet, `app/` does not exist, and `release.yml` is not written. This is left as written per
+> Last updated 2026-10-15. Still a draft: no release has shipped and `release.yml` is not
+> written (issue #178). `app/` now exists, and `ci-app.yml` already builds a self-contained
+> publish and an unsigned `vpk pack` on every run, so steps that say "the workflow builds" are
+> ahead of what runs today. Written 2026-09-19, before the thing it prepares for was done.
+> This is left as written per
 > Hard Rule 18 rather than deleted, so the first real release has a checklist to follow and
 > correct against, instead of inventing one under time pressure. The first person to
 > actually run this end to end should update it with what was true, not what this draft
