@@ -9,9 +9,12 @@ public sealed partial class SettingsPage : Page
 {
     public SettingsViewModel ViewModel { get; }
 
+    public ExternalViewersSettingsViewModel ExternalViewers { get; }
+
     public SettingsPage()
     {
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
+        ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         InitializeComponent();
     }
 }

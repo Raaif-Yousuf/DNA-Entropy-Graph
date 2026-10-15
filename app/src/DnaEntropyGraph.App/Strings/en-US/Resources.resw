@@ -483,8 +483,14 @@
   <data name="NewRunStatusDropVirtual" xml:space="preserve">
     <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
   </data>
-  <data name="NewRunStatusStartFailed" xml:space="preserve">
+  <data name="NewRunStatusStartFailedCloud" xml:space="preserve">
     <value>We could not start the run. Check your Google Cloud connection on the Cloud page, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedFile" xml:space="preserve">
+    <value>We could not read your file to start the run. Check that the file is still there and not open in another program, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedOther" xml:space="preserve">
+    <value>We could not start the run. Press Run again. Still failing? Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
   <data name="NewRunStatusBrowseFailed" xml:space="preserve">
     <value>The file chooser could not open. Drag your files onto the drop area instead, or choose Add files again.</value>
@@ -855,6 +861,51 @@
   <data name="AuthError_SIGNIN_STORAGE" xml:space="preserve">
     <value>The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Sign in again.</value>
   </data>
+  <data name="NewRunOutputsHeader.Text" xml:space="preserve">
+    <value>Files you get back</value>
+  </data>
+  <data name="NewRunOutputsNoneChosen.Text" xml:space="preserve">
+    <value>No file is ticked. Tick at least one file above to run.</value>
+  </data>
+  <data name="OutputChoice_genbank" xml:space="preserve">
+    <value>The sequence with its genes and a mean entropy note on each gene (GenBank, .gb)</value>
+  </data>
+  <data name="OutputChoice_fasta" xml:space="preserve">
+    <value>The plain sequence (FASTA, .fasta)</value>
+  </data>
+  <data name="OutputChoice_bedgraph" xml:space="preserve">
+    <value>Entropy at every base, for IGV (.bedgraph)</value>
+  </data>
+  <data name="OutputChoice_wig" xml:space="preserve">
+    <value>Entropy at every base, in the WIG track format (.wig). Tick this instead of the IGV track if your viewer wants WIG.</value>
+  </data>
+  <data name="OutputChoice_geneious_gff3" xml:space="preserve">
+    <value>Entropy at every base, for Geneious (.gff3)</value>
+  </data>
+  <data name="OutputChoice_genes_gff3" xml:space="preserve">
+    <value>The gene positions, for a genome viewer (.genes.gff3)</value>
+  </data>
+  <data name="OutputChoice_smoothed" xml:space="preserve">
+    <value>A smoothed entropy track, averaged over a stretch of bases so trends are easier to see (.smooth files)</value>
+  </data>
+  <data name="OutputChoice_gene_summary" xml:space="preserve">
+    <value>One row of entropy figures per gene, for a spreadsheet (.genes.tsv and .genes.csv)</value>
+  </data>
+  <data name="OutputChoice_regions" xml:space="preserve">
+    <value>Stretches of unusually low or high entropy, as a track (.regions.bed and .regions.gff3)</value>
+  </data>
+  <data name="OutputChoice_stats" xml:space="preserve">
+    <value>A short text summary: length, mean, lowest and highest entropy (.txt)</value>
+  </data>
+  <data name="OutputChoice_tsv" xml:space="preserve">
+    <value>Entropy at every base, as a table for a spreadsheet (.tsv)</value>
+  </data>
+  <data name="OutputChoice_probs" xml:space="preserve">
+    <value>The model's probability for each base, as a table (.probs.tsv.gz). Large, so it is off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_probs_npy" xml:space="preserve">
+    <value>The model's probability for each base, as a NumPy array (.probs.npy). Large, so it is off unless you tick it.</value>
+  </data>
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
   </data>
@@ -1184,6 +1235,51 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="SetupAction_CreateProject" xml:space="preserve">
     <value>Create project</value>
   </data>
+  <data name="ViewerGeneiousPathBox.PlaceholderText" xml:space="preserve">
+    <value>Found automatically</value>
+  </data>
+  <data name="ViewerGeneiousPathBox.Header" xml:space="preserve">
+    <value>Geneious program</value>
+  </data>
+  <data name="ViewerIgvPortBox.Header" xml:space="preserve">
+    <value>IGV batch port (1 to 65535)</value>
+  </data>
+  <data name="ViewerIgvPathBox.PlaceholderText" xml:space="preserve">
+    <value>Found automatically</value>
+  </data>
+  <data name="ViewerIgvPathBox.Header" xml:space="preserve">
+    <value>IGV program</value>
+  </data>
+  <data name="ViewerPathMissing" xml:space="preserve">
+    <value>No program was found at this path. Choose Browse to pick the program again.</value>
+  </data>
+  <data name="ViewerPortInvalid" xml:space="preserve">
+    <value>The port must be a whole number from 1 to 65535. Choose Reset to default to use 60151.</value>
+  </data>
+  <data name="ViewerGeneiousBrowseButton.Content" xml:space="preserve">
+    <value>Browse...</value>
+  </data>
+  <data name="ViewerIgvPortResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="ViewerIgvBrowseButton.Content" xml:space="preserve">
+    <value>Browse...</value>
+  </data>
+  <data name="ViewerSettingNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
+  </data>
+  <data name="ViewerGeneiousPathResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="ViewerIgvPathResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="SettingsViewersHeader.Text" xml:space="preserve">
+    <value>External viewers</value>
+  </data>
+  <data name="SettingsViewersExplainer.Text" xml:space="preserve">
+    <value>Where the Open in IGV and Open in Geneious buttons find those programs. Leave a path empty and the app looks for the program itself. A change applies the next time you press the button.</value>
+  </data>
   <data name="ProfileBanner_Text" xml:space="preserve">
     <value>Sandbox profile: {0}</value>
     <comment>Title bar banner shown when the app runs on a data folder given by --profile or DEG_DATA_DIR. {0} is the folder.</comment>
@@ -1205,5 +1301,3 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
   </data>
 </root>
-
-
