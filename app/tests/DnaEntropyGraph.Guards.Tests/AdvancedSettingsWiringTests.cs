@@ -54,12 +54,19 @@ public sealed class AdvancedSettingsWiringTests : IDisposable
         images.Resolve("0.0.1-nothing-shipped", gpu: true).Reference.ShouldBeNull();
     }
 
-    [Fact]
-    public void The_real_container_says_the_cloud_is_the_fake_while_every_gateway_is_the_fake()
+    [Theory]
+    [InlineData(CloudBackend.Google)]
+    [InlineData(CloudBackend.Fake)]
+    [InlineData(CloudBackend.Developer)]
+    public void The_container_says_the_cloud_is_simulated_exactly_when_the_backend_is_not_Google(CloudBackend backend)
     {
-        using var provider = Build();
+        // The rule, not today's state (#644 cold review 11): it follows the backend the container was built over, so it cannot
+        // go stale when a gateway or the production default changes.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: backend);
+        using var provider = services.BuildServiceProvider();
 
-        provider.GetRequiredService<ICloudModeInfo>().IsFakeCloud.ShouldBeTrue();
+        provider.GetRequiredService<ICloudModeInfo>().IsFakeCloud.ShouldBe(backend != CloudBackend.Google);
         provider.GetRequiredService<IResettableSettings>().ShouldBeSameAs(provider.GetRequiredService<ISettingsStore>());
     }
 }

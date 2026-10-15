@@ -1,15 +1,15 @@
-using DnaEntropyGraph.Cloud;
+using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Core.Abstractions;
-using DnaEntropyGraph.Core.Cloud;
 
 namespace DnaEntropyGraph.App.Services;
 
 /// <summary>
-/// Whether the app is talking to the development fake instead of Google Cloud (issue #644's read-only note; #69 owns the mode
-/// itself). It follows the same SWITCH POINT as the token refresher in ServiceRegistration: the refresher is the fake exactly
-/// while every gateway is the fake, so the note flips on its own when the first real gateway is wired.
+/// Whether the app is talking to a simulated cloud instead of Google Cloud (issue #644's read-only note). It is the backend the
+/// container was built over (<c>ServiceRegistration</c>'s one switch point, issues #609 and #69), not an inference from which
+/// object some service happens to be: every backend except <see cref="CloudBackend.Google"/> is simulated, so a new gateway or a
+/// changed default cannot make the note wrong.
 /// </summary>
-public sealed class FakeCloudModeInfo(ICloudTokenRefresher refresher) : ICloudModeInfo
+public sealed class FakeCloudModeInfo(CloudBackend backend) : ICloudModeInfo
 {
-    public bool IsFakeCloud => refresher is FakeGcp;
+    public bool IsFakeCloud => backend != CloudBackend.Google;
 }

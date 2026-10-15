@@ -54,6 +54,22 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public void A_simulated_cloud_always_shows_its_banner_and_a_real_one_never_does()
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
+        strings.GetString("SimulatedCloud_Banner").Returns("Simulated cloud: nothing here is real");
+
+        var simulated = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion(), simulatedCloud: new SimulatedCloudMode());
+        var real = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
+
+        simulated.HasSimulatedCloud.ShouldBeTrue();
+        simulated.SimulatedCloudBannerText.ShouldBe("Simulated cloud: nothing here is real");
+        real.HasSimulatedCloud.ShouldBeFalse();
+        real.SimulatedCloudBannerText.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void The_real_data_folder_shows_no_banner_and_the_plain_title()
     {
         var viewModel = new ShellViewModel(Substitute.For<INavigator>(), Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), CreatePassthroughStrings(), TestMessages.Center(), TestMessages.Completion(), dataRoot: AppDataRoot.Default());
