@@ -192,8 +192,10 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
 For lanes that work in their own worktree (#510). Flow and refusals: [branching_and_prs.md](branching_and_prs.md).
 
 ```powershell
-worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <tip-sha> --title "feat: ..." --body-file body.md [--full]
+worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <tip-sha> --title "feat: ..." --body-file body.md [--full] [--merge-when-green [--checks-timeout 1800] [--checks-poll 20] [--no-rerun-failed-once]]
 ```
+
+`--merge-when-green` waits for the PR checks and merges only if none failed (exit 5 failed, 6 pending at the timeout).
 
 Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh).
 
