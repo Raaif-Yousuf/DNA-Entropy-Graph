@@ -544,6 +544,16 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `maxRunDuration` plus 5 minutes). Ending first lets the runner give up on its own terms: end the
   VM per the user's choice, verify it, record `result_timeout`. A worker still uploading in the last
   3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
+- **The platform's limit is the user's cap plus 15 minutes (issue #89).** `CloudJobRequestFactory` sets `VmSpec.MaxRunDuration`
+  to `RunOptions.MaxRunDurationMinutes + 15 min` (`VmGrace`), with `instanceTerminationAction=DELETE` (`VmSpec` rejects anything else).
+  The worker enforces the user's cap itself (manifest `limits.maxRunSeconds`), so a worker that is merely slow finishes and stops its own VM
+  before Compute Engine deletes it; the VM's own deadline is the backstop for a worker that hangs. `startup.sh` reads the VM limit
+  (`deg-max-run-min`), so keep-alive is capped against the platform deadline, not the cap. A VM that was seen created, is now gone, and whose
+  `maxRunDuration` has passed with no `result.json` and no worker error code in `status.json` is recorded `run_time_limit` (not `vm_unhealthy`):
+  the run hit its limit while the app was not looking (a closed laptop lid, a resume). When the app is looking it ends the run first
+  (`result_timeout`, above). THEORY (unverified): Compute Engine deletes at exactly `creationTimestamp + maxRunDuration`; ToTest #89 measures it.
+  Already built before #89 and now covered by name: labels and `DELETE` guard (`VmSpec`), the Insert fields (`GoogleComputeGateway`),
+  the post-result stop/delete verification (`VmTerminator.EnsureVmEndedAsync`, `lifecycle_unverified` / `vm_end_unconfirmed`).
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two

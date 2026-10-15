@@ -17,6 +17,12 @@ public static class CloudJobRequestFactory
     /// escalating-parallelism ladder over every zone that offers the tier
     /// is issue #86 and replaces this list.
     /// </summary>
+    /// <summary>
+    /// The platform's <c>maxRunDuration</c> is the user's cap plus this (#89): the worker enforces the cap itself
+    /// (manifest <c>limits.maxRunSeconds</c>) and gets time to upload and stop before Compute Engine deletes the VM.
+    /// </summary>
+    public static readonly TimeSpan VmGrace = TimeSpan.FromMinutes(15);
+
     private static readonly string[] DefaultZones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"];
 
     public static CloudJobRequest Create(
@@ -53,7 +59,7 @@ public static class CloudJobRequestFactory
             AppVersion: appVersion,
             Lifecycle: LifecycleLabel(options.AfterTask),
             MachineType: MachineTypeFor(options.GpuTier),
-            MaxRunDuration: TimeSpan.FromMinutes(options.MaxRunDurationMinutes),
+            MaxRunDuration: TimeSpan.FromMinutes(options.MaxRunDurationMinutes) + VmGrace,
             TerminationAction: "DELETE");
 
         return new CloudJobRequest(

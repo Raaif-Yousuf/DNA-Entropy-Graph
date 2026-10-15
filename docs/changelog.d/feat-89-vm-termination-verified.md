@@ -1,0 +1,1 @@
+- Cloud (#89): a VM's `maxRunDuration` is the user's cap plus 15 minutes (the worker enforces the cap itself), and a VM Compute Engine deleted at its limit with no result is recorded `run_time_limit` with its own message, not "lost".
