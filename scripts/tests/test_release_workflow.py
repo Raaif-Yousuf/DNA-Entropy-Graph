@@ -347,7 +347,7 @@ def test_the_signature_check_covers_every_signed_file_and_the_signer_subject(tex
     step = _by_name(_steps(_jobs(text)["app"]), "verify the signatures")
     assert "verify /pa" in step
     assert "steps.own.outputs.files" in step, "the exes and every DnaEntropyGraph.*.dll, not just one file"
-    assert "DnaEntropyGraph-win-Setup.exe" in step
+    assert "DnaEntropyGraph.Desktop-win-Setup.exe" in step
     assert "Get-AuthenticodeSignature" in step and "SignerCertificate.Subject" in step
     assert "vars.RELEASE_SIGNER_SUBJECT" in step
     assert "-ne 'Valid'" in step
@@ -357,8 +357,42 @@ def test_the_signature_check_covers_every_signed_file_and_the_signer_subject(tex
 def test_pack_uses_main_exe_and_the_tag_version(text):
     pack = _by_name(_steps(_jobs(text)["app"]), "vpk pack")
     assert "--mainExe DnaEntropyGraph.App.exe" in pack
-    assert "--packId DnaEntropyGraph" in pack
+    assert "--packId DnaEntropyGraph.Desktop " in pack
     assert "--packVersion" in pack and "GITHUB_REF_NAME" in pack
+
+
+APP_DATA_ROOT_CS = Path(__file__).resolve().parent.parent.parent / "app" / "src" / "DnaEntropyGraph.Core" / "AppDataRoot.cs"
+CI_APP = WORKFLOW.parent / "ci-app.yml"
+
+
+def _data_folder_name() -> str:
+    src = APP_DATA_ROOT_CS.read_text(encoding="utf-8")
+    m = re.search(r'SpecialFolder\.LocalApplicationData\)\s*,\s*"([^"]+)"\)', src)
+    assert m, "AppDataRoot.Default no longer builds <LocalApplicationData>\\<name>; update this test"
+    return m.group(1)
+
+
+def _collides(pack_id: str, data_folder: str) -> bool:
+    return pack_id.casefold() == data_folder.casefold()
+
+
+@pytest.mark.parametrize("path", [WORKFLOW, CI_APP], ids=["release.yml", "ci-app.yml"])
+def test_pack_id_never_equals_the_app_data_folder_name(path):
+    """#712: Velopack installs to %LOCALAPPDATA%\\<packId> and uninstall empties that folder. NTFS is case-insensitive,
+    so a packId equal to the data folder name (any case) would share the user's history, settings and saved inputs."""
+    data_folder = _data_folder_name()
+    ids = re.findall(r"--packId\s+(\S+)", _code(path.read_text(encoding="utf-8")))
+    assert ids, f"no --packId in {path.name}"
+    for pack_id in ids:
+        assert not _collides(pack_id, data_folder), (
+            f"{path.name}: --packId {pack_id} is the same folder as the app data folder {data_folder} (case-insensitive)"
+        )
+
+
+def test_the_collision_check_is_case_insensitive():
+    assert _collides("dnaentropygraph", _data_folder_name())
+    assert _collides("DnaEntropyGraph", "DNAEntropyGraph")
+    assert not _collides("DnaEntropyGraph.Desktop", "DNAEntropyGraph")
 
 
 def test_attest_covers_only_this_releases_staged_files(text):
@@ -370,7 +404,7 @@ def test_attest_covers_only_this_releases_staged_files(text):
     assert re.search(r"(?m)^        id: assets\s*$", stage)
     assert "scripts/release_assets.py stage" in stage and "--github-output" in stage
     sbom = _by_name(steps, "SBOM attestation for the installer")
-    assert "stage/DnaEntropyGraph-win-Setup.exe" in sbom and "app/releases" not in sbom
+    assert "stage/DnaEntropyGraph.Desktop-win-Setup.exe" in sbom and "app/releases" not in sbom
 
 
 def test_app_sbom_and_provenance_cover_the_installer(text):

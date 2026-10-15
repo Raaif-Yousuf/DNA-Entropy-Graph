@@ -358,7 +358,7 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          vpk pack --packId DnaEntropyGraph --packVersion $version --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
+          vpk pack --packId DnaEntropyGraph.Desktop --packVersion $version --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: sign Setup.exe
@@ -370,7 +370,7 @@ jobs:
           endpoint: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
           signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\app\releases\DnaEntropyGraph-win-Setup.exe
+          files: ${{ github.workspace }}\app\releases\DnaEntropyGraph.Desktop-win-Setup.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -388,7 +388,7 @@ jobs:
           $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
           if (-not $tool) { Write-Host "::error title=No signing tool::the Windows SDK signing tool was not found on the runner."; exit 1 }
           if ([string]::IsNullOrWhiteSpace($env:EXPECTED_SIGNER_SUBJECT)) { Write-Host "::error title=No expected signer::RELEASE_SIGNER_SUBJECT is empty. Set it in the release environment, then re-run."; exit 1 }
-          $files = @($env:OWN_FILES -split ',' | Where-Object { $_ }) + "$env:GITHUB_WORKSPACE\app\releases\DnaEntropyGraph-win-Setup.exe"
+          $files = @($env:OWN_FILES -split ',' | Where-Object { $_ }) + "$env:GITHUB_WORKSPACE\app\releases\DnaEntropyGraph.Desktop-win-Setup.exe"
           if ($files.Count -lt 3) { Write-Host "::error title=Nothing to verify::only $($files.Count) signed files were listed."; exit 1 }
           foreach ($f in $files) {
             & $tool.FullName verify /pa $f
@@ -417,7 +417,7 @@ jobs:
       - name: SBOM attestation for the installer
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: stage/DnaEntropyGraph-win-Setup.exe
+          subject-path: stage/DnaEntropyGraph.Desktop-win-Setup.exe
           sbom-path: sbom-app.cdx.json
 
       - name: keep the app SBOM for the release

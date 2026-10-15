@@ -228,6 +228,20 @@ would fail immediately because the repository's Dependency graph setting is off 
 #325, an owner-only action). Restoring the PR trigger before #325 is done would recreate a
 permanently red check.
 
+### The packId (#712)
+
+**Decision: `--packId DnaEntropyGraph.Desktop`** (release.yml and ci-app.yml). MEASURED 2026-10-15 from Velopack source
+(`src/bins/src/commands/install.rs`): the default install root is `<LocalAppData>\<manifest id>`, and `commands/uninstall.rs` runs
+`remove_dir_contents(root_path)` on that root. The app data folder is `%LOCALAPPDATA%\DNAEntropyGraph` (`AppDataRoot.Default`). With the old
+`--packId DnaEntropyGraph` the two were the same folder on NTFS (case-insensitive), so an uninstall would have emptied history, settings,
+auth and saved inputs. The new id is a different folder, so the uninstaller never touches the data folder. Installer file names follow
+the id (`DnaEntropyGraph.Desktop-win-Setup.exe`, `DnaEntropyGraph.Desktop-<ver>-win-full.nupkg`).
+THEORY (unverified): the packId is immutable once shipped. It is the install folder, the update feed's package id and the nupkg file
+prefix, so an installed copy would look for updates under the old id; the Velopack docs say only that it is "the unique ID of your
+application". That is why it is fixed before the first public release.
+`scripts/tests/test_release_workflow.py` fails if a `--packId` equals the data folder name ignoring case; the name is read from
+`AppDataRoot.cs`, not hard-coded.
+
 ## 9. release.yml (issues #178, #518, #165, #255, #181)
 
 Jobs, in order: `verify` (secrets, lockstep with the tag, tag is on `main`), `images` (matrix `cuda`/`cpu`), `wheel`, `app`
