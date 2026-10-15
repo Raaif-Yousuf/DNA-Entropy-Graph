@@ -272,8 +272,12 @@ docker run --rm \
   -e DEG_ZONE="$ZONE" \
   -e DEG_PROJECT="$PROJECT" \
   "$IMAGE" \
-  dna-entropy-worker run --manifest /work/manifest.json --store gcs
-rc=$?
+  dna-entropy-worker run --manifest /work/manifest.json --store gcs \
+  && rc=0 || rc=$?
+# `&& ... || rc=$?` makes the non-zero exit a tested condition, so the ERR trap does not fire
+# on the worker's legitimate exit codes (2, 3, 10, 11): the trap used to overwrite the
+# worker's own terminal status.json with WORKER_CRASH and run cleanup a second time (#494,
+# MEASURED 2026-10-15 against the real trap line with a stub docker).
 
 # worker/src/dna_entropy/worker/cli.py's exit-code contract:
 #   0 done | 2 failed | 3 cancelled | 10 stopped-by-worker | 11 deleted-by-worker
@@ -285,6 +289,11 @@ rc=$?
 # backstop. With lifecycle=keep the 0/2/3 branch goes to keep_hold: DECISION (agent-made on
 # the owner's behalf, reversible): only rc 0 is held for the keep-alive window; rc 2 and 3
 # apply afterKeepAlive at once.
+# docker itself failed (125-127) or the container was killed (137, OOM): the worker never wrote
+# its own terminal state, so report the crash here, once.
+if [ "$rc" != 0 ] && [ "$rc" != 2 ] && [ "$rc" != 3 ] && [ "$rc" != 10 ] && [ "$rc" != 11 ]; then
+  status failed '{"code":"WORKER_CRASH","retriable":false}'
+fi
 case $rc in
   10|11)
     kill "$RELAY_PID" 2>/dev/null || true
