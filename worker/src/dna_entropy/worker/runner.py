@@ -76,10 +76,14 @@ class _RunDeadline:
     its VM before Compute Engine deletes the VM; the platform limit stays the backstop for a hung worker.
     """
 
-    def __init__(self, max_run_seconds: float, time_source: Callable[[], float]) -> None:
+    def __init__(
+        self, max_run_seconds: float, time_source: Callable[[], float], already_elapsed: float = 0.0
+    ) -> None:
         self._limit = max_run_seconds
         self._time_source = time_source
-        self._started = time_source()
+        # The platform's maxRunDuration counts from VM start, so boot, image pull and the manifest
+        # download (already elapsed when the worker starts) come out of this budget (#89 review).
+        self._started = time_source() - max(already_elapsed, 0.0)
         self._expired = False
 
     @property
@@ -93,6 +97,20 @@ class _RunDeadline:
             raise RunTimeLimitError(
                 f"the run reached its {self._limit:g} second limit (manifest limits.maxRunSeconds)"
             )
+
+
+def _default_vm_uptime_seconds(proc_uptime: Path = Path("/proc/uptime")) -> float:
+    """Seconds since this VM booted, or 0.0 when that is not meaningful.
+
+    Only on a VM the app created (``DEG_VM_NAME`` is set by ``startup.sh``): a laptop's or a
+    long-lived dev box's uptime must never shorten a local run's cap. Unreadable means 0.0.
+    """
+    if not os.environ.get("DEG_VM_NAME"):
+        return 0.0
+    try:
+        return max(float(proc_uptime.read_text(encoding="ascii").split()[0]), 0.0)
+    except (OSError, ValueError, IndexError):
+        return 0.0
 
 
 def _utc_now_iso() -> str:
@@ -464,6 +482,7 @@ def run_job(
     cache_store: Blobstore | None = None,
     hf_cache_dir: Path | None = None,
     time_source: Callable[[], float] = time.monotonic,
+    vm_uptime_seconds: Callable[[], float] = _default_vm_uptime_seconds,
 ) -> JobResult:
     """Run the full job described by ``manifest.json`` in ``store`` and return the
     :class:`JobResult` that was also written to ``result.json``. See :func:`run_job_outcome`
@@ -475,6 +494,7 @@ def run_job(
         cache_store=cache_store,
         hf_cache_dir=hf_cache_dir,
         time_source=time_source,
+        vm_uptime_seconds=vm_uptime_seconds,
     ).result
 
 
@@ -486,6 +506,7 @@ def run_job_outcome(
     cache_store: Blobstore | None = None,
     hf_cache_dir: Path | None = None,
     time_source: Callable[[], float] = time.monotonic,
+    vm_uptime_seconds: Callable[[], float] = _default_vm_uptime_seconds,
 ) -> RunOutcome:
     """Run the full job described by ``manifest.json`` in ``store``. Returns a
     :class:`RunOutcome` whose ``result`` is the :class:`JobResult` that was also written
@@ -535,7 +556,9 @@ def run_job_outcome(
     # CancelWatcher applies to its own store round-trips (see cancel.py's docstring).
     cancel = CancelWatcher(store, poll_interval_seconds=float(manifest.limits.cancel_poll_seconds))
     # Issue #89: limits.maxRunSeconds was parsed and never read; the worker now enforces the user's cap.
-    deadline = _RunDeadline(float(manifest.limits.max_run_seconds), time_source)
+    deadline = _RunDeadline(
+        float(manifest.limits.max_run_seconds), time_source, already_elapsed=vm_uptime_seconds()
+    )
     # Issue #41: ONE predictor for the whole batch, built lazily from the first input's config.
     # Issue #75: the weights cache lives at the BUCKET ROOT (cache/models/<id>/), not under
     # this job's prefix; a local store has none. The HF cache dir is where evo2's loader writes.
@@ -551,6 +574,7 @@ def run_job_outcome(
     job_status = "done"
     job_error: dict | None = None
     gpu = GpuInfo()
+    time_limit_hit = False  # decided at a checkpoint, never from a clock re-read after the work (#89 review)
 
     try:
         with tempfile.TemporaryDirectory(prefix="deg-job-") as tmpdir:
@@ -582,15 +606,16 @@ def run_job_outcome(
                 )
                 if cancel.is_cancelled:
                     break  # stop the whole job, not just this input (job_contract.md §6)
-                if deadline.expired:
-                    break  # the user's cap: no further input starts (issue #89)
+                if input_results[-1].error and input_results[-1].error.get("code") == RunTimeLimitError.code:
+                    time_limit_hit = True  # a checkpoint inside that input saw the cap (issue #89)
+                    break
 
     except BatchLimitError as exc:
         job_status = "failed"
         job_error = {"code": exc.code, "message": str(exc), "retriable": False}
         status.notice(f"batch refused: {exc}", level="error")
     except RunTimeLimitError:
-        pass  # before an input started; reported below, with the same code as a mid-input stop
+        time_limit_hit = True  # before an input started; reported below, same code as a mid-input stop
     except JobCancelledError:
         # Seen BEFORE an input even started (_run_one_input's own pre-start check raises
         # directly, since nothing ran yet and there is nothing to upload) — the mid-input
@@ -603,7 +628,7 @@ def run_job_outcome(
         job_error = {"code": "WORKER_CRASH", "message": str(exc), "retriable": False}
         status.notice(f"job-level crash: {exc}", level="error")
 
-    if job_status != "failed" and not cancel.is_cancelled and deadline.expired:
+    if job_status != "failed" and not cancel.is_cancelled and time_limit_hit:
         job_status = "failed"
         job_error = {
             "code": RunTimeLimitError.code,
