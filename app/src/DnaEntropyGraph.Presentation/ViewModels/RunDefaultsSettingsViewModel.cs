@@ -1,0 +1,114 @@
+using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using DnaEntropyGraph.Core;
+using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Services;
+
+namespace DnaEntropyGraph.Presentation.ViewModels;
+
+/// <summary>
+/// The Settings "Run defaults" group (issue #640): the output files a new run starts with, per input kind. It reads and
+/// writes <see cref="OutputSelectionStore"/>, the same store the New run page loads when it opens and saves when a run starts,
+/// so there is no second copy of any default. Only what New run offers is listed (the folder and name template are not New
+/// run options today, so they are not invented here).
+/// </summary>
+public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
+{
+    private readonly OutputSelectionStore _store;
+    private readonly IStringResourceProvider _strings;
+    private bool _applying;
+
+    [ObservableProperty]
+    private string _genBankStatus = string.Empty;
+
+    [ObservableProperty]
+    private string _sequenceStatus = string.Empty;
+
+    public RunDefaultsSettingsViewModel(OutputSelectionStore store, IStringResourceProvider strings)
+    {
+        _store = store;
+        _strings = strings;
+        Build(GenBankChoices, OutputInputKinds.GenBank);
+        Build(SequenceChoices, OutputInputKinds.Sequence);
+    }
+
+    /// <summary>The boxes for a GenBank input.</summary>
+    public ObservableCollection<OutputChoiceItem> GenBankChoices { get; } = [];
+
+    /// <summary>The boxes for a FASTA file or a pasted sequence.</summary>
+    public ObservableCollection<OutputChoiceItem> SequenceChoices { get; } = [];
+
+    private void Build(ObservableCollection<OutputChoiceItem> list, OutputInputKinds group)
+    {
+        OutputFileKinds selection;
+        try
+        {
+            selection = _store.Load(group);
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while reading run defaults: {ex.GetType().Name}");
+            selection = OutputCatalog.Defaults;
+        }
+
+        foreach (var entry in OutputCatalog.For(group))
+        {
+            list.Add(new OutputChoiceItem(entry, _strings.GetString(entry.LabelKey), selection.HasFlag(entry.Kind), item => OnChanged(group, list, item)));
+        }
+    }
+
+    private void OnChanged(OutputInputKinds group, ObservableCollection<OutputChoiceItem> list, OutputChoiceItem item)
+    {
+        if (_applying)
+        {
+            return;
+        }
+
+        _applying = true;
+        try
+        {
+            // The worker writes one track format per run: the bedGraph and WIG are alternatives (OutputCatalog.Normalize).
+            if (item.IsChecked && item.Entry.Kind is OutputFileKinds.BedGraph or OutputFileKinds.Wig)
+            {
+                var other = item.Entry.Kind == OutputFileKinds.Wig ? OutputFileKinds.BedGraph : OutputFileKinds.Wig;
+                list.FirstOrDefault(c => c.Entry.Kind == other)?.IsChecked = false;
+            }
+
+            if (!list.Any(c => c.IsChecked))
+            {
+                // A run must return at least one file: put the box back instead of saving nothing.
+                item.IsChecked = true;
+                SetStatus(group, _strings.GetString("RunDefaultsNoneChosen"));
+                return;
+            }
+
+            var selection = list.Where(c => c.IsChecked).Aggregate(OutputFileKinds.None, (all, c) => all | c.Entry.Kind);
+            try
+            {
+                _store.Save(group, selection);
+                SetStatus(group, string.Empty);
+            }
+            catch (SettingsUnavailableException ex)
+            {
+                System.Diagnostics.Trace.TraceWarning($"settings_unavailable while saving run defaults: {ex.GetType().Name}");
+                SetStatus(group, _strings.GetString("RunDefaultsNotSaved"));
+            }
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    private void SetStatus(OutputInputKinds group, string text)
+    {
+        if (group == OutputInputKinds.GenBank)
+        {
+            GenBankStatus = text;
+        }
+        else
+        {
+            SequenceStatus = text;
+        }
+    }
+}
