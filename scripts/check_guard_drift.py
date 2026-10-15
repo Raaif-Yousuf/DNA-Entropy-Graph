@@ -69,9 +69,9 @@ from pathlib import Path
 class GuardEntry:
     name: str
     issue: int
-    guarded_file: str      # POSIX-style, relative to repo root
-    workflow_file: str     # POSIX-style, relative to repo root
-    notice_marker: str     # exact substring the workflow's soft-gate still needs to contain
+    guarded_file: str  # POSIX-style, relative to repo root
+    workflow_file: str  # POSIX-style, relative to repo root
+    notice_marker: str  # exact substring the workflow's soft-gate still needs to contain
 
 
 # The pile as of issue #309 (2026-09-19), minus the ruff gate -- see the
@@ -114,7 +114,9 @@ def _file_is_committed(root: Path, rel: str) -> bool:
     someone's disk has not "landed" for this check's purposes."""
     result = subprocess.run(
         ["git", "cat-file", "-e", f"HEAD:{rel}"],
-        cwd=root, capture_output=True, timeout=10,
+        cwd=root,
+        capture_output=True,
+        timeout=10,
     )
     return result.returncode == 0
 
@@ -128,7 +130,10 @@ def _workflow_still_soft_gates(root: Path, entry: GuardEntry) -> bool | None:
     on a guess."""
     result = subprocess.run(
         ["git", "show", f"HEAD:{entry.workflow_file}"],
-        cwd=root, capture_output=True, text=True, timeout=10,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     if result.returncode != 0:
         return None
@@ -179,6 +184,7 @@ def check(root: Path, guards: tuple[GuardEntry, ...] = GUARDS) -> int:
 # `git show` are exercised against real HEAD trees rather than mocked.
 # ---------------------------------------------------------------------------
 
+
 def self_test() -> bool:
     import tempfile
 
@@ -217,11 +223,7 @@ def self_test() -> bool:
         "        echo '::notice title=skipped::fixture/guarded.txt does not exist yet.'\n"
         "      fi\n"
     )
-    workflow_hardened = (
-        "steps:\n"
-        "  - name: guarded thing\n"
-        "    run: echo real check unconditionally\n"
-    )
+    workflow_hardened = "steps:\n  - name: guarded thing\n    run: echo real check unconditionally\n"
 
     fixture_guard = GuardEntry(
         name="fixture guard",
@@ -252,8 +254,7 @@ def self_test() -> bool:
         (repo / "fixture" / "guarded.txt").write_text("here now\n", encoding="utf-8")
         commit_all(repo, "guarded file lands, workflow not yet hardened")
         drifted = check_drift(repo, guards=(fixture_guard,))
-        check_case("file present + workflow still soft-gated: DRIFT detected",
-                   drifted == [fixture_guard])
+        check_case("file present + workflow still soft-gated: DRIFT detected", drifted == [fixture_guard])
         check_case("check() exits 1 on drift", check(repo, guards=(fixture_guard,)) == 1)
 
         # Case 3: guarded file landed AND the workflow has since been
@@ -275,14 +276,15 @@ def self_test() -> bool:
         (repo / "fixture" / "guarded.txt").write_text("here now\n", encoding="utf-8")
         commit_all(repo, "guarded file lands but no workflow file at all")
         drifted = check_drift(repo, guards=(fixture_guard,))
-        check_case("file present + workflow file missing entirely: cannot tell, no crash",
-                   drifted == [])
+        check_case("file present + workflow file missing entirely: cannot tell, no crash", drifted == [])
 
         # The real manifest against the real repo must not crash either,
         # whatever it currently finds -- a smoke check, not an assertion on
         # today's live findings (those change as issues close).
-        check_case("the real GUARDS manifest runs clean against this repo without raising",
-                   isinstance(check_drift(Path(__file__).resolve().parent.parent), list))
+        check_case(
+            "the real GUARDS manifest runs clean against this repo without raising",
+            isinstance(check_drift(Path(__file__).resolve().parent.parent), list),
+        )
 
     if ok:
         print(f"\nPASS: check_guard_drift self-test ({len(GUARDS)}-entry live manifest also ran clean)")

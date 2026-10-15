@@ -38,9 +38,20 @@ def test_known_irrelevant_paths_are_skippable(workflow, path):
 @pytest.mark.parametrize(
     "path",
     [
-        "app/src/a.cs", "worker/src/b.py", "tests/contract-fixtures/x.json", "scripts/gen_manifest_schema.py",
-        ".editorconfig", ".gitattributes", "global.json", "docs/contract/error-codes.json", "docs/copy_catalog.md",
-        "docs/contract/sub/new.json", "THIRD-PARTY-NOTICES.md", "something/unknown.txt", "Makefile", ".github/actions/x/action.yml",
+        "app/src/a.cs",
+        "worker/src/b.py",
+        "tests/contract-fixtures/x.json",
+        "scripts/gen_manifest_schema.py",
+        ".editorconfig",
+        ".gitattributes",
+        "global.json",
+        "docs/contract/error-codes.json",
+        "docs/copy_catalog.md",
+        "docs/contract/sub/new.json",
+        "THIRD-PARTY-NOTICES.md",
+        "something/unknown.txt",
+        "Makefile",
+        ".github/actions/x/action.yml",
     ],
 )
 def test_everything_else_and_every_exception_is_relevant(workflow, path):
@@ -67,9 +78,23 @@ def _git(root: Path, *args: str) -> None:
 def test_a_git_failure_runs_the_jobs_with_a_warning(tmp_path):
     out = tmp_path / "out.txt"
     proc = subprocess.run(
-        [sys.executable, str(SCRIPTS / "ci_changes_gate.py"), "--workflow", "ci-app", "--event", "pull_request",
-         "--base", "0" * 40, "--root", str(tmp_path), "--output", str(out)],
-        capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            str(SCRIPTS / "ci_changes_gate.py"),
+            "--workflow",
+            "ci-app",
+            "--event",
+            "pull_request",
+            "--base",
+            "0" * 40,
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert out.read_text(encoding="utf-8").strip() == "run=true"
@@ -90,9 +115,23 @@ def test_a_rename_out_of_app_is_seen_because_renames_are_not_collapsed(tmp_path)
     _git(tmp_path, "commit", "-q", "-m", "move")
     out = tmp_path / "out.txt"
     proc = subprocess.run(
-        [sys.executable, str(SCRIPTS / "ci_changes_gate.py"), "--workflow", "ci-app", "--event", "pull_request",
-         "--base", base, "--root", str(tmp_path), "--output", str(out)],
-        capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            str(SCRIPTS / "ci_changes_gate.py"),
+            "--workflow",
+            "ci-app",
+            "--event",
+            "pull_request",
+            "--base",
+            base,
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert out.read_text(encoding="utf-8").strip() == "run=true", "the deleted app/a.cs half of the rename must trigger the run"
@@ -101,9 +140,22 @@ def test_a_rename_out_of_app_is_seen_because_renames_are_not_collapsed(tmp_path)
 def test_a_non_pull_request_event_always_runs(tmp_path):
     out = tmp_path / "out.txt"
     subprocess.run(
-        [sys.executable, str(SCRIPTS / "ci_changes_gate.py"), "--workflow", "ci-app", "--event", "workflow_dispatch",
-         "--base", "", "--root", str(tmp_path), "--output", str(out)],
-        check=True, capture_output=True,
+        [
+            sys.executable,
+            str(SCRIPTS / "ci_changes_gate.py"),
+            "--workflow",
+            "ci-app",
+            "--event",
+            "workflow_dispatch",
+            "--base",
+            "",
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
     )
     assert out.read_text(encoding="utf-8").strip() == "run=true"
 
@@ -142,7 +194,7 @@ def _add_joined(found: set[str], segments: list[str]) -> None:
         parts.extend(p for p in s.split("/") if p)
     for end in range(len(parts), 0, -1):
         for start in range(0, len(parts) - end + 1):
-            candidate = "/".join(parts[start:start + end])
+            candidate = "/".join(parts[start : start + end])
             target = REPO / candidate
             # A lone directory name ("docs", "tests") is noise from joining; a file or a nested directory is a real read.
             real = target.is_file() or (target.is_dir() and "/" in candidate)
@@ -193,9 +245,23 @@ def test_each_workflow_calls_the_gate_script_not_an_inline_pattern():
 def test_a_pull_request_with_no_base_sha_runs_the_jobs(tmp_path):
     out = tmp_path / "out.txt"
     proc = subprocess.run(
-        [sys.executable, str(SCRIPTS / "ci_changes_gate.py"), "--workflow", "ci-app", "--event", "pull_request",
-         "--base", "", "--root", str(tmp_path), "--output", str(out)],
-        capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            str(SCRIPTS / "ci_changes_gate.py"),
+            "--workflow",
+            "ci-app",
+            "--event",
+            "pull_request",
+            "--base",
+            "",
+            "--root",
+            str(tmp_path),
+            "--output",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert out.read_text(encoding="utf-8").strip() == "run=true"

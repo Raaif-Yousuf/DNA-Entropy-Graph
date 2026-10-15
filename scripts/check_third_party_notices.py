@@ -60,24 +60,40 @@ def check(root: Path, *, app_root: Path | None = None, worker_root: Path | None 
     worker_root = worker_root if worker_root is not None else root / "worker"
 
     if not notices_path.is_file():
-        return ([], [
-            f"{NOTICES_RELATIVE} does not exist yet (issue #{NOTICES_ISSUE}: packaging: "
-            "THIRD-PARTY-NOTICES generator and staleness check) -- nothing to check "
-            "freshness against yet. This will start enforcing once both that file and "
-            f"{GENERATOR_RELATIVE} exist."
-        ])
+        return (
+            [],
+            [
+                f"{NOTICES_RELATIVE} does not exist yet (issue #{NOTICES_ISSUE}: packaging: "
+                "THIRD-PARTY-NOTICES generator and staleness check) -- nothing to check "
+                "freshness against yet. This will start enforcing once both that file and "
+                f"{GENERATOR_RELATIVE} exist."
+            ],
+        )
 
     if not generator_path.is_file():
-        return ([], [
-            f"{NOTICES_RELATIVE} exists but {GENERATOR_RELATIVE} does not (issue #{NOTICES_ISSUE}) -- "
-            "cannot regenerate to compare against, so the committed file is trusted as-is for now."
-        ])
+        return (
+            [],
+            [
+                f"{NOTICES_RELATIVE} exists but {GENERATOR_RELATIVE} does not (issue #{NOTICES_ISSUE}) -- "
+                "cannot regenerate to compare against, so the committed file is trusted as-is for now."
+            ],
+        )
 
     proc = subprocess.run(
-        [sys.executable, str(generator_path), "--stdout",
-         "--app-root", str(app_root), "--worker-root", str(worker_root),
-         "--repo-root", str(root)],
-        capture_output=True, text=True, timeout=180,
+        [
+            sys.executable,
+            str(generator_path),
+            "--stdout",
+            "--app-root",
+            str(app_root),
+            "--worker-root",
+            str(worker_root),
+            "--repo-root",
+            str(root),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
     # A generator failure (an unresolved licence problem, e.g. evo2's -- see the module
     # docstring) is reported EVEN IF the file below turns out to be byte-identical: an
@@ -88,10 +104,7 @@ def check(root: Path, *, app_root: Path | None = None, worker_root: Path | None 
         # -- a usage/environment problem, not a licence finding either way.
         return ([f"{GENERATOR_RELATIVE} could not run (exit {proc.returncode}): {proc.stdout}\n{proc.stderr}"], [])
     if proc.returncode == 1:
-        problems.append(
-            f"{GENERATOR_RELATIVE} reports an unresolved licence problem (Hard Rule 21) -- "
-            f"see its stderr:\n{proc.stderr.strip()}"
-        )
+        problems.append(f"{GENERATOR_RELATIVE} reports an unresolved licence problem (Hard Rule 21) -- see its stderr:\n{proc.stderr.strip()}")
 
     committed = _normalize(notices_path.read_text(encoding="utf-8"))
     fresh = _normalize(proc.stdout)
@@ -109,22 +122,14 @@ def check(root: Path, *, app_root: Path | None = None, worker_root: Path | None 
 # Self-test
 # ---------------------------------------------------------------------------
 
-_FAKE_GENERATOR_OK = (
-    "import sys\n"
-    "print('# Third-party notices\\n\\n(fake, matches)\\n', end='')\n"
-    "sys.exit(0)\n"
-)
+_FAKE_GENERATOR_OK = "import sys\nprint('# Third-party notices\\n\\n(fake, matches)\\n', end='')\nsys.exit(0)\n"
 _FAKE_GENERATOR_LICENSE_PROBLEM = (
     "import sys\n"
     "print('# Third-party notices\\n\\n(fake, matches, but a licence is unresolved)\\n', end='')\n"
     "print('ERROR: some-package 1.0 has an unresolved licence problem', file=sys.stderr)\n"
     "sys.exit(1)\n"
 )
-_FAKE_GENERATOR_CRASHES = (
-    "import sys\n"
-    "print('cannot even run: dotnet not found', file=sys.stderr)\n"
-    "sys.exit(2)\n"
-)
+_FAKE_GENERATOR_CRASHES = "import sys\nprint('cannot even run: dotnet not found', file=sys.stderr)\nsys.exit(2)\n"
 
 
 def _write_fake_generator(root: Path, source: str) -> None:

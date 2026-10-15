@@ -52,7 +52,8 @@ package itself needs):
 ```powershell
 uvx ruff check worker
 uvx ruff format --check worker
-uvx ruff check scripts                      # lint only for scripts/ (#430): see the scripts/tests section
+uvx ruff check scripts                      # lint for scripts/ (#430): see the scripts/tests section
+uvx ruff format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -371,9 +372,10 @@ uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
-There is deliberately **no `ruff format --check scripts` gate yet**: MEASURED 2026-10-02, `uvx ruff format --check
-scripts` would rewrite 42 of 44 files (about 1,700 changed lines at the 145 limit). A mass reformat is its own
-mechanical commit and is not wired until someone lands it; the preview is `uvx ruff format --diff scripts`.
+**Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
+(`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
+`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the
+preview is `uvx ruff format --diff scripts`.
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 

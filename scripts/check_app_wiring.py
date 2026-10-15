@@ -286,16 +286,10 @@ class Scan:
         return "\n".join(self.xaml_files.values())
 
     def production_cs(self, exclude: Path) -> dict[Path, str]:
-        return {
-            p: t
-            for p, t in self.cs_files.items()
-            if p != exclude and not _is_test_path(p)
-        }
+        return {p: t for p, t in self.cs_files.items() if p != exclude and not _is_test_path(p)}
 
     def test_cs(self, exclude: Path) -> dict[Path, str]:
-        return {
-            p: t for p, t in self.cs_files.items() if p != exclude and _is_test_path(p)
-        }
+        return {p: t for p, t in self.cs_files.items() if p != exclude and _is_test_path(p)}
 
 
 def _is_test_path(path: Path) -> bool:
@@ -366,8 +360,7 @@ def _strip_comments(text: str) -> str:
     return _COMMENT_OR_STRING.sub(lambda m: m.group(0) if m.group(0)[0] in '@"' else " ", text)
 
 
-def _member_mentions(identifier: str, texts: dict[Path, str], owner: str | None = None,
-                     class_names: frozenset[str] = frozenset()) -> list[Path]:
+def _member_mentions(identifier: str, texts: dict[Path, str], owner: str | None = None, class_names: frozenset[str] = frozenset()) -> list[Path]:
     """Files that READ this member, as opposed to merely spelling the name.
 
     A bare name match counts an unrelated type's identically named property as
@@ -380,9 +373,7 @@ def _member_mentions(identifier: str, texts: dict[Path, str], owner: str | None 
     receiver is the literal name of ANOTHER class declared in the tree (`RunOptions.ModelId`) it is
     a read of that class, not of `owner`. An instance receiver (`vm.ModelId`) stays a match.
     """
-    pattern = re.compile(
-        rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b"
-    )
+    pattern = re.compile(rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b")
     hits: list[Path] = []
     for path, text in texts.items():
         for match in pattern.finditer(_strip_comments(text)):
@@ -647,9 +638,7 @@ def _check_members(scan: Scan) -> list[Finding]:
             tests = _member_mentions(identifier, scan.test_cs(exclude=path), member_owner, class_names)
             noun = "command" if kind == "COMMAND" else "observable property"
             a_noun = "A command" if kind == "COMMAND" else "An observable property"
-            generator = (
-                "[RelayCommand]" if kind == "COMMAND" else "[ObservableProperty]"
-            )
+            generator = "[RelayCommand]" if kind == "COMMAND" else "[ObservableProperty]"
             if prod:
                 findings.append(
                     Finding(
@@ -677,9 +666,7 @@ def _check_members(scan: Scan) -> list[Finding]:
                     Finding(
                         f"UNBOUND-{kind}",
                         symbol,
-                        f"No .xaml and no other .cs names this {noun}. "
-                        f"{generator} generates it so a view can bind to it; "
-                        f"nothing does.",
+                        f"No .xaml and no other .cs names this {noun}. {generator} generates it so a view can bind to it; nothing does.",
                         str(path),
                     )
                 )
@@ -726,8 +713,7 @@ def _check_resources(scan: Scan) -> list[Finding]:
             Finding(
                 "ORPHAN-RESOURCE",
                 name,
-                "No x:Uid names it and no production C# looks it up. "
-                "User-facing copy no user can reach (Hard Rule 13).",
+                "No x:Uid names it and no production C# looks it up. User-facing copy no user can reach (Hard Rule 13).",
                 str(path),
             )
         )
@@ -735,9 +721,7 @@ def _check_resources(scan: Scan) -> list[Finding]:
 
 
 def _check_di(scan: Scan) -> list[Finding]:
-    registration = next(
-        (p for p in scan.cs_files if p.name == "ServiceRegistration.cs"), None
-    )
+    registration = next((p for p in scan.cs_files if p.name == "ServiceRegistration.cs"), None)
     if registration is None:
         return []
 
@@ -914,10 +898,7 @@ def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
         resolved = _viewmodel_for(path, scan)
         code_behind = scan.cs_files.get(path.with_suffix(".xaml.cs"), "")
         if resolved is None:
-            skipped.append(
-                f"{path}: no ViewModel matches the naming convention; "
-                f"{len(paths_used)} binding path(s) unchecked"
-            )
+            skipped.append(f"{path}: no ViewModel matches the naming convention; {len(paths_used)} binding path(s) unchecked")
             continue
 
         vm_name, vm_text = resolved
@@ -943,12 +924,7 @@ def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
 def collect_findings(root: Path) -> tuple[list[Finding], Scan, list[str]]:
     scan = read_tree(root)
     binding_findings, binding_skips = _check_bindings(scan)
-    findings = (
-        _check_members(scan)
-        + _check_resources(scan)
-        + _check_di(scan)
-        + binding_findings
-    )
+    findings = _check_members(scan) + _check_resources(scan) + _check_di(scan) + binding_findings
     findings.sort(key=lambda f: (f.code, f.symbol))
     return findings, scan, binding_skips
 
@@ -996,10 +972,7 @@ def run(root: Path, allowlist_path: Path, verbose: bool, as_json: bool) -> int:
 
     # Always say what was READ, not only what was objected to: a guard that
     # scans nothing must not be able to look clean.
-    print(
-        f"- read {len(scan.cs_files)} .cs, {len(scan.xaml_files)} .xaml, "
-        f"{len(scan.resw_files)} .resw under {root}"
-    )
+    print(f"- read {len(scan.cs_files)} .cs, {len(scan.xaml_files)} .xaml, {len(scan.resw_files)} .resw under {root}")
     if verbose:
         for skip in binding_skips + scan.skipped:
             print(f"  skipped: {skip}")
@@ -1008,10 +981,7 @@ def run(root: Path, allowlist_path: Path, verbose: bool, as_json: bool) -> int:
 
     if not live and not stale:
         print(f"OK: nothing in {root} is wired to nothing that this guard can see.")
-        print(
-            "    (Name-matched, not type-resolved: see this script's docstring "
-            "for what it cannot see.)"
-        )
+        print("    (Name-matched, not type-resolved: see this script's docstring for what it cannot see.)")
         return 0
 
     if live:
@@ -1111,21 +1081,11 @@ def _write_wired(root: Path) -> None:
     (root / "src" / "Demo.App" / "Services").mkdir(parents=True)
     (root / "src" / "Demo.App" / "Strings" / "en-US").mkdir(parents=True)
 
-    (root / "src" / "Demo.Presentation" / "ViewModels" / "NewRunViewModel.cs").write_text(
-        _WIRED_VM, encoding="utf-8", newline="\n"
-    )
-    (root / "src" / "Demo.App" / "Views" / "NewRunPage.xaml").write_text(
-        _WIRED_XAML, encoding="utf-8", newline="\n"
-    )
-    (root / "src" / "Demo.App" / "Startup" / "ServiceRegistration.cs").write_text(
-        _WIRED_REGISTRATION, encoding="utf-8", newline="\n"
-    )
-    (root / "src" / "Demo.App" / "Services" / "FilePickerService.cs").write_text(
-        _WIRED_SERVICE, encoding="utf-8", newline="\n"
-    )
-    (root / "src" / "Demo.App" / "Strings" / "en-US" / "Resources.resw").write_text(
-        _WIRED_RESW, encoding="utf-8", newline="\n"
-    )
+    (root / "src" / "Demo.Presentation" / "ViewModels" / "NewRunViewModel.cs").write_text(_WIRED_VM, encoding="utf-8", newline="\n")
+    (root / "src" / "Demo.App" / "Views" / "NewRunPage.xaml").write_text(_WIRED_XAML, encoding="utf-8", newline="\n")
+    (root / "src" / "Demo.App" / "Startup" / "ServiceRegistration.cs").write_text(_WIRED_REGISTRATION, encoding="utf-8", newline="\n")
+    (root / "src" / "Demo.App" / "Services" / "FilePickerService.cs").write_text(_WIRED_SERVICE, encoding="utf-8", newline="\n")
+    (root / "src" / "Demo.App" / "Strings" / "en-US" / "Resources.resw").write_text(_WIRED_RESW, encoding="utf-8", newline="\n")
 
 
 def _codes(root: Path) -> set[str]:
@@ -1161,9 +1121,7 @@ def self_test() -> int:
         _, scan, _ = collect_findings(wired)
         check(
             "the scanner read the fixture files",
-            len(scan.cs_files) >= 3
-            and len(scan.xaml_files) >= 1
-            and len(scan.resw_files) >= 1,
+            len(scan.cs_files) >= 3 and len(scan.xaml_files) >= 1 and len(scan.resw_files) >= 1,
             f"cs={len(scan.cs_files)} xaml={len(scan.xaml_files)} resw={len(scan.resw_files)}",
         )
 
@@ -1286,9 +1244,8 @@ def self_test() -> int:
         # 3b. The three false results of #461, one fixture each (revert the fix and these fail).
         check(
             "a constructor parameter with a default value parses to its type",
-            _constructor_parameters(
-                "public class C { public C(IFoo f, Action<string, JobPhase>? cb = null) { } }", "C"
-            ) == ["IFoo", "Action<string,JobPhase>"],
+            _constructor_parameters("public class C { public C(IFoo f, Action<string, JobPhase>? cb = null) { } }", "C")
+            == ["IFoo", "Action<string,JobPhase>"],
         )
         check(
             "the instance registration form registers the type",
@@ -1326,7 +1283,7 @@ def self_test() -> int:
         _write_wired(typed_root)
         (typed_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
         (typed_root / "src/Demo.Presentation/Item.cs").write_text(
-            "public sealed class Item { public string ItemOnlyMember { get; } = \"\"; }\n", encoding="utf-8"
+            'public sealed class Item { public string ItemOnlyMember { get; } = ""; }\n', encoding="utf-8"
         )
         _patch(
             typed_root,
@@ -1343,7 +1300,7 @@ def self_test() -> int:
         _write_wired(typed_bad_root)
         (typed_bad_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
         (typed_bad_root / "src/Demo.Presentation/Item.cs").write_text(
-            "public sealed class Item { public string ItemOnlyMember { get; } = \"\"; }\n", encoding="utf-8"
+            'public sealed class Item { public string ItemOnlyMember { get; } = ""; }\n', encoding="utf-8"
         )
         _patch(
             typed_bad_root,
@@ -1360,7 +1317,7 @@ def self_test() -> int:
         _write_wired(nested_root)
         (nested_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
         (nested_root / "src/Demo.Presentation/Item.cs").write_text(
-            "public sealed record Group(string Header);\npublic sealed class Row { public string Title { get; } = \"\"; }\n",
+            'public sealed record Group(string Header);\npublic sealed class Row { public string Title { get; } = ""; }\n',
             encoding="utf-8",
         )
         _patch(
@@ -1413,8 +1370,8 @@ def self_test() -> int:
         _write_wired(scoped_root)
         (scoped_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
         (scoped_root / "src/Demo.Presentation/Item.cs").write_text(
-            "public sealed class Item { public string Own { get; } = \"\"; }\n"
-            "public sealed class Other { public string OnlyOnOther { get; } = \"\"; }\n",
+            'public sealed class Item { public string Own { get; } = ""; }\n'
+            'public sealed class Other { public string OnlyOnOther { get; } = ""; }\n',
             encoding="utf-8",
         )
         _patch(
@@ -1432,7 +1389,7 @@ def self_test() -> int:
         _write_wired(single_root)
         (single_root / "src/Demo.Presentation").mkdir(parents=True, exist_ok=True)
         (single_root / "src/Demo.Presentation/Item.cs").write_text(
-            "public sealed class Item { public string ItemOnlyMember { get; } = \"\"; }\n", encoding="utf-8"
+            'public sealed class Item { public string ItemOnlyMember { get; } = ""; }\n', encoding="utf-8"
         )
         _patch(
             single_root,
