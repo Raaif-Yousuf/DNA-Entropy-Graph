@@ -104,12 +104,21 @@ badge (#638) are separate, and all three can show together.
   (`UninstallDataPrompt`, a plain message box because the uninstaller has no window); only Yes deletes the folder
   (`UninstallDataCleanup`, tested with a fake prompt and delete). Result files in the output folder are never touched (Hard Rule 14).
   A prompt that cannot be shown, or a locked file, keeps or leaves the data and never fails the uninstall.
+  **The hook's limit.** MEASURED 2026-10-15 from Velopack 1.2.161's `Velopack.xml`: `OnBeforeUninstallFastCallback` code that has not finished within **30 seconds** is
+  terminated. So: a silent or non-interactive uninstall (`Environment.UserInteractive` false, or `DEG_SILENT_UNINSTALL=1`) asks nothing and keeps the data
+  (`NotInteractive`); the message box is `MessageBoxTimeoutW` with a 10 second timeout, and a timeout counts as No; a Yes first renames the folder to
+  `DNAEntropyGraph.removing-xxxxxxxx` (one atomic rename on the same volume) and then deletes that, waiting at most 12 seconds, so a kill leaves a clearly
+  named leftover and never a half-deleted live folder (a leftover is safe to delete by hand). A folder that cannot be renamed is left exactly as it was.
+  The dialog text comes from the resource loader, and falls back to embedded English constants (`UninstallDataStrings`) when the loader returns the key or
+  throws, because the hook runs before `Application.Start`; a Guards test keeps the constants equal to the resw values. The overlap check compares the
+  real locations (`FinalPath`: junctions and links followed, 8.3 names expanded) and is a refusal that never deletes. With the packId `DnaEntropyGraph.Desktop`
+  (#712) the install root is `%LOCALAPPDATA%\DnaEntropyGraph.Desktop`, so the folders do not overlap and the question is asked.
 - *Collision, MEASURED 2026-10-15 from the files:* `release.yml` packs with `--packId DnaEntropyGraph`, so Velopack installs into
   `%LOCALAPPDATA%\DnaEntropyGraph`, and the data folder is `%LOCALAPPDATA%\DNAEntropyGraph`. Windows paths are not case sensitive, so these are
   the same folder. THEORY (unverified): Velopack's uninstaller deletes its whole root, which would remove the user's data whatever they answered; and
   an update replaces only `current\`, so updates are safe. While the names collide the hook asks nothing (`SharedWithInstall`) because "keep"
   would be a promise it cannot make. The fix is a different `--packId` (for example `DnaEntropyGraphApp`), which is a `release.yml` change; see the issue
-  filed for it. Until then ToTest verifies what an uninstall really leaves.
+  filed for it. Until then ToTest verifies what an uninstall really leaves. Resolved by #712: the packId is `DnaEntropyGraph.Desktop`, so the hook asks.
 
 ## 4. Update channel
 
