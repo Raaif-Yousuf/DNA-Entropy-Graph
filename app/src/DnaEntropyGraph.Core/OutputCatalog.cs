@@ -48,6 +48,8 @@ public static class OutputCatalog
         new(OutputFileKinds.EntropyTsv, "tsv", "OutputChoice_tsv", OutputInputKinds.Both, true, false),
         new(OutputFileKinds.Probs, "probs", "OutputChoice_probs", OutputInputKinds.Both, false, false),
         new(OutputFileKinds.ProbsNpy, "probs_npy", "OutputChoice_probs_npy", OutputInputKinds.Both, false, false),
+        new(OutputFileKinds.Gc, "gc", "OutputChoice_gc", OutputInputKinds.Both, false, false),
+        new(OutputFileKinds.Codons, "codons", "OutputChoice_codons", OutputInputKinds.Both, false, false),
     ];
 
     /// <summary>Every flag the catalog owns.</summary>

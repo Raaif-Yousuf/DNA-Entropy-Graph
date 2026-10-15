@@ -967,6 +967,12 @@
   <data name="OutputChoice_probs_npy" xml:space="preserve">
     <value>The model's probability for each base, as a NumPy array (.probs.npy). Large, so it is off unless you tick it.</value>
   </data>
+  <data name="OutputChoice_gc" xml:space="preserve">
+    <value>GC percent along the sequence, as a track (.gc.bedgraph). Shows where the DNA is rich in G and C next to the entropy. Off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_codons" xml:space="preserve">
+    <value>How often each codon is used by the genes, as a table (.codons.tsv). Needs genes, so it is empty for a sequence with none. Off unless you tick it.</value>
+  </data>
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
   </data>

@@ -164,6 +164,12 @@ public static class WorkerManifestBuilder
             root["analysis"]!["topology"] = options.Topology == Topology.Circular ? "circular" : "linear";
         }
 
+        if (options.OutputFiles.HasFlag(OutputFileKinds.Gc))
+        {
+            // Read only when "gc" is named (job_contract.md section 3, issue #688); sending it otherwise would be noise.
+            root["analysis"]!["gcWindow"] = options.GcWindow;
+        }
+
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
     }
 

@@ -66,7 +66,7 @@ reasonable for most sequences.
   has its own genes recorded, and those are used instead.
 - **Files you get back**: under the file list there is one tick box for each result file you can ask for (the
   list is the same for a GenBank file and for a FASTA or pasted sequence). Everything is ticked except the WIG
-  track and the two large tables of the model's probability for every base, which you tick only if you want them. Your choice is
+  track, the two large tables of the model's probability for every base, the GC percent track and the codon usage table, which you tick only if you want them. Your choice is
   remembered separately for GenBank files and for FASTA or pasted sequences, and the next time you add a file of
   that kind the same boxes are ticked. If you clear every box, the page asks you to tick at least one file before
   **Run** works. The entropy track comes in one format per run, so the IGV track and the WIG track are alternatives: ticking one clears the other. See

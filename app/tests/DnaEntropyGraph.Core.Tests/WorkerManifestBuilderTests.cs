@@ -256,6 +256,27 @@ public class WorkerManifestBuilderTests
     }
 
     [Fact]
+    public void Gc_and_codons_are_requested_only_when_chosen_and_gc_carries_its_window()
+    {
+        var plain = Build();
+        Outputs(plain).ShouldNotContain("gc");
+        Outputs(plain).ShouldNotContain("codons");
+        plain.GetProperty("analysis").TryGetProperty("gcWindow", out _).ShouldBeFalse("the window only matters when gc is named");
+
+        var chosen = Build(Opts(o => o with { OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Gc | OutputFileKinds.Codons, GcWindow = 101 }));
+        Outputs(chosen).ShouldContain("gc");
+        Outputs(chosen).ShouldContain("codons");
+        chosen.GetProperty("analysis").GetProperty("gcWindow").GetInt32().ShouldBe(101);
+
+        var codonsOnly = Build(Opts(o => o with { OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Codons }));
+        codonsOnly.GetProperty("analysis").TryGetProperty("gcWindow", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_default_gc_window_is_the_workers_default()
+        => new RunOptions { ModelId = "m", RunTarget = "Cloud" }.GcWindow.ShouldBe(51);
+
+    [Fact]
     public void Not_finding_genes_never_requests_the_gene_summary_either()
     {
         var outputs = Outputs(Build(Opts(o => o with { FindGenes = false })));
