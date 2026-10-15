@@ -38,6 +38,47 @@ public class ActivationRouterTests
         _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
     }
 
+    [Fact]
+    public void An_activation_from_another_thread_touches_the_window_and_navigator_only_on_the_dispatcher_thread()
+    {
+        // Notification clicks and redirected launches arrive on a thread-pool thread; the window and the frame are UI-thread objects.
+        var queue = new QueueDispatcher();
+        var router = new ActivationRouter(_navigator, _window, queue);
+        var callerThread = -1;
+        var touchedOn = new List<int>();
+        _window.When(w => w.BringToFront()).Do(_ => touchedOn.Add(Environment.CurrentManagedThreadId));
+        _navigator.When(n => n.NavigateTo(Arg.Any<string>(), Arg.Any<object?>())).Do(_ => touchedOn.Add(Environment.CurrentManagedThreadId));
+
+        var caller = new Thread(() =>
+        {
+            callerThread = Environment.CurrentManagedThreadId;
+            router.Handle(AppDeepLink.ForRun("job-7"));
+        });
+        caller.Start();
+        caller.Join();
+
+        touchedOn.ShouldBeEmpty("nothing runs on the calling thread");
+        queue.RunPending();
+
+        touchedOn.Count.ShouldBe(2);
+        touchedOn.ShouldAllBe(t => t == Environment.CurrentManagedThreadId && t != callerThread);
+    }
+
+    private sealed class QueueDispatcher : IDispatcher
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _work = new();
+
+        public void Enqueue(Action action) => _work.Enqueue(action);
+
+        public void RunPending()
+        {
+            while (_work.TryDequeue(out var action))
+            {
+                action();
+            }
+        }
+    }
+
     private sealed class InlineDispatcher : IDispatcher
     {
         public void Enqueue(Action action) => action();

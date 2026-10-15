@@ -15,9 +15,14 @@ public sealed class AppWindowService : IAppWindow
 
     public bool IsInForeground => _active;
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    /// <summary>Called after the window is first activated; takes the real initial state (the Activated event only reports changes).</summary>
     public void Attach(Window window)
     {
         _window = window;
+        _active = GetForegroundWindow() == WinRT.Interop.WindowNative.GetWindowHandle(window);
         window.Activated += (_, args) => _active = args.WindowActivationState != WindowActivationState.Deactivated;
     }
 

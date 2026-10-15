@@ -208,6 +208,32 @@ public sealed class NotificationsTests
     }
 
     [Fact]
+    public async Task A_repeated_failed_message_for_the_same_run_notifies_once_but_another_run_still_does()
+    {
+        var actions = Actions();
+
+        await actions.OnRunFailedAsync("job-1");
+        await actions.OnRunFailedAsync("job-1");
+        await actions.OnRunFailedAsync("job-2");
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-2");
+    }
+
+    [Fact]
+    public async Task A_failed_run_that_was_not_notified_because_the_switch_was_off_can_notify_after_it_is_turned_on()
+    {
+        var actions = Actions();
+        new NotificationSettings(_settings).NotifyWhenDone = false;
+        await actions.OnRunFailedAsync("job-1");
+        new NotificationSettings(_settings).NotifyWhenDone = true;
+
+        await actions.OnRunFailedAsync("job-1");
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
+    }
+
+    [Fact]
     public async Task A_desktop_notifier_that_throws_never_stops_the_in_app_toast_or_Results()
     {
         new NotificationSettings(_settings).OpenResultsWhenDone = true;

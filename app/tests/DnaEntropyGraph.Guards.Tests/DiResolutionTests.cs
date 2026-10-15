@@ -252,6 +252,7 @@ public class DiResolutionTests
             real.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IDesktopNotifier>().ShouldBeOfType<DnaEntropyGraph.App.Services.AppNotifier>();
             real.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IAppWindow>().ShouldBeSameAs(real.GetRequiredService<DnaEntropyGraph.App.Services.AppWindowService>());
             real.GetRequiredService<DnaEntropyGraph.Presentation.Services.ActivationRouter>().ShouldNotBeNull();
+            real.GetRequiredService<DnaEntropyGraph.App.Services.INotificationSink>().ShouldBeOfType<DnaEntropyGraph.App.Services.WindowsNotificationSink>();
         }
 
         var seen = new List<(string Title, string? JobId)>();
@@ -268,6 +269,7 @@ public class DiResolutionTests
     {
         public void Notify(string title, string body, string? jobId) => seen.Add((title, jobId));
     }
+
     [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {

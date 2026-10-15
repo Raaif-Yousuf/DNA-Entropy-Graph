@@ -1389,7 +1389,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Your run did not finish</value>
   </data>
   <data name="RunFailed_Body" xml:space="preserve">
-    <value>Nothing more is being charged. Open the run to see what went wrong and what to do next.</value>
+    <value>Open the run to see what went wrong and what to do next.</value>
   </data>
   <data name="RunToast_OpenResults" xml:space="preserve">
     <value>Open run</value>

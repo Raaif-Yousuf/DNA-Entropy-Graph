@@ -26,9 +26,20 @@ public sealed class RunCompletionActions(
     public async Task OnRunFailedAsync(string jobId)
     {
         var choices = await Task.Run(settings.Snapshot).ConfigureAwait(false);
-        if (choices.NotifyWhenDone)
+        if (choices.NotifyWhenDone && MarkFailedNotified(jobId))
         {
             NotifyDesktop(strings.GetString("RunFailed_Title"), strings.GetString("RunFailed_Body"), jobId);
+        }
+    }
+
+    // The same Failed message can arrive twice for one run (a reattach, a re-poll); one toast per run is enough.
+    private readonly HashSet<string> _failedNotified = [];
+
+    private bool MarkFailedNotified(string jobId)
+    {
+        lock (_failedNotified)
+        {
+            return _failedNotified.Add(jobId);
         }
     }
 
