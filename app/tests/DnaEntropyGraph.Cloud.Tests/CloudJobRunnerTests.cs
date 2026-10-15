@@ -31,7 +31,7 @@ public class CloudJobRunnerTests
     private static CloudJobRequest ValidRequest(string jobId, IReadOnlyList<string>? zones = null, AfterTaskAction afterTask = AfterTaskAction.Stop) => TestInputs.Request(jobId, ValidSpec(jobId), zones, afterTask);
 
     private static CloudJobRunner NewRunner(FakeGcp gcp, InMemoryRunRepository? repo = null, Action<string, JobPhase>? onPhaseChanged = null)
-        => new(gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository(), onPhaseChanged);
+        => new(gcp, gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository(), onPhaseChanged);
 
     [Fact]
     public async Task Happy_path_reaches_Completed_and_records_every_phase_in_order()
