@@ -1334,6 +1334,10 @@ account and a role and edits two policies, and a whole-method retry would replay
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.
 
+## 17. Overrides in Settings (issue #644)
+
+Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),
