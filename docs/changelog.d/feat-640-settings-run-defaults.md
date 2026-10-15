@@ -1,0 +1,2 @@
+- Settings has a Run defaults group: the files a new run starts with, for a GenBank input and for a FASTA or pasted one, edited through the same store the New run page reads (#640).
+- A Run defaults box that could not be saved now goes back to what is saved, and the refused last box is put back after the click finishes (#640).
