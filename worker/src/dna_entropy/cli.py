@@ -98,6 +98,12 @@ def run(
         "--informat",
         help="Force input format: genbank|fasta|paste (default: auto-detect by extension/content).",
     ),
+    gff3: str | None = typer.Option(
+        None,
+        "--gff3",
+        help="Pair a GFF3 annotation with a FASTA --input: its genes are used and Prodigal never "
+        "runs (issue #135). Sequence names (first column) must match the FASTA header names.",
+    ),
     predictor: str = typer.Option("mock", "--predictor", help="Predictor backend: mock|evo."),
     model: str = typer.Option("evo2_7b", "--model", help="Evo model id (evo predictor only)."),
     device: str = typer.Option("cuda", "--device", help="cuda|cpu (evo predictor only)."),
@@ -230,6 +236,7 @@ def run(
             name=safe_name,
             input_path=input,
             informat=informat,
+            annotation_path=gff3,
             predictor=PredictorKind(predictor),
             model=model,
             device=device,

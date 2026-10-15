@@ -563,6 +563,25 @@ so the viewer and IGV keep every record's track aligned to its own sequence.
 
 ---
 
+### 5c. A FASTA + GFF3 pair as an annotated input (issue #135)
+
+`dna-entropy run -i seq.fasta --gff3 seq.gff3` (`RunConfig.annotation_path`, reader
+`readers/gff3.py`). The GFF3's genes are the file's own, so **Prodigal never runs**, even with
+`--genes`. Rules:
+
+- Rows are matched to FASTA records by the GFF3's first column against the record id (the header
+  text up to the first space). If no name matches, the run is refused; if some do not, one counted
+  notice says so. A GFF3 with a non-FASTA input is refused.
+- Per sequence name, `gene` features are used, else `CDS` (the same preference as the GenBank
+  reader). Coordinates are GFF3's 1-based inclusive, the same as `GeneFeature`. Several `CDS` rows
+  sharing one `ID` are one feature: outer span in `begin..end`, real parts in `segments`, with a
+  notice (like a GenBank `join`). The gene id is `Name`, else `gene`, `locus_tag`, `product`, `ID`.
+- A feature past the end of its sequence is dropped with a counted notice; a malformed line is
+  skipped with a counted notice naming the first line number; the `##FASTA` section is ignored.
+- Outputs: `<name>.genes.gff3` (source `gff3`), the gene summary tables, and the bonus `<name>.gb`
+  carry these genes. Auto-pairing `<name>.fasta` with `<name>.gff3` in one drop, and a pairing UI
+  when ambiguous, are app work (follow-up issue); the manifest field is `worker/manifest.py`'s.
+
 ## 6. Viewer support matrix
 
 | Viewer | Loads | Notes |

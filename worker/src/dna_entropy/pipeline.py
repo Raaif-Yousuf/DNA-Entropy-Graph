@@ -630,9 +630,13 @@ def _write_standard_outputs(
 
     genes: list[GeneFeature] = []
     genes_by_contig: list[list[GeneFeature]] = [[] for _ in processed]
-    if cfg.genes:
+    # issue #135: genes supplied by a paired GFF3 are the file's own, so Prodigal never runs,
+    # even with --genes (a contig with no GFF3 rows gets no genes rather than a second opinion).
+    annotated = cfg.annotation_path is not None
+    if annotated or cfg.genes:
         for i, (c, _dr) in enumerate(processed):
-            g = ProdigalAnnotator().annotate(c.seq)  # may raise AnnotatorError (explicit opt-in)
+            # Prodigal may raise AnnotatorError (explicit opt-in)
+            g = list(c.features) if annotated else ProdigalAnnotator().annotate(c.seq)
             genes_by_contig[i] = g
             genes += g
         if cfg.include_genes_gff3:
@@ -644,11 +648,11 @@ def _write_standard_outputs(
                     ],
                     start=cfg.start,
                     out_dir=cfg.out_dir,
-                    source="pyrodigal",
+                    source="gff3" if annotated else "pyrodigal",
                 )
             )
 
-    if cfg.include_gene_summary and cfg.genes:
+    if cfg.include_gene_summary and (cfg.genes or annotated):
         outputs += _write_gene_summary(cfg, processed, genes_by_contig)
 
     # Bonus GenBank "if possible": reuse --genes features per contig, else best-effort
@@ -657,7 +661,7 @@ def _write_standard_outputs(
         try:
             records = []
             for (c, dr), g in zip(processed, genes_by_contig, strict=True):
-                gb_features = g or _try_annotate(c.seq)
+                gb_features = g if annotated else (g or _try_annotate(c.seq))
                 records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
             outputs.append(GenBankWriter().write_multi(name=cfg.name, records=records, out_dir=cfg.out_dir))
         except Exception:

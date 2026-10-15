@@ -243,6 +243,7 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "-i",
         "--name",
         "--informat",
+        "--gff3",
         "--predictor",
         "--model",
         "--device",

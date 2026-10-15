@@ -104,6 +104,9 @@ class RunConfig:
     name: str = "user_locus"
     input_path: str | None = None  # None => read from stdin
     informat: str | None = None  # "genbank"|"fasta"|"paste" override; None => auto-detect
+    # issue #135: a GFF3 file paired with a FASTA input. Its genes replace Prodigal (which then
+    # never runs). Only valid with FASTA input; None => no pairing.
+    annotation_path: str | None = None
     predictor: PredictorKind = PredictorKind.MOCK
     model: str = "evo2_7b"
     device: str = "cuda"

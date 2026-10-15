@@ -19,6 +19,7 @@ from ..validation.validators import ValidationError, validate_sequence
 from . import detect
 from .fasta import read_fasta
 from .genbank import read_genbank
+from .gff3 import read_gff3
 from .paste import PasteReader
 
 
@@ -167,6 +168,20 @@ def _assert_unique_contig_names(contigs: list[Contig]) -> None:
         )
 
 
+def _fit_to_length(feats: list[GeneFeature], seq_len: int) -> tuple[list[GeneFeature], list[str]]:
+    """Drop a paired GFF3 feature that runs past its sequence's own length (the pair disagree:
+    wrong FASTA, or a trimmed one), counted in one notice, never kept with a wrong span."""
+    kept = [f for f in feats if f.end <= seq_len]
+    dropped = len(feats) - len(kept)
+    notes = []
+    if dropped:
+        notes.append(
+            f"{dropped} GFF3 feature(s) fall outside their sequence's length of {seq_len} nt and were "
+            "dropped. Check the GFF3 belongs to this FASTA."
+        )
+    return kept, notes
+
+
 def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     """Read + validate the configured input into a :class:`LoadedInput`.
 
@@ -175,6 +190,11 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     ``N``); the paste path stays strict A/C/G/T.
     """
     kind = cfg.informat or detect.detect_kind(cfg.input_path)
+    if cfg.annotation_path is not None and kind != detect.FASTA:
+        raise ValidationError(
+            "A GFF3 annotation can only be paired with a FASTA file; this input is not FASTA. "
+            "Remove the GFF3, or add the sequence as a FASTA file."
+        )
 
     if kind == detect.GENBANK:
         records, notices = read_genbank(cfg.input_path)
@@ -201,8 +221,13 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
 
     if kind == detect.FASTA:
         records, notices = read_fasta(cfg.input_path)
+        paired: dict[str, list[GeneFeature]] = {}
+        if cfg.annotation_path is not None:
+            paired, gff_notices = read_gff3(cfg.annotation_path)
+            notices += gff_notices
         contigs: list[Contig] = []
         running_total = 0
+        matched: set[str] = set()
         for i, rec in enumerate(records):
             v = validate_sequence(
                 rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
@@ -210,13 +235,33 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
             notices += v.notices
             running_total += len(v.seq)
             _check_whole_input_cap(running_total, cfg.max_total_len)
+            features: list[GeneFeature] = []
+            seqid = rec.header.split(None, 1)[0] if rec.header else ""
+            if seqid in paired:
+                matched.add(seqid)
+                features, fit_notices = _fit_to_length(paired[seqid], len(v.seq))
+                notices += fit_notices
             contigs.append(
                 Contig(
                     name=_safe_contig_name(cfg.name, i, len(records), out_dir=cfg.out_dir),
                     seq=v.seq,
+                    features=features,
                     source_id=rec.header,
                 )
             )
+        if paired:
+            if not matched:
+                raise ValidationError(
+                    "None of the sequence names in the GFF3 match a FASTA record name (the text "
+                    "after > up to the first space), so none of its genes can be placed. Make "
+                    "the GFF3's first column match the FASTA header names, or pick the right pair."
+                )
+            unmatched = len(set(paired) - matched)
+            if unmatched:
+                notices.append(
+                    f"{unmatched} sequence name(s) in the GFF3 match no FASTA record; their genes "
+                    "were not used."
+                )
         _assert_unique_contig_names(contigs)
         return LoadedInput(contigs=contigs, notices=notices, source_kind=kind)
 
