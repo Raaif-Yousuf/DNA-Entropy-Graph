@@ -71,6 +71,7 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
         ];
         // A field, not the property: opening a page must not save what was just read.
         _selectedTarget = Read(settings);
+        _acceptedTarget = _selectedTarget;
         messenger?.Register<RunTargetPickerViewModel, SettingsResetMessage>(this, static (vm, _) => vm.Reload());
     }
 
@@ -112,13 +113,42 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
         };
     }
 
+    private string _acceptedTarget = RunTargets.Cloud;
+    private bool _reverting;
+
     partial void OnSelectedTargetChanged(string value)
     {
+        if (_reverting)
+        {
+            return;
+        }
+
         if (_loading)
         {
+            _acceptedTarget = value;
             UpdateNote(_lastReadiness);
             return;
         }
+
+        // A choice the user cannot use is refused here, not only greyed out: the list greys the text, but its row can still be clicked.
+        var thisPc = Options.First(o => o.Value == RunTargets.ThisPc);
+        if (value == RunTargets.ThisPc && !thisPc.IsAvailable)
+        {
+            _reverting = true;
+            try
+            {
+                SelectedTarget = _acceptedTarget;
+            }
+            finally
+            {
+                _reverting = false;
+            }
+
+            Note = thisPc.Reason;
+            return;
+        }
+
+        _acceptedTarget = value;
 
         try
         {

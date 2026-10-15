@@ -173,6 +173,37 @@ public sealed class RunTargetPickerTests
     }
 
     [Fact]
+    public async Task Choosing_a_greyed_out_This_PC_is_refused_keeps_the_old_choice_saves_nothing_and_says_why()
+    {
+        // MEASURED 2026-10-15 (review of #173): IsEnabled on the item's content greys the text but the row is still clickable, so This PC could be picked.
+        Readiness(Blocked(LocalBlocker.NoNvidiaGpu), LocalEngineHealth.NotInstalled());
+        var vm = Create();
+        await vm.RefreshAsync(TestContext.Current.CancellationToken);
+        vm.SelectedTarget = "Auto";
+        var writes = _settings.Writes;
+
+        vm.SelectedTarget = "This PC";
+
+        vm.SelectedTarget.ShouldBe("Auto");
+        _settings.Values[RunTargetPickerViewModel.SettingKey].ShouldBe("Auto");
+        _settings.Writes.ShouldBe(writes);
+        vm.Note.ShouldBe("RunTargetReason_NoNvidiaGpu");
+    }
+
+    [Fact]
+    public async Task Choosing_This_PC_when_it_can_run_is_accepted_and_saved()
+    {
+        Readiness(Capable(), Healthy());
+        var vm = Create();
+        await vm.RefreshAsync(TestContext.Current.CancellationToken);
+
+        vm.SelectedTarget = "This PC";
+
+        vm.SelectedTarget.ShouldBe("This PC");
+        _settings.Values[RunTargetPickerViewModel.SettingKey].ShouldBe("This PC");
+    }
+
+    [Fact]
     public async Task Auto_says_where_it_will_go()
     {
         Readiness(Blocked(LocalBlocker.NoNvidiaGpu), LocalEngineHealth.NotInstalled());

@@ -304,7 +304,8 @@ public static class ServiceRegistration
         services.AddTransient<FilesSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
-        services.AddTransient<RunTargetPickerViewModel>();
+        // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
+        services.AddSingleton<RunTargetPickerViewModel>();
         services.AddTransient<ThisPcSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         services.AddSingleton<RunCompletionActions>();

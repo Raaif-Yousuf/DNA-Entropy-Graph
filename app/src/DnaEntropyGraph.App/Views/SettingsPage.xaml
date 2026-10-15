@@ -109,6 +109,12 @@
                         <!-- Where to run (issues #120, #173). A choice that cannot work right now is greyed out and the reason is the line under the box. -->
                         <StackPanel Spacing="4">
                             <ComboBox x:Uid="RunTargetBox" ItemsSource="{x:Bind ThisPc.Picker.Options}" SelectedValuePath="Value" SelectedValue="{x:Bind ThisPc.Picker.SelectedTarget, Mode=TwoWay}">
+                                <!-- The row itself is disabled for a choice that cannot work (the content's own IsEnabled only greyed the text). A {Binding} here, not x:Bind: a Style setter has no compiled-binding source. -->
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem">
+                                        <Setter Property="IsEnabled" Value="{Binding IsAvailable}" />
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:RunTargetOption">
                                         <!-- A choice that cannot work right now reads greyed out; the reason is the line under the box. -->
