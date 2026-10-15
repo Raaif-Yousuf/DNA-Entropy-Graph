@@ -96,15 +96,23 @@ public sealed class NotificationsTests
     public async Task The_settings_are_read_once_and_off_the_thread_that_reported_the_run_finished()
     {
         // #643 cold review (6): the settings store is a mutex with a 300 ms budget; the run-driving thread must not wait on it.
-        var callerThread = Environment.CurrentManagedThreadId;
-        var store = new ThreadRecordingSettings(_settings);
+        // Proved with a gate, not by comparing thread ids: the pool can hand the caller's own thread to Task.Run, so an id
+        // comparison flaked on CI (#721). If the read moved onto the caller, the call would block on the gate and Join would fail.
+        using var gate = new ManualResetEventSlim(false);
+        var store = new GatedSettings(_settings, gate);
+        var actions = new RunCompletionActions(new NotificationSettings(store), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher());
+        Task? pending = null;
+        var caller = new Thread(() => pending = actions.OnRunFinishedAsync("job-1", JobPhase.Completed));
 
-        await new RunCompletionActions(new NotificationSettings(store), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher())
-            .OnRunFinishedAsync("job-1", JobPhase.Completed);
+        caller.Start();
+        var returned = caller.Join(TimeSpan.FromSeconds(10));
+        var finishedBeforeRelease = pending?.IsCompleted ?? true;
+        gate.Set();
 
-        store.ReadThreads.ShouldNotBeEmpty();
-        store.ReadThreads.ShouldAllBe(t => t != callerThread);
-        store.ReadThreads.Count.ShouldBe(3, "one read per switch, not one per use");
+        returned.ShouldBeTrue("the caller returned without waiting for the settings store");
+        finishedBeforeRelease.ShouldBeFalse("the read was still held by the gate when the caller returned");
+        await pending.ShouldNotBeNull();
+        store.Reads.ShouldBe(3, "one read per switch, not one per use");
     }
 
     [Fact]
@@ -318,17 +326,16 @@ public sealed class NotificationsTests
         public void Enqueue(Action action) => action();
     }
 
-    private sealed class ThreadRecordingSettings(ISettingsStore inner) : ISettingsStore
+    private sealed class GatedSettings(ISettingsStore inner, ManualResetEventSlim gate) : ISettingsStore
     {
-        public List<int> ReadThreads { get; } = [];
+        private int _reads;
+
+        public int Reads => Volatile.Read(ref _reads);
 
         public string? GetString(string key)
         {
-            lock (ReadThreads)
-            {
-                ReadThreads.Add(Environment.CurrentManagedThreadId);
-            }
-
+            gate.Wait();
+            Interlocked.Increment(ref _reads);
             return inner.GetString(key);
         }
 
