@@ -52,7 +52,7 @@ def _build_record(
             quals["note"].append("partial")
         record.features.append(
             SeqFeature(
-                FeatureLocation(begin0, end, strand=1 if f.strand == "+" else -1),
+                FeatureLocation(begin0, end, strand={"+": 1, "-": -1}.get(f.strand)),  # "." stays unstranded
                 type="gene",
                 qualifiers=quals,
             )

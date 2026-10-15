@@ -107,7 +107,13 @@ def run(
     informat: str | None = typer.Option(
         None,
         "--informat",
-        help="Force input format: genbank|fasta|paste (default: auto-detect by extension/content).",
+        help="Force input format: genbank|embl|snapgene|fasta|paste (default: auto-detect).",
+    ),
+    gff3: str | None = typer.Option(
+        None,
+        "--gff3",
+        help="Pair a GFF3 annotation with a FASTA --input: its genes are used and Prodigal never "
+        "runs (issue #135). Sequence names (first column) must match the FASTA header names.",
     ),
     accession: str | None = typer.Option(
         None,
@@ -285,6 +291,7 @@ def run(
             name=safe_name,
             input_path=input,
             informat=informat,
+            annotation_path=gff3,
             predictor=PredictorKind(predictor),
             model=model,
             device=device,

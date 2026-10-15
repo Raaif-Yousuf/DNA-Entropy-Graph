@@ -247,6 +247,7 @@ def test_run_declares_exactly_the_expected_option_surface() -> None:
         "--accession-range",
         "--ncbi-api-key",
         "--cache-dir",
+        "--gff3",
         "--predictor",
         "--model",
         "--device",
