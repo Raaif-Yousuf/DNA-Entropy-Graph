@@ -10,14 +10,15 @@ using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.LocalEngine;
 
-/// <summary>Everything one This PC run needs. <see cref="Input"/> is the app's own staged copy (Hard Rule 14), never the user's file.</summary>
+/// <summary>Everything one This PC run needs. <see cref="Input"/> is the app's own staged copy (Hard Rule 14), never the user's file. <paramref name="CudaDevice"/> is the card the worker must use (its <c>GPU-...</c> uuid): the one the readiness check judged, not whichever CUDA happens to number first.</summary>
 public sealed record LocalJobRequest(
     string JobId,
     RunOptions Options,
     StagedInput Input,
     string InstallationId,
     string AppVersion,
-    string OutputFolder);
+    string OutputFolder,
+    string? CudaDevice = null);
 
 /// <summary>How a This PC run ended. <see cref="ErrorCode"/> is a <see cref="RunErrorCodes"/> code when it did not complete.</summary>
 public sealed record LocalJobResult(JobPhase FinalPhase, string? ErrorCode = null, string? ErrorDetail = null);
@@ -43,14 +44,17 @@ public sealed class LocalJobRunner
     private readonly LocalEngineLayout _layout;
     private readonly string _runsDirectory;
     private readonly Action<string, JobPhase>? _onPhaseChanged;
+    private readonly IDiagnosticsLog _log;
 
     public LocalJobRunner(
         IProcessLauncher launcher,
         IRunRepository runs,
         LocalEngineLayout layout,
         string runsDirectory,
-        Action<string, JobPhase>? onPhaseChanged = null)
+        Action<string, JobPhase>? onPhaseChanged = null,
+        IDiagnosticsLog? log = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
         _launcher = launcher;
         _runs = runs;
         _layout = layout;
@@ -60,6 +64,24 @@ public sealed class LocalJobRunner
 
     /// <summary>How often <c>status.json</c> is read while the worker runs.</summary>
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>The clock every deadline below runs on (virtual in tests, #525).</summary>
+    public TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// How long after the process starts its first heartbeat may take. THEORY (unverified): ten minutes covers a cold start of Python and torch on a PC
+    /// with a virus scanner. This is the app's own deadline, not the worker's.
+    /// </summary>
+    public TimeSpan FirstHeartbeatDeadline { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>How long a heartbeat may stay unchanged (the worker writes one every 30 s, docs/job_contract.md section 5) before the worker is called frozen: 20 beats, the cloud's own rule.</summary>
+    public TimeSpan StaleHeartbeat { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Added to the run's own maximum duration before the app kills the worker: the worker's cap (<c>limits.maxRunSeconds</c>) gets to fire first and say why, and
+    /// this is the backstop for a worker that does not honour it (the app must not rely on the worker side).
+    /// </summary>
+    public TimeSpan MaxRunMargin { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>How long a cancelled worker has to stop by itself before its process tree is killed (issue #174: 30 s).</summary>
     public TimeSpan CancelGrace { get; init; } = TimeSpan.FromSeconds(30);
@@ -102,7 +124,8 @@ public sealed class LocalJobRunner
             _layout.PythonExe,
             ["-m", "dna_entropy.worker.cli", "run", "--manifest", manifestPath, "--store", "localdir", "--root", jobDir],
             WorkingDirectory: jobDir,
-            Environment: _layout.Environment);
+            Environment: EnvironmentFor(request),
+            ClearEnvironment: _layout.ClearedVariables);
 
         IRunningProcess process;
         try
@@ -118,20 +141,27 @@ public sealed class LocalJobRunner
         using (process)
         {
             await SetPhaseAsync(request.JobId, JobPhase.Running).ConfigureAwait(false);
-            int exitCode;
+            WatchOutcome watched;
             try
             {
-                exitCode = await WatchAsync(request.JobId, jobDir, process, cancellationToken).ConfigureAwait(false);
+                watched = await WatchAsync(request, jobDir, process, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 // The worker is stopped before the cancel is acknowledged; whatever it had finished is kept (docs/job_contract.md section 6).
                 await StopWorkerAsync(jobDir, process).ConfigureAwait(false);
-                await CopyPartialAsync(jobDir, runFolder).ConfigureAwait(false);
+                await CopyPartialAsync(request.JobId, jobDir, runFolder).ConfigureAwait(false);
                 throw;
             }
 
-            return await FinishAsync(request.JobId, jobDir, runFolder, exitCode).ConfigureAwait(false);
+            if (watched.StopCode is { } stopCode)
+            {
+                // Killed by the app's own deadline: keep whatever the worker had finished, then record the named cause.
+                await CopyPartialAsync(request.JobId, jobDir, runFolder).ConfigureAwait(false);
+                return await FailAsync(request.JobId, stopCode, watched.StopDetail ?? string.Empty).ConfigureAwait(false);
+            }
+
+            return await FinishAsync(request.JobId, jobDir, runFolder, watched.ExitCode).ConfigureAwait(false);
         }
     }
 
@@ -173,22 +203,76 @@ public sealed class LocalJobRunner
         return manifestPath;
     }
 
-    /// <summary>Waits for the worker to end, reading its heartbeat while it runs. Throws <see cref="OperationCanceledException"/> on a cancel.</summary>
-    private async Task<int> WatchAsync(string jobId, string jobDir, IRunningProcess process, CancellationToken cancellationToken)
+    private IReadOnlyDictionary<string, string>? EnvironmentFor(LocalJobRequest request)
     {
+        if (string.IsNullOrWhiteSpace(request.CudaDevice))
+        {
+            return _layout.Environment;
+        }
+
+        var merged = new Dictionary<string, string>(_layout.Environment ?? new Dictionary<string, string>()) { ["CUDA_VISIBLE_DEVICES"] = request.CudaDevice };
+        return merged;
+    }
+
+    /// <summary>How the wait ended: the worker's exit code, or the app's own deadline that killed it (<see cref="StopCode"/>).</summary>
+    private sealed record WatchOutcome(int ExitCode, string? StopCode = null, string? StopDetail = null);
+
+    /// <summary>
+    /// Waits for the worker to end, reading its heartbeat while it runs, on <see cref="Clock"/>. Three deadlines end a run that would otherwise hang: no first
+    /// heartbeat within <see cref="FirstHeartbeatDeadline"/>, a heartbeat unchanged for <see cref="StaleHeartbeat"/>, and the run's own maximum plus
+    /// <see cref="MaxRunMargin"/>. Each kills the whole process tree. Throws <see cref="OperationCanceledException"/> on a cancel.
+    /// </summary>
+    private async Task<WatchOutcome> WatchAsync(LocalJobRequest request, string jobDir, IRunningProcess process, CancellationToken cancellationToken)
+    {
+        var started = Clock.GetUtcNow();
+        var lastChange = started;
+        var sawHeartbeat = false;
         long lastSeq = -1;
+        var configured = request.Options.MaxRunDurationMinutes > 0 ? request.Options.MaxRunDurationMinutes : 240;
+        var maxRun = TimeSpan.FromMinutes(configured) + MaxRunMargin;
         while (true)
         {
-            var ended = await Task.WhenAny(process.Exited, Task.Delay(PollInterval, cancellationToken)).ConfigureAwait(false);
+            var ended = await Task.WhenAny(process.Exited, Task.Delay(PollInterval, Clock, cancellationToken)).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            lastSeq = await ReadHeartbeatAsync(jobId, jobDir, lastSeq).ConfigureAwait(false);
+            var seq = await ReadHeartbeatAsync(request.JobId, jobDir, lastSeq).ConfigureAwait(false);
+            if (seq != lastSeq)
+            {
+                lastSeq = seq;
+                sawHeartbeat = true;
+                lastChange = Clock.GetUtcNow();
+            }
+
             if (ended == process.Exited)
             {
-                return await process.Exited.ConfigureAwait(false);
+                return new WatchOutcome(await process.Exited.ConfigureAwait(false));
+            }
+
+            var now = Clock.GetUtcNow();
+            if (now - started >= maxRun)
+            {
+                return await KillAsync(process, RunErrorCodes.LocalWorkerTimedOut, "The run passed its maximum duration of " + configured.ToString(CultureInfo.InvariantCulture) + " minutes.").ConfigureAwait(false);
+            }
+
+            if (!sawHeartbeat && now - started >= FirstHeartbeatDeadline)
+            {
+                return await KillAsync(process, RunErrorCodes.LocalWorkerNoHeartbeat, "The worker wrote no heartbeat within " + FirstHeartbeatDeadline.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + " seconds of starting.").ConfigureAwait(false);
+            }
+
+            if (sawHeartbeat && now - lastChange >= StaleHeartbeat)
+            {
+                return await KillAsync(process, RunErrorCodes.LocalWorkerStalled, "The worker's heartbeat did not change for " + StaleHeartbeat.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + " seconds.").ConfigureAwait(false);
             }
         }
     }
 
+    private static async Task<WatchOutcome> KillAsync(IRunningProcess process, string code, string detail)
+    {
+        process.Kill(entireTree: true);
+        await Task.WhenAny(process.Exited, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+        return new WatchOutcome(-1, code, detail);
+    }
+
+    /// <summary>Reads the heartbeat into the row when it changed; returns the sequence last seen.</summary>
     private async Task<long> ReadHeartbeatAsync(string jobId, string jobDir, long lastSeq)
     {
         var status = TryReadStatus(Path.Combine(jobDir, "status.json"));
@@ -202,12 +286,11 @@ public sealed class LocalJobRunner
             row => row with
             {
                 LastProgressSeq = (int)Math.Clamp(seq, 0, int.MaxValue),
-                LastHeartbeatAt = DateTimeOffset.UtcNow,
+                LastHeartbeatAt = Clock.GetUtcNow(),
                 WorkerVersion = string.IsNullOrEmpty(status.WorkerVersion) ? row.WorkerVersion : status.WorkerVersion,
             }).ConfigureAwait(false);
         return seq;
     }
-
     private static WorkerStatusSnapshot? TryReadStatus(string path)
     {
         try
@@ -233,7 +316,7 @@ public sealed class LocalJobRunner
             // Cannot ask nicely; the kill below still ends it.
         }
 
-        var finished = await Task.WhenAny(process.Exited, Task.Delay(CancelGrace)).ConfigureAwait(false);
+        var finished = await Task.WhenAny(process.Exited, Task.Delay(CancelGrace, Clock)).ConfigureAwait(false);
         if (finished != process.Exited)
         {
             process.Kill(entireTree: true);
@@ -296,12 +379,23 @@ public sealed class LocalJobRunner
         }
 
         var finalPhase = doneInputs == result.Inputs.Count ? JobPhase.Completed : JobPhase.PartiallyCompleted;
-        await SetPhaseAsync(jobId, finalPhase).ConfigureAwait(false);
+        // DECISION (agent-made, reversible): result.json is the worker's verdict and every file is verified against it, so a nonzero exit AFTER a finished
+        // result.json (a crash while CUDA shuts down is the usual cause) does not throw good results away. The row carries a note and the exit code is logged.
+        if (exitCode != 0)
+        {
+            _log.Warning("local-run", jobId, "worker exit code " + exitCode.ToString(CultureInfo.InvariantCulture) + " after a finished result.json");
+            await SetPhaseAsync(jobId, finalPhase, RunErrorCodes.LocalWorkerExitedNonzero, "The worker exited with code " + exitCode.ToString(CultureInfo.InvariantCulture) + " after writing a finished result.json.").ConfigureAwait(false);
+        }
+        else
+        {
+            await SetPhaseAsync(jobId, finalPhase).ConfigureAwait(false);
+        }
+
         return new LocalJobResult(finalPhase);
     }
 
     /// <summary>Copies what a cancelled worker finished, if it got as far as a <c>result.json</c>; a failure here is never worth reporting over the cancel.</summary>
-    private async Task CopyPartialAsync(string jobDir, string runFolder)
+    private async Task CopyPartialAsync(string jobId, string jobDir, string runFolder)
     {
         try
         {
@@ -312,10 +406,8 @@ public sealed class LocalJobRunner
                 await TryCopyAsync(jobDir, runFolder, result).ConfigureAwait(false);
             }
 
-            if (!Directory.EnumerateFileSystemEntries(runFolder).Any())
-            {
-                Directory.Delete(runFolder, recursive: false);
-            }
+            // Also clears the row's OutputDir when nothing was kept: a row that names a folder that is gone is a dead link in History.
+            await RemoveEmptyFolderAsync(jobId, runFolder).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         {

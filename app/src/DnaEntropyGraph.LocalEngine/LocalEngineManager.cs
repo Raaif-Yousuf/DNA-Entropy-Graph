@@ -21,6 +21,12 @@ public sealed class LocalEngineLayout
 
     public IReadOnlyDictionary<string, string>? Environment { get; }
 
+    /// <summary>Inherited variables that point Python somewhere else than the engine's own venv; a child must not see them (a user's <c>PYTHONPATH</c> or an activated venv would shadow the engine's packages).</summary>
+    public static IReadOnlyList<string> InheritedPythonVariables { get; } = ["PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"];
+
+    /// <summary>What to remove from a child's environment: <see cref="InheritedPythonVariables"/> unless the development override in <see cref="Environment"/> sets it.</summary>
+    public IReadOnlyList<string> ClearedVariables => InheritedPythonVariables.Where(name => Environment is null || !Environment.ContainsKey(name)).ToList();
+
     public string VenvFolder => Path.Combine(EngineFolder, ".venv");
 
     public string PythonExe => _pythonOverride ?? Path.Combine(VenvFolder, "Scripts", "python.exe");
@@ -73,7 +79,7 @@ public sealed class LocalEngineManager : ILocalReadinessSource
             return LocalEngineHealth.NotInstalled("no python in the engine folder");
         }
 
-        var spec = new ProcessSpec(_layout.PythonExe, ["-m", "dna_entropy.worker.cli", "health"], Environment: _layout.Environment);
+        var spec = new ProcessSpec(_layout.PythonExe, ["-m", "dna_entropy.worker.cli", "health"], Environment: _layout.Environment, ClearEnvironment: _layout.ClearedVariables);
         var output = await _launcher.RunToEndAsync(spec, cancellationToken, HealthTimeout).ConfigureAwait(false);
         if (!output.Started)
         {

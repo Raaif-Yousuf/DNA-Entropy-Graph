@@ -1433,6 +1433,21 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunError_local_worker_crashed" xml:space="preserve">
     <value>The analysis program on this PC stopped unexpectedly. Open Settings, choose Repair under This PC, then start the run again.</value>
   </data>
+  <data name="RunError_local_worker_no_heartbeat" xml:space="preserve">
+    <value>The analysis program on this PC started but never reported in, so it was stopped. Open Settings, choose Repair under This PC, then start the run again.</value>
+  </data>
+  <data name="RunError_local_worker_stalled" xml:space="preserve">
+    <value>The analysis program on this PC stopped reporting in, so it was stopped. Start the run again, and if it happens again choose Repair under This PC in Settings.</value>
+  </data>
+  <data name="RunError_local_worker_timed_out" xml:space="preserve">
+    <value>The analysis on this PC ran longer than the time allowed, so it was stopped. Start the run again with a longer time limit or a shorter sequence.</value>
+  </data>
+  <data name="RunError_local_worker_exit_nonzero" xml:space="preserve">
+    <value>The analysis finished and its results are saved, but the analysis program reported a problem as it closed. If the results look wrong, choose Repair under This PC in Settings and run again.</value>
+  </data>
+  <data name="RunError_local_run_interrupted" xml:space="preserve">
+    <value>The app was closed while this run was in progress, so it did not finish. Start the run again.</value>
+  </data>
   <data name="LocalEngineError_local_uv_missing" xml:space="preserve">
     <value>The installer part of the app is missing, so the engine could not be set up. Install the app again from the download page, then choose Install.</value>
   </data>

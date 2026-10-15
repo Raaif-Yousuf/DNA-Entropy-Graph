@@ -4,12 +4,13 @@ using System.Text;
 
 namespace DnaEntropyGraph.LocalEngine;
 
-/// <summary>One program to start: the file, its arguments (never a single shell string, so a path with a space or a quote is safe) and its settings.</summary>
+/// <summary>One program to start: the file, its arguments (never a single shell string, so a path with a space or a quote is safe) and its settings. <paramref name="ClearEnvironment"/> names inherited variables the child must not see (removed first; <paramref name="Environment"/> is applied after, so it wins).</summary>
 public sealed record ProcessSpec(
     string FileName,
     IReadOnlyList<string> Arguments,
     string? WorkingDirectory = null,
-    IReadOnlyDictionary<string, string>? Environment = null);
+    IReadOnlyDictionary<string, string>? Environment = null,
+    IReadOnlyCollection<string>? ClearEnvironment = null);
 
 /// <summary>A program that was started. <see cref="Exited"/> completes with its exit code once it ends, however it ends.</summary>
 public interface IRunningProcess : IDisposable
@@ -91,9 +92,21 @@ public static class ProcessLauncherExtensions
     }
 }
 
+/// <summary>Ties every child to the app so that no child outlives it (issue #734: a killed app left the worker running). Windows: a Job Object (<see cref="WindowsKillOnCloseJob"/>).</summary>
+public interface IChildProcessGroup
+{
+    /// <summary>Puts a just-started process in the group. May throw; the launcher treats that as a missing safety net, never as a failed start.</summary>
+    void Assign(Process process);
+}
+
 /// <summary>The real launcher: <see cref="Process"/>, no window, output read line by line.</summary>
 public sealed class SystemProcessLauncher : IProcessLauncher
 {
+    private readonly IChildProcessGroup? _group;
+
+    /// <param name="group">Every started program is assigned to it; the app passes a kill-on-close job so a killed app takes its worker with it.</param>
+    public SystemProcessLauncher(IChildProcessGroup? group = null) => _group = group;
+
     public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null)
     {
         var info = new ProcessStartInfo(spec.FileName)
@@ -118,6 +131,11 @@ public sealed class SystemProcessLauncher : IProcessLauncher
         // The worker prints ASCII, but Python on Windows picks the console code page for pipes unless told.
         info.Environment["PYTHONIOENCODING"] = "utf-8";
         info.Environment["PYTHONUTF8"] = "1";
+        foreach (var name in spec.ClearEnvironment ?? [])
+        {
+            info.Environment.Remove(name);
+        }
+
         foreach (var (key, value) in spec.Environment ?? new Dictionary<string, string>())
         {
             info.Environment[key] = value;
@@ -152,6 +170,15 @@ public sealed class SystemProcessLauncher : IProcessLauncher
         {
             process.Dispose();
             throw new ProcessStartFailedException(spec.FileName, ex);
+        }
+
+        try
+        {
+            _group?.Assign(process);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+            // No safety net for this child (it already ended, or the job refused it); the run itself still goes on.
         }
 
         process.BeginOutputReadLine();

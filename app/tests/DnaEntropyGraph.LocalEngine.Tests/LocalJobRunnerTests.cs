@@ -5,6 +5,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core.LocalEngine;
 using Shouldly;
 using Xunit;
@@ -45,20 +46,32 @@ public sealed class LocalJobRunnerTests : IDisposable
 
     private static readonly LocalEngineLayout Layout = new(@"C:\data\engine");
 
-    private LocalJobRunner Runner(FakeProcessLauncher launcher, TimeSpan? grace = null)
-        => new(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase))
+    private LocalJobRunner Runner(FakeProcessLauncher launcher, TimeSpan? grace = null, LocalEngineLayout? layout = null)
+        => new(launcher, _runs, layout ?? Layout, RunsDirectory, (_, phase) => _phases.Add(phase))
         {
             PollInterval = TimeSpan.FromMilliseconds(20),
             CancelGrace = grace ?? TimeSpan.FromMilliseconds(300),
         };
 
-    private LocalJobRequest Request(string jobId = JobId, string? outputFolder = null) => new(
+    /// <summary>A runner on a clock that stands still until the test moves it: every deadline below is virtual time (#525).</summary>
+    private LocalJobRunner TimedRunner(FakeProcessLauncher launcher, VirtualTimeProvider clock)
+        => new(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase))
+        {
+            Clock = clock,
+            PollInterval = TimeSpan.FromSeconds(1),
+            CancelGrace = TimeSpan.FromSeconds(5),
+            FirstHeartbeatDeadline = TimeSpan.FromSeconds(60),
+            StaleHeartbeat = TimeSpan.FromSeconds(120),
+        };
+
+    private LocalJobRequest Request(string jobId = JobId, string? outputFolder = null, string? cudaDevice = null, int maxRunMinutes = 240) => new(
         jobId,
-        new RunOptions { ModelId = "mock", RunTarget = "This PC", Predictor = PredictorSelection.MockTestPredictor },
+        new RunOptions { ModelId = "mock", RunTarget = "This PC", Predictor = PredictorSelection.MockTestPredictor, MaxRunDurationMinutes = maxRunMinutes },
         new StagedInput(_stagedInput, "locus.fasta"),
         "install-1",
         "0.0.1",
-        outputFolder ?? OutputParent);
+        outputFolder ?? OutputParent,
+        cudaDevice);
 
     private static string RootOf(ProcessSpec spec) => spec.Arguments[spec.Arguments.ToList().IndexOf("--root") + 1];
 
@@ -347,6 +360,206 @@ public sealed class LocalJobRunnerTests : IDisposable
         _runs.Latest(JobId).Phase.ShouldBe(JobPhase.Completed);
     }
 
+    private static void WriteHeartbeat(string root, int seq)
+        => File.WriteAllText(Path.Combine(root, "status.json"), "{\"stage\":\"running\",\"heartbeatSeq\":" + seq + ",\"updatedAt\":\"2026-10-15T12:00:00Z\",\"worker\":{\"version\":\"0.0.1\"}}");
+
+    /// <summary>Moves the virtual clock one poll at a time (letting the runner's loop run between steps) until the condition holds.</summary>
+    private static async Task AdvanceUntilAsync(VirtualTimeProvider clock, Func<bool> condition, Action? eachStep = null)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException("condition not reached on virtual time");
+            }
+
+            eachStep?.Invoke();
+            clock.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(3);
+        }
+    }
+
+    [Fact]
+    public async Task A_worker_that_never_reports_a_first_heartbeat_is_killed_with_its_tree_and_the_run_fails_with_a_named_code()
+    {
+        // Observable: without the deadline this run never ends (the worker never exits and never writes a status).
+        var clock = new VirtualTimeProvider();
+        var worker = new FakeProcess();
+        var run = TimedRunner(new FakeProcessLauncher(_ => worker), clock).RunAsync(Request(), CancellationToken.None);
+        await WaitUntilAsync(() => _runs.Latest(JobId).Phase == JobPhase.Running);
+
+        clock.Advance(TimeSpan.FromSeconds(55));
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        worker.Killed.ShouldBeFalse("55 s is inside the 60 s first-heartbeat deadline");
+        await AdvanceUntilAsync(clock, () => run.IsCompleted);
+
+        var result = await run;
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerNoHeartbeat);
+        worker.KilledTree.ShouldBeTrue();
+        _runs.Latest(JobId).Phase.ShouldBe(JobPhase.Failed);
+        _runs.Latest(JobId).ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerNoHeartbeat);
+        _runs.Latest(JobId).OutputDir.ShouldBeNull();
+        Directory.EnumerateDirectories(OutputParent).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_heartbeat_that_stops_changing_is_stale_after_the_window_and_the_worker_is_killed()
+    {
+        var clock = new VirtualTimeProvider();
+        var worker = new FakeProcess();
+        string? root = null;
+        var run = TimedRunner(new FakeProcessLauncher(spec =>
+        {
+            root = RootOf(spec);
+            WriteHeartbeat(root, 1);
+            return worker;
+        }), clock).RunAsync(Request(), CancellationToken.None);
+        await AdvanceUntilAsync(clock, () => _runs.Latest(JobId).LastProgressSeq == 1);
+
+        await AdvanceUntilAsync(clock, () => run.IsCompleted);
+
+        var result = await run;
+        result.ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerStalled);
+        worker.KilledTree.ShouldBeTrue();
+        _runs.Latest(JobId).ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerStalled);
+    }
+
+    [Fact]
+    public async Task A_worker_whose_heartbeat_keeps_changing_is_never_called_stale_and_finishes_normally()
+    {
+        var clock = new VirtualTimeProvider();
+        var worker = new FakeProcess();
+        string? root = null;
+        var seq = 0;
+        var run = TimedRunner(new FakeProcessLauncher(spec =>
+        {
+            root = RootOf(spec);
+            return worker;
+        }), clock).RunAsync(Request(), CancellationToken.None);
+        await WaitUntilAsync(() => root is not null);
+
+        // 300 virtual seconds: 2.5 stale windows, each poll with a new heartbeat.
+        for (var step = 0; step < 300; step++)
+        {
+            WriteHeartbeat(root!, ++seq);
+            clock.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(2, TestContext.Current.CancellationToken);
+        }
+
+        worker.Killed.ShouldBeFalse();
+        var (rel, sha, bytes) = WriteOutput(root!, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+        WriteResult(root!, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+        worker.End(0);
+        (await run).FinalPhase.ShouldBe(JobPhase.Completed);
+    }
+
+    [Fact]
+    public async Task A_worker_that_beats_forever_is_stopped_at_the_run_cap_without_relying_on_the_worker_side_cap()
+    {
+        var clock = new VirtualTimeProvider();
+        var worker = new FakeProcess();
+        string? root = null;
+        var seq = 0;
+        var run = TimedRunner(new FakeProcessLauncher(spec =>
+        {
+            root = RootOf(spec);
+            return worker;
+        }), clock).RunAsync(Request(maxRunMinutes: 10), CancellationToken.None);
+        await WaitUntilAsync(() => root is not null);
+
+        await AdvanceUntilAsync(clock, () => run.IsCompleted, () => WriteHeartbeat(root!, ++seq));
+
+        var result = await run;
+        result.ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerTimedOut);
+        worker.KilledTree.ShouldBeTrue();
+        // Ten minutes plus the margin the worker's own cap gets to fire first; never earlier than the limit.
+        clock.GetUtcNow().ShouldBeGreaterThanOrEqualTo(new DateTimeOffset(2026, 10, 2, 8, 10, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task The_worker_is_started_on_the_chosen_graphics_card_and_with_the_python_variables_cleared()
+    {
+        var launcher = HappyWorker();
+
+        await Runner(launcher).RunAsync(Request(cudaDevice: "GPU-1f2e3d4c"), CancellationToken.None);
+
+        var spec = launcher.Started.Single();
+        spec.Environment!["CUDA_VISIBLE_DEVICES"].ShouldBe("GPU-1f2e3d4c");
+        spec.ClearEnvironment.ShouldNotBeNull();
+        spec.ClearEnvironment!.ShouldBe(["PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"], ignoreOrder: true);
+    }
+
+    [Fact]
+    public async Task With_no_card_chosen_CUDA_VISIBLE_DEVICES_is_not_set_and_a_development_PYTHONPATH_is_kept()
+    {
+        var launcher = HappyWorker();
+        var layout = new LocalEngineLayout(@"C:\data\engine", null, new Dictionary<string, string> { ["PYTHONPATH"] = @"C:\src\worker" });
+
+        await Runner(launcher, layout: layout).RunAsync(Request(), CancellationToken.None);
+
+        var spec = launcher.Started.Single();
+        spec.Environment!.ContainsKey("CUDA_VISIBLE_DEVICES").ShouldBeFalse();
+        spec.Environment["PYTHONPATH"].ShouldBe(@"C:\src\worker");
+        spec.ClearEnvironment!.ShouldBe(["PYTHONHOME", "VIRTUAL_ENV"], ignoreOrder: true);
+    }
+
+    [Fact]
+    public async Task A_cancel_that_leaves_nothing_clears_the_rows_output_folder()
+    {
+        var worker = new FakeProcess();
+        using var cts = new CancellationTokenSource();
+        var run = Runner(new FakeProcessLauncher(_ => worker), grace: TimeSpan.FromMilliseconds(50)).RunAsync(Request(), cts.Token);
+        await WaitUntilAsync(() => _runs.Latest(JobId).Phase == JobPhase.Running);
+        _runs.Latest(JobId).OutputDir.ShouldNotBeNull();
+
+        await cts.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(run);
+
+        _runs.Latest(JobId).OutputDir.ShouldBeNull();
+        Directory.EnumerateDirectories(OutputParent).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_nonzero_exit_after_a_finished_result_json_still_completes_the_run_with_a_note_and_a_log_line()
+    {
+        // DECISION (agent-made, reversible): result.json is the worker's verdict and the files are verified against it, so a late nonzero exit
+        // (a crash while closing CUDA is the usual cause) does not throw away good results; the row carries a note code and the exit code is logged.
+        var log = new RecordingLog();
+        var launcher = new FakeProcessLauncher(spec =>
+        {
+            var root = RootOf(spec);
+            var (rel, sha, bytes) = WriteOutput(root, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+            WriteResult(root, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+            var process = new FakeProcess();
+            process.End(-1073740791);
+            return process;
+        });
+        var runner = new LocalJobRunner(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase), log) { PollInterval = TimeSpan.FromMilliseconds(20) };
+
+        var result = await runner.RunAsync(Request(), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed);
+        _runs.Latest(JobId).ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerExitedNonzero);
+        _runs.Latest(JobId).ErrorDetail!.ShouldContain("-1073740791");
+        log.Entries.ShouldContain(e => e.JobId == JobId && e.ErrorClass.Contains("exit code -1073740791"));
+    }
+
+    [Fact]
+    public async Task A_clean_exit_adds_no_note()
+    {
+        await Runner(HappyWorker()).RunAsync(Request(), CancellationToken.None);
+
+        _runs.Latest(JobId).ErrorCode.ShouldBeNull();
+    }
+
+    private sealed class RecordingLog : IDiagnosticsLog
+    {
+        public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass) => Entries.Add((source, jobId, errorClass));
+    }
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);
