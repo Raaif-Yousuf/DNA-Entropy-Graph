@@ -91,8 +91,17 @@ foreign_zone_exit() {
   claimed=$(get_object "jobs/${JOB}/control/zone" 2>/dev/null || true)
   if [ -n "$claimed" ] && [ "$claimed" != "$ZONE" ]; then
     echo "zone ${ZONE} is not the zone this job kept (${claimed}): deleting this VM without touching the job prefix"
-    curl -sf -X DELETE -H "Authorization: Bearer $(token)" \
-      "https://compute.googleapis.com/compute/v1/projects/${PROJECT}/zones/${ZONE}/instances/${NAME}" || true
+    # The relay (once it runs) would keep writing startup.log into the winner's prefix: stop it first.
+    if [ -n "${RELAY_PID:-}" ]; then
+      kill "$RELAY_PID" 2>/dev/null || true
+    fi
+    if ! curl -sf -X DELETE -H "Authorization: Bearer $(token)" \
+      "https://compute.googleapis.com/compute/v1/projects/${PROJECT}/zones/${ZONE}/instances/${NAME}"; then
+      # LAST RESORT, the one place a guest shutdown is right: the Compute API call failed, and this VM must not keep running a
+      # job that belongs to another zone. The app also deletes every extra by zone, and maxRunDuration stays the backstop.
+      echo "self-delete failed: shutting the guest down so this VM stops running"
+      shutdown -h now
+    fi
     exit 0
   fi
 }
@@ -199,6 +208,7 @@ if get_object "jobs/${JOB}/status.json" 2>/dev/null | grep -Eq '"stage":"(done|f
   exit 0
 fi
 
+foreign_zone_exit  # before this VM writes anything under the job prefix (#670)
 status booting
 df -h / | tail -1
 
@@ -218,8 +228,8 @@ if [ "$EXPECT_GPU" = "true" ]; then
   fi
 fi
 
+foreign_zone_exit  # the claim may have landed during the boot: before the next write (#670)
 status installing
-foreign_zone_exit  # the claim may have landed during the boot (#670)
 
 # Pull BY DIGEST (IMAGE is a full ref@sha256:<digest> from the manifest, never a mutable
 # tag) so every VM in a batch, and every retry, runs byte-identical bits.

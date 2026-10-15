@@ -187,26 +187,30 @@ public class ZoneLadderReviewTests
     public async Task The_first_winner_is_kept_at_once_without_waiting_for_the_slowest_zone()
     {
         var gcp = ThreeStockedOut();
+        var slow = new VirtualTimeProvider();
         var stub = new Stub(gcp)
         {
             OnCreate = async (spec, zone, token) =>
             {
                 if (zone is "us-east1-b" or "us-east1-c")
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(30), token);
+                    await Task.Delay(TimeSpan.FromSeconds(30), slow, token);
                 }
 
                 return await gcp.CreateVmAsync(spec, zone, token);
             },
         };
         var spec = Spec("job-w1");
-        var clock = Stopwatch.StartNew();
+        var started = slow.GetUtcNow();
 
-        var result = await Provisioner(stub, gcp).ProvisionAsync(Request("job-w1", spec), spec, new RunProgress(), CancellationToken.None);
+        // The slow zones sit on a virtual clock nobody advances: if the ladder waited for them it would never return (the guard below is a hang
+        // guard, not a speed assertion).
+        var result = await Provisioner(stub, gcp).ProvisionAsync(Request("job-w1", spec), spec, new RunProgress(), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
         result.Success.ShouldBeTrue(result.FailureMessage);
         result.Zone.ShouldBe("us-central1-f");
-        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2.5), "the winner waited for the slowest attempt");
+        slow.GetUtcNow().ShouldBe(started, "the winner waited for the slowest attempt");
         (await LiveZonesAsync(gcp, "job-w1")).ShouldBe(["us-central1-f"]);
     }
 
@@ -250,11 +254,11 @@ public class ZoneLadderReviewTests
         }).ProvisionAsync(Request("job-w3", spec), spec, new RunProgress(), CancellationToken.None);
 
         result.Success.ShouldBeTrue(result.FailureMessage);
-        claimed.ShouldBe([result.Zone!], "the kept zone is written for the VMs' startup script to read before it touches the job prefix");
+        claimed.TakeLast(2).ToList().ShouldBe(["", result.Zone!], "a parallel batch clears any stale claim before it creates anything, then writes the kept zone for the VMs' startup script to read before it touches the job prefix");
     }
 
     [Fact]
-    public async Task A_single_attempt_needs_no_claim()
+    public async Task A_single_attempt_writes_its_zone_before_the_create_so_a_stale_claim_cannot_delete_the_VM()
     {
         var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered);
         var claimed = new List<string>();
@@ -267,7 +271,7 @@ public class ZoneLadderReviewTests
         }).ProvisionAsync(Request("job-w4", spec), spec, new RunProgress(), CancellationToken.None);
 
         result.Success.ShouldBeTrue(result.FailureMessage);
-        claimed.ShouldBeEmpty("only a parallel batch can leave a second VM");
+        claimed.ShouldBe([result.Zone!], "an earlier parallel win left a claim naming another zone: the VM would read it and delete itself");
     }
 
     // ---- 8: extras come from the zones the batch knows, not from a listing that can lag ----
@@ -353,6 +357,113 @@ public class ZoneLadderReviewTests
         result.Zone.ShouldBe("europe-west4-a");
     }
 
+    // ---- review: the claim is written the moment the winner is chosen, and every provision overwrites a stale one ----
+
+    [Fact]
+    public async Task The_claim_is_written_before_any_extra_is_deleted()
+    {
+        var gcp = ThreeStockedOut();
+        var events = new List<string>();
+        var stub = new Stub(gcp)
+        {
+            OnDelete = (name, zone, token) =>
+            {
+                events.Add("delete:" + zone);
+                return gcp.DeleteVmAsync(name, zone, token);
+            },
+        };
+        var spec = Spec("job-o1");
+
+        var result = await Provisioner(stub, gcp, (_, zone, _) =>
+        {
+            events.Add("claim:" + zone);
+            return Task.CompletedTask;
+        }).ProvisionAsync(Request("job-o1", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeTrue(result.FailureMessage);
+        events.Any(e => e.StartsWith("delete:", StringComparison.Ordinal)).ShouldBeTrue("the scenario must leave extras to delete, or this test proves nothing");
+        events.IndexOf("claim:" + result.Zone).ShouldBeGreaterThanOrEqualTo(0);
+        events.IndexOf("claim:" + result.Zone).ShouldBeLessThan(events.FindIndex(e => e.StartsWith("delete:", StringComparison.Ordinal)), "an extra mid-boot reads the claim: it must exist before the first delete");
+    }
+
+    [Fact]
+    public async Task The_claim_is_written_even_when_an_extra_cannot_be_confirmed_gone()
+    {
+        var gcp = ThreeStockedOut();
+        var claimed = new List<string>();
+        var stub = new Stub(gcp) { OnDelete = (_, _, _) => throw new CloudOperationException(new CloudError("PERMISSION_DENIED", 403, "no"), CloudErrorKind.Permission) };
+        var spec = Spec("job-o2");
+
+        var result = await Provisioner(stub, gcp, (_, zone, _) =>
+        {
+            claimed.Add(zone);
+            return Task.CompletedTask;
+        }).ProvisionAsync(Request("job-o2", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeFalse("an extra that cannot be deleted is reported");
+        claimed.LastIndexOf(string.Empty).ShouldBeLessThan(claimed.Count - 1, "the parallel batch cleared the claim, then the winner must have been written after it; the one case the claim exists for: an extra that is still alive must be told to stand down");
+    }
+
+    private static CloudJobRunner ClaimRunner(FakeGcp gcp, IStorageGateway? storage = null) => new(gcp, storage ?? gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+    {
+        ResultPollInterval = TimeSpan.FromMilliseconds(1),
+        ResultTimeout = TimeSpan.FromSeconds(10),
+        CallTimeout = TimeSpan.FromMilliseconds(300),
+        LifecycleTimeout = TimeSpan.FromSeconds(1),
+        LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+    };
+
+    [Fact]
+    public async Task A_stale_claim_from_an_earlier_parallel_win_does_not_survive_a_single_zone_provision()
+    {
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered).WithWorker(FakeWorkerMode.Done);
+        var bucket = FakeGcp.BucketName(Project);
+        using (var stale = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("us-east1-b")))
+        {
+            await gcp.UploadAsync(bucket, "jobs/job-s1/control/zone", stale, CancellationToken.None);
+        }
+
+        var result = await ClaimRunner(gcp).RunAsync(Request("job-s1", Spec("job-s1")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        var live = await LiveZonesAsync(gcp, "job-s1");
+        live.ShouldBe(["us-central1-a"], "a single-zone provision in us-central1-a");
+        System.Text.Encoding.UTF8.GetString(gcp.GetObjectBytes(bucket, "jobs/job-s1/control/zone")).ShouldBe("us-central1-a", "the VM reads this at boot: a stale zone would make it delete itself");
+    }
+
+    private sealed class ClaimHangsStorage(FakeGcp inner) : IStorageGateway
+    {
+        public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken) => inner.EnsureBucketAsync(projectId, cancellationToken);
+
+        public async Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
+        {
+            if (objectKey.EndsWith("control/zone", StringComparison.Ordinal))
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            }
+
+            await inner.UploadAsync(bucket, objectKey, content, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.DownloadAsync(bucket, objectKey, cancellationToken);
+
+        public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
+
+        public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken) => inner.ListBucketsAsync(projectId, cancellationToken);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_claim_write_that_hangs_past_its_call_timeout_never_fails_the_run(bool parallel)
+    {
+        // GatewayCalls turns a call that outlives its deadline into a Network CloudOperationException; the claim is best effort and swallows it.
+        var gcp = (parallel ? ThreeStockedOut() : new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered)).WithWorker(FakeWorkerMode.Done);
+
+        var result = await ClaimRunner(gcp, new ClaimHangsStorage(gcp)).RunAsync(Request("job-h1", Spec("job-h1")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+    }
     [Fact]
     public async Task The_runner_writes_the_kept_zone_into_the_job_prefix_after_a_parallel_win()
     {

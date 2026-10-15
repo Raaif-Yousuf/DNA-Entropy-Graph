@@ -201,7 +201,7 @@ public sealed class CloudJobRunner
     }
 
     /// <summary>
-    /// Issue #670: writes the zone a parallel ladder kept to <c>jobs/&lt;jobId&gt;/control/zone</c>. A VM that boots in any other zone reads it (before
+    /// Issue #670: writes the zone this provision means the VM to be in (an empty zone clears the claim) to <c>jobs/&lt;jobId&gt;/control/zone</c>. A VM that boots in any other zone reads it (before
     /// it writes anything under the job prefix, <c>worker/vm/startup.sh</c>) and deletes itself, so an extra that outlives its deletion by a few
     /// seconds cannot overwrite the winner's status.json or log. A failure is the caller's to ignore: the extras are deleted by API regardless.
     /// </summary>

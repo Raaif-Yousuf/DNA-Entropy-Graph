@@ -79,6 +79,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             }
 
             progress.VmName = kept.Name;
+            await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
 
@@ -300,6 +301,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             if (zones.Count == 1)
             {
+                // Written BEFORE the create: a claim left by an earlier parallel win names another zone, and this VM reads it at boot.
+                await ClaimAsync(progress, zones[0], cancellationToken).ConfigureAwait(false);
                 var single = await TryZoneAsync(request, spec, new AttemptState(zones[0]), progress, cancellationToken).ConfigureAwait(false);
                 if (single.Won)
                 {
@@ -340,6 +343,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
     private async Task<BatchOutcome> RunParallelBatchAsync(CloudJobRequest request, VmSpec spec, IReadOnlyList<string> zones, RunProgress progress, CancellationToken callerToken)
     {
+        // No zone is the kept one yet: clear any claim an earlier provision left, so no VM of this batch reads a stale zone and deletes itself.
+        await ClaimAsync(progress, string.Empty, callerToken).ConfigureAwait(false);
         using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
         var states = zones.Select(z => new AttemptState(z)).ToList();
         var running = states.Select(s => AttemptAsync(request, spec, s, progress, batchCts.Token, callerToken)).ToList();
@@ -367,6 +372,13 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                     abort ??= attempt.Abort;
                 }
             }
+        }
+
+        // The claim comes the moment a winner exists, before anything is cancelled or deleted: an extra that is mid-boot reads it and stands down,
+        // and it must be there in the very case it exists for, an extra that cannot be confirmed gone.
+        if (winner is not null)
+        {
+            await ClaimAsync(progress, winner.Value.Zone, callerToken).ConfigureAwait(false);
         }
 
         // Stragglers (only when a winner ended the wait early): cancel them, then wait for their creates to settle.
@@ -427,19 +439,31 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 []);
         }
 
-        if (claimZone is not null)
+        return new BatchOutcome(ProvisionResult.Ok(winner.Value.Zone), []);
+    }
+
+    /// <summary>
+    /// Issue #670: records the zone this job's VM is meant to be in (<c>jobs/&lt;job&gt;/control/zone</c>), or clears the record with an empty
+    /// <paramref name="zone"/> (no zone is the kept one yet). Every provision sets it before the VM it makes can read it, so a claim left by an
+    /// earlier run of the job never makes a legitimate VM delete itself. Best effort: <see cref="GatewayCalls"/> turns a call that outlives its
+    /// deadline into a <see cref="CloudOperationException"/> (Network), which is swallowed here like any other failed write; the caller
+    /// cancelling still propagates.
+    /// </summary>
+    private async Task ClaimAsync(RunProgress progress, string zone, CancellationToken cancellationToken)
+    {
+        if (claimZone is null)
         {
-            try
-            {
-                await claimZone(progress, winner.Value.Zone, callerToken).ConfigureAwait(false);
-            }
-            catch (CloudOperationException)
-            {
-                // Best effort: the extras are already deleted, which is what ends them. The record only stops one that was mid-boot.
-            }
+            return;
         }
 
-        return new BatchOutcome(ProvisionResult.Ok(winner.Value.Zone), []);
+        try
+        {
+            await claimZone(progress, zone, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException)
+        {
+            // The extras are deleted by API regardless; the record only stops one that is mid-boot or lands late.
+        }
     }
 
     /// <summary>One attempt of a parallel batch. A cancel of the BATCH (a winner was found) ends it as a lost attempt; the caller cancelling still propagates.</summary>
@@ -560,6 +584,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         }
 
         progress.VmMayExist = true;
+        await ClaimAsync(progress, chosen.Zone, cancellationToken).ConfigureAwait(false); // before the start: a stale claim must not make this VM delete itself
         try
         {
             // Tracked like a create: a cancel that arrives between the claim and the start must wait for this to land, or the start
