@@ -1,0 +1,1 @@
+- docs: OWNER_TODO 1a/1b are now a click-by-click checklist for the OAuth client (#21) and the GPU dev project and quota (#24), with a check after each.

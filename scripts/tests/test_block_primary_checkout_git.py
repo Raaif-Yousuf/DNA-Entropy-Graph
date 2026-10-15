@@ -9,6 +9,7 @@ git's own answer, not a path pattern.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -248,6 +249,7 @@ def test_pop_location_returns_to_the_previous_directory(repos):
     assert hook.verdict(command, _in(primary)) is None
 
 
+@pytest.mark.skipif(os.name != "nt", reason="a backslash path is only a path on Windows (#662)")
 def test_backslash_windows_path_is_taken_literally(repos):
     """The Git Bash backslash trap: bash would eat the backslashes of an
     unquoted C:\\... path. The hook must treat them as literal path chars."""

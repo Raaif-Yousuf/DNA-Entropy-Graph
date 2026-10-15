@@ -38,7 +38,12 @@ gives a user an actionable, specific answer instead of "no capacity anywhere":
 ```
 project ACTIVE -> billing enabled -> Compute Engine API enabled (auto-enable, idempotent)
                -> GPU quota > 0 in at least one region -> bucket exists and is readable
+               -> worker identity ensured (issue #606; after the bucket, because it binds the bucket)
 ```
+
+Step 6, the worker identity, is not a project-wide precondition the Insert error can be confused with; it runs in
+`CloudJobRunner` right after step 5 and before the VM is created, and its account email is what the VM runs as
+(section 16, "The worker identity").
 
 MEASURED, carried forward from the prototype's own recorded field experience
 (`docs/entry_points.md`'s seeded disproven-diagnosis row, and CLAUDE.md's Critical
@@ -231,6 +236,55 @@ Two distinct quota reads matter, and conflating them is a real bug shape:
  the C# port must preserve it (see the comment on issue #86 filed as part of #287's
  survey).
 
+### 6.1 The real read (issue #88, item 1)
+
+`GoogleQuotaGateway` (`app/src/DnaEntropyGraph.Cloud/Rest/`, `GoogleCloudGateways.Create(...).Quota`, not wrapped in
+`ResilientQuotaGateway`) implements `IQuotaGateway` over two Compute v1 calls, each a single small HTTP request through
+`CloudCallPipeline` with `singleRequest: true`:
+
+- `regions.list` (`compute.regions.list`, paged by `pageToken`; a repeated token fails the read instead of returning a partial
+  table): every region's `quotas[]` (`metric`, `limit`, `usage`), kept whole, so `NVIDIA_L4_GPUS` and the other GPU metrics, `CPUS`
+  and `SSD_TOTAL_GB` are all in the table.
+- `projects.get` (`compute.projects.get`): the project-wide `GPUS_ALL_REGIONS` line.
+
+`ReadQuotaAsync(projectId)` returns a `QuotaReadResult` (Core, `QuotaReadResult.cs`): the region table, the global line, and a
+`Failures` list. The two reads fail independently and **a failed read is a value, never a zero**. `GpuState(region, metric)` is the
+three-way answer:
+
+| Situation | State |
+| --- | --- |
+| Smaller of (regional limit minus usage, global limit minus usage) is at least 1 | `Available` |
+| Either known remainder is below 1 (a global 0 overrides a regional 1; a regional 0 binds without the cap) | `None` |
+| The region is listed but has no such metric | `None` (that region offers none of it) |
+| `regions.list` failed, the region is not in the reply, the `projects.get` read failed or lacks `GPUS_ALL_REGIONS`, and no known value is below 1 | `Unknown` |
+
+`GetGpuQuotaAsync` keeps its `int` answer (the smaller remainder) and **throws the classified `CloudOperationException`** when the state is
+`Unknown`, so a preflight can never read an unreadable quota as "no quota". The accelerator type maps to its regional metric in
+`QuotaMetrics.ForAccelerator` (`gpu` and `nvidia-l4` are `NVIDIA_L4_GPUS`); an unmapped type throws rather than guessing.
+A metric line the reply carries without a `limit` is `Unknown` for that metric (`QuotaMetric.Limit` and `Remaining` are null), never zero and never dropped
+from the table; only a definite zero elsewhere (a global cap of 0) still wins. `FakeGcp` answers both `ReadQuotaAsync` and `GetGpuQuotaAsync` from ONE table
+built from `WithGpuQuota`, `WithAllRegionsGpuCap` and `WithQuotaReadFailing(kind)`, so they agree: a scripted read failure makes `GetGpuQuotaAsync` throw the
+classified `CloudOperationException` (code `QUOTA_READ_FAILED`) as the real gateway does, and a region or accelerator nobody scripted is the always-succeeds
+default of 1 through either.
+THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGIONS` for a project that never raised it (when absent it is a
+failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Not yet switched on in production (#609). The request flow
+(`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
+
+### 6.2 What preflight does with a quota it cannot read (issue #88)
+
+DECISION (agent-made, reversible): an unreadable quota is UNKNOWN, and unknown is not "none". `PreflightChecks` calls `GetGpuQuotaAsync` and:
+
+| The read | The run |
+| --- | --- |
+| Returns a number of 0 or less | Fails with `quota`, as before. |
+| Fails with a project-wide kind (`permission`, `billing`, `api_disabled`, `org_policy`) | Fails at once with that classified error (its own run error code), before any bucket, upload or VM: the create would fail the same way. |
+| Fails any other way (`network`, a 5xx, the read's own budget running out, `other`) | UNKNOWN: preflight passes and provisioning goes on. The prototype tried every zone when quota was unknown; quota is pre-filterable, not a stop sign, and a real shortage still surfaces as a classified `quota` error on the create, which the zone ladder handles. |
+
+The whole read has its own budget, `CloudRunSettings.QuotaReadTimeout` (5 minutes; `CloudJobRunner.QuotaReadTimeout`), because it is several sequential
+requests (`regions.list` pages, `projects.get`) in one gateway method and the 60 s `CallTimeout` is sized for one. THEORY (unverified, sized from the
+pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
+`FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
+
 ## 7. Least-privilege IAM for the worker service account
 
 The VM runs as the service account `dna-entropy-worker@<project>.iam.gserviceaccount.com`
@@ -272,9 +326,21 @@ is the `PERMISSION_ACTAS` error: `CloudErrorClassifier.IsActAsDenial` recognises
 `iam.serviceAccounts.actAs` or `roles/iam.serviceAccountUser`, `GoogleApiErrors.ToException`
 (used for an HTTP error body and for the `error` of a polled operation alike, which `FromOperationError` converts first)
 gives it the code `PERMISSION_ACTAS` (still the `permission` bucket, so it still aborts), and the
-one action is Copy request for the project owner. **Reachable only once #604 lands:** there is no Compute insert path yet, so today only tests produce
-this code, and the Copy request action does not yet name `roles/iam.serviceAccountUser` on the worker account's email (it would
-copy the generic request); both are #604's Done when.
+one action is Copy request for the project owner. **Run row (#604):** the specific code travels on `CloudError.Code`
+(`CloudOperationException.Error`), not in a new field. `RunErrorCodes.For(CloudError, kind)` maps `PERMISSION_ACTAS`,
+`WORKER_DEFAULT_ACCOUNT_MISSING` and `WORKER_IDENTITY_NOT_APPLIED` to the run codes `permission_actas`,
+`worker_default_account_missing` and `worker_identity_not_applied` (each with its own `RunError_*` text), and treats a 403
+whose text names actAs as `permission_actas` even when the gateway did not label it. Both ways a run can meet one of these use
+it: `VmProvisioner` puts the code on `ProvisionResult.FailureCode` for a refused create, and `CloudJobRunner`'s catch maps an
+exception from the worker-identity step. The Runs page shows the message and a **Copy request for the project owner** button
+(`RunListItem.CopyOwnerRequestCommand`, only for `permission_actas` with a known project) that copies
+`Runs_OwnerRequest_ActAs`, which names `roles/iam.serviceAccountUser` (`WorkerIdentityNames.ActAsRole`) on
+`WorkerIdentityNames.ServiceAccountEmail(project)`, or, when an organization policy made the VM run as the project's default
+Compute Engine account (`<number>-compute@developer.gserviceaccount.com`), that account: the runner records the account the VM was
+asked to run as on the failed row as a trailing `[vm-account=...]` mark in `ErrorDetail` (`WorkerAccountDetail`, no new column) and the
+request reads it back. The request also names the signed-in Google account as the grantee (`Runs_OwnerRequest_Grantee`, clipboard only,
+never logged) and leaves that clause out when nobody is signed in. THEORY (unverified, no live project): Compute's exact wording for an actAs
+refusal; docs/ToTest.md carries the row for the real insert.
 
 ## 8. Termination semantics - the pitfall this project has already been burned by once
 
@@ -458,9 +524,14 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   carry on without the app, so a network blip of a minute must not cost the user a second run.
   Pinned by `More_transient_503s_than_the_retry_pipeline_absorbs...` (14 scripted 503s behind the real
   retry pipeline and breaker, then a valid result: Completed with the track on disk).
+- **`EnsureBucket` budget (issue #600).** `EnsureBucketAsync` is a sequence of up to about ten requests (project get, list, insert, read-back,
+  second list, loser delete or config write, patch), each with its own retry backoff inside the gateway, so it runs under its own
+  `EnsureBucketTimeout` (5 min, `CloudRunSettings`) and not the 60 s of one request. A cut still lands as a network failure; the next call finds
+  the bucket by label and writes a missing config (`GoogleStorageGateway.ConvergeAsync`, proven by
+  `A_second_listing_that_keeps_failing_strands_a_created_bucket_and_the_next_call_adopts_and_configures_it`). The duplicate a lost
+  two-PC race leaves is not cleaned up by a cut; it stays an empty labelled bucket. A request that never answers is not left to that 5 minutes: see the per-attempt cap in section 12.
 - **Per-call deadline.** Every gateway call the runner makes runs under `CallTimeout` (60 s) through
-  `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, `EnsureBucket`,
-  every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
+  `Task.WaitAsync`, so a callee that ignores its token is cut too: the preflight calls, every `FindByJobId`, the create-collision `GetVm`, the wait, the lifecycle check, `CancelAsync`,
   `StopVmAsync` and `DeleteVmAsync`, and each read of a downloaded file. A call that outlives it is a
   network failure: the wait loops look again, anywhere else the run (or the cancel) is recorded Failed
   instead of hanging. **Uploads** have their own deadline, `UploadTimeout`, default a floor of 2 minutes plus
@@ -736,6 +807,8 @@ the policy for free.
 | 403, 409, 412, stockout, anything else | Untouched: `CloudErrorClassifier` and the zone ladder own them |
 | Most recent calls failed (6+ calls in 30s, 80% transient failures) | The breaker opens for 30s. Calls fail fast as kind `network` with code `OFFLINE` and are not sent. **Cleanup bypasses the breaker**: `StopVm`, `DeleteVm` and `FindByJobId` go through a second pipeline with the same retries and no breaker, because they are what stops the meter; if a cancel's cleanup still fails the run is recorded `Failed` with code `cancel_failed`, never left in `Cancelling`. `CloudCallPipeline.IsOffline`/`OfflineChanged` report it; it closes after a successful half-open call |
 
+**Per-attempt cap (issue #600).** A request that never answers would otherwise wait for the caller's own deadline (the 5 minute `EnsureBucketTimeout`) or the HTTP client's 100 s default. `CloudCallPipeline.ExecuteAsync(..., singleRequest: true)` adds an innermost Polly timeout of `CloudRetryOptions.AttemptTimeout` (30 s) to that call, so each hung attempt is cut (a `TimeoutRejectedException`, transient: retried, counted by the breaker) and the call ends as kind `network`, code `TIMEOUT`, after the retries. Only the single small metadata requests pass it: `GoogleStorageGateway` list, insert, get, delete, patch and the ~300 byte config write (`GoogleStorageGateway.cs`, `singleRequest: true` sites) and `GoogleProjectCatalogGateway.FetchAsync`. **Never capped:** `GoogleStorageGateway.UploadAsync` and the two downloads (a large input or result must be allowed to take as long as the link needs; the runner's size-scaled `UploadTimeout` and the result wait bound them), and anything that wraps several requests (the `Resilient*` wrappers).
+
 Retrying a mutating call is safe only because of two earlier decisions: `CreateVmAsync`
 carries a deterministic request id (issue #257, so a replay is idempotent) and stop/delete
 are idempotent. An upload is replayed only when its stream can seek (the decorator rewinds
@@ -1007,8 +1080,8 @@ creates the project's default network).
   already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
   already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
-  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute gateway
-  and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; the quota read does since #88 (section 6.1), the storage gateway since #53,
+  and the token refresher does not, so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
 - **Proven only by a real project:** `docs/ToTest.md`.
 
@@ -1172,9 +1245,24 @@ account and a role and edits two policies, and a whole-method retry would replay
   either). They are found by their fixed ids, not by label, which Rule 9 allows because they are not compute resources and are
   per project, shared by design: a second PC adopts them. The carve-out is recorded in `docs/hard_rules.md`; no guard covers
   labels on these two, so there is no allowlist entry. Everything that bills (the VM, the bucket) keeps its labels.
-- **No production caller yet.** `IWorkerIdentityGateway` has no registration in `ServiceRegistration` and nothing calls
-  `EnsureWorkerIdentityAsync`: only `GoogleCloudGateways.Create` builds it (and tests use it). Calling it from the setup flow
-  before a VM is created, and registering it, is issue #606 (P1). Until then no VM runs as the worker account. `FakeGcp`
+- **Caller (issue #606).** `CloudJobRunner.CompleteSpecAsync` calls `EnsureWorkerIdentityAsync(projectId, bucket)` after
+  `EnsureBucketAsync`, and `VmProvisioner.ProvisionAsync` invokes it only after its adoption lookup (`FindByJobIdAsync`) found
+  no VM, once, before the first create. It sets the returned `ServiceAccountEmail` on the spec it creates with
+  (`with { ServiceAccountEmail = ... }`); without it `GoogleComputeGateway` refuses the create (`WORKER_SERVICE_ACCOUNT_MISSING`).
+  A run that adopts a VM, or whose job already finished, never calls IAM, so an IAM failure can never end a healthy working
+  VM (cold review of #606). The step runs under its own `CloudRunSettings.WorkerIdentityTimeout` (5 minutes, not the 60 s
+  `CallTimeout`), because the gateway is a dozen or more HTTP calls in one method (account create, up to 6 tries with 2 s to 12 s
+  visibility waits, role create and read-back, two policy edits of up to 5 attempts) and abandoning it at 60 s would leave it
+  writing policies after the run failed `network`. THEORY (unverified): 5 minutes is sized from that worst case, not measured. A refusal is a `CloudOperationException` that ends the
+  run through the ordinary classifier (`permission`, `org_policy`, ...) before any VM is created. `WORKER_DEFAULT_ACCOUNT` is a
+  note: the run continues and the row carries `RunErrorCodes.WorkerDefaultAccount` (`worker_default_account`, copy
+  `RunError_worker_default_account`) as an `ErrorCode` on a row that still completes, which the Runs list shows as its warning line
+  (#459); a later failure or `lifecycle_unverified` replaces it. DI registers `IWorkerIdentityGateway` as `FakeGcp` (never wrapped
+  in a `Resilient*` decorator); the real gateway switch is #609.
+  **DECISION (agent-made, reversible):** the call lives in the runner, not a setup-wizard step, because this codebase has no
+  bucket step in the wizard (the bucket is made in the runner) and the account binds the bucket, so the bucket must exist first;
+  the wizard may also call it for early feedback later. It is not run from `UploadInputsAsync` (no VM there).
+  `FakeGcp`
   implements the member
   with scripted failures (`WithServiceAccountCreationBlockedByOrgPolicy`, `WithWorkerIdentityPermissionDenied`,
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.

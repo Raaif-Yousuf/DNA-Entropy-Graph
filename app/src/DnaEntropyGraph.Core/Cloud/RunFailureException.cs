@@ -14,6 +14,9 @@ internal sealed class RunProgress
     public bool VmMayExist { get; set; }
 
     public string? Zone { get; set; }
+
+    /// <summary>The service account the VM was asked to run as (issue #604), once the identity step has answered.</summary>
+    public string? WorkerAccountEmail { get; set; }
 }
 
 /// <summary>
@@ -48,7 +51,7 @@ internal static class VmEndNotes
         var (kind, code) = ex switch
         {
             RunFailureException failure => (failure.Kind, failure.Code),
-            CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Kind)),
+            CloudOperationException cloud => (cloud.Kind, RunErrorCodes.For(cloud.Error, cloud.Kind)),
             _ => (CloudErrorKind.Other, RunErrorCodes.Other),
         };
         return MarkAttempted(new RunFailureException(kind, RunErrorCodes.VmEndUnconfirmed, $"{ex.Message} Original code: {code}.{note}"));

@@ -277,11 +277,13 @@ public class AccountRegistryTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(FilePath, "{\"activeSub\":\"1001\",\"accounts\":[]}");
-        var registry = new AccountRegistry(_dir);
+        // MEASURED 2026-10-15 (CI, PR #663, twice): with the default 40 ms backoff the third read lands at ~120 ms and the old release was at 120 ms, so a loaded runner
+        // exhausted the retries (Unreadable, correctly) and the test failed. The product behaved; the test had no margin. Now: reads at 0 and 400 ms, release at 150 ms.
+        var registry = new AccountRegistry(_dir, name => new Mutex(false, name), readBackoffMs: 400);
         var hold = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None);
         var release = new Thread(() =>
         {
-            Thread.Sleep(120);
+            Thread.Sleep(150);
             hold.Dispose();
         });
         release.Start();

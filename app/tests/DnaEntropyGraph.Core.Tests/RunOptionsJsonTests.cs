@@ -28,6 +28,40 @@ public sealed class RunOptionsJsonTests
         back.ShouldBe(options);
     }
 
+    private static string StoredWith(string outputFiles)
+        => System.Text.RegularExpressions.Regex.Replace(
+            RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }),
+            "\"OutputFiles\":\"[^\"]*\"",
+            "\"OutputFiles\":\"" + outputFiles + "\"");
+
+    [Fact]
+    public void A_row_stored_before_the_newer_files_existed_still_means_the_files_it_was_written_with()
+    {
+        // MEASURED 2026-10-03: JsonStringEnumConverter writes a flags value that equals a named member by that name, so every
+        // run stored before #103 says "All". Its meaning is frozen at the original eight files.
+        RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", OutputFiles = OutputFileKinds.All })
+            .ShouldContain("\"OutputFiles\":\"All\"");
+
+        var back = RunOptionsJson.TryDeserialize(StoredWith("All"))!;
+
+        back.OutputFiles.ShouldBe(OutputFileKinds.GenBank | OutputFileKinds.Fasta | OutputFileKinds.BedGraph | OutputFileKinds.Wig
+            | OutputFileKinds.GeneiousGff3 | OutputFileKinds.GenesGff3 | OutputFileKinds.Stats | OutputFileKinds.EntropyTsv);
+        back.OutputFiles.HasFlag(OutputFileKinds.Smoothed).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_stored_comma_list_of_the_original_flags_reads_back_unchanged()
+        => RunOptionsJson.TryDeserialize(StoredWith("GenBank, Wig, Stats"))!.OutputFiles
+            .ShouldBe(OutputFileKinds.GenBank | OutputFileKinds.Wig | OutputFileKinds.Stats);
+
+    [Fact]
+    public void A_selection_with_the_new_files_round_trips()
+    {
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Probs };
+
+        RunOptionsJson.TryDeserialize(RunOptionsJson.Serialize(options))!.OutputFiles.ShouldBe(options.OutputFiles);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{}")]
