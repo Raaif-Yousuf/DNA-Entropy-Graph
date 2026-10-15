@@ -96,7 +96,7 @@ def run(
     informat: str | None = typer.Option(
         None,
         "--informat",
-        help="Force input format: genbank|fasta|paste (default: auto-detect by extension/content).",
+        help="Force input format: genbank|embl|snapgene|fasta|paste (default: auto-detect).",
     ),
     predictor: str = typer.Option("mock", "--predictor", help="Predictor backend: mock|evo."),
     model: str = typer.Option("evo2_7b", "--model", help="Evo model id (evo predictor only)."),

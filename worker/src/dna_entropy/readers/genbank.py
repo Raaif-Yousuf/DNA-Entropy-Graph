@@ -139,7 +139,8 @@ class GenBankRecord:
 
 def _feature_id(feature) -> str:
     """Pick a stable label for a feature from its qualifiers."""
-    for key in ("gene", "locus_tag", "product"):
+    # "label" last: SnapGene (issue #134) names a feature by its label, GenBank rarely carries one.
+    for key in ("gene", "locus_tag", "product", "label"):
         vals = feature.qualifiers.get(key)
         if vals:
             return str(vals[0])
@@ -313,8 +314,15 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
             "file was not truncated or hand-edited, and that its ORIGIN block matches its own "
             "LOCUS/FEATURES."
         ) from exc
+    return records_from_parsed(parsed, "GenBank")
+
+
+def records_from_parsed(parsed: list, label: str) -> tuple[list[GenBankRecord], list[str]]:
+    """Turn Biopython ``SeqRecord``s into ``(records, notices)``; shared by the GenBank, EMBL and
+    SnapGene readers (issue #134), so all three map features identically. ``label`` is the format
+    name used in user-facing text ("GenBank" keeps the original wording byte for byte)."""
     if not parsed:
-        raise GenBankReadError("No GenBank records found in the file.")
+        raise GenBankReadError(f"No {label} records found in the file.")
 
     notices: list[str] = []
     records: list[GenBankRecord] = []
@@ -326,7 +334,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
             # free text a user or their sequencing core chose, same privacy class as a
             # FASTA header or a file name.
             notices.append(
-                f"Skipped GenBank record {idx} (id {describe_len(str(rec.id))}): no nucleotide sequence."
+                f"Skipped {label} record {idx} (id {describe_len(str(rec.id))}): no nucleotide sequence."
             )
             continue
         feats, feat_notices = _features_of(rec)
@@ -344,7 +352,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
 
     if not records:
         raise GenBankReadError(
-            "The GenBank file has no records with a nucleotide sequence (a truncated or "
+            f"The {label} file has no records with a nucleotide sequence (a truncated or "
             "sequence-less export). Re-export the file from the tool that made it, with its "
             "sequence included."
         )
@@ -354,6 +362,6 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     # as broken English rather than the ordinary "0 gene feature(s)" it means.
     notices.append(
         f"Read {len(records)} record(s) with {total_features} gene feature(s) from the "
-        "GenBank (not re-annotated)."
+        f"{label} (not re-annotated)."
     )
     return records, notices

@@ -17,9 +17,17 @@ from ..annotators.base import GeneFeature
 from ..config import RunConfig
 from ..validation.validators import ValidationError, validate_sequence
 from . import detect
+from .embl import read_embl
 from .fasta import read_fasta
 from .genbank import read_genbank
 from .paste import PasteReader
+from .snapgene import read_snapgene
+
+_ANNOTATED_FLAT_FILE_READERS = {
+    detect.GENBANK: read_genbank,
+    detect.EMBL: read_embl,
+    detect.SNAPGENE: read_snapgene,
+}
 
 
 @dataclass
@@ -176,8 +184,8 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     """
     kind = cfg.informat or detect.detect_kind(cfg.input_path)
 
-    if kind == detect.GENBANK:
-        records, notices = read_genbank(cfg.input_path)
+    if kind in _ANNOTATED_FLAT_FILE_READERS:
+        records, notices = _ANNOTATED_FLAT_FILE_READERS[kind](cfg.input_path)
         contigs: list[Contig] = []
         running_total = 0
         for i, rec in enumerate(records):
@@ -197,7 +205,9 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
                 )
             )
         _assert_unique_contig_names(contigs)
-        return LoadedInput(contigs=contigs, notices=notices, source_kind=kind)
+        # EMBL and SnapGene are annotated flat files read into the same records as GenBank
+        # (issue #134), so they take the GenBank output set: their own genes, never Prodigal.
+        return LoadedInput(contigs=contigs, notices=notices, source_kind=detect.GENBANK)
 
     if kind == detect.FASTA:
         records, notices = read_fasta(cfg.input_path)

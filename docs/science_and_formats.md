@@ -563,6 +563,26 @@ so the viewer and IGV keep every record's track aligned to its own sequence.
 
 ---
 
+### 5b. Input formats beyond GenBank and FASTA (issue #134)
+
+`readers/embl.py` (EMBL flat file, `.embl`/`.emb`, or an `ID   ` first line) and
+`readers/snapgene.py` (SnapGene `.dna`, detected by its magic bytes: a type-0x09 packet whose
+data starts `SnapGene`, so a renamed file still works and a text file named `.dna` is not
+claimed) are parsed by Biopython (BSD-3-Clause; the `snapgene` SeqIO parser needs no new
+dependency) and mapped by the same `genbank.records_from_parsed` as GenBank: the file's own
+`gene` (else `CDS`) features become `GeneFeature`s, a circular topology is kept, a record with no
+sequence is skipped with a notice. The loaded input takes the GenBank output set (the genes
+are the file's own, Prodigal never runs). Differences worth knowing:
+
+- EMBL record ids are `accession.version`; a non-ASCII letter in the `SQ` block is refused (the
+  GenBank #492 case-folding trap applies, so it is checked before Biopython upper-cases).
+- SnapGene names features by `label`; the reader uses it as the gene id when there is no
+  `gene`/`locus_tag`/`product` (this also applies to GenBank features that only have a `label`).
+- SnapGene keeps one sequence per file and is capped at 64 MiB; a non-ASCII sequence byte or a
+  truncated packet is a named refusal, never a traceback.
+- The app does not yet validate these two formats locally before creating a VM (rule 2); that
+  port is tracked in a follow-up issue.
+
 ## 6. Viewer support matrix
 
 | Viewer | Loads | Notes |
