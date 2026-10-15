@@ -146,6 +146,26 @@ per-region quota memory, persisted per project instead of the prototype's
  seen (not one line per zone tried), plus the applicable next steps: retry in ~10
  minutes, try Spot, wait with Flex-start, or try a bigger GPU tier explicitly.
 
+**What is built (issues #86a, #670).** `ZoneCandidates.Build` (pure: accelerator filter, the three-way quota rule, the ordering) and the ladder in
+`VmProvisioner` (`PlanZonesAsync`, `RunLadderAsync`, `TryZoneAsync`):
+
+- The zone universe is `IComputeGateway.ListAcceleratorZonesAsync(accelerator)` (`acceleratorTypes.aggregatedList` filtered on the name, partial success
+  asked for; `FakeGcp.WithAcceleratorZones` scripts it). The accelerator is the one the REQUESTED machine carries (`ZoneCandidates.AcceleratorFor`): the
+  ladder never reads, and so never tries, a bigger tier (item 6 stays a click). A machine with no GPU, an offer that fails or comes back empty, fall back to
+  `CloudJobRequest.Zones` ("unknown is not none"). The quota read is `IQuotaGateway.ReadQuotaAsync` (#88); a read that fails narrows nothing. The
+  preference is the request's first zone; the bucket's location (`ListBucketsAsync`, by the run's bucket name) orders its continent next. The last-good zone
+  is not wired yet (null: #210).
+- Attempts run in batches of 1, 1, 1, then 3, 5 and 7 in parallel until the zones are used up, all with the same VM name in different zones. A failed
+  attempt cleans up ITS zone only (`VmTerminator.EndVmAfterFailureAsync(request, zone)`); a sweep by job label would delete a parallel batch's winner.
+  When a parallel batch lands more than one VM, the first in candidate order is kept and every other VM carrying the job's label is deleted and verified
+  (`DeleteOtherZonesAsync`); an extra that cannot be confirmed deleted ends the run with `vm_end_unconfirmed` after ending everything by label.
+- A project-wide kind (billing, API off, permission, org policy) or a network failure aborts at the first batch that sees it (a batch settles first, so
+  nothing is left in flight; a winner of the same batch is still kept). Quota and stockout move on.
+- Total failure: `quota` (the copy that names raising the allowance) when the quota read says there is none in any candidate zone (every zone is still
+  tried: the quota API can under-report) or every failure was a quota error; otherwise `stockout`. `ZoneCandidateResult.QuotaZeroEverywhere` is what carries this.
+- Not built: the user-facing "other continents" toggle (the ladder walks every offered zone, the bucket's continent first), per-tier escalation on a click,
+  and the last-good-zone memory (#210).
+
 ## 4. Labels and naming
 
 Covered field-by-field in [`job_contract.md`](job_contract.md) section 2 (identifiers) -

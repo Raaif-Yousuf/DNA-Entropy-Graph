@@ -165,7 +165,7 @@ public sealed class CloudJobRunner
         _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls, _settings);
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
-        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync);
+        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync, quotaGateway, BucketLocationAsync);
         _canceller = new VmCanceller(_rows, _provisioner, _terminator);
         _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
@@ -186,6 +186,18 @@ public sealed class CloudJobRunner
         {
             return false;
         }
+    }
+
+    /// <summary>The location of the run's bucket (issue #670: the ladder prefers zones on its continent), or null when it is not known yet or cannot be read.</summary>
+    private async Task<string?> BucketLocationAsync(RunProgress progress, CancellationToken cancellationToken)
+    {
+        if (progress.Bucket is not { } bucket || progress.ProjectId is not { } project)
+        {
+            return null;
+        }
+
+        var buckets = await _calls.CallAsync(token => _storage.ListBucketsAsync(project, token), cancellationToken).ConfigureAwait(false);
+        return buckets.FirstOrDefault(b => string.Equals(b.Name, bucket, StringComparison.Ordinal))?.Location;
     }
 
     public async Task<JobPhase> GetPhaseAsync(string jobId, CancellationToken cancellationToken)
@@ -314,6 +326,8 @@ public sealed class CloudJobRunner
         // Step 5 of the preflight order (docs/cloud_design.md section 2): the bucket exists.
         var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
 
+        progress.Bucket = bucket;
+        progress.ProjectId = request.Spec.ProjectId;
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Uploading, cancellationToken).ConfigureAwait(false);
 
         // docs/job_contract.md section 3: the manifest is immutable once the worker may be reading

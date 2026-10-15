@@ -15,6 +15,12 @@ internal sealed class RunProgress
 
     public string? Zone { get; set; }
 
+    /// <summary>The run's results bucket, once the runner has ensured it: the zone ladder reads its location to prefer zones on its continent (#670).</summary>
+    public string? Bucket { get; set; }
+
+    /// <summary>The project the bucket lives in (set with <see cref="Bucket"/>).</summary>
+    public string? ProjectId { get; set; }
+
     /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
     public string? VmName { get; set; }
 

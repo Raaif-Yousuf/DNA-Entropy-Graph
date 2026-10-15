@@ -1,0 +1,1 @@
+- Cloud (#670): the zone ladder is real: zones come from the live accelerator offer (narrowed by quota, bucket continent first), attempts run 3 sequential then 3, 5 and 7 in parallel, extra winners are deleted, and zero quota everywhere is reported as the fixable quota error rather than a stockout.

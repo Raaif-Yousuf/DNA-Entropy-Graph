@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// (<see cref="VmCanceller"/>) and the ladder wait for these through <see cref="SettleInflightCreatesAsync"/> before they
 /// record a terminal state. Nothing else touches the dictionary.
 /// </summary>
-internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, Task<bool>>? jobIsFinished = null)
+internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, Task<bool>>? jobIsFinished = null, IQuotaGateway? quotaGateway = null, Func<RunProgress, CancellationToken, Task<string?>>? bucketLocation = null)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, string> _inflightCreates = new();
 
@@ -84,9 +84,17 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         // One value for both the create's own timeout and the poller's deadline, so they cannot drift apart: the create's
         // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the
         // backstop at the same instant.
-        var createTimeout = settings.CreateTimeout;
+        var plan = await PlanZonesAsync(request, spec, progress, cancellationToken).ConfigureAwait(false);
+        return await RunLadderAsync(request, spec, plan, progress, cancellationToken).ConfigureAwait(false);
+    }
 
-        foreach (var zone in request.Zones)
+    /// <summary>
+    /// One zone's create attempt: the create under its own timeout, the classification of what it threw, and the clean-up of ITS zone only
+    /// (a clean-up by job label would delete the winner of a parallel batch, #670). Never throws for a cloud failure.
+    /// </summary>
+    private async Task<ZoneAttempt> TryZoneAsync(CloudJobRequest request, VmSpec spec, string zone, RunProgress progress, CancellationToken cancellationToken)
+    {
+        var createTimeout = settings.CreateTimeout;
         {
             // The kind the gateway (or the resilience pipeline in front of
             // it) already decided. Re-deriving it from the error text would
@@ -131,16 +139,16 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 // settle (bounded) and delete whatever it made BEFORE the run is allowed to end or try another zone;
                 // if it cannot be confirmed the run says so (vm_end_unconfirmed). The VM's own maxRunDuration
                 // (Hard Rule 10) is the backstop.
-                var settleNote = await SettleAbandonedCreateAsync(request, createTask!).ConfigureAwait(false);
+                var settleNote = await SettleAbandonedCreateAsync(request, createTask!, zone).ConfigureAwait(false);
                 if (settleNote is not null)
                 {
-                    return ProvisionResult.Failed(CloudErrorKind.Network, outcome.Error!.Message, settleNote);
+                    return ZoneAttempt.Aborted(zone, ProvisionResult.Failed(CloudErrorKind.Network, outcome.Error!.Message, settleNote));
                 }
             }
 
             if (outcome.Success)
             {
-                return ProvisionResult.Ok(zone);
+                return ZoneAttempt.Win(zone);
             }
 
             var kind = thrownKind ?? CloudErrorClassifier.Classify(outcome.Error!);
@@ -153,19 +161,19 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 if (vm is not null)
                 {
-                    return ProvisionResult.Ok(zone);
+                    return ZoneAttempt.Win(zone);
                 }
             }
 
             // A create can fail AFTER the server accepted it (the ResilientGateways retry, a response lost on the wire, an
-            // internal error answered late): look by label and delete whatever landed before the ladder moves on or the
+            // internal error answered late): look in THIS zone and delete whatever landed before the ladder moves on or the
             // run is recorded, or a zone's VM is left billing beside the next zone's. A timed-out create was settled above.
             if (!createTimedOut && kind is CloudErrorKind.Network or CloudErrorKind.Other or CloudErrorKind.Stockout)
             {
-                var sweepNote = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+                var sweepNote = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: true).ConfigureAwait(false);
                 if (sweepNote is not null)
                 {
-                    return ProvisionResult.Failed(kind, outcome.Error!.Message, sweepNote, RunErrorCodes.For(outcome.Error, kind));
+                    return ZoneAttempt.Aborted(zone, ProvisionResult.Failed(kind, outcome.Error!.Message, sweepNote, RunErrorCodes.For(outcome.Error, kind)));
                 }
             }
 
@@ -174,7 +182,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 // docs/cloud_design.md section 5: billing/API/permission/org
                 // policy abort the WHOLE ladder immediately - retrying a
                 // different zone cannot fix a project-wide problem.
-                return ProvisionResult.Failed(kind, outcome.Error!.Message, code: RunErrorCodes.For(outcome.Error, kind));
+                return ZoneAttempt.Aborted(zone, ProvisionResult.Failed(kind, outcome.Error!.Message, code: RunErrorCodes.For(outcome.Error, kind)));
             }
 
             // Quota / stockout / other: per-zone or per-region, worth trying
@@ -182,9 +190,148 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             // one aborts the ladder). Network is not in this list: another
             // zone cannot fix an unreachable API, and reporting it as a
             // stockout after trying them all is the bug this guards against.
+            return ZoneAttempt.Lost(zone, kind);
+        }
+    }
+
+    /// <summary>The zones to try, in order, and whether the quota read says there is none anywhere (#670).</summary>
+    private readonly record struct ZonePlan(IReadOnlyList<string> Zones, bool QuotaZeroEverywhere);
+
+    /// <summary>
+    /// Issue #670. The zone universe is what the gateway says offers the machine's accelerator (<see cref="ZoneCandidates.AcceleratorFor"/>:
+    /// the tier the request asked for, never a bigger one); the candidates are <see cref="ZoneCandidates.Build"/> over it with the quota read,
+    /// the request's first zone as the preference and the bucket's location. A machine with no GPU, an offer that cannot be read or that comes
+    /// back empty, and a quota that cannot be read each fall back to "do not narrow": unknown is not none, so the request's own zones are used.
+    /// </summary>
+    private async Task<ZonePlan> PlanZonesAsync(CloudJobRequest request, VmSpec spec, RunProgress progress, CancellationToken cancellationToken)
+    {
+        var accelerator = ZoneCandidates.AcceleratorFor(spec.MachineType);
+        if (accelerator is null)
+        {
+            return new ZonePlan(request.Zones, false);
         }
 
-        return ProvisionResult.Failed(CloudErrorKind.Stockout, $"No zone in [{string.Join(", ", request.Zones)}] could provision '{request.Spec.VmName}'.");
+        IReadOnlyList<string> offered;
+        try
+        {
+            offered = await calls.CallAsync(token => compute.ListAcceleratorZonesAsync(accelerator, token), cancellationToken, settings.QuotaReadTimeout).ConfigureAwait(false);
+        }
+        catch (CloudOperationException)
+        {
+            return new ZonePlan(request.Zones, false);
+        }
+
+        if (offered.Count == 0)
+        {
+            return new ZonePlan(request.Zones, false);
+        }
+
+        QuotaReadResult? quota = null;
+        if (quotaGateway is not null)
+        {
+            try
+            {
+                quota = await calls.CallAsync(token => quotaGateway.ReadQuotaAsync(spec.ProjectId, token), cancellationToken, settings.QuotaReadTimeout).ConfigureAwait(false);
+            }
+            catch (CloudOperationException)
+            {
+                // A quota that cannot be read is unknown, never zero: no zone is dropped for it.
+            }
+        }
+
+        string? location = null;
+        if (bucketLocation is not null)
+        {
+            try
+            {
+                location = await bucketLocation(progress, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException)
+            {
+                // The location only orders the zones; unknown orders them as offered.
+            }
+        }
+
+        var built = ZoneCandidates.Build(new ZoneCandidateInput(offered, [], request.Zones.Count > 0 ? request.Zones[0] : null, null, location, quota, QuotaMetrics.ForAccelerator(accelerator)));
+        return built.Zones.Count == 0 ? new ZonePlan(request.Zones, false) : new ZonePlan(built.Zones, built.QuotaZeroEverywhere);
+    }
+
+    /// <summary>How many creates run together in the nth batch (0-based): three one at a time for fast feedback in the common case, then 3, 5 and batches of 7 in parallel.</summary>
+    private static int BatchSize(int batch) => batch switch { < 3 => 1, 3 => 3, 4 => 5, _ => 7 };
+
+    /// <summary>
+    /// Issue #670: the escalating ladder over the planned zones. Parallel attempts use the same VM name in different zones (names are zonal);
+    /// when more than one of a batch lands, the first in candidate order is kept and every other VM of the job is deleted by label and
+    /// verified. A project-wide error aborts at the first batch that sees it (a batch settles first: nothing is left in flight, and a winner
+    /// from the same batch is still kept). The tier is never escalated here: that needs the user's click.
+    /// </summary>
+    private async Task<ProvisionResult> RunLadderAsync(CloudJobRequest request, VmSpec spec, ZonePlan plan, RunProgress progress, CancellationToken cancellationToken)
+    {
+        var lost = new List<CloudErrorKind>();
+        var next = 0;
+        for (var batch = 0; next < plan.Zones.Count; batch++)
+        {
+            var zones = plan.Zones.Skip(next).Take(BatchSize(batch)).ToList();
+            next += zones.Count;
+            progress.VmMayExist = true;
+            var attempts = zones.Count == 1
+                ? [await TryZoneAsync(request, spec, zones[0], progress, cancellationToken).ConfigureAwait(false)]
+                : await Task.WhenAll(zones.Select(zone => TryZoneAsync(request, spec, zone, progress, cancellationToken))).ConfigureAwait(false);
+
+            var winnerIndex = Array.FindIndex(attempts, a => a.Won);
+            if (winnerIndex >= 0)
+            {
+                var winner = attempts[winnerIndex];
+                if (zones.Count > 1)
+                {
+                    var extras = await DeleteOtherZonesAsync(request, winner.Zone, cancellationToken).ConfigureAwait(false);
+                    if (extras is not null)
+                    {
+                        var all = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+                        return ProvisionResult.Failed(CloudErrorKind.Other, "More than one VM was created for this job in a parallel attempt and the extra could not be deleted.", extras + all, RunErrorCodes.For(CloudErrorKind.Other));
+                    }
+                }
+
+                return ProvisionResult.Ok(winner.Zone);
+            }
+
+            var abortedIndex = Array.FindIndex(attempts, a => a.Abort is not null);
+            if (abortedIndex >= 0)
+            {
+                return attempts[abortedIndex].Abort!.Value;
+            }
+
+            lost.AddRange(attempts.Select(a => a.Kind!.Value));
+        }
+
+        // Every zone failed. Quota the user can fix is told apart from a stockout they can only wait out: when the read says there is none
+        // anywhere (every zone was still tried: the quota API can under-report), or every failure was a quota one, the kind is Quota.
+        var kind = plan.QuotaZeroEverywhere || (lost.Count > 0 && lost.All(k => k == CloudErrorKind.Quota)) ? CloudErrorKind.Quota : CloudErrorKind.Stockout;
+        var detail = kind == CloudErrorKind.Quota ? " The project has no GPU quota in them: raising it is something the user can do." : string.Empty;
+        return ProvisionResult.Failed(kind, $"No zone in [{string.Join(", ", plan.Zones)}] could provision '{request.Spec.VmName}'.{detail}");
+    }
+
+    /// <summary>Deletes every VM carrying this job's label outside <paramref name="keepZone"/> and verifies each is gone. Null when none is left, else why one is.</summary>
+    private async Task<string?> DeleteOtherZonesAsync(CloudJobRequest request, string keepZone, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<VmDescriptor> owned;
+        try
+        {
+            owned = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex)
+        {
+            return $" (VM end not confirmed: the VMs for this job could not be looked up: {ex.Message})";
+        }
+
+        string? note = null;
+        foreach (var vm in owned.Where(v => !string.Equals(v.Zone, keepZone, StringComparison.Ordinal)))
+        {
+            var error = await terminator.EnsureVmEndedAsync(request, vm.Zone, AfterTaskAction.Delete, cancellationToken, vm.Name).ConfigureAwait(false);
+            note ??= error is null ? null : " (VM end not confirmed: " + error + ")";
+        }
+
+        return note;
     }
 
     /// <summary>
@@ -303,7 +450,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// After a create timed out: wait for it to settle, then delete whatever landed (a VM that never ran has no disk
     /// worth keeping). Returns null when nothing is left, else a note that the VM end is not confirmed.
     /// </summary>
-    private async Task<string?> SettleAbandonedCreateAsync(CloudJobRequest request, Task createTask)
+    private async Task<string?> SettleAbandonedCreateAsync(CloudJobRequest request, Task createTask, string zone)
     {
         var winner = await Task.WhenAny(createTask, Task.Delay(settings.CreateSettleTimeout, settings.TimeProvider)).ConfigureAwait(false);
         if (winner != createTask)
@@ -311,8 +458,19 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             return $" (VM end not confirmed: a create request was still in flight after {settings.CreateSettleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s and could not be cancelled)";
         }
 
-        return await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+        // This zone only: a label sweep would also delete the winner of a parallel batch (#670).
+        return await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: true).ConfigureAwait(false);
     }
+}
+
+/// <summary>What one zone's attempt came to (#670): it won, it lost in a way another zone can fix (<see cref="Kind"/>), or it ends the whole ladder (<see cref="Abort"/>).</summary>
+internal readonly record struct ZoneAttempt(string Zone, bool Won, CloudErrorKind? Kind, ProvisionResult? Abort)
+{
+    public static ZoneAttempt Win(string zone) => new(zone, true, null, null);
+
+    public static ZoneAttempt Lost(string zone, CloudErrorKind kind) => new(zone, false, kind, null);
+
+    public static ZoneAttempt Aborted(string zone, ProvisionResult result) => new(zone, false, null, result);
 }
 
 internal readonly struct ProvisionResult

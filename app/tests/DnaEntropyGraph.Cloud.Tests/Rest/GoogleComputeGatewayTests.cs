@@ -580,6 +580,40 @@ public class GoogleComputeGatewayTests
         found[1].Zone.ShouldBe("us-west1-b");
     }
 
+    // ---- #670: the accelerator offer read ----
+
+    private const string AcceleratorAggregated = Base + "/aggregated/acceleratorTypes";
+
+    [Fact]
+    public async Task The_accelerator_offer_read_filters_by_name_follows_the_page_token_and_answers_the_zones_that_list_it()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, AcceleratorAggregated, 200,
+                "{\"items\":{\"zones/us-central1-a\":{\"acceleratorTypes\":[{\"name\":\"nvidia-l4\"}]},\"zones/us-central1-b\":{\"warning\":{\"code\":\"NO_RESULTS_ON_PAGE\",\"message\":\"none\"}}},\"nextPageToken\":\"p2\"}")
+            .Returns(Get, AcceleratorAggregated, 200,
+                "{\"items\":{\"zones/europe-west4-a\":{\"acceleratorTypes\":[{\"name\":\"nvidia-l4\"}]}}}");
+
+        var zones = await rig.Gateways.Compute.ListAcceleratorZonesAsync("nvidia-l4", CancellationToken.None);
+
+        zones.ShouldBe(["us-central1-a", "europe-west4-a"]);
+        var requests = rig.Handler.To(Get, AcceleratorAggregated);
+        requests.Count.ShouldBe(2);
+        HttpUtility.UrlDecode(requests[0].Uri.Query).ShouldContain("filter=name = \"nvidia-l4\"");
+        requests[0].Uri.Query.ShouldContain("returnPartialSuccess=true");
+        requests[1].Uri.Query.ShouldContain("pageToken=p2");
+    }
+
+    [Fact]
+    public async Task An_accelerator_name_that_could_carry_filter_syntax_asks_nobody()
+    {
+        var rig = new GoogleGatewayHarness();
+
+        (await rig.Gateways.Compute.ListAcceleratorZonesAsync("nvidia-l4\" OR name = \"x", CancellationToken.None)).ShouldBeEmpty();
+
+        rig.Handler.Requests.ShouldBeEmpty();
+    }
+
     // ---- #94: reuse of a stopped VM ----
 
     private const string OldInstance = Instances + "/deg-job-old";

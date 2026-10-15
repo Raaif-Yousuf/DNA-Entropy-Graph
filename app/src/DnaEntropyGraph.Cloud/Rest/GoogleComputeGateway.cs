@@ -102,6 +102,59 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>
+    /// Issue #670: <c>acceleratorTypes.aggregatedList</c> filtered to the accelerator's name, following the page token, answering every zone
+    /// that lists it. It asks for partial success: a zone Compute could not read is simply not in the answer (this is advice for the ladder,
+    /// which falls back to the requested zones on an empty answer, not a safety decision like the VM listings).
+    /// THEORY (unverified, no live project): that the <c>name = "nvidia-l4"</c> filter syntax matches.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        if (!LabelValuePattern.IsMatch(acceleratorType ?? string.Empty))
+        {
+            return [];
+        }
+
+        var zones = new List<string>();
+        string? pageToken = null;
+        do
+        {
+            var requestedToken = pageToken;
+            var page = await CallAsync(
+                "compute.acceleratorTypes.aggregatedList",
+                token =>
+                {
+                    var request = _service.AcceleratorTypes.AggregatedList(project);
+                    request.Filter = $"name = \"{acceleratorType}\"";
+                    request.PageToken = requestedToken;
+                    request.ModifyRequest += message =>
+                        message.RequestUri = new Uri(message.RequestUri + (string.IsNullOrEmpty(message.RequestUri!.Query) ? "?" : "&") + "returnPartialSuccess=true");
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.AcceleratorTypesScopedList>())
+            {
+                if (scoped?.AcceleratorTypes is { Count: > 0 } found && found.Any(a => string.Equals(a.Name, acceleratorType, StringComparison.Ordinal)) && ZoneName(scope) is { Length: > 0 } zone)
+                {
+                    zones.Add(zone);
+                }
+            }
+
+            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            if (next is not null && next == pageToken)
+            {
+                return zones;
+            }
+
+            pageToken = next;
+        }
+        while (pageToken is not null);
+
+        return zones;
+    }
+
+    /// <summary>
     /// Issue #94. Order matters: scheduling and metadata first (harmless on an idle stopped VM that still carries its old job's label),
     /// the label rewrite (the claim) last before the start, each write carrying the fingerprint read at the start so two installations'
     /// jobs racing for one VM cannot both win (the loser's write fails with a precondition error). THEORY (unverified, no live project):
