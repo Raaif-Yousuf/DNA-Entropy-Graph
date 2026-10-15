@@ -1,0 +1,1 @@
+- test(app): the SettingsStore writer-race tests inject a long wait budget (they prove serialisation, not speed), a signalled slow-disk test pins the 300 ms product budget, and the budget's rationale and measurements are recorded in SettingsStore (#673).
