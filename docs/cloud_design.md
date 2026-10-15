@@ -546,8 +546,9 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
 - **The platform's limit is the user's cap plus 15 minutes (issue #89).** `CloudJobRequestFactory` sets `VmSpec.MaxRunDuration`
   to `RunOptions.MaxRunDurationMinutes + 15 min` (`VmGrace`), with `instanceTerminationAction=DELETE` (`VmSpec` rejects anything else).
-  The worker enforces the user's cap itself (manifest `limits.maxRunSeconds`), so a worker that is merely slow finishes and stops its own VM
-  before Compute Engine deletes it; the VM's own deadline is the backstop for a worker that hangs. `startup.sh` reads the VM limit
+  The worker enforces the user's cap itself (manifest `limits.maxRunSeconds`, `runner.py` `_RunDeadline`): past it no further record or input starts,
+  finished work is uploaded and `result.json` carries `RUN_TIME_LIMIT` (mapped to the app's `run_time_limit`), so a worker that is merely slow
+  stops its own VM before Compute Engine deletes it; the VM's own deadline is the backstop for a worker that hangs. `startup.sh` reads the VM limit
   (`deg-max-run-min`), so keep-alive is capped against the platform deadline, not the cap. A VM that was seen created, is now gone, and whose
   `maxRunDuration` has passed with no `result.json` and no worker error code in `status.json` is recorded `run_time_limit` (not `vm_unhealthy`):
   the run hit its limit while the app was not looking (a closed laptop lid, a resume). When the app is looking it ends the run first
