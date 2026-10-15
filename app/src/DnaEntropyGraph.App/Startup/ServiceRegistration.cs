@@ -95,10 +95,20 @@ public static class ServiceRegistration
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserSuccess"),
                 () => sp.GetRequiredService<IStringResourceProvider>().GetString("SignInBrowserFailure")),
         });
-        services.AddSingleton<GoogleAccountService>();
-        services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<GoogleAccountService>());
-        // The real gateways take their access token from here.
-        services.AddSingleton<IGcpAccessTokenSource>(sp => sp.GetRequiredService<GoogleAccountService>());
+        if (cloud == CloudBackend.Developer)
+        {
+            // Developer mode (issue #69): no real account service exists in this container at all, so nothing can reach Google through it.
+            services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
+            services.AddSingleton<IGcpAccessTokenSource, FakeCloudMode.FakeTokenSource>();
+            services.AddSingleton<DnaEntropyGraph.Presentation.Services.SimulatedCloudMode>();
+        }
+        else
+        {
+            services.AddSingleton<GoogleAccountService>();
+            services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<GoogleAccountService>());
+            // The real gateways take their access token from here.
+            services.AddSingleton<IGcpAccessTokenSource>(sp => sp.GetRequiredService<GoogleAccountService>());
+        }
 
         // Issue #258: every cloud call goes through the one resilience pipeline (retry with jitter on 429/5xx/transport, a
         // single token refresh on 401, a circuit breaker for the offline banner). The Google gateways run it themselves, per
@@ -259,9 +269,8 @@ public static class ServiceRegistration
 
         if (cloud == CloudBackend.Developer)
         {
-            // Developer mode (issue #69), registered last so it wins over the real account and image list: the account is the fake too
+            // Developer mode (issue #69), registered last so it wins over the shipped image list: the account is the fake too (registered above)
             // (Sign in succeeds with no browser, its project is the fake project) and the worker image is a fixed fake reference.
-            services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
             services.AddSingleton<IWorkerImageProvider, FakeCloudMode.FakeWorkerImageProvider>();
         }
 

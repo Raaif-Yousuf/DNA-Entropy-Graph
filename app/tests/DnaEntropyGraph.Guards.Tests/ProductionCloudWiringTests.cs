@@ -180,7 +180,7 @@ public class ProductionCloudWiringTests : IDisposable
         options.CurrentInstallationId.ShouldBe("0123456789abcdef0123456789abcdef", "the file was repaired: the next use reads it again");
     }
 
-    public static TheoryData<CloudBackend> Backends() => new() { CloudBackend.Google, CloudBackend.Fake };
+    public static TheoryData<CloudBackend> Backends() => new() { CloudBackend.Google, CloudBackend.Fake, CloudBackend.Developer };
 
     [Theory]
     [MemberData(nameof(Backends))]

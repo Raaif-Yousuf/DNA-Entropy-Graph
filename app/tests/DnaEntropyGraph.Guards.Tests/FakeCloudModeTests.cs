@@ -102,14 +102,86 @@ public sealed class FakeCloudModeTests : IDisposable
     }
 
     [Fact]
-    public void The_entry_point_reads_the_flags_and_the_app_builds_its_container_over_the_result()
+    public void An_explicit_profile_in_the_equals_form_also_wins_over_fresh_profile()
     {
-        // The flags are parsed in Program.Main and consumed in App's constructor; either end missing is a switch wired to nothing.
-        var src = Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App");
-        File.ReadAllText(Path.Combine(src, "Program.cs")).ShouldContain("FakeCloudMode.Resolve(args)");
-        File.ReadAllText(Path.Combine(src, "App.xaml.cs")).ShouldContain("AddDnaEntropyGraph(StartupDataRoot.Current, FakeCloudMode.Backend)");
+        var args = FakeCloudMode.WithFreshProfile(["--profile=C:\\mine", "--fresh-profile"], _scratch);
+
+        args.ShouldBe(["--profile=C:\\mine"]);
     }
 
+    [Fact]
+    public void Resolve_flips_the_backend_the_app_then_builds_its_container_over()
+    {
+        // The init-order observable: Program.Main calls Resolve, and only afterwards App's constructor reads Backend into the container.
+        try
+        {
+            FakeCloudMode.Resolve(["--FAKE-CLOUD", "--fresh-profile"]).ShouldContain("--profile");
+            FakeCloudMode.Backend.ShouldBe(CloudBackend.Developer);
+
+            var services = new ServiceCollection();
+            services.AddDnaEntropyGraph(appDataRoot: _scratch, cloud: FakeCloudMode.Backend);
+            using var provider = services.BuildServiceProvider();
+            provider.GetRequiredService<IGcpAccount>().ShouldBeOfType<FakeGcp>();
+        }
+        finally
+        {
+            FakeCloudMode.Resolve([]);
+        }
+
+        FakeCloudMode.Backend.ShouldBe(CloudBackend.Google);
+    }
+
+    [Fact]
+    public void A_variable_with_spaces_around_the_one_still_counts()
+    {
+        FakeCloudMode.BackendFor([], name => name == "DEG_FAKE_CLOUD" ? " 1 " : null).ShouldBe(CloudBackend.Developer);
+    }
+
+    [Fact]
+    public void The_flag_is_case_insensitive()
+    {
+        FakeCloudMode.BackendFor(["--FAKE-CLOUD"], NoEnv).ShouldBe(CloudBackend.Developer);
+    }
+
+    [Fact]
+    public void A_simulated_cloud_is_refused_on_the_real_profile_and_allowed_on_a_sandbox()
+    {
+        // DECISION (agent-made, reversible): fake runs must never write into the real history, so the simulated cloud needs a sandbox folder.
+        FakeCloudMode.IsAllowedOn(CloudBackend.Developer, AppDataRoot.Default()).ShouldBeFalse();
+        FakeCloudMode.IsAllowedOn(CloudBackend.Developer, AppDataRoot.FromPath(_scratch)).ShouldBeTrue();
+        FakeCloudMode.IsAllowedOn(CloudBackend.Google, AppDataRoot.Default()).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_developer_container_has_no_real_account_service_and_everything_still_builds()
+    {
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _scratch, cloud: CloudBackend.Developer);
+        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+
+        provider.GetService<DnaEntropyGraph.Cloud.Auth.GoogleAccountService>().ShouldBeNull("nothing may sit underneath the fake account");
+        (await provider.GetRequiredService<IGcpAccessTokenSource>().GetAccessTokenAsync(CancellationToken.None)).ShouldNotBeNullOrEmpty();
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.ShellViewModel>().HasSimulatedCloud.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void The_shell_of_a_real_build_shows_no_simulated_cloud_banner()
+    {
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _scratch, cloud: CloudBackend.Google);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.ShellViewModel>().HasSimulatedCloud.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_shell_binds_the_simulated_cloud_banner()
+    {
+        var xaml = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "MainWindow.xaml"));
+
+        xaml.ShouldContain("ViewModel.HasSimulatedCloud");
+        xaml.ShouldContain("ViewModel.SimulatedCloudBannerText");
+    }
     [Fact]
     public void The_real_backend_still_resolves_no_fake()
     {

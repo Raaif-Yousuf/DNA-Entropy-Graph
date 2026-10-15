@@ -19,7 +19,7 @@ public static class Program
         VelopackApp.Build().Run();
 
         // Issue #638: the data folder (--profile / DEG_DATA_DIR) is fixed before anything can touch app state.
-        if (!StartupDataRoot.TryResolve(FakeCloudMode.Resolve(args)))
+        if (!StartupDataRoot.TryResolve(FakeCloudMode.Resolve(args)) || !FakeCloudMode.CheckProfile(StartupDataRoot.Current))
         {
             Environment.ExitCode = 2;
             return;

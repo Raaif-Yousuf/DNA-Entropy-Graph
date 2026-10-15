@@ -1195,6 +1195,13 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="DataFolderUnusable_NotAFolder" xml:space="preserve">
     <value>The data folder you chose is a file, not a folder: {0}. Start the app again with a folder path, or without the --profile option.</value>
   </data>
+  <data name="SimulatedCloud_Banner" xml:space="preserve">
+    <value>Simulated cloud: nothing here is real and no money is spent</value>
+    <comment>Permanent banner in the title bar while the app runs over the simulated cloud (developer mode, issue #69).</comment>
+  </data>
+  <data name="FakeCloud_NeedsProfile" xml:space="preserve">
+    <value>The simulated cloud only runs on a separate data folder, so its fake results never reach your real history. Start the app again with --fresh-profile (or --profile followed by a folder) added to --fake-cloud, or remove --fake-cloud and the DEG_FAKE_CLOUD setting.</value>
+  </data>
   <data name="DataFolderUnusable_MissingValue" xml:space="preserve">
     <value>The --profile option needs a folder after it. Start the app again with --profile followed by a folder path, or without the option.</value>
   </data>
