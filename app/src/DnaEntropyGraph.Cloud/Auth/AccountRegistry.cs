@@ -42,15 +42,17 @@ public sealed class AccountRegistry
     private readonly string _path;
     private readonly Func<string, Mutex> _openMutex;
     private readonly TimeSpan _saveLockWait;
+    private readonly int _readBackoffMs;
 
     public AccountRegistry(string directory)
         : this(directory, name => new Mutex(false, name))
     {
     }
 
-    /// <summary>Tests only: how the named mutex is opened (so a refusal by the system can be played) and how long a save waits for it.</summary>
-    internal AccountRegistry(string directory, Func<string, Mutex> openMutex, TimeSpan? saveLockWait = null)
+    /// <summary>Tests only: how the named mutex is opened (so a refusal by the system can be played) and how long a save waits for it, and the read-retry backoff (a test that holds the file for a while needs margins a loaded CI runner cannot eat, issue #664).</summary>
+    internal AccountRegistry(string directory, Func<string, Mutex> openMutex, TimeSpan? saveLockWait = null, int readBackoffMs = ReadBackoffMs)
     {
+        _readBackoffMs = readBackoffMs;
         _path = Path.Combine(directory, "accounts.json");
         _openMutex = openMutex;
         _saveLockWait = saveLockWait ?? DefaultSaveLockWait;
@@ -133,7 +135,7 @@ public sealed class AccountRegistry
                     return new LoadOutcome(AccountsFile.Empty, true, false, null);
                 }
 
-                Thread.Sleep(ReadBackoffMs * attempt);
+                Thread.Sleep(_readBackoffMs * attempt);
             }
         }
 
