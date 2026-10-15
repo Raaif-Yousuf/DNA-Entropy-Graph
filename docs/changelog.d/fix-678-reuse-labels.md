@@ -1,0 +1,1 @@
+- Cloud: a reused VM's boot disk is relabelled to the new job (disks.setLabels) after the instance claim and before the start (#678).

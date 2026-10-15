@@ -625,6 +625,61 @@ public class GoogleComputeGatewayTests
             + "\"labelFingerprint\":\"lf1\",\"metadata\":{\"fingerprint\":\"mf1\",\"items\":[{\"key\":\"deg-job-id\",\"value\":\"job-old\"}]},"
             + "\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}}";
 
+    private const string OldDisk = Base + "/zones/" + Zone + "/disks/deg-job-old";
+
+    private static string StoppedOldWithBootDisk()
+        => StoppedOld().Replace("\"labelFingerprint\":\"lf1\",",
+            "\"labelFingerprint\":\"lf1\",\"disks\":[{\"boot\":true,\"source\":\"https://www.googleapis.com/compute/v1/projects/my-lab/zones/" + Zone + "/disks/deg-job-old\"}],");
+
+    private static string OldDiskBody()
+        => "{\"kind\":\"compute#disk\",\"name\":\"deg-job-old\",\"labelFingerprint\":\"df1\",\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}}";
+
+    // Issue #678. FakeGcp does not model disks, so this gateway test (the request itself) is the only proof.
+    [Fact]
+    public async Task Reuse_rewrites_the_boot_disk_labels_to_the_new_job_after_the_claim_and_before_the_start()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOldWithBootDisk())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start"))
+            .Returns(Get, OldInstance, 200, Vm("deg-job-old", Zone, "RUNNING", job: "job1"));
+
+        await rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None);
+
+        rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[r.Uri.AbsolutePath.IndexOf("/zones/", StringComparison.Ordinal)..])
+            .ShouldBe(
+                [$"/zones/{Zone}/instances/deg-job-old/setLabels", $"/zones/{Zone}/disks/deg-job-old/setLabels", $"/zones/{Zone}/instances/deg-job-old/setScheduling", $"/zones/{Zone}/instances/deg-job-old/setMetadata", $"/zones/{Zone}/instances/deg-job-old/start"],
+                "the disk is relabelled after the instance claim and before anything else or the start");
+        using var body = JsonDocument.Parse(rig.Handler.To(Post, OldDisk + "/setLabels").Single().Body);
+        body.RootElement.GetProperty("labelFingerprint").GetString().ShouldBe("df1");
+        var sent = body.RootElement.GetProperty("labels").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
+        sent["job-id"].ShouldBe("job1", "a reused VM's boot disk must not keep the old job's id");
+        sent["app"].ShouldBe("dna-entropy-graph");
+        sent.Count.ShouldBe(6);
+    }
+
+    [Fact]
+    public async Task A_failed_disk_relabel_is_a_start_failure_and_the_VM_is_never_started()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOldWithBootDisk())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldDisk, 200, OldDiskBody())
+            .Returns(Post, OldDisk + "/setLabels", 403, RpcError(403, "PERMISSION_DENIED", "denied", "forbidden"));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(403, "the disk's own refusal, not a later missing stub");
+        rig.Handler.Requests.Any(r => r.Uri.AbsolutePath.EndsWith("/setScheduling", StringComparison.Ordinal)).ShouldBeFalse();
+        rig.Handler.Requests.Any(r => r.Uri.AbsolutePath.EndsWith("/start", StringComparison.Ordinal)).ShouldBeFalse();
+    }
+
     [Fact]
     public async Task Reuse_claims_a_stopped_VM_by_labels_first_then_scheduling_then_metadata_then_start_each_with_its_fingerprint()
     {

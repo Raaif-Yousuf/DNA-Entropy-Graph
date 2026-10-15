@@ -196,6 +196,16 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         var claim = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(labelBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         await AwaitOperationAsync(project, zone, claim, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
+        // Issue #678: the boot disk keeps the OLD job's labels from its creation; relabel it (a disk's own label fingerprint) so every resource
+        // of this job carries its labels (Hard Rules 9-10). A failure here is a start failure: the VM is not started, the caller ends it.
+        if (BootDiskName(instance) is { } bootDisk)
+        {
+            var disk = await CallAsync("compute.disks.get", token => _service.Disks.Get(project, zone, bootDisk).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            var diskBody = new ComputeData.ZoneSetLabelsRequest { Labels = labels.ToDictionary(p => p.Key, p => p.Value), LabelFingerprint = disk.LabelFingerprint };
+            var relabel = await CallAsync("compute.disks.setLabels", token => _service.Disks.SetLabels(diskBody, project, zone, bootDisk).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            await AwaitOperationAsync(project, zone, relabel, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+        }
+
         var scheduling = await CallAsync("compute.instances.setScheduling", token => _service.Instances.SetScheduling(ComputeVmShape.Scheduling(reuse), project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         await AwaitOperationAsync(project, zone, scheduling, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
@@ -210,6 +220,13 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             ?? throw new CloudOperationException(
                 new CloudError("START_OUTCOME_UNKNOWN", null, $"Compute Engine reported the start of '{existingVmName}' done, but the VM cannot be found."),
                 CloudErrorKind.Network);
+    }
+
+    /// <summary>The name of the instance's boot disk (the last segment of its <c>source</c> URL), or null when the instance lists none.</summary>
+    private static string? BootDiskName(ComputeData.Instance instance)
+    {
+        var source = instance.Disks?.FirstOrDefault(d => d.Boot == true)?.Source;
+        return string.IsNullOrEmpty(source) ? null : source[(source.LastIndexOf('/') + 1)..];
     }
 
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
