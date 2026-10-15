@@ -278,7 +278,7 @@ Nothing here has run on a real tag yet; `docs/ToTest.md` carries the row.
   in `app/releases` is never uploaded, but a `*.nupkg` glob would have attested it: `scripts/release_assets.py stage` reads
   `assets.win.json` instead (refusing a nupkg of another version, requiring the full nupkg and `Setup.exe`), and `check` verifies the
   published asset NAMES, anchored (the full nupkg of this version, not only a delta).
-- **Containers (#255).** The `images` job runs `scripts/check_dockerfile_base_pinned.py` (tested against fixture Dockerfiles): EVERY
+- **Containers (#255).** The `images` job runs `scripts/release_dockerfile_base_pinned.py` (named `release_*`, not `check_*`, so premerge and ci-docs do not run it on every PR: it gates a release, and fails by design until #37 pins Dockerfile.cuda) (tested against fixture Dockerfiles): EVERY
   `FROM` must be pinned by `@sha256` (a multi-stage file with one pinned stage fails; `FROM <earlier stage>` and `scratch` are
   exempt). The job then builds with
   `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true`, pushes, then runs Trivy (Apache-2.0) on the pushed digest and fails on a

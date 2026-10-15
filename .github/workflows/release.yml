@@ -115,7 +115,7 @@ jobs:
       # #255: a base that is not pinned by digest is not reproducible, and the release refuses to publish one. EVERY FROM
       # must be pinned (a multi-stage file with one pinned stage fails). The logic is a script with its own tests.
       - name: the base image is pinned by digest
-        run: python3 scripts/check_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"
+        run: python3 scripts/release_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"
 
       # The NGC PyTorch base is large; an ubuntu runner has about 14 GB free until these are removed.
       - name: free disk space

@@ -1,4 +1,4 @@
-"""scripts/check_dockerfile_base_pinned.py: every FROM is pinned by digest (#255, #178)."""
+"""scripts/release_dockerfile_base_pinned.py: every FROM is pinned by digest (#255, #178)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-import check_dockerfile_base_pinned as cdp  # noqa: E402
+import release_dockerfile_base_pinned as cdp  # noqa: E402
 
 D = "@sha256:" + "a" * 64
 
@@ -75,7 +75,7 @@ def test_a_file_with_no_from_is_a_failure_not_a_vacuous_pass():
 
 def _run(path: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "check_dockerfile_base_pinned.py"), str(path)],
+        [sys.executable, str(SCRIPTS_DIR / "release_dockerfile_base_pinned.py"), str(path)],
         capture_output=True,
         text=True,
     )

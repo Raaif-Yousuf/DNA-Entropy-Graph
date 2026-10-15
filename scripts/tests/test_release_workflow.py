@@ -277,7 +277,7 @@ def test_images_build_both_variants_scan_and_attest(text):
 def test_images_run_the_pin_checker_on_the_variants_dockerfile_before_building(text):
     steps = _steps(_jobs(text)["images"])
     pin = _by_name(steps, "the base image is pinned by digest")
-    assert 'python3 scripts/check_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"' in pin
+    assert 'python3 scripts/release_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"' in pin
     assert _pos(steps, "the base image is pinned by digest") < _pos(steps, "build and push")
 
 
