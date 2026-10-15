@@ -1,11 +1,8 @@
 # Release runbook: cutting a DNA Entropy Graph release
 
-> Written 2026-09-19, before the thing it prepares for was done: no release has shipped
-> yet, `app/` does not exist, and `release.yml` is not written. This is left as written per
-> Hard Rule 18 rather than deleted, so the first real release has a checklist to follow and
-> correct against, instead of inventing one under time pressure. The first person to
-> actually run this end to end should update it with what was true, not what this draft
-> guessed, and note the correction in section 7 below.
+> Rewritten 2026-10-15 against the real `release.yml` (#178, #180). No release has been cut yet, so every step
+> below is still unproven end to end. The first person to run it should correct what was wrong in place and add a dated
+> note to section 7 (Hard Rule 18), not rewrite it as if it had always been right.
 
 This is the checklist for cutting a tagged release: version bump, tag, watch the
 workflow, verify the signature, install on a clean VM, publish notes, drain the relevant
@@ -20,7 +17,10 @@ moving on; do not skip a step because a later one "would probably catch it anywa
 |---|---|
 | Working tree is clean, `main` is the branch, and `main` is up to date with `origin` | `git status --short` (empty) and `git log -1 origin/main..main` (empty) |
 | `pytest -m "not gpu"` is green | `worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q` |
-| `dotnet test` is green (once `app/` exists) | `dotnet test app/DnaEntropyGraph.sln --filter "FullyQualifiedName!~UiTests"` |
+| The app tests are green | From `app/`, each test project (`dotnet test <project>`); the solution-wide command hangs on CI (see `ci-app.yml`'s header) |
+| `ci-app` and `ci-worker` were green on the commit you will tag | `gh run list --commit <sha> --limit 10`; the release workflow does not run the test suites, it only builds |
+| Both worker Dockerfiles pin their base by `@sha256` digest | `Select-String '^FROM' worker/Dockerfile.*`; the `images` job refuses a release otherwise (`Dockerfile.cuda` is unpinned until #37) |
+| `app/Directory.Build.props` and `worker/pyproject.toml` already say the new version | `python scripts\check_version_lockstep.py --tag vX.Y.Z` |
 | No open `P0` issues remain | `gh issue list --label P0 --state open` (empty) |
 | Azure Trusted Signing secrets are present on this repo | `gh secret list` shows `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `TRUSTED_SIGNING_ENDPOINT`, `TRUSTED_SIGNING_ACCOUNT`, `TRUSTED_SIGNING_PROFILE`, and `OAUTH_CLIENT_JSON` (the Desktop-app client file from Google's console, issue #21; the first six are `OWNER_TODO.md` item 3; without these, `release.yml`'s own precondition assertion fails the build on purpose rather than shipping unsigned) |
 | The GPU acceptance checklist has been run on this exact commit (v0.2 and later only) | `scripts/cloud_gpu_test.ps1` output, archived per `dev_commands.md` |
@@ -90,26 +90,23 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-Pushing the tag triggers `release.yml` (`on: push: tags: v*`), which:
+Pushing the tag triggers `release.yml` (`on: push: tags: v*`). Its jobs, in order (`packaging_design.md` section 9 has the why):
 
-1. Asserts every signing secret exists (section 0 above); fails loudly and stops here if
-   any are missing, rather than producing an unsigned artifact silently.
-2. Runs the same build and test steps as `ci-app.yml`.
-3. Publishes: `dotnet publish -r win-x64 --self-contained
-   -p:WindowsAppSDKSelfContained=true -p:WindowsPackageType=None`.
-4. Signs with `azure/trusted-signing-action`.
-5. `vpk pack` with signing enabled, producing `Setup.exe` and the delta-update assets.
-6. Builds and pushes `dna-entropy-worker:vX.Y.Z-cuda` and `:vX.Y.Z-cpu` to GHCR, with
-   provenance attestation.
-7. `vpk upload github` as a **draft** release, then attaches the worker image digests to
-   the release notes.
-8. Publishes the release only after every asset is attached. This ordering matters: the
-   in-app updater reads the Releases API, so a half-uploaded but already-published
-   release would be visible and offered to users before every asset exists.
+1. `verify`: asserts every secret in section 0 exists (names only, never values) and fails the run before anything is built
+   if one is missing; runs `check_version_lockstep.py --tag`; checks the tagged commit is on `main`.
+2. `images` (cuda and cpu in parallel): checks the base is pinned by digest, builds and pushes
+   `ghcr.io/raaif-yousuf/dna-entropy-worker:vX.Y.Z-cuda` and `-cpu`, runs the Trivy gate, writes SBOMs and attestations.
+3. `wheel`: builds the worker wheel.
+4. `app`: writes the image digests into `worker-images.json`, publishes, writes `oauth_client.local.json` from `OAUTH_CLIENT_JSON`,
+   signs the app binaries, `vpk pack`, signs `Setup.exe`, verifies both signatures, attests, and uploads a **draft** release.
+5. `publish`: attaches wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, checks every expected asset is present, and only then
+   makes the release public (a tag with a `-` becomes a pre-release). This ordering matters: the in-app updater reads the
+   Releases API, so a release that is public before every asset exists would be offered to users half-uploaded.
+6. `verify-reminder`: opens `Verify vX.Y.Z on a clean VM` (one per version) with the checklist of section 5.
 
-Watch the workflow run to completion (`gh run watch`, or the Actions tab); a failure at
-step 1 or 2 needs a fix-forward commit and a new tag (never force-push an existing tag),
-per this repo's own git safety rules.
+Watch the run (`gh run watch`, or the Actions tab). A failure in jobs 1 to 4 leaves no public release (the draft, if it was
+created, stays a draft): fix forward with a commit and a new tag, and never force-push an existing tag. A failure in `publish`
+leaves the draft in place; fix the cause and re-run the failed job.
 
 ## 5. Verification on a clean machine
 
@@ -118,22 +115,27 @@ installer actually installs and runs** on a machine that has never had this app,
 dependencies, or a dev environment on it.
 
 1. On a clean Windows 11 VM (no Visual Studio, no .NET SDK, no prior install of this
-   app): download `Setup.exe` from the just-published release.
+   app): download `Setup.exe` from the just-published release. Also run
+   `gh attestation verify Setup.exe --repo Raaif-Yousuf/DNA-Entropy-Graph` and compare `SHA256SUMS`.
 2. `signtool verify /pa Setup.exe` must accept the signature. This is the real proof for
-   signing, not "the workflow's signing step reported success" (which, per
-   `packaging_design.md` section 3, can silently no-op on a config problem class that a
-   green workflow step would not itself have caught if the assertion in section 0 above
-   had somehow been bypassed).
-3. Run `Setup.exe`, complete first-run sign-in and setup with a real Google account, run
+   signing: the signing action can no-op on a bad configuration and still report success.
+3. Run `Setup.exe` with no admin prompt. Complete first-run sign-in with a real Google account: Google's page must open
+   (proves `oauth_client.local.json` shipped; `OAUTH_CLIENT_MISSING` means it did not). Run
    `sample.gb` with the mock predictor on `e2-small` (the v0.1 walking skeleton's own
    defined observable). Confirm `sample.entropy.bedgraph` appears both on disk and in the
    embedded viewer.
 4. Confirm the in-app "Check for updates" reports "up to date" against the version just
    installed (proves the Releases-API-based update check itself works, not just that the
    installer ran).
-5. Confirm the Cloud page shows the VM as Stopped (or Deleted, per the run's after-task
+5. Update in place: install the PREVIOUS release on the VM first, then publish or point it at this one and accept the update
+   prompt. The app must restart into the new version with its run history intact. (Skip for the first release.)
+6. Confirm the Cloud page shows the VM as Stopped (or Deleted, per the run's after-task
    setting) after the run finishes. An orphaned RUNNING VM here is a release-blocking
    finding, not a follow-up issue.
+7. Uninstall from Windows Settings. Once #264 lands it asks whether to keep history and the local engine; run it twice, once
+   keeping and once removing, and look under `%LOCALAPPDATA%\DNAEntropyGraph` each time.
+8. Drain every `installer` row of `docs/ToTest.md` that this build can now prove (Rule 5 of that file), and append the dated
+   note of section 7 below.
 
 Only once every check in this section passes on the clean VM does the release count as
 verified; a green CI run alone is not sufficient evidence per this repo's own
@@ -141,8 +143,9 @@ verification discipline.
 
 ## 6. Rollback
 
-- **Before the release is published** (workflow still running or failed before step 7
-  above): delete the tag (`git push --delete origin vX.Y.Z` after confirming with
+- **Before the release is published** (workflow still running or failed before the
+  `publish` job made it public): delete the draft release on the Releases page (a draft the updater cannot see,
+  but a re-tag would collide with it), then delete the tag (`git push --delete origin vX.Y.Z` after confirming with
   whoever asked for the release; this repo's git safety rules require this to be an
   explicit, discussed action, not a reflex) and re-tag once the underlying issue is
   fixed.
