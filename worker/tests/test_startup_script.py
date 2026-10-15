@@ -144,11 +144,23 @@ def test_exit_code_dispatch_matches_the_cli_contract() -> None:
 
 
 def test_uses_curl_unconditionally_no_gcloud_dependency() -> None:
-    """Must run identically on the DLVM (has gcloud) and Container-Optimized OS (does
-    not) for the CPU smoke test."""
+    """No gcloud dependency: the script talks to the metadata server and Google REST with curl, so it
+    does not rely on the image shipping gcloud (the DLVM image does, for CPU and GPU alike, #615)."""
     code = _code_only()
     assert "gcloud" not in code
     assert "curl" in code
+
+
+def test_docker_run_passes_gpus_all_only_when_a_gpu_is_expected() -> None:
+    """The CPU smoke VM boots the same DLVM image with no GPU (issue #56): an unconditional
+    `--gpus all` makes `docker run` fail there. The flag is appended only when EXPECT_GPU is true."""
+    code = _code_only()
+    assert code.count("--gpus all") == 1
+    gate = code.index('if [ "$EXPECT_GPU" = "true" ]; then\n  GPU_FLAGS=(--gpus all)')
+    assert gate < code.index("docker run --rm")
+    run_block = code[code.index("docker run --rm") :]
+    assert '"${GPU_FLAGS[@]}"' in run_block.split("dna-entropy-worker run")[0]
+    assert "--gpus all" not in run_block
 
 
 # --- lifecycle=keep (issue #464): the script owns the keep-alive window ------------------

@@ -23,7 +23,7 @@ public partial class App : Application
         InitializeComponent();
 
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph();
+        services.AddDnaEntropyGraph(StartupDataRoot.Current);
         Services = services.BuildServiceProvider();
     }
 
