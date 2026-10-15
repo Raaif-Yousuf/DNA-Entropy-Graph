@@ -54,7 +54,20 @@ public static class QuotaMetrics
             ? new Dictionary<string, string>(StringComparer.Ordinal) { ["region"] = region, ["gpu_family"] = "NVIDIA_L4" }
             : new Dictionary<string, string>(StringComparer.Ordinal);
 
-    /// <summary>The Spot (preemptible) twin of a regional GPU metric: a Spot run draws on its own quota line, not the on-demand one. Null when there is no metric.</summary>
+    /// <summary>
+    /// The regional quota metric a Spot run of <paramref name="acceleratorType"/> consumes in a region whose quota lines are <paramref name="regionLines"/> (issue #718).
+    /// MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): without a preemptible quota grant Spot VMs "consume standard quota", and once one is granted they "can only
+    /// consume preemptible quota". So the preemptible twin is read only when its line exists with a limit above zero; otherwise the standard metric is. THEORY (unverified, no
+    /// live project): an ungranted region reports the preemptible line as 0 or not at all; both read as the standard metric here. Null when the accelerator has no known metric.
+    /// </summary>
+    public static string? SpotRegionalMetric(string acceleratorType, IEnumerable<QuotaMetric> regionLines)
+    {
+        var standard = ForAccelerator(acceleratorType);
+        var twin = Preemptible(standard);
+        return twin is not null && regionLines.Any(m => string.Equals(m.Metric, twin, StringComparison.Ordinal) && m.Limit is > 0) ? twin : standard;
+    }
+
+    /// <summary>The Spot (preemptible) twin's NAME for a regional GPU metric. It is only the line a Spot run consumes once a preemptible quota was granted (<see cref="SpotRegionalMetric"/> decides). Null when there is no metric.</summary>
     private static string? Preemptible(string? metric) => metric is null ? null : "PREEMPTIBLE_" + metric;
 }
 
