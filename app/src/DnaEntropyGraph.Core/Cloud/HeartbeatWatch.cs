@@ -138,7 +138,8 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
             return new HeartbeatVerdict(
                 RunErrorCodes.WorkerProgressStalled,
                 $"The worker's heartbeat is moving but it finished no window and changed no stage for {Format(elapsed - _progressChange)} (windowsDone {_progressKey?.Split('|')[1]}), past the {Format(progressBound)} progress bound.",
-                DeleteVm: false) { Stage = _stage };
+                DeleteVm: false)
+            { Stage = _stage };
         }
 
         if (!_workerSeen)
