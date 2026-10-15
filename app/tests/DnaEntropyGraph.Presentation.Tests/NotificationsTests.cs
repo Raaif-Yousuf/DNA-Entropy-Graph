@@ -19,6 +19,7 @@ public sealed class NotificationsTests
     private readonly INavigator _navigator = Substitute.For<INavigator>();
     private readonly IRunRepository _runs = Substitute.For<IRunRepository>();
     private readonly IStringResourceProvider _strings = Substitute.For<IStringResourceProvider>();
+    private readonly IDesktopNotifier _desktop = Substitute.For<IDesktopNotifier>();
 
     public NotificationsTests()
     {
@@ -28,7 +29,7 @@ public sealed class NotificationsTests
             Task.FromResult<IReadOnlyList<RunRecord>>([new RunRecord("job-1", JobPhase.Completed, DateTimeOffset.UnixEpoch, OutputDir: @"C:\out\job-1")]));
     }
 
-    private RunCompletionActions Actions() => new(new NotificationSettings(_settings), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher());
+    private RunCompletionActions Actions() => new(new NotificationSettings(_settings), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher(), _desktop);
 
     private static async Task Finish(RunCompletionActions actions, JobPhase phase = JobPhase.Completed)
         => await actions.OnRunFinishedAsync("job-1", phase);
@@ -95,15 +96,23 @@ public sealed class NotificationsTests
     public async Task The_settings_are_read_once_and_off_the_thread_that_reported_the_run_finished()
     {
         // #643 cold review (6): the settings store is a mutex with a 300 ms budget; the run-driving thread must not wait on it.
-        var callerThread = Environment.CurrentManagedThreadId;
-        var store = new ThreadRecordingSettings(_settings);
+        // Proved with a gate, not by comparing thread ids: the pool can hand the caller's own thread to Task.Run, so an id
+        // comparison flaked on CI (#721). If the read moved onto the caller, the call would block on the gate and Join would fail.
+        using var gate = new ManualResetEventSlim(false);
+        var store = new GatedSettings(_settings, gate);
+        var actions = new RunCompletionActions(new NotificationSettings(store), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher());
+        Task? pending = null;
+        var caller = new Thread(() => pending = actions.OnRunFinishedAsync("job-1", JobPhase.Completed));
 
-        await new RunCompletionActions(new NotificationSettings(store), _toasts, _folders, _navigator, _runs, _strings, new InlineDispatcher())
-            .OnRunFinishedAsync("job-1", JobPhase.Completed);
+        caller.Start();
+        var returned = caller.Join(TimeSpan.FromSeconds(10));
+        var finishedBeforeRelease = pending?.IsCompleted ?? true;
+        gate.Set();
 
-        store.ReadThreads.ShouldNotBeEmpty();
-        store.ReadThreads.ShouldAllBe(t => t != callerThread);
-        store.ReadThreads.Count.ShouldBe(3, "one read per switch, not one per use");
+        returned.ShouldBeTrue("the caller returned without waiting for the settings store");
+        finishedBeforeRelease.ShouldBeFalse("the read was still held by the gate when the caller returned");
+        await pending.ShouldNotBeNull();
+        store.Reads.ShouldBe(3, "one read per switch, not one per use");
     }
 
     [Fact]
@@ -163,6 +172,97 @@ public sealed class NotificationsTests
         _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!, default);
         _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
         shell.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_finished_run_also_goes_to_the_desktop_notifier_with_the_run_to_open()
+    {
+        await Finish(Actions());
+
+        _desktop.Received(1).Notify("RunDone_Title", "RunDone_Body", "job-1");
+    }
+
+    [Fact]
+    public async Task A_partly_finished_run_is_a_desktop_notification_too()
+    {
+        await Finish(Actions(), JobPhase.PartiallyCompleted);
+
+        _desktop.Received(1).Notify("RunPartial_Title", "RunPartial_Body", "job-1");
+    }
+
+    [Fact]
+    public async Task Turning_off_Notify_when_done_means_no_desktop_notification_either()
+    {
+        new NotificationSettings(_settings).NotifyWhenDone = false;
+
+        await Finish(Actions());
+        await Actions().OnRunFailedAsync("job-1");
+
+        _desktop.DidNotReceiveWithAnyArgs().Notify(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task A_failed_run_is_a_desktop_notification_only_and_never_opens_a_page_or_a_folder()
+    {
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
+        new NotificationSettings(_settings).OpenFolderWhenDone = true;
+
+        await Actions().OnRunFailedAsync("job-1");
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
+        _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!, default);
+        _navigator.DidNotReceiveWithAnyArgs().NavigateTo(default!, default);
+        _folders.DidNotReceive().OpenFolder(Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task A_repeated_failed_message_for_the_same_run_notifies_once_but_another_run_still_does()
+    {
+        var actions = Actions();
+
+        await actions.OnRunFailedAsync("job-1");
+        await actions.OnRunFailedAsync("job-1");
+        await actions.OnRunFailedAsync("job-2");
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-2");
+    }
+
+    [Fact]
+    public async Task A_failed_run_that_was_not_notified_because_the_switch_was_off_can_notify_after_it_is_turned_on()
+    {
+        var actions = Actions();
+        new NotificationSettings(_settings).NotifyWhenDone = false;
+        await actions.OnRunFailedAsync("job-1");
+        new NotificationSettings(_settings).NotifyWhenDone = true;
+
+        await actions.OnRunFailedAsync("job-1");
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
+    }
+
+    [Fact]
+    public async Task A_desktop_notifier_that_throws_never_stops_the_in_app_toast_or_Results()
+    {
+        new NotificationSettings(_settings).OpenResultsWhenDone = true;
+        _desktop.When(d => d.Notify(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>())).Do(_ => throw new InvalidOperationException("no toast"));
+
+        await Finish(Actions());
+
+        _toasts.Received(1).ShowToast("RunDone_Title", "RunDone_Body", ToastSeverity.Success);
+        _navigator.Received(1).NavigateTo(ResultsViewModel.PageKey, "job-1");
+    }
+
+    [Fact]
+    public async Task The_shell_sends_a_failed_run_to_the_desktop_notifier()
+    {
+        var messenger = new WeakReferenceMessenger();
+        var shell = new ShellViewModel(_navigator, Substitute.For<IGcpAccount>(), messenger, _strings, TestMessages.Center(), Actions());
+
+        messenger.Send(new RunPhaseChangedMessage("job-1", JobPhase.Failed));
+        await shell.CompletionWork;
+
+        _desktop.Received(1).Notify("RunFailed_Title", "RunFailed_Body", "job-1");
     }
 
     [Fact]
@@ -226,17 +326,16 @@ public sealed class NotificationsTests
         public void Enqueue(Action action) => action();
     }
 
-    private sealed class ThreadRecordingSettings(ISettingsStore inner) : ISettingsStore
+    private sealed class GatedSettings(ISettingsStore inner, ManualResetEventSlim gate) : ISettingsStore
     {
-        public List<int> ReadThreads { get; } = [];
+        private int _reads;
+
+        public int Reads => Volatile.Read(ref _reads);
 
         public string? GetString(string key)
         {
-            lock (ReadThreads)
-            {
-                ReadThreads.Add(Environment.CurrentManagedThreadId);
-            }
-
+            gate.Wait();
+            Interlocked.Increment(ref _reads);
             return inner.GetString(key);
         }
 

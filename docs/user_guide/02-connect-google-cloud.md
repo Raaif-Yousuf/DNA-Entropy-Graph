@@ -14,6 +14,8 @@ made this app can see your cloud account, your files, or your bill.
 
 ## The eight steps
 
+The steps are one page in the app, **Set up Google Cloud**. Click the status text at the top right of the window ("Not signed in" or your account) to open it at any time. Steps 2 to 7 are rows with a badge that reads **OK** or **Fix**: after you sign in, the app checks them one after another and stops at the first row that needs you. Every Fix row has one button that does the thing (or a link to Google's own page, followed by **Check again** once you have done it there), and every Fix row also has **Do it by hand**, which opens the by-hand guide ([`docs/gcp_setup_manual.md`](../gcp_setup_manual.md)). **Check everything again** at the bottom runs all the rows once more.
+
 ### Step 1: Welcome
 
 The app tells you roughly what a run costs (usually well under a dollar) and states
