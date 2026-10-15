@@ -1446,7 +1446,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The engine was installed but did not pass its check. Choose Repair to set it up again.</value>
   </data>
   <data name="LocalEngineError_local_remove_refused" xml:space="preserve">
-    <value>The engine folder is not where the app expects it, so nothing was deleted. Choose Save diagnostics and send the file to support.</value>
+    <value>The engine folder is not where the app expects it, so nothing was deleted. Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
   <data name="LocalEngineError_local_cancelled" xml:space="preserve">
     <value>The setup was cancelled. Choose Repair to finish it, or Remove to delete what was installed.</value>

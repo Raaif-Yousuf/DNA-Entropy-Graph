@@ -43,9 +43,8 @@ public sealed partial class ThisPcSettingsViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(InstallCommand), nameof(RepairCommand), nameof(RemoveCommand), nameof(RefreshCommand), nameof(CancelInstallCommand))]
     private bool _isBusy;
 
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(InstallCommand), nameof(RepairCommand), nameof(RemoveCommand))]
-    private LocalEngineState _engineState = LocalEngineState.NotInstalled;
+    /// <summary>What the last check found; decides which of Install, Repair and Remove are offered.</summary>
+    public LocalEngineState EngineState { get; private set; } = LocalEngineState.NotInstalled;
 
     /// <summary>The step the install is on, and the last line of what it is doing.</summary>
     [ObservableProperty]
@@ -140,7 +139,7 @@ public sealed partial class ThisPcSettingsViewModel : ObservableObject
             {
                 if (IsBusy)
                 {
-                    ProgressText = _strings.GetString("ThisPcStep_" + p.Step) + (string.IsNullOrEmpty(p.Line) ? string.Empty : " " + p.Line);
+                    ProgressText = _strings.GetString(StepKey(p.Step)) + (string.IsNullOrEmpty(p.Line) ? string.Empty : " " + p.Line);
                 }
             });
             var result = await action(_installer, progress, _installCancel.Token).ConfigureAwait(true);
@@ -155,6 +154,31 @@ public sealed partial class ThisPcSettingsViewModel : ObservableObject
             IsBusy = false;
         }
     }
+
+    private static string StepKey(LocalInstallStep step) => step switch
+    {
+        LocalInstallStep.CreatingEnvironment => "ThisPcStep_CreatingEnvironment",
+        LocalInstallStep.InstallingPackages => "ThisPcStep_InstallingPackages",
+        LocalInstallStep.InstallingWorker => "ThisPcStep_InstallingWorker",
+        LocalInstallStep.Checking => "ThisPcStep_Checking",
+        _ => "ThisPcStep_Removing",
+    };
+
+    private static string EngineKey(LocalEngineState state) => state switch
+    {
+        LocalEngineState.NotInstalled => "ThisPcEngine_NotInstalled",
+        LocalEngineState.Broken => "ThisPcEngine_Broken",
+        LocalEngineState.WorkerVersionMismatch => "ThisPcEngine_WorkerVersionMismatch",
+        _ => "ThisPcEngine_Healthy",
+    };
+
+    private static string BlockerKey(LocalBlocker blocker) => blocker switch
+    {
+        LocalBlocker.NoNvidiaGpu => "ThisPcBlocker_NoNvidiaGpu",
+        LocalBlocker.NotEnoughGpuMemory => "ThisPcBlocker_NotEnoughGpuMemory",
+        LocalBlocker.DriverTooOld => "ThisPcBlocker_DriverTooOld",
+        _ => "ThisPcBlocker_NotEnoughDisk",
+    };
 
     private async Task CheckAsync()
     {
@@ -181,9 +205,12 @@ public sealed partial class ThisPcSettingsViewModel : ObservableObject
                 capability.Gpu.DriverVersion);
         DiskText = string.Format(CultureInfo.CurrentCulture, _strings.GetString("ThisPcDiskFormat"), (capability.FreeDiskBytes / BytesPerGb).ToString("0", CultureInfo.CurrentCulture));
         EngineState = readiness.Engine.State;
-        EngineText = _strings.GetString("ThisPcEngine_" + readiness.Engine.State)
+        InstallCommand.NotifyCanExecuteChanged();
+        RepairCommand.NotifyCanExecuteChanged();
+        RemoveCommand.NotifyCanExecuteChanged();
+        EngineText = _strings.GetString(EngineKey(readiness.Engine.State))
             + (readiness.Engine.State == LocalEngineState.Healthy && !readiness.Engine.CudaAvailable ? " " + _strings.GetString("ThisPcEngineNoCuda") : string.Empty);
-        BlockersText = string.Join(' ', capability.Blockers.Select(b => _strings.GetString("ThisPcBlocker_" + b)));
+        BlockersText = string.Join(' ', capability.Blockers.Select(b => _strings.GetString(BlockerKey(b))));
         IsChecked = true;
         await Picker.RefreshAsync().ConfigureAwait(true);
     }

@@ -82,11 +82,11 @@ public sealed class RunTargetPickerTests
         await vm.RefreshAsync(TestContext.Current.CancellationToken);
 
         var thisPc = vm.Options.Single(o => o.Value == "This PC");
-        thisPc.IsEnabled.ShouldBeFalse();
+        thisPc.IsAvailable.ShouldBeFalse();
         thisPc.Reason.ShouldBe("RunTargetReason_NoNvidiaGpu");
         vm.ThisPcReason.ShouldBe("RunTargetReason_NoNvidiaGpu");
-        vm.Options.Single(o => o.Value == "Cloud").IsEnabled.ShouldBeTrue();
-        vm.Options.Single(o => o.Value == "Auto").IsEnabled.ShouldBeTrue();
+        vm.Options.Single(o => o.Value == "Cloud").IsAvailable.ShouldBeTrue();
+        vm.Options.Single(o => o.Value == "Auto").IsAvailable.ShouldBeTrue();
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class RunTargetPickerTests
         await vm.RefreshAsync(TestContext.Current.CancellationToken);
 
         var thisPc = vm.Options.Single(o => o.Value == "This PC");
-        thisPc.IsEnabled.ShouldBeFalse();
+        thisPc.IsAvailable.ShouldBeFalse();
         thisPc.Reason.ShouldBe("RunTargetReason_NotInstalled");
     }
 
@@ -133,7 +133,7 @@ public sealed class RunTargetPickerTests
         await vm.RefreshAsync(TestContext.Current.CancellationToken);
 
         var thisPc = vm.Options.Single(o => o.Value == "This PC");
-        thisPc.IsEnabled.ShouldBeTrue();
+        thisPc.IsAvailable.ShouldBeTrue();
         thisPc.Reason.ShouldBeEmpty();
     }
 
@@ -145,7 +145,7 @@ public sealed class RunTargetPickerTests
 
         await vm.RefreshAsync(TestContext.Current.CancellationToken);
 
-        vm.Options.Single(o => o.Value == "This PC").IsEnabled.ShouldBeFalse();
+        vm.Options.Single(o => o.Value == "This PC").IsAvailable.ShouldBeFalse();
     }
 
     [Fact]

@@ -108,13 +108,13 @@
                         <TextBlock x:Uid="SettingsThisPcExplainer" TextWrapping="Wrap" />
                         <!-- Where to run (issues #120, #173). A choice that cannot work right now is greyed out and the reason is the line under the box. -->
                         <StackPanel Spacing="4">
-                            <ComboBox x:Uid="RunTargetBox" ItemsSource="{x:Bind ThisPc.Picker.Options}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{x:Bind ThisPc.Picker.SelectedTarget, Mode=TwoWay}">
-                                <ComboBox.ItemContainerStyle>
-                                    <Style TargetType="ComboBoxItem">
-                                        <!-- {Binding} on purpose: a container style has no x:DataType; RunTargetOption.IsEnabled is a real property. -->
-                                        <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
-                                    </Style>
-                                </ComboBox.ItemContainerStyle>
+                            <ComboBox x:Uid="RunTargetBox" ItemsSource="{x:Bind ThisPc.Picker.Options}" SelectedValuePath="Value" SelectedValue="{x:Bind ThisPc.Picker.SelectedTarget, Mode=TwoWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RunTargetOption">
+                                        <!-- A choice that cannot work right now reads greyed out; the reason is the line under the box. -->
+                                        <ContentControl Content="{x:Bind Label}" IsEnabled="{x:Bind IsAvailable, Mode=OneWay}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
                             </ComboBox>
                             <TextBlock Text="{x:Bind ThisPc.Picker.ThisPcReason, Mode=OneWay}" TextWrapping="Wrap" />
                             <TextBlock Text="{x:Bind ThisPc.Picker.Note, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />

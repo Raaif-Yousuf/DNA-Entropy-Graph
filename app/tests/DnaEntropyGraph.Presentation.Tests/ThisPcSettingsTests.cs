@@ -63,7 +63,7 @@ public sealed class ThisPcSettingsTests
         vm.GpuText.ShouldBe("NVIDIA GeForce RTX 4090|24 GB|551.61");
         vm.BlockersText.ShouldBeEmpty();
         vm.EngineText.ShouldBe("ThisPcEngine_Healthy");
-        vm.Picker.Options.Single(o => o.Value == "This PC").IsEnabled.ShouldBeTrue("the picker is refreshed by the same check");
+        vm.Picker.Options.Single(o => o.Value == "This PC").IsAvailable.ShouldBeTrue("the picker is refreshed by the same check");
     }
 
     [Fact]

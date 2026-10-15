@@ -23,10 +23,10 @@ public sealed partial class RunTargetOption : ObservableObject
     public string Label { get; }
 
     [ObservableProperty]
-    private bool _isEnabled = true;
+    private bool _isAvailable = true;
 
-    [ObservableProperty]
-    private string _reason = string.Empty;
+    /// <summary>Why this choice is off (read by tests and the note line); the page shows the This PC reason through <see cref="RunTargetPickerViewModel.ThisPcReason"/>.</summary>
+    public string Reason { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -151,7 +151,7 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
         _lastReadiness = readiness;
         var thisPc = Options.First(o => o.Value == RunTargets.ThisPc);
         var reason = readiness is null ? _strings.GetString("RunTargetReason_unknown") : ReasonFor(readiness);
-        thisPc.IsEnabled = reason.Length == 0;
+        thisPc.IsAvailable = reason.Length == 0;
         thisPc.Reason = reason;
         ThisPcReason = reason;
         UpdateNote(readiness);
@@ -162,7 +162,7 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
         // The hardware reasons first: they are what the user can act on first, and an installed engine on a PC with no NVIDIA card is not the fix.
         if (readiness.Capability.Blockers.Count > 0)
         {
-            return _strings.GetString("RunTargetReason_" + readiness.Capability.Blockers[0]);
+            return _strings.GetString(BlockerReasonKey(readiness.Capability.Blockers[0]));
         }
 
         return readiness.Engine.State switch
@@ -174,13 +174,21 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
         };
     }
 
+    private static string BlockerReasonKey(LocalBlocker blocker) => blocker switch
+    {
+        LocalBlocker.NoNvidiaGpu => "RunTargetReason_NoNvidiaGpu",
+        LocalBlocker.NotEnoughGpuMemory => "RunTargetReason_NotEnoughGpuMemory",
+        LocalBlocker.DriverTooOld => "RunTargetReason_DriverTooOld",
+        _ => "RunTargetReason_NotEnoughDisk",
+    };
+
     private void UpdateNote(LocalReadiness? readiness)
     {
         var thisPc = Options.First(o => o.Value == RunTargets.ThisPc);
         Note = SelectedTarget switch
         {
-            RunTargets.ThisPc when !thisPc.IsEnabled && thisPc.Reason.Length > 0 => thisPc.Reason,
-            RunTargets.Auto when readiness is not null => _strings.GetString(thisPc.IsEnabled ? "RunTargetAutoLocal" : "RunTargetAutoCloud"),
+            RunTargets.ThisPc when !thisPc.IsAvailable && thisPc.Reason.Length > 0 => thisPc.Reason,
+            RunTargets.Auto when readiness is not null => _strings.GetString(thisPc.IsAvailable ? "RunTargetAutoLocal" : "RunTargetAutoCloud"),
             RunTargets.Auto => _strings.GetString("RunTargetAutoCloud"),
             _ => string.Empty,
         };
