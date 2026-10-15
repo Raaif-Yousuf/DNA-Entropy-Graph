@@ -100,6 +100,10 @@ public class CloudJobRunnerQuotaPreflightTests
         }
 
         public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken) => inner.ReadQuotaAsync(projectId, cancellationToken);
+
+        public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken) => inner.GetQuotaIncreaseEligibilityAsync(projectId, metric, cancellationToken);
+
+        public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken) => inner.RequestQuotaIncreaseAsync(projectId, request, cancellationToken);
     }
 
     private static (CloudJobRunner Runner, SlowQuota Quota) NewSlowRunner(TimeSpan quotaBudget)

@@ -22,6 +22,9 @@
     "startedAt": {
       "type": "string"
     },
+    "stageStartedAt": {
+      "type": "string"
+    },
     "updatedAt": {
       "type": "string"
     },
@@ -103,6 +106,9 @@
         "code",
         "message"
       ]
+    },
+    "cancelSeen": {
+      "type": "boolean"
     }
   },
   "required": [
@@ -112,6 +118,7 @@
     "percent",
     "detail",
     "startedAt",
+    "stageStartedAt",
     "updatedAt",
     "heartbeatSeq",
     "vm",

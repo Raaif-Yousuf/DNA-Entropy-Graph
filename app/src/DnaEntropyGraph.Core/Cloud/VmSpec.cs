@@ -67,7 +67,15 @@ public sealed record VmSpec(
     /// D13 in docs/cloud_design.md). Computed, never stored separately, so
     /// it can never drift from the job id every other lookup uses.
     /// </summary>
-    public string VmName => $"deg-{JobId}";
+    public string VmName => ExistingVmName ?? $"deg-{JobId}";
+
+    /// <summary>
+    /// Issue #94: set only when the job runs on a stopped VM an earlier job left (reuse). That VM keeps the name it was created with
+    /// (<c>deg-&lt;earlierJobId&gt;</c>; Compute Engine cannot rename an instance), so every look at it, and the end of the run, must use
+    /// this name and never the one computed from <see cref="JobId"/>. Discovery stays by label (Hard Rule 9): the reuse rewrites the
+    /// <c>job-id</c> label.
+    /// </summary>
+    public string? ExistingVmName { get; init; }
 
     /// <summary>
     /// Throws naming the first missing or invalid precondition. Never
@@ -194,7 +202,11 @@ public sealed record VmSpec(
 /// did not say, and the runner falls back to measuring from the moment the run reached Running.
 /// <paramref name="Labels"/> are the instance's labels (Hard Rule 10) when the gateway read them; null means it did not say, and nothing
 /// may be inferred from that. <paramref name="StoppedAt"/> is when the instance last stopped (the real instance's <c>lastStopTimestamp</c>);
-/// null means unknown, which the idle-VM sweep treats as "not provably idle", never as "idle".
+/// null means unknown, which the idle-VM sweep treats as "not provably idle", never as "idle". <paramref name="MachineType"/> is the machine
+/// type's name (<c>g2-standard-8</c>) when the gateway read it; reuse (#94) needs it to match, and null never matches.
+/// <paramref name="StartedAt"/> is when the instance last started (the real instance's <c>lastStartTimestamp</c>); see <see cref="RunClockStart"/>.
+/// <paramref name="ServerNow"/> is the platform's own clock at the read (the HTTP <c>Date</c> header of the real gateway's answer; issue #691): the app's clock is wrong by an
+/// unknown skew, so a VM's age against its run limit is judged as <c>ServerNow - RunClockStart</c>, never as the laptop's now minus a platform timestamp. Null means unknown.
 /// </summary>
 public sealed record VmDescriptor(
     string Name,
@@ -203,4 +215,14 @@ public sealed record VmDescriptor(
     string? StatusReason = null,
     DateTimeOffset? CreatedAt = null,
     IReadOnlyDictionary<string, string>? Labels = null,
-    DateTimeOffset? StoppedAt = null);
+    DateTimeOffset? StoppedAt = null,
+    string? MachineType = null,
+    DateTimeOffset? StartedAt = null,
+    DateTimeOffset? ServerNow = null)
+{
+    /// <summary>
+    /// When the platform's <c>maxRunDuration</c> clock for this VM last started: its last start (<c>lastStartTimestamp</c>), which a reused VM
+    /// (#94) has and which is NOT its creation (a VM created days ago and started now has a fresh limit), else its creation, else null.
+    /// </summary>
+    public DateTimeOffset? RunClockStart => StartedAt ?? CreatedAt;
+}

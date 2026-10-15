@@ -19,8 +19,8 @@ public static class QuotaMetrics
     /// <c>"gpu"</c> is the placeholder the preflight passes today (<c>PreflightChecks</c>) and means the first tier, the L4.
     /// A value that already is a metric name is returned as it is.
     /// </summary>
-    public static string? ForAccelerator(string acceleratorType)
-        => acceleratorType?.Trim().ToLowerInvariant() switch
+    public static string? ForAccelerator(string acceleratorType, bool spot = false)
+        => spot ? Preemptible(ForAccelerator(acceleratorType)) : acceleratorType?.Trim().ToLowerInvariant() switch
         {
             "gpu" or "nvidia-l4" or "nvidia_l4_gpus" => NvidiaL4Gpus,
             "nvidia-tesla-a100" or "nvidia_a100_gpus" => NvidiaA100Gpus,
@@ -28,10 +28,37 @@ public static class QuotaMetrics
             "nvidia-h100-80gb" or "nvidia_h100_gpus" => NvidiaH100Gpus,
             _ => null,
         };
+
+    /// <summary>
+    /// The Cloud Quotas API's <c>quotaId</c> for a metric this app may ask more of (issue #99), or null for any other (the Spot twin included: see
+    /// docs/cloud_design.md section 6.x for why no preemptible request is made). MEASURED 2026-10-15 (docs.cloud.google.com/docs/quotas/api-overview, whose own
+    /// <c>CreateQuotaPreference</c> example for a GPU quota is <c>"quotaId": "GPUS-PER-GPU-FAMILY-per-project-region"</c> with a <c>region</c> dimension, and
+    /// docs.cloud.google.com/compute/resource-usage, which names the standard L4 quota <c>GPU_FAMILY:NVIDIA_L4</c>): the L4 is the per-GPU-family quota with
+    /// <see cref="DimensionsFor"/> naming the family. THEORY (unverified, no live project): the <c>GPUS-ALL-REGIONS-per-project</c> id (the docs name the global quota
+    /// only by its display name "GPUs (all regions)") and the <c>gpu_family</c> dimension key. An id Google does not know reads as an unknown eligibility (never
+    /// "eligible") and a wrong dimension is a rejected request, so a wrong guess asks for nothing.
+    /// </summary>
+    public static string? QuotaIdFor(string metric) => metric switch
+    {
+        NvidiaL4Gpus => "GPUS-PER-GPU-FAMILY-per-project-region",
+        GpusAllRegions => "GPUS-ALL-REGIONS-per-project",
+        _ => null,
+    };
+
+    /// <summary>
+    /// The <c>dimensions</c> of the quota preference for <paramref name="metric"/>: the region and the GPU family for the L4 (one quota id covers every family, the
+    /// dimensions pick the L4 in one region), none for the project-wide cap. Two preferences with the same dimensions are the same preference (the API allows only one).
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> DimensionsFor(string metric, string? region)
+        => metric == NvidiaL4Gpus && !string.IsNullOrWhiteSpace(region)
+            ? new Dictionary<string, string>(StringComparer.Ordinal) { ["region"] = region, ["gpu_family"] = "NVIDIA_L4" }
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>The Spot (preemptible) twin of a regional GPU metric: a Spot run draws on its own quota line, not the on-demand one. Null when there is no metric.</summary>
+    private static string? Preemptible(string? metric) => metric is null ? null : "PREEMPTIBLE_" + metric;
 }
 
-/// <summary>
-/// One quota line: the limit and what is already used (Compute reports both as numbers). A line whose limit the reply did not
+/// <summary>One quota line: the limit and what is already used (Compute reports both as numbers). A line whose limit the reply did not
 /// carry has a null <see cref="Limit"/> and so a null <see cref="Remaining"/>: UNKNOWN for that metric, never zero and never absent.
 /// </summary>
 public sealed record QuotaMetric(string Metric, double? Limit, double Usage)

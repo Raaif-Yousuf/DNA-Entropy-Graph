@@ -146,6 +146,34 @@ per-region quota memory, persisted per project instead of the prototype's
  seen (not one line per zone tried), plus the applicable next steps: retry in ~10
  minutes, try Spot, wait with Flex-start, or try a bigger GPU tier explicitly.
 
+**What is built (issues #86a, #670).** `ZoneCandidates.Build` (pure: accelerator filter, the three-way quota rule, the ordering) and the ladder in
+`VmProvisioner` (`PlanZonesAsync`, `RunLadderAsync`, `TryZoneAsync`):
+
+- The zone universe is `IComputeGateway.ListAcceleratorZonesAsync(accelerator)` (`acceleratorTypes.aggregatedList` filtered on the name, partial success
+  asked for; `FakeGcp.WithAcceleratorZones` scripts it). The accelerator is the one the REQUESTED machine carries (`ZoneCandidates.AcceleratorFor`): the
+  ladder never reads, and so never tries, a bigger tier (item 6 stays a click). A machine with no GPU, an offer that fails or comes back empty, fall back to
+  `CloudJobRequest.Zones` ("unknown is not none"). The quota read is `IQuotaGateway.ReadQuotaAsync` (#88); a read that fails narrows nothing. The
+  preference is the request's first zone; the bucket's location (`ListBucketsAsync`, by the run's bucket name) orders its continent next. The last-good zone
+  is not wired yet (null: #210). **A zone the user chose is a constraint, not a preference** (`RunOptions.ZonePreference`; Auto is null): the ladder tries
+  that zone only and a stockout there is reported as one, because data may have to stay in one place (#149). The default zone list is not a pin.
+- Attempts run in batches of 1, 1, 1, then 3, 5 and 7 in parallel until the zones are used up, all with the same VM name in different zones. A failed
+  attempt cleans up ITS zone only (`VmTerminator.EndVmAfterFailureAsync(request, zone)`); a sweep by job label would delete a parallel batch's winner.
+  A parallel batch is acted on at its FIRST winner, not when its slowest attempt ends: the stragglers are cancelled, and every other zone of the batch
+  (one another attempt landed in, or a straggler whose create may still land) is ended BY ZONE from what the batch knows (`SettleAbandonedCreateAsync`,
+  `VmTerminator.EnsureVmEndedAsync`), then a listing by label sweeps as a backstop (`DeleteOtherZonesAsync`; a listing can lag, so it never replaces the
+  known zones). Every extra that cannot be confirmed deleted is named in the note; the run then ends with `vm_end_unconfirmed` after ending everything by
+  label. The claim `jobs/<jobId>/control/zone` (`CloudJobRunner.ClaimZoneAsync`, called through `VmProvisioner.ClaimAsync`) is set by EVERY provision before the VM it makes can read it: a single zone writes its own zone before the create, a parallel batch clears it (an empty object means no claim) before the first create and writes the winner THE MOMENT a winner exists, before anything is cancelled or deleted (so it is there in the one case it exists for, an extra that cannot be confirmed gone), a reuse writes the reused VM's zone before the start, and an adopted VM's zone is written too. A claim left by an earlier run of the job therefore never makes a legitimate VM delete itself. It is best effort: `GatewayCalls` turns a write that outlives its deadline into a `CloudOperationException` (Network), which is swallowed; the caller cancelling still propagates. `worker/vm/startup.sh` (`foreign_zone_exit`) reads it immediately before `status booting`, before `status installing` and before the worker container, and a VM in any other zone stops its relay, deletes ITSELF without touching the job prefix and, if that DELETE fails, shuts the guest down (the one other `shutdown -h`, a last resort besides the deadman), so an extra that boots before the API deletes it cannot overwrite the winner's `status.json` or log. THEORY (unverified): the window between a loser's first guard and the claim landing is seconds at most; a loser that writes `booting` in it is overwritten by the winner's next snapshot. (Chosen over "the worker refuses by instance name": every zone's VM has the same name.)
+  A resume that finds several VMs labelled with the job (a crash mid-batch) keeps ONE, preferring a running one, then a booting one, then the request's
+  zone order, and deletes and verifies the rest (`KeepOneOwnedVmAsync`; also on the path that finds `result.json` already there).
+- A project-wide kind (billing, API off, permission, org policy) or a network failure aborts at the first batch that sees it (a batch settles first, so
+  nothing is left in flight; a winner of the same batch is still kept). Quota and stockout move on.
+- Total failure: what the creates answered decides first. Any real stockout makes it `stockout` (the transient one worth waiting out; a quota READ of zero
+  must not hide it, the quota API can under-report); every failure a quota error makes it `quota` (the copy that names raising the allowance); when the
+  creates said neither, a quota read of zero in every candidate zone (`ZoneCandidateResult.QuotaZeroEverywhere`) makes it `quota`, otherwise `stockout`.
+  Every zone is still tried.
+- Not built: the user-facing "other continents" toggle (the ladder walks every offered zone, the bucket's continent first), per-tier escalation on a click,
+  and the last-good-zone memory (#210).
+
 ## 4. Labels and naming
 
 Covered field-by-field in [`job_contract.md`](job_contract.md) section 2 (identifiers) -
@@ -284,6 +312,23 @@ The whole read has its own budget, `CloudRunSettings.QuotaReadTimeout` (5 minute
 requests (`regions.list` pages, `projects.get`) in one gateway method and the 60 s `CallTimeout` is sized for one. THEORY (unverified, sized from the
 pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
 `FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
+
+### 6.x Asking for the quota (issue #99, the wizard's GPU step)
+
+`GpuQuotaRequester.RequestAsync(project, region, contactEmail)` asks Google for one more `NVIDIA_L4_GPUS` in the region and one more `GPUS_ALL_REGIONS`. Per quota, in
+this order: skip it when `ReadQuotaAsync` already shows at least one GPU free (limit minus usage); stop with `Failed` `QUOTA_READ_FAILED` when the read failed (the limit is unknown
+and a request built on it could ask for less than the project has: no request is created and the user retries); read eligibility
+(`IQuotaGateway.GetQuotaIncreaseEligibilityAsync`, the Cloud Quotas API's `quotaInfos.get` and its `quotaIncreaseEligibility`); only an explicit yes creates
+the request (`RequestQuotaIncreaseAsync`) for `max(1, limit + 1)`, one more than the project has now. An ineligible project gets the reason (`NoValidBillingAccount`, `NotEnoughUsageHistory`,
+`NotSupported`, `Other`), and an eligibility that says neither yes nor no is a `Failed` with `QUOTA_ELIGIBILITY_UNKNOWN`, never permission. One quota's failure never
+stops the other. The preference id is `deg-<metric-slug>[-<region>]` (no date). MEASURED 2026-10-15 (docs.cloud.google.com/docs/quotas/reference/rest/v1/projects.locations.quotaPreferences): "There is only one QuotaPreference resource for a quota value targeting a unique set of dimensions", a preference cannot be deleted, an `etag` that no longer matches is rejected `ABORTED`, and the list `filter` covers state, type and time only. So the gateway lists the project's preferences (paged), matches on service, quota id and dimensions under ANY id (a Console request, an older app version), returns one that already asks for enough (`AlreadyExisted`, nothing written), raises a lower one in place with `PATCH` and its etag (one attempt: a replay meets a changed etag), and creates one only when there is none (a replayed create whose answer was lost meets its own id: `AlreadyExists`, read as `AlreadyRequested`).
+The outcomes are `AlreadyAvailable`, `Granted` (approved at once), `Requested` (with Google, review can take days), `AlreadyRequested`, `NotEligible`, `Failed`.
+**DECISION (agent-made, reversible):** raw REST over the same bearer-token HTTP stack, not a package: NuGet has no discovery client for this API
+(`Google.Apis.CloudQuotas.v1` does not exist) and the gRPC `Google.Cloud.CloudQuotas.V1` would bring its own transport and break the injectable HTTP handler every other
+gateway and test uses. Quota preferences are not billable and carry no labels, so Hard Rules 9 and 10 do not apply to them. The API itself (`cloudquotas.googleapis.com`)
+must be enabled in the project: while it is not, both calls fail `api_disabled`. The wizard's service step enables it: `RequiredServices.Ids` is `[compute, storage, cloudquotas]` (#705, `GoogleServiceUsageGatewayTests` asserts the batch), so the earlier note that it did not was stale (rc99 review, 2026-10-15).
+Quota ids, MEASURED 2026-10-15: the docs' own `CreateQuotaPreference` example for a GPU quota is `GPUS-PER-GPU-FAMILY-per-project-region` with a `region` dimension, and Compute's resource-usage page names the standard L4 quota `GPU_FAMILY:NVIDIA_L4`, so the L4 request is that quota id with dimensions `region` and `gpu_family=NVIDIA_L4` (the earlier guess `NVIDIA-L4-GPUS-per-project-region` is gone). THEORY (unverified, no live project): the `GPUS-ALL-REGIONS-per-project` id (the docs name the global quota only as "GPUs (all regions)"), the `gpu_family` dimension key, and that a fresh project is `isEligible: true` for them; a wrong id is a 404 read as unknown (nothing asked) and a wrong dimension a rejected create. Every Cloud Quotas call sends `X-Goog-User-Project: <selected project>`: MEASURED 2026-10-15 (docs.cloud.google.com/docs/quotas/set-quota-project) that a request to a client-based API can fail when the quota project cannot be identified and that for REST the `x-goog-user-project` header sets it; THEORY (unverified): the docs do not say the Cloud Quotas API is client-based, so the header may be unnecessary (it is harmless: it needs `serviceusage.services.use` on the project the user chose). **Spot:** no preemptible request is made. MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): Spot VMs consume the standard quota until a preemptible quota is requested, and after a request "the applicable resources can only consume preemptible quota"; asking for `PREEMPTIBLE_NVIDIA_L4_GPUS` would move the project off the quota this request raises, so `QuotaMetrics.QuotaIdFor` answers null for it. `FakeGcp`: `WithQuotaEligibility`, `WithQuotaEligibilityFailure`, `WithQuotaRequestFailure`, `WithQuotaAutoGrant` (moves the
+table `GetGpuQuotaAsync` reads), `QuotaCalls` (the order of reads and creates), `QuotaRequests`.
 
 ## 7. Least-privilege IAM for the worker service account
 
@@ -544,6 +589,24 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `maxRunDuration` plus 5 minutes). Ending first lets the runner give up on its own terms: end the
   VM per the user's choice, verify it, record `result_timeout`. A worker still uploading in the last
   3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
+- **The platform's limit is the user's cap plus 15 minutes (issue #89).** `CloudJobRequestFactory` sets `VmSpec.MaxRunDuration`
+  to `RunOptions.MaxRunDurationMinutes + 15 min` (`VmGrace`), with `instanceTerminationAction=DELETE` (`VmSpec` rejects anything else).
+  The worker enforces the user's cap itself (manifest `limits.maxRunSeconds`, `runner.py` `_RunDeadline`): past it no further record or input starts,
+  finished work is uploaded and `result.json` carries `RUN_TIME_LIMIT` (mapped to the app's `run_time_limit`), so a worker that is merely slow
+  stops its own VM before Compute Engine deletes it; the VM's own deadline is the backstop for a worker that hangs.
+  **The arithmetic.** The platform's `maxRunDuration` = cap + 15 min counts from VM start (THEORY (unverified) for a VM that was stopped and started again, see ToTest #94). The worker therefore counts its own cap from VM start too: it reads `/proc/uptime` once at start (only when `DEG_VM_NAME` is set, i.e. on an app-created VM, so a laptop's uptime never shortens a local run) and treats that as already elapsed. Boot (up to 8 min), image pull (15) and manifest download (15) are stage allowances that come OUT of the cap, not on top of it, so the worker's graceful stop always lands at cap from VM start and the 15 min grace is left for the upload, `result.json` and the VM's own stop/delete. The verdict is taken at a checkpoint (a window or contig boundary, or an input start), never from a clock read after the work ended: a last window that finished in time whose upload ran past the cap is a finished run. `startup.sh` reads the VM limit
+  (`deg-max-run-min`), so keep-alive is capped against the platform deadline, not the cap. A VM that was seen created, is now gone, and whose
+  `maxRunDuration` has passed with no `result.json` and no worker error code in `status.json` is recorded `run_time_limit` (not `vm_unhealthy`):
+  the run hit its limit while the app was not looking (a closed laptop lid, a resume). When the app is looking it ends the run first
+  (`result_timeout`, above). THEORY (unverified): Compute Engine deletes at exactly `creationTimestamp + maxRunDuration`; ToTest #89 measures it.
+  The reconciler (a run found after an app restart) judges a gone VM with no result the way `VmLostAsync` does: it reads `status.json` first (a worker error code is the cause), and records `run_time_limit` only when the worker's own last heartbeat shows the VM lived to its limit (`updatedAt` minus `startedAt`, one clock, within 10 minutes of `maxRunDuration` + grace; THEORY (unverified): the gap between VM boot and worker start is under that). The row's age is NOT evidence (it counts every hour the app was closed after the VM died); with no usable `status.json` the code is `vm_unhealthy` (issue #679 review). The row's `VmName` starts as the planned name (the diagnostics redaction key for a run that fails before any VM exists) and the runner overwrites it with the VM the run used (a reused VM keeps its old name); a failed write of it is swallowed, never a reason to abandon a live VM.
+  Already built before #89 and now covered by name: labels and `DELETE` guard (`VmSpec`), the Insert fields (`GoogleComputeGateway`),
+  the post-result stop/delete verification (`VmTerminator.EnsureVmEndedAsync`, `lifecycle_unverified` / `vm_end_unconfirmed`).
+- **Per-stage deadlines (issue #90).** `HeartbeatWatch` also remembers the `stage` in `status.json` and when it last CHANGED (on the app's clock, any
+  writer: the startup script's `booting`/`installing` count). A stage past its deadline (`booting` 8 min, `installing` 15, `restoring-cache` 15,
+  `model-loading` 15, `uploading` 10; `CloudJobRunner.StageDeadlines` overrides them) ends the run as `worker_stage_stuck` and the VM per the
+  user's choice, whatever the heartbeat says: this catches a hung main thread under a ticking heartbeat thread while it is in one of those
+  stages (#522's remaining case is a hang inside `running`). Numbers are the contract's (THEORY, unverified on a real VM).
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
@@ -789,6 +852,16 @@ last-good-zone-first, tier-escalating ladder section 3 describes. `PreflightChec
 quota check also uses a placeholder accelerator-type string (`"gpu"`), because `VmSpec` has
 no accelerator-type field yet (only `MachineType`) - see this round's changelog fragment
 and issue tracker for the follow-up.
+
+### 11.x Slow stages and stalls: the notice and the three-way choice (issue #675)
+
+`CloudJobRunner.OnNotice` (`Action<RunNotice>`) is told `SlowStage` once per stage when it passes 75 percent of its deadline (`HeartbeatWatch.SlowFraction`, stage, time in stage,
+deadline), `StallDetected` when the heartbeat watch fires and a question is opened, and `StallCleared` when the worker recovers while it is open. `CloudJobRunner.OnStall`
+(`StallDecision`: `StallPrompt` in, `StallChoice` out: `Stop`, `Delete`, `KeepWaiting`) replaces "end the VM at once" for `worker_stage_stuck`, `worker_heartbeat_stale` and `worker_no_heartbeat`;
+null keeps the old behaviour. While the question is open `ResultWaiter` keeps polling `result.json` and does not repeat it; Stop and Delete end the run under the same code with the VM
+stopped or deleted whatever the run's own end choice was; `KeepWaiting` restarts every watch allowance (`HeartbeatWatch.Snooze`) so the question comes back after a fresh one; the result
+limit still applies, so waiting is never unbounded (Hard Rule 11); a handler that throws or is cancelled counts as no answer and the VM is ended the run's own way. A box with no GPU is never
+asked about. The question's token is cancelled on every exit. Graceful cancel: `docs/job_contract.md` section 6. `FakeGcp`: `WithWorkerIgnoringCancel`, `WithUploadFailure`.
 
 ## 12. Retry, token refresh and the offline breaker (issue #258)
 
@@ -1193,6 +1266,26 @@ the running app calls this class yet.
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
   `Labels` and `StoppedAt` (`lastStopTimestamp`) are filled, `CreatedAt` from `creationTimestamp`.
+- **Reuse of a stopped VM (issue #94).** The default after a run is Stop (Hard Rule 11), so the next job finds this installation's stopped VM and
+  starts it (about 2 minutes) instead of paying for a new VM and an image pull. `VmProvisioner` does this AFTER the adopt-by-label look and BEFORE the
+  zone ladder: it lists the installation's VMs (`ListByInstallationAsync`, by label, Hard Rule 9) and takes the most recently stopped one that is
+  `STOPPED`/`TERMINATED`, has the same `model` label and machine type (`VmDescriptor.MachineType`), and whose last job's run row is terminal or absent
+  (`CloudJobRunner.JobIsFinishedAsync`; a history that cannot be read answers "not finished", so a VM that may belong to a run underway is never taken).
+  `IComputeGateway.ReuseVmAsync` then does, in this order: `instances.get` (refuses a VM that is not stopped with `VM_NOT_STOPPED` before any change),
+  `setLabels` (the CLAIM, FIRST: the `job-id` label becomes this job's, with the label fingerprint read at the start, so of two jobs racing for one VM only
+  one passes and the loser, answered 412, has written nothing), `disks.setLabels` on the BOOT disk (issue #678: the disk keeps the old job's labels from its creation, so it is read for its own label fingerprint and relabelled (a regional disk through the regional API; no boot disk found throws before any write; a 412 on either label write is re-read and accepted when the labels already equal the target, which is a lost answer to our own write); a failure is a start failure and nothing later is written), `setScheduling` (this job's `maxRunDuration` and `DELETE`; it has no fingerprint, so a racer
+  that lost the claim must never have written it), `setMetadata` (the new startup script and `deg-*` attributes, with the fingerprint read at the start), then
+  `start`. The composite is NOT idempotent as a whole: `ResilientComputeGateway` attempts it once (no retries, no 401 replay; the real gateway already retries each
+  HTTP request itself), because a replay after a lost answer meets a RUNNING VM, answers `VM_NOT_STOPPED` and used to delete the VM that had just started. A
+  `Network` failure of the reuse is an unknown outcome: the provisioner looks by label and adopts the one VM that is booting or running for this job. The reuse is
+  tracked as an in-flight create, so a cancel waits for it to land and then deletes the VM. THEORY (unverified, ToTest #94 measures it): the platform's `maxRunDuration` clock restarts at each start; a
+  reused VM keeps its `creationTimestamp`. The app is safe under either reading. For a VM this run started (a create or a reuse) the result deadline counts the runner's OWN elapsed clock from just before the request (`RunProgress.VmStartMark`); it never subtracts a platform timestamp from the laptop's wall clock, so a clock an hour fast cannot fire it early. Only a VM the run adopted has no mark and uses `VmDescriptor.RunClockStart` (`lastStartTimestamp`, else the creation) against the laptop's clock PLUS a skew (issue #691): `GoogleComputeGateway.GetVmAsync` reads the answer's HTTP `Date` header into `VmDescriptor.ServerNow`, and `ResultWaiter` keeps a `PlatformReading` (the server time and a MONOTONIC mark taken then) from the last look that found the VM; "platform now" is `ServerNow + monotonic elapsed`, never a wall-clock difference stored once (an NTP step or a resume from sleep between two looks would break that). A server time more than a day from the laptop's clock is refused (a broken proxy or clock), and so is an answer carrying an `Age` header (a cached replay). The same reading decides whether a VM that is GONE (`ResultWaiter.VmLostAsync`, `VmClockBasis`) passed its run limit: `platform now >= RunClockStart + maxRunDuration`, so a laptop an hour fast or slow, or one that slept, still records `run_time_limit` and `vm_unhealthy` correctly. A gateway that reports no usable server time (or a VM never seen) uses the laptop's own clock, the old behaviour. PRECISION: `Date` has one-second resolution (up to 1 s behind) and left the server before the answer crossed the network (0.1 to 1.5 s more), so platform now runs at most about 2.5 s BEHIND true, never ahead: nothing reads `run_time_limit` early, and a VM that vanished within that margin of its limit may read `vm_unhealthy`. THEORY (unverified, no live project): the real `Date` header is within that margin, and the monotonic clock keeps counting through sleep on Windows; ToTest #691 measures both. If the clock does NOT restart, a VM created days ago is deleted by the platform soon after its start: the run ends in a recorded terminal state (`vm_unhealthy` or `run_time_limit`) with nothing left billing, and `FakeGcp.WithRunClockFromCreation` tests exactly that. The VM keeps its old name (`deg-<earlierJobId>`; an instance cannot be renamed): `VmSpec.ExistingVmName` carries it and
+  `RunProgress.Resolve` makes every later look at, and the end of, the run use it; discovery stays by the label. A start that fails is never a failed run
+  by itself: whatever carries this job's label is deleted (the claim may already have been made), then a stockout, quota or any other per-VM failure
+  falls through to the create ladder, while billing, API-off, permission, org-policy and network failures abort like the ladder's. Only one VM is tried.
+  THEORY (unverified, no live project): that `setScheduling` accepts `maxRunDuration` on a stopped instance; that a stockout on a start reads like one on
+  an insert; that the old VM's boot disk still carries the OLD job's `job-id` label (only the instance's labels are rewritten: a finding, not fixed here).
+  Not built: the run page's "Starting your computer from yesterday" line (a run-page string, owned by the Presentation lane).
 - **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
   scheduling settings; that the `labels.job-id = "x"` filter syntax matches; that the DLVM image family boots and runs docker on a machine with no GPU;
   the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row.
@@ -1272,6 +1365,30 @@ account and a role and edits two policies, and a whole-method retry would replay
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
+### 16.x The Cloud page's gateway methods (issue #105)
+
+What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, `FakeGcp` and the `Resilient*` wrappers:
+
+- `IComputeGateway.StartVmAsync(vm, zone)`: `instances.start` on the VM as it is (no label, scheduling or metadata write: that is reuse, #94), polled
+  to `DONE`. A 404 is `VM_NOT_FOUND`; a stockout on the start is `stockout`. THEORY (unverified): a VM stopped past its `maxRunDuration` is accepted.
+- `IComputeGateway.ListDisksByInstallationAsync(installationId)`: `disks.aggregatedList` filtered on `labels.app` AND `labels.installation-id`
+  (`returnPartialSuccess=true`; an unreachable zone fails the listing as `ZONES_UNREACHABLE`, never a short list; every disk is re-checked for both
+  labels), returning `DiskDescriptor` (name, zone, size in GB, status, labels, creation time, the VMs holding it). `DeleteDiskAsync(disk, zone)`:
+  `disks.delete`, already gone is a success.
+- `IStorageGateway.GetPrefixUsageAsync`, `ListChildPrefixesAsync`, `DeletePrefixAsync`. The bucket has no per-installation prefix (objects live under
+  `jobs/<jobId>/`, one bucket per project shared by every installation), so an installation's footprint is the `jobs/<id>/` folders whose
+  `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
+  job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
+  `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
+  never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
+  every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),
+  one failed delete never stops the others (`Failed` with the error kind), and every delete is read back: `Deleted` means gone, `NotVerified` means the
+  platform accepted the delete and the read still finds it. A disk still held by a VM that is not ours is `Skipped`. `CleanupReport.Complete` is true only
+  when every item is `Deleted`. The service role and the worker service account are not touched here.
+- Resilience: a start keeps the breaker; listing and deleting our disks and the bucket prefix calls bypass it (cleanup that stops the meter).
+  `FakeGcp`: `WithDisk`, `WithStartFailure(kind)`, `WithDeleteFailure(name, kind)`, `WithSilentNoOpDeletes()`.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),
@@ -1280,3 +1397,31 @@ for when the in-app wizard cannot complete them), [`threat_model.md`](threat_mod
 (why the OAuth scope this whole design needs is a large ask, and what it does and does not
 expose), `docs/migration/2026-09-19-worker-migration-inventory.md` (the exhaustive,
 line-referenced prototype-behaviour inventory this doc summarizes for implementers).
+
+Review fixes (rc105, 2026-10-15):
+
+- Every step of `DeleteAllAsync` after the up-front listings is contained: a failed VM read back, second disk listing or prefix read back is an item (`NotVerified` / `Failed`
+  with the error kind) and the sweep goes on; only the caller's cancellation propagates. A job folder whose key is not a deletable folder path (`jobs/../`, which a
+  bucket writer can create) is `Failed` with `PREFIX_REFUSED` and never deleted. Ids are compared exactly (`ab` never matches `abc`).
+- Regional disks: the listing returns a region as the disk's scope, and `DeleteDiskAsync` sends a region (a name not ending in `-<letter>`) to `regionDisks.delete`;
+  the zonal call would 404, which reads as "already gone".
+- Soft delete. MEASURED 2026-10-15 (cloud.google.com/storage/docs/soft-delete): a bucket created without a setting, including through the JSON API, gets a 7 day soft delete
+  retention, "soft-deleted objects continue to accrue storage charges", and the only supported operations on them during retention are list and restore. So a deleted job folder
+  stays billed and recoverable for 7 days. `BucketDescriptor.SoftDeleteRetentionDays` carries the bucket's policy (null unknown, 0 off) and a deleted `JobData` item carries it as
+  `RecoverableForDays`: the Cloud page says "deleted; Google keeps a recoverable copy for N days" instead of a bare "deleted". **DECISION (agent-made, reversible):** the bucket is
+  NOT created with soft delete off. The same bucket holds the shared model cache (a multi-GB re-download if deleted by mistake) and recoverability is the safe default; the cost
+  is a week of storage for small outputs. Changing it is one field on the bucket insert if the owner wants the cleanup to stop billing at once.
+- A run whose VM the cleanup deletes is ended (Hard Rule 11): the VM carries `job-id`, the run's driver is stopped through `ActiveRuns.CancelAsync` first (one writer), and once
+  the VM reads back gone a non-terminal row becomes Cancelling then Cancelled with `RunErrorCodes.DeletedByCleanup` (`cleanup_deleted`, copy `RunError_cleanup_deleted`). A VM whose delete failed leaves its row alone.
+  A VM whose run has a user cancel in progress is `Skipped` (`CANCEL_IN_PROGRESS`).
+- `ResilientStorageGateway.DeletePrefixAsync` is one attempt at this layer (`replayable: false`): the real gateway already runs each list page and each object delete through the
+  pipeline with its own retries, 401 replay and per-attempt deadline, so a second retrying layer around the whole sweep multiplied retries and replayed whole sweeps.
+- `singleRequest:` on `CloudCallPipeline.ExecuteAsync` exists in this branch's base (`CloudCallPipeline.cs`, added before #105).
+- DI: `InstallationCleanup` is registered with the run repository, `ActiveRuns` and the phase callback in all three backends (`DiResolutionTests`); `IComputeGateway.StartVmAsync` resolves through the same registration.
+
+Review fixes (rc675, 2026-10-15):
+
+- A no-GPU verdict (`gpu_not_visible`, delete at once) while a stall question is open wins: the question is withdrawn (its token cancelled, `StallCleared`) and the VM is deleted in the same look, never swallowed because "the question is already open".
+- The stall question runs OFF the poll loop (`Task.Run`) and is cut at `StallAnswerTimeout` (default 10 minutes; null never cuts it): a handler that blocks its thread, never returns or throws is "no answer", and the run ends the way it chose (Hard Rule 11). Notices (`OnNotice`) are queued in order on the thread pool and the end of a wait lets the ones already given finish for at most 2 s, so a blocking notice handler costs a run at most that.
+- Production defaults in DI (`ServiceRegistration`): `OnStall = StallDecisions.EndAsRunChose` (answers at once with `StallChoice.EndAsRunChose`: nobody to ask, so a stall ends as it did before the question existed), `OnNotice` logs the job id and notice kind to the diagnostics log (never a sequence, file name or email), `CancelAckTimeout` stays 60 s. The app lane replaces the first two with real UI. `DiResolutionTests.The_production_runner_has_safe_stall_and_notice_defaults_that_need_no_UI`.
+- Cancel: the worker's explicit `cancelSeen` is the acknowledgement (see `job_contract.md` section 6); the graceful ask runs inside the delete-guaranteeing guard; an acknowledged cancel records the job folder on the row so partial outputs stay downloadable. The tests run the ack and finish windows on virtual time (`VirtualTimeProvider` plus a `PollDelay` that advances it), and `A_cancel_racing_a_driver_that_is_finishing_...` races a finishing `RunAsync` against `ActiveRuns.CancelAsync` over fifteen moments of the run. THEORY (unverified, ToTest #675): the stall tests that use `StuckRunner` / `StaleRunner` still measure their 60 to 80 ms windows on the real clock (not converted in this pass).

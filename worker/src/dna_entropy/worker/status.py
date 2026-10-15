@@ -123,11 +123,15 @@ class StatusDocument:
     percent: float
     detail: dict
     startedAt: str
+    stageStartedAt: str
     updatedAt: str
     heartbeatSeq: int
     vm: VmRef
     worker: WorkerInfo
     error: ErrorInfo | None = None
+    # Issue #675: true once the worker has seen control/cancel (job_contract.md section 6):
+    # its explicit acknowledgement.
+    cancelSeen: bool = False
 
 
 class StatusWriter:
@@ -184,6 +188,7 @@ class StatusWriter:
             "percent": 0.0,
             "detail": {},
             "startedAt": now,
+            "stageStartedAt": now,
             "updatedAt": now,
             "heartbeatSeq": 0,
             "vm": {"name": vm_name, "zone": None, "gpu": None, "driver": None},
@@ -192,6 +197,7 @@ class StatusWriter:
                 "image": worker.image if worker else "",
             },
             "error": None,
+            "cancelSeen": False,
         }
         self._progress: list[dict] = []
         self._progress_seq = 0
@@ -216,6 +222,13 @@ class StatusWriter:
                 "gpu": gpu.name,
                 "driver": gpu.driver,
             }
+        self._write_status()
+
+    def mark_cancel_seen(self) -> None:
+        """Issue #675: acknowledge ``control/cancel``. Written at once (not at the next tick), so the app's
+        cancel sees an explicit answer within a poll, however far the worker is from its next heartbeat."""
+        with self._lock:
+            self._state["cancelSeen"] = True
         self._write_status()
 
     def start(self) -> None:
@@ -258,6 +271,9 @@ class StatusWriter:
         """Update the in-memory snapshot and write it out immediately."""
         with self._lock:
             if stage is not None:
+                if stage != self._state["stage"]:
+                    # The app reads a stage's age as updatedAt - stageStartedAt after a resume (#90).
+                    self._state["stageStartedAt"] = utc_now_iso()
                 self._state["stage"] = stage
             if percent is not None:
                 self._state["percent"] = float(percent)

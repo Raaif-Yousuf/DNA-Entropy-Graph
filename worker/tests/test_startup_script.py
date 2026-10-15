@@ -64,7 +64,11 @@ def test_never_uses_shutdown_h_as_the_primary_cleanup_mechanism() -> None:
     """CLAUDE.md Critical Pitfalls / CLAIR #2908: instanceTerminationAction does not fire
     on a guest shutdown. The ONLY `shutdown -h` may be the deadman, armed once, in the
     background (trailing `&`), never inside cleanup() itself."""
-    code = _code_only()
+    # The one other `shutdown -h` is foreign_zone_exit's last resort when its own self-delete failed
+    # (#670 review): it is pinned by test_a_foreign_zone_vm_whose_self_delete_fails_shuts_the_guest_down.
+    import re
+
+    code = re.sub(r"foreign_zone_exit\(\) \{\n.*?\n\}\n", "", _code_only(), flags=re.DOTALL)
     shutdown_lines = [ln for ln in code.splitlines() if "shutdown -h" in ln]
     assert len(shutdown_lines) == 1, shutdown_lines
     assert shutdown_lines[0].rstrip().endswith("&")  # backgrounded deadman, not a direct call
@@ -305,3 +309,94 @@ def test_keep_hold_measures_elapsed_time_from_vm_boot_not_script_start() -> None
 
 def test_the_exit_code_dispatch_passes_the_worker_exit_code_to_keep_hold() -> None:
     assert 'keep_hold "$rc"' in _code_only()
+
+
+def test_infra_stage_snapshots_carry_stage_started_at() -> None:
+    """The app reads a stage's age from status.json after a resume (#90 review), so the snapshots this
+    script writes for booting/installing carry stageStartedAt too (the same instant as updatedAt)."""
+    text = _code_only()
+    assert '"stageStartedAt":"%s"' in text
+
+
+def test_a_vm_in_a_zone_the_ladder_did_not_keep_refuses_before_writing_anything() -> None:
+    """#670: a parallel zone ladder creates the same job's VM in several zones at once and the app records the
+    kept one in control/zone. A VM booted in another zone must read it and delete itself BEFORE it writes
+    status.json or the startup log under the job prefix, and must not do so through cleanup()."""
+    text = _code_only()
+    assert "control/zone" in text
+    guard_at = text.index("control/zone")
+    for first_write in ("relay &", "status booting", "status installing"):
+        assert guard_at < text.index(first_write), f"the zone check must precede {first_write!r}"
+    guard = text[text.index("foreign_zone_exit()") : text.index("relay()")]
+    assert 'curl -sf -X DELETE -H "Authorization: Bearer $(token)"' in guard
+    assert "cleanup" not in guard, "cleanup() uploads the startup log into the job prefix"
+    assert "put_object" not in guard, "the refusal must write nothing under the job prefix"
+    # Checked again just before the worker container starts, in case the claim landed during the boot.
+    assert text.count("foreign_zone_exit") >= 4, (
+        "defined once, called at the start, after the boot and before docker run"
+    )
+
+
+# --- foreign_zone_exit behaviour, run for real in bash with stubbed curl/kill/shutdown (#670 review) ----
+
+
+def _run_foreign_zone_exit(*, claimed: str, delete_ok: bool, relay_pid: str | None) -> list[str]:
+    """Source the REAL foreign_zone_exit() with stubs for everything it touches and return what it did.
+    ``curl`` fails a DELETE when ``delete_ok`` is false; ``kill`` and ``shutdown`` only record their calls."""
+    lines = [
+        "set -uo pipefail",
+        _extract_function("foreign_zone_exit"),
+        'ZONE=us-central1-a; NAME=deg-vm; JOB=job1; PROJECT=proj; LOG=""',
+        f'token() {{ echo tok; }}; get_object() {{ echo "{claimed}"; }}',
+        'curl() { case "$*" in *DELETE*) LOG="$LOG delete"; return '
+        + ("0" if delete_ok else "22")
+        + " ;; esac; }",
+        'kill() { LOG="$LOG kill:$1"; }',
+        'shutdown() { LOG="$LOG shutdown:$*"; }',
+        "exec 3>&1",  # the trap must write past the redirect the call below is under
+        "trap 'echo \"$LOG\" >&3' EXIT",
+    ]
+    if relay_pid is not None:
+        lines.append(f"RELAY_PID={relay_pid}")
+    lines += ["foreign_zone_exit >/dev/null", 'LOG="$LOG survived"']
+    result = subprocess.run(
+        ["bash", "-s"], input=("\n".join(lines) + "\n").encode("utf-8"), capture_output=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    return result.stdout.decode("utf-8").split()
+
+
+@needs_bash
+def test_a_foreign_zone_vm_stops_the_relay_and_deletes_itself() -> None:
+    assert _run_foreign_zone_exit(claimed="us-east1-b", delete_ok=True, relay_pid="4242") == [
+        "kill:4242",
+        "delete",
+    ]
+
+
+@needs_bash
+def test_a_foreign_zone_vm_whose_self_delete_fails_shuts_the_guest_down() -> None:
+    calls = _run_foreign_zone_exit(claimed="us-east1-b", delete_ok=False, relay_pid="4242")
+    assert calls == ["kill:4242", "delete", "shutdown:-h", "now"], calls
+
+
+@needs_bash
+def test_a_foreign_zone_vm_before_the_relay_exists_does_not_trip_on_the_unset_pid() -> None:
+    assert _run_foreign_zone_exit(claimed="us-east1-b", delete_ok=True, relay_pid=None) == ["delete"]
+
+
+@needs_bash
+@pytest.mark.parametrize("claimed", ["", "us-central1-a"])
+def test_the_kept_zone_or_no_claim_carries_on(claimed: str) -> None:
+    assert _run_foreign_zone_exit(claimed=claimed, delete_ok=True, relay_pid="4242") == ["survived"]
+
+
+def test_the_zone_check_is_the_line_right_before_each_status_write_that_precedes_the_worker() -> None:
+    """The guard must sit immediately before `status booting` and `status installing`, not after them: a VM in
+    the wrong zone that has already written booting/installing has written into the winner's prefix."""
+    lines = [ln.strip() for ln in _code_only().splitlines() if ln.strip()]
+    for stage in ("status booting", "status installing"):
+        at = lines.index(stage)
+        assert lines[at - 1].startswith("foreign_zone_exit"), (
+            f"the zone check must immediately precede {stage!r}"
+        )

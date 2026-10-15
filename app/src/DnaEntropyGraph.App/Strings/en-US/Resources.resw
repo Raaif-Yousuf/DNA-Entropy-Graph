@@ -193,11 +193,17 @@
   <data name="RunError_worker_image_refused" xml:space="preserve">
     <value>This app does not recognise the analysis software your computer is set to use, so it will not send it to the rented computer. Check the app's download page for a newer version of the app, install it, then start the run again.</value>
   </data>
+  <data name="RunError_run_time_limit" xml:space="preserve">
+    <value>The run reached its time limit and the rented computer was removed automatically. Start the run again with a longer time limit.</value>
+  </data>
   <data name="RunError_result_timeout" xml:space="preserve">
     <value>The rented computer did not finish in time, so we shut it down. Start the run again.</value>
   </data>
   <data name="RunError_worker_no_heartbeat" xml:space="preserve">
     <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
+  </data>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
@@ -279,6 +285,9 @@
   </data>
   <data name="RunError_worker_identity_not_applied" xml:space="preserve">
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
+  </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start it again.</value>
   </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
