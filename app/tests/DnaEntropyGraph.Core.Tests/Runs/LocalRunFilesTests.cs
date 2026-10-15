@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Runs;
 using NSubstitute;
 using Shouldly;
@@ -304,6 +305,27 @@ public sealed class LocalRunFilesTests : IDisposable
 
         File.Delete(original);
         files.FindRerunInput(Run(null), options).ShouldBeNull();
+    }
+
+    [Fact]
+    public void Rerun_of_a_paired_run_uses_the_app_copy_of_the_gff3_then_the_original_then_nothing()
+    {
+        var original = Path.Combine(_base, "original.gff3");
+        File.WriteAllText(original, "x");
+        var staged = Path.Combine(_base, "staged.gff3");
+        File.WriteAllText(staged, "x");
+        var options = new RunOptions { ModelId = "m", RunTarget = "cloud", AnnotationPath = original };
+        var files = Make();
+
+        _inputs.FindAnnotationAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromResult<StagedInput?>(new StagedInput(staged, "staged.gff3", IsAnnotation: true)));
+        files.FindRerunAnnotation(Run(null), options).ShouldBe(staged);
+
+        _inputs.FindAnnotationAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromResult<StagedInput?>(null));
+        files.FindRerunAnnotation(Run(null), options).ShouldBe(original);
+
+        File.Delete(original);
+        files.FindRerunAnnotation(Run(null), options).ShouldBeNull();
+        files.FindRerunAnnotation(Run(null), options with { AnnotationPath = null }).ShouldBeNull();
     }
 }
 

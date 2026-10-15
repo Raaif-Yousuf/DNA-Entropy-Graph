@@ -571,6 +571,36 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task Rerun_of_a_paired_run_carries_the_gff3_the_app_kept()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\gone\in.fasta", AnnotationPath = @"C:\gone\in.gff3" };
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\input\in.fasta");
+        _local.FindRerunAnnotation(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\annotation\in.gff3");
+        _engine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns("new-job");
+        var vm = await Loaded(Row("a", options: RunOptionsJson.Serialize(recorded)));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
+
+        await _engine.Received(1).StartRunAsync(
+            recorded with { InputPath = @"C:\app\runs\a\input\in.fasta", AnnotationPath = @"C:\app\runs\a\annotation\in.gff3" },
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Rerun_of_a_paired_run_whose_gff3_is_gone_does_not_start_without_it()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", AnnotationPath = @"C:\gone\in.gff3" };
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\input\in.fasta");
+        _local.FindRerunAnnotation(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns((string?)null);
+        var vm = await Loaded(Row("a", options: RunOptionsJson.Serialize(recorded)));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
+
+        await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body", ToastSeverity.Warning);
+    }
+
+    [Fact]
     public async Task Rerun_with_no_input_anywhere_does_not_start_a_run()
     {
         _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns((string?)null);
