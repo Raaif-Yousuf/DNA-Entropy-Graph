@@ -18,6 +18,12 @@ public sealed partial class UpdateViewModel : ObservableObject
     private readonly UpdateSettings _settings;
     private readonly IStringResourceProvider _strings;
     private readonly IActiveRunProbe _runs;
+
+    /// <summary>How long a check may take before it is given up as failed (a stalled network must not leave the Check button busy forever).</summary>
+    public static readonly TimeSpan DefaultCheckTimeout = TimeSpan.FromSeconds(30);
+
+    private readonly IDispatcher? _dispatcher;
+    private readonly TimeSpan _checkTimeout;
     private bool _loading;
     private bool _downloaded;
 
@@ -53,12 +59,14 @@ public sealed partial class UpdateViewModel : ObservableObject
     [ObservableProperty]
     private bool _checkOnLaunch;
 
-    public UpdateViewModel(IAppUpdateSource source, UpdateSettings settings, IStringResourceProvider strings, IActiveRunProbe runs, IMessenger? messenger = null)
+    public UpdateViewModel(IAppUpdateSource source, UpdateSettings settings, IStringResourceProvider strings, IActiveRunProbe runs, IMessenger? messenger = null, IDispatcher? dispatcher = null, TimeSpan? checkTimeout = null)
     {
         _source = source;
         _settings = settings;
         _strings = strings;
         _runs = runs;
+        _dispatcher = dispatcher;
+        _checkTimeout = checkTimeout ?? DefaultCheckTimeout;
         // Fields, not properties: opening the page must not save what was just read.
         _channelIndex = settings.Channel == UpdateChannel.Beta ? 1 : 0;
         _checkOnLaunch = settings.CheckOnLaunch;
@@ -96,10 +104,12 @@ public sealed partial class UpdateViewModel : ObservableObject
         StatusText = reportFailure ? _strings.GetString("UpdateChecking") : string.Empty;
         try
         {
-            var result = await _source.CheckAsync(Channel, CancellationToken.None).ConfigureAwait(true);
+            var channel = Channel;
+            using var deadline = new CancellationTokenSource(_checkTimeout);
+            var result = await _source.CheckAsync(channel, deadline.Token).ConfigureAwait(true);
             switch (result.Outcome)
             {
-                case UpdateCheckOutcome.Available when result.Update is { } update:
+                case UpdateCheckOutcome.Available when result.Update is { } update && UpdateChannelPolicy.Allows(channel, update.Version):
                     Offer(update);
                     break;
                 case UpdateCheckOutcome.NotInstalled:
@@ -161,7 +171,7 @@ public sealed partial class UpdateViewModel : ObservableObject
             if (!_downloaded)
             {
                 StatusText = _strings.GetString("UpdateDownloading");
-                await _source.DownloadAsync(percent => StatusText = string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("UpdateDownloadingPercent"), percent), CancellationToken.None).ConfigureAwait(true);
+                await _source.DownloadAsync(ReportDownloadPercent, CancellationToken.None).ConfigureAwait(true);
                 _downloaded = true;
             }
 
@@ -183,6 +193,20 @@ public sealed partial class UpdateViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    // Velopack reports progress from a worker thread; StatusText is bound, so it is only ever written on the UI thread.
+    private void ReportDownloadPercent(int percent)
+    {
+        void Write() => StatusText = string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("UpdateDownloadingPercent"), percent);
+        if (_dispatcher is null)
+        {
+            Write();
+        }
+        else
+        {
+            _dispatcher.Enqueue(Write);
         }
     }
 

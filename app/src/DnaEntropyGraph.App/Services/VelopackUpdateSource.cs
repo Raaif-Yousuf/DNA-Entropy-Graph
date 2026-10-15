@@ -41,7 +41,7 @@ public sealed class VelopackUpdateSource : IAppUpdateSource
             return new UpdateCheckResult(UpdateCheckOutcome.NotInstalled);
         }
 
-        var info = await manager.CheckForUpdatesAsync().ConfigureAwait(false);
+        var info = await manager.CheckForUpdatesAsync().WaitAsync(cancellationToken).ConfigureAwait(false); // Velopack takes no token here, so the caller's deadline abandons the wait
         if (info is null)
         {
             _manager = null;
