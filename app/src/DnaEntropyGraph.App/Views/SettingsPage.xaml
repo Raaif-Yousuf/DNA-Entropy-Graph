@@ -1,7 +1,8 @@
 <Page
     x:Class="DnaEntropyGraph.App.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
 
     <!--
         Titled groups (docs/ui_conventions.md section 10): a header, then a card holding that group's controls. The page has
@@ -37,6 +38,32 @@
             </StackPanel>
 
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsRunDefaultsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsRunDefaultsExplainer" TextWrapping="Wrap" />
+                        <TextBlock x:Uid="SettingsRunDefaultsGenBankHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <ItemsControl ItemsSource="{x:Bind RunDefaults.GenBankChoices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:OutputChoiceItem">
+                                    <CheckBox Content="{x:Bind Label}" IsChecked="{x:Bind IsChecked, Mode=TwoWay}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{x:Bind RunDefaults.GenBankStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <TextBlock x:Uid="SettingsRunDefaultsSequenceHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <ItemsControl ItemsSource="{x:Bind RunDefaults.SequenceChoices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:OutputChoiceItem">
+                                    <CheckBox Content="{x:Bind Label}" IsChecked="{x:Bind IsChecked, Mode=TwoWay}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{x:Bind RunDefaults.SequenceStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsDiagnosticsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">
@@ -47,6 +74,49 @@
                             <ProgressRing IsActive="{x:Bind ViewModel.IsSavingDiagnostics, Mode=OneWay}" Width="20" Height="20" />
                         </StackPanel>
                         <TextBlock Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsViewersHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="16">
+                        <TextBlock x:Uid="SettingsViewersExplainer" TextWrapping="Wrap" />
+                        <!-- Each value saves when the box loses focus or Browse picks a file, under the Viewer.* keys the Results page reads at each press. -->
+                        <StackPanel Spacing="4">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Uid="ViewerIgvPathBox" Text="{x:Bind ExternalViewers.IgvPath, Mode=TwoWay}" />
+                                <Button Grid.Column="1" x:Uid="ViewerIgvBrowseButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.BrowseIgvCommand}" />
+                                <Button Grid.Column="2" x:Uid="ViewerIgvPathResetButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.ResetIgvPathCommand}" />
+                            </Grid>
+                            <TextBlock Text="{x:Bind ExternalViewers.IgvPathStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <StackPanel Spacing="4">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Uid="ViewerIgvPortBox" Width="160" Text="{x:Bind ExternalViewers.IgvPortText, Mode=TwoWay}" />
+                                <Button x:Uid="ViewerIgvPortResetButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.ResetIgvPortCommand}" />
+                            </StackPanel>
+                            <TextBlock Text="{x:Bind ExternalViewers.IgvPortStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <StackPanel Spacing="4">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Uid="ViewerGeneiousPathBox" Text="{x:Bind ExternalViewers.GeneiousPath, Mode=TwoWay}" />
+                                <Button Grid.Column="1" x:Uid="ViewerGeneiousBrowseButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.BrowseGeneiousCommand}" />
+                                <Button Grid.Column="2" x:Uid="ViewerGeneiousPathResetButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.ResetGeneiousPathCommand}" />
+                            </Grid>
+                            <TextBlock Text="{x:Bind ExternalViewers.GeneiousPathStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
             </StackPanel>

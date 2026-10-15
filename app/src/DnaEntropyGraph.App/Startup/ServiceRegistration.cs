@@ -138,6 +138,7 @@ public static class ServiceRegistration
         services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<ISettingsStore>(_ => new SettingsStore(settingsPath));
+        services.AddSingleton<OutputSelectionStore>();
 
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
@@ -256,6 +257,9 @@ public static class ServiceRegistration
         services.AddTransient<HistoryViewModel>();
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();
+        services.AddTransient<RunDefaultsSettingsViewModel>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
+        services.AddTransient<ExternalViewersSettingsViewModel>();
 
         return services;
     }
