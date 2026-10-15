@@ -8,10 +8,8 @@ endings are normalised before Biopython sees them, exactly like the GenBank read
 
 from __future__ import annotations
 
-import io
-
 from .encoding import read_text
-from .genbank import GenBankReadError, GenBankRecord, records_from_parsed
+from .genbank import GenBankReadError, GenBankRecord, parse_recording_dropped_locations, records_from_parsed
 
 
 def _refuse_non_ascii_sequence(text: str) -> None:
@@ -46,18 +44,19 @@ def _refuse_non_ascii_sequence(text: str) -> None:
 
 def read_embl(path: str) -> tuple[list[GenBankRecord], list[str]]:
     """Return ``(records, notices)`` for every record in an EMBL file."""
-    from Bio import SeqIO
 
     text = read_text(path).replace("\r\n", "\n").replace("\r", "\n")
     _refuse_non_ascii_sequence(text)
     parsed: list = []
+    dropped_texts: list[list[str]] = []  # issue #543: unreadable feature locations, per record
     try:
-        for rec in SeqIO.parse(io.StringIO(text), "embl"):
+        for rec, location_texts in parse_recording_dropped_locations(text, "embl"):
             parsed.append(rec)
+            dropped_texts.append(location_texts)
     except (ValueError, AssertionError, IndexError, KeyError) as exc:
         raise GenBankReadError(
             f"Could not parse the EMBL file (record {len(parsed) + 1}): "
             f"{str(exc) or type(exc).__name__}. Check the file was not truncated or hand-edited, "
             "or re-export it from the tool that made it."
         ) from exc
-    return records_from_parsed(parsed, "EMBL")
+    return records_from_parsed(parsed, "EMBL", dropped_texts)

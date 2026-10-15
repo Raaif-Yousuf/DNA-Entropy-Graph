@@ -126,9 +126,9 @@ def test_embl_feature_with_unparseable_location_is_dropped_not_a_crash(
     p.write_text(
         text.replace("gene            1..42", f"gene            {bad_location}", 1), encoding="utf-8"
     )
-    with pytest.warns(Warning, match="location"):  # Biopython names the location it could not read
-        records, _ = read_embl(str(p))
+    records, notices = read_embl(str(p))  # Biopython's own warning is turned into a notice (#543)
     assert [(f.begin, f.end, f.gene_id) for f in records[0].features] == [(85, 126, "geneB")]
+    assert any("EMBL record 1" in n and "could not be read" in n for n in notices)
 
 
 def test_embl_unterminated_join_is_a_named_refusal(tmp_path: Path) -> None:

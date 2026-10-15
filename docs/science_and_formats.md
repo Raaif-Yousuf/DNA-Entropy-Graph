@@ -501,6 +501,29 @@ must each individually fit inside the record regardless of a partial marker; a
 legitimate origin-wrapping feature on a circular plasmid record (the intended shape for
 issue #128) already satisfies this per-segment, so this check does not affect it.
 
+**A feature whose location cannot be read is reported, not dropped (issue #543, MEASURED
+2026-10-15, Biopython 1.88).** The bad-location shapes split in two:
+
+- `LocationParserError`: Biopython warns and sets the feature's location to `None`. Covered
+  shapes include `abc`, `0..42`, `-1`, `1..?`, `?..5`, `1..`, `<<1..5`, `gap(10)`, `1.5..9`, and
+  `42..1` / `5..3` / `complement(42..1)` on a record that is **not** circular. On a circular record
+  `42..1` is a valid join across the origin, so nothing is dropped.
+- a plain `ValueError` (`join()`, `order()`, `complement(1..3)..5`, `99999999999999999999..5`, an
+  unterminated `join(1..5,`) or a bare `AssertionError` (`1..5,9..12`, `1..3)`): Biopython raises out
+  of the record and cannot resume, so the whole file is refused with the reader's own named action
+  (`GenBankReadError`). The notice cannot cover these.
+
+For the first kind, GenBank and EMBL (one shared mapper) add ONE notice per record: the count of
+dropped features that would have become genes (a record's `gene` features, else its `CDS`
+features; a CDS beside a readable `gene` set is not counted) and the key and location text of the
+first three (the rest as "and N more"), with a good location shown as the action. The location text
+is shown through `ascii()` and cut at 40 characters (Hard Rule 5). When the number of Biopython
+warnings does not match the number of unreadable features, only the feature key is named. The
+readable features are still used; the unreadable gene is not repaired. Biopython's other warnings
+are re-emitted unchanged. SnapGene builds its locations itself and raises on a bad range, so a bad
+SnapGene range is a refusal, not a notice. Test: `worker/tests/test_genbank_dropped_features.py`
+(fixture `malformed/genbank_unparseable_location.gb`).
+
 Every one of these five checks has a dedicated, deterministic test in
 `worker/tests/test_validation.py`; `docs/tests.md`'s neighbour-test set names the shapes a
 new validation test should also sweep (empty contig, ambiguity codes, multi-record files,
