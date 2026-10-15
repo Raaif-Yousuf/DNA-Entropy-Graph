@@ -245,6 +245,11 @@ public class ResilientGatewayTests
                 var gateway = make(gcp, rig.Pipeline);
 
                 var args = method.GetParameters().Select(ArgumentFor).ToArray();
+                if (method.Name == nameof(IStorageGateway.DeletePrefixAsync))
+                {
+                    args[1] = "jobs/x/"; // a delete refuses a prefix that is not a folder path, so the sample must be one
+                }
+
                 var task = (Task)method.Invoke(gateway, args)!;
                 // ReuseVmAsync is a composite (read, claim, scheduling, metadata, start) and not idempotent as a whole: replaying it after
                 // a transient failure meets a VM that already started. It goes through the pipeline for the breaker and the token refresh
@@ -254,6 +259,12 @@ public class ResilientGatewayTests
                 {
                     var thrown = await Should.ThrowAsync<CloudOperationException>(() => task);
                     thrown.Kind.ShouldBe(CloudErrorKind.Network, "the one 503 must reach the caller unreplayed");
+                }
+                else if (method.Name == nameof(IComputeGateway.StartVmAsync))
+                {
+                    // The fake holds no VM called "x": after the one retried 503 the start meets the real not-found answer.
+                    var thrown = await Should.ThrowAsync<CloudOperationException>(() => task);
+                    thrown.Error.Code.ShouldBe("VM_NOT_FOUND", "the 503 must have been retried, not surfaced");
                 }
                 else
                 {

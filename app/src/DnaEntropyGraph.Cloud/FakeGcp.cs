@@ -1146,7 +1146,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        ThrowIfDeleteScripted(vmName);
+        if (_silentNoOpDeletes)
+        {
+            return;
+        }
+
         var existed = _vms.TryRemove((vmName, zone), out _);
+        if (existed)
+        {
+            DetachDisksOf(vmName);
+        }
+
         _labelFingerprints.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {

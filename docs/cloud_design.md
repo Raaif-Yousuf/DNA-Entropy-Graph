@@ -1334,6 +1334,30 @@ account and a role and edits two policies, and a whole-method retry would replay
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.
 
+### 16.x The Cloud page's gateway methods (issue #105)
+
+What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, `FakeGcp` and the `Resilient*` wrappers:
+
+- `IComputeGateway.StartVmAsync(vm, zone)`: `instances.start` on the VM as it is (no label, scheduling or metadata write: that is reuse, #94), polled
+  to `DONE`. A 404 is `VM_NOT_FOUND`; a stockout on the start is `stockout`. THEORY (unverified): a VM stopped past its `maxRunDuration` is accepted.
+- `IComputeGateway.ListDisksByInstallationAsync(installationId)`: `disks.aggregatedList` filtered on `labels.app` AND `labels.installation-id`
+  (`returnPartialSuccess=true`; an unreachable zone fails the listing as `ZONES_UNREACHABLE`, never a short list; every disk is re-checked for both
+  labels), returning `DiskDescriptor` (name, zone, size in GB, status, labels, creation time, the VMs holding it). `DeleteDiskAsync(disk, zone)`:
+  `disks.delete`, already gone is a success.
+- `IStorageGateway.GetPrefixUsageAsync`, `ListChildPrefixesAsync`, `DeletePrefixAsync`. The bucket has no per-installation prefix (objects live under
+  `jobs/<jobId>/`, one bucket per project shared by every installation), so an installation's footprint is the `jobs/<id>/` folders whose
+  `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
+  job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
+  `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
+  never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
+  every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),
+  one failed delete never stops the others (`Failed` with the error kind), and every delete is read back: `Deleted` means gone, `NotVerified` means the
+  platform accepted the delete and the read still finds it. A disk still held by a VM that is not ours is `Skipped`. `CleanupReport.Complete` is true only
+  when every item is `Deleted`. The service role and the worker service account are not touched here.
+- Resilience: a start keeps the breaker; listing and deleting our disks and the bucket prefix calls bypass it (cleanup that stops the meter).
+  `FakeGcp`: `WithDisk`, `WithStartFailure(kind)`, `WithDeleteFailure(name, kind)`, `WithSilentNoOpDeletes()`.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

@@ -22,6 +22,25 @@ public interface IStorageGateway
     /// by name alone). Read-only: unlike <see cref="EnsureBucketAsync"/> it never creates or repairs one. For the CloudCli (issue #60).
     /// </summary>
     Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #105: how many objects and bytes sit under <paramref name="prefix"/> in <paramref name="bucket"/> (a full, paged listing: a repeated page token fails the
+    /// read rather than return a short total). An empty prefix is zero, not an error.
+    /// </summary>
+    Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #105: the next-level "folders" under <paramref name="prefix"/> (each returned with its trailing slash, such as <c>jobs/&lt;id&gt;/</c>), by a
+    /// slash-delimited listing, so a bucket with thousands of objects is not listed whole to find its jobs.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #105: deletes every object under <paramref name="prefix"/> and returns how many it deleted. The prefix must pass
+    /// <see cref="StoragePrefixes.RequireDeletable"/> (an <see cref="ArgumentException"/> otherwise, before any request). An object already gone counts as
+    /// deleted; the caller reads back to verify (see <c>InstallationCleanup</c>).
+    /// </summary>
+    Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken);
 }
 
 /// <summary>A bucket as a gateway reports it: its name, its location (the region group, such as US), its labels and when it was created (null when unknown).</summary>

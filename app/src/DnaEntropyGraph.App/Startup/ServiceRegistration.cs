@@ -231,6 +231,8 @@ public static class ServiceRegistration
         // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.
         // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
         services.AddSingleton<ActiveRuns>();
+        // Issue #105: what this installation has in the project, and "delete everything": for the Cloud page (the app lane binds it).
+        services.AddSingleton<InstallationCleanup>(sp => new InstallationCleanup(sp.GetRequiredService<IComputeGateway>(), sp.GetRequiredService<IStorageGateway>()));
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
