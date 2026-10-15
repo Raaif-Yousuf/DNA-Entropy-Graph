@@ -40,6 +40,9 @@ public static class WorkerManifestBuilder
     /// </summary>
     private static readonly HashSet<string> Fp8Models = new(StringComparer.Ordinal) { "evo2_1b_base", "evo2_20b", "evo2_40b" };
 
+    /// <summary>True for a model whose worker-side requirement is fp8 (Hopper only), so no PC with an ordinary GPU can run it (issue #173).</summary>
+    public static bool NeedsFp8(string modelId) => Fp8Models.Contains(modelId);
+
     /// <summary>The manifest as compact JSON. Throws <see cref="ArgumentException"/> for a request the worker would misread (no inputs, an empty output selection, a file name that could leave the job prefix).</summary>
     public static string Build(
         RunOptions options,
