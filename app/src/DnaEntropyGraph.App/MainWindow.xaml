@@ -131,14 +131,11 @@
             page at the bottom; info and success close themselves, errors stay until the user closes the bar.
             IsOpen is TwoWay so the close button clears the ViewModel state too.
         -->
+        <!-- Issue #179 review: the update bar and the message bar share one bottom-aligned stack, so neither covers the other. -->
+        <StackPanel Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Center" MaxWidth="640" Margin="16" Spacing="8">
         <!-- Issue #179: a newer release was found. Non-blocking: the app keeps working until the user presses Restart to update, which refuses while a run is active. -->
         <InfoBar
             x:Name="UpdateBar"
-            Grid.Row="1"
-            VerticalAlignment="Top"
-            HorizontalAlignment="Center"
-            MaxWidth="640"
-            Margin="16"
             IsClosable="True"
             Severity="Informational"
             Title="{x:Bind ViewModel.Updates.BannerTitle, Mode=OneWay}"
@@ -150,15 +147,11 @@
 
         <InfoBar
             x:Name="MessageBar"
-            Grid.Row="1"
-            VerticalAlignment="Bottom"
-            HorizontalAlignment="Center"
-            MaxWidth="640"
-            Margin="16"
             IsClosable="True"
             Title="{x:Bind ViewModel.Messages.Title, Mode=OneWay}"
             Message="{x:Bind ViewModel.Messages.Message, Mode=OneWay}"
             Severity="{x:Bind converters:InfoBarSeverityHelper.From(ViewModel.Messages.Severity), Mode=OneWay}"
             IsOpen="{x:Bind ViewModel.Messages.IsOpen, Mode=TwoWay}" />
+        </StackPanel>
     </Grid>
 </Window>
