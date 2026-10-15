@@ -1212,10 +1212,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var vmKey = (spec.VmName, zone);
         var resultKey = (bucket, prefix + "result.json");
 
-        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone)
+        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading)
         {
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
-            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1));
+            var stuck = workerMode == FakeWorkerMode.StuckInModelLoading;
+            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running"));
+            if (stuck)
+            {
+                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading");
+            }
+
             _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
             if (workerMode == FakeWorkerMode.HeartbeatingThenDone)
             {
@@ -1321,14 +1327,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish);
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running");
 
-    private static string WorkerStatusJson(string jobId, long seq)
+    private static string WorkerStatusJson(string jobId, long seq, string stage = "running")
         => new JsonObject
         {
             ["schema"] = 1,
             ["jobId"] = jobId,
-            ["stage"] = "running",
+            ["stage"] = stage,
             ["heartbeatSeq"] = seq,
             ["updatedAt"] = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
             ["vm"] = new JsonObject { ["gpu"] = "NVIDIA L4" },
@@ -1349,7 +1355,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private void TickLiveWorker(string bucket, string statusKey, LiveWorker live)
     {
         var next = live with { Seq = live.Seq + 1, ReadsLeft = live.ReadsLeft - 1 };
-        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq));
+        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage));
         if (next.ReadsLeft <= 0)
         {
             _liveWorkers.TryRemove((bucket, statusKey), out _);

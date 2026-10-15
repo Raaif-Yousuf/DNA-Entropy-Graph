@@ -95,6 +95,55 @@ public class HeartbeatWatchTests
         watch.NeedsProgress.ShouldBeFalse();
     }
 
+    // ---- #90: per-stage deadlines (docs/job_contract.md section 5) ----
+
+    private static string StageStatus(string stage, long seq, bool worker = true)
+        => $$$"""{"schema":1,"stage":"{{{stage}}}","heartbeatSeq":{{{seq}}},"updatedAt":"2026-09-18T15:20:03Z","worker":{"version":"{{{(worker ? "1.0.0" : "")}}}"}}""";
+
+    [Theory]
+    [InlineData("booting", 8, false)]
+    [InlineData("installing", 15, false)]
+    [InlineData("restoring-cache", 15, true)]
+    [InlineData("model-loading", 15, true)]
+    [InlineData("uploading", 10, true)]
+    public void A_stage_that_outlasts_its_deadline_is_stuck_even_while_the_heartbeat_ticks(string stage, int minutes, bool worker)
+    {
+        var watch = new HeartbeatWatch(false, TimeSpan.FromHours(2), TimeSpan.FromHours(2));
+        var limit = TimeSpan.FromMinutes(minutes);
+        long seq = 0;
+        for (var t = TimeSpan.Zero; t < limit; t += TimeSpan.FromSeconds(30))
+        {
+            watch.Observe(StageStatus(stage, ++seq, worker), null, t).ShouldBeNull($"{stage} at {t}");
+        }
+
+        var verdict = watch.Observe(StageStatus(stage, ++seq, worker), null, limit);
+
+        verdict.ShouldNotBeNull();
+        verdict.Code.ShouldBe(RunErrorCodes.WorkerStageStuck);
+        verdict.DeleteVm.ShouldBeFalse();
+        verdict.Message.ShouldContain(stage);
+    }
+
+    [Fact]
+    public void Moving_to_the_next_stage_restarts_the_stage_clock()
+    {
+        var watch = new HeartbeatWatch(false, TimeSpan.FromHours(2), TimeSpan.FromHours(2));
+        watch.Observe(StageStatus("model-loading", 1), null, TimeSpan.Zero).ShouldBeNull();
+        watch.Observe(StageStatus("model-loading", 2), null, TimeSpan.FromMinutes(14)).ShouldBeNull();
+        watch.Observe(StageStatus("running", 3), null, TimeSpan.FromMinutes(14.5)).ShouldBeNull();
+
+        watch.Observe(StageStatus("running", 4), null, TimeSpan.FromHours(1.5)).ShouldBeNull("running has no stage deadline; the result limit and the heartbeat judge it");
+    }
+
+    [Fact]
+    public void A_stage_deadline_override_replaces_the_default_for_that_stage()
+    {
+        var watch = new HeartbeatWatch(false, TimeSpan.FromHours(2), TimeSpan.FromHours(2), new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromSeconds(60) });
+        watch.Observe(StageStatus("model-loading", 1), null, TimeSpan.Zero).ShouldBeNull();
+
+        watch.Observe(StageStatus("model-loading", 2), null, TimeSpan.FromSeconds(60))!.Code.ShouldBe(RunErrorCodes.WorkerStageStuck);
+    }
+
     [Fact]
     public void Progress_is_wanted_only_for_a_GPU_tier_with_a_worker_heartbeat_and_no_verdict_yet()
     {

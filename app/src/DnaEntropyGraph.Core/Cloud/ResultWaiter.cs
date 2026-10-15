@@ -105,7 +105,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var watch = new HeartbeatWatch(
             VmProvisioner.ExpectsGpu(request.Spec.MachineType),
             settings.FirstHeartbeatTimeout,
-            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor));
+            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor),
+            settings.StageDeadlines);
 
         while (true)
         {

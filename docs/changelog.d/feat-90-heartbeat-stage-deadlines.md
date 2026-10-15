@@ -1,0 +1,1 @@
+- Cloud (#90): the runner now enforces per-stage deadlines (booting 8 min, installing 15, restoring-cache 15, model-loading 15, uploading 10) from the stage in `status.json`, ending a run whose worker is stuck in one stage even while its heartbeat ticks (`worker_stage_stuck`).
