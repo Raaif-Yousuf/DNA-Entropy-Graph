@@ -241,6 +241,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             OwnerRequestFor(run))
         {
             PresetText = PresetLine(run),
+            RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
         };
     }
 
@@ -382,7 +383,8 @@ public sealed partial class HistoryViewModel : ObservableObject
                 Toast(RunsCopy.RedownloadChangedKeptAside(result.ChangedKeptAside), result.ChangedKeptAside);
             }
 
-            return RunsCopy.Redownload(result.Status);
+            // A cancelled run's partial outputs are the expected result of its cancel, not a warning that something is missing.
+            return run.Phase == JobPhase.Cancelled && result.Status == CloudResultsStatus.Partial ? RunsCopy.RedownloadCancelledPartial : RunsCopy.Redownload(result.Status);
         },
         RunsCopy.Redownload(CloudResultsStatus.Failed));
 
