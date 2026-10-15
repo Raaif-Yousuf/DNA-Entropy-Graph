@@ -1,0 +1,1 @@
+- Diagnostics: a number leaf equal to a withheld job id (for example `"id": 12`) is now rewritten to the placeholder instead of shipped as it was (#637 review round 2); `docs/threat_model.md` 5b notes the residual risk and drops a repeated sentence.

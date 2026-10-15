@@ -103,10 +103,10 @@ public class DiagnosticsBundleBuilderTests
             "GGATCCGATA",
             "CGCGATATCG",
             "12:16 done"),
-        ["runs/job-1/status.json"] = JsonSerializer.Serialize(new
+        ["runs/20261001-080000-abc234/status.json"] = JsonSerializer.Serialize(new
         {
             schema = 1,
-            jobId = "job-1",
+            jobId = "20261001-080000-abc234",
             stage = "failed",
             percent = 42.5,
             heartbeatSeq = 7,
@@ -115,14 +115,14 @@ public class DiagnosticsBundleBuilderTests
             vm = new { name = Vm, zone = "us-central1-a", gpu = "NVIDIA L4" },
             error = new { code = "WORKER_FAILED", message = $"could not read {FileName} {Sequence}", remediation = "x" },
         }),
-        ["runs/job-1/progress.jsonl"] =
+        ["runs/20261001-080000-abc234/progress.jsonl"] =
             JsonSerializer.Serialize(new { seq = 1, ts = "2026-10-01T08:00:00Z", stage = "analysing", level = "info", message = $"{Contig} {Sequence}", data = new { input = FileName } })
             + "\n" + JsonSerializer.Serialize(new { seq = 2, stage = "ACGUUGCAAGGCUUAACCGGUUAAGGCC" })
             + "\nnot json " + Sequence + "\n",
-        ["runs/job-1/result.json"] = JsonSerializer.Serialize(new
+        ["runs/20261001-080000-abc234/result.json"] = JsonSerializer.Serialize(new
         {
             schema = 1,
-            jobId = "job-1",
+            jobId = "20261001-080000-abc234",
             status = "failed",
             perContig = new Dictionary<string, double> { [PatientKey] = 1.9 },
             inputs = new[]
@@ -138,13 +138,13 @@ public class DiagnosticsBundleBuilderTests
             },
             timing = new { startedAt = "2026-10-01T08:00:00Z", finishedAt = "2026-10-01T09:00:00Z" },
         }),
-        ["runs/job-1/logs/worker.log"] = $"INFO read {FileName}\nINFO seq {Sequence.ToLowerInvariant()}\nERROR OOM\n",
-        ["runs/job-1/outputs/entropy.bedgraph"] = "chr 0 1 1.9\n",
+        ["runs/20261001-080000-abc234/logs/worker.log"] = $"INFO read {FileName}\nINFO seq {Sequence.ToLowerInvariant()}\nERROR OOM\n",
+        ["runs/20261001-080000-abc234/outputs/entropy.bedgraph"] = "chr 0 1 1.9\n",
         ["runs/../escape/status.json"] = "{}",
     };
 
     private static readonly RunRecord Run = new(
-        "job-1", JobPhase.Failed, new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero),
+        "20261001-080000-abc234", JobPhase.Failed, new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero),
         Name: "Patient run", ErrorCode: "WORKER_FAILED", ErrorDetail: $"{Sequence} in {FileName} for {Email}",
         OutputDir: $@"{Profile}\Downloads\{FileName}-run", InstallationId: "inst-abc123", MachineType: "g2-standard-8",
         ProjectId: Project, Bucket: Bucket, VmName: Vm,
@@ -236,10 +236,10 @@ public class DiagnosticsBundleBuilderTests
         names.ShouldNotContain(n => n.Contains("bedgraph", StringComparison.Ordinal));
         names.ShouldNotContain(n => n.Contains("..", StringComparison.Ordinal) || n.Contains("escape", StringComparison.Ordinal));
         names.ShouldContain("files/logs/log-01.log");
-        names.ShouldContain("files/runs/job-1/status.json");
-        names.ShouldContain("files/runs/job-1/progress.jsonl");
-        names.ShouldContain("files/runs/job-1/result.json");
-        names.ShouldContain("files/runs/job-1/logs/log-01.log");
+        names.ShouldContain("files/runs/20261001-080000-abc234/status.json");
+        names.ShouldContain("files/runs/20261001-080000-abc234/progress.jsonl");
+        names.ShouldContain("files/runs/20261001-080000-abc234/result.json");
+        names.ShouldContain("files/runs/20261001-080000-abc234/logs/log-01.log");
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public class DiagnosticsBundleBuilderTests
 
         using var document = JsonDocument.Parse(history);
         var row = document.RootElement[0];
-        row.GetProperty("jobId").GetString().ShouldBe("job-1");
+        row.GetProperty("jobId").GetString().ShouldBe("20261001-080000-abc234");
         row.GetProperty("phase").GetString().ShouldBe("Failed");
         row.GetProperty("errorCode").GetString().ShouldBe("WORKER_FAILED");
         row.GetProperty("createdUtc").GetString().ShouldStartWith("2026-10-01");
@@ -297,7 +297,7 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void Status_json_keeps_only_allowlisted_keys_with_their_numbers_and_codes()
     {
-        var status = BuildSeeded()["files/runs/job-1/status.json"];
+        var status = BuildSeeded()["files/runs/20261001-080000-abc234/status.json"];
 
         status.ShouldContain("\"stage\": \"failed\"");
         status.ShouldContain("\"heartbeatSeq\": 7");
@@ -315,7 +315,7 @@ public class DiagnosticsBundleBuilderTests
     public void Result_json_drops_unknown_keys_whole_so_a_data_named_key_cannot_pass()
     {
         // {"perContig":{"my_patient_42":1.9}}: the key names the user's data, so the key is the leak.
-        var result = BuildSeeded()["files/runs/job-1/result.json"];
+        var result = BuildSeeded()["files/runs/20261001-080000-abc234/result.json"];
 
         result.ShouldNotContain("perContig");
         result.ShouldNotContain(PatientKey);
@@ -326,7 +326,7 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void Progress_keeps_only_allowlisted_keys_and_a_sequence_in_a_kept_value_is_redacted()
     {
-        var progress = BuildSeeded()["files/runs/job-1/progress.jsonl"];
+        var progress = BuildSeeded()["files/runs/20261001-080000-abc234/progress.jsonl"];
 
         progress.ShouldContain("\"stage\":\"analysing\"");
         progress.ShouldNotContain("message");
@@ -367,7 +367,7 @@ public class DiagnosticsBundleBuilderTests
         var folder = new Dictionary<string, string>
         {
             ["logs/big.log"] = "partial first line\nline two\nline three\n",
-            ["runs/job-1/status.json"] = "{\"schema\":1,\"stage\":\"running\"}",
+            ["runs/20261001-080000-abc234/status.json"] = "{\"schema\":1,\"stage\":\"running\"}",
         };
 
         var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 20), [], Info));
@@ -375,7 +375,7 @@ public class DiagnosticsBundleBuilderTests
         entries["files/logs/log-01.log"].ShouldStartWith("[truncated:");
         entries["files/logs/log-01.log"].ShouldContain("line three");
         entries["files/logs/log-01.log"].ShouldNotContain("partial first line");
-        entries["files/runs/job-1/status.json"].ShouldBe("<omitted: file too large>");
+        entries["files/runs/20261001-080000-abc234/status.json"].ShouldBe("<omitted: file too large>");
     }
 
     [Fact]
@@ -420,9 +420,9 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void A_leak_the_redactor_cannot_see_refuses_the_zip_and_names_the_entry()
     {
-        // The run history copies fields as they are, so a job id that is itself a DNA run, or an error code that is a
+        // The run history copies fields as they are, so an error code that is a DNA run, or one that is a
         // token, is the one place the redactor does not rewrite: the final scan must still stop it.
-        foreach (var leaky in new[] { Run with { JobId = Sequence }, Run with { ErrorCode = Credentials[0] } })
+        foreach (var leaky in new[] { Run with { ErrorCode = Sequence }, Run with { ErrorCode = Credentials[0] } })
         {
             var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [leaky], Info));
 
@@ -484,10 +484,10 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void Build_hands_the_identifiers_to_the_scan_so_a_field_the_redactor_never_sees_refuses_the_zip()
     {
-        // Run history is copied as it is: a job id carrying the Windows user name is a miss only the scan can catch.
+        // Run history is copied as it is: an error code carrying the Windows user name is a miss only the scan can catch.
         var info = Info with { SensitiveValues = ["jsmith"] };
 
-        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [Run with { JobId = "jsmith-1" }], info));
+        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [Run with { ErrorCode = "jsmith-1" }], info));
 
         ex.EntryName.ShouldBe("run-history.json");
     }
@@ -495,10 +495,347 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void Build_hands_harvested_names_to_the_scan_too()
     {
-        var run = Run with { JobId = "pUC19secret-9", ManifestJson = JsonSerializer.Serialize(new { inputs = new[] { new { name = "pUC19secret-9" } } }) };
+        var run = Run with { ErrorCode = "pUC19secret-9", ManifestJson = JsonSerializer.Serialize(new { inputs = new[] { new { name = "pUC19secret-9" } } }) };
 
         Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info))
             .EntryName.ShouldBe("run-history.json");
+    }
+
+    // ---- Issue #626: the owner's real profile refused with "identifier" on run-history.json ----
+
+    private const string StandardId = "20261003-120000-abcdef";
+
+    [Theory]
+    [InlineData(StandardId, StandardId, null)]
+    [InlineData("Patient run", StandardId, "jobs/" + StandardId + "/")]
+    [InlineData("Patient run", StandardId, @"jobs\" + StandardId)]
+    public void A_run_name_or_prefix_that_is_only_the_runs_own_standard_job_id_does_not_refuse_the_bundle(string name, string jobId, string? jobPrefix)
+    {
+        // MEASURED 2026-10-03 on the owner's profile: a run whose Name was its own JobId made the final scan refuse (rule
+        // "identifier", entry run-history.json) because the scrub list held a value that the history copies verbatim as jobId.
+        // A value equal to a field the bundle deliberately carries tells the reader nothing the field does not, but only
+        // when that field is the app's own id: the standard shape round-trips as it is.
+        var run = Run with { JobId = jobId, Name = name, JobPrefix = jobPrefix };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+
+        entries["run-history.json"].ShouldContain(jobId);
+    }
+
+    [Theory]
+    [InlineData("Patient 42")]
+    [InlineData("demo-run")]
+    public void A_job_id_that_is_not_the_apps_own_shape_is_never_shipped_and_the_bundle_is_still_built(string id)
+    {
+        // The owner's real run has a non-standard id equal to its name; an imported or hand-edited row could hold a patient.
+        var run = Run with { JobId = id, Name = id, ManifestJson = "{}", OptionsJson = "{}" };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+
+        entries.Count.ShouldBeGreaterThan(3, "vacuity: the bundle was built");
+        Entries(entries).ShouldNotContain(id, Case.Insensitive);
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("jobId").GetString().ShouldBe("withheldid1");
+    }
+
+    [Fact]
+    public void A_non_standard_id_gets_the_same_placeholder_in_the_history_and_in_entry_names_and_is_scrubbed_from_file_text()
+    {
+        const string Odd = "secret_id-9";
+        var folder = new Dictionary<string, string>
+        {
+            [$"runs/{Odd}/status.json"] = JsonSerializer.Serialize(new { jobId = Odd, stage = "failed" }),
+            [$"runs/{Odd}/logs/worker.log"] = $"INFO job {Odd} ended",
+            ["runs/orphan-7/status.json"] = JsonSerializer.Serialize(new { jobId = "orphan-7", stage = "failed" }),
+        };
+        var run = Run with { JobId = Odd, Name = Odd, ManifestJson = "{}", OptionsJson = "{}" };
+
+        var entries = BuildWith(folder, Info, run, Run with { JobId = StandardId, Name = "n" });
+
+        entries.Keys.ShouldContain("files/runs/withheldid1/status.json");
+        entries.Keys.ShouldContain("files/runs/withheldid1/logs/log-01.log");
+        entries.Keys.ShouldContain("files/runs/withheldid2/status.json");
+        Entries(entries).ShouldNotContain(Odd, Case.Insensitive);
+        Entries(entries).ShouldNotContain("orphan-7", Case.Insensitive);
+        entries["files/runs/withheldid1/status.json"].ShouldContain("\"stage\": \"failed\"");
+    }
+
+    [Theory]
+    [InlineData("12345678")]
+    [InlineData("ACGTACGTACGTACGTACGTACGT")]
+    [InlineData("Patient_42")]
+    public void A_withheld_job_id_is_rewritten_inside_file_bodies_and_logs_even_when_the_scrub_list_would_drop_it(string id)
+    {
+        // An all-digit id (a record number) is dropped by the scrub list's digit filter, and jobId is an allowlisted leaf, so
+        // without a rewrite keyed on the folder the raw id would ship in status.json, result.json and the logs.
+        var folder = new Dictionary<string, string>
+        {
+            [$"runs/{id}/status.json"] = JsonSerializer.Serialize(new { jobId = id, stage = "failed" }),
+            [$"runs/{id}/result.json"] = JsonSerializer.Serialize(new { jobId = id, status = "failed" }),
+            [$"runs/{id}/logs/worker.log"] = $"INFO job {id} ended",
+            ["logs/app.log"] = $"opened run {id} for display",
+        };
+        var run = Run with { JobId = id, Name = "n", ManifestJson = "{}", OptionsJson = "{}" };
+
+        var entries = BuildWith(folder, Info, run);
+
+        entries.Count.ShouldBeGreaterThan(6, "vacuity: the bundle was built");
+        Entries(entries).ShouldNotContain(id, Case.Insensitive);
+        entries["files/runs/withheldid1/status.json"].ShouldContain("\"jobId\": \"withheldid1\"");
+        entries["files/runs/withheldid1/result.json"].ShouldContain("\"jobId\": \"withheldid1\"");
+    }
+
+    [Fact]
+    public void A_one_character_withheld_id_leaves_numbers_keys_and_other_words_intact()
+    {
+        // Issue #637: an unanchored replace of "1" turned `"percent":100` into `"percent":withheldid1withheldid1`.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/1/status.json"] = """{"jobId":"1","stage":"failed","percent":100}""",
+            ["runs/1/logs/worker.log"] = "INFO job 1 failed after 100 windows",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var status = entries["files/runs/withheldid1/status.json"];
+        status.ShouldContain("\"percent\": 100");
+        status.ShouldContain("\"jobId\": \"withheldid1\"");
+        status.ShouldContain("\"stage\": \"failed\"");
+        entries["files/runs/withheldid1/logs/log-01.log"].ShouldBe("INFO job withheldid1 failed after 100 windows");
+    }
+
+    [Fact]
+    public void A_one_letter_withheld_id_rewrites_only_the_whole_token_in_a_log()
+    {
+        var folder = new Dictionary<string, string> { ["runs/q/logs/worker.log"] = "run q failed: quota exceeded" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "q", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/runs/withheldid1/logs/log-01.log"].ShouldBe("run withheldid1 failed: quota exceeded");
+    }
+
+    [Fact]
+    public void A_numeric_unquoted_job_id_leaf_ships_the_folders_placeholder_and_the_file_stays_valid_json()
+    {
+        var folder = new Dictionary<string, string> { ["runs/12/status.json"] = """{"jobId":12,"stage":"failed"}""" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/runs/withheldid1/status.json"].ShouldContain("\"jobId\": \"withheldid1\"");
+        JsonDocument.Parse(entries["files/runs/withheldid1/status.json"]).RootElement.GetProperty("stage").GetString().ShouldBe("failed");
+    }
+
+    private const char Backslash = (char)92;
+
+    [Fact]
+    public void An_escaped_spelling_of_a_withheld_id_in_an_allowlisted_leaf_does_not_ship_the_digits()
+    {
+        // "12" parses to 12; the scrub list drops an all-digit value, so only the leaf rewrite can catch it.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/12/result.json"] = "{\"jobId\":\"12\",\"status\":\"failed\",\"inputs\":[{\"id\":\"" + Backslash + "u0031" + Backslash + "u0032\",\"status\":\"ok\"},{\"id\":\"seq-2\",\"status\":\"ok\"}]}",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var result = entries["files/runs/withheldid1/result.json"];
+        result.ShouldNotContain("\"12\"");
+        result.ShouldContain("\"id\": \"withheldid1\"");
+        result.ShouldContain("\"id\": \"seq-2\"");
+    }
+
+    [Fact]
+    public void A_numeric_leaf_equal_to_a_withheld_numeric_id_does_not_ship_the_digits()
+    {
+        // Review round 2 of #637: a number leaf was DeepCloned, so `"id": 12` shipped the withheld id as it was.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/12/result.json"] = """{"jobId":"12","status":"failed","inputs":[{"id":12,"status":"ok"},{"id":120,"status":"ok"}]}""",
+            ["runs/12/progress.jsonl"] = """{"jobId":"12","stage":"failed","percent":12}""",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var result = entries["files/runs/withheldid1/result.json"];
+        result.ShouldContain("\"id\": \"withheldid1\"");
+        result.ShouldContain("\"id\": 120");
+        result.ShouldNotContain("\"id\": 12,");
+        entries["files/runs/withheldid1/progress.jsonl"].ShouldNotContain(":12}");
+    }
+
+    [Fact]
+    public void A_decimal_number_containing_a_withheld_id_digit_is_left_as_a_number()
+    {
+        // Review of #637 r2: '.' and '-' are token boundaries, so id "1" turned 0.1 into "0.withheldid1".
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/1/progress.jsonl"] = """{"jobId":"1","percent":0.1}""",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var line = entries["files/runs/withheldid1/progress.jsonl"];
+        line.ShouldContain("\"percent\":0.1");
+        line.ShouldNotContain("0.withheldid1");
+    }
+
+    [Fact]
+    public void A_withheld_id_that_starts_or_ends_with_a_symbol_is_rewritten_when_glued_to_a_letter()
+    {
+        // Review of #637 r2: the alphanumeric lookarounds also applied at a symbol edge, so "job#1" survived id "#1".
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "job#1 failed and x#1 done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "#1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("jobwithheldid1 failed and xwithheldid1 done");
+        Entries(entries).ShouldNotContain("#1", Case.Insensitive);
+    }
+
+    [Fact]
+    public void A_truncated_log_with_a_withheld_id_drops_the_partial_line_and_still_rewrites_the_id()
+    {
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/job7/logs/worker.log"] = "partial first line job7\nline two for job7 ended\n",
+        };
+        var run = Run with { JobId = "job7", Name = "n", ManifestJson = "{}", OptionsJson = "{}" };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 28), [run], Info));
+
+        var log = entries["files/runs/withheldid1/logs/log-01.log"];
+        log.ShouldStartWith("[truncated:");
+        log.ShouldContain("withheldid1");
+        Entries(entries).ShouldNotContain("job7", Case.Insensitive);
+        log.ShouldNotContain("partial first line");
+    }
+
+    [Fact]
+    public void A_blank_job_id_row_with_a_blank_named_run_folder_builds_without_throwing()
+    {
+        var folder = new Dictionary<string, string> { ["runs/ /status.json"] = """{"jobId":"x","stage":"failed"}""" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = " ", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries.Keys.Where(k => k.StartsWith("files/runs/", StringComparison.Ordinal)).ShouldAllBe(k => !k.Contains("/ /", StringComparison.Ordinal));
+        Entries(entries).ShouldContain("withheldid0");
+    }
+
+    [Fact]
+    public void A_character_that_only_case_folds_to_a_withheld_id_is_rewritten_and_never_crashes_the_build()
+    {
+        // U+212A (Kelvin sign) matches the pattern "k" under Unicode case folding but is not equal to it ordinally.
+        var kelvin = ((char)0x212A).ToString();
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = $"run k and {kelvin} done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "k", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("run withheldid1 and withheldid1 done");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_job_id_row_is_withheld_in_the_history_and_never_rewrites_text(string blank)
+    {
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "a b - c ... done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = blank, Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("a b - c ... done");
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("jobId").GetString().ShouldBe("withheldid0");
+    }
+
+    [Fact]
+    public void A_longer_withheld_id_wins_over_a_shorter_one_and_a_placeholder_is_never_rewritten_again()
+    {
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "runs ab-12 and ab and withheldid2 done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "ab", Name = "n", ManifestJson = "{}", OptionsJson = "{}" }, Run with { JobId = "ab-12", Name = "m", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("runs withheldid2 and withheldid1 and withheldid2 done");
+    }
+
+    [Fact]
+    public void A_standard_id_folder_whose_status_names_a_different_job_id_ships_the_folders_id()
+    {
+        var folder = new Dictionary<string, string>
+        {
+            [$"runs/{StandardId}/status.json"] = JsonSerializer.Serialize(new { jobId = "Patient 42", stage = "failed" }),
+            [$"runs/{StandardId}/result.json"] = JsonSerializer.Serialize(new { jobId = "Patient 42", status = "failed" }),
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = StandardId });
+
+        Entries(entries).ShouldNotContain("Patient 42", Case.Insensitive);
+        entries[$"files/runs/{StandardId}/status.json"].ShouldContain($"\"jobId\": \"{StandardId}\"");
+    }
+
+    [Theory]
+    [InlineData("20261003-120000-abcdef\n")]
+    [InlineData("\u0662\u0660\u0662\u0666\u0661\u0660\u0660\u0663-120000-abcdef")]
+    [InlineData("20261003-120000-abcdeF")]
+    [InlineData("")]
+    public void Only_the_exact_standard_job_id_shape_matches_the_convention(string id) =>
+        DnaEntropyGraph.Core.Cloud.JobId.MatchesConvention(id).ShouldBeFalse();
+
+    [Fact]
+    public void A_standard_id_keeps_its_own_entry_names()
+    {
+        var folder = new Dictionary<string, string> { [$"runs/{StandardId}/status.json"] = "{\"stage\":\"running\"}" };
+
+        BuildWith(folder, Info, Run with { JobId = StandardId }).Keys.ShouldContain($"files/runs/{StandardId}/status.json");
+    }
+
+    [Theory]
+    [InlineData("labout/")]
+    [InlineData("x/")]
+    [InlineData("PROFILE")]
+    public void An_output_folder_that_ends_in_the_job_id_is_not_exempt_and_its_parent_stays_scrubbed(string parent)
+    {
+        var folder = parent == "PROFILE" ? Profile + @"\Downloads\" : parent;
+        var run = Run with { JobId = StandardId, Name = "n", OutputDir = folder + StandardId, ManifestJson = "{}", OptionsJson = "{}" };
+        var log = new Dictionary<string, string> { ["logs/a.log"] = $"wrote {folder}{StandardId}/out and {folder.Trim('\\', '/')} too" };
+
+        var entries = BuildWith(log, Info, run);
+
+        var text = Entries(entries);
+        text.ShouldNotContain("labout", Case.Insensitive);
+        text.ShouldNotContain("jdoe", Case.Insensitive);
+        text.ShouldNotContain("Downloads", Case.Insensitive);
+        entries["run-history.json"].ShouldContain(StandardId);
+    }
+
+    [Fact]
+    public void A_run_named_by_its_job_id_that_holds_the_windows_user_name_ships_neither()
+    {
+        var info = Info with { SensitiveValues = ["jsmith"] };
+        var run = Run with { JobId = "jsmith-1", Name = "jsmith-1" };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], info));
+
+        // A non-standard id is withheld, so the name never reaches the history; the zip is built and clean.
+        Entries(entries).ShouldNotContain("jsmith", Case.Insensitive);
+    }
+
+    [Fact]
+    public void A_user_typed_run_name_that_is_not_the_job_id_is_still_scrubbed_and_still_refused_when_it_reaches_the_history()
+    {
+        // The exemption is for equality with the job id only: a different name holds user text and stays on the scrub list.
+        var run = Run with { JobId = StandardId, Name = "Patient 42 run", ErrorCode = "Patient 42 run" };
+
+        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+
+        ex.Rule.ShouldBe(LeakRules.Identifier);
+    }
+
+    [Fact]
+    public void The_scan_names_which_check_fired_for_each_class_of_leak()
+    {
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "refresh_token=abcdefghijkl1234" })!.Rule.ShouldBe(LeakRules.Credential);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = @"in D:\Lab\run" })!.Rule.ShouldBe(LeakRules.Path);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "mail bob@x.org" })!.Rule.ShouldBe(LeakRules.Email);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "opened by jsmith" }, ["jsmith"])!.Rule.ShouldBe(LeakRules.Identifier);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = Sequence })!.Rule.ShouldBe(LeakRules.Sequence);
+        DiagnosticsLeakScan.Find(new Dictionary<string, string> { ["a"] = "clean" }).ShouldBeNull();
     }
 
     [Fact]
@@ -522,14 +859,14 @@ public class DiagnosticsBundleBuilderTests
         {
             ["logs/jsmith-Patient42.log"] = "one",
             ["logs/zeta.log"] = "two",
-            ["runs/job-1/logs/jsmith-Patient42.log"] = "three",
+            ["runs/20261001-080000-abc234/logs/jsmith-Patient42.log"] = "three",
         };
 
         var entries = BuildWith(folder, info);
 
         entries.Keys.ShouldContain("files/logs/log-01.log");
         entries.Keys.ShouldContain("files/logs/log-02.log");
-        entries.Keys.ShouldContain("files/runs/job-1/logs/log-01.log");
+        entries.Keys.ShouldContain("files/runs/20261001-080000-abc234/logs/log-01.log");
         Entries(entries).ShouldNotContain("jsmith", Case.Insensitive);
         Entries(entries).ShouldNotContain("Patient42", Case.Insensitive);
         entries["files/logs/log-01.log"].ShouldBe("one");
@@ -553,18 +890,18 @@ public class DiagnosticsBundleBuilderTests
         var run = Run with { ManifestJson = "{\"inputs\":[{\"name\":\"a\",\"name\":\"b\"}]}", OptionsJson = "{\"x\":1,\"x\":2}" };
         var folder = new Dictionary<string, string>
         {
-            ["runs/job-1/status.json"] = "{\"stage\":\"running\",\"stage\":\"failed\"}",
-            ["runs/job-1/result.json"] = "{\"status\":\"ok\",\"status\":\"bad\"}",
-            ["runs/job-1/progress.jsonl"] = "{\"seq\":1,\"seq\":2}\n{\"seq\":3}\n",
+            ["runs/20261001-080000-abc234/status.json"] = "{\"stage\":\"running\",\"stage\":\"failed\"}",
+            ["runs/20261001-080000-abc234/result.json"] = "{\"status\":\"ok\",\"status\":\"bad\"}",
+            ["runs/20261001-080000-abc234/progress.jsonl"] = "{\"seq\":1,\"seq\":2}\n{\"seq\":3}\n",
             ["logs/a.log"] = "still here",
         };
 
         var entries = BuildWith(folder, Info, run);
 
-        entries["files/runs/job-1/status.json"].ShouldStartWith("<omitted");
-        entries["files/runs/job-1/result.json"].ShouldStartWith("<omitted");
-        entries["files/runs/job-1/progress.jsonl"].ShouldContain("<unparseable line omitted>");
-        entries["files/runs/job-1/progress.jsonl"].ShouldContain("\"seq\":3");
+        entries["files/runs/20261001-080000-abc234/status.json"].ShouldStartWith("<omitted");
+        entries["files/runs/20261001-080000-abc234/result.json"].ShouldStartWith("<omitted");
+        entries["files/runs/20261001-080000-abc234/progress.jsonl"].ShouldContain("<unparseable line omitted>");
+        entries["files/runs/20261001-080000-abc234/progress.jsonl"].ShouldContain("\"seq\":3");
         entries["files/logs/log-01.log"].ShouldBe("still here");
     }
 
