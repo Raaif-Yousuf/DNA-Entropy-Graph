@@ -388,7 +388,7 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py
 Each reads the tool-call payload from stdin per `scripts/hooks/README.md`, so running one
 with no input will simply wait.
 
-All six, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
+All seven, including the `run_hook.py` dispatcher, take `--self-test`, which needs no stdin
 and exercises both the allow and the deny arm:
 
 ```powershell
