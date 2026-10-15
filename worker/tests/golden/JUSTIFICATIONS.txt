@@ -1,0 +1,1 @@
+2026-10-15: initial golden files for the MockPredictor path (issue 161)
