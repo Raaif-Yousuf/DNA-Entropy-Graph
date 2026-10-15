@@ -12,6 +12,7 @@ public sealed partial class FakeGcp : IWorkerIdentityGateway
     private bool _serviceAccountCreationOrgBlocked;
     private bool _workerIdentityPermissionDenied;
     private bool _workerIdentityActAsDenied;
+    private bool _defaultComputeAccountMissing;
 
     /// <summary>How many times <see cref="EnsureWorkerIdentityAsync"/> reached Google (a wizard that runs the step twice shows here).</summary>
     public int WorkerIdentityEnsureCalls
@@ -41,6 +42,14 @@ public sealed partial class FakeGcp : IWorkerIdentityGateway
     public FakeGcp WithServiceAccountCreationBlockedByOrgPolicy()
     {
         _serviceAccountCreationOrgBlocked = true;
+        return this;
+    }
+
+    /// <summary>An organization policy refuses service-account creation AND the project's default Compute Engine account is missing or off: a permission error naming <see cref="SetupErrorCodes.WorkerDefaultAccountMissing"/> (issue #604).</summary>
+    public FakeGcp WithDefaultComputeAccountMissing()
+    {
+        _serviceAccountCreationOrgBlocked = true;
+        _defaultComputeAccountMissing = true;
         return this;
     }
 
@@ -89,6 +98,11 @@ public sealed partial class FakeGcp : IWorkerIdentityGateway
         if (_workerIdentityActAsDenied)
         {
             throw Build(CloudErrorKind.Permission, SetupErrorCodes.PermissionActAs, 403, "Required 'iam.serviceAccounts.actAs' permission for the worker service account.");
+        }
+
+        if (_serviceAccountCreationOrgBlocked && _defaultComputeAccountMissing)
+        {
+            throw Build(CloudErrorKind.Permission, SetupErrorCodes.WorkerDefaultAccountMissing, 403, "The default Compute Engine service account of the project is missing or disabled.");
         }
 
         if (_serviceAccountCreationOrgBlocked)

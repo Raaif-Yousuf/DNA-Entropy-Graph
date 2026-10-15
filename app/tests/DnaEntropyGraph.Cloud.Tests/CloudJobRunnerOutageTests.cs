@@ -57,7 +57,7 @@ public class CloudJobRunnerOutageTests
     private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, TimeSpan? resultTimeout = null, bool realTime = false)
     {
         var clocks = new Clocks();
-        return new(gcp, gcp, gcp, gcp, repo, onPhase)
+        return new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = resultTimeout ?? TimeSpan.FromMilliseconds(80),
@@ -88,6 +88,7 @@ public class CloudJobRunnerOutageTests
             new ResilientStorageGateway(gcp, pipeline),
             new ResilientProjectSetupGateway(gcp, pipeline),
             new ResilientQuotaGateway(gcp, pipeline),
+            gcp,
             repo,
             onPhase)
         {
@@ -255,7 +256,7 @@ public class CloudJobRunnerOutageTests
         var gcp = new FakeGcp();
         var repo = new InMemoryRunRepository();
         var compute = new RecordingCompute(gcp);
-        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, repo)
+        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, gcp, repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
@@ -288,6 +289,8 @@ public class CloudJobRunnerOutageTests
         public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
 
         public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
     }
 
     /// <summary>Delegates to the fake and notes the instant of the first stop or delete request.</summary>
@@ -320,6 +323,8 @@ public class CloudJobRunnerOutageTests
         public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
 
         public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
     }
 
     // ---- Finding 3: a hung call, and a deadline the VM's own limit does not pre-empt ----
@@ -333,7 +338,7 @@ public class CloudJobRunnerOutageTests
         var gcp = new FakeGcp();
         var repo = new InMemoryRunRepository();
         var clocks = new Clocks();
-        var runner = new CloudJobRunner(new SlowLookupCompute(gcp, TimeSpan.FromMilliseconds(150)), gcp, gcp, gcp, repo)
+        var runner = new CloudJobRunner(new SlowLookupCompute(gcp, TimeSpan.FromMilliseconds(150)), gcp, gcp, gcp, gcp, repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             BootTimeout = TimeSpan.FromMilliseconds(80),

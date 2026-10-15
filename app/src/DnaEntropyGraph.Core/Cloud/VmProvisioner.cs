@@ -56,6 +56,14 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// docs/cloud_design.md section 5's abort-vs-continue rule.
     /// </summary>
     public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, VmSpec spec, RunProgress progress, CancellationToken cancellationToken)
+        => await ProvisionAsync(request, _ => Task.FromResult(spec), progress, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// As above, but the spec is made by <paramref name="completeSpec"/> only once the adoption lookup has found nothing, so
+    /// whatever it needs (issue #606: the worker identity, an IAM call that can fail) is never asked of a run that adopts
+    /// a VM, and a failure there can never end a healthy VM. It runs once, before the first create.
+    /// </summary>
+    public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, CancellationToken cancellationToken)
     {
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
         if (existing.Count > 0)
@@ -63,6 +71,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             progress.VmMayExist = true;
             return ProvisionResult.Ok(existing[0].Zone);
         }
+
+        var spec = await completeSpec(cancellationToken).ConfigureAwait(false);
 
         // One value for both the create's own timeout and the poller's deadline, so they cannot drift apart: the create's
         // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the
@@ -148,7 +158,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 var sweepNote = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
                 if (sweepNote is not null)
                 {
-                    return ProvisionResult.Failed(kind, outcome.Error!.Message, sweepNote);
+                    return ProvisionResult.Failed(kind, outcome.Error!.Message, sweepNote, RunErrorCodes.For(outcome.Error, kind));
                 }
             }
 
@@ -157,7 +167,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 // docs/cloud_design.md section 5: billing/API/permission/org
                 // policy abort the WHOLE ladder immediately - retrying a
                 // different zone cannot fix a project-wide problem.
-                return ProvisionResult.Failed(kind, outcome.Error!.Message);
+                return ProvisionResult.Failed(kind, outcome.Error!.Message, code: RunErrorCodes.For(outcome.Error, kind));
             }
 
             // Quota / stockout / other: per-zone or per-region, worth trying
@@ -230,8 +240,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
 internal readonly struct ProvisionResult
 {
-    private ProvisionResult(bool success, string? zone, CloudErrorKind? failureKind, string? failureMessage, string? vmEndNote)
+    private ProvisionResult(bool success, string? zone, CloudErrorKind? failureKind, string? failureMessage, string? vmEndNote, string? failureCode)
     {
+        FailureCode = failureCode;
         Success = success;
         Zone = zone;
         FailureKind = failureKind;
@@ -250,7 +261,10 @@ internal readonly struct ProvisionResult
 
     public string? FailureMessage { get; }
 
-    public static ProvisionResult Ok(string zone) => new(true, zone, null, null, null);
+    /// <summary>The code the run row records (issue #604): the error's own specific code (PERMISSION_ACTAS) when it has one, else the code of <see cref="FailureKind"/>.</summary>
+    public string? FailureCode { get; }
 
-    public static ProvisionResult Failed(CloudErrorKind kind, string message, string? vmEndNote = null) => new(false, null, kind, message, vmEndNote);
+    public static ProvisionResult Ok(string zone) => new(true, zone, null, null, null, null);
+
+    public static ProvisionResult Failed(CloudErrorKind kind, string message, string? vmEndNote = null, string? code = null) => new(false, null, kind, message, vmEndNote, code ?? RunErrorCodes.For(kind));
 }

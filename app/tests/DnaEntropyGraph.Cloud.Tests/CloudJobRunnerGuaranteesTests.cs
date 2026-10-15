@@ -38,7 +38,7 @@ public class CloudJobRunnerGuaranteesTests
         FakeGcp gcp,
         IRunRepository repo,
         Action<string, JobPhase>? onPhase = null)
-        => new(compute, gcp, gcp, gcp, repo, onPhase)
+        => new(compute, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
@@ -89,6 +89,8 @@ public class CloudJobRunnerGuaranteesTests
 
         public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
             => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
     }
 
     // ---- M1: a gateway's own deadline (an OCE with the caller's token live) is not the caller cancelling ----
@@ -286,7 +288,7 @@ public class CloudJobRunnerGuaranteesTests
             },
         };
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, repo)
+        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, gcp, repo)
         {
             TimeProvider = time,
             ResultPollInterval = TimeSpan.FromMilliseconds(1),

@@ -25,7 +25,7 @@ IRRELEVANT_PREFIXES = ("docs/", ".claude/", ".agents/", ".codex/", ".serena/")
 IRRELEVANT_FILES = frozenset({"license", ".gitignore", ".ignore"})
 # Read by tests or by a job step although they live under an irrelevant prefix. Matched exactly (prefix match only where
 # the entry ends with '/'), never by substring.
-RELEVANT_EXCEPTIONS = ("docs/contract/", "docs/copy_catalog.md")
+RELEVANT_EXCEPTIONS = ("docs/contract/", "docs/copy_catalog.md", "docs/job_contract.md")
 # Root files that LOOK like docs but are read: THIRD-PARTY-NOTICES.md is regenerated and checked against dotnet/pip state.
 RELEVANT_ROOT_MARKDOWN = frozenset({"third-party-notices.md"})
 WORKFLOWS = ("ci-app", "ci-worker")
