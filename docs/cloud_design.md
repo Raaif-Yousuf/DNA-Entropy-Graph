@@ -1215,9 +1215,15 @@ the running app calls this class yet.
   `STOPPED`/`TERMINATED`, has the same `model` label and machine type (`VmDescriptor.MachineType`), and whose last job's run row is terminal or absent
   (`CloudJobRunner.JobIsFinishedAsync`; a history that cannot be read answers "not finished", so a VM that may belong to a run underway is never taken).
   `IComputeGateway.ReuseVmAsync` then does, in this order: `instances.get` (refuses a VM that is not stopped with `VM_NOT_STOPPED` before any change),
-  `setScheduling` (this job's `maxRunDuration` and `DELETE`), `setMetadata` (the new startup script and `deg-*` attributes, with the fingerprint read at
-  the start), `setLabels` (the CLAIM: the `job-id` label becomes this job's, with the label fingerprint read at the start, so two jobs racing for one VM
-  cannot both win), then `start`. The VM keeps its old name (`deg-<earlierJobId>`; an instance cannot be renamed): `VmSpec.ExistingVmName` carries it and
+  `setLabels` (the CLAIM, FIRST: the `job-id` label becomes this job's, with the label fingerprint read at the start, so of two jobs racing for one VM only
+  one passes and the loser, answered 412, has written nothing), `setScheduling` (this job's `maxRunDuration` and `DELETE`; it has no fingerprint, so a racer
+  that lost the claim must never have written it), `setMetadata` (the new startup script and `deg-*` attributes, with the fingerprint read at the start), then
+  `start`. The composite is NOT idempotent as a whole: `ResilientComputeGateway` attempts it once (no retries, no 401 replay; the real gateway already retries each
+  HTTP request itself), because a replay after a lost answer meets a RUNNING VM, answers `VM_NOT_STOPPED` and used to delete the VM that had just started. A
+  `Network` failure of the reuse is an unknown outcome: the provisioner looks by label and adopts the one VM that is booting or running for this job. The reuse is
+  tracked as an in-flight create, so a cancel waits for it to land and then deletes the VM. The platform's `maxRunDuration` clock restarts at each start, and a
+  reused VM keeps its `creationTimestamp`, so the runner measures the result deadline (and `run_time_limit`) from `VmDescriptor.RunClockStart`
+  (`lastStartTimestamp`, else the creation), not the creation. The VM keeps its old name (`deg-<earlierJobId>`; an instance cannot be renamed): `VmSpec.ExistingVmName` carries it and
   `RunProgress.Resolve` makes every later look at, and the end of, the run use it; discovery stays by the label. A start that fails is never a failed run
   by itself: whatever carries this job's label is deleted (the claim may already have been made), then a stockout, quota or any other per-VM failure
   falls through to the create ladder, while billing, API-off, permission, org-policy and network failures abort like the ladder's. Only one VM is tried.

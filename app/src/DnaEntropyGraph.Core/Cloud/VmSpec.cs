@@ -204,6 +204,7 @@ public sealed record VmSpec(
 /// may be inferred from that. <paramref name="StoppedAt"/> is when the instance last stopped (the real instance's <c>lastStopTimestamp</c>);
 /// null means unknown, which the idle-VM sweep treats as "not provably idle", never as "idle". <paramref name="MachineType"/> is the machine
 /// type's name (<c>g2-standard-8</c>) when the gateway read it; reuse (#94) needs it to match, and null never matches.
+/// <paramref name="StartedAt"/> is when the instance last started (the real instance's <c>lastStartTimestamp</c>); see <see cref="RunClockStart"/>.
 /// </summary>
 public sealed record VmDescriptor(
     string Name,
@@ -213,4 +214,12 @@ public sealed record VmDescriptor(
     DateTimeOffset? CreatedAt = null,
     IReadOnlyDictionary<string, string>? Labels = null,
     DateTimeOffset? StoppedAt = null,
-    string? MachineType = null);
+    string? MachineType = null,
+    DateTimeOffset? StartedAt = null)
+{
+    /// <summary>
+    /// When the platform's <c>maxRunDuration</c> clock for this VM last started: its last start (<c>lastStartTimestamp</c>), which a reused VM
+    /// (#94) has and which is NOT its creation (a VM created days ago and started now has a fresh limit), else its creation, else null.
+    /// </summary>
+    public DateTimeOffset? RunClockStart => StartedAt ?? CreatedAt;
+}

@@ -93,11 +93,12 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
         var clockStart = settings.StartClock();
         string? lastTransient = null;
-        DateTimeOffset? vmCreatedAt = null;
+        DateTimeOffset? vmCreatedAt = null; // when the platform's limit clock last started (see VmDescriptor.RunClockStart)
 
-        // The VM's maxRunDuration started when Compute Engine created it, not when it reached Running: a boot of several
-        // minutes, or a resume, has already used part of it. With the default limit the clock is moved forward by the VM's
-        // age at the first look that reports a creation time (a gateway that reports none leaves it at "from Running").
+        // The VM's maxRunDuration started when Compute Engine last STARTED it (its creation, for a new VM; the start of the reuse, for a VM
+        // created days ago, #94), not when it reached Running: a boot of several minutes, or a resume, has already used part of it. With the
+        // default limit the clock is moved forward by the VM's age at the first look that reports a start time (a gateway that reports
+        // none leaves it at "from Running").
         var elapsedBeforeClock = TimeSpan.Zero;
         var ageKnown = settings.ResultTimeout is not null;
         var statusKey = WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json";
@@ -122,11 +123,11 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 lastTransient = null;
-                vmCreatedAt = vm?.CreatedAt ?? vmCreatedAt;
-                if (!ageKnown && vm?.CreatedAt is { } createdAt)
+                vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
+                if (!ageKnown && vm?.RunClockStart is { } clockBegan)
                 {
                     ageKnown = true;
-                    var age = settings.TimeProvider.GetUtcNow() - createdAt - settings.ElapsedSince(clockStart);
+                    var age = settings.TimeProvider.GetUtcNow() - clockBegan - settings.ElapsedSince(clockStart);
                     elapsedBeforeClock = age > TimeSpan.Zero ? age : TimeSpan.Zero;
                 }
 
