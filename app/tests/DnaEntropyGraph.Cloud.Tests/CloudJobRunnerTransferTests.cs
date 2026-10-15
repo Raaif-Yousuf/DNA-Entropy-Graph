@@ -33,7 +33,7 @@ public class CloudJobRunnerTransferTests
     private static string Bucket => FakeGcp.BucketName(Project);
 
     private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null)
-        => new(gcp, gcp, gcp, gcp, repo, onPhase)
+        => new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(60),

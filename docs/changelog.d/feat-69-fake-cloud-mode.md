@@ -1,0 +1,2 @@
+- Developer mode (#69): `--fake-cloud` or `DEG_FAKE_CLOUD=1` boots the app over the simulated cloud, `--fresh-profile` over an empty throwaway data folder, and `scripts/dev_app.ps1` does both. A shipped launch has neither.
+- The simulated cloud now needs a sandbox data folder and shows a permanent title-bar banner (#69); the Developer container has no real account service.
