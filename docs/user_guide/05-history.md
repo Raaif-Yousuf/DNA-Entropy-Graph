@@ -32,6 +32,10 @@ saved but we could not confirm the rented computer shut down) shows the same kin
 Use the search box to find a run by its name, its input file name or its id, and the status
 box to show only running, completed, failed or cancelled runs.
 
+### Messages from the app
+
+When something you did finishes or cannot finish (a delete, a download, a new theme), the app shows a message bar at the bottom of its window. Good news and plain information close by themselves after a few seconds. A warning or a problem stays until you press its close button, so you cannot miss it, and it names what to do next.
+
 ## If you use the app on more than one computer
 
 Two computers signed into the same Google account do not automatically see each other's

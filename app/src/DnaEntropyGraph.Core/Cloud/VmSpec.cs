@@ -34,8 +34,19 @@ public sealed record VmSpec(
     /// </summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
+    /// <summary>
+    /// The email of the service account the VM runs as (the worker identity, issue #54). Optional here so a spec for
+    /// <see cref="DnaEntropyGraph.Cloud.FakeGcp"/> stays small, but the real Compute gateway refuses a create without
+    /// it: guessing <c>deg-worker@&lt;project&gt;</c> (which nothing creates) would boot a VM that cannot reach its
+    /// bucket. The run path fills it from the worker identity (#606, #609).
+    /// </summary>
+    public string? ServiceAccountEmail { get; init; }
+
     /// <summary>The <c>app</c> label's fixed value - every DNA Entropy Graph resource carries the same one.</summary>
     public const string AppLabelValue = "dna-entropy-graph";
+
+    /// <summary>The only <c>instanceTerminationAction</c> a VM may carry (Hard Rule 10).</summary>
+    public const string RequiredTerminationAction = "DELETE";
 
     /// <summary>
     /// A Compute Engine label VALUE: lowercase letters, digits, underscores
@@ -90,6 +101,13 @@ public sealed record VmSpec(
         RequireNonEmpty(AppVersion, "app-version");
 
         RequireNonEmpty(TerminationAction, "instanceTerminationAction");
+
+        // Hard Rule 10: DELETE, never STOP. A terminated-but-not-deleted VM still bills for its boot disk, so no caller may send anything else.
+        if (!string.Equals(TerminationAction, RequiredTerminationAction, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"VmSpec's instanceTerminationAction must be {RequiredTerminationAction} (Hard Rule 10), not '{TerminationAction}'.");
+        }
 
         if (MaxRunDuration <= TimeSpan.Zero)
         {

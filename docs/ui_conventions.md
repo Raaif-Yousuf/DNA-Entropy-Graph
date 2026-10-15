@@ -83,7 +83,14 @@ first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the w
 ## 4. Theme
 
 Three choices in Settings: **Light / Dark / Use system** (default: Use system),
-implemented via `ThemeService` broadcasting a `ThemeChanged` message. The embedded viewer
+applied live (#639): the Appearance `RadioButtons` selection is `SettingsViewModel.ThemeIndex` (two-way), and a change
+applies through `IThemeApplier` (Presentation) and then saves, so a click and an arrow key take one path. The App
+implementation, `WindowThemeApplier`, sets `RequestedTheme` on the window's content root (`RootGrid`, not the
+`NavigationView`: the title bar and the Mica backdrop sit outside it, MEASURED 2026-10-03: with the theme on the
+`NavigationView` only, a Light app on a dark system kept a dark title bar and pane) and recolours the caption buttons from
+`CaptionButtonPalette` (the system draws them in the system theme: MEASURED 2026-10-03, white glyphs on a light bar,
+app Light on dark system). `MainWindow` calls the same `Apply` with the saved theme at startup. The apply happens before the
+save, so a locked settings file (#558) still changes the window for the session. The embedded viewer
 (igv.js in WebView2) is not a native WinUI surface, so it needs its own theme sync:
 `CoreWebView2.Profile.PreferredColorScheme` follows the app theme, and a `dark.css`
 override (toggled by a `body.dark` class posted through the bridge) recolors igv.js's own
@@ -119,6 +126,17 @@ and FASTA extensions, registered as *additional* "Open with" entries, never as t
 default handler, so a user's existing Geneious or SnapGene file association is never
 silently overwritten.
 
+### In-app messages (issue #585)
+
+Every `IToastService.ShowToast(title, body, severity)` call becomes a message bar (an `InfoBar` at the bottom of
+`MainWindow`), not a Windows notification. The service is `InAppMessageCenter` (Presentation, singleton, no WinUI types);
+`ShellViewModel.Messages` exposes the same instance and the InfoBar binds to it. One message at a time, a new one replaces
+the old. Severity decides lifetime: `Info` and `Success` close after 6 seconds (a `TimeProvider` timer, so tests never
+sleep), `Warning` and `Error` stay until the user closes the bar. Any thread may call it; the state change goes through
+`IDispatcher`. A ViewModel picks the severity per message (the Runs copy carries it in `RunsMessage`): a failed or refused
+delete is `Error`, a finished one `Success`. The Windows toast with a deep link for a finished run while the app is in the
+background (#107) is a separate channel and a second implementation behind the same seam; this section does not build it.
+`Guards.Tests/ToastServiceWiringTests` resolves the real registration and fails if a message does not reach the shell.
 ## 7. The `JobPhase`-to-UI table
 
 Reading this table alongside `architecture.md` section 4 (the `JobPhase` state machine
@@ -211,7 +229,14 @@ left as unnecessary caution.
   next to Run once there is more than one pill.
 ## 10. Settings page (issues #106, #104)
 
-`SettingsPage` is one scrolling `StackPanel` of groups. #106 built the **Diagnostics** group (the Save diagnostics button,
+`SettingsPage` has **no title of its own**: the shell's `NavigationView` header already shows "Settings" (#627), the same
+pattern every page follows. It is one scrolling `StackPanel` of groups. **The group pattern (#639):** each group is a
+`StackPanel Spacing=8` holding a `SubtitleTextBlockStyle` header (its own `Settings<Group>Header` resw key) and a `Border`
+with `SettingsGroupCardStyle` (a `Page.Resources` style: card fill and stroke, 16 padding) containing the group's
+controls; groups are spaced 24 apart. A new group (#640 to #644) adds one such `StackPanel`; no
+CommunityToolkit SettingsControls dependency. **Appearance** (#639) is one `RadioButtons` (Light, Dark, Use system) with `SelectedIndex` bound two-way to
+`ThemeIndex`: loose `RadioButton`s with `Command` only run on Click, and an arrow key moves their focus without changing the
+selection (MEASURED 2026-10-03), so use the `RadioButtons` control for any choice set that must work from the keyboard. #106 built the **Diagnostics** group (the Save diagnostics button,
 Open folder, the status line and one line saying what is and is never included). #104 adds its groups to the same
 panel and keeps this one. The run-error strings say "Choose Save diagnostics in Settings"; `Guards.Tests/SaveDiagnosticsWiringTests`
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
