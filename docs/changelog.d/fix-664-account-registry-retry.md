@@ -1,0 +1,1 @@
+- Fix the flaky AccountRegistry retry test (#664): the product already reports an exhausted read as Unreadable (never a silent empty list); the test released its lock at the instant of the last retry, so a slow CI runner lost the race. The read backoff is now a test seam.

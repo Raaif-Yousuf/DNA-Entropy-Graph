@@ -1,0 +1,1 @@
+- tooling: `scripts/hooks/gcloud_read_only.py` replaces the blanket `gcloud *` deny, so a session can read Google Cloud state (list, describe, ls, config/auth list) while every mutating `gcloud`/`gsutil`/`bq` call, an unknown verb and a token print stay refused.

@@ -53,4 +53,12 @@ public interface IComputeGateway
     /// <c>instances.aggregatedList</c> filtered on those two labels. Used by the reconciler's idle-VM sweep (issue #530).
     /// </summary>
     Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Every VM carrying <c>app=dna-entropy-graph</c>, whichever installation or job it belongs to, across every zone. A real gateway
+    /// implements this via <c>instances.aggregatedList</c> filtered on the app label alone and, like the other listings, fails when a
+    /// zone cannot be read rather than return a partial list. For the CloudCli's inventory (issue #60) only: no run decides anything
+    /// from another installation's VMs.
+    /// </summary>
+    Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken);
 }

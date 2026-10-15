@@ -91,7 +91,8 @@ ask IT, or use a personal account. *(`NO_EXTERNAL_IP`)*
 
 **"You are not allowed to run computers as the worker identity"**, a narrower permission
 problem than being a non-Owner; ask your project's Owner for the specific role named in
-the message. Choose **Copy request for the project owner** and send it to them. *(`PERMISSION_ACTAS`)*
+the message. Choose **Copy request for the project owner** and send it to them. The same
+button appears on the failed run in the Runs list. *(`PERMISSION_ACTAS`)*
 
 **"Using the default computer identity"**, a yellow note, not a failure: your organization does
 not let apps create their own worker identity (a service account), so the rented computer

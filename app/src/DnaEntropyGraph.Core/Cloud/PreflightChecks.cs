@@ -6,7 +6,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// run never reaches Uploading at all, per the same rule <see cref="VmProvisioner"/> enforces for a project-wide error
 /// discovered later, at create time.
 /// </summary>
-internal sealed class PreflightChecks(IProjectSetupGateway projectSetup, IQuotaGateway quota, GatewayCalls calls)
+internal sealed class PreflightChecks(IProjectSetupGateway projectSetup, IQuotaGateway quota, GatewayCalls calls, CloudRunSettings settings)
 {
     public async Task<(CloudErrorKind Kind, string Message)?> RunAsync(CloudJobRequest request, CancellationToken cancellationToken)
     {
@@ -35,7 +35,24 @@ internal sealed class PreflightChecks(IProjectSetupGateway projectSetup, IQuotaG
         // quota (1) makes this preflight step pass unless a test explicitly
         // scripts a quota for this exact placeholder string.
         const string PlaceholderAcceleratorType = "gpu";
-        var gpuQuota = await calls.CallAsync(token => quota.GetGpuQuotaAsync(projectId, RegionOf(request.Zones[0]), PlaceholderAcceleratorType, token), cancellationToken).ConfigureAwait(false);
+        // DECISION (agent-made, reversible) #88, docs/cloud_design.md section 6.2: an unreadable quota is UNKNOWN, and unknown is not
+        // "none". A read that fails with a project-wide kind (permission, billing, api_disabled, org_policy) would fail the create too, so
+        // the run ends here with that classified error. Any other failure (network, 5xx, the quota budget) lets provisioning go on: quota
+        // is pre-filterable, not a stop sign, and a real shortage still surfaces as a classified quota error on the create.
+        int gpuQuota;
+        try
+        {
+            gpuQuota = await calls.CallAsync(token => quota.GetGpuQuotaAsync(projectId, RegionOf(request.Zones[0]), PlaceholderAcceleratorType, token), cancellationToken, settings.QuotaReadTimeout).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (VmFacts.IsProjectWide(ex.Kind))
+        {
+            return (ex.Kind, ex.Error.Message);
+        }
+        catch (CloudOperationException)
+        {
+            return null;
+        }
+
         if (gpuQuota <= 0)
         {
             return (CloudErrorKind.Quota, $"No GPU quota available in region '{RegionOf(request.Zones[0])}' for project '{projectId}'.");

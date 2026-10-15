@@ -2,6 +2,7 @@ using DnaEntropyGraph.Core.Cloud;
 using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
+using Polly.Timeout;
 
 namespace DnaEntropyGraph.Cloud;
 
@@ -24,6 +25,10 @@ namespace DnaEntropyGraph.Cloud;
 /// </summary>
 public sealed class CloudCallPipeline
 {
+    /// <summary>Set on the resilience context by a call that is one small request: its attempt is capped (<see cref="CloudRetryOptions.AttemptTimeout"/>). Absent means no cap.</summary>
+    private static readonly ResiliencePropertyKey<TimeSpan> AttemptTimeoutKey = new("AttemptTimeout");
+
+    private readonly TimeSpan _attemptTimeout;
     private readonly ICloudTokenRefresher _refresher;
     private readonly ICloudCallObserver _observer;
     private readonly ResiliencePipeline _pipeline;
@@ -35,6 +40,7 @@ public sealed class CloudCallPipeline
         ArgumentNullException.ThrowIfNull(options);
         _refresher = refresher;
         _observer = observer;
+        _attemptTimeout = options.AttemptTimeout;
 
         _pipeline = BuildPipeline(options, withBreaker: true);
 
@@ -89,6 +95,12 @@ public sealed class CloudCallPipeline
             });
         }
 
+        // Innermost, so each retry attempt (and the breaker) sees its own cut as a transient TimeoutRejectedException.
+        builder.AddTimeout(new TimeoutStrategyOptions
+        {
+            TimeoutGenerator = args => new ValueTask<TimeSpan>(args.Context.Properties.GetValue(AttemptTimeoutKey, Timeout.InfiniteTimeSpan)),
+        });
+
         return builder.Build();
     }
 
@@ -101,12 +113,13 @@ public sealed class CloudCallPipeline
     /// <param name="action">The gateway call.</param>
     /// <param name="cancellationToken">Cancels the call and any wait between retries.</param>
     /// <param name="bypassBreaker">True for cleanup that must still reach Google while the breaker is open (cancel, stop, delete, find-by-job): same retries, no breaker.</param>
+    /// <param name="singleRequest">True for a call that is exactly one small HTTP request: each attempt is cut after <see cref="CloudRetryOptions.AttemptTimeout"/> and retried. False (the default) for media transfers and for calls that wrap several requests, which have their own deadlines.</param>
     /// <param name="replayable">False when the call consumes something that cannot be replayed (a non-seekable upload stream): it then gets neither retries nor a 401 replay.</param>
-    public async Task<T> ExecuteAsync<T>(string operation, Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false)
+    public async Task<T> ExecuteAsync<T>(string operation, Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false, bool singleRequest = false)
     {
         try
         {
-            return await RunAsync(operation, action, cancellationToken, replayable, bypassBreaker).ConfigureAwait(false);
+            return await RunAsync(operation, action, cancellationToken, replayable, bypassBreaker, singleRequest).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 401 && replayable)
         {
@@ -114,7 +127,7 @@ public sealed class CloudCallPipeline
             _observer.OnTokenRefreshed(operation);
             try
             {
-                return await RunAsync(operation, action, cancellationToken, replayable, bypassBreaker).ConfigureAwait(false);
+                return await RunAsync(operation, action, cancellationToken, replayable, bypassBreaker, singleRequest).ConfigureAwait(false);
             }
             catch (CloudOperationException again) when (again.Error.HttpStatus == 401)
             {
@@ -123,7 +136,7 @@ public sealed class CloudCallPipeline
         }
     }
 
-    public async Task ExecuteAsync(string operation, Func<CancellationToken, Task> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false)
+    public async Task ExecuteAsync(string operation, Func<CancellationToken, Task> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false, bool singleRequest = false)
         => await ExecuteAsync<bool>(
             operation,
             async token =>
@@ -133,9 +146,10 @@ public sealed class CloudCallPipeline
             },
             cancellationToken,
             replayable,
-            bypassBreaker).ConfigureAwait(false);
+            bypassBreaker,
+            singleRequest).ConfigureAwait(false);
 
-    private async Task<T> RunAsync<T>(string operation, Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken, bool replayable, bool bypassBreaker)
+    private async Task<T> RunAsync<T>(string operation, Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken, bool replayable, bool bypassBreaker, bool singleRequest)
     {
         if (!replayable)
         {
@@ -147,6 +161,11 @@ public sealed class CloudCallPipeline
         var context = ResilienceContextPool.Shared.Get(operation, cancellationToken);
         try
         {
+            if (singleRequest)
+            {
+                context.Properties.Set(AttemptTimeoutKey, _attemptTimeout);
+            }
+
             return await TranslateAsync(
                 async () => await pipeline.ExecuteAsync(async ctx => await action(ctx.CancellationToken).ConfigureAwait(false), context).ConfigureAwait(false),
                 cancellationToken).ConfigureAwait(false);
@@ -168,6 +187,11 @@ public sealed class CloudCallPipeline
             // A diagnostic, not user text: the UI shows the resource string
             // for the run's "network" error code (Hard Rule 13).
             throw new CloudOperationException(new CloudError("OFFLINE", null, "circuit open"), CloudErrorKind.Network);
+        }
+        catch (TimeoutRejectedException)
+        {
+            // The per-attempt cap: every attempt was cut, so the service is not answering.
+            throw new CloudOperationException(new CloudError("TIMEOUT", null, "request timed out"), CloudErrorKind.Network);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -198,7 +222,7 @@ public sealed class CloudCallPipeline
     /// </summary>
     internal static bool IsTransient(Exception exception, CancellationToken cancellationToken)
     {
-        if (exception is HttpRequestException)
+        if (exception is HttpRequestException or TimeoutRejectedException)
         {
             return true;
         }
