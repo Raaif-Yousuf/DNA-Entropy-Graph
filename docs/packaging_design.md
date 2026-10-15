@@ -230,22 +230,43 @@ permanently red check.
 
 ## 9. release.yml (issues #178, #518, #165, #255, #181)
 
-Jobs, in order: `verify` (secrets, lockstep with the tag, tag is on `main`), `images` (matrix `cuda`/`cpu`), `wheel`, `app`,
-`publish`, `verify-reminder`. Structure is pinned by `scripts/tests/test_release_workflow.py`; the file is also linted with
-actionlint (`uvx --from actionlint-py actionlint .github/workflows/release.yml`). MEASURED 2026-10-15: actionlint 1.7.12 exits 0 on it and `check_actions_pinned.py` passes.
+Jobs, in order: `verify` (secrets, lockstep with the tag, tag is on `main`), `images` (matrix `cuda`/`cpu`), `wheel`, `app`
+(signing secrets, READ token), `upload` (write token, no secret), `publish`, `verify-reminder`. `verify` and `app` run under the
+`release` GitHub environment (tag rule `v*`, required reviewers, environment-scoped secrets; owner steps in #703 and
+`release_runbook.md` section 0). Every checkout sets `persist-credentials: false`. Steps are addressed by exact name in the test, and
+the app job order (sign, pack, sign Setup.exe, verify, stage, attest, hand off) and the publish order (attach, asset check, flip) are
+pinned step by step. Structure is pinned by `scripts/tests/test_release_workflow.py`; the file is also linted with
+actionlint (`uvx --from actionlint-py actionlint .github/workflows/release.yml`). MEASURED 2026-10-15: actionlint exits 0 on it, `check_actions_pinned.py` passes, and `git ls-remote` confirmed each of the 13 distinct pinned SHAs exists and matches its `# vX.Y.Z` comment (two tags are annotated: the peeled commit matches).
 Nothing here has run on a real tag yet; `docs/ToTest.md` carries the row.
 
 - **OAuth client (#518).** `OAUTH_CLIENT_JSON` is the file Google's console downloads for the Desktop-app client. The `app` job
-  parses it (failing with a named action if it is not an `installed` object), masks the id and secret in the log, and writes
+  is read by `scripts/write_oauth_client.py`, which keeps ONLY `installed.client_id` and `installed.client_secret` (validated
+  non-empty strings; every other field is dropped), masks both before printing or writing anything, and writes
   `oauth_client.local.json` into the publish folder next to the exe, which `OAuthClientLoader.DefaultCandidates` checks first, so
-  `vpk pack` carries it in the payload. It never touches git. The installer is never uploaded as an Actions artifact (the payload
-  holds the file; anyone with read access to a public repo can download artifacts) but goes straight to the draft release, which
-  is public by design: Google says a Desktop-app client secret is not confidential (CLAUDE.md Hard Rule 12).
+  `vpk pack` carries it in the payload. It never touches git and is never an artifact on its own. The signed installer payload does
+  hold it, and the draft/public release is public by design (Google says a Desktop-app client secret is not confidential,
+  CLAUDE.md Hard Rule 12). A job cannot read another job's disk, so the `app` job hands the staged release files to the `upload` job
+  through ONE artifact, `release-files` (path `stage/*`, one day of retention). DECISION (agent-made, reversible): this is the only
+  artifact that may carry packages; `test_release_workflow.py` forbids every other upload-artifact step from touching
+  `app/releases`, `app/publish`, `*.nupkg`, `*.exe` or the OAuth file in any slash form. The alternative (one job with the write token
+  and the secrets) was rejected so the job that builds the repo never holds contents: write.
 - **SBOM and provenance (#165).** CycloneDX SBOMs (anchore/sbom-action, Apache-2.0) for the app publish folder (taken before the
   OAuth file is written) and for each image digest. `actions/attest` (MIT) attaches SLSA provenance and the SBOM as GitHub
   attestations: to the installer and nupkg, and to each image in GHCR (`push-to-registry`). The images are also built with
   buildkit `provenance: mode=max` and `sbom: true`. Check with `gh attestation verify <file> --repo Raaif-Yousuf/DNA-Entropy-Graph`.
-- **Containers (#255).** The `images` job refuses a Dockerfile whose `FROM` is not pinned by `@sha256`, builds with
+- **Signatures.** After signing, every signed file (the exe, every `DnaEntropyGraph.*.dll`, `Setup.exe`) must pass `signtool verify /pa`,
+  `Get-AuthenticodeSignature` status `Valid`, AND carry the owner's identity in its signer subject (`RELEASE_SIGNER_SUBJECT`, an
+  environment variable). A file signed by someone else fails the build.
+- **Which files are this release (#178, #179).** MEASURED 2026-10-15 from velopack 1.2.161 source (tag `1.2.161`, which exists on
+  NuGet): `vpk download github` fetches only the latest FULL nupkg (no feed file); `vpk pack` writes `assets.win.json` naming what it
+  produced; `vpk upload github` uploads exactly the files that names, then `releases.win.json` and, for the default Windows channel,
+  a legacy `RELEASES`. So the feed names to expect on a release are `releases.win.json` and `RELEASES`. A prior release's nupkg left
+  in `app/releases` is never uploaded, but a `*.nupkg` glob would have attested it: `scripts/release_assets.py stage` reads
+  `assets.win.json` instead (refusing a nupkg of another version, requiring the full nupkg and `Setup.exe`), and `check` verifies the
+  published asset NAMES, anchored (the full nupkg of this version, not only a delta).
+- **Containers (#255).** The `images` job runs `scripts/check_dockerfile_base_pinned.py` (tested against fixture Dockerfiles): EVERY
+  `FROM` must be pinned by `@sha256` (a multi-stage file with one pinned stage fails; `FROM <earlier stage>` and `scratch` are
+  exempt). The job then builds with
   `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true`, pushes, then runs Trivy (Apache-2.0) on the pushed digest and fails on a
   fixable HIGH or CRITICAL finding. The publish job needs it, and a digest that failed the scan is never written into
   `worker-images.json`, so no released app can run it. The tag it pushed stays in GHCR. MEASURED 2026-09 (issue #255 thread):
@@ -253,8 +274,8 @@ Nothing here has run on a real tag yet; `docs/ToTest.md` carries the row.
   "same tag gives the same digest" is NOT yet true; the timestamp rewrite is the next lever and is THEORY (unverified) until two
   release builds are compared. `Dockerfile.cuda` still builds from an unpinned NGC tag (#37), so a release cannot be cut until
   that base is pinned: the gate is working as intended, not a bug.
-- **Draft until complete.** `vpk upload github` without `--publish` creates a draft. The `publish` job downloads it, adds the
-  wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, asserts every expected asset name is present, and only then runs
+- **Draft until complete.** `vpk upload github` (in the `upload` job) without `--publish` creates a draft. The `publish` job downloads it, adds the
+  wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, asserts every expected asset name is present (exact, anchored), and only then runs
   `gh release edit --draft=false` (a tag containing `-` becomes a pre-release instead of the latest release).
 - **Reminder (#181).** The last job opens `Verify <tag> on a clean VM` with the runbook's checklist, unless an issue with that
   exact title already exists, so re-running the workflow never opens a second one.

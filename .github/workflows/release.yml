@@ -5,22 +5,27 @@ name: release
 #     git tag vX.Y.Z && git push origin vX.Y.Z
 #
 # Shape (docs/packaging_design.md sections 3, 4, 6, 7 explain why):
-#   verify   asserts every secret exists, then the version lockstep with the tag. Every other job needs it, so a missing
-#            secret stops the run BEFORE anything is built, signed or pushed. The Azure signing action silently no-ops
-#            when its inputs are empty and would leave an unsigned installer that looks like any other (#178).
+#   verify   asserts every secret exists, then the version lockstep with the tag and that the tag is on main. Every other
+#            job needs it, so a missing secret stops the run BEFORE anything is built, signed or pushed. The Azure signing
+#            action silently no-ops when its inputs are empty and would leave an unsigned installer that looks like any
+#            other (#178).
 #   images   builds, pushes, scans (Trivy gate) and attests the -cuda and -cpu worker images (#255, #165).
 #   wheel    builds the worker wheel.
 #   app      pins the image digests into the app, publishes, injects the OAuth client from a secret (#518), signs, packs
-#            with Velopack, verifies the signature, attests, and uploads the installer as a DRAFT release.
-#   publish  attaches the checksums, wheel, SBOMs and image digests, checks every expected asset is there, and only then
-#            makes the release public. The in-app updater reads the Releases API, so a release that is public before all
-#            its assets exist would be offered to users half-uploaded (#179).
+#            with Velopack, verifies every signature AND the signer, stages exactly this release's files, attests them.
+#            It holds the signing secrets and only a READ token.
+#   upload   the only job besides publish with a write token. Uploads the staged files as a DRAFT release (vpk).
+#   publish  attaches the checksums, wheel, SBOMs and image digests, checks every expected asset is there (exact names), and
+#            only then makes the release public. The in-app updater reads the Releases API, so a release that is public
+#            before all its assets exist would be offered to users half-uploaded (#179).
 #   verify-reminder  opens one "Verify <tag> on a clean VM" issue (#181).
 #
-# A signed build needs the secrets named in the verify job; the runbook lists where they come from. Nothing here prints a
-# secret value: the assert step prints names only and the OAuth file is masked before it is written.
+# The jobs that hold secrets (verify, app) run under the `release` environment: tag restriction v*, required reviewers and
+# environment-scoped secrets (docs/release_runbook.md section 0). Nothing here prints a secret value: the assert step prints
+# names only and the OAuth values are masked before anything else is written.
 #
 # Every action is pinned by commit SHA (scripts/check_actions_pinned.py); Dependabot moves the SHA and its `# vX.Y.Z` comment.
+# Steps carry exact names on purpose: scripts/tests/test_release_workflow.py pins their order by name.
 on:
   push:
     tags:
@@ -41,10 +46,13 @@ jobs:
     name: verify secrets and version lockstep
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: release
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Names only. A value is never printed (the env block hands each secret to the shell, nothing echoes it).
       - name: assert every release secret exists
@@ -56,18 +64,20 @@ jobs:
           TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
           TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
           OAUTH_CLIENT_JSON: ${{ secrets.OAUTH_CLIENT_JSON }}
+          RELEASE_SIGNER_SUBJECT: ${{ vars.RELEASE_SIGNER_SUBJECT }}
         run: |
           missing=""
-          for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET TRUSTED_SIGNING_ENDPOINT TRUSTED_SIGNING_ACCOUNT TRUSTED_SIGNING_PROFILE OAUTH_CLIENT_JSON; do
+          for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET TRUSTED_SIGNING_ENDPOINT TRUSTED_SIGNING_ACCOUNT TRUSTED_SIGNING_PROFILE OAUTH_CLIENT_JSON RELEASE_SIGNER_SUBJECT; do
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
-            echo "::error title=Release secrets missing::Set these repository secrets, then re-run (see docs/release_runbook.md section 0):$missing"
+            echo "::error title=Release secrets missing::Set these in the release environment (RELEASE_SIGNER_SUBJECT is an environment variable), then re-run (see docs/release_runbook.md section 0):$missing"
             exit 1
           fi
           echo "OK: all release secrets are set"
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: set up python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
@@ -97,17 +107,15 @@ jobs:
       matrix:
         variant: [cuda, cpu]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # #255: a base that is not pinned by digest is not reproducible, and the release refuses to publish one.
+      # #255: a base that is not pinned by digest is not reproducible, and the release refuses to publish one. EVERY FROM
+      # must be pinned (a multi-stage file with one pinned stage fails). The logic is a script with its own tests.
       - name: the base image is pinned by digest
-        run: |
-          from_line=$(grep -E '^FROM ' "worker/Dockerfile.${{ matrix.variant }}")
-          echo "$from_line"
-          if ! echo "$from_line" | grep -q '@sha256:[0-9a-f]\{64\}'; then
-            echo "::error title=Base image not pinned::worker/Dockerfile.${{ matrix.variant }} must pin its FROM by @sha256 digest (issue 255). Resolve the digest and commit it."
-            exit 1
-          fi
+        run: python3 scripts/check_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"
 
       # The NGC PyTorch base is large; an ubuntu runner has about 14 GB free until these are removed.
       - name: free disk space
@@ -115,9 +123,11 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: set up buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - name: log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -198,11 +208,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
       - name: build the wheel
         run: uv build --wheel --out-dir dist worker
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: keep the wheel for the release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: worker-wheel
           path: dist/*.whl
@@ -214,18 +229,31 @@ jobs:
     needs: [verify, images]
     runs-on: windows-latest
     timeout-minutes: 60
+    environment: release
+    # READ only. The OAuth client file and the signing secrets live here, next to code that builds the repo; the write
+    # token lives in the upload job, which never sees a secret.
     permissions:
-      contents: write
+      contents: read
       attestations: write
       id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - name: set up python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: set up dotnet
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: app/global.json
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - name: download the image digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-*
           path: images
@@ -270,26 +298,16 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
-      # #518. The Desktop-app client file is read from a secret, masked, and written next to the exe (the first place
-      # OAuthClientLoader.DefaultCandidates looks) so vpk packs it into the payload. It is never in git and never in an
-      # artifact: the only uploads of this job are the SBOM and the signed installer's attestation, and the installer itself goes to the
-      # draft release, not to an Actions artifact.
+      # #518. The Desktop-app client file is written next to the exe (the first place OAuthClientLoader.DefaultCandidates
+      # looks) so vpk packs it into the payload. The script keeps ONLY installed.client_id and installed.client_secret,
+      # validates them and masks both before it prints or writes anything. It is never in git and never in an Actions artifact.
       - name: write oauth_client.local.json from the secret
         shell: pwsh
         env:
           OAUTH_CLIENT_JSON: ${{ secrets.OAUTH_CLIENT_JSON }}
         run: |
-          $doc = $env:OAUTH_CLIENT_JSON | ConvertFrom-Json
-          $id = $doc.installed.client_id
-          $secret = $doc.installed.client_secret
-          if (-not $id -or -not $secret) {
-            Write-Host "::error title=OAuth client secret is not a Desktop-app download::OAUTH_CLIENT_JSON must be the JSON Google's console gives for a Desktop app client (an installed object with client_id and client_secret). Replace the secret, then re-run."
-            exit 1
-          }
-          Write-Host "::add-mask::$id"
-          Write-Host "::add-mask::$secret"
-          [System.IO.File]::WriteAllText("$PWD/app/publish/oauth_client.local.json", $env:OAUTH_CLIENT_JSON, (New-Object System.Text.UTF8Encoding($false)))
-          Write-Host "OK: oauth_client.local.json written to the publish folder"
+          python scripts/write_oauth_client.py --out app/publish/oauth_client.local.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Only this project's own binaries are signed. Microsoft's files in the publish folder keep Microsoft's signature.
       - name: list the binaries to sign
@@ -317,7 +335,9 @@ jobs:
       - name: install vpk
         run: dotnet tool install -g vpk --version 1.2.161
 
-      # Deltas need the previous release's packages. The first release has none to download.
+      # MEASURED 2026-10-15 from velopack 1.2.161 source: `vpk download github` fetches only the latest full nupkg (it
+      # gives pack the base for a delta). Whatever it leaves in app/releases is NOT part of this release: pack names this
+      # release's files in assets.win.json and the stage step below reads only that.
       - name: download the previous release (for delta updates)
         shell: pwsh
         env:
@@ -356,30 +376,99 @@ jobs:
           timestamp-digest: SHA256
 
       # The proof that signing happened. A green signing step alone is not: the action can no-op on a bad configuration.
+      # EVERY signed file is checked (the exe, every DnaEntropyGraph.*.dll, Setup.exe): the chain is valid (signtool /pa)
+      # and the signer is OUR identity (the subject must contain the owner's validated name), so a file signed by someone
+      # else, or with a different certificate profile, fails too.
       - name: verify the signatures
         shell: pwsh
+        env:
+          OWN_FILES: ${{ steps.own.outputs.files }}
+          EXPECTED_SIGNER_SUBJECT: ${{ vars.RELEASE_SIGNER_SUBJECT }}
         run: |
           $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
           if (-not $tool) { Write-Host "::error title=No signing tool::the Windows SDK signing tool was not found on the runner."; exit 1 }
-          foreach ($f in 'app/releases/DnaEntropyGraph-win-Setup.exe', 'app/publish/DnaEntropyGraph.App.exe') {
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_SIGNER_SUBJECT)) { Write-Host "::error title=No expected signer::RELEASE_SIGNER_SUBJECT is empty. Set it in the release environment, then re-run."; exit 1 }
+          $files = @($env:OWN_FILES -split ',' | Where-Object { $_ }) + "$env:GITHUB_WORKSPACE\app\releases\DnaEntropyGraph-win-Setup.exe"
+          if ($files.Count -lt 3) { Write-Host "::error title=Nothing to verify::only $($files.Count) signed files were listed."; exit 1 }
+          foreach ($f in $files) {
             & $tool.FullName verify /pa $f
             if ($LASTEXITCODE -ne 0) { Write-Host "::error title=Not signed::$f failed signature verification."; exit 1 }
+            $sig = Get-AuthenticodeSignature -FilePath $f
+            if ($sig.Status -ne 'Valid') { Write-Host "::error title=Not signed::$f has signature status $($sig.Status)."; exit 1 }
+            if ($sig.SignerCertificate.Subject -notlike "*$($env:EXPECTED_SIGNER_SUBJECT)*") { Write-Host "::error title=Wrong signer::$f is signed by $($sig.SignerCertificate.Subject), not the expected identity."; exit 1 }
           }
+          Write-Host "OK: $($files.Count) files carry a valid signature from the expected signer"
+
+      # Only the files vpk pack listed for THIS version (and never a prior release's package that vpk download left
+      # behind) are staged. The step writes the attestation subjects; the upload job gets the staged folder.
+      - name: stage this release's files
+        id: assets
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          python scripts/release_assets.py stage --dir app/releases --stage stage --version $version --github-output $env:GITHUB_OUTPUT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: provenance attestation for the installer
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: |
-            app/releases/*.exe
-            app/releases/*.nupkg
+          subject-path: ${{ steps.assets.outputs.subjects }}
 
       - name: SBOM attestation for the installer
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: app/releases/DnaEntropyGraph-win-Setup.exe
+          subject-path: stage/DnaEntropyGraph-win-Setup.exe
           sbom-path: sbom-app.cdx.json
 
-      # A DRAFT: vpk creates the release as a draft unless --publish is given. The publish job flips it.
+      - name: keep the app SBOM for the release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-app
+          path: sbom-app.cdx.json
+          retention-days: 7
+          if-no-files-found: error
+
+      # The one deliberate package hand-off between jobs (a job cannot read another job's disk). It is the SAME signed
+      # installer the public release will carry, one day of retention, and the folder holds only what stage copied.
+      - name: hand the staged files to the upload job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
+          path: stage/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # A DRAFT: vpk creates the release as a draft unless --publish is given. The publish job flips it. This job holds the
+  # write token and no secret; the app job holds the secrets and no write token.
+  upload:
+    name: upload the draft release
+    needs: [verify, app]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: set up dotnet
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: app/global.json
+
+      - name: download the staged files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: app/releases
+
+      - name: install vpk
+        run: dotnet tool install -g vpk --version 1.2.161
+
+      # MEASURED 2026-10-15 (velopack 1.2.161): upload sends exactly the files assets.win.json names, then releases.win.json
+      # and the legacy RELEASES. Without --merge it fails if the tag already has a release, so a re-run never mixes files.
       - name: vpk upload github (draft)
         shell: pwsh
         env:
@@ -390,17 +479,9 @@ jobs:
           vpk upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN --tag $env:GITHUB_REF_NAME --releaseName "DNA Entropy Graph $env:GITHUB_REF_NAME" --targetCommitish $env:GITHUB_SHA --outputDir app/releases @pre
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: keep the app SBOM for the release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: sbom-app
-          path: sbom-app.cdx.json
-          retention-days: 7
-          if-no-files-found: error
-
   publish:
     name: publish the release
-    needs: [verify, images, wheel, app]
+    needs: [verify, images, wheel, app, upload]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -408,7 +489,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: download the images, wheel and SBOM artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: extras
 
@@ -458,17 +545,13 @@ jobs:
       - name: attach the extra assets to the draft
         run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber assets/*.whl assets/*.cdx.json assets/image-digests.txt assets/SHA256SUMS
 
-      # Every asset the installer, the updater and a reviewer need must exist before the release can be seen.
+      # Every asset the installer, the updater and a reviewer need must exist before the release can be seen. Exact,
+      # anchored names (MEASURED from velopack 1.2.161 source: releases.win.json plus the legacy RELEASES), and the FULL
+      # nupkg of THIS version: a delta alone cannot install.
       - name: every expected asset is attached
         run: |
-          names=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
-          echo "$names"
-          for pattern in 'Setup\.exe$' '\.nupkg$' '^RELEASES' '\.whl$' '^SHA256SUMS$' '^image-digests\.txt$' 'sbom-app\.cdx\.json$' 'sbom-image-cuda\.cdx\.json$' 'sbom-image-cpu\.cdx\.json$'; do
-            if ! echo "$names" | grep -Eq "$pattern"; then
-              echo "::error title=Release is missing an asset::nothing matching $pattern is attached to the draft. It stays a draft; fix the cause and re-run the failed job."
-              exit 1
-            fi
-          done
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tee names.txt
+          python3 scripts/release_assets.py check --version "${GITHUB_REF_NAME#v}" < names.txt
 
       - name: make the release public
         run: |
@@ -489,11 +572,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      # Re-running the workflow must not open a second one: look for the title first.
+      # Re-running the workflow must not open a second one: look for the title first. The title goes to jq as an argument.
       - name: open the issue if there is not one already
         run: |
           title="Verify ${GITHUB_REF_NAME} on a clean VM"
-          existing=$(gh issue list --state all --search "\"$title\" in:title" --json title --jq "[.[] | select(.title == \"$title\")] | length")
+          existing=$(gh issue list --state all --search "\"$title\" in:title" --json title | jq --arg t "$title" '[.[] | select(.title == $t)] | length')
           if [ "$existing" != "0" ]; then
             echo "OK: an issue titled '$title' already exists"
             exit 0

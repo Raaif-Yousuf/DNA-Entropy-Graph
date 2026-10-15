@@ -158,6 +158,13 @@ tokens expire weekly.
 **Blocks:** more than 100 total users, and anything beyond a small lab group without
 re-authenticating weekly. Per #11's recommendation, this is timed for v0.3, not now.
 
+### 5c. Create the `release` GitHub environment (#703)
+
+`release.yml` runs its two secret-holding jobs under `environment: release`. Create it in Settings > Environments: a TAG rule
+`v*`, required reviewers (you), the seven release secrets from 5a moved in as ENVIRONMENT secrets (then delete the repository-level
+copies), and one environment VARIABLE `RELEASE_SIGNER_SUBJECT` (the validated name in the Trusted Signing certificate subject).
+Exact steps and the check commands are in #703. **Blocks:** the first tag run (v0.1).
+
 ---
 
 ## What is NOT here, and why
