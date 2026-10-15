@@ -110,7 +110,24 @@ never touches any checkout's working tree and never force-pushes.
 worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <sha> --title "feat: ..." --body-file body.md          # premerge --fast
 worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <sha> --title "feat: ..." --body-file body.md --full   # full premerge
 gh pr merge <n> --merge                                                                                                                # your call, after CI
+worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <sha> --title "feat: ..." --body-file body.md --merge-when-green   # wait for CI, merge only if green
 ```
+
+**`--merge-when-green` (#666).** MEASURED 2026-10-15: `main` is unprotected and `scripts tests` was red on PRs #656, #657
+and #660, which all merged, because a `gh pr checks --watch; gh pr merge` chain exits 0 even when a check failed. With the
+flag, after the PR opens the script polls `gh pr checks <pr> --json name,bucket,state` every `--checks-poll` seconds (default
+20) for up to `--checks-timeout` seconds (default 1800) and then:
+
+| Outcome | Exit | Merges? |
+| --- | --- | --- |
+| every check `pass` or `skipping` | 0 | yes, `gh pr merge <pr> --merge` (a merge commit) |
+| any check `fail` or `cancel` (reported at once, naming each) | 5 | no, the PR stays open |
+| a check still pending, or no check reported at all, at the timeout | 6 | no, the PR stays open |
+| every check green but `gh pr merge` itself fails | 4 | no |
+
+A pending check at the timeout never merges, and an empty check list is "not green yet", never green (gh reports no checks for
+a moment after the PR opens). Console output is ASCII. Without the flag nothing changes: the script prints the
+`gh pr merge` line and you decide.
 
 In order: fetch; the sha must be the branch tip (a stale sha refuses); a control-byte scan of the changed text files
 (MEASURED 2026-10-02: an agent's `scripts\v` became `\x0b`); a detached worktree under `%TEMP%\landwt` at the sha; origin/main
