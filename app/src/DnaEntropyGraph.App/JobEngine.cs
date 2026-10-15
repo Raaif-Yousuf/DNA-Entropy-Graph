@@ -200,7 +200,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         => string.Equals(target, "Cloud", StringComparison.OrdinalIgnoreCase)
            || string.Equals(target, "Auto", StringComparison.OrdinalIgnoreCase);
 
-    private static string AppVersion()
+    internal static string AppVersion()
         => Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
     private async Task FailBeforeStartAsync(string jobId, RunOptions options, string errorCode, CancellationToken cancellationToken, string? errorDetail = null)

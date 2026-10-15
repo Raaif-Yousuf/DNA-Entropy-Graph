@@ -50,13 +50,14 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     public async Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_options.InstallationId))
+        var installationId = _options.CurrentInstallationId;
+        if (string.IsNullOrWhiteSpace(installationId))
         {
             throw new InvalidOperationException("The results bucket needs the installation id: a bucket without the installation-id label is invisible to the Cloud page (Hard Rule 10).");
         }
 
         ResultsBucket.ValidateRetentionDays(_options.ResultsRetentionDays);
-        var labels = ResultsBucket.Labels(_options.InstallationId, _options.AppVersion);
+        var labels = ResultsBucket.Labels(installationId, _options.AppVersion);
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         var existing = await FindOursAsync(projectId, preferOwnInstallation: true, cancellationToken).ConfigureAwait(false);
@@ -108,7 +109,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         var ours = await ListOursAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         return ours
-            .OrderByDescending(b => preferOwnInstallation && string.Equals(InstallationOf(b), _options.InstallationId, StringComparison.Ordinal))
+            .OrderByDescending(b => preferOwnInstallation && string.Equals(InstallationOf(b), _options.CurrentInstallationId, StringComparison.Ordinal))
             .ThenBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
             .ThenBy(b => b.Name, StringComparer.Ordinal)
             .FirstOrDefault();
@@ -306,7 +307,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     private async Task WriteConfigAsync(string bucket, CancellationToken cancellationToken)
     {
-        var json = ResultsBucket.ConfigJson(_options.InstallationId!, _options.AppVersion, _options.ResultsRetentionDays, _options.TimeProvider.GetUtcNow());
+        var json = ResultsBucket.ConfigJson(_options.CurrentInstallationId ?? throw new InvalidOperationException("The installation id became unreadable while the bucket was being set up."), _options.AppVersion, _options.ResultsRetentionDays, _options.TimeProvider.GetUtcNow());
         var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(json);
         try
         {
