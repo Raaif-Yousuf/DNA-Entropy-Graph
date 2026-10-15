@@ -67,11 +67,13 @@
       "PowerShell(git log *)",
       "PowerShell(git diff *)",
       "PowerShell(git show *)",
-      "PowerShell(rtk *)"
-    ],
-    "deny": [
+      "PowerShell(rtk *)",
       "Bash(gcloud *)",
       "PowerShell(gcloud *)",
+      "Bash(gsutil ls *)",
+      "PowerShell(gsutil ls *)"
+    ],
+    "deny": [
       "Bash(aws *)",
       "PowerShell(aws *)",
       "Bash(gh release *)",
@@ -122,6 +124,13 @@
             "shell": "bash",
             "timeout": 10,
             "statusMessage": "Checking this is not a branch change in the primary checkout..."
+          },
+          {
+            "type": "command",
+            "command": "ROOT=$(cd \"$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/..\" 2>/dev/null && pwd); PY=$(command -v python3 || command -v python); if [ -z \"$PY\" ] || [ -z \"$ROOT\" ]; then printf %s '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"The repo safety guards cannot run: no Python interpreter on PATH. Fix PATH, or remove this hook deliberately rather than leaving it silently disabled.\"}}'; else \"$PY\" \"$ROOT/scripts/hooks/run_hook.py\" gcloud_read_only; fi",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking a gcloud call is read-only..."
           }
         ]
       },
