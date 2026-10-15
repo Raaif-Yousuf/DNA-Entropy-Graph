@@ -25,6 +25,7 @@ public sealed class NewRunViewModelTests : IDisposable
     private readonly INavigator _navigator = Substitute.For<INavigator>();
     private readonly FakeStrings _strings = new();
     private readonly ICostEstimateService _estimates = Substitute.For<ICostEstimateService>();
+    private readonly RecordingLog _log = new();
     private NewRunViewModel _viewModel;
 
     public NewRunViewModelTests()
@@ -56,6 +57,8 @@ public sealed class NewRunViewModelTests : IDisposable
         _strings,
         store ?? new LocalPastedInputStore(_appData),
         _estimates,
+        new OutputSelectionStore(Substitute.For<ISettingsStore>()),
+        _log,
         validate,
         files);
 
@@ -1088,9 +1091,260 @@ public sealed class NewRunViewModelTests : IDisposable
 
         await _viewModel.StartRunCommand.ExecuteAsync(null);
 
-        _viewModel.StatusMessage.ShouldBe("NewRunStatusStartFailed");
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusStartFailedOther");
         _viewModel.StartRunCommand.ExecutionTask?.IsFaulted.ShouldNotBe(true);
         _navigator.DidNotReceive().NavigateTo(Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    private sealed class ThrowingLog : IDiagnosticsLog
+    {
+        public void Warning(string source, string? jobId, string errorClass) => throw new InvalidOperationException("log broke");
+    }
+
+    [Fact]
+    public async Task A_log_that_throws_neither_hides_the_start_failure_line_nor_escapes_the_command()
+    {
+        _viewModel = new NewRunViewModel(
+            _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new InvalidOperationException("boom")));
+
+        await Should.NotThrowAsync(() => _viewModel.StartRunCommand.ExecuteAsync(null));
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusStartFailedOther");
+    }
+
+    [Fact]
+    public async Task A_log_that_throws_neither_hides_the_picker_failure_line_nor_escapes_the_command()
+    {
+        _viewModel = new NewRunViewModel(
+            _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("COM")));
+
+        await Should.NotThrowAsync(() => _viewModel.BrowseCommand.ExecuteAsync(null));
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusBrowseFailed");
+    }
+
+    private sealed class RecordingLog : IDiagnosticsLog
+    {
+        public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass) => Entries.Add((source, jobId, errorClass));
+    }
+
+    // ---- #553: a failed start is classified by what threw, logged by class, and posted like every other line ----
+
+    public static TheoryData<Exception, string, string> StartFailures => new()
+    {
+        { new FileNotFoundException("gone"), "NewRunStatusStartFailedFile", "FileNotFoundException" },
+        { new DirectoryNotFoundException("gone"), "NewRunStatusStartFailedFile", "DirectoryNotFoundException" },
+        { new IOException("disk full"), "NewRunStatusStartFailedOther", "IOException" },
+        { new UnauthorizedAccessException("denied"), "NewRunStatusStartFailedFile", "UnauthorizedAccessException" },
+        { new CloudOperationException(new CloudError("QUOTA_EXCEEDED", 403, "quota"), CloudErrorKind.Quota), "NewRunStatusStartFailedCloud", "CloudOperationException:Quota" },
+        { new CloudOperationException(new CloudError(null, 403, "denied"), CloudErrorKind.Permission), "NewRunStatusStartFailedCloud", "CloudOperationException:Permission" },
+        { new AccountAuthException("sign_in_required"), "NewRunStatusStartFailedCloud", "AccountAuthException" },
+        { new InvalidOperationException("boom"), "NewRunStatusStartFailedOther", "InvalidOperationException" },
+        { new SettingsUnavailableException("settings", new IOException("x")), "NewRunStatusStartFailedOther", "SettingsUnavailableException" },
+    };
+
+    [Theory]
+    [MemberData(nameof(StartFailures))]
+    public async Task A_run_that_fails_to_start_says_the_action_for_what_failed_and_logs_only_its_class(Exception failure, string expectedKey, string expectedClass)
+    {
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<string>(failure));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBe(expectedKey);
+        _log.Entries.ShouldBe([("new-run", null, expectedClass)]);
+    }
+
+    [Fact]
+    public void The_start_failure_theory_covers_the_local_cloud_and_other_copy()
+        => StartFailures.Select(row => row.Data.Item2).Distinct().Order().ShouldBe(
+            ["NewRunStatusStartFailedCloud", "NewRunStatusStartFailedFile", "NewRunStatusStartFailedOther"]);
+
+    [Fact]
+    public async Task The_log_of_a_failed_start_never_carries_the_file_name_or_the_exception_message()
+    {
+        var path = Write("secret-sample-name.fasta", ">a\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new FileNotFoundException("no such file " + path, path)));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _log.Entries.ShouldNotBeEmpty();
+        _log.Entries.Select(e => $"{e.Source} {e.JobId} {e.ErrorClass}").ShouldAllBe(line => !line.Contains("secret-sample-name") && !line.Contains("no such file"));
+    }
+
+    [Fact]
+    public async Task A_cancelled_start_is_not_logged_as_a_failure()
+    {
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new OperationCanceledException()));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _log.Entries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failed_start_and_a_failed_picker_do_not_wipe_a_line_another_add_has_already_said()
+    {
+        var blockable = new BlockableValidator();
+        _viewModel = NewViewModel(validate: blockable.Validate);
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        blockable.BlockSuffix = "b.fasta";
+        var adding = _viewModel.AddDroppedCommand.ExecuteAsync(Drop(Write("b.fasta", ">b\n" + Dna + "\n")));
+        blockable.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+
+        // Another add, while b is still being checked, says a line.
+        var missing = Path.Combine(_dir, "nope.fasta");
+        _viewModel.PasteText = missing;
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        var said = "NewRunStatusPathNotFound:" + missing;
+        _viewModel.StatusMessage.ShouldBe(said);
+
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new InvalidOperationException("boom")));
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("COM")));
+        await _viewModel.BrowseCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.Split('\n').ShouldBe([said, "NewRunStatusStartFailedOther", "NewRunStatusBrowseFailed"]);
+        blockable.Release();
+        await adding;
+    }
+
+    [Fact]
+    public async Task A_failed_start_on_an_idle_page_replaces_a_line_left_by_an_earlier_action()
+    {
+        await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
+        _viewModel.PasteText = Path.Combine(_dir, "nope.fasta");
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        _viewModel.StatusMessage.ShouldStartWith("NewRunStatusPathNotFound");
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<string>(new InvalidOperationException("boom")));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBe("NewRunStatusStartFailedOther");
+    }
+
+    [Fact]
+    public async Task A_failed_picker_is_logged_by_class()
+    {
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("COM")));
+
+        await _viewModel.BrowseCommand.ExecuteAsync(null);
+
+        _log.Entries.ShouldBe([("new-run", null, "InvalidOperationException")]);
+    }
+
+    // A check that Treat as RNA started on the pill an add is still checking belongs to the Treat as RNA click, not to the add.
+    private sealed class TwoStageValidator
+    {
+        private readonly ManualResetEventSlim _firstGate = new(false);
+        private readonly ManualResetEventSlim _secondGate = new(false);
+        private int _calls;
+
+        public ManualResetEventSlim FirstEntered { get; } = new(false);
+
+        public ManualResetEventSlim SecondEntered { get; } = new(false);
+
+        public void ReleaseSecond() => _secondGate.Set();
+
+        public void ReleaseFirst() => _firstGate.Set();
+
+        public InputValidationResult Validate(string path, InputFormat format, AmbiguityPolicy policy, bool treatAsRna)
+        {
+            switch (Interlocked.Increment(ref _calls))
+            {
+                case 1:
+                    FirstEntered.Set();
+                    _firstGate.Wait(TimeSpan.FromSeconds(20));
+                    break;
+                case 2:
+                    SecondEntered.Set();
+                    _secondGate.Wait(TimeSpan.FromSeconds(20));
+                    break;
+            }
+
+            return InputFileValidator.Validate(path, format, policy, treatAsRna);
+        }
+    }
+
+    [Fact]
+    public async Task A_cancelled_add_never_marks_the_check_Treat_as_RNA_started_on_the_same_pill_as_stopped()
+    {
+        var validator = new TwoStageValidator();
+        _viewModel = NewViewModel(validate: validator.Validate);
+        var path = Write("rna.fasta", ">r\n" + Rna + "\n");
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([path]));
+
+        var browsing = _viewModel.BrowseCommand.ExecuteAsync(null);
+        validator.FirstEntered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        var pill = _viewModel.Items.Single();
+        var treating = _viewModel.TreatAsRnaCommand.ExecuteAsync(null);
+        validator.SecondEntered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        pill.IsChecking.ShouldBeTrue();
+
+        _viewModel.BrowseCommand.Cancel();
+        try
+        {
+            await browsing;
+        }
+        catch (OperationCanceledException)
+        {
+            // the command may report its own cancellation
+        }
+
+        // The Treat as RNA check is still running: its pill must say so, and Run stays blocked until it lands.
+        pill.IsChecking.ShouldBeTrue("the add's cancel must not end a check the add does not own");
+        pill.ErrorText.ShouldNotBe("NewRunPillCheckStopped");
+        pill.HasError.ShouldBeFalse();
+
+        validator.ReleaseSecond();
+        await treating;
+        validator.ReleaseFirst();
+
+        pill.IsValid.ShouldBeTrue();
+        pill.ErrorText.ShouldBe(string.Empty);
+    }
+
+    [Fact]
+    public async Task An_add_cancelled_before_its_check_began_still_ends_the_checking_state_with_one_action()
+    {
+        var gated = new GatedValidator();
+        _viewModel = NewViewModel(validate: gated.Validate);
+        var a = Write("a.fasta", ">a\n" + Dna + "\n");
+        var b = Write("b.fasta", ">b\n" + Dna + "\n");
+        _picker.PickInputFilesAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([a, b]));
+
+        var browsing = _viewModel.BrowseCommand.ExecuteAsync(null);
+        gated.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        _viewModel.BrowseCommand.Cancel();
+        gated.Release();
+        try
+        {
+            await browsing;
+        }
+        catch (OperationCanceledException)
+        {
+            // the command may report its own cancellation
+        }
+
+        _viewModel.Items.ShouldAllBe(item => !item.IsChecking);
     }
 
     [Fact]
