@@ -109,6 +109,12 @@
     },
     "cancelSeen": {
       "type": "boolean"
+    },
+    "windowsDone": {
+      "type": "integer"
+    },
+    "lastProgressAt": {
+      "type": "string"
     }
   },
   "required": [
