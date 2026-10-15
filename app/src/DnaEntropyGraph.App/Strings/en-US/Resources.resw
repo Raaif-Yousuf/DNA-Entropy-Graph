@@ -433,6 +433,42 @@
   <data name="NewRunPasteAdd.Content" xml:space="preserve">
     <value>Add sequence</value>
   </data>
+  <data name="NewRunPillKind_Ncbi" xml:space="preserve">
+    <value>NCBI record</value>
+  </data>
+  <data name="NewRunPillAccessionSummary" xml:space="preserve">
+    <value>Fetched from NCBI on the rented computer when the run starts</value>
+  </data>
+  <data name="NewRunAccessionExpander.Header" xml:space="preserve">
+    <value>Fetch from NCBI</value>
+  </data>
+  <data name="NewRunAccessionBox.Header" xml:space="preserve">
+    <value>Accession</value>
+  </data>
+  <data name="NewRunAccessionBox.PlaceholderText" xml:space="preserve">
+    <value>For example NC_045512.2</value>
+  </data>
+  <data name="NewRunAccessionStart.Header" xml:space="preserve">
+    <value>From base (optional)</value>
+  </data>
+  <data name="NewRunAccessionEnd.Header" xml:space="preserve">
+    <value>To base (optional)</value>
+  </data>
+  <data name="NewRunAccessionAdd.Content" xml:space="preserve">
+    <value>Fetch record</value>
+  </data>
+  <data name="NewRunAccessionProblem_NotAnAccession" xml:space="preserve">
+    <value>That does not look like an NCBI accession. Check it for typos and type it again, for example NC_045512.2 or MN908947.3.</value>
+  </data>
+  <data name="NewRunAccessionProblem_RangeIncomplete" xml:space="preserve">
+    <value>Fill in both ends of the range, or clear both to fetch the whole record.</value>
+  </data>
+  <data name="NewRunAccessionProblem_RangeInvalid" xml:space="preserve">
+    <value>The range must be whole numbers from 1 up, with the first no bigger than the second. Correct the range and try again.</value>
+  </data>
+  <data name="NewRunAccessionAlreadyAdded" xml:space="preserve">
+    <value>That record is already in the list. Choose it there, or type a different accession.</value>
+  </data>
   <data name="NewRunRemoveItem.Content" xml:space="preserve">
     <value>Remove</value>
   </data>

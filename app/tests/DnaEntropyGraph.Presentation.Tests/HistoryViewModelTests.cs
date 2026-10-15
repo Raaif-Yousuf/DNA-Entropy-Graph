@@ -571,6 +571,19 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task Rerun_of_an_accession_run_starts_again_from_the_same_accession_with_no_input_file()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", Accession = "NC_045512.2", AccessionRange = "100-500" };
+        _engine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns("new-job");
+        var vm = await Loaded(Row("a", options: RunOptionsJson.Serialize(recorded)));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
+
+        await _engine.Received(1).StartRunAsync(Arg.Is<RunOptions>(o => o.Accession == "NC_045512.2" && o.AccessionRange == "100-500" && o.InputPath == null), Arg.Any<CancellationToken>());
+        _navigator.Received(1).NavigateTo("RunProgress", "new-job");
+    }
+
+    [Fact]
     public async Task Rerun_of_a_paired_run_carries_the_gff3_the_app_kept()
     {
         var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\gone\in.fasta", AnnotationPath = @"C:\gone\in.gff3" };

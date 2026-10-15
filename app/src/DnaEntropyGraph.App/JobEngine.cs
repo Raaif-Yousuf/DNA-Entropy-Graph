@@ -92,26 +92,47 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
         // Issue #460 / Hard Rule 14: keep our own copy of the input under app data before anything
         // is created in the cloud; the copy is what is uploaded, the user's file is never touched.
-        var staged = await StageInputAsync(jobId, options, cancellationToken).ConfigureAwait(false);
-        if (staged is null)
+        // Issue #684: an NCBI accession is no file. It is checked here with the worker's own pattern (Hard Rule 2), nothing is copied or
+        // uploaded, and the manifest names it; the worker fetches the record on the VM.
+        StagedInput? staged;
+        var uploads = new List<StagedInput>();
+        if (options.Accession is not null)
         {
-            await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputMissing, cancellationToken).ConfigureAwait(false);
-            return jobId;
-        }
+            var accession = AccessionInput.Check(options.Accession, options.AccessionRange);
+            if (accession.Problem is { } accessionProblem)
+            {
+                await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputInvalid, cancellationToken, "Accession " + accessionProblem).ConfigureAwait(false);
+                return jobId;
+            }
 
-        // Hard Rule 2 / #479: validate the staged copy with this run's own options before any bucket
-        // object or VM exists. Nobody pays for a VM to learn their file has an X in it.
-        var check = InputFileValidator.Validate(staged.LocalPath, options.Format, options.AmbiguityPolicy, options.TreatAsRna);
-        if (check.Problem is { } problem)
+            staged = StagedInput.ForAccession(accession.Accession, accession.Range);
+            uploads.Add(staged);
+        }
+        else
         {
-            await FailBeforeStartAsync(jobId, options, InputProblemErrorCodes.For(problem.Code), cancellationToken, InputProblemErrorCodes.DetailFor(problem)).ConfigureAwait(false);
-            return jobId;
+            staged = await StageInputAsync(jobId, options, cancellationToken).ConfigureAwait(false);
+            if (staged is null)
+            {
+                await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputMissing, cancellationToken).ConfigureAwait(false);
+                return jobId;
+            }
+
+            // Hard Rule 2 / #479: validate the staged copy with this run's own options before any bucket
+            // object or VM exists. Nobody pays for a VM to learn their file has an X in it.
+            var check = InputFileValidator.Validate(staged.LocalPath, options.Format, options.AmbiguityPolicy, options.TreatAsRna);
+            if (check.Problem is { } problem)
+            {
+                await FailBeforeStartAsync(jobId, options, InputProblemErrorCodes.For(problem.Code), cancellationToken, InputProblemErrorCodes.DetailFor(problem)).ConfigureAwait(false);
+                return jobId;
+            }
+
+            uploads.Add(staged);
         }
 
         // Issue #686 / Hard Rule 2: a paired GFF3 is copied under the run's own folder too, and checked against the staged FASTA
         // with this run's topology before anything exists in the cloud. The FASTA stays first in the list (the output folder is named from it).
-        var uploads = new List<StagedInput> { staged };
-        if (!string.IsNullOrWhiteSpace(options.AnnotationPath))
+        // An accession has no FASTA to pair with: the worker refuses the combination, so the path is never taken.
+        if (!staged.IsAccession && !string.IsNullOrWhiteSpace(options.AnnotationPath))
         {
             var annotation = await StageAnnotationAsync(jobId, options.AnnotationPath, cancellationToken).ConfigureAwait(false);
             if (annotation is null)

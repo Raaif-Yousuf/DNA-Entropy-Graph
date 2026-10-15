@@ -256,6 +256,33 @@ public class WorkerManifestBuilderTests
     }
 
     [Fact]
+    public void An_accession_input_names_the_accession_and_no_path_and_uploads_nothing()
+    {
+        var m = Build(inputs: [StagedInput.ForAccession("NC_045512.2", "100-500")]);
+
+        var input = m.GetProperty("inputs")[0];
+        input.GetProperty("accession").GetString().ShouldBe("NC_045512.2");
+        input.GetProperty("accessionRange").GetString().ShouldBe("100-500");
+        input.TryGetProperty("path", out _).ShouldBeFalse("the worker refuses an input with both a path and an accession");
+        input.GetProperty("name").GetString().ShouldBe("NC_045512_2", "the name keeps the version, and a dot would read as a file extension");
+        input.GetProperty("informat").GetString().ShouldBe("auto");
+    }
+
+    [Fact]
+    public void An_accession_without_a_range_sends_no_range()
+    {
+        var input = Build(inputs: [StagedInput.ForAccession("MN908947.3", null)]).GetProperty("inputs")[0];
+
+        input.TryGetProperty("accessionRange", out _).ShouldBeFalse();
+        StagedInput.ForAccession("MN908947.3", null).IsAccession.ShouldBeTrue();
+        new StagedInput("x.fa", "x.fa").IsAccession.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void An_accession_cannot_carry_a_gff3()
+        => Should.Throw<ArgumentException>(() => Build(inputs: [StagedInput.ForAccession("NC_045512.2", null), new StagedInput("a.gff3", "a.gff3", IsAnnotation: true)]));
+
+    [Fact]
     public void Gc_and_codons_are_requested_only_when_chosen_and_gc_carries_its_window()
     {
         var plain = Build();

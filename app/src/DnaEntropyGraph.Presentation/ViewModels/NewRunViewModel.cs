@@ -107,8 +107,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         IClipboardTextReader? clipboard = null,
         PresetPickerViewModel? presets = null,
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
-        bool? offerAnnotation = null)
+        bool? offerAnnotation = null,
+        bool? offerAccession = null)
     {
+        OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
         OffersAnnotation = offerAnnotation ?? WorkerManifestSupport.Annotation;
@@ -167,6 +169,29 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     /// <summary>True while the worker the run starts on reads a paired GFF3 (<see cref="WorkerManifestSupport.Annotation"/>): only then does the page offer Add GFF3 and take a dropped GFF3.</summary>
     public bool OffersAnnotation { get; }
+
+    /// <summary>True while the worker the run starts on fetches an NCBI accession (<see cref="WorkerManifestSupport.Accession"/>): only then does the page offer the Fetch from NCBI box.</summary>
+    public bool OffersAccession { get; }
+
+    /// <summary>The accession typed in the Fetch from NCBI box (issue #684).</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(AddAccessionCommand))]
+    private string _accessionText = string.Empty;
+
+    /// <summary>Where in the record to start (1-based), or empty for the whole record.</summary>
+    [ObservableProperty]
+    private string _accessionStartText = string.Empty;
+
+    /// <summary>Where in the record to stop (inclusive), or empty for the whole record.</summary>
+    [ObservableProperty]
+    private string _accessionEndText = string.Empty;
+
+    /// <summary>What is wrong with the typed accession or range, with the one thing to do; empty when there is nothing to say.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAccessionMessage))]
+    private string _accessionMessage = string.Empty;
+
+    public bool HasAccessionMessage => AccessionMessage.Length > 0;
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -706,6 +731,39 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 
+    private bool CanAddAccession() => OffersAccession && !string.IsNullOrWhiteSpace(AccessionText);
+
+    /// <summary>
+    /// Fetch from NCBI (issue #684): checks the typed accession and range with the worker's own rules (Hard Rule 2), and makes a pill the run
+    /// fetches on the VM. A problem stays in the box with one line to fix it; nothing is requested from NCBI on this PC.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanAddAccession))]
+    private void AddAccession()
+    {
+        var check = AccessionInput.Check(AccessionText, AccessionStartText, AccessionEndText);
+        if (check.Problem is { } problem)
+        {
+            AccessionMessage = _strings.GetString("NewRunAccessionProblem_" + problem);
+            return;
+        }
+
+        if (Items.Any(item => item.IsAccession && item.Accession == check.Accession && item.AccessionRange == check.Range))
+        {
+            AccessionMessage = _strings.GetString("NewRunAccessionAlreadyAdded");
+            return;
+        }
+
+        var pill = InputPillItem.ForAccession(check.Accession, check.Range, _strings);
+        Items.Add(pill);
+        SelectedItem ??= pill;
+        AccessionText = string.Empty;
+        AccessionStartText = string.Empty;
+        AccessionEndText = string.Empty;
+        AccessionMessage = string.Empty;
+        RefreshOutputChoices();
+        StartRunCommand.NotifyCanExecuteChanged();
+    }
+
     [RelayCommand(CanExecute = nameof(CanRemoveItem), AllowConcurrentExecutions = true)]
     private async Task RemoveItemAsync(InputPillItem? item)
     {
@@ -748,8 +806,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             ModelId = DefaultModelId,
             RunTarget = "Cloud",
-            InputPath = SelectedItem!.Path,
+            InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
             AnnotationPath = SelectedItem.AnnotationPath,
+            Accession = SelectedItem.Accession,
+            AccessionRange = SelectedItem.AccessionRange,
             TreatAsRna = IsTreatingAsRna,
             Direction = Presets?.Direction ?? Direction.BothCombined,
             ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
@@ -807,7 +867,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
         IsTreatingAsRna = value;
-        foreach (var item in Items.ToList())
+        foreach (var item in Items.Where(i => !i.IsAccession).ToList())
         {
             if (cancellationToken.IsCancellationRequested)
             {

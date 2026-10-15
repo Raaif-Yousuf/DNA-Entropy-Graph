@@ -1003,6 +1003,12 @@ public sealed class JobReconciler
 
     private async Task<StagedInput?> FindInputAsync(RunRecord row, RunOptions options, CancellationToken cancellationToken)
     {
+        if (options.Accession is not null)
+        {
+            // Issue #684: an accession is fetched by the worker; there is no copy to find and nothing to upload.
+            return StagedInput.ForAccession(options.Accession, options.AccessionRange);
+        }
+
         try
         {
             var copy = await _inputs.FindAsync(row.JobId, cancellationToken).ConfigureAwait(false);

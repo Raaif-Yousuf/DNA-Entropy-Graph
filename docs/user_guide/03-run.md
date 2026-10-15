@@ -11,6 +11,10 @@ On the **New run** page, either:
 - Open **Paste a sequence**, type or paste letters, a FASTA record, or the path of a file, and
   click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
   letters are saved in the app's own folder, never next to your files.
+- Open **Fetch from NCBI**, type an accession such as `NC_045512.2` (and, if you want only part of the
+  record, the first and last base), and click **Fetch record**. The record is downloaded by the rented
+  computer when the run starts, so the list shows it as an NCBI record with no base count yet. The app
+  checks the accession for typos before it rents anything.
 
 You can add more than one file at once. For now each press of **Run** runs the file you
 have selected in the list (running several files together as one batch is not built yet),

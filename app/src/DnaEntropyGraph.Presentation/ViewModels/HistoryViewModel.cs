@@ -346,8 +346,9 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.RerunNoOptions;
             }
 
-            var input = await Task.Run(() => _local.FindRerunInput(run, options));
-            if (input is null)
+            // Issue #684: an accession run has no file; it starts again from the same accession.
+            var input = options.Accession is not null ? null : await Task.Run(() => _local.FindRerunInput(run, options));
+            if (input is null && options.Accession is null)
             {
                 return RunsCopy.RerunNoInput;
             }

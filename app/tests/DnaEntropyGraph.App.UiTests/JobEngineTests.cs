@@ -322,6 +322,50 @@ public class JobEngineTests
         h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldContain(key => key.EndsWith("pair.gff3", StringComparison.Ordinal));
     }
 
+    private static RunOptions AccessionOptions(string accession, string? range = null)
+        => new()
+        {
+            ModelId = "evo2_7b",
+            RunTarget = "Cloud",
+            Accession = accession,
+            AccessionRange = range,
+            OutputFolder = Path.Combine(TempRoot, "out-" + Guid.NewGuid().ToString("N")),
+        };
+
+    [Fact]
+    public async Task An_accession_run_uploads_no_input_and_its_manifest_names_the_accession_with_no_path()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        var jobId = await h.Engine.StartRunAsync(AccessionOptions("NC_045512.2", "100-500"), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        var bucket = FakeGcp.BucketName(Project);
+        h.Gcp.ObjectKeys(bucket).ShouldNotContain(key => key.Contains("/input/", StringComparison.Ordinal), "nothing is uploaded for an accession");
+        var manifest = System.Text.Json.JsonDocument.Parse(h.Gcp.GetObjectBytes(bucket, $"jobs/{jobId}/manifest.json")).RootElement;
+        var input = manifest.GetProperty("inputs")[0];
+        input.GetProperty("accession").GetString().ShouldBe("NC_045512.2");
+        input.GetProperty("accessionRange").GetString().ShouldBe("100-500");
+        input.TryGetProperty("path", out _).ShouldBeFalse();
+        Directory.Exists(Path.Combine(h.AppData, "runs", jobId, "input")).ShouldBeFalse("no copy of an input that is not a file");
+    }
+
+    [Theory]
+    [InlineData("not an accession", null)]
+    [InlineData("NC_045512.2", "500-100")]
+    public async Task A_bad_accession_or_range_fails_locally_as_an_invalid_input_and_creates_nothing(string accession, string? range)
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        var jobId = await h.Engine.StartRunAsync(AccessionOptions(accession, range), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(RunErrorCodes.InputInvalid);
+        h.Gcp.CreateAttempts.ShouldBe(0);
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task A_paired_gff3_that_names_no_sequence_of_the_fasta_fails_locally_and_creates_nothing()
     {

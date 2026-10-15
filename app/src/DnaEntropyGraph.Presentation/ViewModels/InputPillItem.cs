@@ -22,11 +22,39 @@ public sealed partial class InputPillItem : ObservableObject
         DisplayName = isPasted ? strings.GetString("NewRunPastedName") : System.IO.Path.GetFileName(path);
     }
 
+    /// <summary>
+    /// A pill for an NCBI accession the worker fetches on the VM (issue #684). It is a GenBank record with no file on this PC, so it is
+    /// valid at once (the accession was checked by <see cref="AccessionInput"/> before the pill was made) and has no bases to size an estimate from.
+    /// </summary>
+    public static InputPillItem ForAccession(string accession, string? range, IStringResourceProvider strings)
+    {
+        ArgumentNullException.ThrowIfNull(accession);
+        var pill = new InputPillItem(string.Empty, false, strings)
+        {
+            Accession = accession,
+            AccessionRange = range,
+            DisplayName = range is null ? accession : accession + " (" + range + ")",
+        };
+        pill.Kind = InputKind.GenBank;
+        pill.KindText = strings.GetString("NewRunPillKind_Ncbi");
+        pill.SummaryText = strings.GetString("NewRunPillAccessionSummary");
+        pill.IsChecking = false;
+        return pill;
+    }
+
     public string Path { get; }
+
+    /// <summary>The NCBI accession this pill fetches, or null for a file or pasted sequence.</summary>
+    public string? Accession { get; private init; }
+
+    /// <summary>The <c>start-end</c> part of the record, or null for all of it.</summary>
+    public string? AccessionRange { get; private init; }
+
+    public bool IsAccession => Accession is not null;
 
     public bool IsPasted { get; }
 
-    public string DisplayName { get; }
+    public string DisplayName { get; private init; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsValid))]

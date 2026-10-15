@@ -54,6 +54,15 @@ public sealed record RunOptions
     /// </summary>
     public string? AnnotationPath { get; init; }
 
+    /// <summary>
+    /// An NCBI accession the worker fetches on the VM instead of a file (issue #684), already checked by <c>AccessionInput</c>. Manifest: <c>inputs[].accession</c>.
+    /// When set, <see cref="InputPath"/> and <see cref="AnnotationPath"/> are null: there is no file to copy or upload.
+    /// </summary>
+    public string? Accession { get; init; }
+
+    /// <summary>The <c>start-end</c> part of <see cref="Accession"/> to fetch (1-based, inclusive), or null for the whole record. Manifest: <c>inputs[].accessionRange</c>.</summary>
+    public string? AccessionRange { get; init; }
+
     /// <summary>Manifest: <c>inputs[].informat</c>. Default "Auto" (auto-detect, matching <see cref="Inputs.SequenceSniffer" />).</summary>
     public InputFormat Format { get; init; } = InputFormat.Auto;
 

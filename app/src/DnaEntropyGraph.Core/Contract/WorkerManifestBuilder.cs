@@ -11,10 +11,18 @@ namespace DnaEntropyGraph.Core.Contract;
 /// name it is uploaded under (<c>jobs/&lt;jobId&gt;/input/&lt;FileName&gt;</c>).
 /// </summary>
 /// <param name="IsAnnotation">True for a GFF3 paired with the input listed before it (issue #686): it is uploaded like any input but is not an input of its own; the manifest names it in that input's <c>annotation</c>.</param>
-public sealed record StagedInput(string LocalPath, string FileName, bool IsAnnotation = false)
+/// <param name="Accession">An NCBI accession the worker fetches on the VM (issue #684). Such an input has no file: nothing is staged or uploaded and the manifest names the accession instead of a path.</param>
+/// <param name="AccessionRange"><c>start-end</c> of the part of the record to fetch, or null for all of it.</param>
+public sealed record StagedInput(string LocalPath, string FileName, bool IsAnnotation = false, string? Accession = null, string? AccessionRange = null)
 {
     /// <summary>The path inside the job prefix, as <c>manifest.json</c> names it.</summary>
     public string ObjectName => "input/" + FileName;
+
+    /// <summary>True for an input the worker fetches from NCBI: there is no local file to upload.</summary>
+    public bool IsAccession => Accession is not null;
+
+    /// <summary>An input that is an accession; <paramref name="accession"/> is already checked by <c>AccessionInput</c>.</summary>
+    public static StagedInput ForAccession(string accession, string? range) => new(string.Empty, accession, false, accession, range);
 }
 
 /// <summary>
@@ -67,7 +75,7 @@ public static class WorkerManifestBuilder
             if (inputs[i].IsAnnotation)
             {
                 // Issue #686: a GFF3 rides on the input before it (worker manifest.py: inputs[].annotation, an object name like path).
-                if (last is null || last.ContainsKey("annotation"))
+                if (last is null || last.ContainsKey("annotation") || last.ContainsKey("accession"))
                 {
                     throw new ArgumentException("A GFF3 annotation needs exactly one input before it to pair with.", nameof(inputs));
                 }
@@ -79,8 +87,7 @@ public static class WorkerManifestBuilder
             last = new JsonObject
             {
                 ["id"] = "in" + (inputEntries.Count + 1).ToString(CultureInfo.InvariantCulture),
-                ["path"] = inputs[i].ObjectName,
-                ["name"] = Path.GetFileNameWithoutExtension(inputs[i].FileName),
+                ["name"] = inputs[i].IsAccession ? inputs[i].FileName.Replace('.', '_') : Path.GetFileNameWithoutExtension(inputs[i].FileName),
                 ["informat"] = InFormat(options.Format),
                 ["start"] = options.StartCoordinate,
                 ["rna"] = options.TreatAsRna,
@@ -88,6 +95,20 @@ public static class WorkerManifestBuilder
                 ["ambiguityPolicy"] = options.AmbiguityPolicy.ToWireValue(),
                 ["fastaRecords"] = options.FastaRecords == FastaRecordsSelection.FirstOnly ? "first" : "all",
             };
+            if (inputs[i].IsAccession)
+            {
+                // Issue #684 (worker manifest.py): an accession and a path together are refused, so the path is simply absent.
+                last["accession"] = inputs[i].Accession;
+                if (inputs[i].AccessionRange is { } range)
+                {
+                    last["accessionRange"] = range;
+                }
+            }
+            else
+            {
+                last["path"] = inputs[i].ObjectName;
+            }
+
             inputEntries.Add(last);
         }
 
