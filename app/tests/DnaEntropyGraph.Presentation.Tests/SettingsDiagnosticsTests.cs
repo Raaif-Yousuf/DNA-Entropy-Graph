@@ -156,7 +156,7 @@ public class SettingsDiagnosticsTests
             var real = new DiagnosticsExporter(new OneStatusFile(Odd), repository, () => new DiagnosticsInfo("0", "os", "net", null, Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "x"), [], DateTimeOffset.UnixEpoch, "readme"));
             var strings = Substitute.For<IStringResourceProvider>();
             strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>() + "|{0}");
-            var viewModel = new SettingsViewModel(Substitute.For<ISettingsStore>(), _toasts, strings, real, _picker, _launcher, TimeProvider.System);
+            var viewModel = new SettingsViewModel(Substitute.For<ISettingsStore>(), _toasts, strings, real, _picker, _launcher, TimeProvider.System, Substitute.For<IThemeApplier>());
             _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(path);
 
             await viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
