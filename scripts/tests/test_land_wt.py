@@ -34,6 +34,9 @@ if sys.argv[2:4] == ["pr", "checks"]:
     reply = replies[min(seen, len(replies) - 1)]
     print(reply if isinstance(reply, str) else json.dumps(reply))
     sys.exit(1 if isinstance(reply, str) else 0)
+if sys.argv[2:4] == ["run", "rerun"]:
+    rc_file = Path(str(log) + ".rerunrc")
+    sys.exit(int(rc_file.read_text()) if rc_file.exists() else 0)
 if sys.argv[2:4] == ["pr", "merge"]:
     rc_file = Path(str(log) + ".mergerc")
     sys.exit(int(rc_file.read_text()) if rc_file.exists() else 0)
@@ -569,11 +572,16 @@ class Clock:
         self.now += seconds
 
 
-def _check(name: str, bucket: str) -> dict[str, str]:
-    return {"name": name, "bucket": bucket, "state": bucket.upper()}
+def _check(name: str, bucket: str, run: int | None = None) -> dict[str, str]:
+    link = f"https://github.com/o/r/actions/runs/{run}/job/9" if run else ""
+    return {"name": name, "bucket": bucket, "state": bucket.upper(), "link": link}
 
 
-def _land_green(world: World, replies: list, *, timeout: float = 100.0, poll: float = 10.0, merge_rc: int = 0) -> tuple[int, Clock]:
+def _land_green(
+    world: World, replies: list, *, timeout: float = 100.0, poll: float = 10.0, merge_rc: int = 0, rerun: bool = False, rerun_rc: int = 0
+) -> tuple[int, Clock]:
+    if rerun_rc:
+        (world.root / "gh.log.rerunrc").write_text(str(rerun_rc), encoding="utf-8")
     (world.root / "gh.log.checks").write_text(json.dumps(replies), encoding="utf-8", newline="\n")
     if merge_rc:
         (world.root / "gh.log.mergerc").write_text(str(merge_rc), encoding="utf-8")
@@ -583,7 +591,9 @@ def _land_green(world: World, replies: list, *, timeout: float = 100.0, poll: fl
     ctx = world.ctx()
     clock = Clock()
     ctx.sleep, ctx.monotonic = clock.sleep, clock.monotonic
-    rc = lw.land(ctx, "feat/66-x", sha, "feat: t", body, merge_when_green=True, checks_timeout=timeout, checks_poll=poll)
+    rc = lw.land(
+        ctx, "feat/66-x", sha, "feat: t", body, merge_when_green=True, checks_timeout=timeout, checks_poll=poll, rerun_failed_once=rerun
+    )
     return rc, clock
 
 
@@ -672,3 +682,79 @@ def test_cli_flags_reach_land(world, monkeypatch):
     seen.clear()
     assert lw.main(base, repo=world.clone) == 0
     assert seen["merge_when_green"] is False
+
+
+# --- --rerun-failed-once (on by default with --merge-when-green) -------------------------------------
+
+
+def _flaky_log(world: World) -> list[str]:
+    path = world.clone / ".git" / "flaky-checks.log"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def test_a_red_check_is_rerun_once_and_the_pr_merges_when_the_rerun_is_green(world):
+    red = [_check("scripts tests", "fail", 111), _check("lint", "pass", 222)]
+    green = [_check("scripts tests", "pass", 111), _check("lint", "pass", 222)]
+    rc, clock = _land_green(world, [red, green], rerun=True, poll=5.0)
+    assert rc == lw.EXIT_OK
+    reruns = [c for c in world.gh_calls() if c[:2] == ["run", "rerun"]]
+    assert reruns == [["run", "rerun", "111", "--failed"]]  # only the failed run, once
+    assert len(_calls(world, "merge")) == 1
+    assert clock.sleeps == [5.0]  # one poll lets the rerun replace the stale red
+    (line,) = _flaky_log(world)
+    assert "pr=https://github.com/o/r/pull/7" in line and "checks=scripts tests" in line and "runs=111" in line
+
+
+def test_each_failed_run_is_rerun_exactly_once_even_when_it_stays_red(world, capsys):
+    red = [_check("a", "fail", 111), _check("b", "fail", 222), _check("c", "fail", 111)]
+    rc, _ = _land_green(world, [red], rerun=True)
+    assert rc == lw.EXIT_CHECKS_RED
+    reruns = [c for c in world.gh_calls() if c[:2] == ["run", "rerun"]]
+    assert reruns == [["run", "rerun", "111", "--failed"], ["run", "rerun", "222", "--failed"]]
+    assert _calls(world, "merge") == []
+    out = capsys.readouterr().out
+    assert "still red after one re-run" in out and out.isascii()
+    assert len(_flaky_log(world)) == 1
+
+
+def test_the_rerun_waits_for_the_other_checks_to_finish_first(world):
+    # gh refuses `run rerun --failed` while a run is in progress, so a red beside a pending check keeps polling
+    mixed = [_check("bad", "fail", 111), _check("slow", "pending", 222)]
+    settled = [_check("bad", "fail", 111), _check("slow", "pass", 222)]
+    rc, _ = _land_green(world, [mixed, settled, [_check("bad", "pass", 111), _check("slow", "pass", 222)]], rerun=True)
+    assert rc == lw.EXIT_OK
+    assert [c for c in world.gh_calls() if c[:2] == ["run", "rerun"]] == [["run", "rerun", "111", "--failed"]]
+    assert len(_calls(world, "checks")) == 3
+
+
+def test_a_red_check_with_no_run_link_cannot_be_rerun_and_refuses(world):
+    rc, _ = _land_green(world, [[_check("bad", "fail")]], rerun=True)
+    assert rc == lw.EXIT_CHECKS_RED
+    assert [c for c in world.gh_calls() if c[:2] == ["run", "rerun"]] == []
+    assert _calls(world, "merge") == []
+
+
+def test_a_rerun_that_gh_rejects_refuses_without_waiting(world, capsys):
+    rc, _ = _land_green(world, [[_check("bad", "fail", 111)]], rerun=True, rerun_rc=1)
+    assert rc == lw.EXIT_CHECKS_RED
+    assert _calls(world, "merge") == []
+    assert "could not be re-run" in capsys.readouterr().out
+
+
+def test_rerun_can_be_switched_off(world):
+    rc, _ = _land_green(world, [[_check("bad", "fail", 111)]], rerun=False)
+    assert rc == lw.EXIT_CHECKS_RED
+    assert [c for c in world.gh_calls() if c[:2] == ["run", "rerun"]] == []
+    assert _flaky_log(world) == []
+
+
+def test_rerun_flag_defaults_on_and_can_be_negated(world, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(lw, "land", lambda ctx, *a, **k: seen.update(k) or 0)
+    body = world.root / "body.md"
+    body.write_text("b\n", encoding="utf-8", newline="\n")
+    base = ["--branch", "feat/1-x", "--sha", "abc", "--title", "t", "--body-file", str(body), "--venv", str(world.venv), "--merge-when-green"]
+    assert lw.main(base, repo=world.clone) == 0
+    assert seen["rerun_failed_once"] is True
+    assert lw.main([*base, "--no-rerun-failed-once"], repo=world.clone) == 0
+    assert seen["rerun_failed_once"] is False

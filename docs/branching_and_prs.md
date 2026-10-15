@@ -125,6 +125,14 @@ flag, after the PR opens the script polls `gh pr checks <pr> --json name,bucket,
 | a check still pending, or no check reported at all, at the timeout | 6 | no, the PR stays open |
 | every check green but `gh pr merge` itself fails | 4 | no |
 
+**`--rerun-failed-once` (on by default with the flag; `--no-rerun-failed-once` disables).** MEASURED 2026-10-15: wall-clock
+timed tests flaked on loaded CI runners and blocked merges (#664, #673). The first red result re-runs each failed run once
+(`gh run rerun <run> --failed`; the run ids come from the check links, and it waits until no other check is still running,
+because gh refuses to re-run an unfinished run), appends `<time> pr=<url> checks=<names> runs=<ids>` to
+`<git-dir>/flaky-checks.log`, and waits again with a fresh timeout. Still red after the one re-run: exit 5. A red check
+with no run link, or a rejected re-run, refuses at once. Read `flaky-checks.log` to see which checks flake and fix their
+tests; the re-run is not a licence to leave them.
+
 A pending check at the timeout never merges, and an empty check list is "not green yet", never green (gh reports no checks for
 a moment after the PR opens). Console output is ASCII. Without the flag nothing changes: the script prints the
 `gh pr merge` line and you decide.

@@ -228,7 +228,8 @@ union-resolved, any other conflict refused, premerge red refused, venv junction 
 removed), pushes and opens the PR; you merge it, or pass `--merge-when-green` and it waits for every PR check and merges
 with a merge commit only if none failed (exit 5 a check failed, 6 still pending at `--checks-timeout`; the PR stays
 open). Prefer the flag to a hand-written `gh pr checks --watch; gh pr merge` chain: that chain exits 0 on a red check
-(MEASURED 2026-10-15, #666). See `docs/branching_and_prs.md`. The steps below apply to every landing.
+(MEASURED 2026-10-15, #666). A failed check is re-run once by default (`--no-rerun-failed-once` to disable) and logged to
+`<git-dir>/flaky-checks.log`; a second red refuses. See `docs/branching_and_prs.md`. The steps below apply to every landing.
 
 Land one lane at a time, and run the guard set after **each**:
 

@@ -26,6 +26,9 @@ WHAT IT DOES, IN ORDER (a refusal before step 4 changes nothing; no step ever fo
    seconds up to `--checks-timeout`, refuses at once when any check is fail/cancel (naming them), refuses
    when anything is still pending (or no check exists) at the timeout, and only when every check is
    pass/skipping runs `gh pr merge <pr> --merge` (a merge commit). Either refusal leaves the PR open.
+   `--rerun-failed-once` (default on, `--no-rerun-failed-once` to disable): the first red result re-runs each failed
+   run once (`gh run rerun <run> --failed`, after the other checks settle), appends a line to
+   `<git-dir>/flaky-checks.log` and waits again; a second red refuses.
 8. ALWAYS, success or not: unlink the junction with `os.rmdir`, check it is gone, and only then
    `git worktree remove --force`. MEASURED: an earlier tool deleted the real venv through a junction.
    If the junction cannot be removed the worktree is LEFT IN PLACE (and named) rather than removed.
@@ -378,7 +381,7 @@ def _create_pr(ctx: Ctx, wt: Path, land_branch: str, title: str, body_file: Path
 def _read_checks(ctx: Ctx, pr: str) -> list[dict[str, str]] | None:
     """The PR's checks as `[{"name", "bucket", "state"}]`, or None when gh has none to report yet (it prints
     "no checks reported" and exits 1 right after a PR opens). Exit 8 means "pending" and still carries the JSON."""
-    argv = [*ctx.gh, "pr", "checks", pr, "--json", "name,bucket,state"]
+    argv = [*ctx.gh, "pr", "checks", pr, "--json", "name,bucket,state,link"]
     try:
         proc = subprocess.run(argv, capture_output=True, check=False)
     except OSError as err:
@@ -394,19 +397,78 @@ def _names(checks: Sequence[dict[str, str]]) -> str:
     return ", ".join(str(c.get("name", "?")) for c in checks)
 
 
-def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float) -> int:
-    """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green."""
+RUN_ID = re.compile(r"/actions/runs/(\d+)")
+
+
+def _run_ids(checks: Sequence[dict[str, str]]) -> list[str]:
+    """The distinct GitHub Actions run ids behind these checks (from their `link`), in first-seen order."""
+    ids: list[str] = []
+    for c in checks:
+        match = RUN_ID.search(str(c.get("link", "")))
+        if match and match.group(1) not in ids:
+            ids.append(match.group(1))
+    return ids
+
+
+def _log_flaky(ctx: Ctx, pr: str, red: Sequence[dict[str, str]], runs: Sequence[str]) -> None:
+    """Append one line to `<git-dir>/flaky-checks.log`: a failed check that a rerun was spent on. Best effort."""
+    try:
+        git_dir = Path(_text(git(ctx.repo, "rev-parse", "--absolute-git-dir").stdout))
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} pr={pr} checks={_names(red).replace(', ', ',')} runs={','.join(runs)}\n"
+        with (git_dir / "flaky-checks.log").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(line)
+    except (LandError, OSError) as err:
+        ctx.say(f"WARNING: could not write flaky-checks.log: {err}")
+
+
+def _rerun_failed(ctx: Ctx, pr: str, red: Sequence[dict[str, str]]) -> bool:
+    """`gh run rerun <run> --failed` once for each failed run. False when it could not be done for every run."""
+    runs = _run_ids(red)
+    if not runs:
+        return False
+    _log_flaky(ctx, pr, red, runs)
+    ok = True
+    for run in runs:
+        try:
+            proc = subprocess.run([*ctx.gh, "run", "rerun", run, "--failed"], capture_output=True, check=False)
+        except OSError:
+            return False
+        if proc.returncode != 0:
+            ctx.say(f"WARNING: `gh run rerun {run} --failed` failed: {_text(proc.stderr or proc.stdout)}")
+            ok = False
+    if ok:
+        ctx.say(f"- failed check(s) {_names(red)} re-run once (flaky-checks.log); waiting again")
+    return ok
+
+
+def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
+    """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green.
+
+    With `rerun_failed_once`, the first red result (once no check is still running, because `gh run rerun --failed`
+    needs a finished run) re-runs the failed runs a single time and waits again with a fresh deadline; a second red refuses."""
     deadline = ctx.monotonic() + timeout
+    rerun_spent = False
     while True:
         checks = _read_checks(ctx, pr)
         waiting: list[dict[str, str]] = []
         if checks:
             red = [c for c in checks if c.get("bucket") in RED_BUCKETS]
-            if red:
-                ctx.say(f"ERROR: not merging {pr}: failed check(s): {_names(red)}. Fix them and push; the PR stays open")
+            waiting = [c for c in checks if c.get("bucket") not in GREEN_BUCKETS and c not in red]
+            if red and rerun_failed_once and not rerun_spent and waiting:
+                pass  # a rerun needs the run finished: keep polling until the rest settle (still bounded by the deadline)
+            elif red and rerun_failed_once and not rerun_spent:
+                rerun_spent = True
+                if _rerun_failed(ctx, pr, red):
+                    deadline = ctx.monotonic() + timeout
+                    ctx.sleep(poll)  # let the rerun replace the stale red before it is read again
+                    continue
+                ctx.say(f"ERROR: not merging {pr}: failed check(s) {_names(red)} could not be re-run. Re-run them by hand; the PR stays open")
                 return EXIT_CHECKS_RED
-            waiting = [c for c in checks if c.get("bucket") not in GREEN_BUCKETS]
-            if not waiting:
+            elif red:
+                again = " (still red after one re-run)" if rerun_spent else ""
+                ctx.say(f"ERROR: not merging {pr}: failed check(s){again}: {_names(red)}. Fix them and push; the PR stays open")
+                return EXIT_CHECKS_RED
+            if not waiting and not red:
                 break
         if ctx.monotonic() >= deadline:
             what = f"still pending: {_names(waiting)}" if waiting else "no checks were reported"
@@ -438,6 +500,7 @@ def land(
     merge_when_green: bool = False,
     checks_timeout: float = CHECKS_TIMEOUT_SECONDS,
     checks_poll: float = CHECKS_POLL_SECONDS,
+    rerun_failed_once: bool = True,
 ) -> int:
     land_branch = land_branch if land_branch is not None else branch
     slug = slugify(branch)
@@ -475,7 +538,7 @@ def land(
         url = _create_pr(ctx, wt, land_branch, title, body_file)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
-            rc = _merge_when_green(ctx, url, checks_timeout, checks_poll)
+            rc = _merge_when_green(ctx, url, checks_timeout, checks_poll, rerun_failed_once)
         else:
             ctx.say(f"OK: pushed {land_branch} and opened {url}. Merge with: gh pr merge {url.rsplit('/', 1)[-1]} --merge")
             rc = EXIT_OK
@@ -520,6 +583,12 @@ def main(argv: Sequence[str] | None = None, *, repo: Path | None = None, premerg
         "--checks-timeout", type=float, default=CHECKS_TIMEOUT_SECONDS, help="seconds to wait for checks before refusing (default 1800)"
     )
     ap.add_argument("--checks-poll", type=float, default=CHECKS_POLL_SECONDS, help="seconds between check polls (default 20)")
+    ap.add_argument(
+        "--rerun-failed-once",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="with --merge-when-green: re-run failed checks once (flaky runners) before refusing; --no-rerun-failed-once disables",
+    )
     ap.add_argument("--venv", type=Path, default=None, help="real venv to junction (default: the running venv)")
     ap.add_argument("--gh", default=os.environ.get("LAND_WT_GH", "gh"), help="path of the gh executable (one path, spaces allowed)")
     args = ap.parse_args(argv)
@@ -540,6 +609,7 @@ def main(argv: Sequence[str] | None = None, *, repo: Path | None = None, premerg
         merge_when_green=args.merge_when_green,
         checks_timeout=args.checks_timeout,
         checks_poll=args.checks_poll,
+        rerun_failed_once=args.rerun_failed_once,
     )
 
 
