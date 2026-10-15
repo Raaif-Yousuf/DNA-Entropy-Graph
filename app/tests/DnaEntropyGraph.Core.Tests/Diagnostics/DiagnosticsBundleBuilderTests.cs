@@ -663,6 +663,63 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void A_decimal_number_containing_a_withheld_id_digit_is_left_as_a_number()
+    {
+        // Review of #637 r2: '.' and '-' are token boundaries, so id "1" turned 0.1 into "0.withheldid1".
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/1/progress.jsonl"] = """{"jobId":"1","percent":0.1}""",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var line = entries["files/runs/withheldid1/progress.jsonl"];
+        line.ShouldContain("\"percent\":0.1");
+        line.ShouldNotContain("0.withheldid1");
+    }
+
+    [Fact]
+    public void A_withheld_id_that_starts_or_ends_with_a_symbol_is_rewritten_when_glued_to_a_letter()
+    {
+        // Review of #637 r2: the alphanumeric lookarounds also applied at a symbol edge, so "job#1" survived id "#1".
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "job#1 failed and x#1 done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "#1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("jobwithheldid1 failed and xwithheldid1 done");
+        Entries(entries).ShouldNotContain("#1", Case.Insensitive);
+    }
+
+    [Fact]
+    public void A_truncated_log_with_a_withheld_id_drops_the_partial_line_and_still_rewrites_the_id()
+    {
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/job7/logs/worker.log"] = "partial first line job7\nline two for job7 ended\n",
+        };
+        var run = Run with { JobId = "job7", Name = "n", ManifestJson = "{}", OptionsJson = "{}" };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 28), [run], Info));
+
+        var log = entries["files/runs/withheldid1/logs/log-01.log"];
+        log.ShouldStartWith("[truncated:");
+        log.ShouldContain("withheldid1");
+        Entries(entries).ShouldNotContain("job7", Case.Insensitive);
+        log.ShouldNotContain("partial first line");
+    }
+
+    [Fact]
+    public void A_blank_job_id_row_with_a_blank_named_run_folder_builds_without_throwing()
+    {
+        var folder = new Dictionary<string, string> { ["runs/ /status.json"] = """{"jobId":"x","stage":"failed"}""" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = " ", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries.Keys.Where(k => k.StartsWith("files/runs/", StringComparison.Ordinal)).ShouldAllBe(k => !k.Contains("/ /", StringComparison.Ordinal));
+        Entries(entries).ShouldContain("withheldid0");
+    }
+
+    [Fact]
     public void A_character_that_only_case_folds_to_a_withheld_id_is_rewritten_and_never_crashes_the_build()
     {
         // U+212A (Kelvin sign) matches the pattern "k" under Unicode case folding but is not equal to it ordinally.

@@ -254,12 +254,12 @@ public static partial class DiagnosticsBundleBuilder
         var spec = SpecFor(file.Kind);
         if (file.Kind is FileKind.Status or FileKind.Result)
         {
-            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!, ids.FolderId(file.Path), ids.Rewrite);
+            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!, ids.FolderId(file.Path), ids.Rewrite, ids.ExactPlaceholder);
         }
 
         // A cut file starts mid-line: drop that partial line and say so.
         var text = file.Truncated ? file.Text[(file.Text.IndexOf('\n', StringComparison.Ordinal) + 1)..] : file.Text;
-        var body = file.Kind == FileKind.Progress ? redactor.RedactJsonLines(text, spec!, ids.Rewrite) : redactor.RedactText(ids.Rewrite(text));
+        var body = file.Kind == FileKind.Progress ? redactor.RedactJsonLines(text, spec!, ids.Rewrite, ids.ExactPlaceholder) : redactor.RedactText(ids.Rewrite(text));
         return file.Truncated ? $"[truncated: only the last {MaxFileBytes} bytes were read]\n{body}" : body;
     }
 
@@ -403,8 +403,10 @@ internal sealed class JobIdWithholder(ISet<string> scrub)
             // matched text up: the regex folds case by Unicode rules (a Kelvin sign matches "k") and a dictionary does not.
             var ordered = _placeholders.OrderByDescending(pair => pair.Key.Length).ThenBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
             _alternativePlaceholders = [.. ordered.Select(pair => pair.Value)];
+            // A lookaround guards an edge only when the id's own edge character is a letter or digit: an id of "#1" must be found
+            // in "job#1" (nothing to be "glued" to at a symbol edge).
             _pattern = new Regex(
-                @"(?<![\p{L}\p{N}])(?:" + string.Join('|', ordered.Select(pair => "(" + Regex.Escape(pair.Key) + ")")) + @")(?![\p{L}\p{N}])",
+                string.Join('|', ordered.Select(pair => "(" + EdgeGuard(pair.Key[0], behind: true) + Regex.Escape(pair.Key) + EdgeGuard(pair.Key[^1], behind: false) + ")")),
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             _patternCount = _placeholders.Count;
         }
@@ -423,6 +425,16 @@ internal sealed class JobIdWithholder(ISet<string> scrub)
             return "withheldid-unknown";
         });
     }
+
+    private static string EdgeGuard(char edge, bool behind) =>
+        char.IsLetterOrDigit(edge) ? (behind ? @"(?<![\p{L}\p{N}])" : @"(?![\p{L}\p{N}])") : string.Empty;
+
+    /// <summary>
+    /// The placeholder when <paramref name="text"/> is, as a whole and ordinally ignoring case, a withheld id; otherwise null.
+    /// Used for a JSON number leaf, where a token match would split <c>0.1</c> at the dot.
+    /// </summary>
+    public string? ExactPlaceholder(string text) =>
+        _placeholders.TryGetValue(text, out var placeholder) ? placeholder : null;
 
     /// <summary>The id a file under <c>runs/&lt;id&gt;/</c> belongs to, as shipped (the placeholder for a withheld one); null elsewhere.</summary>
     public string? FolderId(string path)

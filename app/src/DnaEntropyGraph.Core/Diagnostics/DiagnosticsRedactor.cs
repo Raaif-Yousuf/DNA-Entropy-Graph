@@ -167,12 +167,13 @@ internal sealed partial class DiagnosticsRedactor
     /// <param name="json">The file text.</param>
     /// <param name="spec">The keys it may carry.</param>
     /// <param name="jobId">When given, every <c>jobId</c> leaf is rewritten to it: the file's own run folder decides the id, not the file.</param>
-    /// <param name="rewrite">Applied to every kept string leaf before it is checked (never to a key; a number only when it is itself a withheld id).</param>
-    public string? RedactJson(string json, KeySpec spec, string? jobId = null, Func<string, string>? rewrite = null)
+    /// <param name="rewrite">Applied to every kept string leaf before it is checked (never to a key).</param>
+    /// <param name="rewriteNumber">Given a kept number leaf's text; a non-null result (the whole text is a withheld id) replaces the number with that string.</param>
+    public string? RedactJson(string json, KeySpec spec, string? jobId = null, Func<string, string>? rewrite = null, Func<string, string?>? rewriteNumber = null)
     {
         try
         {
-            return Sanitize(JsonNode.Parse(json), spec, jobId, rewrite)?.ToJsonString(JsonOptions);
+            return Sanitize(JsonNode.Parse(json), spec, jobId, rewrite, rewriteNumber)?.ToJsonString(JsonOptions);
         }
         catch (Exception ex) when (IsUnreadableJson(ex))
         {
@@ -181,7 +182,7 @@ internal sealed partial class DiagnosticsRedactor
     }
 
     /// <summary>One JSON object per line; a line that does not parse is replaced by a note, never copied.</summary>
-    public string RedactJsonLines(string text, KeySpec spec, Func<string, string>? rewrite = null)
+    public string RedactJsonLines(string text, KeySpec spec, Func<string, string>? rewrite = null, Func<string, string?>? rewriteNumber = null)
     {
         var lines = text.Split('\n')
             .Select(line => line.Trim())
@@ -190,7 +191,7 @@ internal sealed partial class DiagnosticsRedactor
             {
                 try
                 {
-                    return Sanitize(JsonNode.Parse(line), spec, rewrite: rewrite)?.ToJsonString(CompactOptions) ?? "null";
+                    return Sanitize(JsonNode.Parse(line), spec, rewrite: rewrite, rewriteNumber: rewriteNumber)?.ToJsonString(CompactOptions) ?? "null";
                 }
                 catch (Exception ex) when (IsUnreadableJson(ex))
                 {
@@ -200,7 +201,7 @@ internal sealed partial class DiagnosticsRedactor
         return string.Join('\n', lines) + "\n";
     }
 
-    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec, string? jobId = null, Func<string, string>? rewrite = null)
+    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec, string? jobId = null, Func<string, string>? rewrite = null, Func<string, string?>? rewriteNumber = null)
     {
         switch (node)
         {
@@ -212,7 +213,7 @@ internal sealed partial class DiagnosticsRedactor
                     {
                         kept[key] = jobId is not null && key == "jobId" && value is JsonValue
                             ? JsonValue.Create(jobId)
-                            : Sanitize(value, child, jobId, rewrite);
+                            : Sanitize(value, child, jobId, rewrite, rewriteNumber);
                     }
                 }
 
@@ -221,19 +222,19 @@ internal sealed partial class DiagnosticsRedactor
                 var items = new JsonArray();
                 foreach (var item in array)
                 {
-                    items.Add(Sanitize(item, spec, jobId, rewrite));
+                    items.Add(Sanitize(item, spec, jobId, rewrite, rewriteNumber));
                 }
 
                 return items;
             case JsonValue value when value.TryGetValue<string>(out var text):
                 text = rewrite is null ? text : rewrite(text);
                 return SafeValue().IsMatch(text) && !SequenceShape.IsSequenceLine(text, minLength: 20, out _) ? RedactText(text) : RedactedValue;
-            case JsonValue number when rewrite is not null:
+            case JsonValue number when rewriteNumber is not null:
                 // A number is not copied as it is: a withheld all-digit id (`"id": 12`) is a number leaf too. Only a leaf the
                 // rewrite changes becomes a string; any other number keeps its type and value.
-                var raw = number.ToJsonString();
-                var rewritten = rewrite(raw);
-                return rewritten == raw ? node.DeepClone() : JsonValue.Create(rewritten);
+                // Whole-text match only: a token match would split 0.1 at the dot.
+                var rewritten = rewriteNumber(number.ToJsonString());
+                return rewritten is null ? node.DeepClone() : JsonValue.Create(rewritten);
             case JsonValue:
                 return node.DeepClone();
             default:
