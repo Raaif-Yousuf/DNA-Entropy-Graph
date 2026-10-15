@@ -1,0 +1,1 @@
+- First-run wizard page: sign in, then one row per step with an OK or Fix badge (project, billing, turn on services, storage and worker account, GPU allowance), each failed row with one button, a Check again after a link, and Do it by hand. The status text at the top right opens it. A billing refusal's request text now names the billing account it was refused for (#99).

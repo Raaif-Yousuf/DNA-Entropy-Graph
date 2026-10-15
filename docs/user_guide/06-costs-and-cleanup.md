@@ -127,6 +127,11 @@ time from the Cloud page.
 
 ## How to see what is costing you money right now
 
+*Note: the Cloud page, the spending figure in the status bar and Settings > Budget are not in
+the app yet (the Cloud page currently says so). Until they are, the Billing section of the
+Google Cloud console lists every charge, and its Compute Engine page lists any computer
+this app created.*
+
 - The **status bar at the top of the app** always shows your estimated spending so far
   this month.
 - The **Cloud page** lists every computer and every storage bucket this app has ever
