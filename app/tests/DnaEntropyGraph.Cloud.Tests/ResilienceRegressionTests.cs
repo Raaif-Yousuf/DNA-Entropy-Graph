@@ -30,6 +30,7 @@ public class ResilienceRegressionTests
                 new ResilientStorageGateway(gcp, Pipeline),
                 new ResilientProjectSetupGateway(gcp, Pipeline),
                 new ResilientQuotaGateway(gcp, Pipeline),
+                gcp,
                 Repo);
         }
 
@@ -58,7 +59,7 @@ public class ResilienceRegressionTests
     {
         var gcp = new FakeGcp().WithCallTimeouts(1);
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, repo);
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
 
         var result = await runner.RunAsync(Request("job-t1"), CancellationToken.None);
 
@@ -85,7 +86,7 @@ public class ResilienceRegressionTests
     public async Task A_cancelled_caller_token_still_propagates_instead_of_being_recorded_as_a_failure()
     {
         var gcp = new FakeGcp();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, new InMemoryRunRepository());
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository());
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
@@ -200,7 +201,7 @@ public class ResilienceRegressionTests
     {
         var gcp = new FakeGcp();
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, repo);
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
         await gcp.CreateVmAsync(Spec("job-c3"), "us-central1-a", CancellationToken.None);
         await repo.UpsertAsync(new RunRecord("job-c3", JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
         gcp.WithTransientFailures(400, 1, "Bad request");
@@ -247,7 +248,7 @@ public class ResilienceRegressionTests
     {
         var gcp = new FakeGcp().WithBillingOff(Project);
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, repo);
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
 
         var result = await runner.RunAsync(Request("job-e1"), CancellationToken.None);
 
@@ -262,7 +263,7 @@ public class ResilienceRegressionTests
     {
         var gcp = new FakeGcp();
         var repo = new InMemoryRunRepository();
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, repo);
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
         var bad = Request("job-e2") with { Spec = Spec("job-e2") with { InstallationId = "Not A Label" } };
 
         var result = await runner.RunAsync(bad, CancellationToken.None);

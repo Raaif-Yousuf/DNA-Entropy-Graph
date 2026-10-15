@@ -585,6 +585,176 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void A_one_character_withheld_id_leaves_numbers_keys_and_other_words_intact()
+    {
+        // Issue #637: an unanchored replace of "1" turned `"percent":100` into `"percent":withheldid1withheldid1`.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/1/status.json"] = """{"jobId":"1","stage":"failed","percent":100}""",
+            ["runs/1/logs/worker.log"] = "INFO job 1 failed after 100 windows",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var status = entries["files/runs/withheldid1/status.json"];
+        status.ShouldContain("\"percent\": 100");
+        status.ShouldContain("\"jobId\": \"withheldid1\"");
+        status.ShouldContain("\"stage\": \"failed\"");
+        entries["files/runs/withheldid1/logs/log-01.log"].ShouldBe("INFO job withheldid1 failed after 100 windows");
+    }
+
+    [Fact]
+    public void A_one_letter_withheld_id_rewrites_only_the_whole_token_in_a_log()
+    {
+        var folder = new Dictionary<string, string> { ["runs/q/logs/worker.log"] = "run q failed: quota exceeded" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "q", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/runs/withheldid1/logs/log-01.log"].ShouldBe("run withheldid1 failed: quota exceeded");
+    }
+
+    [Fact]
+    public void A_numeric_unquoted_job_id_leaf_ships_the_folders_placeholder_and_the_file_stays_valid_json()
+    {
+        var folder = new Dictionary<string, string> { ["runs/12/status.json"] = """{"jobId":12,"stage":"failed"}""" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/runs/withheldid1/status.json"].ShouldContain("\"jobId\": \"withheldid1\"");
+        JsonDocument.Parse(entries["files/runs/withheldid1/status.json"]).RootElement.GetProperty("stage").GetString().ShouldBe("failed");
+    }
+
+    private const char Backslash = (char)92;
+
+    [Fact]
+    public void An_escaped_spelling_of_a_withheld_id_in_an_allowlisted_leaf_does_not_ship_the_digits()
+    {
+        // "12" parses to 12; the scrub list drops an all-digit value, so only the leaf rewrite can catch it.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/12/result.json"] = "{\"jobId\":\"12\",\"status\":\"failed\",\"inputs\":[{\"id\":\"" + Backslash + "u0031" + Backslash + "u0032\",\"status\":\"ok\"},{\"id\":\"seq-2\",\"status\":\"ok\"}]}",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var result = entries["files/runs/withheldid1/result.json"];
+        result.ShouldNotContain("\"12\"");
+        result.ShouldContain("\"id\": \"withheldid1\"");
+        result.ShouldContain("\"id\": \"seq-2\"");
+    }
+
+    [Fact]
+    public void A_numeric_leaf_equal_to_a_withheld_numeric_id_does_not_ship_the_digits()
+    {
+        // Review round 2 of #637: a number leaf was DeepCloned, so `"id": 12` shipped the withheld id as it was.
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/12/result.json"] = """{"jobId":"12","status":"failed","inputs":[{"id":12,"status":"ok"},{"id":120,"status":"ok"}]}""",
+            ["runs/12/progress.jsonl"] = """{"jobId":"12","stage":"failed","percent":12}""",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "12", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var result = entries["files/runs/withheldid1/result.json"];
+        result.ShouldContain("\"id\": \"withheldid1\"");
+        result.ShouldContain("\"id\": 120");
+        result.ShouldNotContain("\"id\": 12,");
+        entries["files/runs/withheldid1/progress.jsonl"].ShouldNotContain(":12}");
+    }
+
+    [Fact]
+    public void A_decimal_number_containing_a_withheld_id_digit_is_left_as_a_number()
+    {
+        // Review of #637 r2: '.' and '-' are token boundaries, so id "1" turned 0.1 into "0.withheldid1".
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/1/progress.jsonl"] = """{"jobId":"1","percent":0.1}""",
+        };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        var line = entries["files/runs/withheldid1/progress.jsonl"];
+        line.ShouldContain("\"percent\":0.1");
+        line.ShouldNotContain("0.withheldid1");
+    }
+
+    [Fact]
+    public void A_withheld_id_that_starts_or_ends_with_a_symbol_is_rewritten_when_glued_to_a_letter()
+    {
+        // Review of #637 r2: the alphanumeric lookarounds also applied at a symbol edge, so "job#1" survived id "#1".
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "job#1 failed and x#1 done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "#1", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("jobwithheldid1 failed and xwithheldid1 done");
+        Entries(entries).ShouldNotContain("#1", Case.Insensitive);
+    }
+
+    [Fact]
+    public void A_truncated_log_with_a_withheld_id_drops_the_partial_line_and_still_rewrites_the_id()
+    {
+        var folder = new Dictionary<string, string>
+        {
+            ["runs/job7/logs/worker.log"] = "partial first line job7\nline two for job7 ended\n",
+        };
+        var run = Run with { JobId = "job7", Name = "n", ManifestJson = "{}", OptionsJson = "{}" };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 28), [run], Info));
+
+        var log = entries["files/runs/withheldid1/logs/log-01.log"];
+        log.ShouldStartWith("[truncated:");
+        log.ShouldContain("withheldid1");
+        Entries(entries).ShouldNotContain("job7", Case.Insensitive);
+        log.ShouldNotContain("partial first line");
+    }
+
+    [Fact]
+    public void A_blank_job_id_row_with_a_blank_named_run_folder_builds_without_throwing()
+    {
+        var folder = new Dictionary<string, string> { ["runs/ /status.json"] = """{"jobId":"x","stage":"failed"}""" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = " ", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries.Keys.Where(k => k.StartsWith("files/runs/", StringComparison.Ordinal)).ShouldAllBe(k => !k.Contains("/ /", StringComparison.Ordinal));
+        Entries(entries).ShouldContain("withheldid0");
+    }
+
+    [Fact]
+    public void A_character_that_only_case_folds_to_a_withheld_id_is_rewritten_and_never_crashes_the_build()
+    {
+        // U+212A (Kelvin sign) matches the pattern "k" under Unicode case folding but is not equal to it ordinally.
+        var kelvin = ((char)0x212A).ToString();
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = $"run k and {kelvin} done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "k", Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("run withheldid1 and withheldid1 done");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_job_id_row_is_withheld_in_the_history_and_never_rewrites_text(string blank)
+    {
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "a b - c ... done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = blank, Name = "n", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("a b - c ... done");
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("jobId").GetString().ShouldBe("withheldid0");
+    }
+
+    [Fact]
+    public void A_longer_withheld_id_wins_over_a_shorter_one_and_a_placeholder_is_never_rewritten_again()
+    {
+        var folder = new Dictionary<string, string> { ["logs/app.log"] = "runs ab-12 and ab and withheldid2 done" };
+
+        var entries = BuildWith(folder, Info, Run with { JobId = "ab", Name = "n", ManifestJson = "{}", OptionsJson = "{}" }, Run with { JobId = "ab-12", Name = "m", ManifestJson = "{}", OptionsJson = "{}" });
+
+        entries["files/logs/log-01.log"].ShouldBe("runs withheldid2 and withheldid1 and withheldid2 done");
+    }
+
+    [Fact]
     public void A_standard_id_folder_whose_status_names_a_different_job_id_ships_the_folders_id()
     {
         var folder = new Dictionary<string, string>

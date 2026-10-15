@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 
 namespace DnaEntropyGraph.Presentation.Tests;
@@ -67,4 +68,14 @@ internal sealed class ManualTimeProvider : TimeProvider
 internal static class TestMessages
 {
     public static InAppMessageCenter Center() => new(new ManualDispatcher(), TimeProvider.System);
+
+    /// <summary>A completion-actions object whose collaborators are all do-nothing fakes, for a shell test that is not about run completion.</summary>
+    public static RunCompletionActions Completion() => new(
+        new NotificationSettings(NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.ISettingsStore>()),
+        NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IToastService>(),
+        NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IFolderLauncher>(),
+        NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.INavigator>(),
+        NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IRunRepository>(),
+        NSubstitute.Substitute.For<DnaEntropyGraph.Presentation.Services.IStringResourceProvider>(),
+        new ManualDispatcher());
 }

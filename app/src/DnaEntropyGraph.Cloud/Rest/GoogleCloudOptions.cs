@@ -22,6 +22,15 @@ public sealed class GoogleCloudOptions
     /// </summary>
     public string? InstallationId { get; init; }
 
+    /// <summary>
+    /// Reads the id at each use, for a production build whose id file may be unusable at first and repaired later (issue #609: a value read once at startup would stay null for the whole process).
+    /// Returns null when it cannot be read now. <see cref="CurrentInstallationId"/> prefers the fixed <see cref="InstallationId"/> when a test sets one.
+    /// </summary>
+    public Func<string?>? InstallationIdSource { get; init; }
+
+    /// <summary>The installation id to use for this call: the fixed one, else a fresh read from <see cref="InstallationIdSource"/>, else null.</summary>
+    public string? CurrentInstallationId => InstallationId ?? InstallationIdSource?.Invoke();
+
     /// <summary>The <c>app-version</c> label and the <c>app-config.json</c> field. Production passes the running app's version.</summary>
     public string AppVersion { get; init; } = "unknown";
 
