@@ -99,7 +99,7 @@ the shell's `Update available: <version>` InfoBar (a non-blocking bar with a Res
 Settings > About and updates group (version, channel, the launch switch, Check now, the release notes).
 It talks to `IAppUpdateSource`; the only implementation, `VelopackUpdateSource` (App), is
 `UpdateManager(new GithubSource(repoUrl, null, prerelease: channel == Beta))`, so the Beta channel is
-exactly `prerelease: true`, and Stable never sees a pre-release. Tests use a fake source. The release notes are the
+exactly `prerelease: true`, and Stable never sees a pre-release (the flag is not trusted alone: `UpdateChannelPolicy` also refuses a version with a semver pre-release tag on Stable, and a check has a 30 second deadline). Tests use a fake source. The release notes are the
 GitHub release body (`NotesMarkdown`), shown as plain text. A copy the installer did not put there (a dev build, a CI artifact)
 reports `NotInstalled` and tells the user to use the installer.
 
