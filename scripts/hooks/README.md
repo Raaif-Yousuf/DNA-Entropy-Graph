@@ -1,6 +1,6 @@
 # scripts/hooks/ — testing these by hand
 
-Six hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.json`:
+Seven hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.json`:
 
 - `block_git_stash.py` -- refuses a mutating `git stash` (the stash stack is shared
   across every worktree of this repo and every concurrent Claude session).
@@ -17,15 +17,28 @@ Six hooks live here, all registered as `PreToolUse` hooks in `.claude/settings.j
 - `block_primary_checkout_git.py` -- refuses history-changing git (`checkout`/`switch`,
   `merge` other than `--ff-only`, `commit`, `reset --hard|--soft|--mixed|<commit>`, `rebase`,
   `cherry-pick`, `revert`, `am`, `pull` other than `--ff-only`) when the effective directory
-  is the PRIMARY checkout (issue #542). Registered for both `Bash` and `PowerShell`.
+  is the PRIMARY checkout (issue #542). Registered for both `Bash` and `PowerShell`. Recovery shapes (`merge|rebase|cherry-pick|revert|am --abort`,
+  `--quit`) stay allowed; `am --skip` does not. On a git timeout it answers "unknown" and ALLOWS
+  (fail open on purpose, #629): the git runs through `run_bounded()` (temp file, process tree killed by
+  PID), so a stalled git can never push the hook past `run_hook.py`'s 8 s kill, which would deny every shell.
+  Time budget (asserted in `scripts/tests/test_block_primary_checkout_git.py`): one bounded git costs at most its
+  timeout plus a 1.5 s kill tail (`taskkill` wait 1.0 s + post-kill wait 0.5 s); the dispatch hook runs exactly one
+  (`GIT_TIMEOUT` 4.0 s, 5.5 s worst), this hook's calls share a 5.0 s total budget (6.5 s worst); both keep a 1.0 s
+  margin under the 8 s kill. A `#` glued to the `)` of `$( )` is part of the word, not a comment; `bash<<EOF`
+  (no space) is a shell consumer.
 - `require_premerge_before_pr.py` -- refuses `gh pr create` and `gh pr merge` unless
   `scripts/premerge.py` passed (green, unfiltered) on the CURRENT HEAD, recorded by
   `scripts/premerge_stamp.py` in `<git-dir>/premerge-stamp.json` (12 hour expiry). Escape hatch, logged to
   `<git-dir>/premerge-bypass.log`: `DEG_SKIP_PREMERGE=<reason> gh pr create ...` or the same variable in the
   environment. Register it in `.claude/settings.json` exactly like the others, with matcher `Bash` and
   `run_hook.py require_premerge_before_pr`.
+- `gcloud_read_only.py` -- lets a session READ Google Cloud state (`list`, `describe`,
+  `get-iam-policy`, `ls`, `config list`, `auth list`) and refuses every other `gcloud`, `gsutil`
+  or `bq` call, including an unknown verb and `auth print-access-token`. It replaced the blanket
+  `gcloud *` deny in `.claude/settings.json` (owner call, 2026-10-15). Cloud spend still goes
+  through `scripts/cloud_gpu_test.ps1`. Registered for both `Bash` and `PowerShell`.
 
-All six read a `PreToolUse` JSON payload on stdin and answer with silence (exit 0,
+All seven read a `PreToolUse` JSON payload on stdin and answer with silence (exit 0,
 no stdout) or a deny decision. They never block on their own failure: a malformed
 payload or an unexpected exception exits 0 quietly, because a hook that breaks the
 session when IT has a bug is worse than the bug it guards. `scripts/tests/` holds the

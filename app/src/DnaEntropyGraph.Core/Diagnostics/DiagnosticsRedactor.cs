@@ -164,11 +164,16 @@ internal sealed partial class DiagnosticsRedactor
     public static bool IsUnreadableJson(Exception ex) => ex is not OutOfMemoryException;
 
     /// <summary>A parsed JSON document cut down to <paramref name="spec"/>; null when the text cannot be parsed.</summary>
-    public string? RedactJson(string json, KeySpec spec)
+    /// <param name="json">The file text.</param>
+    /// <param name="spec">The keys it may carry.</param>
+    /// <param name="jobId">When given, every <c>jobId</c> leaf is rewritten to it: the file's own run folder decides the id, not the file.</param>
+    /// <param name="rewrite">Applied to every kept string leaf before it is checked (never to a key).</param>
+    /// <param name="rewriteNumber">Given a kept number leaf's text; a non-null result (the whole text is a withheld id) replaces the number with that string.</param>
+    public string? RedactJson(string json, KeySpec spec, string? jobId = null, Func<string, string>? rewrite = null, Func<string, string?>? rewriteNumber = null)
     {
         try
         {
-            return Sanitize(JsonNode.Parse(json), spec)?.ToJsonString(JsonOptions);
+            return Sanitize(JsonNode.Parse(json), spec, jobId, rewrite, rewriteNumber)?.ToJsonString(JsonOptions);
         }
         catch (Exception ex) when (IsUnreadableJson(ex))
         {
@@ -177,7 +182,7 @@ internal sealed partial class DiagnosticsRedactor
     }
 
     /// <summary>One JSON object per line; a line that does not parse is replaced by a note, never copied.</summary>
-    public string RedactJsonLines(string text, KeySpec spec)
+    public string RedactJsonLines(string text, KeySpec spec, Func<string, string>? rewrite = null, Func<string, string?>? rewriteNumber = null)
     {
         var lines = text.Split('\n')
             .Select(line => line.Trim())
@@ -186,7 +191,7 @@ internal sealed partial class DiagnosticsRedactor
             {
                 try
                 {
-                    return Sanitize(JsonNode.Parse(line), spec)?.ToJsonString(CompactOptions) ?? "null";
+                    return Sanitize(JsonNode.Parse(line), spec, rewrite: rewrite, rewriteNumber: rewriteNumber)?.ToJsonString(CompactOptions) ?? "null";
                 }
                 catch (Exception ex) when (IsUnreadableJson(ex))
                 {
@@ -196,7 +201,7 @@ internal sealed partial class DiagnosticsRedactor
         return string.Join('\n', lines) + "\n";
     }
 
-    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec)
+    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec, string? jobId = null, Func<string, string>? rewrite = null, Func<string, string?>? rewriteNumber = null)
     {
         switch (node)
         {
@@ -206,7 +211,9 @@ internal sealed partial class DiagnosticsRedactor
                 {
                     if (spec.Keys.TryGetValue(key, out var child) && (child is not null || value is not (JsonObject or JsonArray)))
                     {
-                        kept[key] = Sanitize(value, child);
+                        kept[key] = jobId is not null && key == "jobId" && value is JsonValue
+                            ? JsonValue.Create(jobId)
+                            : Sanitize(value, child, jobId, rewrite, rewriteNumber);
                     }
                 }
 
@@ -215,12 +222,19 @@ internal sealed partial class DiagnosticsRedactor
                 var items = new JsonArray();
                 foreach (var item in array)
                 {
-                    items.Add(Sanitize(item, spec));
+                    items.Add(Sanitize(item, spec, jobId, rewrite, rewriteNumber));
                 }
 
                 return items;
             case JsonValue value when value.TryGetValue<string>(out var text):
+                text = rewrite is null ? text : rewrite(text);
                 return SafeValue().IsMatch(text) && !SequenceShape.IsSequenceLine(text, minLength: 20, out _) ? RedactText(text) : RedactedValue;
+            case JsonValue number when rewriteNumber is not null:
+                // A number is not copied as it is: a withheld all-digit id (`"id": 12`) is a number leaf too. Only a leaf the
+                // rewrite changes becomes a string; any other number keeps its type and value.
+                // Whole-text match only: a token match would split 0.1 at the dot.
+                var rewritten = rewriteNumber(number.ToJsonString());
+                return rewritten is null ? node.DeepClone() : JsonValue.Create(rewritten);
             case JsonValue:
                 return node.DeepClone();
             default:
@@ -449,36 +463,49 @@ public static partial class DiagnosticsLeakScan
     /// would match ordinary text and numbers). A file name or path given as an identifier also matches by its leaf and
     /// stem, and those match as whole words only, so the folder "out" does not refuse a bundle that says "timeout".
     /// </summary>
-    public static string? FindLeak(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null)
+    public static string? FindLeak(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null) =>
+        Find(entries, sensitiveValues)?.EntryName;
+
+    /// <summary>
+    /// Like <see cref="FindLeak"/>, but also names the check that fired (a fixed word, never user text), so a refusal
+    /// can be diagnosed without the data that caused it.
+    /// </summary>
+    public static LeakFinding? Find(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null)
     {
         var sensitive = SensitiveValue.Normalize(sensitiveValues ?? []);
         foreach (var (name, text) in entries)
         {
-            if (LooksLeaky(name, sensitive) || LooksLeaky(text, sensitive))
+            var rule = Leaky(name, sensitive) ?? Leaky(text, sensitive);
+            if (rule is not null)
             {
-                return name;
+                return new LeakFinding(name, rule);
             }
         }
 
         return null;
     }
 
-    private static bool LooksLeaky(string text, IReadOnlyList<SensitiveValue> sensitive)
+    private static string? Leaky(string text, IReadOnlyList<SensitiveValue> sensitive)
     {
-        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text) || DriveOrUncPath().IsMatch(text))
+        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text))
         {
-            return true;
+            return LeakRules.Credential;
+        }
+
+        if (DriveOrUncPath().IsMatch(text))
+        {
+            return LeakRules.Path;
         }
 
         if (EmailShape().Matches(text).Any(match => !AllowedEmails.Contains(match.Value)))
         {
-            return true;
+            return LeakRules.Email;
         }
 
         var plain = Placeholder().Replace(text, " ");
         if (sensitive.Any(value => value.IsIn(plain)))
         {
-            return true;
+            return LeakRules.Identifier;
         }
 
         text = HexDigest().Replace(text, match => match.Value.Any(char.IsDigit) ? "|" : match.Value);
@@ -502,7 +529,7 @@ public static partial class DiagnosticsLeakScan
 
                 if (run >= 20 && letters >= 16)
                 {
-                    return true;
+                    return LeakRules.Sequence;
                 }
             }
             else
@@ -512,6 +539,19 @@ public static partial class DiagnosticsLeakScan
             }
         }
 
-        return false;
+        return null;
     }
 }
+
+/// <summary>The check that refused a bundle: fixed words only, safe to log.</summary>
+public static class LeakRules
+{
+    public const string Credential = "credential";
+    public const string Path = "path";
+    public const string Email = "email";
+    public const string Identifier = "identifier";
+    public const string Sequence = "sequence";
+}
+
+/// <summary>Which bundle entry tripped the final scan, and which check fired.</summary>
+public sealed record LeakFinding(string EntryName, string Rule);
