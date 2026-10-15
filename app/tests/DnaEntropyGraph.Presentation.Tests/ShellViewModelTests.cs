@@ -139,6 +139,23 @@ public class ShellViewModelTests
         viewModel.CurrentPageTitle.ShouldBe("Cloud services");
     }
 
+    // Issue #99: the status pill is the way into the setup wizard, so the page it opens needs a header title, not an empty one.
+    [Fact]
+    public void The_status_pill_opens_the_setup_wizard_with_its_own_header()
+    {
+        var navigator = Substitute.For<INavigator>();
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("PageTitle_Wizard").Returns("Set up Google Cloud");
+        strings.GetString("StatusPillHelp").Returns("Opens the Google Cloud setup.");
+        var viewModel = new ShellViewModel(navigator, Substitute.For<IGcpAccount>(), new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());
+
+        viewModel.NavigateToCommand.Execute("Wizard");
+
+        navigator.Received(1).NavigateTo("Wizard");
+        viewModel.CurrentPageTitle.ShouldBe("Set up Google Cloud");
+        viewModel.StatusPillHelp.ShouldBe("Opens the Google Cloud setup.");
+    }
+
     [Fact]
     public void Changing_the_page_raises_PropertyChanged_for_the_header_title()
     {
