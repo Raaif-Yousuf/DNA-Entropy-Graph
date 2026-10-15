@@ -492,8 +492,14 @@
   <data name="NewRunStatusDropVirtual" xml:space="preserve">
     <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
   </data>
-  <data name="NewRunStatusStartFailed" xml:space="preserve">
+  <data name="NewRunStatusStartFailedCloud" xml:space="preserve">
     <value>We could not start the run. Check your Google Cloud connection on the Cloud page, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedFile" xml:space="preserve">
+    <value>We could not read your file to start the run. Check that the file is still there and not open in another program, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedOther" xml:space="preserve">
+    <value>We could not start the run. Press Run again. Still failing? Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
   <data name="NewRunStatusBrowseFailed" xml:space="preserve">
     <value>The file chooser could not open. Drag your files onto the drop area instead, or choose Add files again.</value>
@@ -864,6 +870,51 @@
   <data name="AuthError_SIGNIN_STORAGE" xml:space="preserve">
     <value>The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Sign in again.</value>
   </data>
+  <data name="NewRunOutputsHeader.Text" xml:space="preserve">
+    <value>Files you get back</value>
+  </data>
+  <data name="NewRunOutputsNoneChosen.Text" xml:space="preserve">
+    <value>No file is ticked. Tick at least one file above to run.</value>
+  </data>
+  <data name="OutputChoice_genbank" xml:space="preserve">
+    <value>The sequence with its genes and a mean entropy note on each gene (GenBank, .gb)</value>
+  </data>
+  <data name="OutputChoice_fasta" xml:space="preserve">
+    <value>The plain sequence (FASTA, .fasta)</value>
+  </data>
+  <data name="OutputChoice_bedgraph" xml:space="preserve">
+    <value>Entropy at every base, for IGV (.bedgraph)</value>
+  </data>
+  <data name="OutputChoice_wig" xml:space="preserve">
+    <value>Entropy at every base, in the WIG track format (.wig). Tick this instead of the IGV track if your viewer wants WIG.</value>
+  </data>
+  <data name="OutputChoice_geneious_gff3" xml:space="preserve">
+    <value>Entropy at every base, for Geneious (.gff3)</value>
+  </data>
+  <data name="OutputChoice_genes_gff3" xml:space="preserve">
+    <value>The gene positions, for a genome viewer (.genes.gff3)</value>
+  </data>
+  <data name="OutputChoice_smoothed" xml:space="preserve">
+    <value>A smoothed entropy track, averaged over a stretch of bases so trends are easier to see (.smooth files)</value>
+  </data>
+  <data name="OutputChoice_gene_summary" xml:space="preserve">
+    <value>One row of entropy figures per gene, for a spreadsheet (.genes.tsv and .genes.csv)</value>
+  </data>
+  <data name="OutputChoice_regions" xml:space="preserve">
+    <value>Stretches of unusually low or high entropy, as a track (.regions.bed and .regions.gff3)</value>
+  </data>
+  <data name="OutputChoice_stats" xml:space="preserve">
+    <value>A short text summary: length, mean, lowest and highest entropy (.txt)</value>
+  </data>
+  <data name="OutputChoice_tsv" xml:space="preserve">
+    <value>Entropy at every base, as a table for a spreadsheet (.tsv)</value>
+  </data>
+  <data name="OutputChoice_probs" xml:space="preserve">
+    <value>The model's probability for each base, as a table (.probs.tsv.gz). Large, so it is off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_probs_npy" xml:space="preserve">
+    <value>The model's probability for each base, as a NumPy array (.probs.npy). Large, so it is off unless you tick it.</value>
+  </data>
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
   </data>
@@ -1193,6 +1244,51 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="SetupAction_CreateProject" xml:space="preserve">
     <value>Create project</value>
   </data>
+  <data name="ViewerGeneiousPathBox.PlaceholderText" xml:space="preserve">
+    <value>Found automatically</value>
+  </data>
+  <data name="ViewerGeneiousPathBox.Header" xml:space="preserve">
+    <value>Geneious program</value>
+  </data>
+  <data name="ViewerIgvPortBox.Header" xml:space="preserve">
+    <value>IGV batch port (1 to 65535)</value>
+  </data>
+  <data name="ViewerIgvPathBox.PlaceholderText" xml:space="preserve">
+    <value>Found automatically</value>
+  </data>
+  <data name="ViewerIgvPathBox.Header" xml:space="preserve">
+    <value>IGV program</value>
+  </data>
+  <data name="ViewerPathMissing" xml:space="preserve">
+    <value>No program was found at this path. Choose Browse to pick the program again.</value>
+  </data>
+  <data name="ViewerPortInvalid" xml:space="preserve">
+    <value>The port must be a whole number from 1 to 65535. Choose Reset to default to use 60151.</value>
+  </data>
+  <data name="ViewerGeneiousBrowseButton.Content" xml:space="preserve">
+    <value>Browse...</value>
+  </data>
+  <data name="ViewerIgvPortResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="ViewerIgvBrowseButton.Content" xml:space="preserve">
+    <value>Browse...</value>
+  </data>
+  <data name="ViewerSettingNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
+  </data>
+  <data name="ViewerGeneiousPathResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="ViewerIgvPathResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="SettingsViewersHeader.Text" xml:space="preserve">
+    <value>External viewers</value>
+  </data>
+  <data name="SettingsViewersExplainer.Text" xml:space="preserve">
+    <value>Where the Open in IGV and Open in Geneious buttons find those programs. Leave a path empty and the app looks for the program itself. A change applies the next time you press the button.</value>
+  </data>
   <data name="ProfileBanner_Text" xml:space="preserve">
     <value>Sandbox profile: {0}</value>
     <comment>Title bar banner shown when the app runs on a data folder given by --profile or DEG_DATA_DIR. {0} is the folder.</comment>
@@ -1220,6 +1316,121 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="DataFolderUnusable_CannotCreate" xml:space="preserve">
     <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
   </data>
+  <data name="SettingsRunDefaultsHeader.Text" xml:space="preserve">
+    <value>Run defaults</value>
+  </data>
+  <data name="SettingsRunDefaultsExplainer.Text" xml:space="preserve">
+    <value>The files a new run starts with. The New run page shows these ticked, and you can still change them for one run there.</value>
+  </data>
+  <data name="SettingsRunDefaultsGenBankHeader.Text" xml:space="preserve">
+    <value>When the input is a GenBank file</value>
+  </data>
+  <data name="SettingsRunDefaultsSequenceHeader.Text" xml:space="preserve">
+    <value>When the input is a FASTA file or a pasted sequence</value>
+  </data>
+  <data name="RunDefaultsNoneChosen" xml:space="preserve">
+    <value>At least one file must stay ticked. Tick another file first, then untick this one.</value>
+  </data>
+  <data name="RunDefaultsNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open, so the box is back as it was. Close the other copies of the app, then change it again.</value>
+  </data>
+  <data name="SettingsFilesHeader.Text" xml:space="preserve">
+    <value>Files</value>
+  </data>
+  <data name="SettingsFilesExplainer.Text" xml:space="preserve">
+    <value>Where the app keeps its own data on this computer. Nothing here deletes your results or your input files.</value>
+  </data>
+  <data name="FilesDataLabel.Text" xml:space="preserve">
+    <value>App data folder</value>
+  </data>
+  <data name="FilesInputsLabel.Text" xml:space="preserve">
+    <value>Run folders (each keeps a saved copy of its input file, used to run a file again)</value>
+  </data>
+  <data name="FilesLogsLabel.Text" xml:space="preserve">
+    <value>Log files</value>
+  </data>
+  <data name="FilesDataOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesInputsOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesLogsOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesInputsSizeLabel.Text" xml:space="preserve">
+    <value>Space used by saved input copies, pasted sequences included:</value>
+  </data>
+  <data name="FilesSizeUnknown" xml:space="preserve">
+    <value>Not measured. Close Settings and open it again to measure it.</value>
+  </data>
+  <data name="FilesOpenFailed" xml:space="preserve">
+    <value>Windows could not open that folder. Open File Explorer, then paste the folder path shown above into its address bar.</value>
+  </data>
+  <data name="SettingsNotificationsHeader.Text" xml:space="preserve">
+    <value>Notifications</value>
+  </data>
+  <data name="SettingsNotificationsExplainer.Text" xml:space="preserve">
+    <value>What the app does when a run finishes. A change applies from the next run that finishes.</value>
+  </data>
+  <data name="NotifyWhenDoneBox.Content" xml:space="preserve">
+    <value>Show a message when a run finishes</value>
+  </data>
+  <data name="OpenFolderWhenDoneBox.Content" xml:space="preserve">
+    <value>Open the folder with the results when a run finishes</value>
+  </data>
+  <data name="OpenResultsWhenDoneBox.Content" xml:space="preserve">
+    <value>Open the Results page when a run finishes</value>
+  </data>
+  <data name="NotificationsNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then change it again.</value>
+  </data>
+  <data name="RunDone_Title" xml:space="preserve">
+    <value>Your run has finished</value>
+  </data>
+  <data name="RunDone_Body" xml:space="preserve">
+    <value>The results are ready. Choose Results in the Runs list to look at them.</value>
+  </data>
+  <data name="RunPartial_Title" xml:space="preserve">
+    <value>Your run finished with some files missing</value>
+  </data>
+  <data name="RunPartial_Body" xml:space="preserve">
+    <value>Some result files could not be made. Choose Results in the Runs list to see which ones.</value>
+  </data>
+  <data name="SettingsAdvancedHeader.Text" xml:space="preserve">
+    <value>Advanced</value>
+  </data>
+  <data name="SettingsAdvancedExpander.Header" xml:space="preserve">
+    <value>Developer options and reset</value>
+  </data>
+  <data name="AdvancedWorkerImageExplainer.Text" xml:space="preserve">
+    <value>Use your own build of the analysis program instead of the one that came with this app. The box works only when developer mode is already on in the settings file, and it takes an image address that ends in @sha256: followed by its fingerprint. Leave it empty to use the shipped one.</value>
+  </data>
+  <data name="AdvancedWorkerImageBox.Header" xml:space="preserve">
+    <value>Analysis program image</value>
+  </data>
+  <data name="WorkerImageNotPinned" xml:space="preserve">
+    <value>That is not a full image address: the fingerprint is missing (it is written @sha256: followed by 64 letters or numbers). The shipped image is used until you paste the full address from your build.</value>
+  </data>
+  <data name="FakeCloudOn" xml:space="preserve">
+    <value>This copy is using a pretend cloud for testing, so no computer is rented and nothing is billed.</value>
+  </data>
+  <data name="FakeCloudOff" xml:space="preserve">
+    <value>This copy is connected to your Google Cloud project.</value>
+  </data>
+  <data name="AdvancedResetButton.Content" xml:space="preserve">
+    <value>Reset all settings</value>
+  </data>
+  <data name="AdvancedResetConfirmTitle" xml:space="preserve">
+    <value>Reset all settings?</value>
+  </data>
+  <data name="AdvancedResetConfirmBody" xml:space="preserve">
+    <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Continue to reset, or Cancel to keep your settings.</value>
+  </data>
+  <data name="AdvancedResetDone" xml:space="preserve">
+    <value>Settings were reset. Close the app and open it again to finish.</value>
+  </data>
+  <data name="AdvancedNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
+  </data>
 </root>
-
-
