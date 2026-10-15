@@ -387,7 +387,7 @@ public static class ServiceRegistration
             },
             AppVersion = JobEngine.AppVersion(),
         });
-services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
+        services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
             sp.GetRequiredService<IGcpAccessTokenSource>(),
             sp.GetRequiredService<CloudCallPipeline>(),
             sp.GetRequiredService<GoogleCloudOptions>(),

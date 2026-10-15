@@ -1728,3 +1728,16 @@ def test_a_cancel_seen_before_the_model_loads_never_loads_the_model(tmp_path: Pa
 
     assert result.status == "cancelled"
     assert built == []
+
+
+def test_a_completed_run_reports_windows_done_and_a_last_progress_time_in_status_json(tmp_path: Path) -> None:
+    """#522: _on_window must feed the progress signal, or a real wedge cannot be told from a long window."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    run_job(store)
+
+    status_doc = json.loads(store.read_text("status.json"))
+    assert status_doc["windowsDone"] >= 1
+    assert status_doc["lastProgressAt"] >= status_doc["startedAt"]

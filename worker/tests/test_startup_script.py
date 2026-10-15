@@ -400,3 +400,66 @@ def test_the_zone_check_is_the_line_right_before_each_status_write_that_precedes
         assert lines[at - 1].startswith("foreign_zone_exit"), (
             f"the zone check must immediately precede {stage!r}"
         )
+
+
+# --- the ERR trap must not fire on the worker's legitimate exit codes (#494) ---------------
+
+
+def _run_docker_tail(rc: int, lifecycle: str = "stop") -> list[str]:
+    """Run the REAL ERR trap line and the real docker-run-to-end tail of startup.sh with a stub
+    ``docker`` that exits ``rc``, and return what status/cleanup/put_object/kill recorded."""
+    import re
+
+    text = _text()
+    trap = next(ln for ln in text.splitlines() if ln.strip().startswith("trap "))
+    tail = text[text.index("GPU_FLAGS=()") :]
+    assert re.search(r"^docker run --rm", tail, re.MULTILINE), "tail must contain the docker run"
+    lines = [
+        "set -uo pipefail",
+        'LOG=""; EXPECT_GPU=false; JOBURI=gs://b/jobs/j; BUCKET=b; NAME=vm; ZONE=z; PROJECT=p',
+        "IMAGE=img; JOB=j; MAX_RUN_MIN=60; RELAY_PID=999999",
+        f"LIFECYCLE={lifecycle}",
+        'status() { LOG="$LOG status:$1:${2:-}"; }',
+        'cleanup() { LOG="$LOG cleanup:$1"; }',
+        'put_object() { LOG="$LOG put"; }',
+        'kill() { LOG="$LOG kill"; }',
+        "foreign_zone_exit() { :; }",
+        "mkdir() { :; }; chown() { :; }",
+        f"docker() {{ return {rc}; }}",
+        trap,
+        "exec 3>&1",
+        tail,
+        'echo "$LOG" >&3',
+    ]
+    result = subprocess.run(
+        ["bash", "-s"], input=("\n".join(lines) + "\n").encode("utf-8"), capture_output=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    return result.stdout.decode("utf-8").split()
+
+
+@needs_bash
+@pytest.mark.parametrize("rc", [2, 3, 10, 11])
+def test_a_legitimate_worker_exit_code_does_not_write_worker_crash(rc: int) -> None:
+    """A non-zero `docker run` used to fire the ERR trap, which wrote WORKER_CRASH over the
+    worker's own terminal status.json and ran cleanup a second time (#494)."""
+    calls = _run_docker_tail(rc)
+    assert not any("WORKER_CRASH" in c for c in calls), calls
+    assert not any(c.startswith("status:") for c in calls), calls
+    cleanups = [c for c in calls if c.startswith("cleanup:")]
+    assert cleanups == ([] if rc in (10, 11) else ["cleanup:stop"]), calls
+
+
+@needs_bash
+def test_a_clean_exit_runs_cleanup_exactly_once() -> None:
+    assert [c for c in _run_docker_tail(0) if c.startswith("cleanup:")] == ["cleanup:stop"]
+
+
+@needs_bash
+@pytest.mark.parametrize("rc", [1, 125, 126, 127, 137])
+def test_an_unknown_exit_code_still_reports_worker_crash_once(rc: int) -> None:
+    """docker itself failing (125-127) or the container being killed (137) is a real crash: the
+    status must still say WORKER_CRASH, and cleanup still runs exactly once."""
+    calls = _run_docker_tail(rc)
+    assert sum("WORKER_CRASH" in c for c in calls) == 1, calls
+    assert [c for c in calls if c.startswith("cleanup:")] == ["cleanup:stop"], calls
