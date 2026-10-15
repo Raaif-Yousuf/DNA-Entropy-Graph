@@ -115,6 +115,23 @@ requirement, section 5 below) works without a second code path.
   button twin, since drag-and-drop alone is not discoverable or operable for everyone.
 - No fixed heights on text-bearing controls, so text scaling (a Windows accessibility
   setting) does not clip content.
+- Keyboard (issue #110, Appendix A section 6): Alt+Left is a `KeyboardAccelerator` on
+  `RootGrid` in `MainWindow.xaml` with `Invoked="{x:Bind ViewModel.GoBack}"` (x:Bind can
+  bind an event to a parameterless ViewModel method). Ctrl+N is on the New run nav item and
+  Ctrl+, on the Settings nav item (invoking an accelerator on a `NavigationViewItem` selects
+  it); the comma has no `VirtualKey` name, so it is added in `MainWindow.xaml.cs` as
+  `(VirtualKey)188`. Ctrl+O, Ctrl+Enter and F5 sit on the button they press. Ctrl+Shift+V
+  runs `NewRunViewModel.PasteFromClipboard` through `IClipboardTextReader`. Esc closing a
+  `ContentDialog` is the platform default. Nav `AccessKey`s live in the .resw
+  (`NavX.AccessKey`). Not done: Ctrl+L (the locus box belongs to igv.js inside WebView2, not
+  to a XAML control) and F5 on Cloud (that page is still the placeholder).
+- Guards: `IconOnlyAutomationNameGuardTests` fails on an icon-only button with no
+  `AutomationProperties.Name` (attribute, or `<Uid>.AutomationProperties.Name` in the .resw);
+  `KeyboardShortcutWiringTests` fails if a shortcut or the progress page's live regions
+  leave the XAML. The progress page marks the stage title and the detail line
+  `LiveSetting=Polite`.
+- High contrast: only theme resources for colours (`ThemeResource`), never a hard-coded
+  brush; the walkthrough is a ToTest row.
 
 ## 6. Toasts and file associations
 
@@ -245,6 +262,27 @@ Open folder, the status line and one line saying what is and is never included).
 panel and keeps this one. The run-error strings say "Choose Save diagnostics in Settings"; `Guards.Tests/SaveDiagnosticsWiringTests`
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
 `ToastService` is still a debug-output placeholder.
+
+## 11. The setup wizard (issue #99)
+
+One page (`WizardPage`, route `Wizard`, opened from the status pill in the title bar), not a stepper: welcome, sign in, then OK/Fix rows. `WizardViewModel` owns sign-in, the project step (a `SetupStepRow`, the list of projects, Create) and Finish; `SetupStepsViewModel` owns the rows for billing, services, storage and identity, and the GPU allowance, which are also the Settings health report ("Run setup check again"). All Google calls are `SetupCheckService` (`Core/Setup`), which never throws a Google failure: a failure is a `SetupStepResult` with a code (`SetupErrorCodes` or `AuthErrorCodes.ProjectInvalid`) and one `SetupAction` whose kind decides the button: Retry, OpenLink (a `HyperlinkButton`, plus **Check again**), CopyText (clipboard, with the billing request naming the account that was refused), PickProject, PickBillingAccount (a list of buttons, each linking that account), CreateProject.
+
+- A row never shows colour alone: the badge text says OK, Fix, Checking, Skipped or Not checked yet, and its live region announces changes.
+- Rows run in the preflight order of CLAUDE.md: billing, services (Compute API), GPU allowance, then storage and the worker account, so nothing is created in a project whose allowance or permissions already rule a run out. The chain stops at the first red row. **Skip for now** is offered only when the allowance was read and is zero (or could not be read for a reason with no action of its own); permission, org policy, API-off and billing errors abort with their one named action, and Finish never opens over one. Skipping carries on to storage.
+- Every button shown does something: project actions on a step row (Create project, Pick an existing project) are handed to the wizard's project step, a link action with no page opens the manual guide, and choosing a billing account is the list below the row (the row has no second button).
+- Checks are serialized (one gate in `SetupStepsViewModel`, one in `WizardViewModel`): a row's Check again waits for Run all, Finish is off while anything runs, an account change cancels running checks, and a failure that is not a Google error becomes a "Try again" row, never one stuck on Checking.
+- Every Fix row has **Do it by hand** (`docs/gcp_setup_manual.md`).
+- Lists and per-item buttons are commands on the item (`ProjectChoice`, `BillingAccountChoice`, `SetupStepRow.ActionCommand`), so the page has no code-behind logic (Hard Rule 8).
+- Not built yet: the pipeline test and the real-GPU test step (step 8, #97), the quota request through the Cloud Quotas API (needs a gateway method), the local engine step, and "Run setup check again" in Settings.
+## 12. Windows notifications and activation (issue #107)
+
+A run that finishes (done, partly done) or fails while the app window is not in front shows a Windows notification with an **Open run** button; clicking the notification or the button opens that run's Results page, also when the app was closed. The in-app message bar (`IToastService`) is unchanged and still shows for done and partly done; a failed run is a desktop notification only. Both sit behind the Settings switch **Notify when done**.
+
+- `IDesktopNotifier` (Core) is implemented by `AppNotifier` (App, Windows App SDK `AppNotificationManager`, which works unpackaged once `DesktopActivation.Register` has run). It stays silent while the window is in front (`IAppWindow.IsInForeground`).
+- The click carries `run=<job id>` (`AppDeepLink`, Core). The text comes from outside the app, so only a plain job id (letters, digits, `-`, `_`, at most 64) is acted on. `ActivationRouter` (Presentation) brings the window forward and navigates; every route into the app (notification click while running, launch from a notification, a later launch) ends there.
+- `SingleInstance` (Program.Main) keeps one app per data folder: a second launch hands its arguments to the first and exits. The key includes the data folder, so a `--profile` sandbox is its own instance. #108 (file association) reuses it.
+- **Open with (issue #108).** The Settings switch (Files group, `FileAssociationSettingsViewModel`) adds or removes HKCU "Open with" entries for `.gb .gbk .genbank .fasta .fa .fna` (`FileAssociationService`, Core; `CurrentUserClasses`, App): a program id whose open command is this exe, listed under each extension's `OpenWithProgids`. It never sets an extension's default value. A launch with sequence files (the second instance hands its command line to the first) goes through `ActivationRouter` to New run, as a `DroppedItems` navigation parameter that `NewRunPage.OnNavigatedTo` forwards to `NewRunViewModel.ReceiveNavigationParameterCommand`. Only local full paths to sequence types are accepted (`AppDeepLink.TryGetInputFiles`: no UNC or device root in either slash form, no wildcard, no other file type). DECISION (agent-made, reversible): a drive letter mapped to a network share is allowed, because the mapping is the user's own and Open with is chosen on that file in Explorer. Files go to the New run screen that is already showing (`NewRunIntake`, attached by `NewRunPage.OnNavigatedTo`) so a draft survives, and a launch is held until the shell has made its first navigation (`ShellReadiness`, marked by `MainWindow`). Enable is all or nothing, Disable removes the keys it created once empty, both are refused on a `--profile` sandbox (the entries live in the real registry) and unless the process is `DnaEntropyGraph.App.exe` (never `dotnet.exe`); the Velopack uninstall hook (`Program.OnBeforeUninstall`) also removes them.
+- Not built: the idle-VM and keep-alive-expiry notifications (the reconciler in Core/Cloud has no event for them yet).
 
 ## Related
 

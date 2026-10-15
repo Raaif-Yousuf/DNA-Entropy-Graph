@@ -120,13 +120,27 @@ public sealed class IgvViewerHost(AppDataRoot dataRoot)
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
         viewModel.MessageToViewer += OnMessageToViewer;
         webView.ActualThemeChanged += OnActualThemeChanged;
+        ApplyColorScheme(core, webView.ActualTheme == ElementTheme.Dark);
         viewModel.SetDarkMode(webView.ActualTheme == ElementTheme.Dark);
 
         MapRunFolder(core, viewModel.MapRunFolder);
         core.Navigate(ViewerUrls.StartUrl);
     }
 
-    private void OnActualThemeChanged(FrameworkElement sender, object args) => _viewModel?.SetDarkMode(sender.ActualTheme == ElementTheme.Dark);
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    {
+        var dark = sender.ActualTheme == ElementTheme.Dark;
+        if (_webView?.CoreWebView2 is { } core)
+        {
+            ApplyColorScheme(core, dark);
+        }
+
+        _viewModel?.SetDarkMode(dark);
+    }
+
+    /// <summary>Makes the page's own prefers-color-scheme (igv.js dialogs, scrollbars, form controls) follow the app theme (issue #115).</summary>
+    private static void ApplyColorScheme(CoreWebView2 core, bool dark)
+        => core.Profile.PreferredColorScheme = dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
 
     private void OnWebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
