@@ -23,7 +23,9 @@ public sealed class UpdateViewModelTests
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
     }
 
-    private UpdateViewModel Vm() => new(_source, new UpdateSettings(_store), _strings, _runs, _messenger);
+    private readonly ManualDispatcher _dispatcher = new();
+
+    private UpdateViewModel Vm(TimeSpan? checkTimeout = null) => new(_source, new UpdateSettings(_store), _strings, _runs, _messenger, dispatcher: _dispatcher, checkTimeout: checkTimeout);
 
     [Fact]
     public void Defaults_are_the_stable_channel_and_check_on_launch()
@@ -217,6 +219,67 @@ public sealed class UpdateViewModelTests
     }
 
     [Fact]
+    public async Task Download_progress_reported_from_another_thread_reaches_status_text_only_through_the_dispatcher()
+    {
+        _source.Result = new UpdateCheckResult(UpdateCheckOutcome.Available, new AvailableUpdate("1.2.0", null));
+        _strings.GetString("UpdateDownloadingPercent").Returns("Downloading {0}%");
+        var vm = Vm();
+        await vm.CheckNowCommand.ExecuteAsync(null);
+        var seenRightAfter = string.Empty;
+        _source.OnProgress = progress =>
+        {
+            Task.Run(() => progress(42)).Wait();
+            seenRightAfter = vm.StatusText;
+        };
+
+        await vm.RestartToUpdateCommand.ExecuteAsync(null);
+
+        // Nothing wrote StatusText on the worker thread: the percent waits for the UI thread.
+        seenRightAfter.ShouldNotContain("42");
+        _dispatcher.RunAll();
+        vm.StatusText.ShouldBe("Downloading 42%");
+    }
+
+    [Fact]
+    public async Task A_pre_release_version_is_refused_on_stable_even_when_the_feed_offers_it_and_accepted_on_beta()
+    {
+        _source.Result = new UpdateCheckResult(UpdateCheckOutcome.Available, new AvailableUpdate("1.3.0-beta.1", null));
+        var vm = Vm();
+
+        await vm.CheckNowCommand.ExecuteAsync(null);
+        vm.HasUpdate.ShouldBeFalse();
+        vm.IsBannerOpen.ShouldBeFalse();
+        vm.StatusText.ShouldBe("UpdateUpToDate");
+
+        vm.ChannelIndex = 1;
+        await vm.CheckNowCommand.ExecuteAsync(null);
+        vm.HasUpdate.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("1.2.0", true)]
+    [InlineData("1.2.0+build5", true)]
+    [InlineData("1.2.0-rc.1", false)]
+    [InlineData("1.2.0-beta.1+sha", false)]
+    public void Stable_allows_only_a_version_without_a_pre_release_tag(string version, bool allowed)
+    {
+        UpdateChannelPolicy.Allows(UpdateChannel.Stable, version).ShouldBe(allowed);
+        UpdateChannelPolicy.Allows(UpdateChannel.Beta, version).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_check_that_never_answers_gives_up_at_the_deadline_and_names_the_action()
+    {
+        _source.Hang = true;
+        var vm = Vm(TimeSpan.FromMilliseconds(50));
+
+        await vm.CheckNowCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("UpdateCheckFailed");
+        vm.IsBusy.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Reset_all_settings_puts_the_channel_and_switch_back_without_saving()
     {
         var vm = Vm();
@@ -249,6 +312,10 @@ public sealed class UpdateViewModelTests
 
         public Action? OnDownload { get; set; }
 
+        public bool Hang { get; set; }
+
+        public Action<Action<int>>? OnProgress { get; set; }
+
         public List<UpdateChannel> ChannelsAsked { get; } = [];
 
         public int Downloaded { get; private set; }
@@ -260,6 +327,11 @@ public sealed class UpdateViewModelTests
         public Task<UpdateCheckResult> CheckAsync(UpdateChannel channel, CancellationToken cancellationToken)
         {
             ChannelsAsked.Add(channel);
+            if (Hang)
+            {
+                return Task.Delay(Timeout.Infinite, cancellationToken).ContinueWith<UpdateCheckResult>(_ => throw new InvalidOperationException("unreachable"), TaskScheduler.Default);
+            }
+
             return Throw is null ? Task.FromResult(Result) : Task.FromException<UpdateCheckResult>(Throw);
         }
 
@@ -267,6 +339,7 @@ public sealed class UpdateViewModelTests
         {
             Downloaded++;
             OnDownload?.Invoke();
+            OnProgress?.Invoke(percent => progress?.Invoke(percent));
             return Task.CompletedTask;
         }
 

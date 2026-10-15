@@ -91,8 +91,8 @@ public sealed class ActiveRuns
 
     public bool IsActive(string jobId) => _runs.ContainsKey(jobId);
 
-    /// <summary>True while any job has a driver (issue #179: the updater never restarts the app while this is true).</summary>
-    public bool Any => !_runs.IsEmpty;
+    /// <summary>True while any job has a driver or a user cancel still settling (issue #179: the updater never restarts the app while this is true; a cancel writes the run's phases after its driver has ended).</summary>
+    public bool Any => !_runs.IsEmpty || !_cancels.IsEmpty;
 
     /// <summary>
     /// A user cancel (one at a time per job; a second concurrent call waits for the first and runs nothing): stops the job's driver (if any) and waits for it to end, then runs <paramref name="cancel"/>, the code that writes the
