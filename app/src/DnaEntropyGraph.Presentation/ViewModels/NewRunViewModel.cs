@@ -43,6 +43,13 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly ICostEstimateService _estimates;
     private readonly IInputFileSystem _files;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
+    private readonly OutputSelectionStore _outputStore;
+    private readonly IDiagnosticsLog _log;
+
+    // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
+    // kept while the user switches between pills, and written back to the store only when a run starts.
+    private readonly Dictionary<OutputInputKinds, OutputFileKinds> _outputSelections = [];
+    private OutputInputKinds? _shownOutputGroup;
 
     private InputPillItem? _selectedItem;
     private int _countVersion;
@@ -83,9 +90,13 @@ public sealed partial class NewRunViewModel : ObservableObject
         IStringResourceProvider strings,
         IPastedInputStore pastedStore,
         ICostEstimateService estimates,
+        OutputSelectionStore outputStore,
+        IDiagnosticsLog log,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null)
     {
+        _outputStore = outputStore;
+        _log = log;
         _filePicker = filePicker;
         _jobEngine = jobEngine;
         _navigator = navigator;
@@ -116,6 +127,7 @@ public sealed partial class NewRunViewModel : ObservableObject
 
             if (SetProperty(ref _selectedItem, value))
             {
+                RefreshOutputChoices();
                 StartRunCommand.NotifyCanExecuteChanged();
                 _ = RefreshEstimateAsync();
             }
@@ -124,6 +136,71 @@ public sealed partial class NewRunViewModel : ObservableObject
 
     /// <summary>One pill per file or pasted sequence, in the order added.</summary>
     public ObservableCollection<InputPillItem> Items { get; } = [];
+
+    /// <summary>The "Files you get back" boxes for the selected file's kind (a GenBank file or a FASTA/pasted sequence); empty while the kind is not known.</summary>
+    public ObservableCollection<OutputChoiceItem> OutputChoices { get; } = [];
+
+    public bool HasOutputChoices => OutputChoices.Count > 0;
+
+    /// <summary>True when every box is cleared: the page then says to choose a file, and Run waits.</summary>
+    public bool HasNoOutputChosen => HasOutputChoices && !OutputChoices.Any(choice => choice.IsChecked);
+
+    /// <summary>
+    /// Shows the boxes for the selected file's kind. The group already shown keeps its boxes (and any unsaved ticks); a
+    /// group shown for the first time starts from what was remembered for it, or the catalog defaults.
+    /// </summary>
+    private void RefreshOutputChoices()
+    {
+        OutputInputKinds? group = SelectedItem?.Kind is { } kind ? OutputCatalog.GroupFor(kind) : null;
+        if (group == _shownOutputGroup)
+        {
+            return;
+        }
+
+        _shownOutputGroup = group;
+        OutputChoices.Clear();
+        if (group is { } shown)
+        {
+            if (!_outputSelections.TryGetValue(shown, out var selection))
+            {
+                _outputSelections[shown] = selection = _outputStore.Load(shown);
+            }
+
+            foreach (var entry in OutputCatalog.For(shown))
+            {
+                OutputChoices.Add(new OutputChoiceItem(entry, _strings.GetString(entry.LabelKey), selection.HasFlag(entry.Kind), OnOutputChoiceChanged));
+            }
+        }
+
+        NotifyOutputChoicesChanged();
+    }
+
+    private void OnOutputChoiceChanged(OutputChoiceItem choice)
+    {
+        if (_shownOutputGroup is not { } group)
+        {
+            return;
+        }
+
+        var selection = _outputSelections[group];
+        _outputSelections[group] = choice.IsChecked ? selection | choice.Entry.Kind : selection & ~choice.Entry.Kind;
+
+        // The worker writes one track format per run: ticking one of the two track boxes clears the other.
+        if (choice.IsChecked && choice.Entry.Kind is OutputFileKinds.BedGraph or OutputFileKinds.Wig)
+        {
+            var other = choice.Entry.Kind == OutputFileKinds.Wig ? OutputFileKinds.BedGraph : OutputFileKinds.Wig;
+            OutputChoices.FirstOrDefault(c => c.Entry.Kind == other)?.IsChecked = false;
+        }
+
+        NotifyOutputChoicesChanged();
+    }
+
+    private void NotifyOutputChoicesChanged()
+    {
+        OnPropertyChanged(nameof(HasOutputChoices));
+        OnPropertyChanged(nameof(HasNoOutputChosen));
+        StartRunCommand.NotifyCanExecuteChanged();
+    }
 
     public bool HasEstimate => EstimateText.Length > 0;
 
@@ -231,6 +308,49 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Says a failure's line like any other operation does (after what another operation in flight has already said, replacing a
+    /// stale line only when the page is idle), then logs its class, never its message, which can carry a file name. The line comes
+    /// first and the log is best effort: a log that throws must not hide the line or escape the command.
+    /// </summary>
+    private void ReportFailure(Exception exception, string messageKey)
+    {
+        BeginOperation();
+        try
+        {
+            PostStatus([_strings.GetString(messageKey)]);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        try
+        {
+            _log.Warning("new-run", null, ErrorClass(exception));
+        }
+        catch (Exception)
+        {
+            // The log is advice for the diagnostics zip; the user has already been told what to do.
+        }
+    }
+
+    /// <summary>The exception type, plus the cloud error kind when it has one. Never the message.</summary>
+    private static string ErrorClass(Exception exception)
+        => exception is CloudOperationException cloud ? $"{nameof(CloudOperationException)}:{cloud.Kind}" : exception.GetType().Name;
+
+    /// <summary>
+    /// The line for a run that could not start, by what failed. What the runner interface can let out here: a file the app cannot
+    /// read while keeping its own copy (local), a sign-in or Google Cloud call that failed (cloud), or anything else, such as the
+    /// app's own settings or history store, including a plain <see cref="IOException"/> (a full disk under app data is not the user's file).
+    /// </summary>
+    private static string StartFailureKey(Exception exception) => exception switch
+    {
+        FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException => "NewRunStatusStartFailedFile",
+        CloudOperationException or AccountAuthException => "NewRunStatusStartFailedCloud",
+        _ => "NewRunStatusStartFailedOther",
+    };
+
     /// <summary>A drop: adds its real paths, and says one action when some items had no path or the drop could not be read.</summary>
     [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task AddDroppedAsync(DroppedItems? dropped)
@@ -263,10 +383,10 @@ public sealed partial class NewRunViewModel : ObservableObject
         {
             return;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // The picker is a COM call that can fail for reasons we cannot name (no window yet, a shell extension).
-            StatusMessage = _strings.GetString("NewRunStatusBrowseFailed");
+            ReportFailure(ex, "NewRunStatusBrowseFailed");
             return;
         }
 
@@ -390,12 +510,17 @@ public sealed partial class NewRunViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStartRun))]
     private async Task StartRunAsync(CancellationToken cancellationToken)
     {
+        var group = _shownOutputGroup!.Value;
+        var outputs = _outputSelections[group];
         var options = new RunOptions
         {
             ModelId = DefaultModelId,
             RunTarget = "Cloud",
             InputPath = SelectedItem!.Path,
             TreatAsRna = IsTreatingAsRna,
+            OutputFiles = outputs,
+            // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
+            TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
         };
         string jobId;
         try
@@ -406,17 +531,40 @@ public sealed partial class NewRunViewModel : ObservableObject
         {
             return;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // An exception out of a button command would end the app; say what to do instead.
-            StatusMessage = _strings.GetString("NewRunStatusStartFailed");
+            // An exception out of a button command would end the app; say what to do instead, for what actually failed.
+            ReportFailure(ex, StartFailureKey(ex));
             return;
         }
 
-        _navigator.NavigateTo("RunProgress", jobId);
+        // The run has started and is paid for: open its page first, so nothing the store does can leave the user on a Run button
+        // that starts a second one.
+        try
+        {
+            _navigator.NavigateTo("RunProgress", jobId);
+        }
+        finally
+        {
+            // Also when the navigation throws: the run is paid for, so its choice is still remembered.
+            RememberOutputs(group, outputs);
+        }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true };
+    private void RememberOutputs(OutputInputKinds group, OutputFileKinds outputs)
+    {
+        try
+        {
+            _outputStore.Save(group, outputs);
+        }
+        catch (Exception)
+        {
+            // A choice that could not be remembered only means the next run starts from the defaults; it must never reach the command
+            // or replace a navigation failure that is already unwinding.
+        }
+    }
+
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
@@ -445,15 +593,17 @@ public sealed partial class NewRunViewModel : ObservableObject
         var pill = new InputPillItem(path, isPasted, _strings);
         Items.Add(pill);
         SelectedItem ??= pill;
-        var applied = await ValidateAsync(pill, cancellationToken);
-        if (!applied && pill.IsChecking && cancellationToken.IsCancellationRequested)
+        var outcome = await ValidateAsync(pill, cancellationToken);
+        if (outcome == CheckOutcome.NotStarted)
         {
             // Cancelled between adding the pill and starting its check: no check will ever report, so end the
-            // "Checking" state with the one action the user has (Remove, then add it again).
-            pill.AbandonLatest();
+            // "Checking" state with the one action the user has (Remove, then add it again). Any other outcome needs nothing here:
+            // a cancelled check ended its own state, and a superseded one left the pill to the newer check (a Treat as RNA click
+            // that is still running must not be marked stopped).
+            pill.AbandonIfNeverChecked();
         }
 
-        return (pill, applied);
+        return (pill, outcome == CheckOutcome.Applied);
     }
 
     /// <summary>A pasted sequence is our own copy under app data, so removing its pill removes it. A user's file is never touched (Hard Rule 14).</summary>
@@ -465,16 +615,32 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
     }
 
+    /// <summary>What became of one <see cref="ValidateAsync"/> call.</summary>
+    private enum CheckOutcome
+    {
+        /// <summary>This check's result is the one the pill shows.</summary>
+        Applied,
+
+        /// <summary>A newer check of the pill started first, so this result was dropped; the newer check owns the pill.</summary>
+        Superseded,
+
+        /// <summary>Cancelled while running: it ended its own checking state (unless a newer check had taken over).</summary>
+        Cancelled,
+
+        /// <summary>Cancelled before it began: it touched nothing.</summary>
+        NotStarted,
+    }
+
     /// <summary>
-    /// Checks one pill. True when this check's result is the one the pill shows. A check whose token was cancelled before
-    /// it began starts nothing (it would only take a newer generation than the check that replaced it and then abandon
-    /// it), and a cancelled or superseded check writes nothing the pill's newest check does not already own.
+    /// Checks one pill. A check whose token was cancelled before it began starts nothing (it would only take a newer
+    /// generation than the check that replaced it and then abandon it), and a cancelled or superseded check writes nothing
+    /// the pill's newest check does not already own.
     /// </summary>
-    private async Task<bool> ValidateAsync(InputPillItem pill, CancellationToken cancellationToken)
+    private async Task<CheckOutcome> ValidateAsync(InputPillItem pill, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            return false;
+            return CheckOutcome.NotStarted;
         }
 
         var generation = pill.BeginChecking();
@@ -485,28 +651,34 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
 
         var treatAsRna = IsTreatingAsRna;
-        var applied = false;
+        var outcome = CheckOutcome.Superseded;
         try
         {
             // Task.Run honours a token only before the delegate starts; WaitAsync is what lets a cancel end the wait for a check
             // already reading the file (the abandoned read finishes on its own and its result is dropped).
             var result = await Task.Run(() => _validate(pill.Path, InputFormat.Auto, AmbiguityPolicy.Keep, treatAsRna), cancellationToken)
                 .WaitAsync(cancellationToken);
-            applied = pill.Apply(result, generation);
+            outcome = pill.Apply(result, generation) ? CheckOutcome.Applied : CheckOutcome.Superseded;
         }
         catch (OperationCanceledException)
         {
             pill.Abandon(generation);
+            outcome = CheckOutcome.Cancelled;
         }
 
         OnPropertyChanged(nameof(OfferTreatAsRna));
+        if (ReferenceEquals(pill, SelectedItem))
+        {
+            RefreshOutputChoices();
+        }
+
         StartRunCommand.NotifyCanExecuteChanged();
         if (ReferenceEquals(pill, SelectedItem))
         {
             _ = RefreshEstimateAsync();
         }
 
-        return applied;
+        return outcome;
     }
 
     /// <summary>
