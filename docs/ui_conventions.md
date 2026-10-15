@@ -9,7 +9,7 @@ against. The copy rules in section 2 are mechanically guarded by `Guards.Tests`
 `StringResourceKeyGuardTests`, `CodeBehindBranchingGuardTests`). Screen-by-screen detail
 beyond what is summarized here lives in
 [Appendix A, section 2](superpowers/specs/2026-09-18-appendix-a-app-design.md#2-screen-by-screen-ux);
-the viewer page is described in [`viewer.md`](viewer.md).
+the viewer page is described in `docs/viewer.md` (issue #312).
 
 ---
 
