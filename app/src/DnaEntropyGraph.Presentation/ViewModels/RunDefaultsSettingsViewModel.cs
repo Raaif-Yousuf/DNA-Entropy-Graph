@@ -16,6 +16,8 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
 {
     private readonly OutputSelectionStore _store;
     private readonly IStringResourceProvider _strings;
+    private readonly IDispatcher _dispatcher;
+    private readonly Dictionary<OutputInputKinds, OutputFileKinds> _saved = [];
     private bool _applying;
 
     [ObservableProperty]
@@ -24,10 +26,11 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _sequenceStatus = string.Empty;
 
-    public RunDefaultsSettingsViewModel(OutputSelectionStore store, IStringResourceProvider strings)
+    public RunDefaultsSettingsViewModel(OutputSelectionStore store, IStringResourceProvider strings, IDispatcher dispatcher)
     {
         _store = store;
         _strings = strings;
+        _dispatcher = dispatcher;
         Build(GenBankChoices, OutputInputKinds.GenBank);
         Build(SequenceChoices, OutputInputKinds.Sequence);
     }
@@ -50,6 +53,8 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
             System.Diagnostics.Trace.TraceWarning($"settings_unavailable while reading run defaults: {ex.GetType().Name}");
             selection = OutputCatalog.Defaults;
         }
+
+        _saved[group] = selection;
 
         foreach (var entry in OutputCatalog.For(group))
         {
@@ -76,8 +81,10 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
 
             if (!list.Any(c => c.IsChecked))
             {
-                // A run must return at least one file: put the box back instead of saving nothing.
-                item.IsChecked = true;
+                // A run must return at least one file: put the box back instead of saving nothing. The put-back is queued, not
+                // done inside this change notification, because a TwoWay x:Bind may not repaint a value set from inside the
+                // notification it is still handling (THEORY (unverified), see docs/ToTest.md).
+                Revert(() => item.IsChecked = true);
                 SetStatus(group, _strings.GetString("RunDefaultsNoneChosen"));
                 return;
             }
@@ -86,11 +93,21 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
             try
             {
                 _store.Save(group, selection);
+                _saved[group] = selection;
                 SetStatus(group, string.Empty);
             }
             catch (SettingsUnavailableException ex)
             {
                 System.Diagnostics.Trace.TraceWarning($"settings_unavailable while saving run defaults: {ex.GetType().Name}");
+                // Nothing was saved, so the boxes go back to what is saved: the screen never shows a default that is not kept.
+                var saved = _saved[group];
+                Revert(() =>
+                {
+                    foreach (var choice in list)
+                    {
+                        choice.IsChecked = saved.HasFlag(choice.Entry.Kind);
+                    }
+                });
                 SetStatus(group, _strings.GetString("RunDefaultsNotSaved"));
             }
         }
@@ -98,6 +115,22 @@ public sealed partial class RunDefaultsSettingsViewModel : ObservableObject
         {
             _applying = false;
         }
+    }
+
+    private void Revert(Action put)
+    {
+        _dispatcher.Enqueue(() =>
+        {
+            _applying = true;
+            try
+            {
+                put();
+            }
+            finally
+            {
+                _applying = false;
+            }
+        });
     }
 
     private void SetStatus(OutputInputKinds group, string text)

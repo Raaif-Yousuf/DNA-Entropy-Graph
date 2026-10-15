@@ -76,6 +76,7 @@
                         <StackPanel Spacing="4">
                             <TextBlock x:Uid="FilesInputsLabel" Style="{StaticResource BodyStrongTextBlockStyle}" />
                             <TextBlock Text="{x:Bind Files.InputsFolderPath}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                            <TextBlock x:Uid="FilesInputsSizeLabel" TextWrapping="Wrap" />
                             <TextBlock Text="{x:Bind Files.InputsCacheSizeText, Mode=OneWay}" />
                             <Button x:Uid="FilesInputsOpenButton" Command="{x:Bind Files.OpenInputsFolderCommand}" />
                         </StackPanel>

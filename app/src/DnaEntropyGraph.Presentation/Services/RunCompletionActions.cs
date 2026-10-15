@@ -21,7 +21,10 @@ public sealed class RunCompletionActions(
     public async Task OnRunFinishedAsync(string jobId, JobPhase phase)
     {
         var partial = phase == JobPhase.PartiallyCompleted;
-        if (settings.NotifyWhenDone)
+
+        // One read, on the thread pool: the caller is the thread that drives the run, and the settings store can wait on a mutex.
+        var choices = await Task.Run(settings.Snapshot).ConfigureAwait(false);
+        if (choices.NotifyWhenDone)
         {
             dispatcher.Enqueue(() => toasts.ShowToast(
                 strings.GetString(partial ? "RunPartial_Title" : "RunDone_Title"),
@@ -29,12 +32,12 @@ public sealed class RunCompletionActions(
                 partial ? ToastSeverity.Warning : ToastSeverity.Success));
         }
 
-        if (settings.OpenFolderWhenDone)
+        if (choices.OpenFolderWhenDone)
         {
             await OpenFolderAsync(jobId).ConfigureAwait(false);
         }
 
-        if (settings.OpenResultsWhenDone)
+        if (choices.OpenResultsWhenDone)
         {
             dispatcher.Enqueue(() => navigator.NavigateTo(ResultsViewModel.PageKey, jobId));
         }

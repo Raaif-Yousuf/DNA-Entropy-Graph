@@ -84,11 +84,7 @@ public class RunOptionsTests
         options.CloudResultsRetentionDays.ShouldBe(90);
         options.BootDiskGb.ShouldBe(150);
 
-        // Local / notifications
-        options.OpenViewerWhenDone.ShouldBeTrue();
-        options.ToastWhenDone.ShouldBeTrue();
-        options.OpenFolderWhenDone.ShouldBeFalse();
-        options.PlaySoundWhenDone.ShouldBeFalse();
+        // Local
         options.KeepWorkerLogInOutputFolder.ShouldBeFalse();
     }
 

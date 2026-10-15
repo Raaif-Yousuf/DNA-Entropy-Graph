@@ -16,7 +16,10 @@ public sealed class FolderLauncher : IFolderLauncher
 
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folderPath}\"") { UseShellExecute = false });
+            // ArgumentList, not a hand-quoted string: a folder ending in a backslash (D:\) would otherwise end in an escaped quote.
+            var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+            start.ArgumentList.Add(folderPath);
+            Process.Start(start);
             return true;
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)

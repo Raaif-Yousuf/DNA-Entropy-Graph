@@ -17,7 +17,9 @@ public sealed class RunDefaultsSettingsTests
 
     public RunDefaultsSettingsTests() => _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
 
-    private RunDefaultsSettingsViewModel Create() => new(new OutputSelectionStore(_settings), _strings);
+    private readonly QueueDispatcher _dispatcher = new();
+
+    private RunDefaultsSettingsViewModel Create() => new(new OutputSelectionStore(_settings), _strings, _dispatcher);
 
     private static OutputChoiceItem Box(IEnumerable<OutputChoiceItem> list, string wire) => list.Single(c => c.WireName == wire);
 
@@ -61,6 +63,7 @@ public sealed class RunDefaultsSettingsTests
         var vm = Create();
 
         Box(vm.GenBankChoices, "stats").IsChecked = false;
+        _dispatcher.Flush();
 
         Box(vm.GenBankChoices, "stats").IsChecked.ShouldBeTrue();
         vm.GenBankStatus.ShouldBe("RunDefaultsNoneChosen");
@@ -93,6 +96,49 @@ public sealed class RunDefaultsSettingsTests
     }
 
     [Fact]
+    public void The_refused_box_is_put_back_after_the_click_finishes_not_inside_it()
+    {
+        // THEORY (unverified): setting IsChecked inside its own change notification may not repaint through a TwoWay x:Bind.
+        // So the put-back is queued on the UI dispatcher and runs after the binding has finished writing the click.
+        new OutputSelectionStore(_settings).Save(OutputInputKinds.GenBank, OutputFileKinds.Stats);
+        var vm = Create();
+
+        Box(vm.GenBankChoices, "stats").IsChecked = false;
+
+        _dispatcher.Pending.ShouldBe(1);
+        _dispatcher.Flush();
+        Box(vm.GenBankChoices, "stats").IsChecked.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_failed_save_puts_every_box_back_to_what_is_saved_and_names_one_action()
+    {
+        var vm = Create();
+        _settings.Unavailable = true;
+
+        Box(vm.GenBankChoices, "bedgraph").IsChecked = false;
+        _dispatcher.Flush();
+
+        Box(vm.GenBankChoices, "bedgraph").IsChecked.ShouldBeTrue();
+        vm.GenBankChoices.Where(c => c.IsChecked).Select(c => c.WireName)
+            .ShouldBe(OutputCatalog.ToWireNames(OutputCatalog.Defaults));
+        vm.GenBankStatus.ShouldBe("RunDefaultsNotSaved");
+    }
+
+    [Fact]
+    public void A_failed_save_of_a_WIG_tick_puts_the_bedGraph_back_too()
+    {
+        var vm = Create();
+        _settings.Unavailable = true;
+
+        Box(vm.SequenceChoices, "wig").IsChecked = true;
+        _dispatcher.Flush();
+
+        Box(vm.SequenceChoices, "wig").IsChecked.ShouldBeFalse();
+        Box(vm.SequenceChoices, "bedgraph").IsChecked.ShouldBeTrue();
+    }
+
+    [Fact]
     public void A_locked_settings_file_neither_crashes_the_page_nor_pretends_to_save()
     {
         var vm = Create();
@@ -119,6 +165,23 @@ public sealed class RunDefaultsSettingsTests
         _ = Create();
 
         _settings.Values.ShouldBeEmpty();
+    }
+
+    private sealed class QueueDispatcher : IDispatcher
+    {
+        private readonly Queue<Action> _queue = new();
+
+        public int Pending => _queue.Count;
+
+        public void Enqueue(Action action) => _queue.Enqueue(action);
+
+        public void Flush()
+        {
+            while (_queue.Count > 0)
+            {
+                _queue.Dequeue()();
+            }
+        }
     }
 
     private sealed class MemorySettings : ISettingsStore
