@@ -825,6 +825,51 @@
   <data name="AuthError_SIGNIN_STORAGE" xml:space="preserve">
     <value>The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Sign in again.</value>
   </data>
+  <data name="NewRunOutputsHeader.Text" xml:space="preserve">
+    <value>Files you get back</value>
+  </data>
+  <data name="NewRunOutputsNoneChosen.Text" xml:space="preserve">
+    <value>No file is ticked. Tick at least one file above to run.</value>
+  </data>
+  <data name="OutputChoice_genbank" xml:space="preserve">
+    <value>The sequence with its genes and a mean entropy note on each gene (GenBank, .gb)</value>
+  </data>
+  <data name="OutputChoice_fasta" xml:space="preserve">
+    <value>The plain sequence (FASTA, .fasta)</value>
+  </data>
+  <data name="OutputChoice_bedgraph" xml:space="preserve">
+    <value>Entropy at every base, for IGV (.bedgraph)</value>
+  </data>
+  <data name="OutputChoice_wig" xml:space="preserve">
+    <value>Entropy at every base, in the WIG track format (.wig). Tick this instead of the IGV track if your viewer wants WIG.</value>
+  </data>
+  <data name="OutputChoice_geneious_gff3" xml:space="preserve">
+    <value>Entropy at every base, for Geneious (.gff3)</value>
+  </data>
+  <data name="OutputChoice_genes_gff3" xml:space="preserve">
+    <value>The gene positions, for a genome viewer (.genes.gff3)</value>
+  </data>
+  <data name="OutputChoice_smoothed" xml:space="preserve">
+    <value>A smoothed entropy track, averaged over a stretch of bases so trends are easier to see (.smooth files)</value>
+  </data>
+  <data name="OutputChoice_gene_summary" xml:space="preserve">
+    <value>One row of entropy figures per gene, for a spreadsheet (.genes.tsv and .genes.csv)</value>
+  </data>
+  <data name="OutputChoice_regions" xml:space="preserve">
+    <value>Stretches of unusually low or high entropy, as a track (.regions.bed and .regions.gff3)</value>
+  </data>
+  <data name="OutputChoice_stats" xml:space="preserve">
+    <value>A short text summary: length, mean, lowest and highest entropy (.txt)</value>
+  </data>
+  <data name="OutputChoice_tsv" xml:space="preserve">
+    <value>Entropy at every base, as a table for a spreadsheet (.tsv)</value>
+  </data>
+  <data name="OutputChoice_probs" xml:space="preserve">
+    <value>The model's probability for each base, as a table (.probs.tsv.gz). Large, so it is off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_probs_npy" xml:space="preserve">
+    <value>The model's probability for each base, as a NumPy array (.probs.npy). Large, so it is off unless you tick it.</value>
+  </data>
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
   </data>
@@ -1175,5 +1220,3 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
   </data>
 </root>
-
-

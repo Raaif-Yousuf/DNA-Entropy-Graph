@@ -56,6 +56,7 @@ public sealed class NewRunViewModelTests : IDisposable
         _strings,
         store ?? new LocalPastedInputStore(_appData),
         _estimates,
+        new OutputSelectionStore(Substitute.For<ISettingsStore>()),
         validate,
         files);
 

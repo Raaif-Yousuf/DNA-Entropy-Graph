@@ -43,6 +43,12 @@ public sealed partial class NewRunViewModel : ObservableObject
     private readonly ICostEstimateService _estimates;
     private readonly IInputFileSystem _files;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
+    private readonly OutputSelectionStore _outputStore;
+
+    // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
+    // kept while the user switches between pills, and written back to the store only when a run starts.
+    private readonly Dictionary<OutputInputKinds, OutputFileKinds> _outputSelections = [];
+    private OutputInputKinds? _shownOutputGroup;
 
     private InputPillItem? _selectedItem;
     private int _countVersion;
@@ -83,9 +89,11 @@ public sealed partial class NewRunViewModel : ObservableObject
         IStringResourceProvider strings,
         IPastedInputStore pastedStore,
         ICostEstimateService estimates,
+        OutputSelectionStore outputStore,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null)
     {
+        _outputStore = outputStore;
         _filePicker = filePicker;
         _jobEngine = jobEngine;
         _navigator = navigator;
@@ -116,6 +124,7 @@ public sealed partial class NewRunViewModel : ObservableObject
 
             if (SetProperty(ref _selectedItem, value))
             {
+                RefreshOutputChoices();
                 StartRunCommand.NotifyCanExecuteChanged();
                 _ = RefreshEstimateAsync();
             }
@@ -124,6 +133,71 @@ public sealed partial class NewRunViewModel : ObservableObject
 
     /// <summary>One pill per file or pasted sequence, in the order added.</summary>
     public ObservableCollection<InputPillItem> Items { get; } = [];
+
+    /// <summary>The "Files you get back" boxes for the selected file's kind (a GenBank file or a FASTA/pasted sequence); empty while the kind is not known.</summary>
+    public ObservableCollection<OutputChoiceItem> OutputChoices { get; } = [];
+
+    public bool HasOutputChoices => OutputChoices.Count > 0;
+
+    /// <summary>True when every box is cleared: the page then says to choose a file, and Run waits.</summary>
+    public bool HasNoOutputChosen => HasOutputChoices && !OutputChoices.Any(choice => choice.IsChecked);
+
+    /// <summary>
+    /// Shows the boxes for the selected file's kind. The group already shown keeps its boxes (and any unsaved ticks); a
+    /// group shown for the first time starts from what was remembered for it, or the catalog defaults.
+    /// </summary>
+    private void RefreshOutputChoices()
+    {
+        OutputInputKinds? group = SelectedItem?.Kind is { } kind ? OutputCatalog.GroupFor(kind) : null;
+        if (group == _shownOutputGroup)
+        {
+            return;
+        }
+
+        _shownOutputGroup = group;
+        OutputChoices.Clear();
+        if (group is { } shown)
+        {
+            if (!_outputSelections.TryGetValue(shown, out var selection))
+            {
+                _outputSelections[shown] = selection = _outputStore.Load(shown);
+            }
+
+            foreach (var entry in OutputCatalog.For(shown))
+            {
+                OutputChoices.Add(new OutputChoiceItem(entry, _strings.GetString(entry.LabelKey), selection.HasFlag(entry.Kind), OnOutputChoiceChanged));
+            }
+        }
+
+        NotifyOutputChoicesChanged();
+    }
+
+    private void OnOutputChoiceChanged(OutputChoiceItem choice)
+    {
+        if (_shownOutputGroup is not { } group)
+        {
+            return;
+        }
+
+        var selection = _outputSelections[group];
+        _outputSelections[group] = choice.IsChecked ? selection | choice.Entry.Kind : selection & ~choice.Entry.Kind;
+
+        // The worker writes one track format per run: ticking one of the two track boxes clears the other.
+        if (choice.IsChecked && choice.Entry.Kind is OutputFileKinds.BedGraph or OutputFileKinds.Wig)
+        {
+            var other = choice.Entry.Kind == OutputFileKinds.Wig ? OutputFileKinds.BedGraph : OutputFileKinds.Wig;
+            OutputChoices.FirstOrDefault(c => c.Entry.Kind == other)?.IsChecked = false;
+        }
+
+        NotifyOutputChoicesChanged();
+    }
+
+    private void NotifyOutputChoicesChanged()
+    {
+        OnPropertyChanged(nameof(HasOutputChoices));
+        OnPropertyChanged(nameof(HasNoOutputChosen));
+        StartRunCommand.NotifyCanExecuteChanged();
+    }
 
     public bool HasEstimate => EstimateText.Length > 0;
 
@@ -390,12 +464,17 @@ public sealed partial class NewRunViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStartRun))]
     private async Task StartRunAsync(CancellationToken cancellationToken)
     {
+        var group = _shownOutputGroup!.Value;
+        var outputs = _outputSelections[group];
         var options = new RunOptions
         {
             ModelId = DefaultModelId,
             RunTarget = "Cloud",
             InputPath = SelectedItem!.Path,
             TreatAsRna = IsTreatingAsRna,
+            OutputFiles = outputs,
+            // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
+            TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
         };
         string jobId;
         try
@@ -413,10 +492,33 @@ public sealed partial class NewRunViewModel : ObservableObject
             return;
         }
 
-        _navigator.NavigateTo("RunProgress", jobId);
+        // The run has started and is paid for: open its page first, so nothing the store does can leave the user on a Run button
+        // that starts a second one.
+        try
+        {
+            _navigator.NavigateTo("RunProgress", jobId);
+        }
+        finally
+        {
+            // Also when the navigation throws: the run is paid for, so its choice is still remembered.
+            RememberOutputs(group, outputs);
+        }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true };
+    private void RememberOutputs(OutputInputKinds group, OutputFileKinds outputs)
+    {
+        try
+        {
+            _outputStore.Save(group, outputs);
+        }
+        catch (Exception)
+        {
+            // A choice that could not be remembered only means the next run starts from the defaults; it must never reach the command
+            // or replace a navigation failure that is already unwinding.
+        }
+    }
+
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
@@ -500,6 +602,11 @@ public sealed partial class NewRunViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(OfferTreatAsRna));
+        if (ReferenceEquals(pill, SelectedItem))
+        {
+            RefreshOutputChoices();
+        }
+
         StartRunCommand.NotifyCanExecuteChanged();
         if (ReferenceEquals(pill, SelectedItem))
         {
