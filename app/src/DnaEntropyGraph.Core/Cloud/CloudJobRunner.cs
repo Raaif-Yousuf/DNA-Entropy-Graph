@@ -165,10 +165,27 @@ public sealed class CloudJobRunner
         _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls, _settings);
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
-        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator);
+        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync);
         _canceller = new VmCanceller(_rows, _provisioner, _terminator);
         _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
+    }
+
+    /// <summary>
+    /// Issue #94: whether the run that last used a stopped VM has ended (its row is terminal, or this history has no row for it, as the
+    /// idle-VM sweep reads it). A history that cannot be read answers false: a VM that may belong to a run underway is never reused.
+    /// </summary>
+    private async Task<bool> JobIsFinishedAsync(string jobId)
+    {
+        try
+        {
+            var row = await _rows.LatestRecordAsync(jobId, CancellationToken.None).ConfigureAwait(false);
+            return row is null || JobStateMachine.IsTerminal(row.Phase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     public async Task<JobPhase> GetPhaseAsync(string jobId, CancellationToken cancellationToken)
@@ -274,7 +291,7 @@ public sealed class CloudJobRunner
             // the VM must not be left billing under a terminal Failed record nothing will ever look at again. The VM is
             // found by the zone when known and by its job-id label when not. Only the CALLER cancelling is not this (CancelAsync owns that
             // delete): an OperationCanceledException with the caller's token live is a gateway's own deadline, a failure like any other.
-            var note = await _terminator.EndVmAfterFailureAsync(request, progress.Zone).ConfigureAwait(false);
+            var note = await _terminator.EndVmAfterFailureAsync(progress.Resolve(request), progress.Zone).ConfigureAwait(false);
             throw VmEndNotes.Apply(ex, note);
         }
     }
@@ -328,7 +345,8 @@ public sealed class CloudJobRunner
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Running, cancellationToken).ConfigureAwait(false);
                 var owned = await _calls.CallAsync(token => _compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
                 progress.Zone = owned.Count > 0 ? owned[0].Zone : null;
-                return await _outcome.FinishAsync(request, bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
+                progress.VmName = owned.Count > 0 ? owned[0].Name : null;
+                return await _outcome.FinishAsync(progress.Resolve(request), bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -340,7 +358,8 @@ public sealed class CloudJobRunner
         }
 
         progress.Zone = provisioned.Zone!;
-        return await RunOnVmAsync(request, bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+        progress.VmName = provisioned.VmName ?? progress.VmName;
+        return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

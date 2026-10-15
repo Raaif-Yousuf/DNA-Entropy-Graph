@@ -15,6 +15,15 @@ internal sealed class RunProgress
 
     public string? Zone { get; set; }
 
+    /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
+    public string? VmName { get; set; }
+
+    /// <summary><paramref name="request"/> with its spec naming the VM the run is really on, so every look at, and the end of, that VM use the right name.</summary>
+    public CloudJobRequest Resolve(CloudJobRequest request)
+        => VmName is null || string.Equals(VmName, request.Spec.VmName, StringComparison.Ordinal)
+            ? request
+            : request with { Spec = request.Spec with { ExistingVmName = VmName } };
+
     /// <summary>The service account the VM was asked to run as (issue #604), once the identity step has answered.</summary>
     public string? WorkerAccountEmail { get; set; }
 }

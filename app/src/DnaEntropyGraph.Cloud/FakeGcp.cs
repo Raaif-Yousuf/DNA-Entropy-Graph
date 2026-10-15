@@ -840,7 +840,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels());
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType);
         _vms[key] = vm;
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)
@@ -849,6 +849,65 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         RunSimulatedWorker(spec, zone);
+        return Task.FromResult(vm);
+    }
+
+    /// <summary>How many times <see cref="ReuseVmAsync"/> was called (issue #94).</summary>
+    public int ReuseAttempts => Volatile.Read(ref _reuseAttempts);
+
+    private int _reuseAttempts;
+    private CloudErrorKind? _reuseStartFailure;
+
+    /// <summary>
+    /// The start of a reused VM fails with this kind of error AFTER the VM was claimed (relabelled for the new job), as the real
+    /// gateway's start can (a stockout, billing turned off). Issue #94.
+    /// </summary>
+    public FakeGcp WithReuseStartFailure(CloudErrorKind kind)
+    {
+        _reuseStartFailure = kind;
+        return this;
+    }
+
+    /// <summary>
+    /// Issue #94: claims and starts a stopped VM for <paramref name="spec"/>'s job, as the real gateway does: refuses a VM that is
+    /// not stopped before any change, rewrites the labels and the lifetime limit, then starts it (the VM then reads RUNNING and its
+    /// <c>maxRunDuration</c> clock restarts) and lets the simulated worker act for the new job. Under the VM's own, old name.
+    /// </summary>
+    public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        var reuse = spec with { ExistingVmName = existingVmName };
+        reuse.EnsurePreconditions();
+        Interlocked.Increment(ref _reuseAttempts);
+        var key = (existingVmName, zone);
+        if (!_vms.TryGetValue(key, out var vm))
+        {
+            throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+        }
+
+        if (vm.Status is not ("STOPPED" or "TERMINATED"))
+        {
+            throw Build(CloudErrorKind.Other, "VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{vm.Status}', not stopped.");
+        }
+
+        // The claim comes before the start, so a start that fails leaves the VM labelled for this job (the caller ends it).
+        vm = vm with { Labels = reuse.ToLabels() };
+        _vms[key] = vm;
+        _maxRunByVm[key] = reuse.MaxRunDuration;
+        if (_reuseStartFailure is { } kind)
+        {
+            throw kind switch
+            {
+                CloudErrorKind.Stockout => Build(CloudErrorKind.Stockout, "ZONE_RESOURCE_POOL_EXHAUSTED", null, $"The zone '{zone}' does not have enough resources available to fulfill the request."),
+                CloudErrorKind.Billing => Build(CloudErrorKind.Billing, "BILLING_DISABLED", 403, "This API method requires billing to be enabled."),
+                _ => Build(kind, null, null, "The start failed."),
+            };
+        }
+
+        ThrowIfProjectWide(spec.ProjectId);
+        vm = vm with { Status = "RUNNING", StatusReason = null, CreatedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
+        _vms[key] = vm;
+        RunSimulatedWorker(reuse, zone);
         return Task.FromResult(vm);
     }
 
@@ -1010,7 +1069,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ExpireOverdueVms();
         var name = $"deg-{jobId}";
-        IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
+        // By the job-id label, as the real gateway does (a reused VM keeps its old name, #94); a VM seeded without labels, such as WithAlreadyExists's, by name.
+        IReadOnlyList<VmDescriptor> matches = _vms.Values
+            .Where(v => v.Labels is null ? v.Name == name : v.Labels.TryGetValue("job-id", out var owner) && owner == jobId)
+            .ToList();
         return Task.FromResult(matches);
     }
 

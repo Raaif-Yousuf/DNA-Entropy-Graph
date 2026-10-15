@@ -246,7 +246,14 @@ public class ResilientGatewayTests
 
                 var args = method.GetParameters().Select(ArgumentFor).ToArray();
                 var task = (Task)method.Invoke(gateway, args)!;
-                await task;
+                try
+                {
+                    await task;
+                }
+                catch (CloudOperationException) when (method.Name == nameof(IComputeGateway.ReuseVmAsync))
+                {
+                    // The default arguments name no stopped VM, so the retried call is refused (VM_NOT_FOUND): only that the 503 was retried matters here.
+                }
 
                 if (rig.Log.Retries.Count != 1)
                 {

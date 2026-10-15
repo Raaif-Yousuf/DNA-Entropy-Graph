@@ -24,6 +24,9 @@ public sealed class ResilientComputeGateway : IComputeGateway
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.CreateVm", token => _inner.CreateVmAsync(spec, zone, token), cancellationToken);
 
+    public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.ReuseVm", token => _inner.ReuseVmAsync(spec, existingVmName, zone, token), cancellationToken);
+
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.GetVm", token => _inner.GetVmAsync(vmName, zone, token), cancellationToken);
 

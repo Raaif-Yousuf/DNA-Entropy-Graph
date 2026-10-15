@@ -1,0 +1,1 @@
+- Cloud (#94): a run now starts this installation's stopped VM (same model and machine type, last job finished) instead of creating a new one; a start that fails is provision-needed and falls back to the zone ladder, with the claimed VM deleted so nothing is left billing.

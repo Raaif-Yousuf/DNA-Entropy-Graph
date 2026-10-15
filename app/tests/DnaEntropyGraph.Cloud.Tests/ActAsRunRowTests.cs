@@ -228,6 +228,8 @@ public class ActAsRunRowTests
     {
         public int CreateAttempts { get; private set; }
 
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+
         public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
         {
             CreateAttempts++;

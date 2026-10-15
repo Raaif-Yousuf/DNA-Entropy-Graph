@@ -26,6 +26,16 @@ public interface IComputeGateway
     /// </summary>
     Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Issue #94: starts a STOPPED VM this installation left behind for <paramref name="spec"/>'s job: replaces its scheduling limits and its
+    /// metadata (the startup script and <c>deg-*</c> attributes) with the spec's, then claims it by rewriting its labels to the spec's
+    /// (so discovery by <c>job-id</c> finds it, Hard Rule 9), then starts it. The claim is the LAST edit before the start, so a failure
+    /// before it leaves the VM labelled as its old job. A VM that is not stopped is refused (<c>VM_NOT_STOPPED</c>) before any change, and
+    /// a VM someone else claimed first fails the label write (precondition failed). Failures are classified like a create's: a stockout on
+    /// the start is <see cref="CloudErrorKind.Stockout"/>. A failure AFTER the claim leaves the VM labelled for this job: the caller ends it.
+    /// </summary>
+    Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
+
     Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);
