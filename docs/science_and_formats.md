@@ -515,15 +515,34 @@ new validation test should also sweep (empty contig, ambiguity codes, multi-reco
 GenBank path on that file, so every rule in this section and the "use the file's own genes,
 never re-annotate" rule apply unchanged. Mechanics:
 
-- The accession is matched against a strict pattern before any request; a bad one is a
-  `ValidationError` (`INPUT_INVALID`), never a request.
+- The accession is matched against a strict **ASCII-only** pattern before any request (`\d` alone
+  accepts Arabic-Indic and full-width digits, and `str.upper()` folds long s and dotless i into
+  ASCII letters, so both are refused first); a bad one is a `ValidationError` (`INPUT_INVALID`),
+  never a request. The CLI also checks every other option (`--predictor`, `--region-threshold`,
+  `--smoothing-window`, `--accession-range`, `--input`, a conflicting `--informat`) before the
+  fetch, so a run that cannot start never costs a request. `--informat` other than `genbank` with
+  `--accession` is refused, not overwritten.
 - NCBI can answer a failed lookup with HTTP 200 and an error text. A body that does not start
-  with `LOCUS` is refused and not cached.
+  with `LOCUS`, does not end with `//` (a cut-off download), has no `VERSION` line, or names a
+  different record than asked, is refused and not cached.
+- **Resolved version.** The cache file is named, and provenance records, the versioned accession
+  from the record's `VERSION` line (`NC_045512` asked, `NC_045512.2` stored). An unversioned request
+  always asks NCBI (a cached unversioned answer could be a version NCBI has since replaced); a
+  versioned request never changes and is served from the cache. Provenance has both
+  `accession` (resolved) and `requested`.
+- **Deadline and size.** The body is read as it streams: 120 s in total, however slowly it drips
+  in (each single wait 30 s), and at most 64 MiB (the app's own input ceiling); over either, the
+  fetch is refused and nothing is cached. A bigger record needs `--accession-range`.
+- **Failures** each have their own message and one action: 429 (wait, or use an API key), 5xx (try
+  again in a few minutes), 400 and 404 (check the accession and range), 401 and 403 (check the API
+  key), a timeout, a too-large record, any other network failure. Only 429 and 5xx are retried,
+  once, after a 2 s backoff (NCBI's `Retry-After` up to 30 s when it sends one). No message carries
+  the URL or the key.
 - Rate limit: at least 0.34 s between requests without a key, 0.1 s with one.
-- The cache key is accession plus range; a sidecar `.json` keeps the ORIGINAL retrieval date,
-  so a later run served from the cache still reports when the record was downloaded.
-- `provenance.json` gets `input_source: {type: "ncbi_entrez", accession, range, retrieved,
-  from_cache}`. The API key is never written anywhere.
+- The cache key is resolved accession plus range; a sidecar `.json` keeps the ORIGINAL retrieval
+  date, so a later run served from the cache still reports when the record was downloaded.
+- `provenance.json` gets `input_source: {type: "ncbi_entrez", accession, requested, range,
+  retrieved, from_cache}`. The API key is never written anywhere.
 - The test suite never touches the network (`worker/tests/test_entrez.py` injects the opener).
   Local validation in the app (rule 2) is not needed for the fetch itself: the fetched text
   goes through the same GenBank reader and validator in the worker before any prediction.

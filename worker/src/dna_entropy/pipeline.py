@@ -665,6 +665,20 @@ def _write_standard_outputs(
     return outputs, genes
 
 
+def validate_run_options(cfg: RunConfig) -> None:
+    """Refuse run options that cannot mean anything, raising :class:`PipelineError` that names the
+    option. Needs no input, so a caller that is about to spend something first (the CLI's NCBI
+    fetch, issue #133) can check before it does; :func:`run` calls it again at its own top."""
+    try:
+        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
+            validate_smoothing_windows(cfg.smoothing_windows)
+        validate_region_options(
+            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
+        )
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
+
+
 def run(
     cfg: RunConfig,
     raw: str | None = None,
@@ -711,14 +725,7 @@ def run(
     """
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
-    try:
-        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
-            validate_smoothing_windows(cfg.smoothing_windows)
-        validate_region_options(
-            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
-        )
-    except ValueError as exc:
-        raise PipelineError(str(exc)) from exc
+    validate_run_options(cfg)
     loaded = load_input(cfg, raw)
     # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
     # "all records" default — readers/input.py has no opinion on it (and must not: Lane A

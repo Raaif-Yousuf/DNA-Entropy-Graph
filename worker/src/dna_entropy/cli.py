@@ -254,25 +254,26 @@ def run(
     base_dir = Path(out) if out else Path.home() / "Downloads"
     run_dir = base_dir / safe_name
 
-    provenance_extra = None
+    # issue #133: everything that can be checked without the network is checked BEFORE the fetch,
+    # so a run that could never start (a bad option, a conflicting flag, a malformed accession)
+    # never costs a request. The fetch itself comes after the RunConfig is built, below.
+    start_end: tuple[int, int] | None = None
     if accession is not None:
         try:
             if input is not None:
                 raise ValidationError("Use either --accession or --input, not both. Drop one of them.")
+            if informat not in (None, "genbank"):
+                raise ValidationError(
+                    f"--accession always gives a GenBank record, so --informat {informat} does not "
+                    "apply. Drop --informat (or add the file with --input instead)."
+                )
             start_end = _parse_accession_range(accession_range)
-            fetched = entrez.fetch_genbank(
-                accession,
-                cache_dir=cache_dir or entrez.default_cache_dir(),
-                start=start_end[0] if start_end else None,
-                stop=start_end[1] if start_end else None,
-                api_key=ncbi_api_key,
+            entrez.validate_request(
+                accession, start_end[0] if start_end else None, start_end[1] if start_end else None
             )
         except ValidationError as exc:
             typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from exc
-        input = fetched.path
-        informat = "genbank"
-        provenance_extra = {"input_source": fetched.provenance()}
     elif accession_range is not None:
         typer.secho(
             "ERROR: --accession-range needs --accession. Add --accession.", fg=typer.colors.RED, err=True
@@ -316,6 +317,24 @@ def run(
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value
         typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
+
+    provenance_extra = None
+    if accession is not None:
+        try:
+            pipeline.validate_run_options(cfg)
+            fetched = entrez.fetch_genbank(
+                accession,
+                cache_dir=cache_dir or entrez.default_cache_dir(),
+                start=start_end[0] if start_end else None,
+                stop=start_end[1] if start_end else None,
+                api_key=ncbi_api_key,
+            )
+        except (ValidationError, PipelineError) as exc:
+            typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        cfg.input_path = fetched.path
+        cfg.informat = "genbank"
+        provenance_extra = {"input_source": fetched.provenance()}
 
     try:
         result = pipeline.run(cfg, provenance_extra=provenance_extra)
