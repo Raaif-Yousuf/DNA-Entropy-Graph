@@ -10,6 +10,7 @@ public sealed partial class SettingsPage : Page
     public SettingsViewModel ViewModel { get; }
 
     public RunDefaultsSettingsViewModel RunDefaults { get; }
+    public ExternalViewersSettingsViewModel ExternalViewers { get; }
 
     public FilesSettingsViewModel Files { get; }
 
@@ -18,6 +19,7 @@ public sealed partial class SettingsPage : Page
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
         Files = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FilesSettingsViewModel>();
+        ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         InitializeComponent();
     }
 }
