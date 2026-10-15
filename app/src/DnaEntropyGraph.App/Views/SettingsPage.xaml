@@ -114,6 +114,25 @@
                     </StackPanel>
                 </Border>
             </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsAdvancedHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <!-- Collapsed by default: these are for developers and for a clean start. -->
+                <Expander x:Uid="SettingsAdvancedExpander" IsExpanded="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="4">
+                            <TextBlock x:Uid="AdvancedWorkerImageExplainer" TextWrapping="Wrap" />
+                            <TextBox x:Uid="AdvancedWorkerImageBox" Text="{x:Bind Advanced.WorkerImage, Mode=TwoWay}" IsEnabled="{x:Bind Advanced.IsDeveloperMode}" />
+                            <TextBlock Text="{x:Bind Advanced.WorkerImageStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind Advanced.FakeCloudText}" TextWrapping="Wrap" />
+                        <StackPanel Spacing="4">
+                            <Button x:Uid="AdvancedResetButton" Command="{x:Bind Advanced.ResetAllSettingsCommand}" />
+                            <TextBlock Text="{x:Bind Advanced.ResetStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </Page>

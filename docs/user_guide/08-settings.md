@@ -27,3 +27,7 @@ Three switches for what the app does when a run finishes: show a message (on), o
 **Save diagnostics** writes one file you can send to support. It includes your run logs, run
 history (ids, states and error codes), safe settings and version numbers. It never includes
 your sequences, file names, results, email address or sign-in.
+
+## Advanced
+
+A collapsed group. **Reset all settings** asks first, then puts every setting back to its starting value; your runs, results and input files are not touched. Close the app and open it again to finish. A note says whether this copy is using a pretend cloud for testing. The analysis program image box is for developers: it works only when developer mode is already on in the settings file.

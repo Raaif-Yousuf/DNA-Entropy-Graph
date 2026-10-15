@@ -616,4 +616,33 @@ public class SettingsStoreTests
             reopened.GetString($"b{i}").ShouldBe("x");
         }
     }
+
+    [Fact]
+    public void ResetAll_forgets_every_setting_and_keeps_the_installation_id()
+    {
+        using var paths = new TempPaths();
+        var store = new SettingsStore(paths.SettingsPath);
+        store.SetString("Theme", "Dark");
+        store.SetString("output_files_genbank", "stats");
+        var id = Guid.NewGuid().ToString();
+        store.SetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey, id);
+
+        store.ResetAll();
+
+        store.GetString("Theme").ShouldBeNull();
+        store.GetString("output_files_genbank").ShouldBeNull();
+        store.GetString(global::DnaEntropyGraph.Core.Cloud.InstallationId.SettingsKey).ShouldBe(id);
+    }
+
+    [Fact]
+    public void ResetAll_on_a_store_with_no_file_is_not_an_error_and_a_later_write_still_works()
+    {
+        using var paths = new TempPaths();
+        var store = new SettingsStore(paths.SettingsPath);
+
+        store.ResetAll();
+        store.SetString("Theme", "Light");
+
+        store.GetString("Theme").ShouldBe("Light");
+    }
 }

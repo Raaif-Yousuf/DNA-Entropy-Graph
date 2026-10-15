@@ -66,7 +66,7 @@ namespace DnaEntropyGraph.Persistence;
 /// No logger in Persistence: the event is the flag, the kept files and the
 /// typed exceptions, never file content.
 /// </summary>
-public sealed class SettingsStore : ISettingsStore
+public sealed class SettingsStore : ISettingsStore, IResettableSettings
 {
     internal const int ReadAttemptLimit = 5;
 
@@ -155,6 +155,35 @@ public sealed class SettingsStore : ISettingsStore
 
                     state.Values[key] = JsonValue.Create(value);
                     WriteSettingsNoLock(state.Values);
+                }
+
+                return null;
+            });
+        }
+    }
+
+    /// <summary>Writes an empty settings.json. The installation id lives in its own file and is untouched; a legacy id still inside settings.json is kept so it can migrate.</summary>
+    public void ResetAll()
+    {
+        lock (_gate)
+        {
+            Guarded<object?>(() =>
+            {
+                using (AcquireMutex())
+                {
+                    var state = ReadSettingsNoLock();
+                    if (state.ParseFailed)
+                    {
+                        KeepUnreadableCopyNoLock(state.Raw);
+                    }
+
+                    var kept = new JsonObject();
+                    if (state.Values.TryGetPropertyValue(InstallationId.SettingsKey, out var legacy) && legacy is not null)
+                    {
+                        kept[InstallationId.SettingsKey] = legacy.DeepClone();
+                    }
+
+                    WriteSettingsNoLock(kept);
                 }
 
                 return null;

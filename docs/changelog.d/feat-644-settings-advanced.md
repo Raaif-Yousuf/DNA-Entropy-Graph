@@ -1,0 +1,1 @@
+- Settings has an Advanced group (collapsed): the analysis program image box for developers (live only when developer mode is on in the settings file), a note on whether this copy uses the pretend cloud, and Reset all settings with a confirmation. The computer image (DLVM family) override is not included yet (#644).

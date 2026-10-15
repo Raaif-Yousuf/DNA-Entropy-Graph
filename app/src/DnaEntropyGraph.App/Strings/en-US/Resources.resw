@@ -1297,4 +1297,40 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunPartial_Body" xml:space="preserve">
     <value>Some result files could not be made. Choose Results in the Runs list to see which ones.</value>
   </data>
+  <data name="SettingsAdvancedHeader.Text" xml:space="preserve">
+    <value>Advanced</value>
+  </data>
+  <data name="SettingsAdvancedExpander.Header" xml:space="preserve">
+    <value>Developer options and reset</value>
+  </data>
+  <data name="AdvancedWorkerImageExplainer.Text" xml:space="preserve">
+    <value>Use your own build of the analysis program instead of the one that came with this app. The box works only when developer mode is already on in the settings file, and it takes an image address that ends in @sha256: followed by its fingerprint. Leave it empty to use the shipped one.</value>
+  </data>
+  <data name="AdvancedWorkerImageBox.Header" xml:space="preserve">
+    <value>Analysis program image</value>
+  </data>
+  <data name="WorkerImageNotPinned" xml:space="preserve">
+    <value>That is not an image address with a fingerprint (it must contain @sha256: and 64 letters or digits). Paste the full address from your build, or clear the box to use the shipped one.</value>
+  </data>
+  <data name="FakeCloudOn" xml:space="preserve">
+    <value>This copy is using a pretend cloud for testing, so no computer is rented and nothing is billed.</value>
+  </data>
+  <data name="FakeCloudOff" xml:space="preserve">
+    <value>This copy is connected to your Google Cloud project.</value>
+  </data>
+  <data name="AdvancedResetButton.Content" xml:space="preserve">
+    <value>Reset all settings</value>
+  </data>
+  <data name="AdvancedResetConfirmTitle" xml:space="preserve">
+    <value>Reset all settings?</value>
+  </data>
+  <data name="AdvancedResetConfirmBody" xml:space="preserve">
+    <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Yes to reset, or No to keep your settings.</value>
+  </data>
+  <data name="AdvancedResetDone" xml:space="preserve">
+    <value>Settings were reset. Close the app and open it again to finish.</value>
+  </data>
+  <data name="AdvancedNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
+  </data>
 </root>

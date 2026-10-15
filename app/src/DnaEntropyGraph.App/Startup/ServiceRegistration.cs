@@ -145,7 +145,10 @@ public static class ServiceRegistration
         services.AddSingleton(_ => new SqliteDatabase(databasePath));
         services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
-        services.AddSingleton<ISettingsStore>(_ => new SettingsStore(settingsPath));
+        services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
+        services.AddSingleton<ISettingsStore>(sp => sp.GetRequiredService<SettingsStore>());
+        services.AddSingleton<IResettableSettings>(sp => sp.GetRequiredService<SettingsStore>());
+        services.AddSingleton<ICloudModeInfo, DnaEntropyGraph.App.Services.FakeCloudModeInfo>();
         services.AddSingleton<OutputSelectionStore>();
 
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
@@ -267,6 +270,7 @@ public static class ServiceRegistration
         services.AddTransient<RunDefaultsSettingsViewModel>();
         services.AddTransient<FilesSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
+        services.AddTransient<AdvancedSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         services.AddSingleton<RunCompletionActions>();
 
