@@ -164,11 +164,14 @@ internal sealed partial class DiagnosticsRedactor
     public static bool IsUnreadableJson(Exception ex) => ex is not OutOfMemoryException;
 
     /// <summary>A parsed JSON document cut down to <paramref name="spec"/>; null when the text cannot be parsed.</summary>
-    public string? RedactJson(string json, KeySpec spec)
+    /// <param name="json">The file text.</param>
+    /// <param name="spec">The keys it may carry.</param>
+    /// <param name="jobId">When given, every <c>jobId</c> leaf is rewritten to it: the file's own run folder decides the id, not the file.</param>
+    public string? RedactJson(string json, KeySpec spec, string? jobId = null)
     {
         try
         {
-            return Sanitize(JsonNode.Parse(json), spec)?.ToJsonString(JsonOptions);
+            return Sanitize(JsonNode.Parse(json), spec, jobId)?.ToJsonString(JsonOptions);
         }
         catch (Exception ex) when (IsUnreadableJson(ex))
         {
@@ -196,7 +199,7 @@ internal sealed partial class DiagnosticsRedactor
         return string.Join('\n', lines) + "\n";
     }
 
-    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec)
+    private JsonNode? Sanitize(JsonNode? node, KeySpec? spec, string? jobId = null)
     {
         switch (node)
         {
@@ -206,7 +209,9 @@ internal sealed partial class DiagnosticsRedactor
                 {
                     if (spec.Keys.TryGetValue(key, out var child) && (child is not null || value is not (JsonObject or JsonArray)))
                     {
-                        kept[key] = Sanitize(value, child);
+                        kept[key] = jobId is not null && key == "jobId" && value is JsonValue
+                            ? JsonValue.Create(jobId)
+                            : Sanitize(value, child, jobId);
                     }
                 }
 
@@ -215,7 +220,7 @@ internal sealed partial class DiagnosticsRedactor
                 var items = new JsonArray();
                 foreach (var item in array)
                 {
-                    items.Add(Sanitize(item, spec));
+                    items.Add(Sanitize(item, spec, jobId));
                 }
 
                 return items;
@@ -449,36 +454,49 @@ public static partial class DiagnosticsLeakScan
     /// would match ordinary text and numbers). A file name or path given as an identifier also matches by its leaf and
     /// stem, and those match as whole words only, so the folder "out" does not refuse a bundle that says "timeout".
     /// </summary>
-    public static string? FindLeak(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null)
+    public static string? FindLeak(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null) =>
+        Find(entries, sensitiveValues)?.EntryName;
+
+    /// <summary>
+    /// Like <see cref="FindLeak"/>, but also names the check that fired (a fixed word, never user text), so a refusal
+    /// can be diagnosed without the data that caused it.
+    /// </summary>
+    public static LeakFinding? Find(IReadOnlyDictionary<string, string> entries, IEnumerable<string>? sensitiveValues = null)
     {
         var sensitive = SensitiveValue.Normalize(sensitiveValues ?? []);
         foreach (var (name, text) in entries)
         {
-            if (LooksLeaky(name, sensitive) || LooksLeaky(text, sensitive))
+            var rule = Leaky(name, sensitive) ?? Leaky(text, sensitive);
+            if (rule is not null)
             {
-                return name;
+                return new LeakFinding(name, rule);
             }
         }
 
         return null;
     }
 
-    private static bool LooksLeaky(string text, IReadOnlyList<SensitiveValue> sensitive)
+    private static string? Leaky(string text, IReadOnlyList<SensitiveValue> sensitive)
     {
-        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text) || DriveOrUncPath().IsMatch(text))
+        if (CredentialShape().IsMatch(text) || CredentialPair().IsMatch(text))
         {
-            return true;
+            return LeakRules.Credential;
+        }
+
+        if (DriveOrUncPath().IsMatch(text))
+        {
+            return LeakRules.Path;
         }
 
         if (EmailShape().Matches(text).Any(match => !AllowedEmails.Contains(match.Value)))
         {
-            return true;
+            return LeakRules.Email;
         }
 
         var plain = Placeholder().Replace(text, " ");
         if (sensitive.Any(value => value.IsIn(plain)))
         {
-            return true;
+            return LeakRules.Identifier;
         }
 
         text = HexDigest().Replace(text, match => match.Value.Any(char.IsDigit) ? "|" : match.Value);
@@ -502,7 +520,7 @@ public static partial class DiagnosticsLeakScan
 
                 if (run >= 20 && letters >= 16)
                 {
-                    return true;
+                    return LeakRules.Sequence;
                 }
             }
             else
@@ -512,6 +530,19 @@ public static partial class DiagnosticsLeakScan
             }
         }
 
-        return false;
+        return null;
     }
 }
+
+/// <summary>The check that refused a bundle: fixed words only, safe to log.</summary>
+public static class LeakRules
+{
+    public const string Credential = "credential";
+    public const string Path = "path";
+    public const string Email = "email";
+    public const string Identifier = "identifier";
+    public const string Sequence = "sequence";
+}
+
+/// <summary>Which bundle entry tripped the final scan, and which check fired.</summary>
+public sealed record LeakFinding(string EntryName, string Rule);
