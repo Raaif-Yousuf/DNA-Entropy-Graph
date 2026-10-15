@@ -1,0 +1,1 @@
+- Settings: new External viewers group with the IGV program path, IGV batch port (1 to 65535, default 60151) and Geneious program path, each with Browse and Reset to default. A missing path is flagged and a bad port refused; values are saved under the Viewer.* keys that Open in IGV and Open in Geneious read at each press (#641, stacked on #639-r2).

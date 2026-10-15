@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DnaEntropyGraph.Cloud.Tests.Rest;
 using DnaEntropyGraph.Core;
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using Shouldly;
 using Xunit;
@@ -197,6 +198,38 @@ public class ActAsRunRowTests
     }
 
     [Fact]
+    public async Task An_actAs_failure_recorded_with_an_unconfirmed_VM_end_keeps_both_the_billing_warning_and_the_owner_request_on_the_row()
+    {
+        // Issue #665. MEASURED 2026-10-15: no run path reaches this today (the create ladder sweeps only after network, other and stockout, and a
+        // permission refusal aborts without a sweep), so the outcome recorder, where the two facts meet, is driven directly: the day a path does
+        // reach it, the row must not lose the owner request.
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(new RunRecord("job-a8", JobPhase.Provisioning, DateTimeOffset.UtcNow), CancellationToken.None);
+        var settings = Settings();
+        var calls = new GatewayCalls(settings, gcp);
+        var rows = new RunRowStore(repo, null);
+        var recorder = new RunOutcomeRecorder(rows, new RunTransfer(gcp, calls, settings, rows), new VmTerminator(gcp, calls, settings));
+        var detail = WorkerAccountDetail.Append(ActAsMessage, WorkerIdentityNames.ServiceAccountEmail(Project));
+
+        await recorder.FailAsync("job-a8", CloudErrorKind.Permission, RunErrorCodes.PermissionActAs, detail, " (VM end not confirmed: could not look)");
+
+        var row = repo.AllRecordedInOrder.Last(r => r.JobId == "job-a8");
+        row.ErrorCode.ShouldBe(RunErrorCodes.VmEndUnconfirmed, "a possibly-running VM is a billing risk and stays the headline");
+        RunErrorCodes.IsActAsRefusal(row.ErrorCode, row.ErrorDetail).ShouldBeTrue("the owner request must still be offered");
+        WorkerAccountDetail.TryRead(row.ErrorDetail).ShouldBe(WorkerIdentityNames.ServiceAccountEmail(Project));
+    }
+    [Theory]
+    [InlineData("permission_actas", null, true)]
+    [InlineData("vm_end_unconfirmed", "x Original code: permission_actas. (VM end not confirmed)", true)]
+    [InlineData("vm_end_unconfirmed", "x Original code: stockout.", false)]
+    [InlineData("vm_end_unconfirmed", null, false)]
+    [InlineData("permission", "Original code: permission_actas.", false)]
+    [InlineData(null, "Original code: permission_actas.", false)]
+    public void An_actAs_refusal_is_recognised_by_its_code_or_by_the_original_code_behind_an_unconfirmed_VM_end(string? code, string? detail, bool expected)
+        => RunErrorCodes.IsActAsRefusal(code, detail).ShouldBe(expected);
+
+    [Fact]
     public void An_unconfirmed_VM_end_keeps_the_specific_original_code_in_its_detail()
     {
         var refusal = new CloudOperationException(new CloudError("IAM_PERMISSION_DENIED", 403, ActAsMessage), CloudErrorKind.Permission);
@@ -231,6 +264,10 @@ public class ActAsRunRowTests
         public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
 
         public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+        /// <summary>From this call of FindByJobIdAsync on (1-based) the lookup fails; the sweep after a refused create is what reaches it.</summary>
+        public int FindFailsFromCall { get; init; } = int.MaxValue;
+
+        private int _finds;
 
         public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
         {
@@ -244,7 +281,10 @@ public class ActAsRunRowTests
 
         public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+            => ++_finds >= FindFailsFromCall
+                ? Task.FromException<IReadOnlyList<VmDescriptor>>(new CloudOperationException(new CloudError(null, null, "could not reach the service"), CloudErrorKind.Network))
+                : inner.FindByJobIdAsync(jobId, cancellationToken);
 
         public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
 

@@ -20,9 +20,12 @@ public sealed record DiagnosticsInfo(
     string ReadmeText);
 
 /// <summary>The bundle refused to be written because sequence, a credential, an email, a path or one of the user's own identifiers survived redaction.</summary>
-public sealed class DiagnosticsLeakException(string entryName)
-    : Exception($"Identifying or sequence-like text was found in '{entryName}', so no diagnostics file was written.")
+public sealed class DiagnosticsLeakException(LeakFinding finding)
+    : Exception($"A '{finding.Rule}' check refused entry '{finding.EntryName}', so no diagnostics file was written.")
 {
     /// <summary>The bundle entry that tripped the final scan.</summary>
-    public string EntryName { get; } = entryName;
+    public string EntryName { get; } = finding.EntryName;
+
+    /// <summary>The check that fired (a <see cref="LeakRules"/> word); never user text.</summary>
+    public string Rule { get; } = finding.Rule;
 }
