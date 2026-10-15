@@ -1,0 +1,1 @@
+- ci: the Windows backslash-path cases of the primary-checkout git hook run only on Windows, so `scripts tests` is green on the Linux runner again (#662).
