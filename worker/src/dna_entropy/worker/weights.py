@@ -31,7 +31,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-from .blobstore import Blobstore, BlobstoreError, GcsBlobstore, _checked_relative
+from .blobstore import Blobstore, BlobstoreError, GcsBlobstore, TransferCancelled, _checked_relative
 
 MARKER_NAME = "_COMPLETE.json"
 _MARKER_SCHEMA = 1
@@ -227,7 +227,15 @@ def save_to_cache(
         elif f.is_file():
             if should_stop is not None and should_stop():
                 return 0
-            store.upload_file(f, f"{prefix}{rel}")
+            if should_stop is None:
+                store.upload_file(f, f"{prefix}{rel}")
+            else:
+                # Chunked upload: the stop request is honoured between chunks, not only
+                # between files, so a multi-GB shard cannot hold a cancel hostage (#496).
+                try:
+                    store.upload_file(f, f"{prefix}{rel}", should_stop=should_stop)
+                except TransferCancelled:
+                    return 0
             files[rel] = f.stat().st_size
     if not files:
         return 0

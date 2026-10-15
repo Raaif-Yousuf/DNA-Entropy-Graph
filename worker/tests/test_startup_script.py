@@ -416,7 +416,8 @@ def _run_docker_tail(rc: int, lifecycle: str = "stop") -> list[str]:
     assert re.search(r"^docker run --rm", tail, re.MULTILINE), "tail must contain the docker run"
     lines = [
         "set -uo pipefail",
-        'LOG=""; EXPECT_GPU=false; JOBURI=gs://b/jobs/j; BUCKET=b; NAME=vm; ZONE=z; PROJECT=p; IMAGE=img; JOB=j; MAX_RUN_MIN=60; RELAY_PID=999999',
+        'LOG=""; EXPECT_GPU=false; JOBURI=gs://b/jobs/j; BUCKET=b; NAME=vm; ZONE=z; PROJECT=p',
+        "IMAGE=img; JOB=j; MAX_RUN_MIN=60; RELAY_PID=999999",
         f"LIFECYCLE={lifecycle}",
         'status() { LOG="$LOG status:$1:${2:-}"; }',
         'cleanup() { LOG="$LOG cleanup:$1"; }',

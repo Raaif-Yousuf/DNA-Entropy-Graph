@@ -63,7 +63,16 @@ the runner uploads a folder file by file). Every path is relative to the job pre
 absolute paths (a leading `/` or backslash, or a drive letter) and any `..` component are
 refused by both implementations. Writes are atomic for a reader: `LocalBlobstore` writes a
 temp sibling and `os.replace`s it for `write_text`, `upload_file` and `download_file` alike,
-and a GCS object upload is atomic by itself. `GcsBlobstore.list_prefix` follows
+and a GCS object upload is atomic by itself. File transfers are streamed (issue #496), so peak
+memory is one chunk, never the file size: `LocalBlobstore` copies with `shutil.copyfile`;
+`GcsBlobstore.upload_file` sends a file larger than one chunk (8 MiB, always a multiple of
+256 KiB) as a GCS resumable upload with a `Content-Range` per chunk and, after a retryable
+failure, asks the session what it committed (`bytes */total`) and resumes from there; it polls
+the caller's optional `should_stop` between chunks and raises `TransferCancelled`, leaving no
+object (the weights mirror uses this so a multi-GB shard cannot hold a cancel hostage).
+`download_file` streams to `<dest>.part`, resumes a cut stream with a `Range` request, and
+renames on success, so a failed download leaves no file at the destination.
+`GcsBlobstore.list_prefix` follows
 `nextPageToken`, so a listing is complete past the API's 1000-object page.
 `worker/tests/test_blobstore_contract.py` runs one contract against both implementations
 (GCS over an in-memory fake, marker `gcs`).
