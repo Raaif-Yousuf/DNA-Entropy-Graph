@@ -18,6 +18,7 @@ public sealed partial class UpdateViewModel : ObservableObject
     private readonly UpdateSettings _settings;
     private readonly IStringResourceProvider _strings;
     private readonly IActiveRunProbe _runs;
+    private readonly BuildIdentity? _build;
     private bool _loading;
     private bool _downloaded;
 
@@ -53,8 +54,9 @@ public sealed partial class UpdateViewModel : ObservableObject
     [ObservableProperty]
     private bool _checkOnLaunch;
 
-    public UpdateViewModel(IAppUpdateSource source, UpdateSettings settings, IStringResourceProvider strings, IActiveRunProbe runs, IMessenger? messenger = null)
+    public UpdateViewModel(IAppUpdateSource source, UpdateSettings settings, IStringResourceProvider strings, IActiveRunProbe runs, IMessenger? messenger = null, BuildIdentity? build = null)
     {
+        _build = build;
         _source = source;
         _settings = settings;
         _strings = strings;
@@ -66,6 +68,9 @@ public sealed partial class UpdateViewModel : ObservableObject
     }
 
     public string CurrentVersionText => string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("AboutVersion_Text"), _source.CurrentVersion);
+
+    /// <summary>The exact build (version and short sha, issue #263) for the About group; empty when no build identity was given.</summary>
+    public string BuildText => _build is null ? string.Empty : string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("AboutBuild_Text"), _build.Info.Display);
 
     private UpdateChannel Channel => ChannelIndex == 1 ? UpdateChannel.Beta : UpdateChannel.Stable;
 

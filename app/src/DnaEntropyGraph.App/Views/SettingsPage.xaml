@@ -127,6 +127,7 @@
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock Text="{x:Bind Updates.CurrentVersionText}" />
+                        <TextBlock Text="{x:Bind Updates.BuildText}" Opacity="0.8" IsTextSelectionEnabled="True" />
                         <RadioButtons x:Uid="UpdateChannelChoices" MaxColumns="1" SelectedIndex="{x:Bind Updates.ChannelIndex, Mode=TwoWay}">
                             <RadioButton x:Uid="UpdateChannelStable" />
                             <RadioButton x:Uid="UpdateChannelBeta" />

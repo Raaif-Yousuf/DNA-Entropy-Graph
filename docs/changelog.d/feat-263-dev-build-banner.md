@@ -1,0 +1,1 @@
+- Development-build banner and version stamp (#263): an unsigned exe (checked at run time with an Authenticode read of the running exe, not a build flag) shows `Development build <version> (<sha>): not a release` in the title bar; Settings > About shows `Build <version> (<sha>)`. The sha is stamped into the informational version by the App csproj.

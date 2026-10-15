@@ -81,4 +81,16 @@
     build error (NETSDK1022), not a no-op.
   -->
 
+
+  <!--
+    Issue #263: the short git sha goes into the informational version ("0.0.1+abc1234"), which About and the dev-build banner show.
+    The SDK would add it itself only with a SourceLink package; without one SourceRevisionId is empty. A CI override (-p:SourceRevisionId=...) wins,
+    and a checkout with no git (a source zip) just gets no sha: the exec is allowed to fail.
+  -->
+  <Target Name="StampGitRevision" BeforeTargets="AddSourceRevisionToInformationalVersion;GetAssemblyVersion" Condition="'$(SourceRevisionId)' == ''">
+    <Exec Command="git rev-parse --short=7 HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" StandardErrorImportance="low" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="SourceRevisionId" />
+    </Exec>
+  </Target>
+
 </Project>
