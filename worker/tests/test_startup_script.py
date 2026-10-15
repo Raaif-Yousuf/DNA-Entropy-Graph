@@ -317,7 +317,7 @@ def test_infra_stage_snapshots_carry_stage_started_at() -> None:
 def test_a_vm_in_a_zone_the_ladder_did_not_keep_refuses_before_writing_anything() -> None:
     """#670: a parallel zone ladder creates the same job's VM in several zones at once and the app records the
     kept one in control/zone. A VM booted in another zone must read it and delete itself BEFORE it writes
-    status.json or the startup log under the job prefix, and must not do so through cleanup(), which uploads it."""
+    status.json or the startup log under the job prefix, and must not do so through cleanup()."""
     text = _code_only()
     assert "control/zone" in text
     guard_at = text.index("control/zone")
