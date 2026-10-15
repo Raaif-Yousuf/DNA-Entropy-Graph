@@ -23,6 +23,8 @@ see [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for why the ceiling is se
 is. GenBank and FASTA files are detected automatically by their contents, not just their
 file extension, so a renamed file still works.
 
+If you have an NCBI accession (for example `NC_045512.2`) instead of a file, the worker can download the record for you and run it like a GenBank file: `dna-entropy run --accession NC_045512.2 --name my_run`. The accession and the download date are recorded in the run's `provenance.json`. A **Fetch from NCBI** button on this page is not built yet; until then, download the record from NCBI as a GenBank file and drop it in.
+
 Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
 
 Each file you add gets its own small summary: how many records it contains, how many

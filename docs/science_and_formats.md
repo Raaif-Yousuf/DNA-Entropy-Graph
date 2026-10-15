@@ -506,6 +506,28 @@ Every one of these five checks has a dedicated, deterministic test in
 new validation test should also sweep (empty contig, ambiguity codes, multi-record files,
 `L < 2K`, `L > W`).
 
+### 4b. Fetching a record by NCBI accession (issue #133)
+
+`readers/entrez.py`, `dna-entropy run --accession NC_045512.2 [--accession-range 100-500]
+[--ncbi-api-key K] [--cache-dir D]`. The worker asks NCBI E-utilities (`efetch`, `db=nuccore`,
+`rettype=gb`) for the record, writes it under the cache directory
+(`%LOCALAPPDATA%\DNAEntropyGraph\cache\inputs` by default) and then runs the ordinary
+GenBank path on that file, so every rule in this section and the "use the file's own genes,
+never re-annotate" rule apply unchanged. Mechanics:
+
+- The accession is matched against a strict pattern before any request; a bad one is a
+  `ValidationError` (`INPUT_INVALID`), never a request.
+- NCBI can answer a failed lookup with HTTP 200 and an error text. A body that does not start
+  with `LOCUS` is refused and not cached.
+- Rate limit: at least 0.34 s between requests without a key, 0.1 s with one.
+- The cache key is accession plus range; a sidecar `.json` keeps the ORIGINAL retrieval date,
+  so a later run served from the cache still reports when the record was downloaded.
+- `provenance.json` gets `input_source: {type: "ncbi_entrez", accession, range, retrieved,
+  from_cache}`. The API key is never written anywhere.
+- The test suite never touches the network (`worker/tests/test_entrez.py` injects the opener).
+  Local validation in the app (rule 2) is not needed for the fetch itself: the fetched text
+  goes through the same GenBank reader and validator in the worker before any prediction.
+
 ---
 
 ## 5. Output formats, one per row, with the coordinate system that matters
