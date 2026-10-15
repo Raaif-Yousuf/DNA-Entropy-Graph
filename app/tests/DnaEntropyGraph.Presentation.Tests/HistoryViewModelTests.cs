@@ -718,6 +718,20 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task A_run_whose_actAs_refusal_ended_with_an_unconfirmed_VM_still_offers_the_copy_request()
+    {
+        // Issue #665.
+        var vm = await Loaded(Row("both", JobPhase.Failed) with
+        {
+            ErrorCode = RunErrorCodes.VmEndUnconfirmed,
+            ProjectId = "my-lab",
+            ErrorDetail = "refused [vm-account=dna-entropy-worker@my-lab.iam.gserviceaccount.com] Original code: permission_actas. (VM end not confirmed)",
+        });
+
+        Item(vm, "both").HasOwnerRequest.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task The_request_names_the_account_the_row_says_the_VM_ran_as_and_leaves_the_grantee_out_when_nobody_is_signed_in()
     {
         _strings.GetString(RunsCopy.OwnerRequestActAs).Returns("{0}|{1}|{2}|{3}");

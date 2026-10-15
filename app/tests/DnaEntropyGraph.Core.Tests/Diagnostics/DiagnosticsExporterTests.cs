@@ -36,7 +36,7 @@ public class DiagnosticsExporterTests : IDisposable
     public async Task Writes_a_readable_zip_at_the_chosen_path_and_leaves_no_temp_file()
     {
         var path = Path.Combine(_folder, "out.zip");
-        var run = new RunRecord("job-1", JobPhase.Failed, DateTimeOffset.UnixEpoch, ErrorCode: "WORKER_FAILED");
+        var run = new RunRecord("20261001-080000-abc234", JobPhase.Failed, DateTimeOffset.UnixEpoch, ErrorCode: "WORKER_FAILED");
 
         await new DiagnosticsExporter(new EmptySource(), History(run), () => Info).ExportAsync(path, CancellationToken.None);
 
@@ -49,7 +49,7 @@ public class DiagnosticsExporterTests : IDisposable
     public async Task A_refused_bundle_writes_nothing_at_all()
     {
         var path = Path.Combine(_folder, "out.zip");
-        var leaky = new RunRecord("ACGTTGCAAGGCTTAACCGGTTAAGGCC", JobPhase.Failed, DateTimeOffset.UnixEpoch);
+        var leaky = new RunRecord("20261001-080000-abc234", JobPhase.Failed, DateTimeOffset.UnixEpoch, ErrorCode: "ACGTTGCAAGGCTTAACCGGTTAAGGCC");
 
         await Should.ThrowAsync<DiagnosticsLeakException>(
             () => new DiagnosticsExporter(new EmptySource(), History(leaky), () => Info).ExportAsync(path, CancellationToken.None));
@@ -62,7 +62,7 @@ public class DiagnosticsExporterTests : IDisposable
     {
         var path = Path.Combine(_folder, "out.zip");
         await File.WriteAllBytesAsync(path, [], TestContext.Current.CancellationToken);
-        var leaky = new RunRecord("ACGTTGCAAGGCTTAACCGGTTAAGGCC", JobPhase.Failed, DateTimeOffset.UnixEpoch);
+        var leaky = new RunRecord("20261001-080000-abc234", JobPhase.Failed, DateTimeOffset.UnixEpoch, ErrorCode: "ACGTTGCAAGGCTTAACCGGTTAAGGCC");
 
         await Should.ThrowAsync<DiagnosticsLeakException>(
             () => new DiagnosticsExporter(new EmptySource(), History(leaky), () => Info).ExportAsync(path, CancellationToken.None));
@@ -105,7 +105,7 @@ public class DiagnosticsExporterTests : IDisposable
     {
         var path = Path.Combine(_folder, "out.zip");
         await File.WriteAllTextAsync(path, "earlier bundle", TestContext.Current.CancellationToken);
-        var leaky = new RunRecord("ACGTTGCAAGGCTTAACCGGTTAAGGCC", JobPhase.Failed, DateTimeOffset.UnixEpoch);
+        var leaky = new RunRecord("20261001-080000-abc234", JobPhase.Failed, DateTimeOffset.UnixEpoch, ErrorCode: "ACGTTGCAAGGCTTAACCGGTTAAGGCC");
 
         await Should.ThrowAsync<DiagnosticsLeakException>(
             () => new DiagnosticsExporter(new EmptySource(), History(leaky), () => Info).ExportAsync(path, CancellationToken.None));
