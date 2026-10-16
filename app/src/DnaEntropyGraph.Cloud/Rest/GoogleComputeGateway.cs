@@ -431,6 +431,47 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);
 
+    /// <summary>
+    /// Issue #91: <c>zoneOperations.list</c> filtered to the preemption operation on this instance. The answer is also checked on the client (operation type and
+    /// target), so a filter Compute reads more loosely than meant can never turn another operation into a "preemption". THEORY (unverified, no live project): that
+    /// a preempted instance records an operation of type <c>compute.instances.preempted</c> whose <c>targetLink</c> is the instance, and that this filter syntax matches (ToTest row #91).
+    /// </summary>
+    public async Task<bool> WasPreemptedAsync(string vmName, string zone, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        var targetSuffix = $"/zones/{zone}/instances/{vmName}";
+        string? pageToken = null;
+        for (var page = 0; page < 5; page++)
+        {
+            var requestedToken = pageToken;
+            var operations = await CallAsync(
+                "compute.zoneOperations.list",
+                token =>
+                {
+                    var request = _service.ZoneOperations.List(project, zone);
+                    request.Filter = $"(operationType = \"{PreemptedOperationType}\") (targetLink = \"https://www.googleapis.com/compute/v1/projects/{project}{targetSuffix}\")";
+                    request.PageToken = requestedToken;
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (operations.Items?.Any(o => string.Equals(o.OperationType, PreemptedOperationType, StringComparison.Ordinal) && o.TargetLink?.EndsWith(targetSuffix, StringComparison.Ordinal) == true) == true)
+            {
+                return true;
+            }
+
+            pageToken = string.IsNullOrEmpty(operations.NextPageToken) ? null : operations.NextPageToken;
+            if (pageToken is null)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private const string PreemptedOperationType = "compute.instances.preempted";
+
     public async Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         var project = RequireProject();

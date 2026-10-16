@@ -46,6 +46,9 @@ public sealed class ResilientComputeGateway : IComputeGateway
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.GetVm", token => _inner.GetVmAsync(vmName, zone, token), cancellationToken);
 
+    public Task<bool> WasPreemptedAsync(string vmName, string zone, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.WasPreempted", token => _inner.WasPreemptedAsync(vmName, zone, token), cancellationToken, bypassBreaker: true);
+
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.StopVm", token => _inner.StopVmAsync(vmName, zone, token), cancellationToken, bypassBreaker: true);
 
@@ -111,6 +114,9 @@ public sealed class ResilientStorageGateway : IStorageGateway
 
     public Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Storage.ListChildPrefixes", token => _inner.ListChildPrefixesAsync(bucket, prefix, token), cancellationToken, bypassBreaker: true);
+
+    public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Storage.DeleteObject", token => _inner.DeleteObjectAsync(bucket, objectKey, token), cancellationToken, bypassBreaker: true);
 
     public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
     {

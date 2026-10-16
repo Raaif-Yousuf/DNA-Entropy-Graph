@@ -423,15 +423,30 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         // (Hard Rule 10's backstop), not lost. Issue #691: "now passed" is judged on the platform's clock (the last server time read plus the monotonic time since), because the laptop's clock may be an hour out; the platform's time is aged with a MONOTONIC interval so a wall-clock step cannot move it; with no plausible server time the laptop's clock is used. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
         var pastLimit = clock is { } basis && PlatformNow(basis.Reading) >= basis.RunClockStart + request.Spec.MaxRunDuration;
 
-        // Issue #91: a Spot VM that is gone or reads terminated before its limit, with no worker error and no result.json, was taken back by Google. THEORY (unverified,
-        // no live project): with instanceTerminationAction=DELETE a preempted instance disappears (the look finds none), which is why a missing VM counts, and a preempted
-        // one that stays reads TERMINATED with a status message naming the preemption. A VM the person deleted by hand from the Cloud page reads the same way and is retried
-        // once on-demand too; that is the price of not being able to tell them apart without the audit log. A preempted VM is deleted whatever the user chose for after a run.
-        var preempted = request.Spec.Spot && mapped is null && !pastLimit && IsPreemptionReason(reason);
+        // Issue #91: a Spot VM is a preemption only on POSITIVE evidence from Compute itself (a compute.instances.preempted zone operation on the instance). A VM that is
+        // merely gone or stopped proves nothing: the person's Delete, a cancel, an admin, a zone outage and a limit with no clock all look the same, and a wrong guess is a paid
+        // on-demand retry. Nothing is asked when this app ended the VM itself or the worker already said why it stopped. A lookup that fails is "not confirmed": the run fails
+        // as a lost VM (its message names the action: start the run again). A preempted VM is deleted whatever the user chose for after a run.
+        var preempted = false;
+        var lookupFailed = false;
+        if (request.Spec.Spot && mapped is null && !pastLimit && !terminator.AppRequestedEnd(request.JobId))
+        {
+            try
+            {
+                preempted = await calls.CallAsync(token => compute.WasPreemptedAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException)
+            {
+                lookupFailed = true;
+            }
+        }
+
         var note = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: preempted).ConfigureAwait(false);
         return VmEndNotes.Apply(
             preempted
                 ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, reason ?? "The Spot VM was taken back by Google.") { SpotPreempted = true }
+                : lookupFailed
+                ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, (reason ?? "The VM is no longer running.") + " Whether Google took the Spot VM back could not be checked, so the run was not started again.")
                 : mapped is not null
                 ? new RunFailureException(CloudErrorKind.Other, mapped, $"The worker reported {workerCode} in status.json and no result.json followed. {reason}")
                 : pastLimit
@@ -439,11 +454,6 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                     : new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, (reason ?? "The VM is no longer running.") + (workerCode is null ? string.Empty : $" status.json reported {workerCode}.")),
             note);
     }
-
-    private static bool IsPreemptionReason(string? reason)
-        => reason is null
-            || reason.Contains("preempt", StringComparison.OrdinalIgnoreCase)
-            || reason.Contains("could not be found", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The <c>error.code</c> in <c>status.json</c>, or null when it is absent, unreadable or the look itself failed (a diagnostic, never worth failing the run over).</summary>
     private async Task<string?> TryReadWorkerErrorCodeAsync(string bucket, string key, CancellationToken cancellationToken)

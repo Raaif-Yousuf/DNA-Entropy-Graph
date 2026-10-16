@@ -66,6 +66,14 @@ public interface IComputeGateway
 
     Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Issue #91: whether Compute Engine itself recorded that it took this Spot VM back: a zone operation of type
+    /// <c>compute.instances.preempted</c> targeting the instance. This is the only evidence a preemption is accepted on; a VM that is merely gone or
+    /// stopped proves nothing (the person, an admin, the platform at its limit or a zone outage all look the same). A failed look throws like any read.
+    /// The default answers false, so a gateway that cannot tell never causes a paid retry.
+    /// </summary>
+    Task<bool> WasPreemptedAsync(string vmName, string zone, CancellationToken cancellationToken) => Task.FromResult(false);
+
     Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken);

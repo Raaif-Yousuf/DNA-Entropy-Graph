@@ -442,14 +442,28 @@ public sealed class CloudJobRunner
             progress.VmName = provisioned.VmName ?? progress.VmName;
             // No name from the provisioner or the progress means the run created the VM itself, under the planned name.
             await RecordVmNameAsync(request.JobId, progress.VmName ?? attempt.Spec.VmName, cancellationToken).ConfigureAwait(false);
+            await RecordProvisioningModelAsync(request.JobId, attempt.Spec.Spot, cancellationToken).ConfigureAwait(false);
             try
             {
                 return await RunOnVmAsync(progress.Resolve(attempt), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
             }
-            catch (RunFailureException preempted) when (preempted.SpotPreempted && attempt.Spec.Spot)
+            catch (RunFailureException preempted) when (preempted.SpotPreempted && attempt.Spec.Spot && !_terminator.AppRequestedEnd(request.JobId))
             {
                 // The lost VM was already deleted (and the delete confirmed: an unconfirmed end is never marked a preemption), so nothing bills and nothing is adopted below.
-                await _rows.UpdateRowAsync(request.JobId, row => row with { PreemptionCount = row.PreemptionCount + 1 }, cancellationToken).ConfigureAwait(false);
+                // The preempted attempt's status and progress files go first: attempt 2 writes the same keys, and its watcher must never read attempt 1's heartbeat, stage or GPU line.
+                var jobFolder = WorkerManifestBuilder.JobPrefix(request.JobId);
+                foreach (var stale in new[] { "status.json", "progress.jsonl" })
+                {
+                    await _calls.CallAsync(
+                        async token =>
+                        {
+                            await _storage.DeleteObjectAsync(bucket, jobFolder + stale, token).ConfigureAwait(false);
+                            return true;
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                await _rows.RestartProvisioningAsync(request.JobId, cancellationToken).ConfigureAwait(false);
                 attempt = attempt with { Spec = attempt.Spec with { Spot = false, ExistingVmName = null } };
                 progress.VmName = null;
                 progress.Zone = null;
@@ -480,6 +494,19 @@ public sealed class CloudJobRunner
             // The row keeps the planned name; nothing about the VM changes.
         }
     }
+    /// <summary>Issue #91: the run row says whether the VM this attempt is on is Spot (true, then false after the retry). A record, not a step: a failed write never abandons a live VM.</summary>
+    private async Task RecordProvisioningModelAsync(string jobId, bool spot, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _rows.UpdateRowAsync(jobId, row => row with { IsSpot = spot }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The row keeps what it had; nothing about the VM changes.
+        }
+    }
+
     /// <summary>
     /// Issue #606: the spec to create. The provisioner asks for it only when no VM exists for the job, so a run that adopts a VM
     /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured

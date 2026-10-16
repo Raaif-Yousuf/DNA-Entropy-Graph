@@ -40,6 +40,32 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
         }
     }
 
+    /// <summary>
+    /// Issue #91: the one automatic on-demand retry after a Spot preemption. The row goes back to Provisioning (so the UI shows a computer being started again;
+    /// <see cref="SetPhaseAsync"/> would treat that as an already-passed phase and do nothing), records that this attempt is not Spot, and counts the preemption,
+    /// in ONE write. Throws the state machine's own error for a phase that may not go back (a cancel that won the race is Cancelling), which the runner's guard
+    /// treats as standing down.
+    /// </summary>
+    public async Task RestartProvisioningAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var existing = await LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
+        if (existing is null)
+        {
+            return;
+        }
+
+        JobStateMachine.EnsureLegalTransition(existing.Phase, JobPhase.Provisioning);
+        await runs.UpsertAsync(existing with { Phase = JobPhase.Provisioning, IsSpot = false, PreemptionCount = existing.PreemptionCount + 1 }, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            onPhaseChanged?.Invoke(jobId, JobPhase.Provisioning);
+        }
+        catch (Exception)
+        {
+            // The row is committed; a notification that throws is not part of the run (as in SetPhaseAsync).
+        }
+    }
+
     public async Task SetPhaseAsync(string jobId, JobPhase phase, CancellationToken cancellationToken, string? errorCode = null, string? errorDetail = null)
     {
         if (phase is not (JobPhase.Failed or JobPhase.Cancelled or JobPhase.Cancelling))

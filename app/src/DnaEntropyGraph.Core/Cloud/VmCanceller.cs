@@ -32,6 +32,8 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             return;
         }
 
+        // Issue #91: from here the VM going away is this app's doing, never a Spot preemption to retry.
+        terminator.NoteAppRequestedEnd(jobId);
         await rows.SetPhaseAsync(jobId, JobPhase.Cancelling, CancellationToken.None).ConfigureAwait(false);
 
         // A create the caller gave up on can still land. Wait for it (bounded) before looking, or the VM appears

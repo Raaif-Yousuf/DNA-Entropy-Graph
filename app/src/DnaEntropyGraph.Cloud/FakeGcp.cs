@@ -748,6 +748,50 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
 
     private int _spotPreemptionsLeft;
+    private int _onDemandLossesLeft;
+    private readonly ConcurrentDictionary<(string Name, string Zone), byte> _preemptingKeys = new();
+    private bool _preemptionLookupFails;
+    private int _preemptionLookups;
+    private readonly ConcurrentDictionary<(string Name, string Zone), byte> _preemptedOperations = new();
+
+    /// <summary>
+    /// Issue #91: the next <paramref name="count"/> on-demand VMs created are lost at their first look (<c>TERMINATED</c>, never answering) and Compute records NO
+    /// preemption for them, as for an admin delete or a zone outage.
+    /// </summary>
+    public FakeGcp WithOnDemandVmLosses(int count)
+    {
+        _onDemandLossesLeft = count;
+        return this;
+    }
+
+    /// <summary>Issue #91: <see cref="WasPreemptedAsync"/> fails with a network error, as a failed zone-operations read would.</summary>
+    public FakeGcp WithPreemptionLookupFailure()
+    {
+        _preemptionLookupFails = true;
+        return this;
+    }
+
+    /// <summary>How many times <see cref="WasPreemptedAsync"/> was asked (issue #91).</summary>
+    public int PreemptionLookups => Volatile.Read(ref _preemptionLookups);
+
+    public Task<bool> WasPreemptedAsync(string vmName, string zone, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        Interlocked.Increment(ref _preemptionLookups);
+        if (_preemptionLookupFails)
+        {
+            throw Build(CloudErrorKind.Network, null, null, "Could not reach the server; the zone operations could not be read");
+        }
+
+        return Task.FromResult(_preemptedOperations.ContainsKey((vmName, zone)));
+    }
+
+    public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        _objects.TryRemove((bucket, objectKey), out _);
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// Issue #91: the next <paramref name="count"/> Spot VMs created are taken back by Google before their worker writes anything: each reads
@@ -889,6 +933,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         if (spec.Spot && _spotPreemptionsLeft > 0)
         {
             _spotPreemptionsLeft--;
+            _preemptAt[key] = _timeProvider.GetUtcNow();
+            _preemptingKeys[key] = 0;
+            return Task.FromResult(vm);
+        }
+
+        if (!spec.Spot && _onDemandLossesLeft > 0)
+        {
+            _onDemandLossesLeft--;
             _preemptAt[key] = _timeProvider.GetUtcNow();
             return Task.FromResult(vm);
         }
@@ -1122,6 +1174,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             vm = vm with { Status = "TERMINATED", StatusReason = "preempted" };
             _vms[key] = vm;
             _preemptAt.Remove(key);
+            if (_preemptingKeys.TryRemove(key, out _))
+            {
+                _preemptedOperations[key] = 0; // Compute records the preemption only for a Spot VM it took back
+            }
         }
 
         return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });

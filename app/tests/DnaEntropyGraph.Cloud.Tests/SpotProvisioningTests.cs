@@ -32,11 +32,11 @@ public class SpotProvisioningTests
         Spot = spot,
     };
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo)
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, TimeSpan? resultTimeout = null)
         => new(gcp, gcp, gcp, gcp, gcp, repo, null)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
-            ResultTimeout = TimeSpan.FromMilliseconds(200),
+            ResultTimeout = resultTimeout ?? TimeSpan.FromMilliseconds(200),
             CallTimeout = TimeSpan.FromMilliseconds(100),
             EnsureBucketTimeout = TimeSpan.FromMilliseconds(100),
             CreateTimeout = TimeSpan.FromMilliseconds(100),
@@ -129,17 +129,156 @@ public class SpotProvisioningTests
     }
 
     [Fact]
-    public async Task Only_one_automatic_retry_is_made_even_when_the_Spot_create_is_preempted_again()
+    public async Task A_second_loss_of_the_on_demand_retry_is_not_retried_again()
     {
         var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
-        var gcp = new FakeGcp(time).WithSpotPreemptions(5);
+        var gcp = new FakeGcp(time).WithSpotPreemptions(1).WithOnDemandVmLosses(1);
         var repo = new InMemoryRunRepository();
 
         var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-s6", Spec("job-s6", spot: true)), CancellationToken.None);
 
-        // The retry is on-demand, so nothing can preempt it: the run completes after exactly two creates.
-        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
-        gcp.CreatedSpecs.Count.ShouldBe(2);
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        gcp.CreatedSpecs.Select(s => s.Spot).ShouldBe([true, false], "the on-demand retry is the last attempt");
+        gcp.PreemptionLookups.ShouldBe(1, "an on-demand VM is never asked about preemption");
         LastRow(repo, "job-s6").PreemptionCount.ShouldBe(1);
+    }
+
+    // ---- H1: positive evidence only ----
+
+    private static async Task<(Task<CloudJobResult> Run, string JobId)> StartRunningAsync(CloudJobRunner runner, InMemoryRunRepository repo, string jobId)
+    {
+        var run = Task.Run(() => runner.RunAsync(TestInputs.Request(jobId, Spec(jobId, spot: true)), CancellationToken.None), TestContext.Current.CancellationToken);
+        var until = DateTime.UtcNow.AddSeconds(15);
+        while (!repo.AllRecordedInOrder.Any(r => r.JobId == jobId && r.Phase == JobPhase.Running))
+        {
+            (DateTime.UtcNow < until).ShouldBeTrue("the run never reached Running");
+            await Task.Delay(2, TestContext.Current.CancellationToken);
+        }
+
+        return (run, jobId);
+    }
+
+    [Fact]
+    public async Task A_VM_the_person_deleted_mid_run_is_not_a_preemption_and_costs_no_second_VM()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        var runner = Runner(gcp, repo, TimeSpan.FromSeconds(30));
+        var (run, jobId) = await StartRunningAsync(runner, repo, "job-h1a");
+
+        await runner.DeleteVmAsync(jobId, CancellationToken.None);
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+        LastRow(repo, jobId).PreemptionCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_cancel_mid_run_is_not_a_preemption_and_costs_no_second_VM()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        var runner = Runner(gcp, repo, TimeSpan.FromSeconds(30));
+        var (run, jobId) = await StartRunningAsync(runner, repo, "job-h1b");
+
+        await runner.CancelAsync(jobId, CancellationToken.None);
+        await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+        LastRow(repo, jobId).Phase.ShouldBe(JobPhase.Cancelled);
+        LastRow(repo, jobId).PreemptionCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_VM_that_vanishes_with_no_preemption_record_is_not_retried()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        var runner = Runner(gcp, repo, TimeSpan.FromSeconds(30));
+        var (run, jobId) = await StartRunningAsync(runner, repo, "job-h1c");
+
+        await gcp.DeleteVmAsync($"deg-{jobId}", Zone, CancellationToken.None); // an admin or a zone outage: Compute records no preemption
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+        LastRow(repo, jobId).PreemptionCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task When_this_app_has_asked_to_end_the_VM_even_a_recorded_preemption_is_not_retried()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
+        var gcp = new FakeGcp(time).WithSpotPreemptions(1);
+        var repo = new InMemoryRunRepository();
+        var runner = Runner(gcp, repo);
+
+        await runner.DeleteVmAsync("job-h1e", CancellationToken.None); // the person pressed Delete VM now: from here a gone VM is this app's doing
+        var result = await runner.RunAsync(TestInputs.Request("job-h1e", Spec("job-h1e", spot: true)), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+        gcp.PreemptionLookups.ShouldBe(0);
+        LastRow(repo, "job-h1e").PreemptionCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task When_the_preemption_lookup_itself_fails_the_run_fails_and_nothing_is_retried()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
+        var gcp = new FakeGcp(time).WithSpotPreemptions(1).WithPreemptionLookupFailure();
+        var repo = new InMemoryRunRepository();
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-h1d", Spec("job-h1d", spot: true)), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldBe(RunErrorCodes.VmUnhealthy);
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+        LastRow(repo, "job-h1d").PreemptionCount.ShouldBe(0);
+    }
+
+    // ---- H2: nothing of attempt 1 reaches attempt 2's watcher ----
+
+    [Fact]
+    public async Task The_retry_starts_with_no_status_or_progress_left_by_the_preempted_attempt()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
+        var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithSpotPreemptions(1);
+        var bucket = FakeGcp.BucketName(Project);
+        var prefix = "jobs/job-h2/";
+        gcp.PutObject(bucket, prefix + "status.json", "{\"stale\":true}"u8.ToArray());
+        gcp.PutObject(bucket, prefix + "progress.jsonl", "{\"stale\":true}\n"u8.ToArray());
+        var repo = new InMemoryRunRepository();
+
+        await Runner(gcp, repo).RunAsync(TestInputs.Request("job-h2", Spec("job-h2", spot: true)), CancellationToken.None);
+
+        gcp.CreatedSpecs.Count.ShouldBe(2);
+        gcp.ObjectKeys(bucket).ShouldNotContain(prefix + "status.json");
+        gcp.ObjectKeys(bucket).ShouldNotContain(prefix + "progress.jsonl");
+    }
+
+    // ---- M3 and L5: the row shows the retry ----
+
+    [Fact]
+    public async Task The_row_goes_back_to_Provisioning_for_the_retry_and_says_which_attempt_was_Spot()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
+        var gcp = new FakeGcp(time).WithSpotPreemptions(1);
+        var repo = new InMemoryRunRepository();
+
+        await Runner(gcp, repo).RunAsync(TestInputs.Request("job-m3", Spec("job-m3", spot: true)), CancellationToken.None);
+
+        var rows = repo.AllRecordedInOrder.Where(r => r.JobId == "job-m3").ToList();
+        var phases = rows.Select(r => r.Phase).ToList();
+        var firstPreparing = phases.IndexOf(JobPhase.Preparing);
+        firstPreparing.ShouldBeGreaterThanOrEqualTo(0);
+        var restart = phases.IndexOf(JobPhase.Provisioning, firstPreparing);
+        restart.ShouldBeGreaterThan(firstPreparing, "the row shows a computer being started again after the first VM was lost");
+        rows[restart].IsSpot.ShouldBe(false, "the very write that sends the row back to Provisioning says the retry is not Spot");
+        rows[restart].PreemptionCount.ShouldBe(1);
+        rows.Any(r => r.IsSpot == true && r.Phase == JobPhase.Provisioning).ShouldBeTrue();
+        rows.Last().IsSpot.ShouldBe(false);
+        rows.Last().PreemptionCount.ShouldBe(1);
     }
 }
