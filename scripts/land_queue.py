@@ -403,7 +403,6 @@ def _settle(env: Env, pr: str) -> tuple[list[dict[str, str]], bool]:
         if env.clock() >= deadline:
             return checks, True
         env.sleep(20)
-        env.progress = env.clock()
 
 
 def _failing(checks: Sequence[dict[str, str]], ignore: set[str]) -> list[dict[str, str]]:
