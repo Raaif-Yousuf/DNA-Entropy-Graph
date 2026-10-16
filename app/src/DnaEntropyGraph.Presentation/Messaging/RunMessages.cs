@@ -22,3 +22,9 @@ public sealed record RunPhaseChangedMessage(string JobId, JobPhase Phase);
 /// is the intended subscriber for the live per-window narration text.
 /// </summary>
 public sealed record RunProgressChangedMessage(string JobId, ProgressEvent Progress);
+
+/// <summary>
+/// Published by <c>RunStallCoordinator</c> (issue #675) when the runner says a run is slow or stuck: <paramref name="Text"/> is the notice in the user's words
+/// (naming one action), or empty to clear it. <c>RunProgressViewModel</c> shows it on the run page.
+/// </summary>
+public sealed record RunNoticeMessage(string JobId, string Text);

@@ -41,6 +41,18 @@ internal sealed class VirtualTimeProvider(bool autoAdvance = false) : TimeProvid
         }
     }
 
+    /// <summary>
+    /// How many armed timers do NOT repeat every <paramref name="ignoredPeriod"/>: a test about one timer (the reconnect probe) names the period of an unrelated
+    /// repeating timer that also runs on this clock (the nothing-left-running guard's 5 minutes) instead of loosening its own count.
+    /// </summary>
+    public int PendingTimersExcludingPeriod(TimeSpan ignoredPeriod)
+    {
+        lock (_gate)
+        {
+            return _timers.Count(t => t.PeriodTicks != ignoredPeriod.Ticks);
+        }
+    }
+
     /// <summary>Moves the clock forward, firing every timer that falls due on the way in due-time order.</summary>
     public void Advance(TimeSpan by)
     {
@@ -84,6 +96,8 @@ internal sealed class VirtualTimeProvider(bool autoAdvance = false) : TimeProvid
     private sealed class VirtualTimer(VirtualTimeProvider owner, TimerCallback callback, object? state) : ITimer
     {
         private long _periodTicks;
+
+        public long PeriodTicks => _periodTicks;
 
         public long DueTicks { get; private set; } = long.MaxValue;
 

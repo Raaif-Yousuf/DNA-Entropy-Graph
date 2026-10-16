@@ -138,6 +138,8 @@ public class CloudJobRunnerStallTests
         seen.Code.ShouldBe(RunErrorCodes.WorkerStageStuck);
         seen.Stage.ShouldBe("model-loading");
         seen.Message.ShouldNotBeNullOrWhiteSpace();
+        seen.VmName.ShouldBe("deg-job-del", "the dialog must be able to name the computer a Delete would remove (#740)");
+        seen.RunName.ShouldBe("seq.gb", "the dialog must be able to name the run");
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
         (await VmStatusAsync(gcp, "job-del")).ShouldBeNull("Delete means the VM is gone");
