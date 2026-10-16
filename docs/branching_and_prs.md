@@ -66,10 +66,9 @@ one already there, and the next `git merge --ff-only` refuses with a conflict
 nobody can read. A merge commit keeps the branch commit as a parent, so the
 fast-forward afterwards is exact.
 
-**Nothing reliably gates the merge except you.** The owner's 2026-09-19 decision
-was on-demand CI; MEASURED 2026-10-02 the workflow files differ (see
-`dev_commands.md`, "CI triggers"), and `ci-app.yml` has no automatic trigger at all, so a PR with a
-green look has not been checked for `app/`. The step **before `gh pr create`** is one command:
+**CI checks every PR, but run the gate yourself first.** MEASURED 2026-10-16 `ci-app`, `ci-docs`,
+`ci-worker` and `ci-notices` all run on `pull_request` (see `dev_commands.md`, "CI triggers"); CI is slow
+feedback and a Windows test hang has cancelled runs before, so a check list is not a substitute for the local gate. The step **before `gh pr create`** is one command:
 
 ```powershell
 worker\.venv\Scripts\python.exe scripts\premerge.py --fast    # per lane, minutes

@@ -1,0 +1,1 @@
+- tooling: `scripts/check_xaml_shapes.py` (run by premerge) names the file, line and shape of XAML that crashes XamlCompiler.exe silently: `ExtendsContentIntoTitleBar` on `<Window>`, a local converter in a Resources block, `IsEnabled` on a StackPanel (#423).

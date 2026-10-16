@@ -256,6 +256,67 @@ public class WorkerManifestBuilderTests
     }
 
     [Fact]
+    public void An_accession_input_names_the_accession_and_no_path_and_uploads_nothing()
+    {
+        var m = Build(inputs: [StagedInput.ForAccession("NC_045512.2", "100-500")]);
+
+        var input = m.GetProperty("inputs")[0];
+        input.GetProperty("accession").GetString().ShouldBe("NC_045512.2");
+        input.GetProperty("accessionRange").GetString().ShouldBe("100-500");
+        input.TryGetProperty("path", out _).ShouldBeFalse("the worker refuses an input with both a path and an accession");
+        input.GetProperty("name").GetString().ShouldBe("NC_045512_2_100-500", "the name keeps the version and the range, and a dot would read as a file extension");
+        input.GetProperty("informat").GetString().ShouldBe("auto");
+    }
+
+    [Theory]
+    [InlineData("NC_045512.1", null, "NC_045512_1")]
+    [InlineData("NC_045512.2", null, "NC_045512_2")]
+    [InlineData("NC_045512.2", "100-500", "NC_045512_2_100-500")]
+    [InlineData("NC_045512.2", "600-900", "NC_045512_2_600-900")]
+    [InlineData("MN908947", null, "MN908947")]
+    public void Two_versions_or_two_ranges_of_one_record_get_two_different_names(string accession, string? range, string stem)
+    {
+        StagedInput.ForAccession(accession, range).OutputStem.ShouldBe(stem);
+        Build(inputs: [StagedInput.ForAccession(accession, range)]).GetProperty("inputs")[0].GetProperty("name").GetString().ShouldBe(stem);
+        new StagedInput("C:\\x\\sample.v2.fa", "sample.v2.fa").OutputStem.ShouldBe("sample.v2");
+    }
+
+    [Fact]
+    public void An_accession_without_a_range_sends_no_range()
+    {
+        var input = Build(inputs: [StagedInput.ForAccession("MN908947.3", null)]).GetProperty("inputs")[0];
+
+        input.TryGetProperty("accessionRange", out _).ShouldBeFalse();
+        StagedInput.ForAccession("MN908947.3", null).IsAccession.ShouldBeTrue();
+        new StagedInput("x.fa", "x.fa").IsAccession.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void An_accession_cannot_carry_a_gff3()
+        => Should.Throw<ArgumentException>(() => Build(inputs: [StagedInput.ForAccession("NC_045512.2", null), new StagedInput("a.gff3", "a.gff3", IsAnnotation: true)]));
+
+    [Fact]
+    public void Gc_and_codons_are_requested_only_when_chosen_and_gc_carries_its_window()
+    {
+        var plain = Build();
+        Outputs(plain).ShouldNotContain("gc");
+        Outputs(plain).ShouldNotContain("codons");
+        plain.GetProperty("analysis").TryGetProperty("gcWindow", out _).ShouldBeFalse("the window only matters when gc is named");
+
+        var chosen = Build(Opts(o => o with { OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Gc | OutputFileKinds.Codons, GcWindow = 101 }));
+        Outputs(chosen).ShouldContain("gc");
+        Outputs(chosen).ShouldContain("codons");
+        chosen.GetProperty("analysis").GetProperty("gcWindow").GetInt32().ShouldBe(101);
+
+        var codonsOnly = Build(Opts(o => o with { OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Codons }));
+        codonsOnly.GetProperty("analysis").TryGetProperty("gcWindow", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_default_gc_window_is_the_workers_default()
+        => new RunOptions { ModelId = "m", RunTarget = "Cloud" }.GcWindow.ShouldBe(51);
+
+    [Fact]
     public void Not_finding_genes_never_requests_the_gene_summary_either()
     {
         var outputs = Outputs(Build(Opts(o => o with { FindGenes = false })));
