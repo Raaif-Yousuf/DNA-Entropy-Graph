@@ -62,7 +62,8 @@ public static class ServiceRegistration
         // App-owned, WinUI-bound services (Presentation depends on their
         // interfaces only - docs/architecture.md section 2).
         services.AddSingleton<IDispatcher, DispatcherAdapter>();
-        services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
+        // Issue #825: one messenger per container, never the process-wide static, so two containers (tests run in parallel) never hear each other.
+        services.AddSingleton<IMessenger>(_ => new WeakReferenceMessenger());
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
