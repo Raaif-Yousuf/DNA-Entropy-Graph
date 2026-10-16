@@ -822,3 +822,150 @@ def test_a_consumer_of_a_nested_generic_service_is_satisfied_and_the_registratio
 def test_a_nested_generic_factory_registration_is_still_a_factory_registration():
     text = "s.AddSingleton<IRepo<Run, Guid>>(sp => new Repo());"
     assert caw._factory_only_types(text) == {"IRepo<Run,Guid>"}
+
+
+# --- #568: a display property no XAML binds is wired to nothing, whatever C# and tests read -------------------
+
+ITEM_CS = """
+namespace Demo.ViewModels;
+
+public sealed class RunListItem
+{
+    public string Title { get; init; } = "";
+
+    public string ReasonText { get; init; } = "";
+}
+"""
+
+ITEM_PAGE = """
+<Page x:Class="Demo.Views.RunsPage">
+    <ListView>
+        <ListView.ItemTemplate>
+            <DataTemplate x:DataType="vm:RunListItem">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind Title}" />
+                    <TextBlock Text="{x:Bind ReasonText}" />
+                </StackPanel>
+            </DataTemplate>
+        </ListView.ItemTemplate>
+    </ListView>
+</Page>
+"""
+
+ITEM_READER = "public class Reader { string A(RunListItem i) => i.ReasonText; }\n"
+ITEM_TEST = "public class T { void A(RunListItem i) { _ = i.ReasonText; } }\n"
+
+
+def _item_tree(root: Path, page: str = ITEM_PAGE, extra: dict[str, str] | None = None) -> Path:
+    files = {
+        "src/Demo.Presentation/RunListItem.cs": ITEM_CS,
+        "src/Demo.App/Views/RunsPage.xaml": page,
+    }
+    files.update(extra or {})
+    return _tree(root, files)
+
+
+def test_a_template_item_property_bound_in_the_template_is_clean(tmp_path):
+    assert _codes_of(_item_tree(tmp_path / "w"), "UNBOUND-DISPLAY-PROPERTY") == []
+
+
+def test_a_template_item_property_with_its_x_bind_deleted_is_flagged_by_name(tmp_path):
+    page = ITEM_PAGE.replace('<TextBlock Text="{x:Bind ReasonText}" />', "")
+    assert _codes_of(_item_tree(tmp_path / "w", page), "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+def test_production_and_test_references_do_not_count_as_a_binding(tmp_path):
+    page = ITEM_PAGE.replace('<TextBlock Text="{x:Bind ReasonText}" />', "")
+    root = _item_tree(
+        tmp_path / "w",
+        page,
+        {"src/Demo.App/Reader.cs": ITEM_READER, "tests/Demo.Tests/ItemTests.cs": ITEM_TEST},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+def test_a_name_in_plain_xaml_text_that_is_not_a_binding_does_not_count(tmp_path):
+    page = ITEM_PAGE.replace('<TextBlock Text="{x:Bind ReasonText}" />', '<TextBlock x:Name="ReasonText" />')
+    assert _codes_of(_item_tree(tmp_path / "w", page), "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+def test_a_property_used_inside_an_x_bind_function_call_counts_as_bound(tmp_path):
+    page = ITEM_PAGE.replace("{x:Bind ReasonText}", "{x:Bind local:Fmt.Show(ReasonText)}")
+    assert _codes_of(_item_tree(tmp_path / "w", page), "UNBOUND-DISPLAY-PROPERTY") == []
+
+
+def test_a_positional_record_parameter_nothing_binds_is_flagged(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.Presentation/Row.cs": "public sealed record Row(string Header, string Hidden);\n",
+            "src/Demo.App/Views/RowsPage.xaml": (
+                '<Page><DataTemplate x:DataType="vm:Row"><TextBlock Text="{x:Bind Header}" /></DataTemplate></Page>'
+            ),
+        },
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["Row.Hidden"]
+
+
+def test_a_page_viewmodel_plain_property_nothing_binds_is_flagged(tmp_path):
+    vm = VM.replace("[RelayCommand]", 'public string Summary => "";\n\n    [RelayCommand]')
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.Presentation/ViewModels/ThingViewModel.cs": vm,
+            "src/Demo.App/Views/ThingPage.xaml": PAGE,
+            "src/Demo.App/Strings/en-US/Resources.resw": RESW,
+        },
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["ThingViewModel.Summary"]
+
+
+def test_a_command_property_and_a_private_or_static_property_are_not_display_properties(tmp_path):
+    cs = (
+        "public sealed class RunListItem\n{\n"
+        '    public string Title { get; init; } = "";\n'
+        "    public IRelayCommand OpenCommand { get; }\n"
+        '    private string Secret { get; } = "";\n'
+        '    public static string Shared { get; } = "";\n'
+        '    public string Method() => "";\n}\n'
+    )
+    page = '<Page><DataTemplate x:DataType="vm:RunListItem"><TextBlock Text="{x:Bind Title}" /></DataTemplate></Page>'
+    root = _tree(
+        tmp_path / "w",
+        {"src/Demo.Presentation/RunListItem.cs": cs, "src/Demo.App/Views/RunsPage.xaml": page},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == []
+
+
+def test_the_display_property_scanner_sees_the_real_tree():
+    # Vacuity: the scanner must find at least one typed template and its properties on the real app.
+    scan = caw.read_tree(REPO_ROOT / "app")
+    assert caw._display_property_candidates(scan), "no display-property candidates found in app/"
+
+
+def test_only_string_text_is_held_to_a_binding_not_state_flags_enums_or_identifiers(tmp_path):
+    cs = (
+        "public sealed class RunListItem\n{\n"
+        '    public string Title { get; init; } = "";\n'
+        "    public bool IsOk { get; init; }\n"
+        "    public RunStatusFilter Status { get; init; }\n"
+        '    public string JobId { get; init; } = "";\n'
+        "    public string? ActionUrl { get; init; }\n"
+        '    public string Hint { get; init; } = "";\n}\n'
+    )
+    page = '<Page><DataTemplate x:DataType="vm:RunListItem"><TextBlock Text="{x:Bind Title}" /></DataTemplate></Page>'
+    root = _tree(
+        tmp_path / "w",
+        {"src/Demo.Presentation/RunListItem.cs": cs, "src/Demo.App/Views/RunsPage.xaml": page},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.Hint"]
+
+
+def test_a_nullable_string_property_is_a_display_property(tmp_path):
+    cs = "public sealed class RunListItem\n{\n    public string? ReasonText { get; }\n}\n"
+    page = '<Page><DataTemplate x:DataType="vm:RunListItem"><TextBlock Text="x" /></DataTemplate></Page>'
+    root = _tree(
+        tmp_path / "w",
+        {"src/Demo.Presentation/RunListItem.cs": cs, "src/Demo.App/Views/RunsPage.xaml": page},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
