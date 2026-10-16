@@ -21,9 +21,13 @@ public sealed partial class SettingsPage : Page
     public AdvancedSettingsViewModel Advanced { get; }
 
     public SpendCapSettingsViewModel SpendCap { get; }
+    public CloudResultsSettingsViewModel CloudResults { get; }
+
+    public UpdateViewModel Updates { get; }
 
     public SettingsPage()
     {
+        CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
         Files = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FilesSettingsViewModel>();
@@ -32,6 +36,7 @@ public sealed partial class SettingsPage : Page
         Advanced = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<AdvancedSettingsViewModel>();
         SpendCap = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SpendCapSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
+        Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
         InitializeComponent();
     }
 }

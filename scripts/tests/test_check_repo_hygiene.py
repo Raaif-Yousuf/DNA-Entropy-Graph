@@ -28,7 +28,10 @@ def repo(tmp_path):
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_repo_hygiene.py"), "--self-test"],
-        capture_output=True, text=True, timeout=60, check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout

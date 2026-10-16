@@ -161,8 +161,7 @@ def run(
         if detail:
             reason += f": {detail}"
         reason += (
-            ". A crashing guard cannot have an opinion, so this tool call is refused rather "
-            "than silently allowed through an unenforced guard."
+            ". A crashing guard cannot have an opinion, so this tool call is refused rather than silently allowed through an unenforced guard."
         )
         _deny(reason, f"Blocked: guard '{guard_name}' crashed.")
         return 0
@@ -251,13 +250,11 @@ def self_test() -> bool:
 
         _write_guard(hooks_dir, "crashes", _FAKE_GUARD_CRASHES)
         out = capture("crashes", hooks_dir)
-        check("a guard that exits non-zero denies, with its stderr in the reason",
-              _is_deny(out) and "boom" in out)
+        check("a guard that exits non-zero denies, with its stderr in the reason", _is_deny(out) and "boom" in out)
 
         _write_guard(hooks_dir, "denies", _FAKE_GUARD_DENIES)
         out = capture("denies", hooks_dir)
-        check("a guard's own deny decision passes through unchanged",
-              _is_deny(out) and "self-test guard says no" in out)
+        check("a guard's own deny decision passes through unchanged", _is_deny(out) and "self-test guard says no" in out)
 
         _write_guard(hooks_dir, "silent", _FAKE_GUARD_SILENT)
         out = capture("silent", hooks_dir)
@@ -269,8 +266,7 @@ def self_test() -> bool:
 
         _write_guard(hooks_dir, "garbage", _FAKE_GUARD_GARBAGE)
         out = capture("garbage", hooks_dir)
-        check("a guard that exits 0 but prints non-JSON denies (its decision cannot be trusted)",
-              _is_deny(out))
+        check("a guard that exits 0 but prints non-JSON denies (its decision cannot be trusted)", _is_deny(out))
 
     # A crashing guard's own stderr is folded into the deny reason, which is
     # also the cheapest way to prove stdin genuinely reaches the guard: make
@@ -279,12 +275,12 @@ def self_test() -> bool:
     with tempfile.TemporaryDirectory() as tmp:
         hooks_dir = Path(tmp)
         _write_guard(
-            hooks_dir, "echo_and_fail",
+            hooks_dir,
+            "echo_and_fail",
             "import sys\nsys.stderr.write('got:' + sys.stdin.read())\nsys.exit(1)\n",
         )
         out = capture("echo_and_fail", hooks_dir, stdin_payload='{"marker": "xyz123"}')
-        check("stdin is genuinely forwarded to the guard, not just present",
-              _is_deny(out) and "xyz123" in out)
+        check("stdin is genuinely forwarded to the guard, not just present", _is_deny(out) and "xyz123" in out)
 
     print(f"\n{'PASS' if ok else 'FAIL'}: run_hook self-test")
     return ok
@@ -292,15 +288,19 @@ def self_test() -> bool:
 
 def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("guard", nargs="?", help="guard name, e.g. block_git_stash (a .py suffix is accepted)")
-    ap.add_argument("--timeout", type=float, default=DEFAULT_GUARD_TIMEOUT_SECONDS,
-                     help=f"seconds to allow the guard to run before treating it as hung "
-                          f"(default {DEFAULT_GUARD_TIMEOUT_SECONDS:g})")
-    ap.add_argument("--self-test", action="store_true",
-                     help="exercise every arm against synthetic fake guards, with no real "
-                          "PreToolUse payload, and exit")
+    ap.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_GUARD_TIMEOUT_SECONDS,
+        help=f"seconds to allow the guard to run before treating it as hung (default {DEFAULT_GUARD_TIMEOUT_SECONDS:g})",
+    )
+    ap.add_argument(
+        "--self-test", action="store_true", help="exercise every arm against synthetic fake guards, with no real PreToolUse payload, and exit"
+    )
     args = ap.parse_args(argv)
 
     if args.self_test:
