@@ -16,8 +16,46 @@ public sealed class RunCompletionActions(
     INavigator navigator,
     IRunRepository runs,
     IStringResourceProvider strings,
-    IDispatcher dispatcher)
+    IDispatcher dispatcher,
+    IDesktopNotifier? desktop = null)
 {
+    /// <summary>
+    /// A run that ended in Failed (issue #107): a Windows notification only (the run's own page already says why, and it must not jump
+    /// away or open a folder for a run with nothing in it), still behind the Notify when done switch.
+    /// </summary>
+    public async Task OnRunFailedAsync(string jobId)
+    {
+        var choices = await Task.Run(settings.Snapshot).ConfigureAwait(false);
+        if (choices.NotifyWhenDone && MarkFailedNotified(jobId))
+        {
+            NotifyDesktop(strings.GetString("RunFailed_Title"), strings.GetString("RunFailed_Body"), jobId);
+        }
+    }
+
+    // The same Failed message can arrive twice for one run (a reattach, a re-poll); one toast per run is enough.
+    private readonly HashSet<string> _failedNotified = [];
+
+    private bool MarkFailedNotified(string jobId)
+    {
+        lock (_failedNotified)
+        {
+            return _failedNotified.Add(jobId);
+        }
+    }
+
+    private void NotifyDesktop(string title, string body, string jobId)
+    {
+        try
+        {
+            desktop?.Notify(title, body, jobId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A notification that cannot be shown (Focus Assist, a policy) must not stop the next step.
+            System.Diagnostics.Trace.TraceWarning($"desktop notification failed: {ex.GetType().Name}");
+        }
+    }
+
     public async Task OnRunFinishedAsync(string jobId, JobPhase phase)
     {
         var partial = phase == JobPhase.PartiallyCompleted;
@@ -30,6 +68,7 @@ public sealed class RunCompletionActions(
                 strings.GetString(partial ? "RunPartial_Title" : "RunDone_Title"),
                 strings.GetString(partial ? "RunPartial_Body" : "RunDone_Body"),
                 partial ? ToastSeverity.Warning : ToastSeverity.Success));
+            NotifyDesktop(strings.GetString(partial ? "RunPartial_Title" : "RunDone_Title"), strings.GetString(partial ? "RunPartial_Body" : "RunDone_Body"), jobId);
         }
 
         if (choices.OpenFolderWhenDone)
