@@ -44,6 +44,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private readonly IEntropyOverviewSource _overviewSource;
     private readonly long _maxFastaBytes;
     private int _contigGeneration;
+    private int _fallbackGeneration;
     private bool _settingSelection;
 
     // The current run's load command (kept after sending, see the class comment).
@@ -91,6 +92,24 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     /// <summary>Completes when the contig list of the last <see cref="OpenRun"/> is filled (or known to be unavailable).</summary>
     public Task ContigsReady { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Issue #117: when the WebView2 viewer cannot start, the first record of the run's entropy track, so the viewer area still shows
+    /// the track (drawn natively by the same chart as the Results page) beside the one action. Null otherwise.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasFallbackChart))]
+    [NotifyPropertyChangedFor(nameof(FallbackTitle))]
+    private EntropyContig? _fallbackContig;
+
+    public bool HasFallbackChart => FallbackContig is not null;
+
+    public string FallbackTitle => FallbackContig?.Name ?? string.Empty;
+
+    /// <summary>Completes when the fallback chart of the last failed <see cref="OpenRun"/> is filled (or known to be unavailable).</summary>
+    public Task FallbackReady { get; private set; } = Task.CompletedTask;
+
+    private string? _lastRunFolder;
 
     public ViewerViewModel(
         IWebViewRuntimeProbe probe,
@@ -179,6 +198,8 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     public void OpenRun(string? runFolder)
     {
+        _lastRunFolder = runFolder;
+        _fallbackGeneration++; // a slow fallback read for the previous run must not land on this one
         if (string.IsNullOrWhiteSpace(runFolder))
         {
             Fail(ViewerStatus.NoRun, ViewerFailure.NoRun);
@@ -188,6 +209,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         if (!WebViewRuntimeDecision.IsAvailable(_probe.GetVersion))
         {
             Fail(ViewerStatus.RuntimeMissing, ViewerFailure.RuntimeMissing, ViewerUrls.RuntimeDownloadUrl);
+            FallbackReady = LoadFallbackAsync(runFolder);
             return;
         }
 
@@ -211,12 +233,33 @@ public sealed partial class ViewerViewModel : ObservableObject
                 return;
         }
 
+        FallbackContig = null;
         _loadJson = plan.LoadMessageJson;
         // Map first: the host remaps run.deg on this change, before the load command goes out.
         MapRunFolder = plan.RunFolder;
         ShowLoading();
         SendLoadIfReady();
         ContigsReady = LoadContigsAsync(plan.RunFolder!);
+    }
+
+    // Off the UI thread, read once; a missing or malformed track just means no chart (the action card still shows).
+    private async Task LoadFallbackAsync(string folder)
+    {
+        var generation = ++_fallbackGeneration;
+        EntropyContig? first;
+        try
+        {
+            first = (await Task.Run(() => _overviewSource.Load(folder)))?.Contigs.FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            first = null;
+        }
+
+        if (generation == _fallbackGeneration)
+        {
+            FallbackContig = first;
+        }
     }
 
     // The record list and seams come from the run's own entropy track and provenance (off the UI thread, read once).
@@ -349,7 +392,20 @@ public sealed partial class ViewerViewModel : ObservableObject
     }
 
     /// <summary>The WebView2 control could not start (corrupt runtime, unwritable profile folder).</summary>
-    public void OnViewerInitFailed() => Fail(ViewerStatus.ViewerError, ViewerFailure.InitFailed);
+    public void OnViewerInitFailed()
+    {
+        if (IsErrorVisible && Status != ViewerStatus.ViewerError)
+        {
+            // The run already failed for a more specific reason (no sequence file ...): that error is the one to fix first.
+            return;
+        }
+
+        Fail(ViewerStatus.ViewerError, ViewerFailure.InitFailed);
+        if (!string.IsNullOrWhiteSpace(_lastRunFolder))
+        {
+            FallbackReady = LoadFallbackAsync(_lastRunFolder);
+        }
+    }
 
     public void SetDarkMode(bool dark)
     {
@@ -371,6 +427,8 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     private void ShowLoading()
     {
+        _fallbackGeneration++;
+        FallbackContig = null;
         IsErrorVisible = false;
         IsViewerVisible = true;
         IsLoading = true;
@@ -396,11 +454,19 @@ public sealed partial class ViewerViewModel : ObservableObject
         MapRunFolder = null;
         _contigGeneration++;
         ClearContigs();
+        FallbackContig = null;
         ShowError(status, failure, actionUrl);
     }
 
     // A failure of the viewer page itself: keep the run so a retry or a reloaded page redraws it.
-    private void FailKeepingRun(ViewerFailure failure) => ShowError(ViewerStatus.ViewerError, failure, null);
+    private void FailKeepingRun(ViewerFailure failure)
+    {
+        ShowError(ViewerStatus.ViewerError, failure, null);
+        if (!string.IsNullOrWhiteSpace(_lastRunFolder))
+        {
+            FallbackReady = LoadFallbackAsync(_lastRunFolder);
+        }
+    }
 
     private void ShowError(ViewerStatus status, ViewerFailure failure, string? actionUrl)
     {
