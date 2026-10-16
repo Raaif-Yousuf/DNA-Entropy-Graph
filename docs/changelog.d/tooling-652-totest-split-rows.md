@@ -1,0 +1,1 @@
+- check_totest_format.py: fails on any line inside the ToTest.md queue table that is not a row, or a row without a closing pipe, naming the line (#652). Repaired three real rows it found (#105 split by a stray CR; #143 and #144 missing the closing pipe).

@@ -32,6 +32,10 @@ skipped. A sentinel "empty queue" row -- first cell exactly `*(none yet)*`,
 every other cell blank -- is recognised and skipped too: an empty queue is
 the GOOD state (Rule: "Must drain"), not a malformed row.
 
+A line inside the table that is not a row (a row split across two lines, #652) or a row with no closing `|` fails
+with its line number; prose BEFORE the table and blank lines are fine. A bare CR counts as a line break here, as it
+does for every reader that splits by line.
+
 Exit codes: 0 clean (including a genuinely empty queue), 1 a row is
 malformed, names an unknown `Needs`, names a sha this repo does not have, or
 is older than --max-age-days, 2 bad usage (docs/ToTest.md missing, or --root
@@ -117,6 +121,48 @@ def parse_rows(text: str) -> list[Row]:
             continue
         rows.append(Row(line_no=i + 1, cells=cells))
     return rows
+
+
+def _queue_table_lines(text: str) -> list[tuple[int, str]]:
+    """(1-based line number, line) from the first `|` line after `## Queue` up to the next `## ` heading. Prose
+    before the table is not part of it."""
+    lines = text.splitlines()
+    try:
+        queue_at = next(i for i, ln in enumerate(lines) if ln.strip().startswith("## Queue"))
+    except StopIteration:
+        return []
+    table: list[tuple[int, str]] = []
+    started = False
+    for i in range(queue_at + 1, len(lines)):
+        line = lines[i]
+        if line.strip().startswith("## ") and started:
+            break
+        if not started and not line.strip().startswith("|"):
+            continue
+        started = True
+        table.append((i + 1, line))
+    return table
+
+
+def count_table_lines(text: str) -> int:
+    """How many lines the stray-line scan walked (a vacuity probe: zero would mean it saw no table)."""
+    return len(_queue_table_lines(text))
+
+
+def find_stray_lines(text: str) -> list[str]:
+    """#652: inside the Queue table every line is blank or a row ending in `|`. A row split across two lines (a stray
+    CR/LF inside a cell) leaves a first half with no closing pipe and a tail that is not a row, and every reader that
+    parses by line silently loses the tail (the 'false pass' column). One problem per offending line, with its number."""
+    problems: list[str] = []
+    for line_no, line in _queue_table_lines(text):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("|"):
+            problems.append(f"L{line_no}: not a table row (a row split across two lines?): {stripped[:60]!r}")
+        elif not stripped.endswith("|"):
+            problems.append(f"L{line_no}: row has no closing '|' (split across two lines?): ...{stripped[-40:]!r}")
+    return problems
 
 
 def validate_row_shape(row: Row) -> list[str]:
@@ -208,7 +254,8 @@ def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[st
     text = path.read_text(encoding="utf-8", errors="replace")
     rows = parse_rows(text)
 
-    problems: list[str] = find_duplicate_rows(rows)
+    problems: list[str] = find_stray_lines(text)
+    problems.extend(find_duplicate_rows(rows))
     for row in rows:
         shape_problems = validate_row_shape(row)
         problems.extend(shape_problems)
