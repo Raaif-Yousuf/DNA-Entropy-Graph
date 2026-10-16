@@ -77,7 +77,7 @@ public class FileAssociationTests
 
     private readonly FakeClasses _registry = new();
 
-    private FileAssociationService Service(string? exe = Exe, bool sandbox = false) => new(_registry, () => exe, () => sandbox);
+    private FileAssociationService Service(string? exe = Exe, bool sandbox = false, bool portable = false) => new(_registry, () => exe, () => sandbox, () => portable);
 
     [Fact]
     public void Turning_it_on_adds_an_open_with_entry_for_every_sequence_extension_and_never_a_default()
@@ -261,5 +261,15 @@ public class FileAssociationTests
         // The text arrives from another process, so it is never trusted to be a path to a sequence file.
         AppDeepLink.TryGetInputFiles(arguments, out var paths).ShouldBeFalse();
         paths.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Portable_mode_refuses_both_directions_and_writes_nothing_to_the_registry()
+    {
+        var before = _registry.Values.ToArray();
+
+        Should.Throw<FileAssociationRefusedException>(() => Service(portable: true).Enable()).Reason.ShouldBe(FileAssociationRefusal.PortableMode);
+        Should.Throw<FileAssociationRefusedException>(() => Service(portable: true).Disable()).Reason.ShouldBe(FileAssociationRefusal.PortableMode);
+        _registry.Values.ToArray().ShouldBe(before);
     }
 }

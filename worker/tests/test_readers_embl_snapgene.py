@@ -120,14 +120,18 @@ def test_embl_feature_with_unparseable_location_is_dropped_not_a_crash(
     tmp_path: Path, bad_location: str
 ) -> None:
     """MEASURED 2026-10-15: Biopython warns and sets such a feature's location to None; the reader
-    keeps every well-formed neighbour (geneB here) and neither raises nor invents a span."""
+    keeps every well-formed neighbour (geneB here), neither raises nor invents a span, and (issue #694)
+    uses geneA's CDS (the same /gene) as its stand-in rather than losing the gene."""
     text = (DATA / "sample.embl").read_text(encoding="utf-8")
     p = tmp_path / "bad.embl"
     p.write_text(
         text.replace("gene            1..42", f"gene            {bad_location}", 1), encoding="utf-8"
     )
     records, notices = read_embl(str(p))  # Biopython's own warning is turned into a notice (#543)
-    assert [(f.begin, f.end, f.gene_id) for f in records[0].features] == [(85, 126, "geneB")]
+    assert [(f.begin, f.end, f.gene_id) for f in records[0].features] == [
+        (85, 126, "geneB"),
+        (1, 42, "geneA"),
+    ]
     assert any("EMBL record 1" in n and "could not be read" in n for n in notices)
 
 

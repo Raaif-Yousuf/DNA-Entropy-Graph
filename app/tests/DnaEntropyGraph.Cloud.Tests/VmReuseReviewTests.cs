@@ -214,6 +214,37 @@ public class VmReuseReviewTests
         last.Phase.ShouldBe(JobPhase.Cancelled, "the cancel won the race with the run's next phase step (#687): Cancelled, not an illegal-transition Failed");
     }
 
+    [Fact]
+    public async Task A_cancel_that_arrives_before_the_reuse_call_returns_still_waits_for_it_and_ends_the_VM()
+    {
+        // MEASURED 2026-10-16 (#784): the in-flight reuse was tracked only AFTER ReuseVmAsync returned its task, so a cancel that looked
+        // in between settled nothing, deleted nothing, and the reuse then landed a RUNNING VM under a Cancelled record. Deterministic here:
+        // the gateway's synchronous part holds the run's thread until the cancel has recorded Cancelling and had time to look.
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        await SeedIdleVmAsync(gcp, repo, "job-old");
+        CloudJobRunner? runner = null;
+        Task? cancel = null;
+        var compute = new HookedCompute(gcp)
+        {
+            OnReuse = (spec, name, zone, token) =>
+            {
+                cancel = Task.Run(() => runner!.CancelAsync("job-new", CancellationToken.None));
+                SpinWait.SpinUntil(() => repo.AllRecordedInOrder.Any(r => r.JobId == "job-new" && r.Phase == JobPhase.Cancelling), TimeSpan.FromSeconds(10));
+                Thread.Sleep(250); // the cancel has looked (and, unfixed, found nothing) before the reuse call returns
+                return gcp.ReuseVmAsync(spec, name, zone, token);
+            },
+        };
+        runner = Runner(compute, gcp, repo, resultTimeout: TimeSpan.FromMilliseconds(300));
+
+        var run = runner.RunAsync(TestInputs.Request("job-new", Spec("job-new")), CancellationToken.None);
+        await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await cancel!.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        (await gcp.FindByJobIdAsync("job-new", CancellationToken.None)).ShouldBeEmpty("the cancel looked before the reuse was tracked: a VM of the cancelled job was left billing");
+        repo.AllRecordedInOrder.Last(r => r.JobId == "job-new").Phase.ShouldBe(JobPhase.Cancelled);
+    }
+
     // ---- review: the run clock never compares the app's wall clock with the platform's ----
 
     [Theory]

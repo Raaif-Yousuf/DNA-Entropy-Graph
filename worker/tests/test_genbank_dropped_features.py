@@ -67,7 +67,8 @@ def test_unparseable_locations_produce_one_counted_notice_naming_key_and_locatio
     assert "gene 'abc'" in notice
     assert "0..42" not in notice
     assert "1..42" in notice  # names the action: what a good location looks like
-    assert [f.gene_id for f in records[0].features] == ["geneB"]  # the readable gene survives
+    # the readable gene survives; geneA's CDS is '0..42' (also unreadable), so no stand-in exists (#694)
+    assert [f.gene_id for f in records[0].features] == ["geneB"]
 
 
 def test_the_notice_calls_it_location_text_not_raw() -> None:
@@ -114,7 +115,7 @@ def test_each_covered_shape_is_reported_on_a_linear_genbank_record(location: str
     records, notices = read_genbank(_gb_with_first_gene_at(tmp_path, location))
     (notice,) = _dropped_notices(notices)
     assert f"gene {location!r}" in notice
-    assert [f.gene_id for f in records[0].features] == ["geneB"]
+    assert [f.gene_id for f in records[0].features] == ["geneB", "geneA"]  # geneA via its CDS (#694)
 
 
 @pytest.mark.parametrize("location", COVERED)
@@ -122,7 +123,7 @@ def test_each_covered_shape_is_reported_on_a_linear_embl_record(location: str, t
     records, notices = read_embl(_embl_with_first_gene_at(tmp_path, location))
     (notice,) = _dropped_notices(notices)
     assert "EMBL record 1" in notice and f"gene {location!r}" in notice
-    assert [f.gene_id for f in records[0].features] == ["geneB"]
+    assert [f.gene_id for f in records[0].features] == ["geneB", "geneA"]  # geneA via its CDS (#694)
 
 
 @pytest.mark.parametrize("location", ["42..1", "5..3", "complement(42..1)"])
@@ -252,3 +253,67 @@ def test_snapgene_has_no_dropped_feature_notice_a_bad_range_refuses_the_file(tmp
     with pytest.raises(GenBankReadError, match="Could not read the SnapGene file") as exc:
         read_snapgene(str(p))
     assert "export it from SnapGene as GenBank" in str(exc.value)
+
+
+# ---- issue #694: CDS fallback per gene id, and accurate notices for between-base / overflow ----
+
+
+def _gb_with_gene_at(tmp_path: Path, location: str) -> str:
+    return _gb_with_first_gene_at(tmp_path, location)
+
+
+def test_a_dropped_gene_falls_back_to_the_cds_with_the_same_gene_id(tmp_path: Path) -> None:
+    """geneA's gene feature is unreadable; its CDS (same /gene) is readable, so geneA survives."""
+    records, notices = read_genbank(_gb_with_gene_at(tmp_path, "abc"))
+    assert sorted(f.gene_id for f in records[0].features) == ["geneA", "geneB"]
+    cds = next(f for f in records[0].features if f.gene_id == "geneA")
+    assert (cds.begin, cds.end) == (1, 42)
+    assert any("geneA" in n and "CDS" in n and "instead" in n for n in notices)
+
+
+def test_the_fallback_is_per_gene_id_not_for_every_cds(tmp_path: Path) -> None:
+    """A CDS whose gene feature was read fine is not added a second time."""
+    records, _ = read_genbank(_gb_with_gene_at(tmp_path, "abc"))
+    assert [f.gene_id for f in records[0].features].count("geneB") == 1
+
+
+def test_no_fallback_when_the_gene_feature_is_fine(tmp_path: Path) -> None:
+    records, notices = read_genbank(str(SAMPLE))
+    assert sorted(f.gene_id for f in records[0].features) == ["geneA", "geneB"]
+    assert not any("instead" in n for n in notices)
+
+
+def test_a_dropped_gene_with_no_matching_cds_is_still_reported_as_dropped(tmp_path: Path) -> None:
+    text = SAMPLE.read_text(encoding="utf-8").replace(
+        "     CDS             1..42\n", "     CDS             1..20\n", 1
+    )
+    text = text.replace(
+        '                     /gene="geneA"\n                     /product',
+        '                     /gene="other"\n                     /product',
+        1,
+    )
+    text = text.replace("     gene            1..42\n", "     gene            abc\n", 1)
+    p = tmp_path / "x.gb"
+    p.write_text(text, encoding="utf-8", newline="\n")
+    records, notices = read_genbank(str(p))
+    assert [f.gene_id for f in records[0].features] == ["geneB"]
+    assert any("could not be read" in n for n in notices)
+
+
+def test_a_between_bases_location_is_named_as_one(tmp_path: Path) -> None:
+    records, notices = read_genbank(_gb_with_gene_at(tmp_path, "1^2"))
+    note = next(n for n in notices if "geneA" in n and "between" in n)
+    assert "between two bases" in note and "outside" not in note
+    assert "1..42" in note  # names the action
+
+
+def test_an_overflowing_position_is_named_as_too_large_not_as_outside_the_length(tmp_path: Path) -> None:
+    records, notices = read_genbank(_gb_with_gene_at(tmp_path, "1..99999999999999999999"))
+    note = next(n for n in notices if "too large" in n)
+    assert "99999999999999999999" not in note  # no absurd number echoed into a notice
+    assert "1..42" in note
+
+
+def test_an_ordinary_position_past_the_end_still_says_outside_the_length(tmp_path: Path) -> None:
+    _, notices = read_genbank(_gb_with_gene_at(tmp_path, "100..200"))
+    assert any("outside" in n and "126" in n for n in notices)
