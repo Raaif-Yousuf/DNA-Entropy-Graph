@@ -23,20 +23,36 @@
     Blocked on the owner (#24)") and is UNVERIFIED: read its own section
     below before trusting it.
 
-    WHY -Apply DOES NOT WORK YET, ON PURPOSE
-    -----------------------------------------
+    HOW -Apply TALKS TO THE CLOUD, ON PURPOSE
+    -------------------------------------------
     Appendix C's own permission design denies `gcloud` to an agent on
-    purpose, "because the app has no gcloud" and because
-    `scripts/cloud_gpu_test.ps1` is supposed to use the app's own
-    `DnaEntropyGraph.Cloud` via the `CloudCli` console host instead. Neither
-    `CloudCli` (issue #60) nor the app it is built from (`app/`, issue #61)
-    exists yet. Rather than quietly falling back to a raw `gcloud` call --
-    which would defeat the exact reason `gcloud` is denied to agents in the
-    first place -- `-Apply` here looks for a built `CloudCli` executable and
-    FAILS CLEARLY, naming #60/#61/#24, when it is not found. This is
-    intentional: a script that pretends to be the real thing by quietly
-    substituting `gcloud` under the hood is a worse outcome than a script
-    that says plainly "the thing I am supposed to call does not exist yet".
+    purpose, "because the app has no gcloud": this script uses the app's own
+    `DnaEntropyGraph.Cloud` through the `CloudCli` console host
+    (app/tools/DnaEntropyGraph.CloudCli, issue #60). It never falls back to a
+    raw `gcloud` call: when no built CloudCli is found, -Apply FAILS CLEARLY
+    (exit 3) and says how to build one. Pass -CloudCliPath to name the
+    executable explicitly.
+
+    The `vm create` argument list is New-VmCreateArgs: ONLY flags
+    CloudCliParser accepts (--project --zone --install --job --model
+    --machine-type --service-account --app-version --lifecycle
+    --max-run-duration). CloudCli builds the six standard labels, DELETE and
+    the duration itself through VmSpec, so this script cannot weaken them.
+    Consequences (issue #619): the accelerator and boot disk come from the
+    machine type and the gateway (-AcceleratorType, -AcceleratorCount and
+    -DiskSizeGb are plan-only; -DiskSizeGb other than 150 is refused with
+    -Apply), the `purpose` label is plan-only, and -Image is refused with
+    -Apply because CloudCli has no flag for an image or startup metadata.
+    `-PrintApplyArgs` prints the list as JSON with no cloud call; the
+    CloudGpuTestScriptContractTests C# test feeds it to the real parser.
+
+    WHAT -Apply DOES TODAY: create the VM, delete it in a `finally` (so a
+    failed or interrupted run does not leave a billing VM), run the leak
+    scan, and print the resource table as the LAST output line. It does NOT
+    yet run `pytest -m gpu` on the VM or pull logs: CloudCli cannot set the
+    startup metadata, and worker/vm/startup.sh only runs `dna-entropy-worker
+    run`. The run says so ("pytest -m gpu: NOT RUN"); issue #83 stays open
+    for that half.
 
     LABELS AND maxRunDuration (Hard Rule 10)
     -------------------------------------------
@@ -105,11 +121,12 @@
     `docs/cloud_design.md` section 10; the 40B tier's own default is 300).
 
 .PARAMETER MaxRunDurationSeconds
-    `scheduling.maxRunDuration`, in seconds. Default 14400 (4 hours, the
-    cost model's own default; max sane value per that same section is 24
-    hours / 86400 seconds -- this script warns, but does not refuse, above
-    that, since a future real GPU-tier or job type may legitimately need
-    more).
+    `scheduling.maxRunDuration`, in seconds. Default 3600 (1 hour): today's
+    -Apply only creates and deletes a VM, and the VM has no startup script
+    to clean itself up, so maxRunDuration is the only backstop if the delete
+    fails; 4 hours of an L4 would be about $3.40 of idle billing. Raise it
+    when issue #83's pytest step lands. (The cost model's own default is 4
+    hours, docs/cloud_design.md section 10.)
 
 .PARAMETER Lifecycle
     One of `stop`, `delete`, `keepalive` -- the `lifecycle` label value.
@@ -138,18 +155,33 @@
     tree... in dev, `scripts/cloud_gpu_test.ps1 -Image <digest>` overrides
     it and says so in the log"). Recorded in the plan and, on `-Apply`,
     would be passed to `CloudCli vm create`; not validated against any
-    registry by this script.
+    registry by this script. CloudCli has no image flag yet, so -Apply
+    refuses (exit 2) when it is set.
 
 .PARAMETER Apply
-    Create a real resource. UNVERIFIED as of issue #317 -- no session has
-    exercised this path, because no GCP project exists yet (#24) and
-    `CloudCli` does not exist yet (#60). Without a built `CloudCli`, this
-    exits 3 with a message naming the blocking issues rather than doing
-    anything.
+    Create a real, billable resource (and delete it again, see above).
+    UNVERIFIED against a real project (#24): the argument list is proven
+    against the real CloudCli parser, the flow against a stub. Needs
+    -ProjectId and -ServiceAccount (exit 2 without them) and a built
+    CloudCli (exit 3 without one).
+
+.PARAMETER ServiceAccount
+    The email of the worker service account the VM runs as (CloudCli's
+    required --service-account). Required with -Apply; no default, because
+    guessing one would boot a VM that cannot reach its bucket.
+
+.PARAMETER CloudCliPath
+    Explicit path to the CloudCli executable. Default: search the known
+    build locations, then PATH.
+
+.PARAMETER PrintApplyArgs
+    Print the `vm create` argument list as a JSON array and exit 0. Creates
+    nothing and makes no cloud call.
 
 .PARAMETER SelfTest
     Run against synthetic inputs (label formatting, cost/duration math, the
-    dry-run contract, the -Apply-without-CloudCli failure path) and exit.
+    dry-run contract, the vm create argument list, the -Apply flow against a
+    stub CloudCli) and exit.
     Creates nothing, needs no GCP credentials.
 
 .PARAMETER Help
@@ -169,7 +201,8 @@
 
 .EXAMPLE
     pwsh scripts/cloud_gpu_test.ps1 -ProjectId my-dev-project -Apply
-    UNVERIFIED. As of issue #317, exits 3: no built CloudCli to call.
+    UNVERIFIED against a real project. Needs -ServiceAccount and a built
+    CloudCli; creates, deletes and leak-scans one labelled VM.
 #>
 
 param(
@@ -180,7 +213,7 @@ param(
     [int]$AcceleratorCount = 1,
     [string]$Model = 'evo2_7b',
     [int]$DiskSizeGb = 150,
-    [int]$MaxRunDurationSeconds = 14400,
+    [int]$MaxRunDurationSeconds = 3600,
     [ValidateSet('stop', 'delete', 'keepalive')]
     [string]$Lifecycle = 'delete',
     [ValidateSet('job', 'smoke')]
@@ -188,6 +221,9 @@ param(
     [string]$JobId = '',
     [string]$InstallationId = '',
     [string]$Image = '',
+    [string]$ServiceAccount = '',
+    [string]$CloudCliPath = '',
+    [switch]$PrintApplyArgs,
     [switch]$Apply,
     [switch]$SelfTest,
     [switch]$Help
@@ -336,7 +372,7 @@ function New-LabelSet {
 }
 
 function Get-WorkerAppVersion {
-    # No app/ yet (issue #61), so there is no real app-version to read.
+    # This script has no installed app to read an app-version from.
     # worker/pyproject.toml's own version, suffixed to say plainly this is
     # a stand-in, is closer to the truth than a made-up semver.
     $pyproject = Join-Path $PSScriptRoot '..' 'worker' 'pyproject.toml'
@@ -382,9 +418,10 @@ function Write-Plan {
     Write-Host ("  disk cost (ongoing):  `${0:N2}/month while the disk exists, running or not" -f $Pricing.DiskMonthlyUsd)
     Write-Host "  maxRunDuration:       ${MaxRunDurationSeconds}s"
     Write-Host "  instanceTerminationAction: DELETE (backstop only -- worker/vm/startup.sh's own self-stop/delete call is primary, docs/cloud_design.md section 8)"
-    if ($Image) { Write-Host "  image override:       $Image" }
-    Write-Host "  labels:"
+    if ($Image) { Write-Host "  image override:       $Image  [-Apply refuses it: CloudCli has no image flag yet]" }
+    Write-Host "  labels (CloudCli sets the six standard ones through VmSpec; purpose is plan-only):"
     foreach ($key in $Labels.Keys) { Write-Host "    $key=$($Labels[$key])" }
+    Write-Host "  -Apply steps:         vm create, vm delete (in finally), leak scan, resource table. pytest -m gpu is NOT run yet (issue #83)."
 }
 
 # ---------------------------------------------------------------------------
@@ -396,10 +433,9 @@ function Write-Plan {
 
 function Find-CloudCli {
     param([switch]$PathOnly)
-    # Candidate publish locations for the not-yet-built CloudCli console
-    # host (issue #60). None of these exist yet as of issue #317; this
-    # function exists so the day CloudCli IS built, this script starts
-    # finding it without anyone having to edit this function again.
+    # Candidate build/publish locations of the CloudCli console host
+    # (app/tools/DnaEntropyGraph.CloudCli, issue #60), then PATH. -CloudCliPath
+    # on the script overrides all of this.
     $candidates = @(
         (Join-Path $PSScriptRoot '..' 'app' 'artifacts' 'CloudCli' 'DnaEntropyGraph.CloudCli.exe'),
         (Join-Path $PSScriptRoot '..' 'app' 'tools' 'DnaEntropyGraph.CloudCli' 'bin' 'Release' 'net10.0' 'DnaEntropyGraph.CloudCli.exe')
@@ -419,7 +455,7 @@ function Invoke-LeakCheck {
         [string]$CloudCliPath = ''
     )
     if (-not $CloudCliPath) {
-        Write-Host "leak check: skipped -- no CloudCli found (issue #60), and nothing was created by this run to check for."
+        Write-Host "leak check: skipped -- no CloudCli found, and nothing was created by this run to check for."
         return $true
     }
     # --kind vm: the results bucket is meant to outlive a run (lifecycle=results), so only a VM left behind is a leak.
@@ -461,72 +497,105 @@ function Invoke-LeakCheck {
 # "WHY -Apply DOES NOT WORK YET, ON PURPOSE" section.
 # ---------------------------------------------------------------------------
 
-# The issue that must land before -Apply may run (see the gate in Invoke-Apply). $null opens the gate; only #619 may do that.
-$Script:ApplyBlockedByIssue = 619
+# The `vm create` flags CloudCliParser accepts (app/tools/DnaEntropyGraph.CloudCli/CloudCliParser.cs, VmCreateFlags). A recorded
+# list so a drift fails the self-test; the C# CloudGpuTestScriptContractTests feed the real argument list to the real parser.
+$Script:CloudCliVmCreateFlags = @(
+    'project', 'zone', 'install', 'job', 'model', 'machine-type', 'service-account', 'app-version', 'lifecycle',
+    'max-run-duration', 'instance-termination-action'
+)
+
+# The boot disk CloudCli's gateway creates (ComputeVmShape.BootDiskGb). -DiskSizeGb is plan-only, so another value cannot be honoured.
+$Script:CloudCliBootDiskGb = 150
+
+function New-VmCreateArgs {
+    # The argument list for `CloudCli vm create` (#619): only flags CloudCliParser accepts. The six labels, DELETE and the
+    # duration are built by CloudCli through VmSpec from these values; none of them is a flag here.
+    param(
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$Zone,
+        [Parameter(Mandatory)][string]$ServiceAccount,
+        [Parameter(Mandatory)][string]$InstallationId,
+        [Parameter(Mandatory)][string]$JobId,
+        [Parameter(Mandatory)][string]$Model,
+        [Parameter(Mandatory)][string]$MachineType,
+        [Parameter(Mandatory)][string]$AppVersion,
+        [Parameter(Mandatory)][string]$Lifecycle,
+        [Parameter(Mandatory)][int]$MaxRunDurationSeconds
+    )
+    return @(
+        'vm', 'create',
+        '--project', $ProjectId, '--zone', $Zone, '--install', $InstallationId, '--job', $JobId,
+        '--model', $Model, '--machine-type', $MachineType, '--service-account', $ServiceAccount,
+        '--app-version', $AppVersion, '--lifecycle', $Lifecycle,
+        '--max-run-duration', "${MaxRunDurationSeconds}s"
+    )
+}
 
 function Invoke-Apply {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$ProjectId,
         [Parameter(Mandatory)][string]$Zone,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ServiceAccount,
+        [Parameter(Mandatory)][string]$InstallationId,
         [Parameter(Mandatory)][string]$MachineType,
-        [Parameter(Mandatory)][string]$AcceleratorType,
-        [Parameter(Mandatory)][int]$AcceleratorCount,
+        [Parameter(Mandatory)][string]$Model,
+        [Parameter(Mandatory)][string]$AppVersion,
+        [Parameter(Mandatory)][string]$Lifecycle,
         [Parameter(Mandatory)][int]$DiskSizeGb,
         [Parameter(Mandatory)][int]$MaxRunDurationSeconds,
-        [Parameter(Mandatory)][System.Collections.Specialized.OrderedDictionary]$Labels,
         [Parameter(Mandatory)][string]$JobId,
-        [string]$Image = ''
+        [string]$Image = '',
+        [string]$CloudCliPath = ''
     )
     if (-not $ProjectId) {
         Write-UsageError "-Apply requires -ProjectId (working-on-gcp skill: no default project is set; blocked on #24)."
         exit 2
     }
-    # GATE (#619): the 'vm create' arguments built below are not the flags CloudCliParser accepts (no positional name, no --labels,
-    # --accelerator-type, --disk-size-gb), so a real create would be refused by the CLI. Refuse before the CLI is even looked for,
-    # so a built CloudCli on PATH can never be handed this argument list. #619 rewrites the argument list and removes this gate.
-    if ($Script:ApplyBlockedByIssue) {
-        Write-UsageError "-Apply is blocked: its 'vm create' arguments do not match CloudCli's flags (issue #$($Script:ApplyBlockedByIssue)). Nothing was created."
-        Write-UsageError "This script deliberately does not fall back to a raw 'gcloud' call either. Wait for #$($Script:ApplyBlockedByIssue) to land, then run it again."
-        exit 3
+    if (-not $ServiceAccount) {
+        Write-UsageError "-Apply requires -ServiceAccount <email>: the VM must run as the worker service account (CloudCli's --service-account). Pass the worker account's email and run this again."
+        exit 2
     }
-    $cloudCli = Find-CloudCli
-    if (-not $cloudCli) {
-        Write-UsageError "-Apply cannot proceed: no built CloudCli found (issue #60; CloudCli is built from app/, issue #61)."
-        Write-UsageError "This script deliberately does not fall back to a raw 'gcloud' call -- see this file's own"
-        Write-UsageError "module docstring, 'WHY -Apply DOES NOT WORK YET, ON PURPOSE'. Build CloudCli first."
+    if ($Image) {
+        Write-UsageError "-Apply cannot honour -Image: CloudCli has no flag for a worker image or startup metadata yet, so the VM would ignore it. Run without -Image (the VM gets no worker run in this script yet, issue #83)."
+        exit 2
+    }
+    if ($DiskSizeGb -ne $Script:CloudCliBootDiskGb) {
+        Write-UsageError "-Apply cannot honour -DiskSizeGb ${DiskSizeGb}: CloudCli always creates a $($Script:CloudCliBootDiskGb) GB boot disk. Run without -DiskSizeGb."
+        exit 2
+    }
+    $cloudCli = if ($CloudCliPath) { $CloudCliPath } else { Find-CloudCli }
+    if (-not $cloudCli -or -not (Test-Path -LiteralPath $cloudCli)) {
+        Write-UsageError "-Apply cannot proceed: no built CloudCli found. Build it from app/ (dotnet publish app/tools/DnaEntropyGraph.CloudCli -c Release) or pass -CloudCliPath."
+        Write-UsageError "This script deliberately does not fall back to a raw cloud CLI call: Appendix C denies one to agents on purpose."
         exit 3
     }
 
     $vmName = "deg-$JobId"
-    $labelArg = ($Labels.Keys | ForEach-Object { "$_=$($Labels[$_])" }) -join ','
-    $ghArgs = @(
-        'vm', 'create', $vmName,
-        '--project', $ProjectId, '--zone', $Zone, '--machine-type', $MachineType,
-        '--accelerator-type', $AcceleratorType, '--accelerator-count', $AcceleratorCount,
-        '--disk-size-gb', $DiskSizeGb,
-        '--labels', $labelArg,
-        '--max-run-duration', "${MaxRunDurationSeconds}s",
-        '--instance-termination-action', 'DELETE'
-    )
-    if ($Image) { $ghArgs += @('--image', $Image) }
+    $createArgs = New-VmCreateArgs -ProjectId $ProjectId -Zone $Zone -ServiceAccount $ServiceAccount -InstallationId $InstallationId `
+        -JobId $JobId -Model $Model -MachineType $MachineType -AppVersion $AppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds
 
-    # try/finally so even a Ctrl+C (or a real failure) mid-create prints how
-    # to find and delete the VM by hand -- a half-finished -Apply run leaves
-    # a LABELLED VM (Hard Rule 10 is satisfied even by a failed run, because
-    # New-LabelSet validated the labels before this function was ever
-    # called), so the fallback command below is always accurate.
+    # try/finally so even a Ctrl+C (or a real failure) mid-create deletes the VM again: a half-made VM bills. The delete runs even
+    # when create failed (the create may have reached Google before the failure). CloudCli exits 5 when the VM is not there.
     try {
         Write-Host "Creating $vmName via $cloudCli ..."
-        & $cloudCli @ghArgs
+        & $cloudCli @createArgs
         if ($LASTEXITCODE -ne 0) { throw "CloudCli vm create exited $LASTEXITCODE" }
-        Write-Host "$vmName created. Polling for the job to finish is not yet implemented (issue #83)."
+        Write-Host "$vmName created."
+        Write-Host "pytest -m gpu: NOT RUN. CloudCli cannot set the startup metadata yet and worker/vm/startup.sh only runs the worker (issue #83 stays open)."
     } finally {
-        Write-Host ''
-        Write-Host "If $vmName exists and this run did not clean it up:"
-        Write-Host "  find it:   gcloud compute instances list --project=$ProjectId --filter=`"labels.job-id=$JobId`""
-        Write-Host "  delete it: gcloud compute instances delete $vmName --project=$ProjectId --zone=$Zone --quiet"
-        Write-Host "(these are for YOU to run by hand -- an agent session does not shell out to gcloud directly, Appendix C)"
+        Write-Host "Deleting $vmName ..."
+        & $cloudCli 'vm' 'delete' '--project' $ProjectId '--zone' $Zone '--name' $vmName
+        $deleteExit = $LASTEXITCODE
+        if ($deleteExit -ne 0 -and $deleteExit -ne 5) {
+            Write-UsageError "vm delete exited $deleteExit. $vmName may still exist and bill: delete it in the Google Cloud console (project $ProjectId, zone $Zone), or run CloudCli 'vm delete --project $ProjectId --zone $Zone --name $vmName' yourself."
+        }
     }
+}
+
+function Write-ResourceTable {
+    # The run's last output: CloudCli's own table of this installation's VMs. Its footer is 'OK: <n> resource(s)'.
+    param([Parameter(Mandatory)][string]$CloudCliPath, [Parameter(Mandatory)][string]$ProjectId, [Parameter(Mandatory)][string]$InstallationId)
+    & $CloudCliPath 'resources' 'list' '--project' $ProjectId '--install' $InstallationId '--kind' 'vm' | ForEach-Object { Write-Host $_ }
 }
 
 # ---------------------------------------------------------------------------
@@ -549,6 +618,25 @@ function Remove-StubCli {
         Get-ChildItem -Path $Directory -File | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
         Remove-Item -LiteralPath $Directory -Force
     }
+}
+
+function New-ApplyStub {
+    # A stub CloudCli that logs every call to calls.txt next to it: `vm create` exits $CreateExit, `resources list --json` prints
+    # $JsonBody, any other `resources list` prints an empty table, everything else exits 0.
+    param([Parameter(Mandatory)][string]$Directory, [int]$CreateExit = 0, [string]$JsonBody = '[]')
+    $body = @(
+        '>>"%~dp0calls.txt" echo %*',
+        'echo %*|findstr /c:"vm create" >nul && exit /b ' + $CreateExit,
+        'echo %*|findstr /c:"resources list" >nul || exit /b 0',
+        'echo %*|findstr /c:"--json" >nul && goto json',
+        'echo KIND  NAME  LOCATION  STATUS  INSTALLATION  JOB',
+        'echo OK: 0 resource(s^)',
+        'exit /b 0',
+        ':json',
+        "echo $JsonBody",
+        'exit /b 0'
+    )
+    return New-StubCli -Directory $Directory -Body $body
 }
 
 function Invoke-SelfTest {
@@ -636,33 +724,83 @@ function Invoke-SelfTest {
     & pwsh -NoProfile -File $PSCommandPath -Apply 2>&1 | Out-Null
     Check "-Apply with no -ProjectId exits 2 (usage error, not a crash)" ($LASTEXITCODE -eq 2)
 
-    # -Apply with a project but no built CloudCli fails clearly, citing the
-    # blocking issues, rather than falling back to gcloud. This is the one
-    # real assertion this self-test makes about the -Apply path -- it does
-    # NOT and cannot prove -Apply's real creation logic, because nothing
-    # this session can reach has a built CloudCli to call.
-    $applyOut = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -Apply 2>&1 | Out-String
-    Check "-Apply with a project exits 3 (blocked until #619, whether or not a CloudCli is built)" ($LASTEXITCODE -eq 3)
-    Check "-Apply's refusal names the blocking issue (#619)" ($applyOut -match '#619')
-    Check "-Apply's failure explicitly refuses the gcloud fallback" ($applyOut -match 'does not fall back to a raw')
+    # -Apply without a service account refuses (CloudCli's vm create requires --service-account) before any CLI call (#619).
+    $noSaDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-nosa-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $noSaCli = New-ApplyStub -Directory $noSaDir
+        $noSaOut = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -Apply -CloudCliPath $noSaCli 2>&1 | Out-String
+        Check "-Apply with no -ServiceAccount exits 2" ($LASTEXITCODE -eq 2)
+        Check "-Apply with no -ServiceAccount names -ServiceAccount" ($noSaOut -match '-ServiceAccount')
+        Check "-Apply with no -ServiceAccount never calls CloudCli" (-not (Test-Path (Join-Path $noSaDir 'calls.txt')))
+    } finally {
+        Remove-StubCli -Directory $noSaDir
+    }
 
-    # -Apply with a CloudCli stub on PATH: the gate must refuse BEFORE invoking it. The stub drops a marker file when called, so a
-    # create attempt is visible; the Get-Command check proves the stub really is what the child would find (not a vacuous pass).
+    # The vm create argument list (#619): only flags CloudCliParser accepts, every value follows a flag, nothing CloudCli sets itself.
+    $printed = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'p1' -ServiceAccount 'w@p1.iam.gserviceaccount.com' `
+        -Zone 'us-central1-a' -JobId '20261015-120000-ab3xy9' -InstallationId 'inst123' -MaxRunDurationSeconds 1200 -PrintApplyArgs 2>&1 | Out-String
+    Check "-PrintApplyArgs exits 0 and creates nothing" ($LASTEXITCODE -eq 0)
+    $printedArgs = @($printed | ConvertFrom-Json)
+    Check "vm create args start with 'vm create' and no positional name" ($printedArgs[0] -eq 'vm' -and $printedArgs[1] -eq 'create' -and $printedArgs[2].StartsWith('--'))
+    $flagsUsed = @($printedArgs | Where-Object { $_ -is [string] -and $_.StartsWith('--') })
+    $unknownFlags = @($flagsUsed | Where-Object { $Script:CloudCliVmCreateFlags -notcontains $_.Substring(2) })
+    Check "vm create args use only flags CloudCliParser accepts (unknown: $($unknownFlags -join ', '))" ($unknownFlags.Count -eq 0 -and $flagsUsed.Count -ge 6)
+    $valueSlots = @(for ($i = 2; $i -lt $printedArgs.Count; $i++) { if (-not $printedArgs[$i].StartsWith('--')) { $printedArgs[$i - 1].StartsWith('--') } })
+    Check "vm create args: every value directly follows a flag" (@($valueSlots | Where-Object { -not $_ }).Count -eq 0 -and $valueSlots.Count -ge 6)
+    Check "vm create args carry the required --service-account, --install and --zone" (
+        ($printedArgs -contains '--service-account') -and ($printedArgs -contains '--install') -and ($printedArgs -contains '--zone'))
+    Check "vm create args carry the finite --max-run-duration as given" ($printedArgs[[array]::IndexOf($printedArgs, '--max-run-duration') + 1] -eq '1200s')
+    Check "vm create args never try to set labels or the termination action themselves" (
+        -not ($printedArgs -contains '--labels') -and -not ($printedArgs -contains '--instance-termination-action'))
+
+    # -Apply end to end against a stub CloudCli: create, delete in finally, leak scan, resource table last.
     $applyDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-apply-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $stub = New-ApplyStub -Directory $applyDir
+        $applyArgs = @('-NoProfile', '-File', $PSCommandPath, '-ProjectId', 'fake-test-project', '-ServiceAccount', 'w@fake-test-project.iam.gserviceaccount.com',
+            '-Zone', 'us-central1-a', '-JobId', '20261015-120000-ab3xy9', '-InstallationId', 'inst123', '-Apply', '-CloudCliPath', $stub)
+        $applyLines = @(& pwsh @applyArgs 2>&1 | ForEach-Object { "$_" })
+        Check "-Apply against a clean stub exits 0" ($LASTEXITCODE -eq 0)
+        $calls = @(Get-Content -Path (Join-Path $applyDir 'calls.txt'))
+        Check "-Apply calls CloudCli in order: vm create, vm delete, resources list (json), resources list (table)" (
+            $calls.Count -eq 4 -and $calls[0] -like 'vm create *' -and $calls[1] -like 'vm delete *' -and
+            $calls[2] -like 'resources list *--kind vm*--json*' -and $calls[3] -like 'resources list *' -and $calls[3] -notlike '*--json*')
+        Check "-Apply deletes exactly the VM it named (deg-<job id>) in the same zone" ($calls[1] -like '*--name deg-20261015-120000-ab3xy9*' -and $calls[1] -like '*--zone us-central1-a*')
+        $nonBlank = @($applyLines | Where-Object { $_.Trim() })
+        Check "-Apply's LAST output line is the resource table's footer (the empty list)" ($nonBlank[-1] -eq 'OK: 0 resource(s)')
+        Check "-Apply says plainly that the pytest step did not run" (($applyLines -join "`n") -match 'pytest -m gpu: NOT RUN')
+
+        $imgOut = & pwsh @applyArgs -Image 'ghcr.io/x/y@sha256:abc' 2>&1 | Out-String
+        Check "-Apply with -Image exits 2 (CloudCli cannot pass an image) and creates nothing" ($LASTEXITCODE -eq 2 -and $imgOut -match '-Image')
+        Check "-Apply with -Image made no further CloudCli call" ((@(Get-Content -Path (Join-Path $applyDir 'calls.txt'))).Count -eq 4)
+    } finally {
+        Remove-StubCli -Directory $applyDir
+    }
+
+    # A failed create still tries to delete the VM (a half-made VM bills), and a leftover VM in the scan fails the run.
+    $failDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-fail-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $failStub = New-ApplyStub -Directory $failDir -CreateExit 1 -JsonBody '[{"name":"deg-x","zone":"us-central1-a"}]'
+        & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -ServiceAccount 'w@fake-test-project.iam.gserviceaccount.com' `
+            -Zone 'us-central1-a' -JobId '20261015-120000-ab3xy9' -InstallationId 'inst123' -Apply -CloudCliPath $failStub 2>&1 | Out-Null
+        Check "-Apply whose create fails exits non-zero" ($LASTEXITCODE -ne 0)
+        $failCalls = @(Get-Content -Path (Join-Path $failDir 'calls.txt'))
+        Check "-Apply whose create fails still attempts the delete" (@($failCalls | Where-Object { $_ -like 'vm delete *' }).Count -eq 1)
+    } finally {
+        Remove-StubCli -Directory $failDir
+    }
+
+    # Find-CloudCli's PATH fallback still finds the real executable name.
+    $pathDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-path-" + [guid]::NewGuid().ToString('N'))
     $savedPath = $env:PATH
     try {
-        New-StubCli -Directory $applyDir -Body @('echo called> "%~dp0called.txt"', 'exit /b 0') | Out-Null
-        $env:PATH = "$applyDir;$savedPath"
+        New-StubCli -Directory $pathDir -Body @('exit /b 0') | Out-Null
+        $env:PATH = "$pathDir;$savedPath"
         $stubFound = Find-CloudCli -PathOnly
-        Check "Find-CloudCli's PATH fallback finds DnaEntropyGraph.CloudCli (the real executable name)" ($stubFound -eq (Join-Path $applyDir 'DnaEntropyGraph.CloudCli.cmd'))
-        $stubOut = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -Apply 2>&1 | Out-String
-        $stubExit = $LASTEXITCODE
-        Check "-Apply with a stub CloudCli present still exits 3" ($stubExit -eq 3)
-        Check "-Apply with a stub CloudCli present never invokes it (no create attempted)" (-not (Test-Path (Join-Path $applyDir 'called.txt')))
-        Check "-Apply with a stub CloudCli present still names #619" ($stubOut -match '#619')
+        Check "Find-CloudCli's PATH fallback finds DnaEntropyGraph.CloudCli (the real executable name)" ($stubFound -eq (Join-Path $pathDir 'DnaEntropyGraph.CloudCli.cmd'))
     } finally {
         $env:PATH = $savedPath
-        Remove-StubCli -Directory $applyDir
+        Remove-StubCli -Directory $pathDir
     }
 
     # Leak check: a stub CloudCli stands in for the real one. Only a parsed, empty list on exit 0 is "clean"; anything unverifiable fails.
@@ -711,6 +849,14 @@ $zoneChoice = Get-ZoneCandidate -Requested $Zone
 $labels = New-LabelSet -JobId $effectiveJobId -InstallationId $effectiveInstallationId `
     -Model $Model -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -Purpose $Purpose
 
+if ($PrintApplyArgs) {
+    $printArgs = New-VmCreateArgs -ProjectId $ProjectId -Zone $zoneChoice.Zone -ServiceAccount $ServiceAccount `
+        -InstallationId $effectiveInstallationId -JobId $effectiveJobId -Model $Model -MachineType $MachineType `
+        -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds
+    ConvertTo-Json -InputObject @($printArgs) -Compress
+    exit 0
+}
+
 $pricing = Get-PricingEstimate -MachineType $MachineType -AcceleratorType $AcceleratorType `
     -DiskSizeGb $DiskSizeGb -DurationMinutes $Script:DurationEstimateMinutes
 
@@ -721,15 +867,17 @@ Write-Plan -ProjectId $ProjectId -ZoneChoice $zoneChoice -MachineType $MachineTy
 
 if (-not $Apply) {
     Write-Host ''
-    Write-Host 'DRY RUN: nothing created. Pass -Apply to create a real, billable resource.'
-    Write-Host '(-Apply is UNVERIFIED and blocked until issue #619 aligns its CloudCli arguments -- see -Help.)'
+    Write-Host 'DRY RUN: nothing created. Pass -Apply (with -ProjectId and -ServiceAccount) to create, delete and leak-scan one real, billable VM.'
+    Write-Host '(-Apply is UNVERIFIED against a real project and does not yet run pytest -m gpu, issue #83 -- see -Help.)'
     exit 0
 }
 
-Invoke-Apply -ProjectId $ProjectId -Zone $zoneChoice.Zone -MachineType $MachineType `
-    -AcceleratorType $AcceleratorType -AcceleratorCount $AcceleratorCount -DiskSizeGb $DiskSizeGb `
-    -MaxRunDurationSeconds $MaxRunDurationSeconds -Labels $labels -JobId $effectiveJobId -Image $Image
+Invoke-Apply -ProjectId $ProjectId -Zone $zoneChoice.Zone -ServiceAccount $ServiceAccount -InstallationId $effectiveInstallationId `
+    -MachineType $MachineType -Model $Model -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -DiskSizeGb $DiskSizeGb `
+    -MaxRunDurationSeconds $MaxRunDurationSeconds -JobId $effectiveJobId -Image $Image -CloudCliPath $CloudCliPath
 
-$leakOk = Invoke-LeakCheck -InstallationId $effectiveInstallationId -ProjectId $ProjectId -CloudCliPath (Find-CloudCli)
+$resolvedCli = if ($CloudCliPath) { $CloudCliPath } else { Find-CloudCli }
+$leakOk = Invoke-LeakCheck -InstallationId $effectiveInstallationId -ProjectId $ProjectId -CloudCliPath $resolvedCli
+Write-ResourceTable -CloudCliPath $resolvedCli -ProjectId $ProjectId -InstallationId $effectiveInstallationId
 if (-not $leakOk) { exit 1 }
 exit 0
