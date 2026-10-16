@@ -162,7 +162,7 @@ public class ReattachOnStartupTests : IDisposable
         await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
 
         var row = await RowAsync(provider, "job-launch");
-        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+        row.Phase.ShouldBe(JobPhase.Completed, $"{row.ErrorCode}: {row.ErrorDetail}");
         row.OutputDir.ShouldNotBeNull();
         Directory.EnumerateFiles(row.OutputDir, "*", SearchOption.AllDirectories).ShouldNotBeEmpty();
     }
@@ -283,7 +283,7 @@ public class ReattachOnStartupTests : IDisposable
         await ((ReconcileOnReconnect)observer).WhenIdleAsync();
 
         var row = await RowAsync(provider, "job-reconnect");
-        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+        row.Phase.ShouldBe(JobPhase.Completed, $"{row.ErrorCode}: {row.ErrorDetail}");
         provider.GetRequiredService<CloudRetryLog>().IsOffline.ShouldBeFalse("the offline banner's source still hears every change");
     }
 
@@ -315,7 +315,7 @@ public class ReattachOnStartupTests : IDisposable
         await observer.WhenIdleAsync();
 
         var row = await RowAsync(provider, "job-probe");
-        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+        row.Phase.ShouldBe(JobPhase.Completed, $"{row.ErrorCode}: {row.ErrorDetail}");
     }
 
     [Fact]
