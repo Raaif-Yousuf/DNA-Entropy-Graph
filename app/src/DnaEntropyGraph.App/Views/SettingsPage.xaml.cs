@@ -27,6 +27,8 @@ public sealed partial class SettingsPage : Page
 
     public UpdateViewModel Updates { get; }
 
+    public TourViewModel Tour { get; }
+
     public SettingsPage()
     {
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
@@ -40,6 +42,7 @@ public sealed partial class SettingsPage : Page
         ThisPc = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ThisPcSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
+        Tour = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<TourViewModel>();
         InitializeComponent();
     }
 

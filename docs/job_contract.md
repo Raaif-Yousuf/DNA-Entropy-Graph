@@ -44,12 +44,29 @@ gs://deg-<projectNumber>-<rand6>/               (or a local dir for LocalBlobsto
     progress.jsonl                              # re-uploaded whole every 5-10 s (object storage has no append)
     logs/worker.log
     logs/startup.log
+    logs/gpu-test.log                           # gpu-test mode only (#759, scripts/cloud_gpu_test.ps1): the whole `pytest -m gpu` output, or the one-line reason an early failure left
+    logs/gpu-test-result.json                   # gpu-test mode only: written LAST, the object the caller polls for (like result.json for a job); see "gpu-test mode" below
     output/<name>/...                           # the file set from science_and_formats.md section 5, per input
     output/provenance.json
     result.json                                 # written LAST, after every output is uploaded
   vms/<vmName>/queue/<jobId>                    # keep-alive follow-up pointers
   vms/<vmName>/lease.json                       # {installationId, jobId, leasedUntil}; conditional write
 ```
+
+**gpu-test mode (#759).** A VM created with `deg-mode=gpu-test` has no manifest and no job: `worker/vm/startup.sh` runs `pytest -m gpu` in the
+image instead. Its only outputs are `jobs/<jobId>/logs/gpu-test.log` (uploaded first) and `jobs/<jobId>/logs/gpu-test-result.json` (uploaded
+last, so its existence means the log is complete):
+
+```json
+{"schema":1,"jobId":"...","mode":"gpu-test","exitCode":0,"timedOut":false,"image":"name@sha256:...","vm":{"name":"deg-<jobId>","zone":"..."},"finishedAt":"2026-10-16T12:00:00Z"}
+```
+
+`exitCode` is pytest's, with these additions: `6` = every gpu test skipped or none ran, or a gpu-marked test file could not be collected
+(`"error":"GPU_TEST_COLLECTION_ERROR"`; never a pass), `8` = the test log could not be written (`"error":"GPU_TEST_LOG_NOT_WRITTEN"`), `124` = the deadline passed
+(`timedOut` is `true`; the container was killed by name), `7` = the VM failed before any test could start (GPU never visible, image pull
+failed, or an unexpected boot-step error: `"error":"GPU_NOT_VISIBLE"`, `"IMAGE_PULL_FAILED"` or `"WORKER_CRASH"`), in which case the log is that one line. `error` is `null` otherwise. The
+deadline is counted from boot and ends 10 minutes before `maxRunDuration`. A caller must treat the result as its own only when `image` and
+`vm.name` match what it created, and must not reuse a job id whose result object already exists (`cloud_gpu_test.ps1` refuses both).
 
 For a local run (`storage.kind = "localdir"`), the same relative layout is rooted at
 `%LOCALAPPDATA%\DNAEntropyGraph\runs\<jobId>\` instead of a bucket prefix; every file name

@@ -30,6 +30,10 @@ Three switches for what the app does when a run finishes: show a message (on), o
 
 A monthly warning cap in US dollars and a **Hard stop** tick box, saved at once. The group also shows your estimated spending so far this month. An empty box means no cap; text that is not a number above zero is refused with a message and the cap stays as it was. See [Costs and cleanup](06-costs-and-cleanup.md) for what the warning and the hard stop do.
 
+## Help
+
+The first time you open the app, a short tour points at New run, Runs, Cloud and Settings, one step at a time. Press **Next** to move on or **Skip tour** to close it; the app remembers you have seen it. **Show the tour again** in this group starts it over, and **Open the user guide** opens this guide in your web browser. The **Help** button at the top right of the window opens the guide page for the screen you are on (for example, Help on the Cloud page opens the costs and cleanup page). After **Reset all settings** the tour shows again at the next start.
+
 ## This PC
 
 Run the analysis on your own computer instead of a rented one. It needs an NVIDIA graphics card with about 24 GB of memory, an NVIDIA driver of version 550 or newer, and 30 GB of free disk space. The **Where to run** box chooses the default for new runs: **Cloud**, **This PC**, or **Auto** (This PC when it can run the model, the cloud when it cannot). If this PC cannot run the model, **This PC** is greyed out and the line under the box says why and what to do.

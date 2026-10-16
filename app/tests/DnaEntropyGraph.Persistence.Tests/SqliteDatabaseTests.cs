@@ -148,4 +148,40 @@ public class SqliteDatabaseTests
         command.Parameters.AddWithValue("@name", tableName);
         return Convert.ToInt64(command.ExecuteScalar()) == 1L;
     }
+
+    [Theory]
+    [InlineData(false, DriveType.Fixed, "WAL")]
+    [InlineData(true, DriveType.Fixed, "DELETE")]
+    [InlineData(false, DriveType.Removable, "DELETE")]
+    [InlineData(false, DriveType.Network, "DELETE")]
+    [InlineData(false, DriveType.CDRom, "WAL")]
+    public void The_journal_mode_is_delete_in_portable_mode_and_on_removable_or_network_drives_and_wal_otherwise(bool portable, DriveType drive, string expected)
+    {
+        SqliteDatabase.ChooseJournalMode(@"X:\app.db", portable, _ => drive).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void An_unknown_drive_and_a_unc_path_are_handled()
+    {
+        SqliteDatabase.ChooseJournalMode(@"X:\app.db", portable: false, _ => null).ShouldBe("WAL");
+        SqliteDatabase.ChooseJournalMode(@"\\server\share\app.db", portable: false).ShouldBe("DELETE");
+    }
+
+    [Fact]
+    public void A_portable_database_really_runs_in_delete_mode_and_a_normal_one_in_wal()
+    {
+        using var paths = new TempPaths();
+        using var portable = new SqliteDatabase(Path.Combine(paths.Directory, "p.db"), portable: true).OpenConnection();
+        using var normal = new SqliteDatabase(Path.Combine(paths.Directory, "n.db")).OpenConnection();
+
+        Mode(portable).ShouldBe("delete");
+        Mode(normal).ShouldBe("wal");
+    }
+
+    private static string Mode(Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode;";
+        return (string)command.ExecuteScalar()!;
+    }
 }

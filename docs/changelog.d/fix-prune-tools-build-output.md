@@ -1,0 +1,1 @@
+- prune_worktrees.py (#794) treats `app/tools/<project>/{bin,obj}` and `.hypothesis` as build output. MEASURED 2026-10-16: 66 of 134 kept worktrees were kept only for CloudCli obj files or a Hypothesis cache.
