@@ -255,4 +255,31 @@ public class CloudErrorClassifierTests
     [InlineData("QUOTA_EXCEEDED", "Quota exceeded: no capacity left in your quota.")]
     public void A_message_that_only_looks_like_an_expired_flex_request_is_not_a_stockout(string code, string message)
         => CloudErrorClassifier.Classify(new CloudError(code, null, message)).ShouldNotBe(CloudErrorKind.Stockout);
+
+    // ---- Issue #92 round 2 ----
+
+    [Fact]
+    public void An_invalid_value_for_the_wait_field_is_Other_not_a_stockout_so_the_copy_says_to_save_diagnostics()
+    {
+        var error = new CloudError("INVALID_FIELD_VALUE", 400, "Invalid value for field 'params.requestValidForDuration': '10800s'. Duration is out of range.");
+
+        CloudErrorClassifier.Classify(error).ShouldBe(CloudErrorKind.Other);
+    }
+
+    [Theory]
+    [InlineData("FLEX_START_QUOTA_EXCEEDED", null, "Quota 'GPUS_ALL_REGIONS' exceeded. Limit: 0.0.", CloudErrorKind.Quota)]
+    [InlineData("FLEX_START_PERMISSION_DENIED", 403, "Required 'compute.instances.create' permission for 'projects/p'", CloudErrorKind.Permission)]
+    [InlineData("FLEX_START_FORBIDDEN", 403, "Forbidden", CloudErrorKind.Permission)]
+    public void A_flex_code_does_not_override_the_quota_and_permission_rules(string code, int? status, string message, CloudErrorKind expected)
+        => CloudErrorClassifier.Classify(new CloudError(code, status, message)).ShouldBe(expected);
+
+    [Fact]
+    public void A_flex_code_with_nothing_about_capacity_is_not_a_stockout()
+        => CloudErrorClassifier.Classify(new CloudError("FLEX_START_INVALID_ARGUMENT", 400, "Bad field.")).ShouldNotBe(CloudErrorKind.Stockout);
+
+    [Theory]
+    [InlineData("Connection timed out while waiting for capacity.")]
+    [InlineData("Could not reach the server; capacity request timed out")]
+    public void Connection_phrasing_wins_over_a_capacity_timeout(string message)
+        => CloudErrorClassifier.Classify(new CloudError("OPERATION_ERROR", null, message)).ShouldBe(CloudErrorKind.Network);
 }

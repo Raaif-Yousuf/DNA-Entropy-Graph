@@ -163,11 +163,6 @@ public sealed record VmSpec(
                 throw new InvalidOperationException($"VmSpec's flex-start wait must be more than zero and at most {FlexStartLimit.TotalDays:0} days.");
             }
 
-            if (wait > MaxRunDuration)
-            {
-                throw new InvalidOperationException("VmSpec's flex-start wait must not be longer than its maxRunDuration.");
-            }
-
             if (MaxRunDuration > FlexStartLimit)
             {
                 throw new InvalidOperationException($"VmSpec's maxRunDuration must be at most {FlexStartLimit.TotalDays:0} days for a flex-start VM.");

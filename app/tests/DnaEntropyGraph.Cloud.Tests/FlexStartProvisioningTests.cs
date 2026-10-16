@@ -260,14 +260,16 @@ public class FlexStartProvisioningTests
     }
 
     [Fact]
-    public void A_wait_longer_than_the_run_limit_is_refused_by_the_spec_and_clamped_by_the_options()
+    public void A_short_run_limit_does_not_shorten_the_wait_for_a_card_because_the_run_clock_starts_at_the_grant()
     {
-        Should.Throw<InvalidOperationException>(() => (Spec("job-f17", flex: true, wait: TimeSpan.FromHours(5))).EnsurePreconditions());
+        // Review round 2 (L1): "wait <= maxRunDuration" was our invention, not a Compute rule we know of (THEORY, ToTest #92). The run limit counts from the grant (H1).
+        Should.NotThrow(() => Spec("job-f17", flex: true, wait: TimeSpan.FromHours(5)).EnsurePreconditions());
 
         var inputs = new[] { new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb") };
         var request = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true, MaxRunDurationMinutes = 30, WaitForGpuMinutes = 600 }, "20260101-000000-abcdef", Project, "install-1", "0.1.0", null, inputs, @"C:\out");
 
-        request.Spec.FlexStartWait.ShouldBe(request.Spec.MaxRunDuration);
+        request.Spec.FlexStartWait.ShouldBe(TimeSpan.FromMinutes(600));
+        request.Spec.MaxRunDuration.ShouldBeLessThan(request.Spec.FlexStartWait!.Value);
         Should.NotThrow(() => request.Spec.EnsurePreconditions());
     }
 
@@ -399,5 +401,130 @@ public class FlexStartProvisioningTests
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         (DateTime.UtcNow - started).ShouldBeLessThan(TimeSpan.FromSeconds(15), "the 300 ms bound, not the 30 s grant, ended the create");
+    }
+
+    // ---- cold review round 2 ----
+
+    [Fact]
+    public async Task A_resumed_run_waits_out_a_request_still_queued_past_the_boot_timeout_and_makes_no_second_create()
+    {
+        var gcp = new FakeGcp().WithFlexStartHeld();
+        var repo = new InMemoryRunRepository();
+        var request = TestInputs.Request("job-f25", Spec("job-f25", flex: true));
+        using var closed = new CancellationTokenSource();
+        var first = Task.Run(() => Runner(gcp, repo).RunAsync(request, closed.Token), TestContext.Current.CancellationToken);
+        await gcp.FlexStartQueued.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        await closed.CancelAsync();
+        await first.ContinueWith(_ => { }, TestContext.Current.CancellationToken);
+
+        var second = Task.Run(
+            () => new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo, null)
+            {
+                ResultPollInterval = TimeSpan.FromMilliseconds(1),
+                ResultTimeout = TimeSpan.FromSeconds(20),
+                CallTimeout = TimeSpan.FromSeconds(5),
+                CreateTimeout = TimeSpan.FromSeconds(5),
+                BootTimeout = TimeSpan.FromMilliseconds(400),
+                LifecycleTimeout = TimeSpan.FromSeconds(2),
+                LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            }.RunAsync(request, CancellationToken.None),
+            TestContext.Current.CancellationToken);
+        await Task.Delay(1500, TestContext.Current.CancellationToken); // well past the 400 ms boot timeout, still inside the request's own wait
+        gcp.GrantFlexStart();
+        var result = await second.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_cancel_while_queued_still_withdraws_the_waiting_line()
+    {
+        var notices = new List<RunNoticeKind>();
+        var gcp = new FakeGcp().WithFlexStartHeld();
+        var repo = new InMemoryRunRepository();
+        var runner = Runner(gcp, repo, n => { lock (notices) { notices.Add(n.Kind); } });
+        using var cts = new CancellationTokenSource();
+        var run = Task.Run(() => runner.RunAsync(TestInputs.Request("job-f26", Spec("job-f26", flex: true)), cts.Token), TestContext.Current.CancellationToken);
+        await gcp.FlexStartQueued.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+
+        await cts.CancelAsync();
+        await runner.CancelAsync("job-f26", CancellationToken.None);
+        await run.ContinueWith(_ => { }, TestContext.Current.CancellationToken);
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < until && notices.Count < 2)
+        {
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        lock (notices)
+        {
+            notices.ShouldBe([RunNoticeKind.WaitingForGpu, RunNoticeKind.WaitingForGpuEnded]);
+        }
+    }
+
+    [Fact]
+    public async Task A_handler_that_blocks_for_one_job_does_not_hold_back_another_jobs_notices()
+    {
+        var seen = new List<(string Job, RunNoticeKind Kind)>();
+        using var gate = new ManualResetEventSlim(false);
+        var gcp = new FakeGcp().WithFlexStartGrantedAfter(TimeSpan.FromMilliseconds(200));
+        var runner = Runner(
+            gcp,
+            new InMemoryRunRepository(),
+            n =>
+            {
+                if (n.JobId == "job-f27a" && n.Kind == RunNoticeKind.WaitingForGpu)
+                {
+                    gate.Wait(TimeSpan.FromSeconds(20));
+                }
+
+                lock (seen)
+                {
+                    seen.Add((n.JobId, n.Kind));
+                }
+            });
+
+        var a = Task.Run(() => runner.RunAsync(TestInputs.Request("job-f27a", Spec("job-f27a", flex: true), zones: ["us-central1-a"]), CancellationToken.None), TestContext.Current.CancellationToken);
+        var b = Task.Run(() => runner.RunAsync(TestInputs.Request("job-f27b", Spec("job-f27b", flex: true), zones: ["us-central1-b"]), CancellationToken.None), TestContext.Current.CancellationToken);
+
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < until)
+        {
+            lock (seen)
+            {
+                if (seen.Count(s => s.Job == "job-f27b") >= 2)
+                {
+                    break;
+                }
+            }
+
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        List<RunNoticeKind> bKinds;
+        lock (seen)
+        {
+            bKinds = seen.Where(s => s.Job == "job-f27b").Select(s => s.Kind).ToList();
+        }
+
+        gate.Set();
+        await Task.WhenAll(a, b).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        bKinds.ShouldBe([RunNoticeKind.WaitingForGpu, RunNoticeKind.WaitingForGpuEnded], "job B's notices arrived while job A's handler was still blocked");
+    }
+
+    [Fact]
+    public async Task A_queued_request_is_forgotten_when_its_run_ends_terminal_even_if_its_create_timed_out_unconfirmed()
+    {
+        var spec = Spec("job-f28", flex: true, wait: TimeSpan.FromMilliseconds(100)) with { FlexStartMargin = TimeSpan.FromMilliseconds(100) };
+        var gcp = new FakeGcp().WithFlexStartHeld();
+        var repo = new InMemoryRunRepository();
+        var runner = Runner(gcp, repo);
+
+        var result = await runner.RunAsync(TestInputs.Request("job-f28", spec), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        runner.PendingQueuedRequestCount.ShouldBe(0);
     }
 }

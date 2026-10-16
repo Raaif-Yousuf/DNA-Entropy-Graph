@@ -130,7 +130,10 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpu);
             }
 
-            var outcome = await OperationPoller.PollAsync<VmDescriptor>(
+            OperationOutcome<VmDescriptor> outcome;
+            try
+            {
+            outcome = await OperationPoller.PollAsync<VmDescriptor>(
                 async _ =>
                 {
                     try
@@ -160,10 +163,18 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 createTimeout,
                 cancellationToken,
                 time: settings.TimeProvider).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (spec.FlexStart)
+                {
+                    // Round 2 (M3): the waiting line is withdrawn however the wait ends, a cancel or the app closing included.
+                    NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpuEnded);
+                }
+            }
 
             if (spec.FlexStart)
             {
-                NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpuEnded);
                 if (!createTimedOut)
                 {
                     // The create answered (a grant, an expiry or an error), so nothing is pending any more; a cancelled wait leaves the entry for the canceller.
@@ -189,6 +200,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 {
                     return ZoneAttempt.Aborted(zone, ProvisionResult.Failed(CloudErrorKind.Network, outcome.Error!.Message, settleNote));
                 }
+
+                // Settled and deleted in this zone: nothing is pending any more.
+                _pendingFlex.TryRemove((spec.VmName, zone), out _);
             }
 
             if (outcome.Success)
@@ -249,10 +263,13 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             return;
         }
 
-        // One chain, so the waiting line is always withdrawn after it was shown, however slow the handler or fast the create.
+        // One chain PER JOB, so the waiting line is always withdrawn after it was shown, however slow the handler or fast the create, and a handler that
+        // blocks for one job never holds back another's. The chain is dropped once the job's Ended notice has been delivered.
         lock (_noticeGate)
         {
-            _noticeTail = _noticeTail.ContinueWith(
+            var tail = _noticeTails.TryGetValue(jobId, out var existing) ? existing : Task.CompletedTask;
+            Task? self = null;
+            self = tail.ContinueWith(
                 _ =>
                 {
                     try
@@ -263,15 +280,33 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                     {
                         // A notice is advice for the screen; the run goes on without it.
                     }
+
+                    if (kind == RunNoticeKind.WaitingForGpuEnded)
+                    {
+                        lock (_noticeGate)
+                        {
+                            if (_noticeTails.TryGetValue(jobId, out var current) && ReferenceEquals(current, self))
+                            {
+                                _noticeTails.Remove(jobId);
+                            }
+                        }
+                    }
                 },
                 CancellationToken.None,
                 TaskContinuationOptions.None,
                 TaskScheduler.Default);
+            _noticeTails[jobId] = self;
         }
     }
 
     private readonly object _noticeGate = new();
-    private Task _noticeTail = Task.CompletedTask;
+    private readonly Dictionary<string, Task> _noticeTails = new(StringComparer.Ordinal);
+
+    /// <summary>The queued flex requests this instance still remembers (tests: none may outlive a run that ended terminal).</summary>
+    internal int PendingFlexCount => _pendingFlex.Count;
+
+    /// <summary>Round 2 (L2): forgets the queued requests of a job whose run ended terminal; a cancel takes them with <see cref="TakePendingRequests"/> instead.</summary>
+    public void ForgetPendingRequests(string jobId) => TakePendingRequests(jobId);
 
     /// <summary>Issue #92: flex requests queued by this instance whose create has not answered, by VM name and zone, with the job they belong to.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Name, string Zone), string> _pendingFlex = new();

@@ -87,6 +87,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     public async Task<(BootOutcome Outcome, string? Reason)> WaitForBootAsync(CloudJobRequest request, string zone, CancellationToken cancellationToken)
     {
         var clockStart = settings.StartClock();
+        var waitStart = clockStart;
         string? lastTransient = null;
         while (true)
         {
@@ -98,6 +99,14 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 if (vm is { Status: "RUNNING" })
                 {
                     return (BootOutcome.Running, null);
+                }
+
+                // Issue #92 (round 2 H1): a flex request adopted after the app was closed can still be queued (PROVISIONING). That is waiting by choice, not booting:
+                // BootTimeout starts only once the request is no longer queued, and the wait is bounded by the request's own window instead (its age on the platform's
+                // clock when it reports one, else from this look). THEORY (unverified, no live project): a queued flex instance reads PROVISIONING until it is granted.
+                if (request.Spec.FlexStart && vm is { Status: "PROVISIONING" } queued && QueuedWindowOpen(request.Spec, queued, waitStart))
+                {
+                    clockStart = settings.StartClock();
                 }
 
                 if (!VmFacts.IsBooting(vm))
@@ -120,6 +129,19 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
             await settings.DelayAsync(settings.ResultPollInterval, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>True while a queued flex request is inside the window it asked Compute to wait for capacity (the spec's wait plus its margin).</summary>
+    private bool QueuedWindowOpen(VmSpec spec, VmDescriptor vm, long waitStart)
+    {
+        var bound = spec.FlexStartCreateBound;
+        if (vm.CreatedAt is { } created)
+        {
+            var now = vm.ServerNow ?? settings.TimeProvider.GetUtcNow();
+            return now - created < bound;
+        }
+
+        return settings.ElapsedSince(waitStart) < bound;
     }
 
     /// <summary>

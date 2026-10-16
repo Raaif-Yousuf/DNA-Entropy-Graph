@@ -243,6 +243,9 @@ public sealed class CloudJobRunner
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Tests: how many queued flex requests the runner still remembers.</summary>
+    internal int PendingQueuedRequestCount => _provisioner.PendingFlexCount;
+
     public async Task<JobPhase> GetPhaseAsync(string jobId, CancellationToken cancellationToken)
     {
         var latest = await _rows.LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
@@ -258,7 +261,13 @@ public sealed class CloudJobRunner
     {
         try
         {
-            return await RunCoreAsync(request, cancellationToken).ConfigureAwait(false);
+            var done = await RunCoreAsync(request, cancellationToken).ConfigureAwait(false);
+            if (JobStateMachine.IsTerminal(done.FinalPhase))
+            {
+                _provisioner.ForgetPendingRequests(request.JobId);
+            }
+
+            return done;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -271,6 +280,8 @@ public sealed class CloudJobRunner
         }
         catch (Exception ex)
         {
+            _provisioner.ForgetPendingRequests(request.JobId);
+
             // Hard Rule 11: every run ends in a recorded terminal state. An
             // exception nothing classified (a gateway 403 outside the
             // create ladder, an illegal transition, a bad spec) must not
