@@ -1,0 +1,1 @@
+- docs(packaging): `docs/release_runbook.md` rewritten against the real `release.yml` (#180): preconditions (green ci runs, pinned Dockerfile bases, lockstep), the job-by-job sequence, the clean-VM checklist (install, sign-in, pipeline run, update from the previous version, uninstall, attestation check), and the draft-release rollback. Still unproven on a real release.
