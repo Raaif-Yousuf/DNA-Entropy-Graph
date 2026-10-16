@@ -305,8 +305,9 @@ public class GoogleAccountServiceTests
         var service = await harness.SignedInAsync("1001", "first@example.test");
         harness.Google.Behaviour = BrowserBehaviour.Hang;
         using var cts = new CancellationTokenSource();
+        var launchedBefore = harness.Google.AuthorizationRequests.Count;
         var pending = service.SignInAsync(cts.Token);
-        await Task.Delay(300, TestContext.Current.CancellationToken); // let the sign-in reach its wait on the browser
+        await harness.Google.WhenLaunchedAsync(launchedBefore + 1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // the sign-in has reached its wait on the browser
 
         var token = await service.GetAccessTokenAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await service.SwitchAccountAsync("1001", TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);

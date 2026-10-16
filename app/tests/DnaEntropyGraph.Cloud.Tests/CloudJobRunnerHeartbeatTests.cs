@@ -109,6 +109,7 @@ public class CloudJobRunnerHeartbeatTests
         // The heartbeat thread keeps ticking, so the stale rule alone would wait for the result limit (20 s here).
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
         var repo = new InMemoryRunRepository();
+        var clocks = new RunnerClocks();
         var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
@@ -118,6 +119,8 @@ public class CloudJobRunnerHeartbeatTests
             StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(60) },
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
             LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
 
         var result = await runner.RunAsync(TestInputs.Request("job-stuck", Spec("job-stuck")), CancellationToken.None);

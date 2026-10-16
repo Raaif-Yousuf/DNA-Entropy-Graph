@@ -76,12 +76,40 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
         }
     }
 
+    private readonly List<(int Count, TaskCompletionSource Signal)> _launchWaiters = [];
+
+    /// <summary>Completes once the browser has been asked to open <paramref name="count"/> sign-in pages in all (the service is then waiting on the browser): a signal instead of a sleep.</summary>
+    public Task WhenLaunchedAsync(int count)
+    {
+        lock (_gate)
+        {
+            if (AuthorizationRequests.Count >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _launchWaiters.Add((count, signal));
+            return signal.Task;
+        }
+    }
+
     public Task LaunchAsync(Uri authorizationUrl, CancellationToken cancellationToken)
     {
         var query = ParseQuery(authorizationUrl.Query);
         lock (_gate)
         {
             AuthorizationRequests.Add(query);
+            _launchWaiters.RemoveAll(w =>
+            {
+                if (AuthorizationRequests.Count < w.Count)
+                {
+                    return false;
+                }
+
+                w.Signal.TrySetResult();
+                return true;
+            });
         }
 
         // Run on another thread: the app's listener answers this very call, and the app is still inside
