@@ -26,6 +26,11 @@ def test_health_reports_version_and_no_evo_when_the_evo_extra_is_missing(
 ) -> None:
     # A None entry makes `import` raise ImportError, which is the state of every venv without [evo].
     monkeypatch.setitem(sys.modules, "dna_entropy.predictors.evo", None)
+    # `from ..predictors import evo` prefers an `evo` attribute already set on the package over
+    # sys.modules, and test_evo_predictor / test_model_gating import the real module (against a
+    # fake torch) and leave that attribute behind. Without this line the result depends on test
+    # order (CI saw evo True, cuda True).
+    monkeypatch.delattr("dna_entropy.predictors.evo", raising=False)
 
     assert main(["health"]) == 0
 
