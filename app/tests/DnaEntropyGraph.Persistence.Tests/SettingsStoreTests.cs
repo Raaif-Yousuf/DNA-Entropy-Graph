@@ -501,8 +501,8 @@ public class SettingsStoreTests
         for (var round = 0; round < 25; round++)
         {
             using var paths = new TempPaths();
-            var a = new SettingsStore(paths.SettingsPath);
-            var b = new SettingsStore(paths.SettingsPath);
+            var a = RacingStore(paths);
+            var b = RacingStore(paths);
             string? seenByA = null;
             string? seenByB = null;
 
@@ -552,6 +552,49 @@ public class SettingsStoreTests
         }
     }
 
+    /// <summary>
+    /// A store for the tests that race writers (#673). These tests prove the mutex SERIALISES writers, not that a writer
+    /// meets the product's 300 ms UI-thread budget: MEASURED 2026-10-15 a loaded CI runner lost that race
+    /// (SettingsUnavailableException from RunConcurrently). The wait budget is therefore injected, so no test outcome depends on
+    /// how long a contended fsync takes. The budget itself is pinned by the slow-disk test below, with signalling instead of timing.
+    /// </summary>
+    private static SettingsStore RacingStore(TempPaths paths) => new(paths.SettingsPath) { WaitBudget = TimeSpan.FromMinutes(2) };
+
+    [Fact]
+    public void A_writer_that_waits_on_a_slow_disk_inside_the_product_budget_still_saves()
+    {
+        // The holder sits inside the mutex (a slow fsync) and is released only once the second store is provably about to
+        // wait on it, so the wait is the slow part by construction and the 300 ms product budget is measured on the waiter's own clock.
+        using var paths = new TempPaths();
+        using var holderInside = new ManualResetEventSlim();
+        using var waiterAboutToWait = new ManualResetEventSlim();
+        var holder = new SettingsStore(paths.SettingsPath)
+        {
+            FaultHook = op =>
+            {
+                if (op == "temp-create")
+                {
+                    holderInside.Set();
+                    waiterAboutToWait.Wait(TimeSpan.FromSeconds(30)).ShouldBeTrue("the waiter never reached the mutex");
+                }
+            },
+        };
+        var waiter = new SettingsStore(paths.SettingsPath) { FaultHook = op => { if (op == "mutex") { waiterAboutToWait.Set(); } } };
+        waiter.WaitBudget.ShouldBe(TimeSpan.FromMilliseconds(300), "the documented product budget");
+
+        RunConcurrently(
+            () => holder.SetString("a", "1"),
+            () =>
+            {
+                holderInside.Wait(TimeSpan.FromSeconds(30)).ShouldBeTrue();
+                waiter.SetString("b", "2");
+            });
+
+        var reopened = new SettingsStore(paths.SettingsPath);
+        reopened.GetString("a").ShouldBe("1");
+        reopened.GetString("b").ShouldBe("2");
+    }
+
     /// <summary>Starts every action on its own thread at the same instant and rethrows the first failure.</summary>
     private static void RunConcurrently(params Action[] actions)
     {
@@ -587,8 +630,8 @@ public class SettingsStoreTests
     public void Two_store_instances_on_one_path_never_drop_each_others_keys()
     {
         using var paths = new TempPaths();
-        var a = new SettingsStore(paths.SettingsPath);
-        var b = new SettingsStore(paths.SettingsPath);
+        var a = RacingStore(paths);
+        var b = RacingStore(paths);
         a.SetString("seed", "1");
         const int Count = 40;
 
