@@ -80,7 +80,23 @@ public sealed class LeftRunningGuard : IDisposable
     }
 
     private Task<LeftRunningReport> BoundedScanAsync(CancellationToken cancellationToken)
-        => _scanner.ScanAsync(cancellationToken).WaitAsync(ScanTimeout, _clock, cancellationToken);
+        => Observed(_scanner.ScanAsync(cancellationToken), "left-running-scan").WaitAsync(ScanTimeout, _clock, cancellationToken);
+
+    /// <summary>Gives a task that a timeout may abandon an observer, so a late failure is logged by class and never goes unobserved.</summary>
+    private Task<T> Observed<T>(Task<T> task, string source) => ObservedCore(task, source);
+
+    private Task Observed(Task task, string source) => ObservedCore(task, source);
+
+    private TTask ObservedCore<TTask>(TTask task, string source)
+        where TTask : Task
+    {
+        _ = task.ContinueWith(
+            t => _log.Warning(source, null, t.Exception?.GetBaseException().GetType().Name ?? nameof(Exception)),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return task;
+    }
 
     private async Task ScanAndWarnAsync(CancellationToken cancellationToken)
     {
@@ -185,22 +201,30 @@ public sealed class LeftRunningGuard : IDisposable
     }
 
     /// <summary>
-    /// Stops or deletes every named computer at once, each bounded by <see cref="EndTimeout"/>, through <see cref="InstallationCleanup.EndVmAsync"/> (which ends a live run's row, Hard Rule 11).
-    /// A call still not answered at the bound is not a failure: the window closes and says it will finish on Google's side.
+    /// Stops or deletes every named computer at once through <see cref="InstallationCleanup.EndVmAsync"/>, each bounded by <see cref="EndTimeout"/>. That call SENDS the Compute request
+    /// first and ends a live run's row (Hard Rule 11). "Finishing on Google's side" is claimed only when the request was accepted before the bound (or the same job is already being
+    /// ended); a request that was never accepted is a failure that keeps the window open.
     /// </summary>
     private async Task<bool> EndAllAsync(IReadOnlyList<LeftRunningVm> vms, bool delete, string failureKey, CancellationToken cancellationToken)
     {
         var installation = InstallationId.GetOrCreate(_settings);
         var results = await Task.WhenAll(vms.Select(async vm =>
         {
+            var accepted = false;
             try
             {
-                var ok = await _cleanup.EndVmAsync(installation, vm.Descriptor, delete, cancellationToken).WaitAsync(EndTimeout, _clock, cancellationToken).ConfigureAwait(false);
-                return (vm, ok ? EndResult.Done : EndResult.Failed);
+                var work = Observed(_cleanup.EndVmAsync(installation, vm.Descriptor, delete, () => Volatile.Write(ref accepted, true), cancellationToken), "left-running-exit");
+                var result = await work.WaitAsync(EndTimeout, _clock, cancellationToken).ConfigureAwait(false);
+                return (vm, result switch
+                {
+                    VmEndResult.Done => EndResult.Done,
+                    VmEndResult.AlreadyEnding => EndResult.StillEnding,
+                    _ => EndResult.Failed,
+                });
             }
             catch (TimeoutException)
             {
-                return (vm, EndResult.StillEnding);
+                return (vm, Volatile.Read(ref accepted) ? EndResult.StillEnding : EndResult.Failed);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

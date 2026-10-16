@@ -75,10 +75,8 @@ public class CloseConfirmationTests
         await rig.Confirmation.Settled;
 
         rig.Closed.ShouldBe(0);
-        var again = new TaskCompletionSource<bool>();
         rig.Close().ShouldBeTrue();
         rig.Asked.ShouldBe(2);
-        again.TrySetResult(true);
     }
 
     [Fact]
@@ -89,5 +87,70 @@ public class CloseConfirmationTests
         await rig.Confirmation.Settled;
 
         rig.Closed.ShouldBe(1);
+    }
+
+    private sealed class PumpContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback, object?)> _queue = new();
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            lock (_queue)
+            {
+                _queue.Enqueue((d, state));
+            }
+        }
+
+        public bool RunOne()
+        {
+            (SendOrPostCallback, object?) item;
+            lock (_queue)
+            {
+                if (_queue.Count == 0)
+                {
+                    return false;
+                }
+
+                item = _queue.Dequeue();
+            }
+
+            item.Item1(item.Item2);
+            return true;
+        }
+    }
+
+    [Fact]
+    public void The_window_is_closed_on_the_context_the_close_came_from_and_only_when_that_context_runs()
+    {
+        var ui = new PumpContext();
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(ui);
+        try
+        {
+            var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closedOn = -1;
+            var closed = 0;
+            var confirmation = new CloseConfirmation(_ => answer.Task);
+
+            confirmation.ShouldCancelClose(() =>
+            {
+                closed++;
+                closedOn = Environment.CurrentManagedThreadId;
+            }).ShouldBeTrue();
+            answer.SetResult(true);
+            Thread.Sleep(100);
+
+            closed.ShouldBe(0); // nothing closes the window from a pool thread: the context has not run yet
+            while (ui.RunOne())
+            {
+            }
+
+            closed.ShouldBe(1);
+            closedOn.ShouldBe(Environment.CurrentManagedThreadId);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
     }
 }

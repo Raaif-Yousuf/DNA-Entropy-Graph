@@ -24,6 +24,14 @@ public enum CleanupOutcome
     Skipped,
 }
 
+/// <summary>What <see cref="InstallationCleanup.EndVmAsync"/> did: <see cref="Done"/> (request accepted, run ended), <see cref="Failed"/> (refused or never accepted), <see cref="AlreadyEnding"/> (another end for the same job is in flight).</summary>
+public enum VmEndResult
+{
+    Done,
+    Failed,
+    AlreadyEnding,
+}
+
 /// <summary>One thing the cleanup looked at. <paramref name="RecoverableForDays"/> is set on a deleted job folder in a bucket with soft delete on: Google keeps a recoverable copy (and bills it) that many days, so "deleted" is never the whole truth. <paramref name="Location"/> is the zone, or the bucket for job data; <paramref name="Detail"/> is a machine-readable code or note for the caller to turn into words.</summary>
 public sealed record CleanupItem(CleanupKind Kind, string Name, string Location, CleanupOutcome Outcome, string? Detail = null, CloudErrorKind? ErrorKind = null, int? RecoverableForDays = null);
 
@@ -71,12 +79,14 @@ public sealed class InstallationCleanup
     private readonly IStorageGateway _storage;
     private readonly RunRowStore? _rows;
     private readonly ActiveRuns? _active;
+    private readonly TimeProvider _clock;
 
     /// <param name="runs">When given, a run whose VM is deleted is ended as Cancelled (<see cref="RunErrorCodes.DeletedByCleanup"/>) instead of being left Running (Hard Rule 11).</param>
     /// <param name="activeRuns">When given, the run's driver is stopped before its VM is deleted, so it never writes over the row.</param>
     /// <param name="onPhaseChanged">Told after a row's phase is committed, like the runner's callback.</param>
-    public InstallationCleanup(IComputeGateway compute, IStorageGateway storage, IRunRepository? runs = null, ActiveRuns? activeRuns = null, Action<string, JobPhase>? onPhaseChanged = null)
+    public InstallationCleanup(IComputeGateway compute, IStorageGateway storage, IRunRepository? runs = null, ActiveRuns? activeRuns = null, Action<string, JobPhase>? onPhaseChanged = null, TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _compute = compute;
         _storage = storage;
         _rows = runs is null ? null : new RunRowStore(runs, onPhaseChanged);
@@ -301,59 +311,71 @@ public sealed class InstallationCleanup
     /// <summary>The name of the <see cref="CleanupKind.Disk"/> item reported when the second disk listing failed (no disk could be looked at).</summary>
     public const string DiskListingName = "(disk listing)";
 
+    /// <summary>The longest <see cref="EndVmAsync"/> waits for a run's driver to stop once the request has been accepted, before it writes the run's end anyway.</summary>
+    public static readonly TimeSpan DriverStopWait = TimeSpan.FromSeconds(5);
+
     /// <summary>
-    /// Issue #113: stops or deletes ONE computer of this installation (the exit window's Stop / Delete) through the same run-ending path as "Delete everything": a VM that
-    /// carries a <c>job-id</c> is ended under <see cref="ActiveRuns.CancelAsync"/>, so its driver is stopped first and a run that was still live is ended as Cancelled
-    /// (<see cref="RunErrorCodes.DeletedByCleanup"/> for a delete, <see cref="RunErrorCodes.StoppedByCleanup"/> for a stop) instead of being left Running (Hard Rule 11). Refuses a VM not labelled for <paramref name="installationId"/> (false, nothing touched).
-    /// True when the stop or delete was accepted (a delete also read back as gone); never throws for a cloud failure, so the caller can name the computer and the action.
+    /// Issue #113: stops or deletes ONE computer of this installation (the exit window's Stop / Delete). The Compute request is SENT FIRST, while the job's driver is stopped
+    /// alongside it, so a slow driver can never hold the request back; <paramref name="requestAccepted"/> is called once Google has accepted it (the caller may then close the app
+    /// and say it finishes on Google's side). The run's end is written as soon as the request is accepted, with the driver wait bounded by <see cref="DriverStopWait"/>: a run whose
+    /// computer is stopped or deleted is ended as Cancelled (<see cref="RunErrorCodes.DeletedByCleanup"/> for a delete, <see cref="RunErrorCodes.StoppedByCleanup"/> for a stop),
+    /// never left Running (Hard Rule 11). Refuses a computer not labelled for <paramref name="installationId"/> (<see cref="VmEndResult.Failed"/>, nothing sent). A cancel already in flight
+    /// for the same job (an abandoned stop, "Delete everything") is <see cref="VmEndResult.AlreadyEnding"/>, not a failure. Never throws for a cloud failure.
     /// </summary>
-    public async Task<bool> EndVmAsync(string installationId, VmDescriptor vm, bool delete, CancellationToken cancellationToken)
+    public async Task<VmEndResult> EndVmAsync(string installationId, VmDescriptor vm, bool delete, Action? requestAccepted, CancellationToken cancellationToken)
     {
         RequireInstallation(installationId);
         if (!BelongsTo(vm, installationId))
         {
-            return false;
-        }
-
-        if (delete)
-        {
-            var items = new List<CleanupItem>();
-            await DeleteVmAndEndItsRunAsync(vm, items, cancellationToken).ConfigureAwait(false);
-            return items.Count > 0 && items.All(i => i.Outcome == CleanupOutcome.Deleted);
+            return VmEndResult.Failed;
         }
 
         var jobId = vm.Labels is { } labels && labels.TryGetValue("job-id", out var id) ? id : null;
-        var stopped = false;
-
-        async Task StopAsync()
+        ActiveRuns.CancelScope? scope = null;
+        if (_active is not null && jobId is not null)
         {
+            scope = _active.TryBeginCancel(jobId);
+            if (scope is null)
+            {
+                return VmEndResult.AlreadyEnding;
+            }
+        }
+
+        try
+        {
+            var driver = scope?.StopDriverAsync() ?? Task.CompletedTask;
             try
             {
-                await _compute.StopVmAsync(vm.Name, vm.Zone, cancellationToken).ConfigureAwait(false);
-                stopped = true;
+                await (delete ? _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken) : _compute.StopVmAsync(vm.Name, vm.Zone, cancellationToken)).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return;
+                return VmEndResult.Failed;
             }
 
+            requestAccepted?.Invoke();
             if (jobId is not null)
             {
-                await EndRunRowAsync(jobId, RunErrorCodes.StoppedByCleanup).ConfigureAwait(false);
+                try
+                {
+                    await driver.WaitAsync(DriverStopWait, _clock, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // A driver that will not stop does not keep the run Running: its end is written below.
+                }
+
+                await EndRunRowAsync(jobId, delete ? RunErrorCodes.DeletedByCleanup : RunErrorCodes.StoppedByCleanup).ConfigureAwait(false);
             }
-        }
 
-        if (_active is not null && jobId is not null)
-        {
-            await _active.CancelAsync(jobId, StopAsync).ConfigureAwait(false);
+            return VmEndResult.Done;
         }
-        else
+        finally
         {
-            await StopAsync().ConfigureAwait(false);
+            scope?.Dispose();
         }
-
-        return stopped;
     }
+
     /// <summary>
     /// Deletes one VM and reads it back, contained: a failed delete or read back is an item, never an exception. When the VM carries a <c>job-id</c> the
     /// work runs under <see cref="ActiveRuns.CancelAsync"/>, so the run's driver is stopped first and one writer owns the row; a VM verified gone then
