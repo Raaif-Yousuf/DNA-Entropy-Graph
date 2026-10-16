@@ -23,7 +23,7 @@ public sealed class UserGuideLinksTests
             File.Exists(Path.Combine(GuideFolder, file)).ShouldBeTrue($"{file} is linked from Help but is not in docs/user_guide");
         }
 
-        foreach (var key in new[] { "NewRun", "Runs", "Cloud", "Settings", "Wizard", "nope" })
+        foreach (var key in new[] { "NewRun", "Runs", "Cloud", "Settings", "Wizard", "RunProgress", "Results", "Viewer", "nope" })
         {
             UserGuideLinks.AllFiles.ShouldContain(UserGuideLinks.FileFor(key));
         }
@@ -40,12 +40,26 @@ public sealed class UserGuideLinksTests
         }
 
         var code = File.ReadAllText(RepoPaths.AllXamlCsFiles.Single(p => Path.GetFileName(p) == "MainWindow.xaml.cs"));
-        code.ShouldContain("ViewModel.OnWindowLoaded()");
+        code.ShouldContain("ViewModel.OnWindowLoadedAsync()");
+        code.ShouldContain("ViewModel.OnNavigationDisplayModeChanged(");
+        code.ShouldContain("ViewModel.OnTourTipClosed(");
+        xaml.ShouldContain("DisplayModeChanged=\"RootNavigationView_DisplayModeChanged\"");
+        xaml.Split("Closed=\"TourTip_Closed\"").Length.ShouldBe(5, "all four tips report a framework close");
     }
 
     [Fact]
     public void Settings_can_replay_the_tour()
     {
         Read("SettingsPage.xaml").ShouldContain("Tour.StartCommand");
+    }
+
+    [Fact]
+    public void The_navigation_service_announces_the_page_on_forward_navigation_and_on_back()
+    {
+        var service = File.ReadAllText(RepoPaths.AllCSharpFiles.Single(p => Path.GetFileName(p) == "NavigationService.cs"));
+
+        service.Split("CurrentPageChanged?.Invoke(").Length.ShouldBe(3, "NavigateTo and GoBack each raise it (#143): Help and the tour read the page that is really showing");
+        service.ShouldContain("_history.Push(pageKey)");
+        service.ShouldContain("_history.Pop()");
     }
 }

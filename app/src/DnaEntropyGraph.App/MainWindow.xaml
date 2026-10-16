@@ -91,6 +91,7 @@
             AlwaysShowHeader="True"
             Header="{x:Bind ViewModel.CurrentPageTitle, Mode=OneWay}"
             SelectionChanged="RootNavigationView_SelectionChanged"
+            DisplayModeChanged="RootNavigationView_DisplayModeChanged"
             Loaded="RootNavigationView_Loaded">
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="NewRunNavItem" x:Uid="NavNewRun" Tag="NewRun">
@@ -155,9 +156,9 @@
         </StackPanel>
 
         <!-- Issue #143: the first-launch tour. One tip at a time, each pointing at its nav item; TourViewModel owns which is open. -->
-        <TeachingTip x:Uid="TourStepNewRun" Target="{x:Bind NewRunNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsNewRunStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
-        <TeachingTip x:Uid="TourStepRuns" Target="{x:Bind RunsNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsRunsStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
-        <TeachingTip x:Uid="TourStepCloud" Target="{x:Bind CloudNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsCloudStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
-        <TeachingTip x:Uid="TourStepSettings" Target="{x:Bind SettingsNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsSettingsStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
+        <TeachingTip Closed="TourTip_Closed" x:Uid="TourStepNewRun" Target="{x:Bind NewRunNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsNewRunStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
+        <TeachingTip Closed="TourTip_Closed" x:Uid="TourStepRuns" Target="{x:Bind RunsNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsRunsStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
+        <TeachingTip Closed="TourTip_Closed" x:Uid="TourStepCloud" Target="{x:Bind CloudNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsCloudStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
+        <TeachingTip Closed="TourTip_Closed" x:Uid="TourStepSettings" Target="{x:Bind SettingsNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsSettingsStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
     </Grid>
 </Window>

@@ -39,6 +39,9 @@ public sealed partial class ShellViewModel : ObservableObject
     // CurrentPageTitle, which NavigateTo notifies.
     private string _currentPageKey = InitialPageKeyValue;
 
+    // The page that is really showing (issue #143), from the navigator: a nav click, Back and a deep link all end up here, unlike _currentPageKey.
+    private string _helpPageKey = InitialPageKeyValue;
+
     [ObservableProperty]
     private string _statusPillText;
 
@@ -55,15 +58,25 @@ public sealed partial class ShellViewModel : ObservableObject
     public TourViewModel? Tour { get; }
 
     /// <summary>Called once the window and its first page are up: shows the first-launch tour on a profile that has not seen it (issue #143).</summary>
-    public void OnWindowLoaded() => Tour?.StartIfFirstLaunch();
+    public Task OnWindowLoadedAsync() => Tour?.StartIfFirstLaunchAsync() ?? Task.CompletedTask;
+
+    /// <summary>NavigationViewDisplayMode.Minimal: the pane is hidden behind a button, so the tour's tips have nothing to point at.</summary>
+    public const int MinimalNavigationDisplayMode = 0;
+
+    /// <summary>The navigation pane changed layout (<c>NavigationViewDisplayMode</c> as a number, so Presentation has no WinUI type).</summary>
+    public void OnNavigationDisplayModeChanged(int displayMode) => Tour?.SetNavigationMinimal(displayMode == MinimalNavigationDisplayMode);
+
+    /// <summary>A tour tip was closed (<c>TeachingTipCloseReason</c> as a number).</summary>
+    public void OnTourTipClosed(int reason) => Tour?.OnTipClosed(reason);
 
     /// <summary>The user guide page for the page the user is on (issue #143); the Help button in the title bar binds its link to this.</summary>
-    public Uri HelpUri => UserGuideLinks.UriFor(_currentPageKey);
+    public Uri HelpUri => UserGuideLinks.UriFor(_helpPageKey, _build);
 
     public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, TourViewModel? tour = null)
     {
         Updates = updates;
         Tour = tour;
+        navigator.CurrentPageChanged += (_, _) => OnNavigatorPageChanged(navigator.CurrentPageKey);
         _build = build;
         _completion = completion;
         _dataRoot = dataRoot;
@@ -143,7 +156,19 @@ public sealed partial class ShellViewModel : ObservableObject
     {
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
+        _helpPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
+        OnPropertyChanged(nameof(HelpUri));
+    }
+
+    private void OnNavigatorPageChanged(string? pageKey)
+    {
+        if (pageKey is null)
+        {
+            return;
+        }
+
+        _helpPageKey = pageKey;
         OnPropertyChanged(nameof(HelpUri));
     }
 
