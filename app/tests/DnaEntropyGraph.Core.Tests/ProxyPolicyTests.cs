@@ -16,11 +16,17 @@ public class ProxyPolicyTests
 
         public bool FailWrites { get; set; }
 
-        public string? GetString(string key) => Values.TryGetValue(key, out var v) ? v : null;
+        public bool FailReads { get; set; }
+
+        public int? FailOnWriteNumber { get; set; }
+
+        private int _writes;
+
+        public string? GetString(string key) => FailReads ? throw new SettingsUnavailableException("locked") : Values.TryGetValue(key, out var v) ? v : null;
 
         public void SetString(string key, string value)
         {
-            if (FailWrites)
+            if (FailWrites || ++_writes == FailOnWriteNumber)
             {
                 throw new SettingsUnavailableException("locked");
             }
@@ -321,6 +327,7 @@ public class ProxyPolicyTests
 
         credentials.Saved!.UserName.ShouldBe("old");
     }
+
     [Fact]
     public void Ordinary_failures_are_not_proxy_failures()
     {
@@ -337,5 +344,75 @@ public class ProxyPolicyTests
         ProxyFailure.IsProxyAuthStatus(407).ShouldBeTrue();
         ProxyFailure.IsProxyAuthStatus(401).ShouldBeFalse();
         ProxyFailure.IsProxyAuthStatus(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Proxy_B_never_gets_the_password_of_proxy_A_when_a_407_from_A_is_answered_after_Apply()
+    {
+        var policy = new ProxyPolicy(new MemorySettings(), new MemoryCredentials());
+        policy.Apply(new ProxySettings(ProxyMode.Manual, "b.uni.edu:8080"), new NetworkCredential("alice", "pw-for-b"));
+        var credentials = new PolicyWebProxy(policy, new FixedProxy(null)).Credentials!;
+
+        credentials.GetCredential(new Uri("http://a.uni.edu:8080"), "Basic").ShouldBeNull();
+        credentials.GetCredential(new Uri("http://b.uni.edu:8081"), "Basic").ShouldBeNull();
+        credentials.GetCredential(new Uri("http://B.UNI.EDU:8080"), "Basic")!.Password.ShouldBe("pw-for-b");
+    }
+
+    [Fact]
+    public void The_saved_sign_in_is_offered_only_for_the_authentication_schemes_it_can_answer()
+    {
+        var policy = new ProxyPolicy(new MemorySettings(), new MemoryCredentials());
+        policy.Apply(new ProxySettings(ProxyMode.Manual, "b.uni.edu:8080"), new NetworkCredential("alice", "pw"));
+        var credentials = new PolicyWebProxy(policy, new FixedProxy(null)).Credentials!;
+
+        credentials.GetCredential(new Uri("http://b.uni.edu:8080"), "Bearer").ShouldBeNull();
+        credentials.GetCredential(new Uri("http://b.uni.edu:8080"), "NTLM")!.UserName.ShouldBe("alice");
+    }
+
+    [Fact]
+    public void A_rollback_puts_back_the_values_that_were_in_settings_json_not_the_fallback_used_while_it_was_unreadable()
+    {
+        var settings = new MemorySettings();
+        settings.Values[ProxySettingKeys.Mode] = "manual";
+        settings.Values[ProxySettingKeys.Address] = "old.uni.edu:8080";
+        settings.FailReads = true;
+        var policy = new ProxyPolicy(settings, new MemoryCredentials());
+        policy.Settings.Mode.ShouldBe(ProxyMode.System); // the fallback while the file could not be read
+        settings.FailReads = false;
+        settings.FailOnWriteNumber = 2; // the mode is written, the address is not
+
+        Should.Throw<SettingsUnavailableException>(() => policy.Apply(new ProxySettings(ProxyMode.None, string.Empty), null));
+
+        settings.Values[ProxySettingKeys.Mode].ShouldBe("manual");
+        settings.Values[ProxySettingKeys.Address].ShouldBe("old.uni.edu:8080");
+    }
+
+    [Fact]
+    public void A_failure_while_rolling_back_never_replaces_the_original_error()
+    {
+        var settings = new MemorySettings { FailWrites = true };
+        var seen = new List<Exception>();
+        var policy = new ProxyPolicy(settings, new RestoreExplodingCredentials(), seen.Add);
+
+        Should.Throw<SettingsUnavailableException>(() => policy.Apply(new ProxySettings(ProxyMode.Manual, "new.uni.edu:8080"), new NetworkCredential("a", "b")));
+
+        seen.ShouldContain(e => e is IOException);
+    }
+
+    private sealed class RestoreExplodingCredentials : IProxyCredentialStore
+    {
+        private int _saves;
+
+        public NetworkCredential? Load() => null;
+
+        public void Save(NetworkCredential credential)
+        {
+            if (++_saves > 1)
+            {
+                throw new IOException("disk full");
+            }
+        }
+
+        public void Clear() => throw new IOException("disk full");
     }
 }

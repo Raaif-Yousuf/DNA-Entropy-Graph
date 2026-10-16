@@ -130,4 +130,18 @@ public class ProxyFailureRunCodeTests
         AuthErrorCodes.All.ShouldContain(AuthErrorCodes.SigninProxy);
         AuthErrorCodes.All.ShouldContain(AuthErrorCodes.SigninCertificate);
     }
+
+    [Fact]
+    public async Task The_proxy_address_in_a_tunnel_error_message_never_reaches_the_recorded_error()
+    {
+        var pipeline = NewPipeline();
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(() => pipeline.ExecuteAsync<int>(
+            "test.call",
+            _ => throw new HttpRequestException(HttpRequestError.ProxyTunnelError, "Tunnel to 'https://storage.googleapis.com/' via proxy.uni.edu:8080 failed", null, HttpStatusCode.ServiceUnavailable),
+            CancellationToken.None));
+
+        failure.Error.Message.ShouldNotContain("proxy.uni.edu");
+        failure.Error.Message.ShouldNotContain("8080");
+    }
 }

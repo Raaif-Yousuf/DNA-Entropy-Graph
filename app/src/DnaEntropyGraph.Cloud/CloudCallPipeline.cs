@@ -210,9 +210,13 @@ public sealed class CloudCallPipeline
         {
             // Issue #239: a proxy that refused the tunnel, or a certificate this PC does not trust, is named by its own code so the run says what to do.
             var proxyFailure = ProxyFailure.Detect(ex);
-            throw new CloudOperationException(new CloudError(proxyFailure is { } kind ? ProxyFailure.CodeFor(kind) : null, null, ex.Message), CloudErrorKind.Network);
+            throw new CloudOperationException(new CloudError(proxyFailure is { } kind ? ProxyFailure.CodeFor(kind) : null, null, SafeMessage(ex)), CloudErrorKind.Network);
         }
     }
+
+    // A tunnel error's own message names the proxy host:port, which can identify the user's institution and must not reach logs or the recorded error.
+    private static string SafeMessage(HttpRequestException ex)
+        => ex.HttpRequestError == HttpRequestError.ProxyTunnelError ? "the proxy did not open a connection" : ex.Message;
 
     /// <summary>
     /// The transient test shared by retry and breaker. Classify first: a

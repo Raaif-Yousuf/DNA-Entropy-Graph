@@ -25,6 +25,7 @@ public sealed class ProxyPolicy : IProxyPolicy
     private readonly IProxyCredentialStore _credentials;
     private Snapshot? _snapshot;
     private readonly object _gate = new();
+    private readonly Action<Exception>? _restoreFailed;
 
     private sealed class FixedPolicy : IProxyPolicy
     {
@@ -35,8 +36,10 @@ public sealed class ProxyPolicy : IProxyPolicy
 
     private sealed record Snapshot(ProxySettings Settings, NetworkCredential? Credential);
 
-    public ProxyPolicy(ISettingsStore settings, IProxyCredentialStore credentials)
+    /// <param name="restoreFailed">Told about a failure while rolling back a failed <see cref="Apply"/> (the original error is still the one thrown); defaults to a trace line with the class only.</param>
+    public ProxyPolicy(ISettingsStore settings, IProxyCredentialStore credentials, Action<Exception>? restoreFailed = null)
     {
+        _restoreFailed = restoreFailed ?? (ex => System.Diagnostics.Trace.TraceWarning("Proxy policy rollback failed: " + ex.GetType().Name));
         _store = new ProxySettingsStore(settings);
         _credentials = credentials;
     }
@@ -89,6 +92,7 @@ public sealed class ProxyPolicy : IProxyPolicy
     public void Apply(ProxySettings settings, NetworkCredential? manualCredential)
     {
         var previous = Current;
+        var persisted = _store.TryReadRaw();
         var credential = settings.Mode == ProxyMode.Manual ? manualCredential : null;
 
         // The sign-in first, then settings.json, and the sign-in goes back if the second step fails: either both changed or neither did.
@@ -99,7 +103,7 @@ public sealed class ProxyPolicy : IProxyPolicy
         }
         catch
         {
-            TryRestore(previous);
+            TryRestore(previous, persisted);
             throw;
         }
 
@@ -118,24 +122,31 @@ public sealed class ProxyPolicy : IProxyPolicy
         }
     }
 
-    private void TryRestore(Snapshot previous)
+    // Puts back what was PERSISTED before the failed Apply, not what the policy held: after an unreadable settings.json the policy held a fallback,
+    // and writing that fallback back would replace a real saved choice. Whatever fails here is reported to the observer and never replaces the original error.
+    private void TryRestore(Snapshot previous, (string? Mode, string? Address)? persisted)
     {
         try
         {
             WriteCredential(previous.Credential);
         }
-        catch (ProxyCredentialUnreadableException)
+        catch (Exception ex)
         {
-            // The original failure is the one to report; an unwritable credential file stays as the policy in memory says.
+            _restoreFailed?.Invoke(ex);
+        }
+
+        if (persisted is not { } raw)
+        {
+            return; // the file could not be read before, so what it held is unknown: leave it alone
         }
 
         try
         {
-            _store.Save(previous.Settings);
+            _store.WriteRaw(raw.Mode, raw.Address);
         }
-        catch (SettingsUnavailableException)
+        catch (Exception ex)
         {
-            // Same: the file is locked, so it still holds whatever it held before the failed write.
+            _restoreFailed?.Invoke(ex);
         }
     }
     private Snapshot Read()
@@ -178,6 +189,8 @@ public sealed class PolicyWebProxy(IProxyPolicy policy, IWebProxy? system = null
 
     private sealed class PolicyCredentials(IProxyPolicy policy) : ICredentials
     {
+        private static readonly string[] Supported = ["Basic", "Digest", "NTLM", "Negotiate", "Kerberos"];
+
         public NetworkCredential? GetCredential(Uri uri, string authType)
         {
             var settings = policy.Settings;
@@ -186,9 +199,20 @@ public sealed class PolicyWebProxy(IProxyPolicy policy, IWebProxy? system = null
                 return null;
             }
 
-            return settings.Mode == ProxyMode.Manual && ProxyAddress.TryParse(settings.ManualAddress, out _) && policy.ManualCredential is { } saved
-                ? saved
-                : CredentialCache.DefaultNetworkCredentials;
+            if (settings.Mode == ProxyMode.Manual && ProxyAddress.TryParse(settings.ManualAddress, out var manual))
+            {
+                // The saved sign-in belongs to the proxy that was typed with it. A challenge from any other host:port (a request still in flight
+                // to the proxy that was just replaced) gets nothing, and a scheme the sign-in cannot answer gets nothing.
+                var mine = string.Equals(uri.Host, manual.Host, StringComparison.OrdinalIgnoreCase) && uri.Port == manual.Port;
+                if (!mine || !Supported.Contains(authType, StringComparer.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                return policy.ManualCredential ?? CredentialCache.DefaultNetworkCredentials;
+            }
+
+            return CredentialCache.DefaultNetworkCredentials;
         }
     }
     public Uri? GetProxy(Uri destination)

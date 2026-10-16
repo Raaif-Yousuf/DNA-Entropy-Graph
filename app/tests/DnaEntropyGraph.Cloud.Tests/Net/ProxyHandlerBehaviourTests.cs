@@ -198,4 +198,58 @@ public class ProxyHandlerBehaviourTests
         failure.Error.Code.ShouldBeNull();
         RunErrorCodes.For(failure.Error, failure.Kind).ShouldBe("network");
     }
+
+    private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request);
+    }
+
+    [Fact]
+    public async Task Two_parallel_requests_to_one_untrusted_host_are_both_called_certificate_problems()
+    {
+        using var server = new TlsServer(hangUp: false);
+        using var client = NewClient();
+
+        var both = await Task.WhenAll(
+            FailureOf(() => client.GetAsync(server.Url)),
+            FailureOf(() => client.GetAsync(server.Url)),
+            FailureOf(() => client.GetAsync(server.Url)));
+
+        both.ShouldAllBe(f => ProxyFailure.Detect(f) == ProxyFailureKind.CertificateUntrusted);
+    }
+
+    [Fact]
+    public async Task Evidence_left_by_an_earlier_request_that_was_cancelled_never_labels_a_later_plain_connection_failure()
+    {
+        using var server = new TlsServer(hangUp: true);
+        var evidence = new ProxyHttpClientFactory.UntrustedChainEvidence();
+        evidence.Record("127.0.0.1"); // the handshake of a request that was then cancelled
+        using var client = new HttpClient(ProxyHttpClientFactory.NewHandler(new PolicyWebProxy(ProxyPolicy.SystemDefault), evidence));
+
+        var failure = await FailureOf(() => client.GetAsync(server.Url));
+
+        ProxyFailure.Detect(failure).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_proxy_refusal_or_a_dropped_connection_is_never_relabelled_by_evidence_from_another_request()
+    {
+        var evidence = new ProxyHttpClientFactory.UntrustedChainEvidence();
+        var refusal = new StubHandler(_ =>
+        {
+            evidence.Record("storage.googleapis.com"); // another request's handshake, written while this one is in flight
+            throw new HttpRequestException(HttpRequestError.ProxyTunnelError, "refused", null, HttpStatusCode.ProxyAuthenticationRequired);
+        });
+        var dropped = new StubHandler(_ =>
+        {
+            evidence.Record("storage.googleapis.com");
+            throw new HttpRequestException(HttpRequestError.ConnectionError, "reset");
+        });
+
+        var refused = await FailureOf(() => new HttpClient(new ProxyHttpClientFactory.UntrustedChainTagHandler(refusal, evidence)).GetAsync("https://storage.googleapis.com/a"));
+        var reset = await FailureOf(() => new HttpClient(new ProxyHttpClientFactory.UntrustedChainTagHandler(dropped, evidence)).GetAsync("https://storage.googleapis.com/a"));
+
+        ProxyFailure.Detect(refused).ShouldBe(ProxyFailureKind.ProxyRefused);
+        ProxyFailure.Detect(reset).ShouldBeNull();
+    }
 }

@@ -53,6 +53,7 @@ public static class ProxyFailure
 
         return null;
     }
+
     /// <summary>407 on an API answer: a proxy asking for a sign-in, not Google refusing the caller.</summary>
     public static bool IsProxyAuthStatus(int? status) => status == 407;
 

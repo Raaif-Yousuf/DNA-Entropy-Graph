@@ -37,6 +37,26 @@ public sealed class ProxySettingsStore(ISettingsStore settings)
         return new ProxySettings(parsed, (address ?? string.Empty).Trim());
     }
 
+    /// <summary>What settings.json holds right now (null when a key is absent), or null when it cannot be read.</summary>
+    public (string? Mode, string? Address)? TryReadRaw()
+    {
+        try
+        {
+            return (settings.GetString(ProxySettingKeys.Mode), settings.GetString(ProxySettingKeys.Address));
+        }
+        catch (SettingsUnavailableException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Writes back values read by <see cref="TryReadRaw"/>; an absent key is written empty, which reads back as the same default.</summary>
+    public void WriteRaw(string? mode, string? address)
+    {
+        settings.SetString(ProxySettingKeys.Mode, mode ?? string.Empty);
+        settings.SetString(ProxySettingKeys.Address, address ?? string.Empty);
+    }
+
     public void Save(ProxySettings value)
     {
         settings.SetString(ProxySettingKeys.Mode, value.Mode switch { ProxyMode.Manual => "manual", ProxyMode.None => "none", _ => "system" });
