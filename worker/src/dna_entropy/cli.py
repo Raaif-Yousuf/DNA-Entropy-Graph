@@ -12,9 +12,19 @@ from pathlib import Path
 import typer
 
 from . import __version__, pipeline
+from .analysis.compare import CompareError, difference, read_entropy_tsv
 from .analysis.composition import DEFAULT_GC_WINDOW
 from .analysis.regions import DEFAULT_MERGE_GAP, DEFAULT_MIN_LENGTH, DEFAULT_THRESHOLD_BITS
 from .analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS
+from .analysis.variants import (
+    DEFAULT_MAX_VARIANTS,
+    VariantError,
+    check_count,
+    cost_estimate,
+    parse_variants_tsv,
+    positions_to_variants,
+    scan,
+)
 from .analysis.windowing import WindowingError
 from .annotators.base import AnnotatorError
 from .config import (
@@ -28,13 +38,16 @@ from .config import (
     Topology,
     TrackFormat,
 )
-from .pipeline import PipelineError, load_and_validate, sanitize_run_name
+from .pipeline import PipelineError, build_predictor, load_and_validate, sanitize_run_name
 from .predictors.base import PredictorError
 from .readers import entrez
+from .readers.input import load_input
 from .validation.validators import ValidationError
 from .worker.blobstore import BlobstoreError, GcsBlobstore, LocalBlobstore
 from .worker.manifest import ManifestError
 from .worker.runner import run_job
+from .writers.compare import write_compare
+from .writers.variants import write_variants
 
 app = typer.Typer(
     add_completion=False,
@@ -394,6 +407,130 @@ def run(
     typer.echo("  wrote:")
     for path in result.outputs:
         typer.echo(f"    {Path(path).name}")
+
+
+def _pick_track(blocks: dict, wanted: str | None, which: str):
+    """The one block to compare: the named contig, or the file's only one (issue #129)."""
+    if wanted is not None:
+        if wanted not in blocks:
+            raise CompareError(
+                f"The {which} file has no contig named {wanted!r}. Check the name or omit --contig."
+            )
+        return wanted, blocks[wanted]
+    if len(blocks) != 1:
+        raise CompareError(
+            f"The {which} file holds {len(blocks)} records. Name the one to compare with --contig."
+        )
+    return next(iter(blocks.items()))
+
+
+@app.command()
+def compare(
+    a: str = typer.Argument(..., help="First run's <name>.entropy.tsv (the reference)."),
+    b: str = typer.Argument(..., help="Second run's <name>.entropy.tsv; the difference is B minus A."),
+    name: str = typer.Option("compare", "--name", help="Output file prefix."),
+    out_dir: str = typer.Option(
+        ".", "--out-dir", help="Folder for the difference track and deviations table."
+    ),
+    offset: int = typer.Option(
+        0, "--offset", help="B position p is compared with A position p + offset (default 0: same length)."
+    ),
+    contig: str | None = typer.Option(
+        None, "--contig", help="Contig name in both files, for multi-record runs."
+    ),
+    top: int = typer.Option(10, "--top", help="How many largest deviations to list."),
+) -> None:
+    """Compare two runs or two sequences: a difference track (B minus A) and the largest deviations."""
+    try:
+        name_a, track_a = _pick_track(read_entropy_tsv(a), contig, "first")
+        _, track_b = _pick_track(read_entropy_tsv(b), contig, "second")
+        positions, diff = difference(track_a, track_b, offset)
+        out = write_compare(
+            name=sanitize_run_name(name),
+            contig=name_a,
+            positions=positions,
+            diff=diff,
+            out_dir=out_dir,
+            top=top,
+        )
+    except (ValidationError, ValueError, OSError) as exc:
+        typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"OK: compared {len(diff)} positions, "
+        f"largest change {max((abs(d) for _, d in out.top), default=0.0):.4f} bits"
+    )
+    for pos, d in out.top:
+        typer.echo(f"  - position {pos}: {d:+.4f} bits")
+    typer.echo(f"OK: wrote {out.bedgraph}")
+    typer.echo(f"OK: wrote {out.deviations}")
+
+
+@app.command()
+def variants(
+    input: str = typer.Option(..., "--input", "-i", help="The sequence (one record) the variants are on."),
+    variants_file: str | None = typer.Option(
+        None, "--variants", help="TSV of pos, ref, alt (one substitution per line)."
+    ),
+    positions: str | None = typer.Option(
+        None, "--positions", help="Comma-separated 1-based positions: all three substitutions at each."
+    ),
+    max_variants: int = typer.Option(
+        DEFAULT_MAX_VARIANTS, "--max-variants", help="Refuse more than this many (one forward pass each)."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the cost estimate and stop."),
+    name: str = typer.Option("variants", "--name", help="Output file prefix."),
+    out_dir: str = typer.Option(".", "--out-dir", help="Folder for <name>.variants.tsv."),
+    predictor: str = typer.Option("mock", "--predictor", help="Predictor backend: mock|evo."),
+    model: str = typer.Option("evo2_7b", "--model", help="Evo model id (evo predictor only)."),
+    device: str = typer.Option("cuda", "--device", help="cuda|cpu (evo predictor only)."),
+    context_length: int = typer.Option(
+        DEFAULT_CONTEXT_LENGTH, "--context-length", help="K: each variant is scored on position +- K/2."
+    ),
+    seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
+) -> None:
+    """Score in-silico substitutions: change in surprisal and local entropy, one pass per variant."""
+    try:
+        if (variants_file is None) == (positions is None):
+            raise VariantError("Give exactly one of --variants and --positions.")
+        cfg = RunConfig(
+            input_path=input,
+            name=sanitize_run_name(name),
+            out_dir=out_dir,
+            predictor=PredictorKind(predictor),
+            model=model,
+            device=device,
+            context_length=context_length,
+            seed=seed,
+        )
+        loaded = load_input(cfg)
+        if len(loaded.contigs) != 1:
+            raise VariantError(
+                f"The input has {len(loaded.contigs)} records; the variant scan takes one. "
+                "Give a file with one record."
+            )
+        seq = loaded.contigs[0].seq
+        if variants_file is not None:
+            found = parse_variants_tsv(variants_file, seq)
+        else:
+            try:
+                wanted = [int(p) for p in (positions or "").split(",") if p.strip()]
+            except ValueError:
+                raise VariantError(
+                    "--positions must be whole numbers separated by commas, like 12,40,77."
+                ) from None
+            found = positions_to_variants(wanted, seq)
+        check_count(found, max_variants)
+        typer.echo(f"Cost: {cost_estimate(len(found))}.")
+        if dry_run:
+            return
+        results = scan(seq, found, build_predictor(cfg), context_length)
+        path = write_variants(name=cfg.name, results=results, out_dir=out_dir)
+    except (ValidationError, PredictorError, ValueError, OSError) as exc:
+        typer.secho(f"ERROR: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"OK: scored {len(results)} variant(s)")
+    typer.echo(f"OK: wrote {path}")
 
 
 @app.command()

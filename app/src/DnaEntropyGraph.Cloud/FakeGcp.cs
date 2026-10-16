@@ -866,6 +866,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow());
+        // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
+        RunSimulatedWorker(spec, zone);
         _vms[key] = vm;
         _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
@@ -874,7 +876,6 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _bootPollsLeft[key] = _bootPolls;
         }
 
-        RunSimulatedWorker(spec, zone);
         return Task.FromResult(vm);
     }
 
@@ -1034,8 +1035,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfProjectWide(spec.ProjectId);
         vm = vm with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
-        _vms[key] = vm;
         RunSimulatedWorker(reuse, zone);
+        _vms[key] = vm;
         if (_reuseResponseLost)
         {
             _reuseResponseLost = false;
