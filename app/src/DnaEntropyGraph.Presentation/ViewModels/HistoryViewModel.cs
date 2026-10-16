@@ -236,8 +236,17 @@ public sealed partial class HistoryViewModel : ObservableObject
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
             new AsyncRelayCommand(() => RemoveAsync(run)),
-            OwnerRequestFor(run));
+            OwnerRequestFor(run))
+        {
+            PresetText = PresetLine(run),
+        };
     }
+
+    /// <summary>The "Preset: name" line of a run started from an option preset (issue #136), read from the options the run recorded.</summary>
+    private string? PresetLine(RunRecord run)
+        => RunOptionsJson.TryDeserialize(run.OptionsJson)?.PresetName is { Length: > 0 } name
+            ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.PresetLine), name)
+            : null;
 
     /// <summary>
     /// The reason line for a finished run (issue #459). A Failed run always has one (an unknown or missing code gets the
@@ -343,7 +352,18 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.RerunNoInput;
             }
 
-            var jobId = await _engine.StartRunAsync(options with { InputPath = input }, CancellationToken.None);
+            // Issue #686: a paired run starts again with its GFF3. One that cannot be found is a missing input, never a silent run without it.
+            string? annotation = null;
+            if (!string.IsNullOrWhiteSpace(options.AnnotationPath))
+            {
+                annotation = await Task.Run(() => _local.FindRerunAnnotation(run, options));
+                if (annotation is null)
+                {
+                    return RunsCopy.RerunNoInput;
+                }
+            }
+
+            var jobId = await _engine.StartRunAsync(options with { InputPath = input, AnnotationPath = annotation }, CancellationToken.None);
             _navigator.NavigateTo("RunProgress", jobId);
             return null;
         },
