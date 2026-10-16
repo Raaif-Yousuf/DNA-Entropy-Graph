@@ -57,6 +57,39 @@ public class JsonLinesCloudAuditLogTests : IDisposable
     }
 
     [Fact]
+    public void A_rotation_that_fails_still_appends_to_the_current_file_and_rotates_once_the_other_file_is_free()
+    {
+        var path = Path.Combine(_dir, "cloud-audit.jsonl");
+        var log = new JsonLinesCloudAuditLog(path, maxBytes: 300);
+        for (var i = 0; i < 4; i++)
+        {
+            log.Record(Entry("Before" + i));
+        }
+
+        File.Exists(log.RotatedPath).ShouldBeTrue();
+        // A reader holds the previous generation: moving over it fails.
+        var held = new FileStream(log.RotatedPath, FileMode.Open, FileAccess.Read, FileShare.None);
+        try
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                log.Record(Entry("During" + i));
+            }
+
+            File.ReadAllText(path).ShouldContain("During3");
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        log.Record(Entry("After"));
+
+        File.ReadAllText(path).ShouldContain("After");
+        File.ReadAllText(log.RotatedPath).ShouldContain("During");
+    }
+
+    [Fact]
     public void An_unusable_path_loses_the_line_and_never_throws()
     {
         Directory.CreateDirectory(_dir);

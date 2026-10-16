@@ -3,6 +3,7 @@ using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Cloud.Audit;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -18,9 +19,12 @@ public class CloudAuditTests
 
     private sealed class MemoryLog : ICloudAuditLog
     {
+        /// <summary>Finished entries only; the started lines are in <see cref="Started"/>.</summary>
         public List<CloudAuditEntry> Entries { get; } = [];
 
-        public void Record(CloudAuditEntry entry) => Entries.Add(entry);
+        public List<CloudAuditEntry> Started { get; } = [];
+
+        public void Record(CloudAuditEntry entry) => (entry.Phase == "started" ? Started : Entries).Add(entry);
     }
 
     private sealed class ThrowingLog : ICloudAuditLog
@@ -145,8 +149,7 @@ public class CloudAuditTests
 
         var thrown = await Should.ThrowAsync<CloudOperationException>(() => auditor.RunAsync<int>(
             "Test.Op",
-            "r",
-            null,
+            () => ("r", null),
             () => throw new CloudOperationException(new CloudError("QUOTA_EXCEEDED", 403, "message with a@b.com"), CloudErrorKind.Quota)));
 
         thrown.Kind.ShouldBe(CloudErrorKind.Quota);
@@ -155,34 +158,146 @@ public class CloudAuditTests
         JsonSerializer.Serialize(log.Entries).ShouldNotContain("a@b.com");
     }
 
-    [Fact]
-    public void Every_mutating_method_of_every_gateway_interface_is_known_to_the_audit()
+    // Closed lists (issue #245 review): every method of every gateway interface is named here as a mutation or a read. A method that
+    // is in neither fails this test until someone decides which it is and, for a mutation, routes it through CloudAuditor.
+    private static readonly Dictionary<Type, (string[] Mutations, string[] Reads)> Classified = new()
     {
-        // A method added to a gateway interface that is not a read must be added here AND routed through CloudAuditor in AuditedGateways.cs.
-        string[] readPrefixes = ["Get", "List", "Find", "Is", "TryDownload", "Download", "Read"];
-        var audited = new Dictionary<Type, string[]>
-        {
-            [typeof(IComputeGateway)] = ["CreateVmAsync", "ReuseVmAsync", "StopVmAsync", "DeleteVmAsync"],
-            [typeof(IStorageGateway)] = ["EnsureBucketAsync", "UploadAsync"],
-            [typeof(IProjectSetupGateway)] = ["EnableComputeApiAsync"],
-            [typeof(IWorkerIdentityGateway)] = ["EnsureWorkerIdentityAsync"],
-            [typeof(IServiceEnablementGateway)] = ["EnableServicesAsync"],
-            [typeof(IBillingGateway)] = ["LinkProjectAsync"],
-            [typeof(IProjectCatalogGateway)] = ["CreateProjectAsync"],
-            [typeof(IQuotaGateway)] = [],
-        };
+        [typeof(IComputeGateway)] = (
+            ["CreateVmAsync", "ReuseVmAsync", "StartVmAsync", "StopVmAsync", "DeleteVmAsync", "DeleteDiskAsync"],
+            ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync"]),
+        [typeof(IStorageGateway)] = (
+            ["EnsureBucketAsync", "UploadAsync", "DeletePrefixAsync"],
+            ["DownloadAsync", "TryDownloadAsync", "ListBucketsAsync", "GetPrefixUsageAsync", "ListChildPrefixesAsync"]),
+        [typeof(IProjectSetupGateway)] = (["EnableComputeApiAsync"], ["GetProjectStateAsync", "IsBillingEnabledAsync", "IsComputeApiEnabledAsync"]),
+        [typeof(IWorkerIdentityGateway)] = (["EnsureWorkerIdentityAsync"], []),
+        [typeof(IServiceEnablementGateway)] = (["EnableServicesAsync"], ["IsServiceEnabledAsync"]),
+        [typeof(IBillingGateway)] = (["LinkProjectAsync"], ["GetBillingStatusAsync", "ListOpenBillingAccountsAsync"]),
+        [typeof(IProjectCatalogGateway)] = (["CreateProjectAsync"], ["ListActiveProjectsAsync", "GetProjectAsync"]),
+        [typeof(IQuotaGateway)] = (["RequestQuotaIncreaseAsync"], ["GetGpuQuotaAsync", "ReadQuotaAsync", "GetQuotaIncreaseEligibilityAsync"]),
+    };
 
-        foreach (var (type, expected) in audited)
+    [Fact]
+    public void Every_method_of_every_gateway_interface_is_classified_as_a_mutation_or_a_read()
+    {
+        foreach (var (type, (mutations, reads)) in Classified)
         {
-            var mutating = type.GetMethods()
-                .Select(m => m.Name)
-                .Where(n => !readPrefixes.Any(p => n.StartsWith(p, StringComparison.Ordinal)))
-                .Order()
-                .ToArray();
-            mutating.ShouldBe(expected.Order().ToArray(), type.Name);
+            var actual = type.GetMethods().Select(m => m.Name).Order().ToArray();
+            actual.ShouldBe(mutations.Concat(reads).Order().ToArray(), type.Name + ": classify the new method in CloudAuditTests.Classified (and audit it if it mutates)");
         }
     }
 
+    [Fact]
+    public async Task Every_classified_mutation_has_an_audited_decorator_that_records_it()
+    {
+        // The decorator of each interface must record each of its Mutations (and nothing for its Reads): prove it by name through the real decorators.
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
+        var compute = Substitute.For<IComputeGateway>();
+        var storage = Substitute.For<IStorageGateway>();
+        var quota = Substitute.For<IQuotaGateway>();
+        storage.EnsureBucketAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("b");
+        var ct = CancellationToken.None;
+        var spec = Spec("job-9");
+
+        var c = new AuditedComputeGateway(compute, auditor);
+        await c.CreateVmAsync(spec, "z", ct);
+        await c.ReuseVmAsync(spec, "deg-job-9", "z", ct);
+        await c.StartVmAsync("deg-job-9", "z", ct);
+        await c.StopVmAsync("deg-job-9", "z", ct);
+        await c.DeleteVmAsync("deg-job-9", "z", ct);
+        await c.DeleteDiskAsync("deg-job-9", "z", ct);
+        var s = new AuditedStorageGateway(storage, auditor);
+        await s.EnsureBucketAsync("p", ct);
+        await s.UploadAsync("b", "jobs/job-9/in/x.gb", new MemoryStream(), ct);
+        await s.DeletePrefixAsync("b", "jobs/job-9/", ct);
+        await new AuditedQuotaGateway(quota, auditor).RequestQuotaIncreaseAsync("p", new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret), ct);
+
+        log.Entries.Select(e => e.Operation).ShouldBe([
+            "Compute.CreateVm", "Compute.ReuseVm", "Compute.StartVm", "Compute.StopVm", "Compute.DeleteVm", "Compute.DeleteDisk",
+            "Storage.EnsureBucket", "Storage.Upload", "Storage.DeletePrefix", "Quota.RequestQuotaIncrease"]);
+        var quotaEntry = log.Entries.Last();
+        quotaEntry.Resource.ShouldBe("projects/p/quotas/NVIDIA_L4_GPUS/regions/us-central1");
+        JsonSerializer.Serialize(log.Entries).ShouldNotContain("JUSTIFICATION");
+        JsonSerializer.Serialize(log.Entries).ShouldNotContain(Secret);
+        log.Entries.Single(e => e.Operation == "Storage.DeletePrefix").Resource.ShouldBe("buckets/b/jobs/job-9");
+    }
+
+    [Fact]
+    public async Task Long_mutations_write_a_started_line_before_the_call_and_a_finished_line_after_with_the_same_correlation_id()
+    {
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
+        var gate = new TaskCompletionSource<VmDescriptor>();
+        var compute = Substitute.For<IComputeGateway>();
+        compute.CreateVmAsync(Arg.Any<VmSpec>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var audited = new AuditedComputeGateway(compute, auditor);
+
+        var pending = audited.CreateVmAsync(Spec("job-8"), "z", CancellationToken.None);
+
+        // A process killed here leaves this evidence behind.
+        log.Started.Single().Operation.ShouldBe("Compute.CreateVm");
+        log.Started.Single().Phase.ShouldBe("started");
+        log.Started.Single().JobId.ShouldBe("job-8");
+        log.Entries.ShouldBeEmpty();
+
+        gate.SetException(new CloudOperationException(new CloudError("ZONE_RESOURCE_POOL_EXHAUSTED", 503, "x"), CloudErrorKind.Stockout));
+        await Should.ThrowAsync<CloudOperationException>(() => pending);
+
+        log.Entries.Single().Phase.ShouldBe("finished");
+        log.Entries.Single().Outcome.ShouldBe("stockout");
+        log.Entries.Single().CorrelationId.ShouldBe(log.Started.Single().CorrelationId);
+        log.Started.Single().CorrelationId.ShouldNotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task A_short_mutation_writes_only_the_finished_line()
+    {
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
+
+        await new AuditedComputeGateway(Substitute.For<IComputeGateway>(), auditor).StopVmAsync("deg-j", "z", CancellationToken.None);
+
+        log.Started.ShouldBeEmpty();
+        log.Entries.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_null_argument_is_a_recorded_failure_and_not_a_synchronous_throw_out_of_the_decorator()
+    {
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
+        var compute = Substitute.For<IComputeGateway>();
+        compute.CreateVmAsync(null!, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<VmDescriptor>>(_ => throw new ArgumentNullException("spec"));
+        var audited = new AuditedComputeGateway(compute, auditor);
+
+        Task<VmDescriptor> task = null!;
+        Should.NotThrow((Action)(() => { task = audited.CreateVmAsync(null!, "z", CancellationToken.None); }));
+        await Should.ThrowAsync<ArgumentNullException>(() => task);
+
+        log.Entries.Single().Outcome.ShouldBe("other");
+        log.Entries.Single().Resource.ShouldBe("(unknown)");
+    }
+
+    [Fact]
+    public async Task A_nested_call_restores_the_outer_calls_ids_when_it_ends()
+    {
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
+
+        await auditor.RunAsync("Outer", () => ("r", null), async () =>
+        {
+            await auditor.RunAsync("Inner", () => ("r2", null), () =>
+            {
+                CloudAuditContext.Note("inner-req", null);
+                return Task.FromResult(1);
+            });
+            CloudAuditContext.Note("outer-req", null);
+            return 1;
+        });
+
+        log.Entries.Single(e => e.Operation == "Inner").RequestId.ShouldBe("inner-req");
+        log.Entries.Single(e => e.Operation == "Outer").RequestId.ShouldBe("outer-req");
+    }
     [Fact]
     public async Task Decorators_route_each_mutating_call_to_the_inner_gateway_and_record_it()
     {

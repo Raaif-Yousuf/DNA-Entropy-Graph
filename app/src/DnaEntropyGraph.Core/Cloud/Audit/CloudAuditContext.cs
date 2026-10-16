@@ -24,8 +24,9 @@ public static class CloudAuditContext
     internal static Scope Begin()
     {
         var holder = new Holder();
+        var previous = Current.Value;
         Current.Value = holder;
-        return new Scope(holder);
+        return new Scope(holder, previous);
     }
 
     internal sealed class Holder
@@ -35,10 +36,11 @@ public static class CloudAuditContext
         public string? OperationId { get; set; }
     }
 
-    internal readonly struct Scope(Holder holder) : IDisposable
+    internal readonly struct Scope(Holder holder, Holder? previous) : IDisposable
     {
         public Holder Holder { get; } = holder;
 
-        public void Dispose() => Current.Value = null;
+        /// <summary>Restores the enclosing call's holder (a decorated call made from inside another one), not null.</summary>
+        public void Dispose() => Current.Value = previous;
     }
 }

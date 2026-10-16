@@ -1403,11 +1403,13 @@ Every call that changes something in the user's Google Cloud project leaves one 
   interface (`Audited*Gateway` in `DnaEntropyGraph.Cloud/AuditedGateways.cs`) around whatever the container hands out: the
   `Resilient*` wrapper over `FakeGcp`, or the real Google gateway. One entry per logical call, with the whole duration including retries.
   `CloudAuditRegistration.Add` (ServiceRegistration) wraps the registered descriptors after the Google/Fake switch, so both backends are
-  audited the same way. A test (`Every_mutating_method_of_every_gateway_interface_is_known_to_the_audit`) fails when a non-read method
-  is added to a gateway interface without being routed through `CloudAuditor`.
+  audited the same way. A test (`Every_method_of_every_gateway_interface_is_classified_as_a_mutation_or_a_read`) holds a closed list of every method
+  of every gateway interface, as a mutation or a read; a new method fails it until someone classifies it and, for a mutation, routes
+  it through `CloudAuditor`. `ProductionCloudWiringTests` sees through `IAuditedGateway.Inner` to check the real gateway underneath.
 - **What is a mutation.** Compute create, reuse (claim, scheduling, metadata, start), stop, delete; Storage `EnsureBucket` (create and
   lifecycle patch) and object upload; the worker identity (service account, role, project and bucket bindings); Service Usage enable;
-  `EnableComputeApi`; billing link; project create. Reads (get, list, find, download, quota) are never logged. MEASURED 2026-10-16
+  `EnableComputeApi`; billing link; project create; start VM; delete disk; delete a job prefix; the quota-increase request
+  (resource `projects/<p>/quotas/<metric>[/regions/<r>]`, never the justification text or contact email). Reads (get, list, find, download, quota) are never logged. MEASURED 2026-10-16
   (read of the interfaces): there is no `setLabels`, bucket-patch or object-delete call at the interface today; they are inside `ReuseVm` and `EnsureBucket`, so
   each shows as that one entry. When one becomes its own interface method, the guard test above names it.
 - **An entry** (`CloudAuditEntry`): `timeUtc`, `installationId`, `jobId` (when the VM name or object key carries one), `operation`
@@ -1418,9 +1420,16 @@ Every call that changes something in the user's Google Cloud project leaves one 
 - **Never in it:** a sequence, an input file name, an object name below `jobs/<id>` (only the prefix is named), an error message, the
   email, a billing account id or the service account email. `CloudAuditTests.No_entry_names_an_input_file_the_email_or_a_message` and
   `Object_prefix_stops_at_the_job...` guard it.
+- **Started and finished lines.** A long mutation (create, reuse, start, delete a VM) writes a `phase: started` line (outcome
+  `started`) BEFORE the call and a `phase: finished` line with the outcome after, both with the same `correlationId`. A process killed
+  mid-call leaves the started line with no finished line: that is the evidence. Short mutations write only the finished line.
+- **Arguments are read inside the audit.** Each decorator passes the resource and job id as a function the auditor runs inside its
+  guarded region, so a null argument is a recorded failure (`resource: (unknown)`, outcome `other`), not a synchronous throw.
 - **Never throws.** `CloudAuditor` and `JsonLinesCloudAuditLog` swallow every failure to write (full disk, locked file, bad path): the
   line is lost, the run is not.
-- **Size.** 1 MB, then the file moves to `cloud-audit.1.jsonl`, replacing the older one: at most about 2 MB.
+- **Size.** 1 MB, then the file moves to `cloud-audit.1.jsonl`, replacing the older one: at most about 2 MB. The cap is soft: if the move
+  fails (the previous file is open in a reader or antivirus), the line is still appended to the current file and the rotation is tried
+  again on the next write.
 - **Support bundle.** `DiagnosticsBundleBuilder` copies both generations as `files/logs/cloud-audit.jsonl` and `.1.jsonl`, redacted
   like a log. Settings > Diagnostics > Open cloud activity log reveals the live file (`CloudActivityLogSettingsViewModel`).
 

@@ -485,6 +485,7 @@ internal static class CloudAuditRegistration
         Decorate<IServiceEnablementGateway>(services, (inner, auditor) => new AuditedServiceEnablementGateway(inner, auditor));
         Decorate<IBillingGateway>(services, (inner, auditor) => new AuditedBillingGateway(inner, auditor));
         Decorate<IProjectCatalogGateway>(services, (inner, auditor) => new AuditedProjectCatalogGateway(inner, auditor));
+        Decorate<IQuotaGateway>(services, (inner, auditor) => new AuditedQuotaGateway(inner, auditor));
     }
 
     private static void Decorate<T>(IServiceCollection services, Func<T, CloudAuditor, T> wrap)

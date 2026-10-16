@@ -22,16 +22,25 @@ public sealed class AuditedComputeGateway(IComputeGateway inner, CloudAuditor au
     private static string Vm(string zone, string name) => $"zones/{zone}/instances/{name}";
 
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.CreateVm", Vm(zone, spec.VmName), spec.JobId, () => inner.CreateVmAsync(spec, zone, cancellationToken));
+        => auditor.RunAsync("Compute.CreateVm", () => (Vm(zone, spec.VmName), spec.JobId), () => inner.CreateVmAsync(spec, zone, cancellationToken), started: true);
 
     public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.ReuseVm", Vm(zone, existingVmName), spec.JobId, () => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken));
+        => auditor.RunAsync("Compute.ReuseVm", () => (Vm(zone, existingVmName), spec.JobId), () => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken), started: true);
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.StopVm", Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName), () => inner.StopVmAsync(vmName, zone, cancellationToken));
+        => auditor.RunAsync("Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StopVmAsync(vmName, zone, cancellationToken));
 
     public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.DeleteVm", Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName), () => inner.DeleteVmAsync(vmName, zone, cancellationToken));
+        => auditor.RunAsync("Compute.DeleteVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.DeleteVmAsync(vmName, zone, cancellationToken), started: true);
+
+    public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.StartVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StartVmAsync(vmName, zone, cancellationToken), started: true);
+
+    public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.DeleteDisk", () => ($"zones/{zone}/disks/{diskName}", null), () => inner.DeleteDiskAsync(diskName, zone, cancellationToken));
+
+    public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken)
+        => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
 
     public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
         => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
@@ -54,13 +63,25 @@ public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor au
     public object Inner => inner;
 
     public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
-        => auditor.RunAsync("Storage.EnsureBucket", $"projects/{projectId}", null, () => inner.EnsureBucketAsync(projectId, cancellationToken), bucket => $"buckets/{bucket}");
+        => auditor.RunAsync("Storage.EnsureBucket", () => ($"projects/{projectId}", null), () => inner.EnsureBucketAsync(projectId, cancellationToken), bucket => $"buckets/{bucket}");
 
     public Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
-    {
         // Only the job prefix is named: the part of the key below it can carry the user's own file name.
+        => auditor.RunAsync("Storage.Upload", () => PrefixOf(bucket, objectKey), () => inner.UploadAsync(bucket, objectKey, content, cancellationToken));
+
+    public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
+        => auditor.RunAsync("Storage.DeletePrefix", () => PrefixOf(bucket, prefix.TrimEnd('/') + "/_"), () => inner.DeletePrefixAsync(bucket, prefix, cancellationToken));
+
+    public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken)
+        => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);
+
+    public Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken)
+        => inner.ListChildPrefixesAsync(bucket, prefix, cancellationToken);
+
+    private static (string Resource, string? JobId) PrefixOf(string bucket, string objectKey)
+    {
         var (prefix, jobId) = CloudAuditor.ObjectPrefix(objectKey);
-        return auditor.RunAsync("Storage.Upload", $"buckets/{bucket}/{prefix}", jobId, () => inner.UploadAsync(bucket, objectKey, content, cancellationToken));
+        return ($"buckets/{bucket}/{prefix}", jobId);
     }
 
     public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
@@ -78,7 +99,7 @@ public sealed class AuditedProjectSetupGateway(IProjectSetupGateway inner, Cloud
     public object Inner => inner;
 
     public Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken)
-        => auditor.RunAsync("ProjectSetup.EnableComputeApi", $"projects/{projectId}/services/compute.googleapis.com", null, () => inner.EnableComputeApiAsync(projectId, cancellationToken));
+        => auditor.RunAsync("ProjectSetup.EnableComputeApi", () => ($"projects/{projectId}/services/compute.googleapis.com", null), () => inner.EnableComputeApiAsync(projectId, cancellationToken));
 
     public Task<ProjectLifecycleState> GetProjectStateAsync(string projectId, CancellationToken cancellationToken)
         => inner.GetProjectStateAsync(projectId, cancellationToken);
@@ -96,7 +117,7 @@ public sealed class AuditedWorkerIdentityGateway(IWorkerIdentityGateway inner, C
 
     // Creates the worker service account and its role, and writes the project and bucket bindings: the one IAM write seam.
     public Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
-        => auditor.RunAsync("Iam.EnsureWorkerIdentity", $"projects/{projectId}/buckets/{bucket}", null, () => inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken));
+        => auditor.RunAsync("Iam.EnsureWorkerIdentity", () => ($"projects/{projectId}/buckets/{bucket}", null), () => inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken));
 }
 
 public sealed class AuditedServiceEnablementGateway(IServiceEnablementGateway inner, CloudAuditor auditor) : IServiceEnablementGateway, IAuditedGateway
@@ -104,7 +125,7 @@ public sealed class AuditedServiceEnablementGateway(IServiceEnablementGateway in
     public object Inner => inner;
 
     public Task EnableServicesAsync(string projectId, IReadOnlyList<string> serviceIds, CancellationToken cancellationToken)
-        => auditor.RunAsync("ServiceUsage.EnableServices", $"projects/{projectId}/services/{string.Join(',', serviceIds)}", null, () => inner.EnableServicesAsync(projectId, serviceIds, cancellationToken));
+        => auditor.RunAsync("ServiceUsage.EnableServices", () => ($"projects/{projectId}/services/{string.Join(',', serviceIds)}", null), () => inner.EnableServicesAsync(projectId, serviceIds, cancellationToken));
 
     public Task<bool> IsServiceEnabledAsync(string projectId, string serviceId, CancellationToken cancellationToken)
         => inner.IsServiceEnabledAsync(projectId, serviceId, cancellationToken);
@@ -116,7 +137,7 @@ public sealed class AuditedBillingGateway(IBillingGateway inner, CloudAuditor au
 
     // The billing account id is not logged: the resource is the project it was linked to.
     public Task LinkProjectAsync(string projectId, string billingAccountId, CancellationToken cancellationToken)
-        => auditor.RunAsync("Billing.LinkProject", $"projects/{projectId}", null, () => inner.LinkProjectAsync(projectId, billingAccountId, cancellationToken));
+        => auditor.RunAsync("Billing.LinkProject", () => ($"projects/{projectId}", null), () => inner.LinkProjectAsync(projectId, billingAccountId, cancellationToken));
 
     public Task<BillingStatus> GetBillingStatusAsync(string projectId, CancellationToken cancellationToken)
         => inner.GetBillingStatusAsync(projectId, cancellationToken);
@@ -130,11 +151,32 @@ public sealed class AuditedProjectCatalogGateway(IProjectCatalogGateway inner, C
     public object Inner => inner;
 
     public Task<ProjectSummary> CreateProjectAsync(string projectId, string displayName, string installationId, CancellationToken cancellationToken)
-        => auditor.RunAsync("ProjectCatalog.CreateProject", $"projects/{projectId}", null, () => inner.CreateProjectAsync(projectId, displayName, installationId, cancellationToken));
+        => auditor.RunAsync("ProjectCatalog.CreateProject", () => ($"projects/{projectId}", null), () => inner.CreateProjectAsync(projectId, displayName, installationId, cancellationToken));
 
     public Task<IReadOnlyList<ProjectSummary>> ListActiveProjectsAsync(CancellationToken cancellationToken)
         => inner.ListActiveProjectsAsync(cancellationToken);
 
     public Task<ProjectSummary?> GetProjectAsync(string projectId, CancellationToken cancellationToken)
         => inner.GetProjectAsync(projectId, cancellationToken);
+}
+
+public sealed class AuditedQuotaGateway(IQuotaGateway inner, CloudAuditor auditor) : IQuotaGateway, IAuditedGateway
+{
+    public object Inner => inner;
+
+    // The resource is the project and the quota metric (and region); the justification text and contact email in the request are never logged.
+    public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken)
+        => auditor.RunAsync(
+            "Quota.RequestQuotaIncrease",
+            () => ($"projects/{projectId}/quotas/{request.Metric}" + (request.Region is { Length: > 0 } region ? $"/regions/{region}" : string.Empty), null),
+            () => inner.RequestQuotaIncreaseAsync(projectId, request, cancellationToken));
+
+    public Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
+        => inner.GetGpuQuotaAsync(projectId, region, acceleratorType, cancellationToken);
+
+    public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken)
+        => inner.ReadQuotaAsync(projectId, cancellationToken);
+
+    public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken)
+        => inner.GetQuotaIncreaseEligibilityAsync(projectId, metric, cancellationToken);
 }

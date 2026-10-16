@@ -26,14 +26,33 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
         return ("(other)", null);
     }
 
-    public async Task<T> RunAsync<T>(string operation, string resource, string? jobId, Func<Task<T>> call, Func<T, string?>? resourceFrom = null)
+    /// <param name="describe">Names the resource and job id. Run INSIDE the guarded region: an argument that is null makes the call fail (and be recorded) instead of throwing out of the decorator.</param>
+    /// <param name="started">True for a long mutation (create, reuse, start, delete a VM): a <c>started</c> line is written before the call, so a process killed mid-call still leaves evidence; the finished line carries the same correlation id.</param>
+    public async Task<T> RunAsync<T>(string operation, Func<(string Resource, string? JobId)> describe, Func<Task<T>> call, Func<T, string?>? resourceFrom = null, bool started = false)
     {
         var start = time.GetTimestamp();
         using var scope = CloudAuditContext.Begin();
+        var resource = "(unknown)";
+        string? jobId = null;
+        var correlation = started ? Guid.NewGuid().ToString("N")[..12] : null;
         try
         {
+            try
+            {
+                (resource, jobId) = describe();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // The call below fails on the same argument with its own exception; the entry names no resource.
+            }
+
+            if (started)
+            {
+                Record(operation, resource, jobId, scope.Holder, "started", null, start, "started", correlation);
+            }
+
             var result = await call().ConfigureAwait(false);
-            Record(operation, resourceFrom?.Invoke(result) ?? resource, jobId, scope.Holder, "ok", null, start);
+            Record(operation, resourceFrom?.Invoke(result) ?? resource, jobId, scope.Holder, "ok", null, start, "finished", correlation);
             return result;
         }
         catch (Exception ex)
@@ -44,18 +63,17 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
                 OperationCanceledException => ("cancelled", null),
                 _ => ("other", null),
             };
-            Record(operation, resource, jobId, scope.Holder, outcome, code, start);
+            Record(operation, resource, jobId, scope.Holder, outcome, code, start, "finished", correlation);
             throw;
         }
     }
 
-    public async Task RunAsync(string operation, string resource, string? jobId, Func<Task> call)
-        => await RunAsync<bool>(operation, resource, jobId, async () =>
+    public async Task RunAsync(string operation, Func<(string Resource, string? JobId)> describe, Func<Task> call, bool started = false)
+        => await RunAsync<bool>(operation, describe, async () =>
         {
             await call().ConfigureAwait(false);
             return true;
-        }).ConfigureAwait(false);
-
+        }, null, started).ConfigureAwait(false);
     public static string Name(CloudErrorKind kind) => kind switch
     {
         CloudErrorKind.Billing => "billing",
@@ -69,7 +87,7 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
         _ => "other",
     };
 
-    private void Record(string operation, string resource, string? jobId, CloudAuditContext.Holder ids, string outcome, string? code, long start)
+    private void Record(string operation, string resource, string? jobId, CloudAuditContext.Holder ids, string outcome, string? code, long start, string phase, string? correlation)
     {
         try
         {
@@ -93,7 +111,9 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
                 ids.OperationId,
                 outcome,
                 code,
-                (long)time.GetElapsedTime(start).TotalMilliseconds));
+                (long)time.GetElapsedTime(start).TotalMilliseconds,
+                phase,
+                correlation));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

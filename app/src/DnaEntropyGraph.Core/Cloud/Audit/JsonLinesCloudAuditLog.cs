@@ -34,10 +34,7 @@ public sealed class JsonLinesCloudAuditLog(string path, long maxBytes = 1_000_00
                     Directory.CreateDirectory(directory);
                 }
 
-                if (File.Exists(Path) && new FileInfo(Path).Length >= maxBytes)
-                {
-                    File.Move(Path, RotatedPath, overwrite: true);
-                }
+                TryRotate();
 
                 using var stream = new FileStream(Path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
                 stream.Write(new UTF8Encoding(false).GetBytes(line));
@@ -46,6 +43,22 @@ public sealed class JsonLinesCloudAuditLog(string path, long maxBytes = 1_000_00
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Lose the line, never the run (a full disk, a locked file, a path that is not usable).
+        }
+    }
+
+    // A rotation that fails (the previous generation is open in a reader, an editor or antivirus) must not lose the line: the cap is
+    // soft, the line goes into the current file, and the next write tries the rotation again.
+    private void TryRotate()
+    {
+        try
+        {
+            if (File.Exists(Path) && new FileInfo(Path).Length >= maxBytes)
+            {
+                File.Move(Path, RotatedPath, overwrite: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 }

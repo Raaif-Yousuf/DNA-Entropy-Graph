@@ -70,10 +70,21 @@ public class ProductionCloudWiringTests : IDisposable
     {
         using var provider = Build();
 
-        var resolved = provider.GetRequiredService(serviceType);
+        // Issue #245: the audit decorator is see-through; what it wraps is what must not be the fake.
+        var resolved = Unwrap(provider.GetRequiredService(serviceType));
 
         resolved.ShouldNotBeOfType<FakeGcp>($"{serviceType.Name} must be the Google-backed gateway in a real build");
         resolved.GetType().Name.ShouldNotStartWith("Fake");
+    }
+
+    private static object Unwrap(object gateway)
+    {
+        while (gateway is IAuditedGateway audited)
+        {
+            gateway = audited.Inner;
+        }
+
+        return gateway;
     }
 
     [Fact]
@@ -91,6 +102,9 @@ public class ProductionCloudWiringTests : IDisposable
         { typeof(IWorkerIdentityGateway), "DnaEntropyGraph.Cloud.Rest.GoogleIamGateway" },
         { typeof(IProjectCatalogGateway), "DnaEntropyGraph.Cloud.Rest.GoogleProjectCatalogGateway" },
         { typeof(IServiceEnablementGateway), "DnaEntropyGraph.Cloud.Rest.GoogleServiceUsageGateway" },
+        { typeof(IProjectSetupGateway), "DnaEntropyGraph.Cloud.Rest.GoogleProjectSetupGateway" },
+        { typeof(IQuotaGateway), "DnaEntropyGraph.Cloud.Rest.GoogleQuotaGateway" },
+        { typeof(IBillingGateway), "DnaEntropyGraph.Cloud.ResilientBillingGateway" },
     };
 
     [Theory]
@@ -105,6 +119,7 @@ public class ProductionCloudWiringTests : IDisposable
         var resolved = provider.GetRequiredService(serviceType);
         var audited = resolved.ShouldBeAssignableTo<IAuditedGateway>($"{serviceType.Name} must be audited (issue #245)");
         audited.Inner.GetType().FullName.ShouldBe(expected);
+        audited.Inner.ShouldNotBeOfType<FakeGcp>();
     }
 
     public static TheoryData<Type> AuditedInterfaces() => new()
@@ -116,6 +131,7 @@ public class ProductionCloudWiringTests : IDisposable
         typeof(IProjectCatalogGateway),
         typeof(IBillingGateway),
         typeof(IServiceEnablementGateway),
+        typeof(IQuotaGateway),
     };
 
     [Theory]
