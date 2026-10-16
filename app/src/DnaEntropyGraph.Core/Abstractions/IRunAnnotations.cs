@@ -7,6 +7,6 @@ namespace DnaEntropyGraph.Core.Abstractions;
 /// </summary>
 public interface IRunAnnotations
 {
-    /// <summary>Sets the notes and tags (a JSON array, see <c>RunTags</c>) of the run; null clears. An unknown id is not an error and creates nothing.</summary>
-    Task UpdateAsync(string jobId, string? notes, string? tagsJson, CancellationToken cancellationToken);
+    /// <summary>Sets the notes and tags (a JSON array, see <c>RunTags</c>) of the run; null clears. An unknown id is not an error and creates nothing; the result is false for it (the run was removed meanwhile), true when a row was written.</summary>
+    Task<bool> UpdateAsync(string jobId, string? notes, string? tagsJson, CancellationToken cancellationToken);
 }

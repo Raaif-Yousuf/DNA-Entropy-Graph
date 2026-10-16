@@ -136,14 +136,14 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
     }
 
     /// <summary>Issue #141: writes only Notes and TagsJson, so it can neither overwrite a concurrent phase write nor be overwritten by one.</summary>
-    public async Task UpdateAsync(string jobId, string? notes, string? tagsJson, CancellationToken cancellationToken)
+    public async Task<bool> UpdateAsync(string jobId, string? notes, string? tagsJson, CancellationToken cancellationToken)
     {
         using var connection = _database.OpenConnection();
         var command = new CommandDefinition(
             "UPDATE Runs SET Notes = @Notes, TagsJson = @TagsJson WHERE Id = @Id;",
             new { Id = jobId, Notes = notes, TagsJson = tagsJson },
             cancellationToken: cancellationToken);
-        await connection.ExecuteAsync(command).ConfigureAwait(false);
+        return await connection.ExecuteAsync(command).ConfigureAwait(false) > 0;
     }
 
     public async Task DeleteAsync(string jobId, CancellationToken cancellationToken)

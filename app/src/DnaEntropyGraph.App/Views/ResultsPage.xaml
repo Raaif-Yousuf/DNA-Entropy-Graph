@@ -43,6 +43,7 @@
                 <TextBox
                     x:Uid="ResultsNotesBox"
                     AcceptsReturn="True"
+                    MaxLength="{x:Bind ViewModel.NotesMaxLength}"
                     TextWrapping="Wrap"
                     MinHeight="72"
                     Text="{x:Bind ViewModel.NotesText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />

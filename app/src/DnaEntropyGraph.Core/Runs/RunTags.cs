@@ -11,6 +11,9 @@ public static class RunTags
     public const int MaxTagLength = 40;
     public const int MaxTags = 20;
 
+    /// <summary>The longest note kept, in UTF-16 characters. The Results box stops at it and a save cuts to it, so an enormous paste can never reach the database, the Runs search or a bundle.</summary>
+    public const int MaxNotesLength = 2000;
+
     private static readonly char[] Separators = [',', ';', '\n', '\r'];
 
     /// <summary>Splits typed text into tags: trimmed, no empties, no repeats (ignoring case), each cut to <see cref="MaxTagLength"/>, at most <see cref="MaxTags"/>.</summary>
@@ -24,7 +27,7 @@ public static class RunTags
         var tags = new List<string>();
         foreach (var part in text.Split(Separators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            var tag = part.Length > MaxTagLength ? part[..MaxTagLength].TrimEnd() : part;
+            var tag = CutTo(part, MaxTagLength);
             if (tag.Length > 0 && !tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
             {
                 tags.Add(tag);
@@ -37,6 +40,21 @@ public static class RunTags
         }
 
         return tags;
+    }
+
+    /// <summary>The note cut to <see cref="MaxNotesLength"/> (never in the middle of a surrogate pair); null stays null.</summary>
+    public static string? ClampNotes(string? notes) => notes is null ? null : CutTo(notes, MaxNotesLength);
+
+    // A cut that lands between the two halves of a surrogate pair (an emoji) drops the lone half, so the text always serializes.
+    private static string CutTo(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        var end = char.IsHighSurrogate(text[maxLength - 1]) ? maxLength - 1 : maxLength;
+        return text[..end].TrimEnd();
     }
 
     /// <summary>The tags stored in a <c>TagsJson</c> value; none for null, empty or anything that is not an array of strings.</summary>

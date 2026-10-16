@@ -107,10 +107,34 @@ internal sealed partial class DiagnosticsRedactor
     private readonly string _profilePath;
     private readonly IReadOnlyList<SensitiveValue> _sensitive;
 
-    public DiagnosticsRedactor(string userProfilePath, IEnumerable<string> sensitiveValues)
+    private readonly Regex? _userText;
+
+    /// <param name="userProfilePath">The Windows profile folder, redacted as a user placeholder.</param>
+    /// <param name="sensitiveValues">Identifiers (names, projects, paths): matched as substrings, like the leak scan.</param>
+    /// <param name="userText">
+    /// The user's own free text (a run's tags and notes, issue #141). Matched as WHOLE tokens only, case-insensitively, in one
+    /// pass, and never checked by the leak scan: a tag such as "completed" or "error" is an ordinary word the bundle itself
+    /// writes, so a substring match would mangle fixed vocabulary and a scan would refuse every bundle.
+    /// </param>
+    public DiagnosticsRedactor(string userProfilePath, IEnumerable<string> sensitiveValues, IEnumerable<string>? userText = null)
     {
         _profilePath = userProfilePath.TrimEnd('\\', '/');
         _sensitive = SensitiveValue.Normalize(sensitiveValues);
+        _userText = WholeTokenRegex(userText);
+    }
+
+    private static Regex? WholeTokenRegex(IEnumerable<string>? values)
+    {
+        var usable = (values ?? [])
+            .Select(v => v?.Trim() ?? string.Empty)
+            .Where(v => v.Length >= 2 && !v.All(char.IsDigit) && v.Any(char.IsLetterOrDigit))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(v => v.Length)
+            .Select(Regex.Escape)
+            .ToList();
+        return usable.Count == 0
+            ? null
+            : new Regex(@"(?<![\p{L}\p{N}])(?:" + string.Join('|', usable) + @")(?![\p{L}\p{N}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     /// <summary>Text redaction for a whole log or file. Output uses LF line endings.</summary>
@@ -157,6 +181,11 @@ internal sealed partial class DiagnosticsRedactor
         foreach (var value in _sensitive)
         {
             line = value.Replace(line, RedactedValue);
+        }
+
+        if (_userText is not null)
+        {
+            line = _userText.Replace(line, RedactedValue);
         }
 
         line = Email().Replace(line, "<email>");

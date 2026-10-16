@@ -63,11 +63,16 @@ public static partial class DiagnosticsBundleBuilder
         // options, and every key and string inside the parts of status and result files that are not copied (contig and
         // record names), so a log line naming any of them is scrubbed too.
         var scrub = new HashSet<string>(info.SensitiveValues, StringComparer.OrdinalIgnoreCase);
+        var userText = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var ids = new JobIdWithholder(scrub);
         foreach (var run in runs)
         {
             ids.Map(run.JobId);
-            AddRunNames(run, scrub, includeNotesAndTags);
+            AddRunNames(run, scrub);
+            if (!includeNotesAndTags)
+            {
+                AddUserText(run, userText);
+            }
         }
 
         var loaded = new List<Loaded>();
@@ -89,7 +94,7 @@ public static partial class DiagnosticsBundleBuilder
         }
 
         // Phase 2: redact and assemble.
-        var redactor = new DiagnosticsRedactor(info.UserProfilePath, scrub);
+        var redactor = new DiagnosticsRedactor(info.UserProfilePath, scrub, userText);
         var entries = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var settings = RedactSettings(source, redactor);
 
@@ -106,7 +111,7 @@ public static partial class DiagnosticsBundleBuilder
             },
             Indented);
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
-        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => includeNotesAndTags ? WithNotesAndTags(ToHistoryRow(run, ids.Map(run.JobId)), run) : ToHistoryRow(run, ids.Map(run.JobId))), Indented);
+        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => includeNotesAndTags ? WithNotesAndTags(ToHistoryRow(run, ids.Map(run.JobId)), run, redactor, scrub) : ToHistoryRow(run, ids.Map(run.JobId))), Indented);
 
         // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
         // the original is written nowhere in the zip.
@@ -167,18 +172,26 @@ public static partial class DiagnosticsBundleBuilder
         _ => null,
     };
 
-    private static void AddRunNames(RunRecord run, HashSet<string> scrub, bool includeNotesAndTags)
+    // Issue #141: a note and a tag are the user's own words. Unless the user ticked the box to share them they are kept out of the
+    // history row and redacted from the copied logs as whole tokens. They are NOT added to the identifier scrub list: that list is
+    // matched as substrings and re-checked by the leak scan, and a tag equal to a word the bundle itself writes ("completed",
+    // "error") made every bundle fail or mangled ordinary log words (cold review of #141, issue #782).
+    private static void AddUserText(RunRecord run, HashSet<string> userText)
     {
-        // Issue #141: a note and a tag are the user's own words, scrubbed like a name unless the user ticked the box to share them.
-        if (!includeNotesAndTags)
+        foreach (var tag in RunTags.Parse(run.TagsJson))
         {
-            foreach (var tag in RunTags.Parse(run.TagsJson))
-            {
-                scrub.Add(tag);
-            }
+            userText.Add(tag);
         }
 
-        foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix, includeNotesAndTags ? null : run.Notes })
+        if (!string.IsNullOrWhiteSpace(run.Notes))
+        {
+            userText.Add(run.Notes.Trim());
+        }
+    }
+
+    private static void AddRunNames(RunRecord run, HashSet<string> scrub)
+    {
+        foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix })
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -337,13 +350,25 @@ public static partial class DiagnosticsBundleBuilder
     };
 
     // Only when the user ticked "include my notes and tags" (issue #141): the row plus those two fields, nothing else added.
-    private static object WithNotesAndTags(object row, RunRecord run)
+    // The user chose to share the words, not a path, an address or a sequence pasted into them: each note and tag goes through the
+    // redactor like a log line, and one that still trips the leak scan is replaced by a fixed placeholder, so a note can never make
+    // the bundle fail (cold review of #141, issue #782).
+    private static object WithNotesAndTags(object row, RunRecord run, DiagnosticsRedactor redactor, IEnumerable<string> scrub)
     {
         var node = JsonSerializer.SerializeToNode(row)!.AsObject();
-        node["notes"] = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes;
-        node["tags"] = JsonSerializer.SerializeToNode(RunTags.Parse(run.TagsJson));
+        node["notes"] = string.IsNullOrWhiteSpace(run.Notes) ? null : Shareable(run.Notes, redactor, scrub);
+        node["tags"] = JsonSerializer.SerializeToNode(RunTags.Parse(run.TagsJson).Select(tag => Shareable(tag, redactor, scrub)).ToList());
         return node;
     }
+
+    private static string Shareable(string text, DiagnosticsRedactor redactor, IEnumerable<string> scrub)
+    {
+        var redacted = redactor.RedactText(text);
+        var probe = new Dictionary<string, string> { ["note"] = redacted };
+        return DiagnosticsLeakScan.Find(probe, scrub) is null ? redacted : OmittedNote;
+    }
+
+    private const string OmittedNote = "<omitted: note withheld>";
 
     private static byte[] Zip(SortedDictionary<string, string> entries, DateTimeOffset createdUtc)
     {

@@ -36,6 +36,7 @@ public static class ResultsCopy
     // Issue #141: notes and tags on the run.
     public const string NotesSaved = "Results_NotesSaved";
     public const string NotesSaveFailed = "Results_NotesSaveFailed";
+    public const string NotesRunGone = "Results_NotesRunGone";
 
     // The worker's direction tokens (DirectionKey maps a token to one of these).
     public const string DirectionBothCombined = "Results_Direction_BothCombined";
@@ -73,7 +74,7 @@ public static class ResultsCopy
     [
         NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed,
         IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, IgvNoAnswer, ViewerUnsafePath, IgvPathUnsendable, IgvNoGenome, IgvFirstInputOnly,
-        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed, NotesSaved, NotesSaveFailed,
+        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed, NotesSaved, NotesSaveFailed, NotesRunGone,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
     ];

@@ -2849,4 +2849,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DiagnosticsIncludeNotesBox.Content" xml:space="preserve">
     <value>Include my run notes and tags in the file (they are your own words, so they are left out unless you tick this)</value>
   </data>
+  <data name="Results_NotesRunGone" xml:space="preserve">
+    <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
+  </data>
 </root>

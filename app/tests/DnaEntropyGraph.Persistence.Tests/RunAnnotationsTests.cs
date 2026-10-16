@@ -52,8 +52,8 @@ public sealed class RunAnnotationsTests
         var repository = new RunRepository(new SqliteDatabase(paths.DatabasePath));
         IRunAnnotations annotations = repository;
         await repository.UpsertAsync(new RunRecord("job-c", JobPhase.Completed, DateTimeOffset.UtcNow, Notes: "x", TagsJson: """["t"]"""), CancellationToken.None);
-        await annotations.UpdateAsync("job-c", null, null, CancellationToken.None);
-        await annotations.UpdateAsync("ghost", "n", null, CancellationToken.None);
+        (await annotations.UpdateAsync("job-c", null, null, CancellationToken.None)).ShouldBeTrue();
+        (await annotations.UpdateAsync("ghost", "n", null, CancellationToken.None)).ShouldBeFalse();
 
         var all = await repository.GetAllAsync(CancellationToken.None);
         all.Count.ShouldBe(1);

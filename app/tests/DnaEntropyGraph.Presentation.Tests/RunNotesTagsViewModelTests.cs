@@ -31,6 +31,7 @@ public sealed class RunNotesTagsViewModelTests
     {
         _strings.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
         _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => _rows);
+        _annotations.UpdateAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(true);
     }
 
     private ResultsViewModel Results() => new(_repository, Substitute.For<IRunOutputReader>(), Substitute.For<IShellLauncher>(), Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), annotations: _annotations);
@@ -99,7 +100,7 @@ public sealed class RunNotesTagsViewModelTests
     public async Task A_failed_save_says_so_and_keeps_what_was_typed()
     {
         _rows = [Row("r")];
-        _annotations.UpdateAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(Task.FromException(new IOException("locked")));
+        _annotations.UpdateAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<bool>(new IOException("locked")));
         var vm = Results();
         await vm.LoadAsync("r", TestContext.Current.CancellationToken);
         vm.NotesText = "keep me";
@@ -108,6 +109,67 @@ public sealed class RunNotesTagsViewModelTests
 
         vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesSaveFailed);
         vm.NotesText.ShouldBe("keep me");
+    }
+
+    [Fact]
+    public async Task Saving_for_a_run_that_was_removed_meanwhile_says_so_and_never_says_saved()
+    {
+        _rows = [Row("r")];
+        _annotations.UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(false);
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = "typed";
+
+        await vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesRunGone);
+        vm.NotesText.ShouldBe("typed");
+    }
+
+    [Fact]
+    public async Task A_note_longer_than_the_limit_is_cut_to_the_limit_before_it_is_stored()
+    {
+        _rows = [Row("r")];
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesMaxLength.ShouldBe(RunTags.MaxNotesLength);
+        vm.NotesText = new string('x', RunTags.MaxNotesLength + 500);
+
+        await vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        await _annotations.Received(1).UpdateAsync("r", Arg.Is<string?>(n => n != null && n.Length == RunTags.MaxNotesLength), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_tag_that_ends_in_an_emoji_at_the_limit_saves_instead_of_throwing()
+    {
+        _rows = [Row("r")];
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.TagsText = new string('a', RunTags.MaxTagLength - 1) + "😀" + "tail";
+
+        await vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesSaved);
+    }
+
+    [Fact]
+    public async Task A_save_that_finishes_after_the_page_moved_to_another_run_leaves_that_run_alone()
+    {
+        _rows = [Row("one", "first"), Row("two", "second")];
+        var gate = new TaskCompletionSource<bool>();
+        _annotations.UpdateAsync("one", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Results();
+        await vm.LoadAsync("one", TestContext.Current.CancellationToken);
+        vm.NotesText = "edited one";
+        var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        await vm.LoadAsync("two", TestContext.Current.CancellationToken);
+        gate.SetResult(true);
+        await saving;
+
+        vm.NotesText.ShouldBe("second");
+        vm.AnnotationsStatusText.ShouldBeEmpty();
     }
 
     [Fact]

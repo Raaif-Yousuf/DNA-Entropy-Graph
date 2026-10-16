@@ -52,4 +52,31 @@ public sealed class RunTagsTests
     {
         RunTags.Format(["a", "b"]).ShouldBe("a, b");
     }
+
+    [Fact]
+    public void A_tag_cut_at_the_limit_never_splits_a_surrogate_pair_and_still_serializes()
+    {
+        // 39 letters, then a 2-char emoji straddling index 40.
+        var typed = new string('a', RunTags.MaxTagLength - 1) + "😀" + "tail";
+
+        var tags = RunTags.ParseInput(typed);
+
+        tags.Count.ShouldBe(1);
+        tags[0].Length.ShouldBeLessThanOrEqualTo(RunTags.MaxTagLength);
+        char.IsHighSurrogate(tags[0][^1]).ShouldBeFalse();
+        Should.NotThrow(() => RunTags.Serialize(tags));
+    }
+
+    [Fact]
+    public void A_note_over_the_limit_is_cut_at_the_limit_without_splitting_a_surrogate_pair()
+    {
+        var typed = new string('n', RunTags.MaxNotesLength - 1) + "😀" + "tail";
+
+        var clamped = RunTags.ClampNotes(typed)!;
+
+        clamped.Length.ShouldBeLessThanOrEqualTo(RunTags.MaxNotesLength);
+        char.IsHighSurrogate(clamped[^1]).ShouldBeFalse();
+        RunTags.ClampNotes("short").ShouldBe("short");
+        RunTags.ClampNotes(null).ShouldBeNull();
+    }
 }

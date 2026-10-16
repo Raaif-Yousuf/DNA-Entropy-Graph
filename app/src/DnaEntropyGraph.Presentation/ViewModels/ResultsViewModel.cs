@@ -60,6 +60,9 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     partial void OnTagsTextChanged(string value) => AnnotationsStatusText = string.Empty;
 
+    /// <summary>How many characters the note box accepts (the page binds its <c>MaxLength</c> to this; a save cuts to it as well).</summary>
+    public int NotesMaxLength => RunTags.MaxNotesLength;
+
     public bool HasAnnotationsStatus => AnnotationsStatusText.Length > 0;
 
     [ObservableProperty]
@@ -408,15 +411,33 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
-        var notes = string.IsNullOrWhiteSpace(NotesText) ? null : NotesText.Trim();
+        var generation = Volatile.Read(ref _loadGeneration);
+        var notes = string.IsNullOrWhiteSpace(NotesText) ? null : RunTags.ClampNotes(NotesText.Trim());
         var tags = RunTags.ParseInput(TagsText);
+        bool found;
         try
         {
-            await _annotations.UpdateAsync(jobId, notes, RunTags.Serialize(tags), cancellationToken);
+            found = await _annotations.UpdateAsync(jobId, notes, RunTags.Serialize(tags), cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaveFailed);
+            if (IsStillShowing(jobId, generation))
+            {
+                AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaveFailed);
+            }
+
+            return;
+        }
+
+        // The page may have moved on to another run while the write was in flight: that run's box and message are not ours to touch.
+        if (!IsStillShowing(jobId, generation))
+        {
+            return;
+        }
+
+        if (!found)
+        {
+            AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesRunGone);
             return;
         }
 
@@ -424,6 +445,9 @@ public sealed partial class ResultsViewModel : ObservableObject
         TagsText = RunTags.Format(tags);
         AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaved);
     }
+
+    private bool IsStillShowing(string jobId, int generation)
+        => generation == Volatile.Read(ref _loadGeneration) && string.Equals(_annotationsJobId, jobId, StringComparison.Ordinal);
 
     [RelayCommand]
     private void ShowRuns() => _navigator.NavigateTo("Runs");
