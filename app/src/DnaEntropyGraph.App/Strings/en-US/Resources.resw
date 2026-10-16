@@ -1030,6 +1030,45 @@
   <data name="RunsRefreshButton.Content" xml:space="preserve">
     <value>Refresh</value>
   </data>
+  <data name="RunsImportButton.Content" xml:space="preserve">
+    <value>Find runs from other computers</value>
+  </data>
+  <data name="Runs_Import_Running" xml:space="preserve">
+    <value>Looking in your cloud results for runs from other computers...</value>
+  </data>
+  <data name="Runs_Import_None" xml:space="preserve">
+    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
+  </data>
+  <data name="Runs_Import_Done_One" xml:space="preserve">
+    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
+  </data>
+  <data name="Runs_Import_Done_Many" xml:space="preserve">
+    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
+  </data>
+  <data name="Runs_Import_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed" xml:space="preserve">
+    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
+  </data>
+  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
+  </data>
+  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
+    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed_Network" xml:space="preserve">
+    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
+  </data>
+  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
+    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
+  </data>
+  <data name="Runs_Imported_Badge" xml:space="preserve">
+    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
+    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+  </data>
   <data name="RunsOpenButton.Content" xml:space="preserve">
     <value>Open</value>
   </data>
@@ -1804,7 +1843,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Continue to reset, or Cancel to keep your settings.</value>
   </data>
   <data name="AdvancedResetDone" xml:space="preserve">
-    <value>Settings were reset. Close the app and open it again to finish.</value>
+    <value>Settings were reset to their starting values. The Settings page shows them now.</value>
   </data>
   <data name="AdvancedNotSaved" xml:space="preserve">
     <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
