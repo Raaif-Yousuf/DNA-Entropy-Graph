@@ -756,7 +756,8 @@ _GPU_OK = (
     "import pytest\n\n\n@pytest.mark.gpu\ndef test_on_gpu():\n    assert True\n\n\n"
     "def test_unmarked_would_fail():\n    assert False\n"
 )
-_GPU_BROKEN = "import pytest\nimport a_dev_only_dependency_not_installed\n\n\n@pytest.mark.gpu\ndef test_x():\n    pass\n"
+_GPU_BROKEN = "import pytest\nimport a_dev_only_dependency_not_installed\n\n\n"
+_GPU_BROKEN += "@pytest.mark.gpu\ndef test_x():\n    pass\n"
 _DEV_ONLY_BROKEN = "import another_dev_only_dependency_not_installed\n\n\ndef test_y():\n    pass\n"
 
 
