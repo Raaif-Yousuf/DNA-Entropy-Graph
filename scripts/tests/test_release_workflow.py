@@ -266,9 +266,6 @@ def test_images_build_both_variants_scan_and_attest(text):
     assert re.search(r"variant:\s*\[cuda, cpu\]|- cuda\n\s+- cpu", images)
     assert "docker/build-push-action@" in images
     assert "provenance: mode=max" in images
-    trivy = images[images.index("aquasecurity/trivy-action@") :]
-    assert re.search(r"exit-code: '1'", trivy), "the Trivy gate must fail the job"
-    assert re.search(r"severity: 'CRITICAL,HIGH'", trivy)
     assert "anchore/sbom-action@" in images
     assert "actions/attest@" in images
     assert "attestations: write" in images and "packages: write" in images
@@ -279,6 +276,56 @@ def test_images_run_the_pin_checker_on_the_variants_dockerfile_before_building(t
     pin = _by_name(steps, "the base image is pinned by digest")
     assert 'python3 scripts/release_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"' in pin
     assert _pos(steps, "the base image is pinned by digest") < _pos(steps, "build and push")
+
+
+TRIVY_REPORT = "Trivy report (SARIF, fixable and unfixed HIGH and CRITICAL)"
+TRIVY_UPLOAD = "upload the Trivy report to code scanning"
+TRIVY_GATE = "Trivy gate (fails on a fixable CRITICAL finding)"
+TRIVY_ALLOWLIST = "the Trivy allowlist has no expired entry"
+
+
+def test_trivy_gate_fails_on_fixable_critical_only(text):
+    gate = _by_name(_steps(_jobs(text)["images"]), TRIVY_GATE)
+    assert "aquasecurity/trivy-action@" in gate
+    assert "exit-code: '1'" in gate
+    assert "severity: 'CRITICAL'" in gate and "HIGH" not in gate
+    assert "ignore-unfixed: true" in gate
+    assert "trivyignores: .trivyignore.yaml" in gate
+
+
+def test_trivy_report_lists_high_without_failing_and_is_uploaded_as_sarif(text):
+    steps = _steps(_jobs(text)["images"])
+    report = _by_name(steps, TRIVY_REPORT)
+    assert "format: sarif" in report and "exit-code: '0'" in report
+    assert "severity: 'CRITICAL,HIGH'" in report
+    assert "limit-severities-for-sarif: true" in report
+    assert "trivyignores: .trivyignore.yaml" in report
+    upload = _by_name(steps, TRIVY_UPLOAD)
+    assert "github/codeql-action/upload-sarif@" in upload
+    assert "category: trivy-${{ matrix.variant }}" in upload
+    assert "sarif_file:" in upload
+
+
+def test_trivy_report_is_uploaded_before_the_gate_can_stop_the_job(text):
+    steps = _steps(_jobs(text)["images"])
+    _assert_order(steps, ["build and push", TRIVY_REPORT, TRIVY_UPLOAD, TRIVY_GATE])
+
+
+def test_trivy_actions_are_pinned_by_commit_sha(text):
+    for step in _steps(_jobs(text)["images"]):
+        for use in re.findall(r"uses: (aquasecurity/\S+|github/codeql-action/\S+)", step):
+            assert re.search(r"@[0-9a-f]{40}$", use), f"{use} must be pinned by a full commit sha"
+
+
+def test_images_job_may_write_security_events(text):
+    assert "security-events: write" in _jobs(text)["images"]
+
+
+def test_expired_allowlist_entries_fail_the_release_before_the_build(text):
+    steps = _steps(_jobs(text)["images"])
+    allow = _by_name(steps, TRIVY_ALLOWLIST)
+    assert "python3 scripts/check_trivy_allowlist.py" in allow
+    assert _pos(steps, TRIVY_ALLOWLIST) < _pos(steps, "build and push")
 
 
 def test_every_matrix_variant_has_a_dockerfile_the_checker_reads():

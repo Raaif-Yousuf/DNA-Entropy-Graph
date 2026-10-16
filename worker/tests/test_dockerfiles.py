@@ -65,7 +65,43 @@ def test_cpu_image_installs_from_a_locked_lockfile() -> None:
     text = DOCKERFILE_CPU.read_text(encoding="utf-8")
     assert "uv.lock" in text
     assert "uv export --locked" in text
-    assert "pip install --no-deps -r requirements.lock.txt" in text
+    assert "pip install --require-hashes --no-deps -r requirements.lock.txt" in text
+
+
+def test_cpu_lockfile_install_is_hash_verified() -> None:
+    """#255: a version pin alone trusts whatever PyPI serves under that version; the export must
+    keep the hashes (no --no-hashes) and pip must refuse anything unhashed."""
+    code = _code_only(DOCKERFILE_CPU)
+    assert "--no-hashes" not in code
+    assert "--require-hashes" in code
+
+
+def test_uv_lock_carries_hashes_for_the_cpu_image_dependencies() -> None:
+    text = (WORKER_DIR / "uv.lock").read_text(encoding="utf-8")
+    assert "sha256:" in text
+
+
+def test_cuda_base_is_pinned_by_digest() -> None:
+    """#255: the release pin gate refuses an unpinned FROM, so cuda must carry a literal digest."""
+    import re
+
+    code = _code_only(DOCKERFILE_CUDA)
+    froms = [ln for ln in code.splitlines() if ln.strip().startswith("FROM ")]
+    assert len(froms) == 1
+    assert re.search(r"^FROM nvcr\.io/nvidia/pytorch:\S+@sha256:[0-9a-f]{64}$", froms[0])
+
+
+def test_every_from_has_its_human_readable_tag_in_a_comment() -> None:
+    """A bare digest is unreadable: the tag it was resolved from stays in a comment above the FROM."""
+    for path, tag in (
+        (DOCKERFILE_CPU, "python:3.12-slim"),
+        (DOCKERFILE_CUDA, "nvcr.io/nvidia/pytorch:25.06-py3"),
+    ):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        idx = next(i for i, ln in enumerate(lines) if ln.startswith("FROM "))
+        above = "\n".join(lines[max(0, idx - 12) : idx])
+        assert tag in above, f"{path.name}: name {tag} in a comment above FROM"
+        assert "resolved" in above.lower()
 
 
 def test_uv_lock_file_exists() -> None:

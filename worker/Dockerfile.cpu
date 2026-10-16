@@ -13,8 +13,8 @@
 # Base image pinned by digest (issue #255): python:3.12-slim, resolved 2026-09-19 via the
 # public Docker Hub registry API (a free, unauthenticated manifest-list read — no cloud
 # spend, no GCP/billing call). Re-resolve and update this digest whenever the base image
-# needs a security patch; `docker build` will otherwise keep using this exact, byte-for-
-# byte-reproducible base forever.
+# needs a security patch (the release Trivy scan tells you when); `docker build` will
+# otherwise keep using this exact, byte-for-byte-reproducible base forever.
 FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
 
 LABEL org.opencontainers.image.source="https://github.com/Raaif-Yousuf/DNA-Entropy-Graph"
@@ -50,13 +50,14 @@ COPY pyproject.toml uv.lock ./
 # someone forgot to regenerate) rather than silently re-resolving, which would defeat the
 # whole point. `uv` itself is pinned by exact version (matching the version this repo's
 # own dev tooling uses) and removed again in the same layer so it never ships in the
-# final image. `--no-hashes`: this repo does not currently commit to a hash-pinned
-# supply chain (no `uv.lock` hash verification workflow exists yet); dropping hashes
-# keeps this a version pin, not a false promise of hash verification nothing checks.
+# final image. The export keeps uv.lock's sha256 hashes and `pip install --require-hashes`
+# refuses any file whose hash is not listed, so a version re-uploaded or tampered with on
+# PyPI fails the build instead of shipping (#255). `--require-hashes` also forces every
+# requirement to be pinned, which is why `--no-deps` is the only mode that works here.
 RUN pip install "uv==0.12.13" \
-    && uv export --locked --no-hashes --no-emit-project --extra genes -o requirements.lock.txt \
+    && uv export --locked --no-emit-project --extra genes -o requirements.lock.txt \
     && pip uninstall -y uv \
-    && pip install --no-deps -r requirements.lock.txt
+    && pip install --require-hashes --no-deps -r requirements.lock.txt
 
 COPY src ./src
 
