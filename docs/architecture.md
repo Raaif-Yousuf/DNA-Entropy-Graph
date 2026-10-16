@@ -82,7 +82,7 @@ Google Cloud call.
 | `DnaEntropyGraph.Core` | `RunOptions`, the contract DTOs (`JobManifest`, `ProgressEvent`, `WorkerStatus`, `WorkerResult`), `JobPhase`/`JobStateMachine`, `ErrorCatalog`, `GpuPlanner`/`ModelGpuLinker`, `CostEstimator`, the C# port of the input sniffer/validator (`SequenceSniffer`, `SequenceValidator` - mirrors `worker/src/dna_entropy/validation/validators.py`, kept aligned via shared `tests/contract-fixtures/` vectors), `RunNamer`. |
 | `DnaEntropyGraph.Cloud` | **The only project referencing `Google.*`** (CLAUDE.md rule 7). Every gateway interface (`IComputeGateway`, `IStorageGateway`, `IProjectSetupGateway`, `IQuotaGateway`, ...), the real Google-backed implementations, `GcpProvisioner` (the zone ladder), `VmLifecycleService`, `CloudJobRunner`, `CloudResourceInventory`, `StartupMetadata`, and `FakeGcp` (the in-memory test double every other test project depends on instead of a real project). |
 | `DnaEntropyGraph.Persistence` | `SqliteDatabase`, numbered migrations under `PRAGMA user_version`, `RunRepository`, `CloudResourceRepository`, `ProjectRepository`, `SettingsStore`, `DpapiTokenStore`. |
-| `DnaEntropyGraph.LocalEngine` | `LocalEngineManager` (install/repair/health of the local `uv`-managed venv or WSL2 fallback per D15), `LocalJobRunner` (launches the worker as a child process), `RunTargetResolver` (Cloud / This PC / Auto). |
+| `DnaEntropyGraph.LocalEngine` | `LocalEngineManager` (health of the local `uv`-managed venv, with `NvidiaSmiGpuDetector` for the GPU), `LocalEngineInstaller` (install/repair/remove with the bundled `uv`), `LocalJobRunner` (launches the worker as a child process over `--store localdir`), `RunTargetResolver` (Cloud / This PC / Auto). Details: [local_engine.md](local_engine.md). |
 | `DnaEntropyGraph.CloudCli` (tool) | A console host for scripts: `resources list`, `bucket describe`, `vm create` - used by `scripts/cloud_gpu_test.ps1` and by nothing user-facing. |
 
 `JobEngine` (in `App`, singleton) owns the active runs, survives navigation, and
@@ -286,7 +286,7 @@ regardless:
  (`Deferred`), never failed; the next launch looks again. A run killed before provisioning goes to the runner,
  which records the same `cloud_not_connected` a live run gets.
  - A row that cannot be rebuilt into a request (no project, unreadable options) is `Failed` with a code, never left
- non-terminal. A local-engine row is skipped (no `LocalJobRunner` yet, #174).
+ non-terminal. A local-engine row (`Target = local`) is skipped: it has no VM to reattach, and a This PC row a killed app left non-terminal is not failed on relaunch yet (see local_engine.md section 6).
 
  A reattached run is driven through ActiveRuns (Core/Cloud), the same registry the engine registers its own runs in, so Cancel stops and awaits whichever task drives a job before it writes its own phase (one writer). The cancel signals when it has ended (ActiveRuns.CancelAsync / WhenCancelSettledAsync), success or failure, so the reattach reports the run as the row then is without polling, and ends with the app's shutdown; a cancel that failed leaves the row non-terminal for the next launch. A lookup the cloud refused (billing, permission) is not evidence of a VM or a result: a run that could still provision then still needs its worker image, and a row with no recorded bucket is judged without creating one.
 

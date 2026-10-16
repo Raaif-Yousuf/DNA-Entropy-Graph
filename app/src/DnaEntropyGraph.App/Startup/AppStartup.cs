@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.LocalEngine;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DnaEntropyGraph.App.Startup;
@@ -11,7 +12,8 @@ namespace DnaEntropyGraph.App.Startup;
 public static class AppStartup
 {
     /// <summary>
-    /// Reattaches every run a killed or closed app left in a non-terminal phase and enforces the lifecycle of every finished run's VM
+    /// First judges every This PC run a killed or closed app left non-terminal (<see cref="LocalJobRunner.ReconcileInterruptedAsync"/>), then
+    /// reattaches every cloud run a killed or closed app left in a non-terminal phase and enforces the lifecycle of every finished run's VM
     /// (<see cref="JobReconciler.ReconcileAsync"/>); the same pass runs again when the connection returns (<see cref="ReconcileOnReconnect"/>).
     /// The returned task ends when every reattached run has ended; the app does not await it, so launch is never held up by a run that takes minutes.
     /// Never faults: a failure here must not take the app down, and the rows it could not judge are looked at again next launch.
@@ -20,6 +22,17 @@ public static class AppStartup
     {
         // Issue #113: the nothing-left-running scan starts first and is not awaited (it scans once now, then every 5 minutes); it never faults.
         _ = services.GetRequiredService<Presentation.Services.LeftRunningGuard>().StartAsync(cancellationToken);
+
+        // This PC runs first and on their own: a run a killed app left non-terminal has no cloud side, and its row must not wait on the network (issue #734).
+        try
+        {
+            await services.GetRequiredService<LocalJobRunner>().ReconcileInterruptedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The rows stay non-terminal and are judged again next launch.
+        }
+
         try
         {
             // The pass runs here, not through ReconcileOnReconnect, so the reconnect probe is started by hand once the pass has judged every run:
