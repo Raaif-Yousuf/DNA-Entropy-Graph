@@ -150,8 +150,8 @@ public sealed partial class ShellViewModel : ObservableObject
         }
     }
 
-    /// <summary>The navigation item the shell selects at startup: the remembered page's (issue #244), else New run. Valid after <see cref="PrepareSessionAsync"/>.</summary>
-    public string StartupNavKey { get; private set; } = InitialPageKeyValue;
+    /// <summary>The navigation item the shell selects at startup: the remembered page's (issue #244), else New run; null when the user already chose a page. Valid after <see cref="PrepareSessionAsync"/>.</summary>
+    public string? StartupNavKey { get; private set; } = InitialPageKeyValue;
 
     /// <summary>How long startup waits for the remembered page to resolve before opening on New run (issue #244). Tests shorten it.</summary>
     public TimeSpan SessionRestoreTimeout { get; set; } = TimeSpan.FromSeconds(2);
@@ -186,8 +186,9 @@ public sealed partial class ShellViewModel : ObservableObject
 
         if (_userNavigated)
         {
-            // The user clicked a page while this was resolving: that choice stands and nothing is restored on top of it.
-            StartupNavKey = _currentPageKey;
+            // The user went to a page while this was resolving (a nav item, or one with none such as the setup wizard): that choice stands,
+            // nothing is restored on top of it, and null tells the window to leave the selection alone.
+            StartupNavKey = null;
             return;
         }
 

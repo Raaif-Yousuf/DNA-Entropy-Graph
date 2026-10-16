@@ -1,2 +1,3 @@
 - App: opens on the page and run you left (Runs, Cloud, Settings, a run's progress or results); a run that finished while the app was closed opens on its results, a deleted run falls back to New run, and Open with or a notification still wins. The last page is saved by wrapping the navigator, so every navigation records it (#244).
 - Startup: finding where you left off waits at most 2 seconds (a locked or hung run history opens New run instead of a blank window), the window is always marked ready for Open-with, and a page you click while it resolves is kept (#244).
+- Startup: a page with no navigation item (the setup wizard opened from the status pill) is no longer replaced by New run when the restore finishes (#244).

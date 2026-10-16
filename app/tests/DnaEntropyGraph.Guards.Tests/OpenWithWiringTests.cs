@@ -22,7 +22,11 @@ public class OpenWithWiringTests
         ready.ShouldBeGreaterThan(select, "MarkReady must come after the first navigation is selected");
 
         // Issue #244: a failing or slow restore must still end in MarkReady, or every Open-with launch is dropped.
-        code.IndexOf("finally", StringComparison.Ordinal).ShouldBeInRange(select, ready);
+        var finallyAt = code.IndexOf("finally", StringComparison.Ordinal);
+        finallyAt.ShouldBeGreaterThan(select);
+        var open = code.IndexOf('{', finallyAt);
+        var close = code.IndexOf('}', open);
+        ready.ShouldBeInRange(open, close, "MarkReady must sit inside the finally block");
     }
 
     [Fact]
