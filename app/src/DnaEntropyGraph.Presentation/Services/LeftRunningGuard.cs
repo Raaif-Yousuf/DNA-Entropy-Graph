@@ -193,8 +193,8 @@ public sealed class LeftRunningGuard : IDisposable
 
         return choice switch
         {
-            0 => await EndAllAsync(report.RunningVms, false, "LeftRunning_StopFailed", cancellationToken).ConfigureAwait(false),
-            1 => await EndAllAsync(report.RunningVms, true, "LeftRunning_DeleteFailed", cancellationToken).ConfigureAwait(false),
+            0 => await EndAllAsync(report.RunningVms, false, "LeftRunning_StopFailedTitle", "LeftRunning_StopFailedBody", cancellationToken).ConfigureAwait(false),
+            1 => await EndAllAsync(report.RunningVms, true, "LeftRunning_DeleteFailedTitle", "LeftRunning_DeleteFailedBody", cancellationToken).ConfigureAwait(false),
             _ => true,
         };
     }
@@ -211,7 +211,7 @@ public sealed class LeftRunningGuard : IDisposable
     /// first and ends a live run's row (Hard Rule 11). "Finishing on Google's side" is claimed only when the request was accepted before the bound (or the same job is already being
     /// ended); a request that was never accepted is a failure that keeps the window open.
     /// </summary>
-    private async Task<bool> EndAllAsync(IReadOnlyList<LeftRunningVm> vms, bool delete, string failureKey, CancellationToken cancellationToken)
+    private async Task<bool> EndAllAsync(IReadOnlyList<LeftRunningVm> vms, bool delete, string failureTitleKey, string failureBodyKey, CancellationToken cancellationToken)
     {
         var installation = InstallationId.GetOrCreate(_settings);
         var results = await Task.WhenAll(vms.Select(async vm =>
@@ -248,7 +248,7 @@ public sealed class LeftRunningGuard : IDisposable
         var failed = results.Where(r => r.Item2 == EndResult.Failed).Select(r => r.vm.Name).ToList();
         if (failed.Count > 0)
         {
-            _toasts.ShowToast(Text(failureKey + "Title"), Text(failureKey + "Body", string.Join(", ", failed)), ToastSeverity.Error);
+            _toasts.ShowToast(Text(failureTitleKey), Text(failureBodyKey, string.Join(", ", failed)), ToastSeverity.Error);
             return false;
         }
 
