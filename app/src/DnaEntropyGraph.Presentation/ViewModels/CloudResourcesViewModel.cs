@@ -110,7 +110,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
                 Disks.Add(new CloudDiskRow(
                     disk.Name,
                     disk.Zone,
-                    Format(disk.Users.Count > 0 ? "CloudDisk_Attached" : "CloudDisk_Detached", disk.SizeGb, disk.Status),
+                    Format(disk.Users.Count > 0 ? "CloudDisk_Attached" : "CloudDisk_Detached", disk.SizeGb),
                     pricing is null ? string.Empty : Format("CloudDisk_Cost", Money(pricing.DiskUsdPerDay(disk.SizeGb)))));
             }
 
@@ -122,8 +122,10 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             IsEmpty = Vms.Count == 0 && Disks.Count == 0 && inventory.Bucket is not { JobCount: > 0 };
             ErrorText = string.Empty;
         }
-        catch (CloudOperationException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Any failure, not only Google's: the page is opened fire-and-forget, so an exception left here would vanish and leave a blank page (#740).
+            LogFailure("listing the project", ex);
             ErrorText = Format("CloudPage_ListFailed");
         }
         finally
@@ -151,8 +153,9 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             {
                 inventory = await _cleanup.InventoryAsync(project, installation, cancellationToken);
             }
-            catch (CloudOperationException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                LogFailure("listing before delete everything", ex);
                 ErrorText = Format("CloudPage_ListFailed");
                 return;
             }
@@ -168,11 +171,20 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             CleanupReport report;
             try
             {
-                report = await _cleanup.DeleteAllAsync(project, installation, cancellationToken);
+                // Only what the dialog named: a computer, disk or folder that appeared meanwhile is left alone and reported (#740).
+                report = await _cleanup.DeleteAllAsync(project, installation, cancellationToken, inventory);
             }
             catch (CloudOperationException)
             {
+                // Thrown only by the listings that come before the first delete: nothing has been deleted.
                 ErrorText = Format("CloudPage_DeleteAllFailed");
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Anything else may have struck mid-sweep, so this message does not claim nothing was deleted.
+                LogFailure("delete everything", ex);
+                ErrorText = Format("CloudPage_DeleteAllInterrupted");
                 return;
             }
 
@@ -256,14 +268,19 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             await call();
             ErrorText = string.Empty;
         }
-        catch (CloudOperationException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            LogFailure("a computer action", ex);
             ErrorText = Format("CloudPage_ActionFailed", vm.Name);
             return;
         }
 
         await RefreshAsync(cancellationToken);
     }
+
+    /// <summary>The error class only, never a message (it can carry a project or file name).</summary>
+    private static void LogFailure(string what, Exception ex)
+        => System.Diagnostics.Trace.TraceWarning($"cloud page failed while {what}: {ex.GetType().Name}");
 
     private PricingTable? LoadPricing()
     {
@@ -288,11 +305,12 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
 
     private static string Money(double usd) => usd.ToString("F2", CultureInfo.InvariantCulture);
 
-    private static string Size(long bytes) => bytes switch
+    /// <summary>A byte count in the largest unit that fits; the unit words live in Resources.resw (Hard Rule 13), the number is culture-invariant.</summary>
+    private string Size(long bytes) => bytes switch
     {
-        >= 1_000_000_000 => (bytes / 1_000_000_000.0).ToString("F1", CultureInfo.InvariantCulture) + " GB",
-        >= 1_000_000 => (bytes / 1_000_000.0).ToString("F1", CultureInfo.InvariantCulture) + " MB",
-        >= 1_000 => (bytes / 1_000.0).ToString("F0", CultureInfo.InvariantCulture) + " KB",
-        _ => bytes.ToString(CultureInfo.InvariantCulture) + " B",
+        >= 1_000_000_000 => Format("CloudSize_GB", (bytes / 1_000_000_000.0).ToString("F1", CultureInfo.InvariantCulture)),
+        >= 1_000_000 => Format("CloudSize_MB", (bytes / 1_000_000.0).ToString("F1", CultureInfo.InvariantCulture)),
+        >= 1_000 => Format("CloudSize_KB", (bytes / 1_000.0).ToString("F0", CultureInfo.InvariantCulture)),
+        _ => Format("CloudSize_B", bytes.ToString(CultureInfo.InvariantCulture)),
     };
 }
