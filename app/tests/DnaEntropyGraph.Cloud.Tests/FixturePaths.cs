@@ -14,21 +14,26 @@ internal static class FixturePaths
 
     public static string CloudErrorClassificationJson => Path.Combine(RepoRoot, "tests", "contract-fixtures", "cloud_error_classification.json");
 
-    private static string FindRepoRoot()
+    // Walks up from the test binary first, then from this source file: a build with a private --artifacts-path (every
+    // parallel lane) puts the binary under %TEMP%, which has no repo ancestor (#495, MEASURED 2026-10-02).
+    private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
+        foreach (var start in new[] { AppContext.BaseDirectory, Path.GetDirectoryName(thisFile) })
         {
-            if (File.Exists(Path.Combine(dir.FullName, "app", "DnaEntropyGraph.sln")))
+            var dir = string.IsNullOrEmpty(start) ? null : new DirectoryInfo(start);
+            while (dir is not null)
             {
-                return dir.FullName;
-            }
+                if (File.Exists(Path.Combine(dir.FullName, "app", "DnaEntropyGraph.sln")))
+                {
+                    return dir.FullName;
+                }
 
-            dir = dir.Parent;
+                dir = dir.Parent;
+            }
         }
 
         throw new InvalidOperationException(
-            $"Could not find app/DnaEntropyGraph.sln by walking up from {AppContext.BaseDirectory}. " +
+            $"Could not find app/DnaEntropyGraph.sln by walking up from {AppContext.BaseDirectory} or {thisFile}. " +
             "A fixture-driven test that cannot find its fixture would silently run zero cases and pass for the wrong reason.");
     }
 }

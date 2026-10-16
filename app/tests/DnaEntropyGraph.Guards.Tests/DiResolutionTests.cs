@@ -80,10 +80,9 @@ public class DiResolutionTests
         // Vacuity check (wired-to-nothing: "a guard test that passes
         // because the directory it scans is empty" is not a pass).
         viewModelTypes.ShouldNotBeEmpty();
-        viewModelTypes.Count.ShouldBe(
-            9,
-            "docs/superpowers/specs Appendix A section 1 names exactly 9 ViewModels; " +
-            "update this count deliberately alongside that table, not by accident.");
+        // Self-maintaining: every concrete *ViewModel in Presentation is found by reflection and must resolve, so a new
+        // ViewModel (or a Settings group) needs no number edited here. The floor only proves the scan found real types.
+        viewModelTypes.Count.ShouldBeGreaterThanOrEqualTo(9, "Appendix A section 1 names 9 ViewModels; a scan that finds fewer is not reading Presentation.");
 
         foreach (var viewModelType in viewModelTypes)
         {
@@ -144,7 +143,7 @@ public class DiResolutionTests
         // gateways were registered without the resilience wrapper, the first
         // 503 would surface as an exception here.
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value);
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
         services.AddSingleton(new DnaEntropyGraph.Cloud.CloudRetryOptions { BaseDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero });
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<DnaEntropyGraph.Cloud.FakeGcp>().WithTransientFailures(503, 2);
@@ -170,10 +169,9 @@ public class DiResolutionTests
         var failure = await Should.ThrowAsync<DnaEntropyGraph.Core.Cloud.AccountAuthException>(() => account.SignInAsync(CancellationToken.None));
         failure.Code.ShouldBe(DnaEntropyGraph.Core.Cloud.AuthErrorCodes.OAuthClientMissing);
 
-        // The access-token source is the real account (the real gateways, #56, will read it). The refresher stays the
-        // fake while every gateway is the fake: a fake 401 must not call Google's real token endpoint.
+        // The access-token source and the refresher are the real account (#609): a 401 from a real gateway refreshes the real token.
         provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IGcpAccessTokenSource>().ShouldBeSameAs(account);
-        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.ICloudTokenRefresher>().ShouldBeOfType<DnaEntropyGraph.Cloud.FakeGcp>();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.ICloudTokenRefresher>().ShouldBeSameAs(account);
     }
 
     [Fact]
@@ -197,7 +195,7 @@ public class DiResolutionTests
             File.WriteAllText(input, ">s\nACGTACGTACGTACGTACGT\n");
 
             var services = new ServiceCollection();
-            services.AddDnaEntropyGraph(appDataRoot: root);
+            services.AddDnaEntropyGraph(appDataRoot: root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
             await using var provider = services.BuildServiceProvider();
             var account = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IGcpAccount>();
             account.IsSignedIn.ShouldBeTrue();
@@ -220,6 +218,75 @@ public class DiResolutionTests
             Directory.Delete(root, recursive: true);
         }
     }
+    [Theory]
+    [InlineData(DnaEntropyGraph.App.Startup.CloudBackend.Google)]
+    [InlineData(DnaEntropyGraph.App.Startup.CloudBackend.Fake)]
+    [InlineData(DnaEntropyGraph.App.Startup.CloudBackend.Developer)]
+    public void The_wizard_and_its_setup_service_resolve_from_the_real_container_in_every_cloud_backend(DnaEntropyGraph.App.Startup.CloudBackend backend)
+    {
+        // Cold review of #99 doubted that the project, billing, service and worker-identity gateways behind ISetupCheckService are
+        // registered; they are (#609), for every backend. This keeps it true: the wizard is built by the real registration.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: backend);
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IProjectCatalogGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IBillingGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IServiceEnablementGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IWorkerIdentityGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Setup.ISetupCheckService>().ShouldBeOfType<DnaEntropyGraph.Core.Setup.SetupCheckService>();
+        var wizard = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.WizardViewModel>();
+        wizard.SetupSteps.ShouldNotBeNull();
+        wizard.ProjectRow.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task The_run_completion_path_reaches_the_registered_desktop_notifier_and_a_click_is_routed()
+    {
+        // Issue #107, wired-to-nothing: the Windows notifier and the activation router are the real App types, and the completion
+        // path the shell calls really hands a finished run to whatever IDesktopNotifier is registered.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
+        using (var real = services.BuildServiceProvider())
+        {
+            real.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IDesktopNotifier>().ShouldBeOfType<DnaEntropyGraph.App.Services.AppNotifier>();
+            real.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IAppWindow>().ShouldBeSameAs(real.GetRequiredService<DnaEntropyGraph.App.Services.AppWindowService>());
+            real.GetRequiredService<DnaEntropyGraph.Presentation.Services.ActivationRouter>().ShouldNotBeNull();
+            real.GetRequiredService<DnaEntropyGraph.App.Services.INotificationSink>().ShouldBeOfType<DnaEntropyGraph.App.Services.WindowsNotificationSink>();
+        }
+
+        var seen = new List<(string Title, string? JobId)>();
+        services.AddSingleton<DnaEntropyGraph.Core.Abstractions.IDesktopNotifier>(new RecordingNotifier(seen));
+        await using var provider = services.BuildServiceProvider();
+
+        await provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.RunCompletionActions>().OnRunFailedAsync("job-42");
+
+        seen.Count.ShouldBe(1);
+        seen[0].JobId.ShouldBe("job-42");
+    }
+
+    private sealed class RecordingNotifier(List<(string Title, string? JobId)> seen) : DnaEntropyGraph.Core.Abstractions.IDesktopNotifier
+    {
+        public void Notify(string title, string body, string? jobId) => seen.Add((title, jobId));
+    }
+
+    [Fact]
+    public async Task An_open_with_file_reaches_the_New_run_screen_the_container_builds_and_waits_for_the_shell()
+    {
+        // Issue #108, wired-to-nothing: the router, the intake and the page's ViewModel share the one registered intake and readiness.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
+        await using var provider = services.BuildServiceProvider();
+        var readiness = provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.ShellReadiness>();
+        var viewModel = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>();
+        await viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(null);
+
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.NewRunIntake>()
+            .TryAdd(new DnaEntropyGraph.Presentation.ViewModels.DroppedItems([], 0, false)).ShouldBeTrue("the page's ViewModel attached to the registered intake");
+        readiness.IsReady.ShouldBeFalse("nothing but the window's Loaded handler marks the shell ready");
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.ActivationRouter>().ShouldNotBeNull();
+    }
+
     [Fact]
     public void The_real_production_container_builds_with_no_missing_registration()
     {

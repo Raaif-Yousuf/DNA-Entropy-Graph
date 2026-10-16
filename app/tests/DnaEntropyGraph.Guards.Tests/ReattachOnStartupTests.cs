@@ -42,7 +42,7 @@ public class ReattachOnStartupTests : IDisposable
     private ServiceProvider Build(bool connected, FakeWorkerMode worker = FakeWorkerMode.Done, TimeProvider? time = null, Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
-        services.AddDnaEntropyGraph(appDataRoot: _root);
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
         if (time is not null)
         {
             services.AddSingleton(time);

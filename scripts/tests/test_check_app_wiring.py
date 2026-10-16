@@ -731,3 +731,57 @@ def test_get_service_the_optional_resolve_is_not_reported(tmp_path):
         "src/Demo.Core/W.cs": "public sealed class W { public W(Maybe? m) { } }\n",
     })
     assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+# --- #478: balanced parameter lists and nested generics ---------------------------------------------
+
+
+def test_a_default_value_with_parentheses_does_not_hide_the_later_parameters():
+    text = "public class Foo { public Foo(IBar bar = default(IBar), IBaz baz) { } }"
+    assert caw._constructor_parameters(text, "Foo") == ["IBar", "IBaz"]  # was ['IBar']: the list stopped at default(IBar
+    assert caw._constructor_parameters(text, "Foo", skip_defaults=True) == ["IBaz"]
+
+
+def test_new_and_nested_call_defaults_are_read_through_to_the_closing_paren():
+    text = "public class Foo { public Foo(IA a = new(), IB b = new Bar(1, Make(2)), IC c, string s = \")\") { } }"
+    assert caw._constructor_parameters(text, "Foo") == ["IA", "IB", "IC", "string"]
+
+
+def test_an_unregistered_parameter_after_a_parenthesised_default_is_reported(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Foo>();"),
+        "src/Demo.App/Services/Foo.cs": (
+            "public sealed class Foo { public Foo(IBar bar = default(IBar), IBaz baz) { } }\n"
+        ),
+    })
+    assert [f.symbol for f in _findings(root) if f.code == "UNREGISTERED-DEPENDENCY"] == ["Foo(IBaz)"]
+
+
+def test_a_nested_generic_registration_is_one_type_not_two_half_types():
+    every, services = caw._registered_types("s.AddSingleton<IRepo<Run, Guid>, Repo>();")
+    assert every == {"IRepo<Run,Guid>", "Repo"}  # was {'IRepo<Run', 'Guid>', 'Repo'}
+    assert services == {"IRepo<Run,Guid>"}
+
+
+def test_a_doubly_nested_generic_and_a_qualified_name_are_normalised_like_constructor_parameters():
+    every, services = caw._registered_types("s.AddTransient<Demo.IRepo<Dictionary<string, int>, Guid>, Demo.Repo>();")
+    assert every == {"IRepo<Dictionary<string,int>,Guid>", "Repo"}
+    assert services == {"IRepo<Dictionary<string,int>,Guid>"}
+
+
+def test_a_consumer_of_a_nested_generic_service_is_satisfied_and_the_registration_is_not_dead(tmp_path):
+    root = _tree(tmp_path / "w", {
+        "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+            "s.AddSingleton<Consumer>();", "s.AddSingleton<IRepo<Run, Guid>, Repo>();"
+        ),
+        "src/Demo.App/Services/Consumer.cs": "public sealed class Consumer { public Consumer(IRepo<Run, Guid> repo) { } }\n",
+        "src/Demo.App/Services/Repo.cs": "public sealed class Repo : IRepo<Run, Guid> { }\n",
+    })
+    # (Consumer itself is a dead registration in this tiny tree: nothing takes a Consumer. That is not what this is about.)
+    bad = [(f.code, f.symbol) for f in _findings(root) if f.code in {"UNREGISTERED-DEPENDENCY", "DEAD-REGISTRATION"} and f.symbol != "Consumer"]
+    assert bad == [], bad
+
+
+def test_a_nested_generic_factory_registration_is_still_a_factory_registration():
+    text = "s.AddSingleton<IRepo<Run, Guid>>(sp => new Repo());"
+    assert caw._factory_only_types(text) == {"IRepo<Run,Guid>"}

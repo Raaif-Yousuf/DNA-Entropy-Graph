@@ -61,12 +61,19 @@ namespace DnaEntropyGraph.Persistence;
 ///    keys. Reads take no mutex: they only ever see a complete file.
 /// 7. The callers are on the UI thread, so one public call spends at most
 ///    <see cref="WaitBudget"/> (about 300 ms) across the lock wait and the retries
-///    (5 attempts, 40 ms apart), then gives up with the typed exception.
+///    (5 attempts, 40 ms apart), then gives up with the typed exception. The budget bounds the
+///    WAIT, not the write: the mutex is uncontended with one window open, so the budget cannot
+///    produce "busy in another window" for a single-window user (#673). It is kept at 300 ms because
+///    it is a UI-thread freeze bound. MEASURED 2026-10-15 on the dev laptop's SSD, two writers
+///    hammering one file, 200 saves each: a save (wait plus fsync) p50 16 ms, p99 30 ms, max 37 ms;
+///    eight writers p99 459 ms, which is more windows than anyone runs. THEORY (unverified): the CI
+///    failures of #671/#664 were a loaded runner whose contended fsync exceeded 300 ms. The race
+///    tests therefore inject a long <see cref="WaitBudget"/> and a slow-disk test pins the budget.
 ///
 /// No logger in Persistence: the event is the flag, the kept files and the
 /// typed exceptions, never file content.
 /// </summary>
-public sealed class SettingsStore : ISettingsStore
+public sealed class SettingsStore : ISettingsStore, IResettableSettings
 {
     internal const int ReadAttemptLimit = 5;
 
@@ -155,6 +162,49 @@ public sealed class SettingsStore : ISettingsStore
 
                     state.Values[key] = JsonValue.Create(value);
                     WriteSettingsNoLock(state.Values);
+                }
+
+                return null;
+            });
+        }
+    }
+
+    /// <summary>Writes an empty settings.json. The installation id lives in its own file and is untouched; a legacy id still inside settings.json is kept so it can migrate.</summary>
+    public void ResetAll()
+    {
+        lock (_gate)
+        {
+            Guarded<object?>(() =>
+            {
+                using (AcquireMutex())
+                {
+                    var state = ReadSettingsNoLock();
+                    if (state.ParseFailed)
+                    {
+                        KeepUnreadableCopyNoLock(state.Raw);
+                    }
+
+                    var kept = new JsonObject();
+                    if (state.Values.TryGetPropertyValue(InstallationId.SettingsKey, out var legacy) && legacy is not null)
+                    {
+                        kept[InstallationId.SettingsKey] = legacy.DeepClone();
+                    }
+                    else if (state.ParseFailed && state.Raw is { } raw && ReadIdFile() is null)
+                    {
+                        // The id may sit after the corruption point, where the structured salvage never reaches. Forgetting it would
+                        // let the next read mint a new one and orphan every labelled cloud resource (Hard Rules 9 and 10).
+                        var recovered = IdMention.Matches(raw).Select(m => m.Groups["id"].Value).FirstOrDefault(InstallationId.IsValid);
+                        if (recovered is not null)
+                        {
+                            kept[InstallationId.SettingsKey] = recovered;
+                        }
+                        else if (raw.Contains(InstallationId.SettingsKey, StringComparison.Ordinal))
+                        {
+                            throw new SettingsUnavailableException("The settings could not be reset: an installation id in the unreadable file could not be recovered. Nothing was changed.");
+                        }
+                    }
+
+                    WriteSettingsNoLock(kept);
                 }
 
                 return null;

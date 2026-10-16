@@ -33,6 +33,22 @@
   <data name="ThemeNotSaved_Body" xml:space="preserve">
     <value>The theme changed for now but could not be remembered. Close other copies of the app, then choose the theme again.</value>
   </data>
+  <!-- Issue #110: Alt, then the letter, jumps to the destination. -->
+  <data name="NavNewRun.AccessKey" xml:space="preserve">
+    <value>N</value>
+  </data>
+  <data name="NavRuns.AccessKey" xml:space="preserve">
+    <value>R</value>
+  </data>
+  <data name="NavCloud.AccessKey" xml:space="preserve">
+    <value>C</value>
+  </data>
+  <data name="NavSettings.AccessKey" xml:space="preserve">
+    <value>S</value>
+  </data>
+  <data name="NewRunStatusClipboardEmpty" xml:space="preserve">
+    <value>The clipboard has no text to paste. Copy your sequence, then press Ctrl+Shift+V again.</value>
+  </data>
   <data name="NavNewRun.Content" xml:space="preserve">
     <value>New run</value>
   </data>
@@ -251,6 +267,18 @@
   </data>
   <data name="RunError_installation_id_unusable" xml:space="preserve">
     <value>The file that identifies this installation could not be used, so the run did not start. A copy was set aside in the DNAEntropyGraph folder under Local AppData, named installation_id.invalid- or settings.json.unreadable- followed by a date. Restore the id from that copy, or send the copy to support.</value>
+  </data>
+  <data name="RunError_worker_default_account" xml:space="preserve">
+    <value>Your organization does not let the app create its own worker identity (a service account), so this run used your project's default computer identity, which may have broad access to your project. To stop this, ask your Google Cloud administrator to allow service accounts, then run again.</value>
+  </data>
+  <data name="RunError_permission_actas" xml:space="preserve">
+    <value>Google will not let your account run a rented computer as the app's worker identity (a service account). The Service Account User role on that identity is missing. Choose Copy request for the project owner and send it to them, then run again.</value>
+  </data>
+  <data name="RunError_worker_default_account_missing" xml:space="preserve">
+    <value>Your organization does not let the app create its own worker identity (a service account), and your project's default computer identity, which the app would use instead, is missing or switched off. Ask your Google Cloud administrator to restore the default one or to allow the app to create its own, then run again.</value>
+  </data>
+  <data name="RunError_worker_identity_not_applied" xml:space="preserve">
+    <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
   </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
@@ -471,8 +499,14 @@
   <data name="NewRunStatusDropVirtual" xml:space="preserve">
     <value>Some of what you dropped is not a file on this PC (for example a file inside a zip, or an e-mail attachment). Save it to a folder first, then add it.</value>
   </data>
-  <data name="NewRunStatusStartFailed" xml:space="preserve">
+  <data name="NewRunStatusStartFailedCloud" xml:space="preserve">
     <value>We could not start the run. Check your Google Cloud connection on the Cloud page, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedFile" xml:space="preserve">
+    <value>We could not read your file to start the run. Check that the file is still there and not open in another program, then press Run again.</value>
+  </data>
+  <data name="NewRunStatusStartFailedOther" xml:space="preserve">
+    <value>We could not start the run. Press Run again. Still failing? Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
   <data name="NewRunStatusBrowseFailed" xml:space="preserve">
     <value>The file chooser could not open. Drag your files onto the drop area instead, or choose Add files again.</value>
@@ -699,6 +733,27 @@
   <data name="RunsRemoveButton.Content" xml:space="preserve">
     <value>Remove from list</value>
   </data>
+  <data name="RunsCopyOwnerRequestButton.Content" xml:space="preserve">
+    <value>Copy request for the project owner</value>
+  </data>
+  <data name="Runs_OwnerRequest_ActAs" xml:space="preserve">
+    <value>Hello, please grant the role {0} (Service Account User) on the service account {1} in the Google Cloud project {2} to my Google account{3}. Without it, DNA Entropy Graph cannot start a run for me. In the Google Cloud console: IAM and Admin, Service Accounts, choose {1}, Permissions, Grant access.</value>
+  </data>
+  <data name="Runs_OwnerRequest_Grantee" xml:space="preserve">
+    <value> ({0})</value>
+  </data>
+  <data name="Runs_OwnerRequest_Copied_Title" xml:space="preserve">
+    <value>Request copied</value>
+  </data>
+  <data name="Runs_OwnerRequest_Copied_Body" xml:space="preserve">
+    <value>Paste it into a message to your project owner.</value>
+  </data>
+  <data name="Runs_OwnerRequest_CopyFailed_Title" xml:space="preserve">
+    <value>Could not copy the request</value>
+  </data>
+  <data name="Runs_OwnerRequest_CopyFailed_Body" xml:space="preserve">
+    <value>Windows would not let the app use the clipboard just now. Choose Copy request for the project owner to try again.</value>
+  </data>
   <data name="Dialog_Confirm_Primary" xml:space="preserve">
     <value>Continue</value>
   </data>
@@ -821,6 +876,51 @@
   </data>
   <data name="AuthError_SIGNIN_STORAGE" xml:space="preserve">
     <value>The app could not save your sign-in in its folder on this computer. Free some disk space or make sure the folder %LOCALAPPDATA%\DNAEntropyGraph is not read-only, then choose Sign in again.</value>
+  </data>
+  <data name="NewRunOutputsHeader.Text" xml:space="preserve">
+    <value>Files you get back</value>
+  </data>
+  <data name="NewRunOutputsNoneChosen.Text" xml:space="preserve">
+    <value>No file is ticked. Tick at least one file above to run.</value>
+  </data>
+  <data name="OutputChoice_genbank" xml:space="preserve">
+    <value>The sequence with its genes and a mean entropy note on each gene (GenBank, .gb)</value>
+  </data>
+  <data name="OutputChoice_fasta" xml:space="preserve">
+    <value>The plain sequence (FASTA, .fasta)</value>
+  </data>
+  <data name="OutputChoice_bedgraph" xml:space="preserve">
+    <value>Entropy at every base, for IGV (.bedgraph)</value>
+  </data>
+  <data name="OutputChoice_wig" xml:space="preserve">
+    <value>Entropy at every base, in the WIG track format (.wig). Tick this instead of the IGV track if your viewer wants WIG.</value>
+  </data>
+  <data name="OutputChoice_geneious_gff3" xml:space="preserve">
+    <value>Entropy at every base, for Geneious (.gff3)</value>
+  </data>
+  <data name="OutputChoice_genes_gff3" xml:space="preserve">
+    <value>The gene positions, for a genome viewer (.genes.gff3)</value>
+  </data>
+  <data name="OutputChoice_smoothed" xml:space="preserve">
+    <value>A smoothed entropy track, averaged over a stretch of bases so trends are easier to see (.smooth files)</value>
+  </data>
+  <data name="OutputChoice_gene_summary" xml:space="preserve">
+    <value>One row of entropy figures per gene, for a spreadsheet (.genes.tsv and .genes.csv)</value>
+  </data>
+  <data name="OutputChoice_regions" xml:space="preserve">
+    <value>Stretches of unusually low or high entropy, as a track (.regions.bed and .regions.gff3)</value>
+  </data>
+  <data name="OutputChoice_stats" xml:space="preserve">
+    <value>A short text summary: length, mean, lowest and highest entropy (.txt)</value>
+  </data>
+  <data name="OutputChoice_tsv" xml:space="preserve">
+    <value>Entropy at every base, as a table for a spreadsheet (.tsv)</value>
+  </data>
+  <data name="OutputChoice_probs" xml:space="preserve">
+    <value>The model's probability for each base, as a table (.probs.tsv.gz). Large, so it is off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_probs_npy" xml:space="preserve">
+    <value>The model's probability for each base, as a NumPy array (.probs.npy). Large, so it is off unless you tick it.</value>
   </data>
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
@@ -1151,6 +1251,51 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="SetupAction_CreateProject" xml:space="preserve">
     <value>Create project</value>
   </data>
+  <data name="ViewerGeneiousPathBox.PlaceholderText" xml:space="preserve">
+    <value>Found automatically</value>
+  </data>
+  <data name="ViewerGeneiousPathBox.Header" xml:space="preserve">
+    <value>Geneious program</value>
+  </data>
+  <data name="ViewerIgvPortBox.Header" xml:space="preserve">
+    <value>IGV batch port (1 to 65535)</value>
+  </data>
+  <data name="ViewerIgvPathBox.PlaceholderText" xml:space="preserve">
+    <value>Found automatically</value>
+  </data>
+  <data name="ViewerIgvPathBox.Header" xml:space="preserve">
+    <value>IGV program</value>
+  </data>
+  <data name="ViewerPathMissing" xml:space="preserve">
+    <value>No program was found at this path. Choose Browse to pick the program again.</value>
+  </data>
+  <data name="ViewerPortInvalid" xml:space="preserve">
+    <value>The port must be a whole number from 1 to 65535. Choose Reset to default to use 60151.</value>
+  </data>
+  <data name="ViewerGeneiousBrowseButton.Content" xml:space="preserve">
+    <value>Browse...</value>
+  </data>
+  <data name="ViewerIgvPortResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="ViewerIgvBrowseButton.Content" xml:space="preserve">
+    <value>Browse...</value>
+  </data>
+  <data name="ViewerSettingNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
+  </data>
+  <data name="ViewerGeneiousPathResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="ViewerIgvPathResetButton.Content" xml:space="preserve">
+    <value>Reset to default</value>
+  </data>
+  <data name="SettingsViewersHeader.Text" xml:space="preserve">
+    <value>External viewers</value>
+  </data>
+  <data name="SettingsViewersExplainer.Text" xml:space="preserve">
+    <value>Where the Open in IGV and Open in Geneious buttons find those programs. Leave a path empty and the app looks for the program itself. A change applies the next time you press the button.</value>
+  </data>
   <data name="ProfileBanner_Text" xml:space="preserve">
     <value>Sandbox profile: {0}</value>
     <comment>Title bar banner shown when the app runs on a data folder given by --profile or DEG_DATA_DIR. {0} is the folder.</comment>
@@ -1162,6 +1307,13 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="DataFolderUnusable_NotAFolder" xml:space="preserve">
     <value>The data folder you chose is a file, not a folder: {0}. Start the app again with a folder path, or without the --profile option.</value>
   </data>
+  <data name="SimulatedCloud_Banner" xml:space="preserve">
+    <value>Simulated cloud: nothing here is real and no money is spent</value>
+    <comment>Permanent banner in the title bar while the app runs over the simulated cloud (developer mode, issue #69).</comment>
+  </data>
+  <data name="FakeCloud_NeedsProfile" xml:space="preserve">
+    <value>The simulated cloud only runs on a separate data folder, so its fake results never reach your real history. Start the app again with --fresh-profile (or --profile followed by a folder) added to --fake-cloud, or remove --fake-cloud and the DEG_FAKE_CLOUD setting.</value>
+  </data>
   <data name="DataFolderUnusable_MissingValue" xml:space="preserve">
     <value>The --profile option needs a folder after it. Start the app again with --profile followed by a folder path, or without the option.</value>
   </data>
@@ -1171,6 +1323,283 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="DataFolderUnusable_CannotCreate" xml:space="preserve">
     <value>The app could not use the data folder {0}. Start the app again with a folder you can write to, or without the --profile option.</value>
   </data>
+  <data name="SettingsRunDefaultsHeader.Text" xml:space="preserve">
+    <value>Run defaults</value>
+  </data>
+  <data name="SettingsRunDefaultsExplainer.Text" xml:space="preserve">
+    <value>The files a new run starts with. The New run page shows these ticked, and you can still change them for one run there.</value>
+  </data>
+  <data name="SettingsRunDefaultsGenBankHeader.Text" xml:space="preserve">
+    <value>When the input is a GenBank file</value>
+  </data>
+  <data name="SettingsRunDefaultsSequenceHeader.Text" xml:space="preserve">
+    <value>When the input is a FASTA file or a pasted sequence</value>
+  </data>
+  <data name="RunDefaultsNoneChosen" xml:space="preserve">
+    <value>At least one file must stay ticked. Tick another file first, then untick this one.</value>
+  </data>
+  <data name="RunDefaultsNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open, so the box is back as it was. Close the other copies of the app, then change it again.</value>
+  </data>
+  <data name="SettingsFilesHeader.Text" xml:space="preserve">
+    <value>Files</value>
+  </data>
+  <data name="SettingsFilesExplainer.Text" xml:space="preserve">
+    <value>Where the app keeps its own data on this computer. Nothing here deletes your results or your input files.</value>
+  </data>
+  <data name="FilesDataLabel.Text" xml:space="preserve">
+    <value>App data folder</value>
+  </data>
+  <data name="FilesInputsLabel.Text" xml:space="preserve">
+    <value>Run folders (each keeps a saved copy of its input file, used to run a file again)</value>
+  </data>
+  <data name="FilesLogsLabel.Text" xml:space="preserve">
+    <value>Log files</value>
+  </data>
+  <data name="FilesDataOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesInputsOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesLogsOpenButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="FilesInputsSizeLabel.Text" xml:space="preserve">
+    <value>Space used by saved input copies, pasted sequences included:</value>
+  </data>
+  <data name="FilesSizeUnknown" xml:space="preserve">
+    <value>Not measured. Close Settings and open it again to measure it.</value>
+  </data>
+  <data name="FilesOpenFailed" xml:space="preserve">
+    <value>Windows could not open that folder. Open File Explorer, then paste the folder path shown above into its address bar.</value>
+  </data>
+  <data name="SettingsNotificationsHeader.Text" xml:space="preserve">
+    <value>Notifications</value>
+  </data>
+  <data name="SettingsNotificationsExplainer.Text" xml:space="preserve">
+    <value>What the app does when a run finishes. A change applies from the next run that finishes.</value>
+  </data>
+  <data name="NotifyWhenDoneBox.Content" xml:space="preserve">
+    <value>Show a message when a run finishes</value>
+  </data>
+  <data name="OpenFolderWhenDoneBox.Content" xml:space="preserve">
+    <value>Open the folder with the results when a run finishes</value>
+  </data>
+  <data name="OpenResultsWhenDoneBox.Content" xml:space="preserve">
+    <value>Open the Results page when a run finishes</value>
+  </data>
+  <data name="OpenWithBox.Content" xml:space="preserve">
+    <value>Show DNA Entropy Graph in Open with for GenBank and FASTA files</value>
+  </data>
+  <data name="OpenWithExplainer.Text" xml:space="preserve">
+    <value>Right-click a .gb, .gbk, .fasta, .fa or .fna file in File Explorer, choose Open with, then DNA Entropy Graph, and it is added to New run. It only adds that menu entry for you; it never becomes the program a file opens in when you double-click it.</value>
+  </data>
+  <data name="OpenWithNotSaved" xml:space="preserve">
+    <value>Windows would not let the app change this. Turn the switch on or off again.</value>
+  </data>
+  <data name="OpenWithNotInstalled" xml:space="preserve">
+    <value>Open with can only be set up from the installed app, not from a copy run from source. Install DNA Entropy Graph from its download page.</value>
+  </data>
+  <data name="OpenWithSandbox" xml:space="preserve">
+    <value>This window is a test profile, and Open with belongs to your real Windows account. Start the app without a test profile to change it.</value>
+  </data>
+  <data name="NotificationsNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then change it again.</value>
+  </data>
+  <data name="RunDone_Title" xml:space="preserve">
+    <value>Your run has finished</value>
+  </data>
+  <data name="RunDone_Body" xml:space="preserve">
+    <value>The results are ready. Choose Results in the Runs list to look at them.</value>
+  </data>
+  <data name="RunPartial_Title" xml:space="preserve">
+    <value>Your run finished with some files missing</value>
+  </data>
+  <data name="RunFailed_Title" xml:space="preserve">
+    <value>Your run did not finish</value>
+  </data>
+  <data name="RunFailed_Body" xml:space="preserve">
+    <value>Open the run to see what went wrong and what to do next.</value>
+  </data>
+  <data name="RunToast_OpenResults" xml:space="preserve">
+    <value>Open run</value>
+  </data>
+  <data name="RunPartial_Body" xml:space="preserve">
+    <value>Some result files could not be made. Choose Results in the Runs list to see which ones.</value>
+  </data>
+  <data name="SettingsAdvancedHeader.Text" xml:space="preserve">
+    <value>Advanced</value>
+  </data>
+  <data name="SettingsAdvancedExpander.Header" xml:space="preserve">
+    <value>Developer options and reset</value>
+  </data>
+  <data name="AdvancedWorkerImageExplainer.Text" xml:space="preserve">
+    <value>Use your own build of the analysis program instead of the one that came with this app. The box works only when developer mode is already on in the settings file, and it takes an image address that ends in @sha256: followed by its fingerprint. Leave it empty to use the shipped one.</value>
+  </data>
+  <data name="AdvancedWorkerImageBox.Header" xml:space="preserve">
+    <value>Analysis program image</value>
+  </data>
+  <data name="WorkerImageNotPinned" xml:space="preserve">
+    <value>That is not a full image address: the fingerprint is missing (it is written @sha256: followed by 64 letters or numbers). The shipped image is used until you paste the full address from your build.</value>
+  </data>
+  <data name="FakeCloudOn" xml:space="preserve">
+    <value>This copy is using a pretend cloud for testing, so no computer is rented and nothing is billed.</value>
+  </data>
+  <data name="FakeCloudOff" xml:space="preserve">
+    <value>This copy is connected to your Google Cloud project.</value>
+  </data>
+  <data name="AdvancedResetButton.Content" xml:space="preserve">
+    <value>Reset all settings</value>
+  </data>
+  <data name="AdvancedResetConfirmTitle" xml:space="preserve">
+    <value>Reset all settings?</value>
+  </data>
+  <data name="AdvancedResetConfirmBody" xml:space="preserve">
+    <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Continue to reset, or Cancel to keep your settings.</value>
+  </data>
+  <data name="AdvancedResetDone" xml:space="preserve">
+    <value>Settings were reset. Close the app and open it again to finish.</value>
+  </data>
+  <data name="AdvancedNotSaved" xml:space="preserve">
+    <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
+  </data>
+  <data name="WizardTitle.Text" xml:space="preserve">
+    <value>Set up Google Cloud</value>
+  </data>
+  <data name="WizardWelcome.Text" xml:space="preserve">
+    <value>DNA Entropy Graph runs on a graphics card (a GPU) that you rent by the minute in your own Google Cloud account. A typical run takes 5 to 20 minutes and costs about $0.10 to $0.50. This page connects your account and checks each thing the app needs. When a step shows Fix, press its button, or choose Do it by hand.</value>
+  </data>
+  <data name="WizardStep_SignIn_Title.Text" xml:space="preserve">
+    <value>Sign in with Google</value>
+  </data>
+  <data name="WizardStep_SignIn_Why.Text" xml:space="preserve">
+    <value>Your browser opens so you can choose your Google account. The app never sees your password.</value>
+  </data>
+  <data name="WizardSignedInBadge.Text" xml:space="preserve">
+    <value>OK</value>
+  </data>
+  <data name="WizardSignInButton.Content" xml:space="preserve">
+    <value>Sign in with Google</value>
+  </data>
+  <data name="WizardProjectListHeading.Text" xml:space="preserve">
+    <value>Choose one of your projects</value>
+  </data>
+  <data name="WizardCreateProjectButton.Content" xml:space="preserve">
+    <value>Create a new project for this app</value>
+  </data>
+  <data name="WizardBillingChoicesHeading.Text" xml:space="preserve">
+    <value>Choose the billing account to use</value>
+  </data>
+  <data name="WizardStep_TestRun_Title.Text" xml:space="preserve">
+    <value>Try it</value>
+  </data>
+  <data name="WizardStep_TestRun_Why.Text" xml:space="preserve">
+    <value>Press Finish, add a small sequence on New run and press Run. A short run costs a few cents and proves everything above works.</value>
+  </data>
+  <data name="WizardFinishButton.Content" xml:space="preserve">
+    <value>Finish and make a first run</value>
+  </data>
+  <data name="WizardRecheckButton.Content" xml:space="preserve">
+    <value>Check again</value>
+  </data>
+  <data name="WizardSkipButton.Content" xml:space="preserve">
+    <value>Skip for now</value>
+  </data>
+  <data name="WizardDoItByHandLink.Content" xml:space="preserve">
+    <value>Do it by hand</value>
+  </data>
+  <data name="WizardStep_Project_Title" xml:space="preserve">
+    <value>Choose a project</value>
+  </data>
+  <data name="WizardStep_Project_Why" xml:space="preserve">
+    <value>Everything this app creates lives in one Google Cloud project of yours. The project itself costs nothing.</value>
+  </data>
+  <data name="WizardStep_Billing_Title" xml:space="preserve">
+    <value>Billing</value>
+  </data>
+  <data name="WizardStep_Billing_Why" xml:space="preserve">
+    <value>Google charges for the rented GPU, so the project needs a billing account. You pay only for the minutes a run uses, about $0.10 to $0.50 for a typical run.</value>
+  </data>
+  <data name="WizardStep_Services_Title" xml:space="preserve">
+    <value>Turn on Google services</value>
+  </data>
+  <data name="WizardStep_Services_Why" xml:space="preserve">
+    <value>The app needs Compute Engine (the rented computer), Cloud Storage (where results are kept) and Cloud Quotas. Turning them on is free.</value>
+  </data>
+  <data name="WizardStep_Storage_Title" xml:space="preserve">
+    <value>Storage and worker account</value>
+  </data>
+  <data name="WizardStep_Storage_Why" xml:space="preserve">
+    <value>Creates a private online folder for your results (a bucket) that removes old runs by itself, and a limited account the rented computer runs as. The folder costs a few cents a month.</value>
+  </data>
+  <data name="WizardStep_Quota_Title" xml:space="preserve">
+    <value>GPU allowance</value>
+  </data>
+  <data name="WizardStep_Quota_Why" xml:space="preserve">
+    <value>New Google projects often start with no GPU allowed. Google must approve one, which can take minutes or days. You can skip this and come back.</value>
+  </data>
+  <data name="WizardStatus_Pending" xml:space="preserve">
+    <value>Not checked yet</value>
+  </data>
+  <data name="WizardStatus_Running" xml:space="preserve">
+    <value>Checking...</value>
+  </data>
+  <data name="WizardStatus_Ok" xml:space="preserve">
+    <value>OK</value>
+  </data>
+  <data name="WizardStatus_Fix" xml:space="preserve">
+    <value>Fix</value>
+  </data>
+  <data name="WizardStatus_Skipped" xml:space="preserve">
+    <value>Skipped</value>
+  </data>
+  <data name="WizardQuota_Skipped" xml:space="preserve">
+    <value>Skipped for now. Runs on a GPU will not start until Google allows one, so run the setup check again once it has.</value>
+  </data>
+  <data name="WizardQuota_None" xml:space="preserve">
+    <value>Your project is not allowed to use a GPU yet. Open Google&apos;s quota page, request one GPU, then press Check again.</value>
+  </data>
+  <data name="WizardQuota_Allowed" xml:space="preserve">
+    <value>{0}: allowed in {1} regions.</value>
+  </data>
+  <data name="WizardQuota_NotYet" xml:space="preserve">
+    <value>{0}: not allowed yet. Press Request a GPU allowance.</value>
+  </data>
+  <data name="WizardQuota_Unknown" xml:space="preserve">
+    <value>{0}: could not be read. Press Check everything again.</value>
+  </data>
+  <data name="WizardStorage_Ok" xml:space="preserve">
+    <value>Your private online folder for results (a bucket) is ready: {0}</value>
+  </data>
+  <data name="WizardProject_Pick" xml:space="preserve">
+    <value>Choose one of your projects below, or create a new one.</value>
+  </data>
+  <data name="WizardProject_None" xml:space="preserve">
+    <value>You have no projects yet. Press Create a new project for this app.</value>
+  </data>
+  <data name="WizardCopied" xml:space="preserve">
+    <value>Copied. Paste it into a message to the person who can fix this.</value>
+  </data>
+  <data name="WizardCopyFailed" xml:space="preserve">
+    <value>Windows would not let the app copy. Close other programs that use the clipboard, then press the button again.</value>
+  </data>
+  <data name="SetupHelpRequestText" xml:space="preserve">
+    <value>Hello, I use DNA Entropy Graph, which needs to work in the Google Cloud project {project}. Google reports: {problem} Could you please allow this or give me the access it needs? Thank you.</value>
+  </data>
+  <data name="WizardRequest_NoProjectYet" xml:space="preserve">
+    <value>one of your organisation's projects (I have not chosen one yet)</value>
+  </data>
+  <data name="SetupAction_RequestGpuAllowance" xml:space="preserve">
+    <value>Request a GPU allowance</value>
+  </data>
+  <data name="PageTitle_Wizard" xml:space="preserve">
+    <value>Set up Google Cloud</value>
+  </data>
+  <data name="StatusPillHelp" xml:space="preserve">
+    <value>Opens the Google Cloud setup, where you can sign in or check your project.</value>
+  </data>
+  <data name="WizardCheckAllButton.Content" xml:space="preserve">
+    <value>Check everything again</value>
+  </data>
 </root>
-
-

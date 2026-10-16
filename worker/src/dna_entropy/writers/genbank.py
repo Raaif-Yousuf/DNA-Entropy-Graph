@@ -53,7 +53,9 @@ def _build_record(
     source_id: str,
     circular: bool = False,
 ):
-    """Build one Biopython ``SeqRecord`` with per-gene mean-entropy notes."""
+    """Build one Biopython ``SeqRecord`` with per-gene mean-entropy notes. ``circular`` (issue
+    #524) writes ``circular`` in the LOCUS line; a linear record writes no topology word, as
+    Biopython does by default, so every linear file is byte-identical to before this existed."""
     from Bio.Seq import Seq
     from Bio.SeqFeature import CompoundLocation, FeatureLocation, SeqFeature
     from Bio.SeqRecord import SeqRecord
@@ -137,10 +139,14 @@ class GenBankWriter:
         """
         from Bio.SeqIO import write as _seqio_write
 
+        if circular is None:
+            circular = [False] * len(records)
+        if len(circular) != len(records):
+            raise ValueError("circular needs one entry per record.")
         seq_records = [
             _build_record(contig_name, seq, features, values, source_id, is_circular)
             for (contig_name, seq, features, values, source_id), is_circular in zip(
-                records, circular if circular is not None else [False] * len(records), strict=True
+                records, circular, strict=True
             )
         ]
         out_path = Path(out_dir) / f"{name}.gb"
