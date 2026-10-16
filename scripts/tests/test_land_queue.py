@@ -884,3 +884,11 @@ def test_interrupted_recovery_does_not_match_a_longer_branch_suffix(env: lq.Env)
     st.set_inflight(parsed("feat/1-x|aaa|1|0|t"), "landing")
     lq.drain(env)
     assert "FAILED interrupted feat/1-x @ aaa" in (env.state / "done.log").read_text(encoding="utf-8")
+
+
+def test_an_empty_claim_is_waited_on_and_a_vanished_one_is_taken(env: lq.Env) -> None:
+    (env.state).mkdir(parents=True, exist_ok=True)
+    f = env.state / "runner.json"
+    f.write_text("", encoding="utf-8")
+    env.sleep = lambda s: f.unlink(missing_ok=True)  # the claimer gave up while we waited
+    lq.drain(env)  # claims instead of refusing

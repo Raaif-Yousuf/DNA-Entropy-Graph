@@ -458,7 +458,7 @@ def _find_existing_pr(env: Env, it: Item) -> tuple[str, str, str] | str | None:
     for ref in (it.branch, f"{it.branch}-{it.sha[:7]}", f"{it.branch}-{it.sha[:7]}-r2"):
         rc, out = env.run("gh", "pr", "list", "--state", "all", "--head", ref, "--json", "number,headRefOid,state", "--limit", "20")
         if rc != 0:
-            return f"FAILED gh pr list rc={rc} (cannot tell whether this item is already landed; check gh auth, then `retry`) {it.branch} @ {it.sha}"
+            return f"FAILED gh pr list rc={rc} (cannot tell if already landed; check gh auth, then `retry`) {it.branch} @ {it.sha}"
         try:
             rows = json.loads(out) if out.strip() else []
         except ValueError:
