@@ -27,6 +27,10 @@ anyone connected with this app:
    a few cents a month at most for typical use, and automatically cleaned up after your
    chosen retention period (90 days by default).
 
+## What a finished run cost
+
+After a run ends, its Results page and its row on the Runs page show one estimated cost. It is the time the rented computer ran, at the list price for that kind of computer (the Spot price for a Spot run), plus the share of its disk. Both pages show the same number as the month total under Settings, because they all read the figure the app saved when the run ended. It is still an estimate: it does not include a computer you kept running or stopped afterwards, or storage in your bucket. Your Google Cloud bill is the real figure.
+
 ## Where the estimate on the New run page comes from
 
 The estimate line is worked out on your PC from a price list that ships inside the app

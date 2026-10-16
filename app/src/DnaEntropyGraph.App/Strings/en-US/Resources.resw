@@ -2210,4 +2210,22 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunModel_Unknown" xml:space="preserve">
     <value>Unknown model</value>
   </data>
+  <data name="Results_CostEstimate" xml:space="preserve">
+    <value>Estimated cost: about ${0}. This is an estimate from the time the rented computer ran and its list price, not your Google bill.</value>
+  </data>
+  <data name="Results_CostEstimateSpot" xml:space="preserve">
+    <value>Estimated cost: about ${0}, at the discounted (Spot) price. This is an estimate from the time the rented computer ran and its list price, not your Google bill.</value>
+  </data>
+  <data name="Results_CostNoCloud" xml:space="preserve">
+    <value>No cloud cost: this run used this PC, not a rented computer.</value>
+  </data>
+  <data name="Results_CostShort" xml:space="preserve">
+    <value>Cost: about ${0} (estimate)</value>
+  </data>
+  <data name="Results_CostShortSpot" xml:space="preserve">
+    <value>Cost: about ${0} (estimate, Spot price)</value>
+  </data>
+  <data name="Results_CostShortNoCloud" xml:space="preserve">
+    <value>No cloud cost</value>
+  </data>
 </root>

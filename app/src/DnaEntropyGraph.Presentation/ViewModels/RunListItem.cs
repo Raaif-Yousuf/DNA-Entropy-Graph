@@ -110,6 +110,11 @@ public sealed partial class RunListItem : ObservableObject
     /// </summary>
     public string? ReasonText { get; }
 
+    /// <summary>The run's cost line (issues #100, #557), the same booked figure as the Results header; null when the run booked nothing.</summary>
+    public string? CostText { get; init; }
+
+    public bool HasCost => CostText is not null;
+
     public bool HasReason => ReasonText is not null;
 
     /// <summary>"Preset: Plasmid QC" for a run started from an option preset (issue #136); null for a run set by hand.</summary>

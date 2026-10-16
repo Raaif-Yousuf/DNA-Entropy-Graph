@@ -1,0 +1,1 @@
+- The Results page header and each Runs row now show the run's estimated cost (the figure the spend ledger booked, Spot-aware, "no cloud cost" for This PC runs, nothing for a run that never had a VM). RunRecord.ActualCostUsd documented as reserved and unused (#100, #557).

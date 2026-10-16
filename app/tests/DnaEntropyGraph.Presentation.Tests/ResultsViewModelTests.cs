@@ -102,6 +102,23 @@ public sealed class ResultsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task The_header_shows_the_runs_booked_cost_and_a_run_that_booked_nothing_shows_no_cost_line()
+    {
+        _strings.GetString(ResultsCopy.CostEstimate).Returns("est ${0}");
+        var a = MakeRunFolder("costed", SummaryText("costed", "1.1", "1.2"));
+        var b = MakeRunFolder("free", SummaryText("free", "1.1", "1.2"));
+        _rows = [new RunRecord("costed", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: a, EstimatedCostUsd: 2.345), new RunRecord("free", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: b)];
+
+        var costed = await Loaded("costed");
+        var free = await Loaded("free");
+
+        costed.HasCost.ShouldBeTrue();
+        costed.CostText.ShouldBe("est $2.35");
+        free.HasCost.ShouldBeFalse("no booked figure means no line, never $0.00");
+        free.CostText.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task The_numbers_shown_are_read_from_that_runs_own_summary_file()
     {
         var a = MakeRunFolder("alpha", SummaryText("alpha", "1.1111", "1.2222"), "alpha.gb");

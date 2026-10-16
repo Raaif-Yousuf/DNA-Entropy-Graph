@@ -63,6 +63,20 @@ public sealed class HistoryViewModelTests
         Item(vm, "plain").HasPreset.ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task A_row_shows_the_booked_cost_short_and_a_row_that_booked_nothing_shows_none()
+    {
+        _strings.GetString(ResultsCopy.CostShort).Returns("about ${0}");
+        _strings.GetString(ResultsCopy.CostShortNoCloud).Returns("none");
+
+        var vm = await Loaded(Row("paid") with { EstimatedCostUsd = 0.5 }, Row("unbooked"), Row("pc") with { Target = "local" });
+
+        Item(vm, "paid").CostText.ShouldBe("about $0.50");
+        Item(vm, "paid").HasCost.ShouldBeTrue();
+        Item(vm, "unbooked").HasCost.ShouldBeFalse();
+        Item(vm, "pc").CostText.ShouldBe("none");
+    }
+
     private async Task<HistoryViewModel> Loaded(params RunRecord[] rows)
     {
         _rows = [.. rows];

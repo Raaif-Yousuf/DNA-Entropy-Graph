@@ -68,6 +68,7 @@
                                                 <StackPanel Orientation="Horizontal" Spacing="12">
                                                     <TextBlock Text="{x:Bind StatusText}" />
                                                     <TextBlock Text="{x:Bind DetailText}" Opacity="0.7" />
+                                                    <TextBlock Text="{x:Bind CostText}" Visibility="{x:Bind HasCost}" Opacity="0.7" />
                                                 </StackPanel>
                                                 <!-- Issue #118: the run's entropy as a small line; absent until read, and for a run with no track. -->
                                                 <controls:EntropySparkline

@@ -241,6 +241,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             OwnerRequestFor(run))
         {
             PresetText = PresetLine(run),
+            CostText = RunCostText.Short(run, _strings),
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
         };
     }

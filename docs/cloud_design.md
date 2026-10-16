@@ -491,6 +491,7 @@ exercise.
  7-day stopped-VM sweep (spec D10) exists as the backstop against a forgotten Stop, not
  just the after-task setting itself: see `docs/user_guide/06-costs-and-cleanup.md` for
  the user-facing version of this same number.
+- **Per-run cost (issues #100, #557, shipped):** one figure per run, `RunRecord.EstimatedCostUsd`, booked by `SpendLedger` (via `LedgerRecordingRunRepository`) when the row first reaches an ended phase: VM seconds from `VmReadyAt` to `FinishedAt` at the machine's list rate (Spot rate when `IsSpot`) plus the disk share, with `VmSeconds` beside it. It is the same number as the ledger row. `Presentation/Services/RunCostText` only formats that column for the Results header and the Runs row (never recomputes, so the three cannot disagree). A local run shows "no cloud cost"; a cloud run with no booked figure shows nothing, never `0.00`. `RunRecord.ActualCostUsd` is **reserved and always null**: it would hold a billing-export figure, and there is no billing-export access. Nothing writes it or displays it; the diagnostics bundle echoes it only so a future writer needs no format change. Decision (agent-made, reversible): kept the column rather than a migration to drop it.
 - A **live ticker** per running job: `(now - lastStartTimestamp) * hourlyRate / 3600 +
  disk`, labelled "estimate" everywhere it appears, because there is no billing-export
  access - every number in this app is a modeled estimate, never a real invoice figure.

@@ -12,6 +12,7 @@
     <ScrollViewer>
         <StackPanel Padding="24" Spacing="16">
             <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="{x:Bind ViewModel.Title, Mode=OneWay}" />
+            <TextBlock Text="{x:Bind ViewModel.CostText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasCost, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
             <InfoBar
                 IsOpen="{x:Bind ViewModel.IsNoticeVisible, Mode=OneWay}"

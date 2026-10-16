@@ -40,6 +40,11 @@ public sealed partial class ResultsViewModel : ObservableObject
     [ObservableProperty]
     private string _title = string.Empty;
 
+    /// <summary>The run's cost line (issues #100, #557): the booked estimate, or no cloud cost for a run on this PC; empty when the run booked nothing.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasCost))]
+    private string _costText = string.Empty;
+
     // Why the whole page has nothing to show (no such run, folder gone, unreadable): one reason, one action.
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNoticeVisible))]
@@ -90,6 +95,8 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public ObservableCollection<ResultsFileItem> Files { get; } = [];
 
+    public bool HasCost => CostText.Length > 0;
+
     public bool IsNoticeVisible => NoticeText.Length > 0;
 
     public bool IsStatsNoticeVisible => StatsNoticeText.Length > 0;
@@ -124,6 +131,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
+            CostText = RunCostText.Header(run, _strings) ?? string.Empty;
             var folder = run.OutputDir;
 
             // Listing a folder and reading its summaries is disk work (maybe a network drive): off the UI thread.
@@ -170,6 +178,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         _folder = null;
         _outputFiles = [];
         Title = string.Empty;
+        CostText = string.Empty;
         Overview = null;
         NoticeText = string.Empty;
         StatsNoticeText = string.Empty;

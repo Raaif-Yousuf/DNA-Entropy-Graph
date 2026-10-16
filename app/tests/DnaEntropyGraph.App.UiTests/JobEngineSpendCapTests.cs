@@ -8,6 +8,7 @@ using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
+using DnaEntropyGraph.Presentation.Services;
 using Shouldly;
 using Xunit;
 
@@ -196,6 +197,30 @@ public class JobEngineSpendCapTests
         row.StartedUtc.ShouldBe(run.VmReadyAt!.Value);
         run.EstimatedCostUsd.ShouldBe(row.UsdEst);
         run.VmSeconds.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task The_Results_header_and_the_Runs_row_show_the_figure_the_ledger_booked_for_a_completed_run()
+    {
+        // Issues #100 and #557: one figure, booked once by the ledger decorator, read by both pages through the real view models.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        var booked = (await h.Ledger.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull();
+        var amount = "$" + RunCostText.Money(booked);
+        var run = (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        var strings = new EchoStrings();
+
+        var header = RunCostText.Header(run, strings); 
+        var row = RunCostText.Short(run, strings);
+
+        header.ShouldNotBeNull().ShouldContain(amount);
+        row.ShouldNotBeNull().ShouldContain(amount);
+    }
+
+    private sealed class EchoStrings : IStringResourceProvider
+    {
+        public string GetString(string key) => key + " ${0}";
     }
 
     [Fact]
