@@ -28,14 +28,11 @@ public class StartupMetadataTests
 
     private static string RepoStartupScript()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "worker", "vm", "startup.sh")))
-        {
-            dir = dir.Parent;
-        }
-
-        dir.ShouldNotBeNull("worker/vm/startup.sh must be found above the test binary directory");
-        return File.ReadAllText(Path.Combine(dir!.FullName, "worker", "vm", "startup.sh"));
+        // ContractFixtures.RepoRoot walks up from the test binary and then from its own source file, so this works
+        // under any --artifacts-path (#495).
+        var script = Path.Combine(Inputs.ContractFixtures.RepoRoot, "worker", "vm", "startup.sh");
+        File.Exists(script).ShouldBeTrue($"{script} must exist");
+        return File.ReadAllText(script);
     }
 
     [Fact]
