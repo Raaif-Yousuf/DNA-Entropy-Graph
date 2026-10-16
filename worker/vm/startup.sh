@@ -203,6 +203,11 @@ gpu_test_early_fail() {
   put_object "$result" "jobs/${JOB}/logs/gpu-test-result.json" || true
 }
 
+# The Hugging Face cache the container mounts (-v /var/cache/deg-hf:/hf-cache, HF_HOME): created and handed to the container's uid 10001 BEFORE any docker run, the
+# gpu-test run below included.
+mkdir -p /var/cache/deg-hf
+chown 10001:10001 /var/cache/deg-hf
+
 # gpu_test_run (issue #759, scripts/cloud_gpu_test.ps1): the whole of gpu-test mode. Runs `pytest -m gpu` inside the image (the
 # image must carry pytest and worker/tests, see Dockerfile.cuda), uploads the log and then, LAST, gpu-test-result.json (the file
 # the caller polls for, like result.json for a job), and applies the lifecycle. Returns pytest's exit code.
@@ -372,8 +377,6 @@ if ! docker pull "$IMAGE"; then
   exit 1
 fi
 
-mkdir -p /var/cache/deg-hf
-chown 10001:10001 /var/cache/deg-hf
 # `--gpus all` only when a GPU is expected: the CPU smoke VM boots the same image with no GPU (issue #56), and docker run fails on it with the flag.
 GPU_FLAGS=()
 if [ "$EXPECT_GPU" = "true" ]; then
