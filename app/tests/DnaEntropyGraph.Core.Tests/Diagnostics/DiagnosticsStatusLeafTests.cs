@@ -67,6 +67,7 @@ public sealed class DiagnosticsStatusLeafTests
                 "schema" or "heartbeatSeq" or "detail.window" or "detail.windows" => JsonValue.Create(1),
                 "percent" => JsonValue.Create(42.5),
                 "error.retriable" => JsonValue.Create(false),
+                "error.code" => JsonValue.Create("WORKER_CRASH"), // an enum leaf: only a registry code ships (#613)
                 _ => JsonValue.Create(Marker + path),
             };
         }

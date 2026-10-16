@@ -8,4 +8,10 @@ public interface INavigator
     bool CanGoBack { get; }
 
     void GoBack();
+
+    /// <summary>The key of the page that is really showing (after a nav click, a deep link or Back); null before the first navigation (issue #143).</summary>
+    string? CurrentPageKey { get; }
+
+    /// <summary>Raised after <see cref="CurrentPageKey"/> changed, on whatever path got there.</summary>
+    event EventHandler? CurrentPageChanged;
 }

@@ -69,7 +69,11 @@ public class StartupMetadataTests
             .ToList();
 
         read.ShouldNotBeEmpty();
-        foreach (var attribute in read)
+
+        // Optional attributes the script reads with an empty default and only CloudCli's gpu-test mode sets (issue #759):
+        // Cloud.Tests CloudCliGpuTestModeTests asserts the CLI really emits it. Anything else must come from Build().
+        string[] optionalSetByCloudCli = ["deg-mode"];
+        foreach (var attribute in read.Where(a => !optionalSetByCloudCli.Contains(a)))
         {
             Build().ContainsKey(attribute).ShouldBeTrue($"startup.sh reads '{attribute}' but StartupMetadata.Build does not set it");
         }

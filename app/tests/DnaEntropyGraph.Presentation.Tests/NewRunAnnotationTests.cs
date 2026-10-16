@@ -54,6 +54,7 @@ public sealed class NewRunAnnotationTests : IDisposable
             estimates,
             new OutputSelectionStore(Substitute.For<ISettingsStore>()),
             Substitute.For<IDiagnosticsLog>(),
+            TestGpu.Plan(),
             validateAnnotation: (fasta, gff, topology) =>
             {
                 _checks.Add((fasta, gff, topology));

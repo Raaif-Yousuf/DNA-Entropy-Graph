@@ -64,6 +64,7 @@ public sealed class NewRunRunTargetTests : IDisposable
             _estimates,
             new OutputSelectionStore(settings),
             NullDiagnosticsLog.Instance,
+            TestGpu.Plan(),
             runTarget: picker);
     }
 
