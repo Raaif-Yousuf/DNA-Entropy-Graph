@@ -92,6 +92,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
     private string _statusMessage = string.Empty;
 
+    /// <summary>The Cloud / This PC / Auto choice (issues #120 and #173); null in a host that has none, which means Cloud.</summary>
+    public RunTargetPickerViewModel? RunTarget { get; }
+
     public NewRunViewModel(
         IFilePicker filePicker,
         IJobEngine jobEngine,
@@ -107,8 +110,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         IClipboardTextReader? clipboard = null,
         PresetPickerViewModel? presets = null,
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
-        bool? offerAnnotation = null)
+        bool? offerAnnotation = null,
+        RunTargetPickerViewModel? runTarget = null)
     {
+        RunTarget = runTarget;
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
         OffersAnnotation = offerAnnotation ?? WorkerManifestSupport.Annotation;
@@ -747,7 +752,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         var options = new RunOptions
         {
             ModelId = DefaultModelId,
-            RunTarget = "Cloud",
+            RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
             InputPath = SelectedItem!.Path,
             AnnotationPath = SelectedItem.AnnotationPath,
             TreatAsRna = IsTreatingAsRna,
