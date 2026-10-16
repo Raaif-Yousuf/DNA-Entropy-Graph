@@ -138,8 +138,11 @@ quarters of the time it normally gets. Nothing is wrong yet. Keep waiting, or pr
 **A window: "This run looks stuck".** The computer has stopped reporting progress. Choose
 **Stop** (keeps the computer so you can start it again later; its disk costs a little),
 **Delete** (removes the computer and its disk), or **Keep waiting** (gives it more time;
-closing the window with Escape also keeps waiting). If it recovers by itself while the
-window is open, the window closes and the run carries on. If nobody answers for ten minutes,
+closing the window with Escape also keeps waiting). The window names the run (its file and job)
+and the rented computer, so two windows at once are never alike. **Delete** asks once more,
+naming the computer, and only that second **Delete it** removes anything. When you choose
+**Keep waiting** the yellow "a window is asking" note on the run page goes away. If it
+recovers by itself while the window is open, the window closes and the run carries on. If nobody answers for ten minutes,
 the app ends the run the way you set it to end.
 
 **"The computer was shut down before finishing"**, either a hardware issue on Google's

@@ -174,14 +174,14 @@ public class CloudResourcesViewModelTests
     [Fact]
     public async Task Delete_everything_names_what_will_go_asks_first_and_declining_deletes_nothing()
     {
+        Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), Vm("deg-job-2", "TERMINATED", Mine, "job-2"), Vm("deg-theirs", "RUNNING", Other, "job-9"));
         var viewModel = await LoadedAsync();
         _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Do<string>(m => _confirmMessage = m), Arg.Any<CancellationToken>()).Returns(false);
 
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
-        _confirmMessage.ShouldNotBeNull();
-        _confirmMessage.ShouldContain("CloudDeleteAll_Body");
-        _confirmMessage.ShouldContain("2", Case.Sensitive);
+        // The whole formatted text: 2 computers (not the other installation's third), 1 disk, 1 job folder, 2 MB of results.
+        _confirmMessage.ShouldBe("CloudDeleteAll_Body 2 1 1 CloudSize_MB 2.0");
         await _compute.DidNotReceiveWithAnyArgs().DeleteVmAsync(default!, default!, Arg.Any<CancellationToken>());
         await _storage.DidNotReceiveWithAnyArgs().DeletePrefixAsync(default!, default!, Arg.Any<CancellationToken>());
     }
@@ -189,6 +189,7 @@ public class CloudResourcesViewModelTests
     [Fact]
     public async Task Delete_everything_reports_each_item_with_its_outcome_including_the_soft_delete_retention()
     {
+        Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), Vm("deg-job-2", "TERMINATED", Mine, "job-2"), Vm("deg-theirs", "RUNNING", Other, "job-9"));
         var viewModel = await LoadedAsync();
         _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
         _compute.DeleteDiskAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new CloudOperationException(new CloudError("403", 403, "no"), CloudErrorKind.Permission));
@@ -198,6 +199,7 @@ public class CloudResourcesViewModelTests
 
         await _compute.Received(1).DeleteVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
         await _compute.Received(1).DeleteVmAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().DeleteVmAsync("deg-theirs", Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _storage.Received(1).DeletePrefixAsync(Bucket, "jobs/job-1/", Arg.Any<CancellationToken>());
         viewModel.HasReport.ShouldBeTrue();
         viewModel.ReportHeadline.ShouldContain("CloudReport_Incomplete");
@@ -205,6 +207,99 @@ public class CloudResourcesViewModelTests
         viewModel.ReportLines.ShouldContain(l => l.Contains("CloudReport_Failed") && l.Contains("deg-job-2"));
         viewModel.ReportLines.ShouldContain(l => l.Contains("CloudReport_DeletedRecoverable") && l.Contains("jobs/job-1/") && l.Contains('7'));
         viewModel.ReportLines.Count(l => l.Contains("CloudReport_Deleted ")).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Delete_everything_never_deletes_another_installations_computer_even_when_the_gateway_hands_it_over()
+    {
+        var stray = Vm("deg-theirs", "RUNNING", Other, "job-9");
+        Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), stray);
+        _compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<VmDescriptor>>(_all));
+        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        var viewModel = await LoadedAsync();
+
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+
+        await _compute.Received(1).DeleteVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().DeleteVmAsync("deg-theirs", Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_computer_created_while_the_confirm_dialog_was_open_is_left_alone_and_the_report_says_so()
+    {
+        // #740 finding 4: the dialog named two computers; a third appeared before the delete ran and must not go unnamed.
+        var viewModel = await LoadedAsync();
+        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), Vm("deg-job-2", "TERMINATED", Mine, "job-2"), Vm("deg-late", "RUNNING", Mine, "job-3"));
+            return Task.FromResult(true);
+        });
+
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+
+        await _compute.Received(1).DeleteVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().DeleteVmAsync("deg-late", Arg.Any<string>(), Arg.Any<CancellationToken>());
+        viewModel.ReportLines.ShouldContain(l => l.Contains("CloudReport_Skipped") && l.Contains("deg-late"));
+        viewModel.ReportHeadline.ShouldContain("CloudReport_Incomplete");
+    }
+
+    [Fact]
+    public async Task A_listing_that_fails_with_any_exception_shows_one_message_and_never_escapes_a_fire_and_forget_refresh()
+    {
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("parse"));
+        var viewModel = NewViewModel();
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        viewModel.ErrorText.ShouldContain("CloudPage_ListFailed");
+        viewModel.IsBusy.ShouldBeFalse();
+        viewModel.IsEmpty.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Delete_everything_survives_any_exception_in_the_listing_and_in_the_sweep_and_each_says_one_thing()
+    {
+        var viewModel = await LoadedAsync();
+        _storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("parse"));
+
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+
+        viewModel.ErrorText.ShouldContain("CloudPage_ListFailed");
+        viewModel.IsBusy.ShouldBeFalse();
+        await _compute.DidNotReceiveWithAnyArgs().DeleteVmAsync(default!, default!, Arg.Any<CancellationToken>());
+
+        // Past the dialog: the sweep's own re-listing fails with something that is not a cloud error.
+        var listing = Task.FromResult<IReadOnlyList<BucketDescriptor>>([new BucketDescriptor(Bucket, "US", Labels(Mine), null, 7)]);
+        _storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns(_ => listing, _ => throw new InvalidOperationException("parse"));
+
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+
+        viewModel.ErrorText.ShouldContain("CloudPage_DeleteAllInterrupted");
+        viewModel.ErrorText.ShouldNotContain("CloudPage_DeleteAllFailed", Case.Sensitive, "an unknown failure may have struck mid-sweep, so the page must not say nothing was deleted");
+        viewModel.IsBusy.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_refused_stop_that_is_not_a_cloud_error_still_names_the_computer()
+    {
+        var viewModel = await LoadedAsync();
+        _compute.StopVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("x"));
+
+        await viewModel.Vms[0].StopCommand!.ExecuteAsync(null);
+
+        viewModel.ErrorText.ShouldContain("CloudPage_ActionFailed");
+        viewModel.ErrorText.ShouldContain("deg-job-1");
+    }
+
+    [Fact]
+    public async Task Sizes_come_from_the_string_table_not_from_unit_literals_in_code()
+    {
+        _strings.GetString("CloudPage_Summary").Returns("{0}|{1}|{2}|{3}");
+        var viewModel = await LoadedAsync();
+
+        viewModel.SummaryText.ShouldBe("1|CloudSize_MB 2.0|deg-bucket|CloudSize_MB 2.0");
     }
 
     [Fact]

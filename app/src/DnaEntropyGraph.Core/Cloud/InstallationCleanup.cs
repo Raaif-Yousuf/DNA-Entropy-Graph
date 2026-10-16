@@ -38,6 +38,9 @@ public sealed record CleanupReport(IReadOnlyList<CleanupItem> Items)
 /// </summary>
 public sealed record InstallationBucketUsage(string BucketName, int JobCount, int ObjectCount, long TotalBytes);
 
+/// <summary>One job folder of this installation in a bucket (the key to delete is the prefix).</summary>
+public sealed record JobFolderRef(string Bucket, string Prefix);
+
 /// <summary>
 /// What this installation has in the project (issue #105). <see cref="Bucket"/> is null when the project has no results bucket yet.
 /// <see cref="SharedCache"/> is the model-weights cache: shared by every installation, reported for the Cloud page's size line and never part of a cleanup.
@@ -46,7 +49,11 @@ public sealed record InstallationInventory(
     IReadOnlyList<VmDescriptor> Vms,
     IReadOnlyList<DiskDescriptor> Disks,
     InstallationBucketUsage? Bucket,
-    PrefixUsage SharedCache);
+    PrefixUsage SharedCache)
+{
+    /// <summary>The job folders counted in <see cref="Bucket"/>: what a confirm dialog showed, so a delete can be limited to exactly that (#740).</summary>
+    public IReadOnlyList<JobFolderRef> JobFolders { get; init; } = [];
+}
 
 /// <summary>
 /// Issue #105: the Cloud page's "what is mine" and "delete everything". Scoped by Hard Rules 9 and 10: a VM or disk is ours only with both
@@ -85,10 +92,12 @@ public sealed class InstallationCleanup
         var buckets = await _storage.ListBucketsAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         InstallationBucketUsage? usage = null;
+        var folders = new List<JobFolderRef>();
         var cache = new PrefixUsage(0, 0);
         foreach (var bucket in buckets)
         {
             var jobs = await OwnJobPrefixesAsync(bucket.Name, installationId, cancellationToken).ConfigureAwait(false);
+            folders.AddRange(jobs.Select(j => new JobFolderRef(bucket.Name, j)));
             var objects = 0;
             long bytes = 0;
             foreach (var job in jobs)
@@ -106,11 +115,15 @@ public sealed class InstallationCleanup
             cache = new PrefixUsage(cache.ObjectCount + bucketCache.ObjectCount, cache.TotalBytes + bucketCache.TotalBytes);
         }
 
-        return new InstallationInventory(vms, disks, usage, cache);
+        return new InstallationInventory(vms, disks, usage, cache) { JobFolders = folders };
     }
 
-    /// <summary>Deletes this installation's VMs, then its disks, then its job folders, and reports each one. See the class remarks for the guarantees.</summary>
-    public async Task<CleanupReport> DeleteAllAsync(string projectId, string installationId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Deletes this installation's VMs, then its disks, then its job folders, and reports each one. See the class remarks for the guarantees.
+    /// When <paramref name="confirmed"/> is given (what a confirm dialog showed, from <see cref="InventoryAsync"/>), only those items are deleted: anything that
+    /// appeared since is reported as <see cref="CleanupOutcome.Skipped"/> with <see cref="NotConfirmedCode"/> and left alone (#740).
+    /// </summary>
+    public async Task<CleanupReport> DeleteAllAsync(string projectId, string installationId, CancellationToken cancellationToken, InstallationInventory? confirmed = null)
     {
         RequireInstallation(installationId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -138,6 +151,12 @@ public sealed class InstallationCleanup
                 continue;
             }
 
+            if (confirmed is not null && !confirmed.Vms.Any(v => v.Name == vm.Name && v.Zone == vm.Zone))
+            {
+                items.Add(new CleanupItem(CleanupKind.Vm, vm.Name, vm.Zone, CleanupOutcome.Skipped, NotConfirmedCode));
+                continue;
+            }
+
             await DeleteVmAndEndItsRunAsync(vm, items, cancellationToken).ConfigureAwait(false);
         }
 
@@ -159,6 +178,12 @@ public sealed class InstallationCleanup
             if (!disk.BelongsTo(installationId))
             {
                 items.Add(new CleanupItem(CleanupKind.Disk, disk.Name, disk.Zone, CleanupOutcome.Skipped, NotOursCode));
+                continue;
+            }
+
+            if (confirmed is not null && !confirmed.Disks.Any(d => d.Name == disk.Name && d.Zone == disk.Zone))
+            {
+                items.Add(new CleanupItem(CleanupKind.Disk, disk.Name, disk.Zone, CleanupOutcome.Skipped, NotConfirmedCode));
                 continue;
             }
 
@@ -206,6 +231,12 @@ public sealed class InstallationCleanup
             foreach (var prefix in prefixes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (confirmed is not null && !confirmed.JobFolders.Any(j => j.Bucket == bucket.Name && j.Prefix == prefix))
+                {
+                    items.Add(new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.Skipped, NotConfirmedCode));
+                    continue;
+                }
+
                 try
                 {
                     StoragePrefixes.RequireDeletable(prefix);
@@ -242,6 +273,9 @@ public sealed class InstallationCleanup
 
     /// <summary>The detail code of a <see cref="CleanupOutcome.Skipped"/> item that did not carry this installation's labels.</summary>
     public const string NotOursCode = "NOT_LABELLED_FOR_THIS_INSTALLATION";
+
+    /// <summary>The detail code of a <see cref="CleanupOutcome.Skipped"/> item that was not in the inventory the user confirmed (it appeared after the dialog was shown).</summary>
+    public const string NotConfirmedCode = "NOT_IN_CONFIRMED_LIST";
 
     /// <summary>The detail code of a <see cref="CleanupOutcome.NotVerified"/> item: the delete was accepted and the read back still finds it.</summary>
     public const string StillThereCode = "STILL_THERE_AFTER_DELETE";

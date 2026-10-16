@@ -31,9 +31,31 @@ public sealed class RunStallCoordinator
     /// <summary>The <see cref="StallDecision"/> the runner calls. Raised on a worker thread; the dialog service marshals to the UI thread.</summary>
     public async Task<StallChoice> AskAsync(StallPrompt prompt, CancellationToken cancellationToken)
     {
+        try
+        {
+            return await AskCoreAsync(prompt, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // The runner sends no StallCleared after Keep waiting (it only snoozes its watch), and a question it withdrew has already cleared it: whichever way
+            // the question ends, the "a window is asking" line must go (#740). Stop and Delete end the run, so an empty line costs nothing there.
+            _messenger.Send(new RunNoticeMessage(prompt.JobId, string.Empty));
+        }
+    }
+
+    private async Task<StallChoice> AskCoreAsync(StallPrompt prompt, CancellationToken cancellationToken)
+    {
         var stage = prompt.Stage ?? _strings.GetString("RunNotice_UnknownStage");
         var minutes = Math.Max(1, (int)Math.Round(prompt.Waited.TotalMinutes));
-        var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(BodyKey(prompt.Code)), stage, minutes);
+        var computer = prompt.VmName ?? _strings.GetString("StallDialog_ThisComputer");
+        var run = prompt.RunName is { Length: > 0 } name
+            ? string.Format(CultureInfo.CurrentCulture, _strings.GetString("StallDialog_RunLabel"), name, prompt.JobId)
+            : string.Format(CultureInfo.CurrentCulture, _strings.GetString("StallDialog_RunLabelNoName"), prompt.JobId);
+
+        // {0} step, {1} minutes, {2} the rented computer, {3} the run: every template of this dialog may use any of them.
+        string Fill(string key) => string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), stage, minutes, computer, run);
+        var title = Fill("StallDialog_Title");
+        var body = Fill(BodyKey(prompt.Code));
         IReadOnlyList<string> labels =
         [
             _strings.GetString("StallDialog_Stop"),
@@ -42,11 +64,18 @@ public sealed class RunStallCoordinator
         ];
         try
         {
-            var pressed = await _dialog.ChooseAsync(_strings.GetString("StallDialog_Title"), body, labels, cancellationToken).ConfigureAwait(false);
+            var pressed = await _dialog.ChooseAsync(title, body, labels, cancellationToken).ConfigureAwait(false);
+            if (pressed == 1)
+            {
+                // Delete destroys the computer and its disk: it needs its own question that names the computer. Anything but its Delete button keeps waiting.
+                IReadOnlyList<string> confirmLabels = [_strings.GetString("StallConfirm_Delete"), _strings.GetString("StallDialog_KeepWaiting")];
+                var confirmed = await _dialog.ChooseAsync(Fill("StallConfirm_Title"), Fill("StallConfirm_Body"), confirmLabels, cancellationToken).ConfigureAwait(false);
+                return confirmed == 0 ? StallChoice.Delete : StallChoice.KeepWaiting;
+            }
+
             return pressed switch
             {
                 0 => StallChoice.Stop,
-                1 => StallChoice.Delete,
                 _ => StallChoice.KeepWaiting,
             };
         }
