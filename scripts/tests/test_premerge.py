@@ -221,6 +221,37 @@ def test_endofline_is_forgiven_only_on_autocrlf_and_only_when_it_is_the_whole_fa
     assert pm.forgive_endofline(EOL, 0, True) is None
 
 
+def _repo_with(tmp_path, files: dict[str, bytes]):
+    def run(*args):
+        assert subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, check=False).returncode == 0
+
+    run("init", "-q")
+    (tmp_path / ".gitattributes").write_bytes(b"* text=auto eol=lf\n*.ps1 text eol=crlf\n")
+    for name in files:
+        (tmp_path / name).write_bytes(b"x\n")
+    run("add", "-A")
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+    return tmp_path
+
+
+def test_stale_crlf_detection_ignores_eol_crlf_files_and_sees_a_real_stale_file(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    only_ps1 = _repo_with(tmp_path / "a", {"x.ps1": b"x\r\n"})
+    assert pm._tree_has_stale_crlf(only_ps1) is False  # a .ps1 is CRLF in the tree on purpose
+    stale = _repo_with(tmp_path / "b", {"x.ps1": b"x\r\n", "y.cs": b"y\r\n"})
+    assert pm._tree_has_stale_crlf(stale) is True
+
+
+def test_endofline_in_an_lf_tree_is_a_real_failure_not_known_462():
+    # the real fix for #462 is an LF tree (`.gitattributes` eol=lf); autocrlf=true alone is not an excuse.
+    # ENDOFLINE with no CRLF file in the working tree is a genuine regression and must FAIL.
+    assert pm.forgive_endofline(EOL * 3, 2, True, crlf_tree=False) is None
+    note = pm.forgive_endofline(EOL * 3, 2, True, crlf_tree=True) or ""
+    assert "fix_eol.py" in note  # and the KNOWN note names the one-command repair
+
+
 def test_the_dotnet_format_gate_has_the_forgive_hook_and_other_gates_do_not():
     gates = {g.name: g for g in pm.build_gates(REPO_ROOT)}
     assert gates["dotnet-format"].forgive is not None
