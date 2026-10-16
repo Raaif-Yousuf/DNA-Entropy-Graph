@@ -174,6 +174,41 @@ per-region quota memory, persisted per project instead of the prototype's
 - Not built: the user-facing "other continents" toggle (the ladder walks every offered zone, the bucket's continent first), per-tier escalation on a click,
   and the last-good-zone memory (#210).
 
+### 3.1 The model and GPU catalog (issue #87)
+
+`GpuCatalog.Shipped` (`app/src/DnaEntropyGraph.Core/Cloud/GpuCatalog.cs`) is the one table of models and GPU tiers: per model the
+precision, size, card count, memory and whether it needs Hopper (copied from the worker's `hardware.py`
+`MODEL_REQUIREMENTS`, which refuses a run whose hardware disagrees); per tier the machine type, accelerator id, quota metric, card count,
+memory, Hopper, Spot-only and the 7B window ceiling. It is a Core table, not a JSON file: it needs no
+file, DI or load-failure path, a wrong row fails a test, and `CloudJobRequestFactory.MachineTypeFor` reads it, so the machine a run
+starts and the machine the pickers and the estimate name cannot drift apart. GPUs are listed cheapest first.
+
+- **Fit**: Hopper first, then card count, then memory (`GpuFit`). MEASURED (project memory, prototype): Evo 2 7B runs on an L4 and an A100
+  only; 1B, 20B and 40B need Hopper FP8 (H100), 40B two of them (`a3-highgpu-2g`, Spot or Flex-start only).
+- **Parity with the worker**: `WorkerContractGuardTests.The_gpu_catalog_agrees_with_the_workers_model_requirements` parses `hardware.py`
+  `MODEL_REQUIREMENTS` and fails when the model set, precision, Hopper need or card count differ; a second test mutates a copy of the text
+  (40B card count) and proves the check goes red.
+- **Spot-only tiers**: both A3 shapes (`a3-highgpu-1g` and `-2g`) are `SpotOnly`. Source: Appendix B section 4.1, "not offered on-demand for small
+  A3 shapes". THEORY (unverified against a real project): that wording covers the 1g shape too. A run on a SpotOnly tier carries
+  `RunOptions.SpotVm = true` and its estimate is asked for Spot (the price list has no A3 rows, so it says no estimate). Mapping `SpotVm` to the VM's
+  scheduling is issue #91's `VmSpec.Spot`; until it lands a SpotOnly tier would be requested on-demand, which is why no SpotOnly tier is offered today.
+- **Nothing fits**: when no offered card can run the chosen model the page says to choose another model, offers no "Run anyway", and Run stays off.
+- **Linking** (`ModelGpuLinker`, pure): a model pick raises an unpinned GPU to the cheapest offered tier that fits; a GPU pick moves an
+  unpinned model to the largest offered model that fits (a tie keeps the current one); a pinned side never moves, so the pair can be
+  infeasible, which the page warns about and asks the user to confirm. "Automatic" (`CheapestAvailable`) stays automatic in
+  `RunOptions.GpuTier` while the cheapest tier is the answer and names the tier otherwise, so a model that needs a bigger card never
+  starts on an L4.
+- **What is offered is issue #14's switch.** `Offered` per model and tier in the catalog is the only thing to change when #14 (ship
+  evo2_40b and evo2_1b_base, or hide them; an owner DECISION, open) is decided. MEASURED 2026-10-15: the app had offered only evo2_7b
+  (no model picker existed), so only evo2_7b and the L4, A100 40 and A100 80 tiers are offered, and the model picker is hidden while one
+  model is offered. `GpuCatalogTests.Today_only_the_standard_7b_model...` pins that state.
+- **Zone availability (not handled here)**: the zone ladder is `us-central1-a/b/c/f` for every tier, and an A100 80 GB or A3 machine type may not exist
+  in all of them; see the issue filed from the #87 cold review about how a "machine type not found in zone" error classifies.
+- **Accelerator and quota** per tier (`GpuEntry.Accelerator`, `QuotaMetric`) are what issue #414's accelerator-type field and the
+  preflight quota check can read instead of the `"gpu"` placeholder; this change does not wire them into `VmSpec`.
+- **Window ceiling**: `GpuEntry.ContextCeiling` is 8,192 for the L4 and null (unmeasured, never guessed) for the others; the clamp offer
+  of science_and_formats.md section 3 is not built on it yet.
+
 ## 4. Labels and naming
 
 Covered field-by-field in [`job_contract.md`](job_contract.md) section 2 (identifiers) -
@@ -297,6 +332,8 @@ default of 1 through either.
 THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGIONS` for a project that never raised it (when absent it is a
 failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Switched on in production by #609. The request flow
 (`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
+
+**Spot quota (issue #718).** MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): the Spot twin of the L4 line is `PREEMPTIBLE_NVIDIA_L4_GPUS` (name confirmed), but without a preemptible grant Spot VMs "consume standard quota", and once one is granted they "can only consume preemptible quota". `QuotaMetrics.SpotRegionalMetric` therefore reads the preemptible line only when the region reports it with a limit above zero, else the standard line. No production path reads it yet (the provisioner uses the on-demand metric); a Spot preflight must call it. THEORY (unverified): whether an ungranted region lists the preemptible line as 0 or omits it; both read as standard.
 
 ### 6.2 What preflight does with a quota it cannot read (issue #88)
 
@@ -606,7 +643,11 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   writer: the startup script's `booting`/`installing` count). A stage past its deadline (`booting` 8 min, `installing` 15, `restoring-cache` 15,
   `model-loading` 15, `uploading` 10; `CloudJobRunner.StageDeadlines` overrides them) ends the run as `worker_stage_stuck` and the VM per the
   user's choice, whatever the heartbeat says: this catches a hung main thread under a ticking heartbeat thread while it is in one of those
-  stages (#522's remaining case is a hang inside `running`). Numbers are the contract's (THEORY, unverified on a real VM).
+  stages (a hang inside `running` is the progress rule below). Numbers are the contract's (THEORY, unverified on a real VM).
+- **Forward progress (issue #723, app half of #522).** `WorkerStatusReader` reads `windowsDone` and `lastProgressAt`. In the `running` stage, when either field is present and
+  `(stage, windowsDone, lastProgressAt)` has not changed across looks for `ProgressStallTimeout` (default 20 min, job_contract.md section 5; compared between looks, never with the
+  app's clock) while the heartbeat keeps changing, the watch returns `worker_progress_stalled` (stop, via the same stall prompt). A status with neither field (an older worker) is never
+  judged by it. THEORY (unverified): 20 min is above any healthy L4 window; ToTest #522.
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
@@ -857,7 +898,7 @@ and issue tracker for the follow-up.
 
 `CloudJobRunner.OnNotice` (`Action<RunNotice>`) is told `SlowStage` once per stage when it passes 75 percent of its deadline (`HeartbeatWatch.SlowFraction`, stage, time in stage,
 deadline), `StallDetected` when the heartbeat watch fires and a question is opened, and `StallCleared` when the worker recovers while it is open. `CloudJobRunner.OnStall`
-(`StallDecision`: `StallPrompt` in, `StallChoice` out: `Stop`, `Delete`, `KeepWaiting`) replaces "end the VM at once" for `worker_stage_stuck`, `worker_heartbeat_stale` and `worker_no_heartbeat`;
+(`StallDecision`: `StallPrompt` in, `StallChoice` out: `Stop`, `Delete`, `KeepWaiting`) replaces "end the VM at once" for `worker_stage_stuck`, `worker_progress_stalled`, `worker_heartbeat_stale` and `worker_no_heartbeat`;
 null keeps the old behaviour. While the question is open `ResultWaiter` keeps polling `result.json` and does not repeat it; Stop and Delete end the run under the same code with the VM
 stopped or deleted whatever the run's own end choice was; `KeepWaiting` restarts every watch allowance (`HeartbeatWatch.Snooze`) so the question comes back after a fresh one; the result
 limit still applies, so waiting is never unbounded (Hard Rule 11); a handler that throws or is cancelled counts as no answer and the VM is ended the run's own way. A box with no GPU is never
@@ -1013,6 +1054,13 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
   on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
   `OAUTH_CLIENT_INVALID` name the installer as the action: the user never has this file, the build does.
+- **Granted scopes (issue #259).** Under granular consent a user can untick `cloud-platform` and still be signed in. MEASURED 2026-10-16
+  (https://developers.google.com/identity/protocols/oauth2/native-app): the token response `scope` field lists what the token grants,
+  a user `may not grant your app access to all` requested scopes, and `Incremental authorization is not supported for installed apps`,
+  so `include_granted_scopes` is not used; the re-ask is the same flow with `prompt=select_account consent`. At sign-in a `scope` without
+  `cloud-platform` (or none) fails `CONSENT_INCOMPLETE` before anything is stored; on a refresh a `scope` that names scopes without it
+  deletes the token file, sets `needsSignIn` and fails the same way (a refresh answer with no `scope` keeps the stored grant). The action
+  is **Sign in again and allow access**, which is the ordinary sign-in command. Decision #18 (single `cloud-platform` scope) is what makes this one check enough.
 - **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
   and the account entry whatever Google said, and makes the next remaining account current.
 - **Not here yet:** the selected project (a placeholder until #520), and any UI that starts a sign-in, lists
@@ -1393,6 +1441,40 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
+## 18. The nothing-left-running scan (issue #113)
+
+`LeftRunningScanner` (Core) lists this installation's computers and disks by label through the same gateway calls the Cloud page uses
+(`ListByInstallationAsync`, `ListDisksByInstallationAsync`; Hard Rules 9 and 10, so another installation's computers are never reported or touched).
+A running computer reports its remaining time (`VmDescriptor.MaxRunDuration`, read from `scheduling.maxRunDuration`, against the run clock start and the platform's
+own clock when the read carried one), its hourly rate from the price list, and whether a non-terminal run row carries its job id. A disk no running computer holds is a
+"stopped disk" with its monthly cost (size times the price list's per-GB-month rate).
+
+`LeftRunningGuard` (Presentation) runs it three ways: at launch (`AppStartup.BeginAsync`), every 5 minutes on a `TimeProvider` timer (a running computer with no live
+run gets one warning toast, again only if it ended and came back), and on close (`AppWindowService` cancels `AppWindow.Closing` at once, asks asynchronously, then closes
+again; the UI thread is never blocked). The exit modal offers Stop, Delete or Leave running; Leave running is never indefinite because every computer carries a
+`maxRunDuration` (Hard Rule 11). A scan that cannot read Google, or a dialog that cannot be shown, never keeps the window open; a Stop or Delete that fails for some computer
+does (it names the action, and the next close asks again).
+
+Bounds (cold-review H1): the scan is abandoned after 10 s (``Task.WaitAsync`` on the ``TimeProvider``, so a listing that ignores its token cannot hold the close), the dialog waits at most 10 s for the window's one-dialog gate (``IChoiceDialogService.ChooseAsync`` with a gate timeout; null answer allows the close), and Stop / Delete wait at most 30 s each, in parallel: a call still unanswered is not a failure, the window closes and an Info toast says it finishes on Google's side. Stop and Delete go through ``InstallationCleanup.EndVmAsync`` (round 3, see below): the exit claims "finishing on Google's side" only for a request Google ACCEPTED; a request never accepted keeps the window open with the failure message. A computer whose run is still live ends that run's row as Cancelled (``cleanup_deleted`` for a delete, ``cleanup_stopped`` for a stop, each with its own ``RunError_`` text) instead of leaving it Running (Hard Rule 11); the modal warns that the results are not downloaded yet. The close decision (cancel at once, ask once, re-close without asking again) is ``CloseConfirmation``, tested without a window. Several computers found in one scan make one toast (the message bar holds one message). A computer whose limit could not be read gets a neutral line, not a claim that it ends itself.
+
+Round 3 (the end of one computer, `InstallationCleanup.EndVmAsync`):
+
+- **Accepted is the insert, not the end of the operation (H1).** `IComputeGateway.EndVmAsync(name, zone, delete, onAccepted, ct)` calls `onAccepted` as soon as the Compute request (the operation insert) was accepted (or answered "already gone"), then waits for the operation to reach DONE and throws what it ends with. `GoogleComputeGateway` and `ResilientComputeGateway` (through the pipeline, breaker bypassed like stop and delete; a replayed attempt may call `onAccepted` again) implement it; `StopVmAsync` and `DeleteVmAsync` keep their meaning for every other caller. `FakeGcp.HoldEndVmCompletion()` / `ReleaseEndVmCompletion()` script "accepted now, done later". A GPU stop that takes over 30 s therefore reads as "finishing on Google's side", not as Failed, and the run row is written at acceptance.
+- **The driver is stopped only after acceptance (M1).** A refused request (403, quota) leaves the run, its driver and its row exactly as they were.
+- **After acceptance nothing the caller's token can cancel decides the row (M3).** The driver wait (bounded by `DriverStopWait`) and the row write take no caller token, so a caller that gives up still gets the run's end recorded (Hard Rule 11). THEORY (unverified): an operation that fails AFTER it was accepted leaves the row Cancelled with the computer still running; the end then reports Failed and the next scan finds a running computer with no live run and warns.
+- **A second end for the same job reports what really happened (M2).** The first end publishes its outcome; the second waits for it (bounded by `InFlightWait` = 20 s, then Failed: nothing is known to be finishing, so nothing is claimed). Accepted: Done and nothing more is sent, except a Delete asked behind an accepted Stop, which is sent and then rewrites the row's code from `cleanup_stopped` to `cleanup_deleted`. Refused: the second makes its own attempt. A cancel some other code owns (the runner's, "Delete everything") is still `AlreadyEnding`.
+- **A run row phase write is atomic per job (H2).** `RunRowStore` takes one process-wide lock per job id for the read and the write, and writes through `IRunRepository.TryUpsertIfPhaseAsync(row, phaseThatWasRead)`, which the SQLite repository does as one `BEGIN IMMEDIATE` transaction (check and write, never resurrecting a removed row). A writer that lost the race re-reads and re-validates; a terminal phase is never left (`JobStateMachine` throws for any move out of one), so a late driver cannot overwrite the cleanup's Cancelled. The interface default is a plain upsert for single-writer test doubles; a repository other writers can reach must override it.
+- Logging: a fault the guard awaits is logged once by the awaiting code; only a call the timeout abandoned is observed for a late fault (with the job id when there is one).
+
+Round 4 (same method):
+
+- **The job is released once the row is ended, not when the operation is done (M1).** The cancel scope (`ActiveRuns.TryBeginCancel`) is disposed right after the run's row is Cancelled; a runner cancel, "Delete everything" and the reconciler no longer see `AlreadyEnding` or wait out a GPU stop. The end's entry stays published until the operation is done, so a second `EndVmAsync` for the job still joins it.
+- **Taking the job and publishing the entry are one step (L4)** under one lock, so a concurrent second call always finds either our entry or someone else's cancel.
+- **A superseding Delete owns the outcome (M2).** When a Delete is accepted behind an accepted Stop, the Stop's end reports the Delete's outcome if the Stop's own operation later ends in error (the computer was deleted under it). THEORY (unverified): that a real Stop operation errors when its computer is deleted; the guard never shows "stop failed" for a deleted computer either way.
+- **A caller token cancelled after acceptance is acceptance (L3)**: Done, row Cancelled, driver stopped. Cancelled before acceptance throws and touches nothing. Both are pinned by tests (the code already did this).
+- **Annotations are conditional too (L5)**: `RunRowStore.UpdateRowAsync` takes the same per-job lock and writes through `TryUpsertIfPhaseAsync`, re-reading and re-applying the change if it lost a race.
+
+THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes back populated in an instances aggregatedList on a real project.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),
