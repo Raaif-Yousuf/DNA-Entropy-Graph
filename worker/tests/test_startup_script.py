@@ -157,8 +157,11 @@ def test_docker_run_passes_gpus_all_only_when_a_gpu_is_expected() -> None:
     code = _code_only()
     assert code.count("--gpus all") == 1
     gate = code.index('if [ "$EXPECT_GPU" = "true" ]; then\n  GPU_FLAGS=(--gpus all)')
-    assert gate < code.index("docker run --rm")
-    run_block = code[code.index("docker run --rm") :]
+    # gpu_test_run() (issue #759) also has a `docker run --rm`, defined above the gate and only
+    # CALLED after it: the worker's own run is the first one after the gate.
+    assert '"${GPU_FLAGS[@]}"' in _extract_function("gpu_test_run")
+    worker_run = code.index("docker run --rm", gate)
+    run_block = code[worker_run:]
     assert '"${GPU_FLAGS[@]}"' in run_block.split("dna-entropy-worker run")[0]
     assert "--gpus all" not in run_block
 
@@ -305,3 +308,132 @@ def test_keep_hold_measures_elapsed_time_from_vm_boot_not_script_start() -> None
 
 def test_the_exit_code_dispatch_passes_the_worker_exit_code_to_keep_hold() -> None:
     assert 'keep_hold "$rc"' in _code_only()
+
+
+# --- gpu-test mode (issue #759): `pytest -m gpu` in the image instead of a job ------------
+
+
+def _run_gpu_test_run(
+    docker_rc: int, max_run_min: int = 60, gpu_flags: str = "--gpus all", summary: str = "== 1 passed =="
+) -> list[str]:
+    """Source the REAL gpu_test_run() with stubs for everything it touches and return the
+    recorded calls, one per line. docker prints a pytest-looking line and exits docker_rc;
+    put_object records the object name AND, for the result file, its content."""
+    lines = [
+        "set -uo pipefail",  # as in startup.sh: the pipeline's status is docker's, not tee's
+        _extract_function("gpu_test_run"),
+        f'MAX_RUN_MIN={max_run_min}; IMAGE="ghcr.io/x/y@sha256:abc"; JOB=job1',
+        "NAME=deg-job1; ZONE=z1; LIFECYCLE=delete",
+        f"GPU_FLAGS=({gpu_flags})",
+        'cd "$(mktemp -d)" || exit 1',
+        "GPU_TEST_LOG=$PWD/gpu.log; GPU_TEST_RESULT=$PWD/result.json",
+        'timeout() { echo "timeout:$1"; shift; "$@"; }',
+        f'docker() {{ echo "docker:$*"; echo "{summary}"; return {docker_rc}; }}',
+        # the result file's content is echoed so the test can read it
+        'put_object() { echo "put:$2"; '
+        '[ "${2##*/}" = "gpu-test-result.json" ] && { cat "$1"; echo; }; true; }',
+        'status() { echo "status:$1"; }',
+        'cleanup() { echo "cleanup:$1"; }',
+        'gpu_test_run; echo "rc:$?"',
+    ]
+    result = subprocess.run(
+        ["bash", "-s"], input=("\n".join(lines) + "\n").encode("utf-8"), capture_output=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    return result.stdout.decode("utf-8").splitlines()
+
+
+@needs_bash
+def test_gpu_test_run_runs_pytest_gpu_in_the_image_with_the_gpu_flags_and_a_deadline() -> None:
+    out = _run_gpu_test_run(0)
+    docker = next(ln for ln in out if ln.startswith("docker:"))
+    assert "--gpus all" in docker
+    assert "ghcr.io/x/y@sha256:abc" in docker
+    assert "pytest -m gpu" in docker
+    assert "timeout:3000" in out  # (MAX_RUN_MIN 60 - 10 min margin) in seconds
+
+
+@needs_bash
+def test_gpu_test_run_has_a_floor_on_the_deadline() -> None:
+    assert "timeout:60" in _run_gpu_test_run(0, max_run_min=5)
+
+
+@needs_bash
+def test_gpu_test_run_uploads_the_log_then_the_result_then_applies_the_lifecycle() -> None:
+    out = _run_gpu_test_run(0)
+    puts = [ln for ln in out if ln.startswith("put:")]
+    assert puts == ["put:jobs/job1/logs/gpu-test.log", "put:jobs/job1/logs/gpu-test-result.json"]
+    # the result file is the LAST object, and the lifecycle comes after both uploads
+    assert out.index("cleanup:delete") > out.index("put:jobs/job1/logs/gpu-test-result.json")
+    assert out[-1] == "rc:0"
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("rc", "status", "timed_out"),
+    [
+        (0, "status:done", False),
+        (1, "status:failed", False),
+        (5, "status:failed", False),
+        (124, "status:failed", True),
+    ],
+)
+def test_gpu_test_run_result_json_carries_the_pytest_exit_code(rc: int, status: str, timed_out: bool) -> None:
+    import json
+
+    out = _run_gpu_test_run(rc)
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert parsed["exitCode"] == rc
+    assert parsed["timedOut"] is timed_out
+    assert parsed["jobId"] == "job1"
+    assert status in out
+    assert out[-1] == f"rc:{rc}"
+    assert "cleanup:delete" in out  # a failed or timed-out run still ends in the lifecycle
+
+
+@needs_bash
+def test_gpu_test_run_without_a_gpu_expectation_passes_no_gpu_flag() -> None:
+    docker = next(ln for ln in _run_gpu_test_run(0, gpu_flags="") if ln.startswith("docker:"))
+    assert "--gpus" not in docker
+
+
+def test_gpu_test_mode_is_chosen_by_the_deg_mode_attribute_before_the_manifest_is_fetched() -> None:
+    text = _code_only()
+    assert "MODE=$(meta instance/attributes/deg-mode)" in text
+    mode_idx = text.index('"$MODE" = "gpu-test"')
+    assert (
+        text.index('docker pull "$IMAGE"')
+        < mode_idx
+        < text.index('get_object "jobs/${JOB}/manifest.json" > /work/manifest.json')
+    )
+    # GPU_FLAGS must exist before the branch uses it
+    assert text.index("GPU_FLAGS=()") < mode_idx
+    branch = text[mode_idx : text.index("mkdir -p /work")]
+    assert "gpu_test_run" in branch
+    assert "exit" in branch
+    assert "dna-entropy-worker run" not in branch
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    "summary", ["== 1 passed, 2 skipped ==", "== 2 skipped in 0.1s ==", "== no tests ran in 0.01s =="]
+)
+def test_gpu_test_run_never_reports_a_pass_when_gpu_tests_were_skipped_or_none_ran(summary: str) -> None:
+    """A skipped GPU test is the false pass this mode exists to prevent: evo2/torch not
+    importable makes every gpu test skip itself and pytest exit 0 (THEORY (unverified),
+    from reading test_evo_predictor.py's importorskip fixtures). Exit code 6 says so."""
+    import json
+
+    out = _run_gpu_test_run(0, summary=summary)
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert parsed["exitCode"] == 6
+    assert "status:failed" in out
+    assert out[-1] == "rc:6"
+
+
+def test_gpu_test_run_selects_only_the_files_that_carry_a_gpu_marker() -> None:
+    """The image has no hypothesis or jsonschema (dev extras, MPL-2.0 for hypothesis), so
+    collecting the whole tests/ folder fails on import. Only gpu-marked files are passed."""
+    body = _extract_function("gpu_test_run")
+    assert "pytest.mark.gpu" in body
+    assert "grep -l" in body

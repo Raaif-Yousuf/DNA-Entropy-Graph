@@ -231,6 +231,10 @@ param(
     [string]$ServiceAccount = '',
     [string]$CloudCliPath = '',
     [int]$SettleSeconds = 10,
+    [string]$Bucket = '',
+    [string]$LogDir = '',
+    [int]$PollSeconds = 20,
+    [int]$GpuTestTimeoutSeconds = 0,
     [switch]$PrintApplyArgs,
     [switch]$Apply,
     [switch]$SelfTest,
@@ -426,10 +430,14 @@ function Write-Plan {
     Write-Host ("  disk cost (ongoing):  `${0:N2}/month while the disk exists, running or not" -f $Pricing.DiskMonthlyUsd)
     Write-Host "  maxRunDuration:       ${MaxRunDurationSeconds}s"
     Write-Host "  instanceTerminationAction: DELETE (backstop only -- worker/vm/startup.sh's own self-stop/delete call is primary, docs/cloud_design.md section 8)"
-    if ($Image) { Write-Host "  image override:       $Image  [-Apply refuses it: CloudCli has no image flag yet]" }
+    if ($Image) { Write-Host "  worker image:         $Image  [-Apply runs pytest -m gpu in it on the VM (gpu-test mode)]" }
     Write-Host "  labels (CloudCli sets the six standard ones through VmSpec; purpose is plan-only):"
     foreach ($key in $Labels.Keys) { Write-Host "    $key=$($Labels[$key])" }
-    Write-Host "  -Apply steps:         vm create, vm delete (in finally), leak scan, resource table. pytest -m gpu is NOT run yet (issue #83)."
+    if ($Image) {
+        Write-Host "  -Apply steps:         bucket ensure, vm create (gpu-test mode), poll the result object, pull the log, vm delete, leak scan, resource table."
+    } else {
+        Write-Host "  -Apply steps:         vm create, vm delete (in finally), leak scan, resource table. pytest -m gpu runs only with -Image <digest> (issue #83)."
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -510,8 +518,23 @@ function Invoke-LeakCheck {
 # list so a drift fails the self-test; the C# CloudGpuTestScriptContractTests feed the real argument list to the real parser.
 $Script:CloudCliVmCreateFlags = @(
     'project', 'zone', 'install', 'job', 'model', 'machine-type', 'service-account', 'app-version', 'lifecycle',
-    'max-run-duration', 'instance-termination-action'
+    'max-run-duration', 'instance-termination-action', 'worker-image', 'bucket', 'startup-mode', 'expect-gpu'
 )
+
+# A worker image the startup script can run: pinned by digest (StartupMetadata's own ImagePattern).
+$Script:PinnedImagePattern = '^[a-z0-9][a-zA-Z0-9._/:-]{0,200}@sha256:[0-9a-f]{64}$'
+
+function New-BucketEnsureArgs {
+    param([Parameter(Mandatory)][string]$ProjectId)
+    return @('bucket', 'ensure', '--project', $ProjectId, '--json')
+}
+
+function New-ObjectGetArgs {
+    param([Parameter(Mandatory)][string]$ProjectId, [Parameter(Mandatory)][string]$Bucket, [Parameter(Mandatory)][string]$Key)
+    return @('object', 'get', '--project', $ProjectId, '--bucket', $Bucket, '--key', $Key)
+}
+$Script:CloudCliBucketEnsureFlags = @('project')
+$Script:CloudCliObjectGetFlags = @('project', 'bucket', 'key')
 $Script:CloudCliVmDeleteFlags = @('project', 'zone', 'name')
 $Script:CloudCliResourcesListFlags = @('project', 'install', 'kind')
 
@@ -547,15 +570,81 @@ function New-VmCreateArgs {
         [Parameter(Mandatory)][string]$MachineType,
         [Parameter(Mandatory)][string]$AppVersion,
         [Parameter(Mandatory)][string]$Lifecycle,
-        [Parameter(Mandatory)][int]$MaxRunDurationSeconds
+        [Parameter(Mandatory)][int]$MaxRunDurationSeconds,
+        [string]$Image = '',
+        [string]$Bucket = '',
+        [bool]$ExpectGpu = $true
     )
-    return @(
+    $createArgs = @(
         'vm', 'create',
         '--project', $ProjectId, '--zone', $Zone, '--install', $InstallationId, '--job', $JobId,
         '--model', $Model, '--machine-type', $MachineType, '--service-account', $ServiceAccount,
         '--app-version', $AppVersion, '--lifecycle', $Lifecycle,
         '--max-run-duration', "${MaxRunDurationSeconds}s"
     )
+    if ($Image) {
+        # gpu-test mode (issue #759): the VM runs `pytest -m gpu` in this image and writes the result object this script polls for.
+        $createArgs += @('--worker-image', $Image, '--bucket', $Bucket, '--startup-mode', 'gpu-test', '--expect-gpu', "$($ExpectGpu.ToString().ToLowerInvariant())")
+    }
+    return $createArgs
+}
+
+function Get-CloudCliText {
+    # Runs CloudCli and returns @{ Exit; Text }. stdout only: stderr stays on the console.
+    param([Parameter(Mandatory)][string]$CloudCliPath, [Parameter(Mandatory)][string[]]$CliArgs)
+    $out = & $CloudCliPath @CliArgs
+    return [pscustomobject]@{ Exit = $LASTEXITCODE; Text = (($out | Out-String) -replace "`r`n", "`n") }
+}
+
+function Wait-GpuTestResult {
+    # Polls jobs/<job>/logs/gpu-test-result.json (the file startup.sh's gpu_test_run writes LAST) until it exists or the deadline
+    # passes, then pulls gpu-test.log into $LogDir. Returns the pytest exit code, or $null when no result arrived (or it was unreadable).
+    param(
+        [Parameter(Mandatory)][string]$CloudCliPath,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$Bucket,
+        [Parameter(Mandatory)][string]$JobId,
+        [Parameter(Mandatory)][string]$LogDir,
+        [Parameter(Mandatory)][int]$TimeoutSeconds,
+        [Parameter(Mandatory)][int]$PollSeconds
+    )
+    $resultKey = "jobs/$JobId/logs/gpu-test-result.json"
+    $logKey = "jobs/$JobId/logs/gpu-test.log"
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    Write-Host "Waiting for $resultKey in bucket $Bucket (up to ${TimeoutSeconds}s) ..."
+    $result = $null
+    while ($true) {
+        $got = Get-CloudCliText -CloudCliPath $CloudCliPath -CliArgs (New-ObjectGetArgs -ProjectId $ProjectId -Bucket $Bucket -Key $resultKey)
+        if ($got.Exit -eq 0) { $result = $got; break }
+        if ($got.Exit -ne 5) {
+            Write-UsageError "object get exited $($got.Exit) while waiting for the gpu-test result. Check the internet connection and that the app is signed in; the VM is deleted below."
+            return $null
+        }
+        if ((Get-Date) -ge $deadline) { break }
+        if ($PollSeconds -gt 0) { Start-Sleep -Seconds $PollSeconds }
+    }
+    if (-not $result) {
+        Write-UsageError "no gpu-test result arrived within ${TimeoutSeconds}s. The VM is deleted below; read jobs/$JobId/logs/startup.log in bucket $Bucket to see how far it got."
+        return $null
+    }
+    # The log is pulled whatever the verdict: a failing run's log is the whole point.
+    $logGot = Get-CloudCliText -CloudCliPath $CloudCliPath -CliArgs (New-ObjectGetArgs -ProjectId $ProjectId -Bucket $Bucket -Key $logKey)
+    if ($logGot.Exit -eq 0) {
+        New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+        $logPath = Join-Path $LogDir 'gpu-test.log'
+        [IO.File]::WriteAllText($logPath, $logGot.Text, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "gpu-test log pulled to $logPath"
+    } else {
+        Write-UsageError "object get for $logKey exited $($logGot.Exit): the log was not pulled. Read it in bucket $Bucket in the Google Cloud console."
+    }
+    try {
+        $parsed = $result.Text | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $parsed.exitCode) { throw 'no exitCode' }
+        return [int]$parsed.exitCode
+    } catch {
+        Write-UsageError "the gpu-test result object was not readable JSON with an exitCode. Read $resultKey in bucket $Bucket in the Google Cloud console."
+        return $null
+    }
 }
 
 function Invoke-Apply {
@@ -571,7 +660,12 @@ function Invoke-Apply {
         [Parameter(Mandatory)][int]$DiskSizeGb,
         [Parameter(Mandatory)][int]$MaxRunDurationSeconds,
         [Parameter(Mandatory)][string]$JobId,
+        [Parameter(Mandatory)][int]$AcceleratorCount,
         [string]$Image = '',
+        [string]$Bucket = '',
+        [string]$LogDir = '',
+        [int]$PollSeconds = 20,
+        [int]$GpuTestTimeoutSeconds = 0,
         [string]$CloudCliPath = '',
         [int]$SettleSeconds = 10
     )
@@ -583,8 +677,8 @@ function Invoke-Apply {
         Write-UsageError "-Apply requires -ServiceAccount <email>: the VM must run as the worker service account (CloudCli's --service-account). Pass the worker account's email and run this again."
         exit 2
     }
-    if ($Image) {
-        Write-UsageError "-Apply cannot honour -Image: CloudCli has no flag for a worker image or startup metadata yet, so the VM would ignore it. Run without -Image (the VM gets no worker run in this script yet, issue #83)."
+    if ($Image -and $Image -cnotmatch $Script:PinnedImagePattern) {
+        Write-UsageError "-Image must be a full reference pinned by digest (name@sha256:<64 hex digits>): the VM's startup script only runs a digest. Pass the digest of the released worker image and run this again."
         exit 2
     }
     if ($DiskSizeGb -ne $Script:CloudCliBootDiskGb) {
@@ -602,16 +696,34 @@ function Invoke-Apply {
         exit 3
     }
 
+    $Script:ApplyCreateFailed = $false
+    $Script:GpuTestExit = $null
+    $Script:GpuTestRan = [bool]$Image
+
+    # gpu-test mode needs the bucket the startup script writes to: the given one, or the project's own (idempotent ensure, no VM yet).
+    $effectiveBucket = $Bucket
+    if ($Image -and -not $effectiveBucket) {
+        $ensure = Get-CloudCliText -CloudCliPath $cloudCli -CliArgs (New-BucketEnsureArgs -ProjectId $ProjectId)
+        $ensureName = $null
+        if ($ensure.Exit -eq 0) { try { $ensureName = ($ensure.Text | ConvertFrom-Json -ErrorAction Stop).name } catch { $ensureName = $null } }
+        if (-not $ensureName) {
+            Write-UsageError "bucket ensure failed (exit $($ensure.Exit)) or printed no name, so no VM was created. Run it again, or pass -Bucket <name> of an existing DNA Entropy Graph bucket."
+            $Script:ApplyCreateFailed = $true
+            return
+        }
+        $effectiveBucket = [string]$ensureName
+    }
+
     $vmName = "deg-$JobId"
     $createArgs = New-VmCreateArgs -ProjectId $ProjectId -Zone $Zone -ServiceAccount $ServiceAccount -InstallationId $InstallationId `
-        -JobId $JobId -Model $Model -MachineType $MachineType -AppVersion $AppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds
+        -JobId $JobId -Model $Model -MachineType $MachineType -AppVersion $AppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds `
+        -Image $Image -Bucket $effectiveBucket -ExpectGpu ($AcceleratorCount -gt 0)
 
     # try/finally so even a Ctrl+C (or a real failure) mid-create deletes the VM again: a half-made VM bills. The delete runs even
-    # when create failed (the create may have reached Google before the failure). CloudCli exits 5 when the VM is not there.
-    # A failed create is NOT a clean state: Google may have accepted the request (CloudCli exit 4 says "check for anything
-    # half-made"), so the delete is retried while it finds nothing, an exit 5 is reported (never read as "clean"), and the caller
-    # still runs the leak scan and the resource table. The failure is recorded in $Script:ApplyCreateFailed for the exit code.
-    $Script:ApplyCreateFailed = $false
+    # when create failed (the create may have reached Google before the failure). A failed create is NOT a clean state: Google may
+    # have accepted the request (CloudCli exit 4 says "check for anything half-made"), so the delete is retried while it finds
+    # nothing, an exit 5 is reported (never read as "clean"), and the caller still runs the leak scan and the resource table.
+    # In gpu-test mode the VM deletes ITSELF after the tests (lifecycle delete), so an exit 5 after a result arrived is expected.
     $deleteArgs = New-VmDeleteArgs -ProjectId $ProjectId -Zone $Zone -Name $vmName
     try {
         Write-Host "Creating $vmName via $cloudCli ..."
@@ -619,9 +731,22 @@ function Invoke-Apply {
         if ($LASTEXITCODE -ne 0) {
             $Script:ApplyCreateFailed = $true
             Write-UsageError "vm create exited $LASTEXITCODE. Looking for a half-made $vmName to delete."
+        } elseif ($Image) {
+            Write-Host "$vmName created; it runs pytest -m gpu in $Image and deletes itself."
+            $timeout = if ($GpuTestTimeoutSeconds -gt 0) { $GpuTestTimeoutSeconds } else { [math]::Max(60, $MaxRunDurationSeconds - 60) }
+            $logTarget = if ($LogDir) { $LogDir } else { Join-Path ([IO.Path]::GetTempPath()) (Join-Path 'deg-gpu-test' $JobId) }
+            $Script:GpuTestExit = Wait-GpuTestResult -CloudCliPath $cloudCli -ProjectId $ProjectId -Bucket $effectiveBucket -JobId $JobId `
+                -LogDir $logTarget -TimeoutSeconds $timeout -PollSeconds $PollSeconds
+            if ($null -eq $Script:GpuTestExit) {
+                Write-UsageError "pytest -m gpu: NO RESULT. Nothing was proven."
+            } elseif ($Script:GpuTestExit -eq 0) {
+                Write-Host "pytest -m gpu: PASSED"
+            } else {
+                Write-UsageError "pytest -m gpu: FAILED (exit code $($Script:GpuTestExit)). Read the pulled log under $logTarget."
+            }
         } else {
             Write-Host "$vmName created."
-            Write-Host "pytest -m gpu: NOT RUN. CloudCli cannot set the startup metadata yet and worker/vm/startup.sh only runs the worker (issue #83 stays open)."
+            Write-Host "pytest -m gpu: NOT RUN. Pass -Image <worker image digest> to run the GPU tests (issue #83)."
         }
     } finally {
         $attempts = if ($Script:ApplyCreateFailed) { 3 } else { 1 }
@@ -633,7 +758,9 @@ function Invoke-Apply {
             if ($deleteExit -ne 5) { break }
             if ($try -lt $attempts -and $SettleSeconds -gt 0) { Start-Sleep -Seconds $SettleSeconds }
         }
-        if ($deleteExit -eq 5) {
+        if ($deleteExit -eq 5 -and -not $Script:ApplyCreateFailed -and $null -ne $Script:GpuTestExit) {
+            Write-Host "$vmName had already deleted itself (vm delete exit 5), as a finished gpu-test run does."
+        } elseif ($deleteExit -eq 5) {
             Write-UsageError "vm delete did not find $vmName in zone $Zone (exit 5). That is not proof it is gone: the leak check below decides."
         } elseif ($deleteExit -ne 0) {
             Write-UsageError "vm delete exited $deleteExit. $vmName may still exist and bill: delete it in the Google Cloud console (project $ProjectId, zone $Zone), or run CloudCli 'vm delete --project $ProjectId --zone $Zone --name $vmName' yourself."
@@ -678,11 +805,19 @@ function Remove-StubCli {
 function New-ApplyStub {
     # A stub CloudCli that logs every call to calls.txt next to it: `vm create` exits $CreateExit, `resources list --json` prints
     # $JsonBody, any other `resources list` prints an empty table, everything else exits 0.
-    param([Parameter(Mandatory)][string]$Directory, [int]$CreateExit = 0, [int]$DeleteExit = 0, [int]$TableExit = 0, [string]$JsonBody = '[]')
+    # Issue #759: `bucket ensure` prints {"name":"deg-test-bucket"}; `object get` of the result key prints $ResultBody (or exits
+    # $ResultExit when that is non-zero, 5 meaning "not there yet"), any other `object get` prints a pytest summary line.
+    param(
+        [Parameter(Mandatory)][string]$Directory, [int]$CreateExit = 0, [int]$DeleteExit = 0, [int]$TableExit = 0, [string]$JsonBody = '[]',
+        [int]$ResultExit = 0, [string]$ResultBody = '{"exitCode":0,"timedOut":false}'
+    )
+    $resultLines = if ($ResultExit -eq 0) { @("echo $ResultBody", 'exit /b 0') } else { @("exit /b $ResultExit") }
     $body = @(
         '>>"%~dp0calls.txt" echo %*',
         ('echo %*|findstr /c:"vm create" >nul && exit /b ' + $CreateExit),
         ('echo %*|findstr /c:"vm delete" >nul && exit /b ' + $DeleteExit),
+        'echo %*|findstr /c:"bucket ensure" >nul && goto ensure',
+        'echo %*|findstr /c:"object get" >nul && goto objget',
         'echo %*|findstr /c:"resources list" >nul || exit /b 0',
         'echo %*|findstr /c:"--json" >nul && goto json',
         'echo KIND  NAME  LOCATION  STATUS  INSTALLATION  JOB',
@@ -690,8 +825,16 @@ function New-ApplyStub {
         "exit /b $TableExit",
         ':json',
         "echo $JsonBody",
-        'exit /b 0'
-    )
+        'exit /b 0',
+        ':ensure',
+        'echo {"name":"deg-test-bucket"}',
+        'exit /b 0',
+        ':objget',
+        'echo %*|findstr /c:"gpu-test-result.json" >nul && goto objresult',
+        'echo == 3 passed ==',
+        'exit /b 0',
+        ':objresult'
+    ) + $resultLines
     return New-StubCli -Directory $Directory -Body $body
 }
 
@@ -839,12 +982,118 @@ function Invoke-SelfTest {
         Check "-Apply's LAST output line is the resource table's footer (the empty list)" ($nonBlank[-1] -eq 'OK: 0 resource(s)')
         Check "-Apply says plainly that the pytest step did not run" (($applyLines -join "`n") -match 'pytest -m gpu: NOT RUN')
 
-        $imgOut = & pwsh @applyArgs -Image 'ghcr.io/x/y@sha256:abc' 2>&1 | Out-String
-        Check "-Apply with -Image exits 2 (CloudCli cannot pass an image) and creates nothing" ($LASTEXITCODE -eq 2 -and $imgOut -match '-Image')
-        Check "-Apply with -Image made no further CloudCli call" ((@(Get-Content -Path (Join-Path $applyDir 'calls.txt'))).Count -eq 4)
     } finally {
         Remove-StubCli -Directory $applyDir
     }
+
+    # -Apply -Image (issue #759): the gpu-test run. Bucket ensure, create with the startup flags, poll the result object, pull the log,
+    # delete, leak scan, table. The stub answers `object get` for the result and the log; -ResultExit 5 means "not there yet".
+    $digest = 'ghcr.io/raaif-yousuf/dna-entropy-worker:0.1.0-cuda@sha256:' + ('ab' * 32)
+    $imgBase = @('-NoProfile', '-File', $PSCommandPath, '-ProjectId', 'fake-test-project', '-ServiceAccount', 'w@fake-test-project.iam.gserviceaccount.com',
+        '-Zone', 'us-central1-a', '-JobId', '20261015-120000-ab3xy9', '-InstallationId', 'inst123', '-Apply', '-SettleSeconds', '0', '-PollSeconds', '0',
+        '-Image', $digest)
+    $imgDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-img-" + [guid]::NewGuid().ToString('N'))
+    $imgLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-imglog-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $imgStub = New-ApplyStub -Directory $imgDir -DeleteExit 5 -ResultBody '{"exitCode":0,"timedOut":false}'
+        $imgOut = @(& pwsh @imgBase -CloudCliPath $imgStub -LogDir $imgLogDir 2>&1 | ForEach-Object { "$_" })
+        Check "-Apply -Image against a passing stub exits 0" ($LASTEXITCODE -eq 0)
+        $imgCalls = @(Get-Content -Path (Join-Path $imgDir 'calls.txt'))
+        $verbs = @($imgCalls | ForEach-Object { ($_ -split ' ')[0..1] -join ' ' })
+        Check "-Apply -Image calls CloudCli in order: bucket ensure, vm create, object get x2, vm delete, resources list x2" (
+            ($verbs -join ',') -eq 'bucket ensure,vm create,object get,object get,vm delete,resources list,resources list')
+        $createCall = @($imgCalls | Where-Object { $_ -like 'vm create *' })[0]
+        Check "-Apply -Image passes the digest, the bucket, gpu-test mode and the GPU expectation to vm create" (
+            $createCall -like "*--worker-image $digest*" -and $createCall -like '*--bucket deg-test-bucket*' -and
+            $createCall -like '*--startup-mode gpu-test*' -and $createCall -like '*--expect-gpu true*')
+        Check "-Apply -Image polls the result object and then pulls the log (keys under jobs/<job>/logs)" (
+            $imgCalls[2] -like '*--key jobs/20261015-120000-ab3xy9/logs/gpu-test-result.json*' -and
+            $imgCalls[3] -like '*--key jobs/20261015-120000-ab3xy9/logs/gpu-test.log*' -and $imgCalls[2] -like '*--bucket deg-test-bucket*')
+        $pulled = Join-Path $imgLogDir 'gpu-test.log'
+        Check "-Apply -Image writes the pulled log to -LogDir" ((Test-Path $pulled) -and ((Get-Content -Raw $pulled) -match '3 passed'))
+        Check "-Apply -Image reports the pytest verdict and not 'NOT RUN'" (($imgOut -join "`n") -match 'pytest -m gpu: PASSED' -and ($imgOut -join "`n") -notmatch 'NOT RUN')
+        Check "-Apply -Image still ends with the resource table footer" (@($imgOut | Where-Object { $_.Trim() })[-1] -eq 'OK: 0 resource(s)')
+        Check "-Apply -Image treats the VM that deleted itself (delete exit 5) as expected, not a warning" (($imgOut -join "`n") -match 'deleted itself' -and ($imgOut -join "`n") -notmatch 'did not find')
+    } finally {
+        Remove-StubCli -Directory $imgDir
+        Remove-StubCli -Directory $imgLogDir
+    }
+
+    # -Bucket skips `bucket ensure`.
+    $bkDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-bk-" + [guid]::NewGuid().ToString('N'))
+    $bkLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-bklog-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $bkStub = New-ApplyStub -Directory $bkDir -ResultBody '{"exitCode":0,"timedOut":false}'
+        & pwsh @imgBase -CloudCliPath $bkStub -LogDir $bkLogDir -Bucket 'my-own-bucket' 2>&1 | Out-Null
+        $bkCalls = @(Get-Content -Path (Join-Path $bkDir 'calls.txt'))
+        Check "-Apply -Image -Bucket skips bucket ensure and uses the given bucket" (
+            @($bkCalls | Where-Object { $_ -like 'bucket ensure*' }).Count -eq 0 -and @($bkCalls | Where-Object { $_ -like '*--bucket my-own-bucket*' }).Count -ge 2)
+    } finally {
+        Remove-StubCli -Directory $bkDir
+        Remove-StubCli -Directory $bkLogDir
+    }
+
+    # A failing pytest (result exitCode 1) fails the run but still pulls the log and deletes the VM.
+    $pfDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-pf-" + [guid]::NewGuid().ToString('N'))
+    $pfLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-pflog-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $pfStub = New-ApplyStub -Directory $pfDir -ResultBody '{"exitCode":1,"timedOut":false}'
+        $pfOut = & pwsh @imgBase -CloudCliPath $pfStub -LogDir $pfLogDir 2>&1 | Out-String
+        Check "-Apply -Image whose pytest failed exits 1" ($LASTEXITCODE -eq 1)
+        Check "-Apply -Image whose pytest failed says FAILED with the exit code" ($pfOut -match 'pytest -m gpu: FAILED \(exit code 1\)')
+        $pfCalls = @(Get-Content -Path (Join-Path $pfDir 'calls.txt'))
+        Check "-Apply -Image whose pytest failed still pulls the log and deletes the VM" (
+            (Test-Path (Join-Path $pfLogDir 'gpu-test.log')) -and @($pfCalls | Where-Object { $_ -like 'vm delete *' }).Count -eq 1)
+    } finally {
+        Remove-StubCli -Directory $pfDir
+        Remove-StubCli -Directory $pfLogDir
+    }
+
+    # No result before the deadline: exit 1 naming it, the VM is deleted (it may still be running), the table still prints.
+    $toDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-to-" + [guid]::NewGuid().ToString('N'))
+    $toLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-tolog-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $toStub = New-ApplyStub -Directory $toDir -ResultExit 5
+        $toOut = & pwsh @imgBase -CloudCliPath $toStub -LogDir $toLogDir -GpuTestTimeoutSeconds 1 2>&1 | Out-String
+        Check "-Apply -Image with no result before the deadline exits 1" ($LASTEXITCODE -eq 1)
+        Check "-Apply -Image with no result says no result arrived" ($toOut -match 'no gpu-test result')
+        $toCalls = @(Get-Content -Path (Join-Path $toDir 'calls.txt'))
+        Check "-Apply -Image with no result still deletes the VM and prints the table" (
+            @($toCalls | Where-Object { $_ -like 'vm delete *' }).Count -ge 1 -and $toCalls[-1] -like 'resources list *' -and $toCalls[-1] -notlike '*--json*')
+    } finally {
+        Remove-StubCli -Directory $toDir
+        Remove-StubCli -Directory $toLogDir
+    }
+
+    # An image not pinned by digest is refused before any CLI call (the startup script can only run a digest).
+    $upDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-up-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $upStub = New-ApplyStub -Directory $upDir
+        $upBase = @($imgBase[0..($imgBase.Count - 2)]) + @('ghcr.io/raaif-yousuf/dna-entropy-worker:latest')
+        $upOut = & pwsh @upBase -CloudCliPath $upStub 2>&1 | Out-String
+        Check "-Apply -Image with a tag instead of a digest exits 2 naming the digest" ($LASTEXITCODE -eq 2 -and $upOut -match 'sha256')
+        Check "-Apply -Image with a tag made no CloudCli call" (-not (Test-Path (Join-Path $upDir 'calls.txt')))
+    } finally {
+        Remove-StubCli -Directory $upDir
+    }
+
+    # -PrintApplyArgs with -Image: the create list gains the startup flags, and the ensure/get lists parse like the rest.
+    $printedImg = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'p1' -ServiceAccount 'w@p1.iam.gserviceaccount.com' -Zone 'us-central1-a' `
+        -JobId '20261015-120000-ab3xy9' -InstallationId 'inst123' -Image $digest -Bucket 'deg-p1' -PrintApplyArgs 2>&1 | Out-String
+    $pi = $printedImg | ConvertFrom-Json
+    $piCreate = @($pi.create)
+    $piFlags = @($piCreate | Where-Object { $_ -is [string] -and $_.StartsWith('--') })
+    $piUnknown = @($piFlags | Where-Object { $Script:CloudCliVmCreateFlags -notcontains $_.Substring(2) })
+    Check "-PrintApplyArgs -Image: vm create still uses only flags CloudCliParser accepts (unknown: $($piUnknown -join ', '))" ($piUnknown.Count -eq 0)
+    Check "-PrintApplyArgs -Image: vm create carries --worker-image, --bucket, --startup-mode gpu-test and --expect-gpu true" (
+        $piCreate[[array]::IndexOf($piCreate, '--worker-image') + 1] -eq $digest -and $piCreate[[array]::IndexOf($piCreate, '--bucket') + 1] -eq 'deg-p1' -and
+        $piCreate[[array]::IndexOf($piCreate, '--startup-mode') + 1] -eq 'gpu-test' -and $piCreate[[array]::IndexOf($piCreate, '--expect-gpu') + 1] -eq 'true')
+    $piEnsure = @($pi.ensure)
+    $piGet = @($pi.get)
+    Check "-PrintApplyArgs: bucket ensure and object get lists use only CloudCliParser flags" (
+        ($piEnsure[0..1] -join ' ') -eq 'bucket ensure' -and ($piGet[0..1] -join ' ') -eq 'object get' -and
+        @($piEnsure | Where-Object { $_ -is [string] -and $_.StartsWith('--') -and $_ -ne '--json' -and $Script:CloudCliBucketEnsureFlags -notcontains $_.Substring(2) }).Count -eq 0 -and
+        @($piGet | Where-Object { $_ -is [string] -and $_.StartsWith('--') -and $Script:CloudCliObjectGetFlags -notcontains $_.Substring(2) }).Count -eq 0)
 
     # A failed create still tries to delete the VM (a half-made VM bills), and a leftover VM in the scan fails the run.
     $failDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-fail-" + [guid]::NewGuid().ToString('N'))
@@ -963,15 +1212,19 @@ $labels = New-LabelSet -JobId $effectiveJobId -InstallationId $effectiveInstalla
     -Model $Model -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -Purpose $Purpose
 
 if ($PrintApplyArgs) {
+    $printBucket = if ($Bucket) { $Bucket } else { 'deg-example-bucket' }
     $printArgs = New-VmCreateArgs -ProjectId $ProjectId -Zone $zoneChoice.Zone -ServiceAccount $ServiceAccount `
         -InstallationId $effectiveInstallationId -JobId $effectiveJobId -Model $Model -MachineType $MachineType `
-        -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds
+        -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds `
+        -Image $Image -Bucket $printBucket -ExpectGpu ($AcceleratorCount -gt 0)
     $printName = "deg-$effectiveJobId"
     [ordered]@{
         create = @($printArgs)
         delete = @(New-VmDeleteArgs -ProjectId $ProjectId -Zone $zoneChoice.Zone -Name $printName)
         list   = @(New-ResourcesListArgs -ProjectId $ProjectId -InstallationId $effectiveInstallationId)
         leak   = @(New-ResourcesListArgs -ProjectId $ProjectId -InstallationId $effectiveInstallationId -Json)
+        ensure = @(New-BucketEnsureArgs -ProjectId $ProjectId)
+        get    = @(New-ObjectGetArgs -ProjectId $ProjectId -Bucket $printBucket -Key "jobs/$effectiveJobId/logs/gpu-test-result.json")
     } | ConvertTo-Json -Compress
     exit 0
 }
@@ -993,11 +1246,14 @@ if (-not $Apply) {
 
 Invoke-Apply -ProjectId $ProjectId -Zone $zoneChoice.Zone -ServiceAccount $ServiceAccount -InstallationId $effectiveInstallationId `
     -MachineType $MachineType -Model $Model -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -DiskSizeGb $DiskSizeGb `
-    -MaxRunDurationSeconds $MaxRunDurationSeconds -JobId $effectiveJobId -Image $Image -CloudCliPath $CloudCliPath -SettleSeconds $SettleSeconds
+    -MaxRunDurationSeconds $MaxRunDurationSeconds -JobId $effectiveJobId -AcceleratorCount $AcceleratorCount -Image $Image -Bucket $Bucket `
+    -LogDir $LogDir -PollSeconds $PollSeconds -GpuTestTimeoutSeconds $GpuTestTimeoutSeconds -CloudCliPath $CloudCliPath -SettleSeconds $SettleSeconds
 
 # Always runs, also after a failed create: the scan and the table are how a half-made VM gets reported.
 $resolvedCli = if ($CloudCliPath) { $CloudCliPath } else { Find-CloudCli }
 $leakOk = Invoke-LeakCheck -InstallationId $effectiveInstallationId -ProjectId $ProjectId -CloudCliPath $resolvedCli
 $tableOk = Write-ResourceTable -CloudCliPath $resolvedCli -ProjectId $ProjectId -InstallationId $effectiveInstallationId
-if ($Script:ApplyCreateFailed -or -not $leakOk -or -not $tableOk) { exit 1 }
+# In gpu-test mode (-Image) the run only passes when pytest exited 0: no result ($null) or a non-zero code fails it.
+$gpuTestFailed = $Script:GpuTestRan -and ($null -eq $Script:GpuTestExit -or $Script:GpuTestExit -ne 0)
+if ($Script:ApplyCreateFailed -or $gpuTestFailed -or -not $leakOk -or -not $tableOk) { exit 1 }
 exit 0

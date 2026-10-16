@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Cloud;
 
 namespace DnaEntropyGraph.CloudCli;
@@ -34,6 +35,8 @@ public static class CloudCliExitCode
 public sealed class CloudCliApp
 {
     private const string DelegatedPrefix = "deg-";
+    private const string GpuTestModeKey = "deg-mode";
+    private const int MaxObjectBytes = 4 * 1024 * 1024;
     private const string NotSignedInMessage = "Sign in with the app first (open DNA Entropy Graph and choose Sign in), then run this again.";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
@@ -77,6 +80,8 @@ public sealed class CloudCliApp
             {
                 ResourcesListCommand list => await ListAsync(session, list, stdout, cancellationToken).ConfigureAwait(false),
                 BucketDescribeCommand describe => await DescribeAsync(session, describe, stdout, stderr, cancellationToken).ConfigureAwait(false),
+                BucketEnsureCommand ensure => await EnsureBucketAsync(session, ensure, stdout, cancellationToken).ConfigureAwait(false),
+                ObjectGetCommand get => await GetObjectAsync(session, get, stdout, stderr, cancellationToken).ConfigureAwait(false),
                 VmCreateCommand create => await CreateAsync(session, create, stdout, stderr, cancellationToken).ConfigureAwait(false),
                 VmDeleteCommand delete => await DeleteAsync(session, delete, stdout, stderr, cancellationToken).ConfigureAwait(false),
                 _ => Fail(stderr, CloudCliExitCode.Usage, CloudCliParser.Usage),
@@ -198,13 +203,88 @@ public sealed class CloudCliApp
         return CloudCliExitCode.Ok;
     }
 
+    private static async Task<int> EnsureBucketAsync(CloudCliSession session, BucketEnsureCommand command, TextWriter stdout, CancellationToken cancellationToken)
+    {
+        var name = await session.Storage.EnsureBucketAsync(command.Project, cancellationToken).ConfigureAwait(false);
+        stdout.WriteLine(command.Json
+            ? JsonSerializer.Serialize(new { name }, JsonOptions)
+            : $"OK: bucket {Ascii(name)}");
+        return CloudCliExitCode.Ok;
+    }
+
+    private static async Task<int> GetObjectAsync(CloudCliSession session, ObjectGetCommand command, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
+    {
+        var stream = await session.Storage.TryDownloadAsync(command.Bucket, command.Key, cancellationToken).ConfigureAwait(false);
+        if (stream is null)
+        {
+            return Fail(stderr, CloudCliExitCode.NotFound, $"{Ascii(command.Key)} is not there yet in bucket {Ascii(command.Bucket)}. Wait and run this again, or check the key with 'bucket describe'.");
+        }
+
+        await using (stream.ConfigureAwait(false))
+        {
+            // Capped: a log is text for a person, and one runaway object must not fill the console. Anything outside printable ASCII becomes '?'.
+            var buffer = new byte[MaxObjectBytes + 1];
+            var read = 0;
+            while (read < buffer.Length)
+            {
+                var n = await stream.ReadAsync(buffer.AsMemory(read), cancellationToken).ConfigureAwait(false);
+                if (n == 0)
+                {
+                    break;
+                }
+
+                read += n;
+            }
+
+            var text = Encoding.UTF8.GetString(buffer, 0, Math.Min(read, MaxObjectBytes));
+            var builder = new StringBuilder(text.Length);
+            foreach (var c in text)
+            {
+                builder.Append(c is '\n' or '\r' or '\t' || c is >= ' ' and <= '~' ? c : '?');
+            }
+
+            stdout.Write(builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", stdout.NewLine, StringComparison.Ordinal));
+            if (read > MaxObjectBytes)
+            {
+                stderr.WriteLine($"ERROR: {Ascii(command.Key)} is larger than {MaxObjectBytes} bytes, so only the first {MaxObjectBytes} bytes were printed. Download the rest from the Google Cloud console.");
+                return CloudCliExitCode.CloudError;
+            }
+        }
+
+        return CloudCliExitCode.Ok;
+    }
+
     private async Task<int> CreateAsync(CloudCliSession session, VmCreateCommand command, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
     {
+        var jobId = command.Job ?? JobId.NewId(_clock.GetUtcNow(), _random);
+
+        // Issue #759: with --worker-image the VM gets the startup script and its deg-* attributes (StartupMetadata validates every value
+        // against the shape the script can consume). A test VM always deletes itself afterwards (AfterTaskAction.Delete).
+        IReadOnlyDictionary<string, string>? metadata = null;
+        if (command.WorkerImage is not null)
+        {
+            try
+            {
+                var built = new Dictionary<string, string>(StartupMetadata.Build(
+                    command.Bucket!, jobId, command.WorkerImage, command.ExpectGpu, AfterTaskAction.Delete, command.MaxRunDuration));
+                if (command.StartupMode == CloudCliParser.GpuTestMode)
+                {
+                    built[GpuTestModeKey] = CloudCliParser.GpuTestMode;
+                }
+
+                metadata = built;
+            }
+            catch (ArgumentException ex)
+            {
+                return Fail(stderr, CloudCliExitCode.Usage, $"{ex.Message} Fix the flag it names and run this again.");
+            }
+        }
+
         // The only way a VM is made: VmSpec, so the six labels, maxRunDuration and DELETE are checked before a request is built (Hard Rule 10).
         var spec = new VmSpec(
             ProjectId: command.Project,
             InstallationId: command.Install,
-            JobId: command.Job ?? JobId.NewId(_clock.GetUtcNow(), _random),
+            JobId: jobId,
             Model: command.Model,
             AppVersion: command.AppVersion,
             Lifecycle: command.Lifecycle,
@@ -213,6 +293,7 @@ public sealed class CloudCliApp
             TerminationAction: VmSpec.RequiredTerminationAction)
         {
             ServiceAccountEmail = command.ServiceAccount,
+            Metadata = metadata,
         };
 
         try

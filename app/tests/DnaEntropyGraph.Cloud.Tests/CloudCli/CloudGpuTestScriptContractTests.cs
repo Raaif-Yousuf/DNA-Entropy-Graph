@@ -32,7 +32,28 @@ public class CloudGpuTestScriptContractTests
         throw new FileNotFoundException("scripts/cloud_gpu_test.ps1 was not found above " + AppContext.BaseDirectory);
     }
 
-    private sealed record Printed(string[] Create, string[] Delete, string[] List, string[] Leak);
+    private sealed record Printed(string[] Create, string[] Delete, string[] List, string[] Leak, string[] Ensure, string[] Get);
+
+    private const string Digest = "ghcr.io/raaif-yousuf/dna-entropy-worker:0.1.0-cuda@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    [Fact]
+    public async Task With_an_image_the_scripts_gpu_test_create_ensure_and_get_lists_parse_and_attach_the_startup_metadata()
+    {
+        var printed = PrintedLists("-Image", Digest, "-Bucket", "deg-my-lab-1");
+
+        var create = CloudCliParser.Parse(printed.Create).Command.ShouldBeOfType<VmCreateCommand>();
+        (create.WorkerImage, create.Bucket, create.StartupMode, create.ExpectGpu).ShouldBe((Digest, "deg-my-lab-1", "gpu-test", true));
+        CloudCliParser.Parse(printed.Ensure).Command.ShouldBeOfType<BucketEnsureCommand>().Json.ShouldBeTrue();
+        var get = CloudCliParser.Parse(printed.Get).Command.ShouldBeOfType<ObjectGetCommand>();
+        (get.Bucket, get.Key).ShouldBe(("deg-my-lab-1", "jobs/" + Job + "/logs/gpu-test-result.json"));
+
+        var fake = new FakeGcp();
+        var stderr = new StringWriter();
+        (await Cli(new FixedSessions(fake)).RunAsync(printed.Create, new StringWriter(), stderr, CancellationToken.None)).ShouldBe(CloudCliExitCode.Ok, stderr.ToString());
+        var metadata = fake.CreatedSpecs.Single().Metadata.ShouldNotBeNull();
+        (metadata["deg-mode"], metadata["deg-worker-image"], metadata["deg-bucket"], metadata["deg-expect-gpu"], metadata["deg-job-id"])
+            .ShouldBe(("gpu-test", Digest, "deg-my-lab-1", "true", Job));
+    }
 
     private static Printed PrintedLists(params string[] extra)
     {

@@ -44,6 +44,7 @@ IMAGE=$(meta instance/attributes/deg-worker-image)          # a full ref@sha256:
 EXPECT_GPU=$(meta instance/attributes/deg-expect-gpu)        # "true" | "false"
 LIFECYCLE=$(meta instance/attributes/deg-lifecycle)          # "stop" | "delete" | "keep"
 MAX_RUN_MIN=$(meta instance/attributes/deg-max-run-min)
+MODE=$(meta instance/attributes/deg-mode)                    # "" (a job) | "gpu-test" (issue #759: run `pytest -m gpu` in the image)
 NAME=$(meta instance/name)
 ZONE=$(basename "$(meta instance/zone)")
 PROJECT=$(meta project/project-id)
@@ -162,6 +163,51 @@ keep_hold() {
   cleanup "$after"
 }
 
+# gpu_test_run (issue #759, scripts/cloud_gpu_test.ps1): the whole of gpu-test mode. Runs `pytest -m gpu` inside the image (the
+# image must carry pytest and worker/tests, see Dockerfile.cuda), uploads the log and then, LAST, gpu-test-result.json (the file
+# the caller polls for, like result.json for a job), and applies the lifecycle. The deadline is maxRunDuration minus a 10 minute
+# margin (at least 60 s) so a hung test is cut off by `timeout` (exit 124) before Compute Engine kills the VM. Returns pytest's
+# exit code. GPU_TEST_LOG / GPU_TEST_RESULT exist so a test can point the files somewhere writable.
+gpu_test_run() {
+  local log="${GPU_TEST_LOG:-/var/log/deg-gpu-test.log}" result="${GPU_TEST_RESULT:-/tmp/deg-gpu-test-result.json}"
+  local limit=$(( (MAX_RUN_MIN - 10) * 60 )) rc timed_out=false
+  if [ "$limit" -lt 60 ]; then
+    limit=60
+  fi
+  status running
+  if timeout "$limit" docker run --rm \
+    "${GPU_FLAGS[@]}" --shm-size=8g \
+    -v /var/cache/deg-hf:/hf-cache \
+    -e HF_HOME=/hf-cache \
+    -w /opt/worker \
+    "$IMAGE" \
+    bash -c 'files=$(grep -l "pytest.mark.gpu" tests/test_*.py); [ -n "$files" ] || { echo "no gpu test files found"; exit 5; }; exec python -m pytest -m gpu -p no:cacheprovider -q -ra $files' 2>&1 | tee "$log"; then
+    rc=0
+  else
+    rc=${PIPESTATUS[0]}
+  fi
+  if [ "$rc" = "124" ]; then
+    timed_out=true
+  fi
+  # A skipped GPU test is not a pass: with torch or evo2 not importable every gpu test skips itself and pytest still exits 0.
+  # Exit code 6 says "the GPU tests did not really run".
+  if [ "$rc" = "0" ] && grep -Eq '[0-9]+ skipped|no tests ran' "$log"; then
+    echo "ERROR: pytest -m gpu skipped tests or ran none, so nothing was proven (exit 6): is the GPU stack importable in the image?"
+    rc=6
+  fi
+  put_object "$log" "jobs/${JOB}/logs/gpu-test.log" || true
+  printf '{"schema":1,"jobId":"%s","mode":"gpu-test","exitCode":%s,"timedOut":%s,"image":"%s","vm":{"name":"%s","zone":"%s"},"finishedAt":"%s"}\n' \
+    "$JOB" "$rc" "$timed_out" "$IMAGE" "$NAME" "$ZONE" "$(date -u +%FT%TZ)" > "$result"
+  if [ "$rc" = "0" ]; then
+    status done
+  else
+    status failed '{"code":"GPU_TESTS_FAILED","retriable":false}'
+  fi
+  put_object "$result" "jobs/${JOB}/logs/gpu-test-result.json" || true
+  cleanup "$LIFECYCLE"
+  return "$rc"
+}
+
 # Any uncaught error anywhere below this line reports WORKER_CRASH and applies the
 # configured lifecycle rather than leaving the VM to bill silently forever.
 trap 'status failed "{\"code\":\"WORKER_CRASH\",\"retriable\":false}"; cleanup "$LIFECYCLE"' ERR
@@ -211,6 +257,21 @@ if ! docker pull "$IMAGE"; then
   exit 1
 fi
 
+mkdir -p /var/cache/deg-hf
+chown 10001:10001 /var/cache/deg-hf
+# `--gpus all` only when a GPU is expected: the CPU smoke VM boots the same image with no GPU (issue #56), and docker run fails on it with the flag.
+GPU_FLAGS=()
+if [ "$EXPECT_GPU" = "true" ]; then
+  GPU_FLAGS=(--gpus all)
+fi
+
+# gpu-test mode (issue #759): no manifest, no job; run the GPU tests in the image and finish. `|| exit 1` (not a bare call) keeps
+# a failing pytest from tripping the ERR trap, which would overwrite the status and apply the lifecycle a second time.
+if [ "$MODE" = "gpu-test" ]; then
+  gpu_test_run || exit 1
+  exit 0
+fi
+
 mkdir -p /work
 if ! get_object "jobs/${JOB}/manifest.json" > /work/manifest.json; then
   status failed '{"code":"MANIFEST_INVALID","message":"could not download manifest.json","retriable":false}'
@@ -224,14 +285,8 @@ fi
 # container is handed off; it only interprets the container's own exit code below.
 # Issue #75: the worker image runs as uid 10001 (Dockerfile.cuda `USER worker`), so the
 # Hugging Face cache must be a folder that uid can write, and HF_HOME must point at it:
-# the old `/root/.cache/huggingface` mount was never read or written by that user.
-mkdir -p /var/cache/deg-hf
-chown 10001:10001 /var/cache/deg-hf
-# `--gpus all` only when a GPU is expected: the CPU smoke VM boots the same image with no GPU (issue #56), and docker run fails on it with the flag.
-GPU_FLAGS=()
-if [ "$EXPECT_GPU" = "true" ]; then
-  GPU_FLAGS=(--gpus all)
-fi
+# the old `/root/.cache/huggingface` mount was never read or written by that user (the folder
+# is made, and GPU_FLAGS set, above the gpu-test branch because both modes need them).
 docker run --rm \
   "${GPU_FLAGS[@]}" --shm-size=8g \
   -v /work:/work \
