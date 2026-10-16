@@ -177,7 +177,7 @@ public static class RunErrorCodes
     /// because docs/copy_catalog.md has no row, and so no user action, for them. A guard test fails when a code in the
     /// contract is neither mapped by <see cref="ForWorkerStatusCode"/> nor listed here, and when an entry here goes stale.
     /// </summary>
-    public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN"];
+    public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN", "GPU_TESTS_FAILED"];
 
     /// <summary>The <c>Resources.resw</c> key for a code (plain, non-dotted: it is read from code, not through <c>x:Uid</c>). An unknown code gets the generic message.</summary>
     public static string ResourceKey(string? code) => code switch
