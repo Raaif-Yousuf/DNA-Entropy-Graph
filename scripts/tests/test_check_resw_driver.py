@@ -30,14 +30,14 @@ def test_an_installed_copy_equal_to_origin_main_passes(tmp_path, capsys):
     assert capsys.readouterr().out.startswith("OK:")
 
 
-def test_a_drifted_copy_fails_and_names_the_fix_command(tmp_path, capsys):
+def test_a_drifted_copy_only_warns_and_names_the_fix_command(tmp_path, capsys):
     repo = _real_repo(tmp_path, origin_script=NEW_SCRIPT)
     assert sgd.main(["--repo", str(repo)]) == 0
     (repo / ".git" / "deg-drivers" / "resw_merge.py").write_bytes(b"# drifted\n")
     capsys.readouterr()
-    assert crd.main(["--repo", str(repo)]) == 1
+    assert crd.main(["--repo", str(repo)]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("ERROR:") and "setup_git_drivers.py" in out
+    assert out.startswith("WARNING:") and "setup_git_drivers.py" in out
 
 
 def test_a_config_pointing_at_a_missing_script_fails(tmp_path, capsys):
@@ -58,4 +58,4 @@ def test_without_an_origin_main_ref_it_skips(tmp_path, capsys):
 def test_it_runs_as_a_script_in_this_checkout():
     done = subprocess.run([sys.executable, str(SCRIPTS_DIR / "check_resw_driver.py")], capture_output=True, text=True, check=False)
     assert done.returncode in (0, 1), done.stdout + done.stderr
-    assert done.stdout.startswith(("OK:", "ERROR:"))
+    assert done.stdout.startswith(("OK:", "WARNING:", "ERROR:"))
