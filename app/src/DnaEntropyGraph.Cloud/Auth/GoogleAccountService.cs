@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Security.Cryptography;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Net;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Auth.OAuth2.Flows;
 using Google.Apis.Auth.OAuth2.Responses;
@@ -342,7 +343,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 // A request timeout reaches us as a TaskCanceledException the caller did not ask for, or, after
                 // Google's refresh manager has retried it three times, as an InvalidOperationException
                 // ("could not be refreshed. Errors: timeout, ..."); a refused token is invalid_grant, handled above.
-                throw new AccountAuthException(AuthErrorCodes.NetworkUnavailable, "the token endpoint could not be reached", ex);
+                throw NetworkFailure("the token endpoint could not be reached", ex);
             }
         }
         catch (TokenStorageException ex)
@@ -380,7 +381,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         }
         catch (Exception ex) when (ex is HttpRequestException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            throw new AccountAuthException(AuthErrorCodes.NetworkUnavailable, "Google could not be reached", ex);
+            throw NetworkFailure("Google could not be reached", ex);
         }
         catch (Win32Exception ex)
         {
@@ -424,7 +425,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             Scopes = Scopes,
             Prompt = "select_account consent",
             DataStore = store,
-            HttpClientFactory = _options.HttpHandler is { } handler ? new HandlerFactory(handler) : null,
+            HttpClientFactory = _options.HttpHandler is { } handler ? new HandlerFactory(handler) : new Net.ProxyHttpClientFactory(_options.Proxy ?? DnaEntropyGraph.Core.Net.ProxyPolicy.SystemDefault),
         });
 
     private async Task MarkExpiredAsync(AccountRecord account)
@@ -465,6 +466,15 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             // Best effort: the original failure is the one the user needs to hear about.
         }
     }
+
+    /// <summary>A failed request to Google: a proxy that refused it or a certificate this PC does not trust (issue #239) is named as such; anything else is the plain network code.</summary>
+    private static AccountAuthException NetworkFailure(string message, Exception ex)
+        => new(ProxyFailure.Detect(ex) switch
+        {
+            ProxyFailureKind.ProxyRefused => AuthErrorCodes.SigninProxy,
+            ProxyFailureKind.CertificateUntrusted => AuthErrorCodes.SigninCertificate,
+            _ => AuthErrorCodes.NetworkUnavailable,
+        }, message, ex);
 
     /// <summary>Only the exception type is kept: its message can carry a path with the user's name in it.</summary>
     private static AccountAuthException StorageFailure(TokenStorageException ex)

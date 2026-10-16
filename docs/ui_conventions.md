@@ -306,6 +306,9 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).
 
+## 14. Settings > Advanced > Network proxy (issue #239)
+
+A collapsed Expander next to the developer one, because the right answer for most labs is to leave it alone. A ComboBox (Windows settings, a proxy I type, no proxy) decides which of the address, user name and password boxes is live; one **Apply** button saves, so a half-typed address is never in use and a password is never saved per keystroke. The password box is emptied after Apply and a line says one is saved; leaving it empty keeps the saved one. Errors name their fix in the line below the button (`ProxyAddressInvalid`, `ProxyPasswordNeeded`, `AdvancedNotSaved`). `IsEnabled` is per control, not on the StackPanel (a StackPanel has no `IsEnabled`; the XAML compiler fails with no message).
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text

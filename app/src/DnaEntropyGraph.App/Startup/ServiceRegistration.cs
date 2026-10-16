@@ -9,6 +9,7 @@ using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.Core.Net;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Setup;
 using DnaEntropyGraph.LocalEngine;
@@ -95,6 +96,13 @@ public static class ServiceRegistration
         services.AddSingleton<WindowPlacementService>();
         services.AddSingleton<ILogTailReader, FileLogTailReader>();
 
+        // Issue #239: the one network proxy policy (follow Windows, a typed proxy, or none) and the encrypted file for a proxy sign-in. Every real HTTP client (Google sign-in,
+        // the Google gateways, the Velopack update check) holds a PolicyWebProxy over this one object, so a change in Settings reaches the next request.
+        services.AddSingleton<IProxyCredentialStore>(_ => new ProxyCredentialFile(Path.Combine(root.AuthDirectory, "proxy.cred"), new DpapiSecretProtector()));
+        services.AddSingleton<ProxyPolicy>(sp => new ProxyPolicy(sp.GetRequiredService<ISettingsStore>(), sp.GetRequiredService<IProxyCredentialStore>()));
+        services.AddSingleton<IProxyPolicy>(sp => sp.GetRequiredService<ProxyPolicy>());
+        services.AddTransient<ProxySettingsViewModel>();
+
         // Cloud (Hard Rule 7: the only project allowed to reference Google.*). Issue #48: the account is the real Google sign-in
         // (loopback + PKCE, DPAPI token files keyed by sub), in both backends. A build with no
         // oauth_client.local.json cannot sign in and says so by code (OAUTH_CLIENT_MISSING), never by crashing.
@@ -106,6 +114,7 @@ public static class ServiceRegistration
                 ? [Path.Combine(root.Path, OAuthClientLoader.FileName)]
                 : OAuthClientLoader.DefaultCandidates(root.Path, AppContext.BaseDirectory)),
             Browser = new SystemBrowserLauncher(),
+            Proxy = sp.GetRequiredService<IProxyPolicy>(),
 
             // Only the fake backend answers a project nobody chose (a project the account chose wins, #520). The Google backend
             // answers null: no chosen project means a run fails with no_project, which names the one way out (#609).
@@ -218,7 +227,7 @@ public static class ServiceRegistration
         services.AddSingleton<IDiagnosticsExporter>(sp => new DiagnosticsExporter(
             new FolderDiagnosticsSource(root.Path),
             sp.GetRequiredService<IRunRepository>(),
-            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>())));
+            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>(), sp.GetRequiredService<IProxyPolicy>())));
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
@@ -385,6 +394,7 @@ public static class ServiceRegistration
                 }
             },
             AppVersion = JobEngine.AppVersion(),
+            Proxy = sp.GetRequiredService<IProxyPolicy>(),
             // Issue #114: the saved "Cloud results retention", read at each use so a change patches the bucket rule on the next run.
             ResultsRetentionDaysSource = () => ResultsRetentionSetting.Days(sp.GetRequiredService<ISettingsStore>()),
         });

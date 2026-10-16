@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Net;
 using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
@@ -207,7 +208,9 @@ public sealed class CloudCallPipeline
         }
         catch (HttpRequestException ex)
         {
-            throw new CloudOperationException(new CloudError(null, null, ex.Message), CloudErrorKind.Network);
+            // Issue #239: a proxy that refused the tunnel, or a certificate this PC does not trust, is named by its own code so the run says what to do.
+            var proxyFailure = ProxyFailure.Detect(ex);
+            throw new CloudOperationException(new CloudError(proxyFailure is { } kind ? ProxyFailure.CodeFor(kind) : null, null, ex.Message), CloudErrorKind.Network);
         }
     }
 
@@ -222,6 +225,12 @@ public sealed class CloudCallPipeline
     /// </summary>
     internal static bool IsTransient(Exception exception, CancellationToken cancellationToken)
     {
+        if (exception is HttpRequestException && ProxyFailure.Detect(exception) is not null)
+        {
+            // A proxy that refuses, or a certificate it swaps, will refuse the same way again: no retry, and no offline banner for it.
+            return false;
+        }
+
         if (exception is HttpRequestException or TimeoutRejectedException)
         {
             return true;

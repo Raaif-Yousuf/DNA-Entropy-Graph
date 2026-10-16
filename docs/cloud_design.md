@@ -1314,6 +1314,38 @@ account and a role and edits two policies, and a whole-method retry would replay
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
+## 18. Network proxy (issue #239)
+
+**One policy, applied in one place.** `ProxyMode` is `System` (default), `Manual` (`host:port`) or `None`, saved as `proxy_mode` and `proxy_address` in settings.json. The sign-in for a manual proxy is NOT there: `ProxyCredentialFile` keeps it DPAPI-encrypted under `%LOCALAPPDATA%\DNAEntropyGraph\auth\proxy.cred` (Hard Rule 12). `ProxyPolicy` (Core, singleton) holds the live choice; `PolicyWebProxy` is the one `IWebProxy` every client holds, so a change in Settings > Advanced > Network proxy reaches the next request of clients that already exist (no restart; pooled connections to the old proxy age out).
+
+- `System` asks `HttpClient.DefaultProxy` per request (WinHTTP: Internet Options, PAC script, automatic detection) and offers `CredentialCache.DefaultNetworkCredentials` to a proxy that asks (NTLM, Kerberos). THEORY (unverified, no proxy lab): the PAC and the Windows sign-in paths; `ToTest.md` has the row.
+- `Manual` uses the typed proxy for everything except loopback, with the saved user name and password (Basic or NTLM), else the Windows sign-in.
+- `None` goes direct even when Windows names a proxy.
+
+**Every outbound path (MEASURED 2026-10-16, by reading `app/src`).** There is no gRPC anywhere: the Google clients are the REST discovery clients of section 16, so there is no second transport that skips the policy.
+
+| Path | Client | Before | After |
+| --- | --- | --- | --- |
+| Sign-in token exchange, refresh, revoke | `Google.Apis.Auth` flow, `HttpClientFactory` from `GoogleAccountService.NewFlow` | THEORY (unverified): the Google.Apis default handler follows `HttpClient.DefaultProxy` (system proxy, PAC) but sets no proxy credentials, so an NTLM proxy answers 407 | `ProxyHttpClientFactory` over the policy |
+| Resource Manager, Billing, Service Usage, Compute, IAM, Quota | `Google.Apis.*` discovery services via `GoogleRestClient.CreateInitializer` | same as above | same factory |
+| Storage upload and download | `Google.Apis.Storage.v1` (same initializer) | same as above | same factory |
+| Update check and download | Velopack `GithubSource` with its default `HttpClientFileDownloader` | THEORY (unverified): the `HttpClientHandler` default, the system proxy with no credentials | `ProxiedFileDownloader` over the policy |
+| igv.js viewer | WebView2, local files only through the `viewer.deg` mapping | no outbound traffic | unchanged (WebView2 follows Windows itself if it ever fetches) |
+| Browser sign-in page, open-in-IGV, folder launch | `Process.Start` of other programs | their own settings | unchanged |
+| Loopback receiver | `HttpListener` on 127.0.0.1 | n/a | loopback never uses a proxy |
+
+NCBI/Entrez: not present in `app/`. A scripted test handler (`HttpHandler` option) still replaces the whole stack, proxy included.
+
+**Failure classes.** A proxy failure is `CloudErrorKind.Network` (so it still aborts as a network class) but carries its own `CloudError.Code`, because the `network` copy ("check your internet connection") would send the user the wrong way:
+
+| Signal (typed, never message text) | Error code | Run code | Action |
+| --- | --- | --- | --- |
+| `HttpRequestError.ProxyTunnelError` (407 or any refusal of the CONNECT), or HTTP 407 on an API answer | `PROXY_REFUSED` | `proxy_blocked` | Open Settings > Advanced > Network proxy |
+| `HttpRequestError.SecureConnectionError` or an `AuthenticationException` in the chain (TLS inspection with a root this PC lacks) | `NETWORK_CERTIFICATE` | `network_certificate` | Ask a network administrator for the organization's certificate |
+
+Sign-in has the matching `SIGNIN_PROXY` and `SIGNIN_CERTIFICATE`. `CloudCallPipeline.IsTransient` treats both as permanent: a refusing proxy refuses again, so there is no retry and no offline banner. A refused CONNECT to a proxy host that does not answer at all is still a plain connection error (`network`): the app cannot tell it from no internet.
+
+**Diagnostics.** `versions.json` records `proxyMode` (`system`/`manual`/`none`) and nothing else: the address can name the user's institution, and `proxy_address` is `<omitted>` in the bundle's settings.json like every unlisted key. No credential is ever recorded.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

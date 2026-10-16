@@ -324,6 +324,8 @@ KNOWN_CLOUD_ERROR_CODES: frozenset[str] = frozenset(
         "PROJECT_SAVE_FAILED",
         "ACCOUNTS_FILE_UNREADABLE",
         "ACCOUNTS_FILE_LOCKED",
+        "SIGNIN_PROXY",
+        "SIGNIN_CERTIFICATE",
     )
 )
 

@@ -41,6 +41,18 @@ browser window that opens. *(`SIGNIN_TIMEOUT`, `SIGNIN_CANCELLED`)*
 **"Google could not be reached"**, your sign-in is unchanged. Check that the computer is
 online, then click **Try again**. *(`SIGNIN_NETWORK`)*
 
+**"Your network's proxy refused the connection to Google"**, many universities and companies send
+internet traffic through a proxy. Your sign-in is unchanged. Open **Settings**, open **Advanced**,
+then **Network proxy**. The default, **Use the Windows settings**, works for most computers, including
+ones that use an automatic proxy script and your Windows sign-in. If your IT help desk gave you a proxy
+address, choose **Use a proxy I type**, enter it as `host:port` (for example `proxy.example.edu:8080`),
+add the user name and password only if they say the proxy needs one, and click **Apply**. Then click
+**Try again**. *(`SIGNIN_PROXY`; a run says the same thing under `proxy_blocked`)*
+
+**"A program on your network is replacing Google's security certificate"**, some networks inspect
+encrypted traffic and use their own certificate, which this computer does not trust yet. Ask your
+network administrator to install your organization's certificate on this computer. The app will not
+bypass the check. *(`SIGNIN_CERTIFICATE`; a run says the same thing under `network_certificate`)*
 **"This copy of the app was built without its Google sign-in details"**, download the
 latest installer from the app's download page and install it over this copy.
 *(`OAUTH_CLIENT_MISSING`, `OAUTH_CLIENT_INVALID`)*

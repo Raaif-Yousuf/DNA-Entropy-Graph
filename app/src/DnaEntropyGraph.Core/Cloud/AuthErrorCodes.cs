@@ -52,11 +52,17 @@ public static class AuthErrorCodes
     /// <summary>The saved account list exists but could not be opened because another program or another copy of the app holds it (issue #616). Nothing was changed; the next try reads it again. Action: Try again.</summary>
     public const string AccountsFileLocked = "ACCOUNTS_FILE_LOCKED";
 
+    /// <summary>The network's proxy refused the connection to Google, or asked for a sign-in the app does not have (issue #239). The stored sign-in is kept. Action: open Settings, Advanced, and check the network proxy.</summary>
+    public const string SigninProxy = "SIGNIN_PROXY";
+
+    /// <summary>A program on the network presented a certificate for Google that this PC does not trust (TLS inspection; issue #239). The stored sign-in is kept. Action: ask an administrator.</summary>
+    public const string SigninCertificate = "SIGNIN_CERTIFICATE";
+
     /// <summary>Every code a sign-in can fail under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         SigninExpired, SigninCancelled, SigninTimeout, SigninFailed, NetworkUnavailable,
-        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable, AccountsFileLocked,
+        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable, AccountsFileLocked, SigninProxy, SigninCertificate,
     ];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (plain, non-dotted, literal so the orphan-resource scan sees it).</summary>
@@ -77,6 +83,8 @@ public static class AuthErrorCodes
         ProjectSaveFailed => "AuthError_PROJECT_SAVE_FAILED",
         AccountsFileUnreadable => "AuthError_ACCOUNTS_FILE_UNREADABLE",
         AccountsFileLocked => "AuthError_ACCOUNTS_FILE_LOCKED",
+        SigninProxy => "AuthError_SIGNIN_PROXY",
+        SigninCertificate => "AuthError_SIGNIN_CERTIFICATE",
         _ => "AuthError_SIGNIN_FAILED",
     };
 

@@ -24,7 +24,7 @@ internal static class GoogleRestClient
         {
             ApplicationName = ApplicationName,
             HttpClientInitializer = new BearerTokenInitializer(tokens),
-            HttpClientFactory = options.HttpHandler is { } handler ? new HandlerFactory(handler) : null,
+            HttpClientFactory = options.HttpHandler is { } handler ? new HandlerFactory(handler) : new Net.ProxyHttpClientFactory(options.Proxy ?? DnaEntropyGraph.Core.Net.ProxyPolicy.SystemDefault),
             GZipEnabled = false,
             // Google.Apis retries a 503 by default; left on it would sleep and replay inside the pipeline's own retry.
             DefaultExponentialBackOffPolicy = ExponentialBackOffPolicy.None,
