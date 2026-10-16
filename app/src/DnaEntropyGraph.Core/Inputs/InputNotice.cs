@@ -42,6 +42,15 @@ public enum InputNoticeCode
 
     /// <summary>Digits (such as line numbers) were removed. Count is how many.</summary>
     DigitsRemoved,
+
+    /// <summary>GFF3 lines were skipped because they are not nine tab-separated columns with a whole-number start and end. Count is how many, <see cref="InputNotice.Other"/> the first line number (issue #686).</summary>
+    AnnotationLinesSkipped,
+
+    /// <summary>GFF3 sequence names that match no FASTA record name. Count is how many names (issue #686).</summary>
+    AnnotationUnmatchedNames,
+
+    /// <summary>GFF3 features that run past the end of their sequence and were left out. Count is how many (issue #686).</summary>
+    AnnotationFeaturesPastEnd,
 }
 
 /// <summary>A notice's machine code and the numbers it mentions (never sequence text, a name or a path).</summary>

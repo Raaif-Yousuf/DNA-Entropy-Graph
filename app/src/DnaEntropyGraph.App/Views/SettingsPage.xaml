@@ -2,6 +2,7 @@
     x:Class="DnaEntropyGraph.App.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:DnaEntropyGraph.App.Converters"
     xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
 
     <!--
@@ -121,6 +122,29 @@
                 </Border>
             </StackPanel>
 
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsAboutHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{x:Bind Updates.CurrentVersionText}" />
+                        <RadioButtons x:Uid="UpdateChannelChoices" MaxColumns="1" SelectedIndex="{x:Bind Updates.ChannelIndex, Mode=TwoWay}">
+                            <RadioButton x:Uid="UpdateChannelStable" />
+                            <RadioButton x:Uid="UpdateChannelBeta" />
+                        </RadioButtons>
+                        <CheckBox x:Uid="UpdateCheckOnLaunchBox" IsChecked="{x:Bind Updates.CheckOnLaunch, Mode=TwoWay}" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button x:Uid="UpdateCheckNowButton" Command="{x:Bind Updates.CheckNowCommand}" />
+                            <Button x:Uid="UpdateRestartButton" Command="{x:Bind Updates.RestartToUpdateCommand}" />
+                            <ProgressRing IsActive="{x:Bind Updates.IsBusy, Mode=OneWay}" Width="20" Height="20" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind Updates.StatusText, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <StackPanel Spacing="4" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Updates.HasUpdate), Mode=OneWay}">
+                            <TextBlock x:Uid="UpdateNotesHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind Updates.ReleaseNotes, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
             <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsAdvancedHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <!-- Collapsed by default: these are for developers and for a clean start. -->

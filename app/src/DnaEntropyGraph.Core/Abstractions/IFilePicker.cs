@@ -6,6 +6,9 @@ public interface IFilePicker
     /// <summary>Lets the user choose one or more sequence files. Empty when the picker was cancelled.</summary>
     Task<IReadOnlyList<string>> PickInputFilesAsync(CancellationToken cancellationToken);
 
+    /// <summary>Lets the user choose one GFF3 file (.gff3 or .gff) to pair with the selected FASTA (#686). Null when the picker was cancelled.</summary>
+    Task<string?> PickAnnotationFileAsync(CancellationToken cancellationToken);
+
     Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken);
 
     /// <summary>Lets the user choose a program (.exe or .bat), for Browse when IGV or Geneious is not found. Null when cancelled (#586).</summary>

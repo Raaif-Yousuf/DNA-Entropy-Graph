@@ -427,6 +427,42 @@
   <data name="NewRunRemoveItem.Content" xml:space="preserve">
     <value>Remove</value>
   </data>
+  <data name="NewRunAddGff3.Content" xml:space="preserve">
+    <value>Add GFF3</value>
+  </data>
+  <data name="NewRunRemoveGff3.Content" xml:space="preserve">
+    <value>Remove GFF3</value>
+  </data>
+  <data name="NewRunPillAnnotationLine" xml:space="preserve">
+    <value>Genes from {0}: {1}. The gene finder (Prodigal) is skipped for this file.</value>
+  </data>
+  <data name="NewRunStatusAnnotationUnavailable" xml:space="preserve">
+    <value>Pairing a GFF3 is not available in this version of the app yet. Remove the GFF3 and run the FASTA alone, or update the app.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNoFasta" xml:space="preserve">
+    <value>A GFF3 needs a FASTA file to go with. Add the FASTA file first, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAmbiguous" xml:space="preserve">
+    <value>There is more than one FASTA file and the GFF3 name does not match any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileUnreadable" xml:space="preserve">
+    <value>The GFF3 or its FASTA file could not be read. Check that both still exist and are not open in another program, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileTooLarge" xml:space="preserve">
+    <value>The GFF3 file is too large to pair. Choose a smaller GFF3, or run the FASTA without it.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NotFasta" xml:space="preserve">
+    <value>A GFF3 can only be paired with a FASTA file. Use a FASTA copy of the sequence, or run a GenBank file, which already carries its genes.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoFeatures" xml:space="preserve">
+    <value>The GFF3 has no gene or CDS rows we can read. Check that it is a GFF3 file with nine tab-separated columns, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoNameMatch" xml:space="preserve">
+    <value>No sequence name in the GFF3 matches a sequence name in the FASTA file. Make the first column of the GFF3 match the FASTA header, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoneFit" xml:space="preserve">
+    <value>Every gene in the GFF3 runs past the end of its sequence. Check that the GFF3 belongs to this FASTA file, then add it again.</value>
+  </data>
   <data name="NewRunTreatAsRna.Content" xml:space="preserve">
     <value>Treat as RNA</value>
   </data>
@@ -1617,6 +1653,72 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="WizardCheckAllButton.Content" xml:space="preserve">
     <value>Check everything again</value>
   </data>
+  <data name="SettingsAboutHeader.Text" xml:space="preserve">
+    <value>About and updates</value>
+  </data>
+  <data name="AboutVersion_Text" xml:space="preserve">
+    <value>Version {0}</value>
+  </data>
+  <data name="UpdateCheckNowButton.Content" xml:space="preserve">
+    <value>Check now</value>
+  </data>
+  <data name="UpdateRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateBarRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateChannelChoices.Header" xml:space="preserve">
+    <value>Which updates to offer</value>
+  </data>
+  <data name="UpdateChannelStable.Content" xml:space="preserve">
+    <value>Stable (recommended)</value>
+  </data>
+  <data name="UpdateChannelBeta.Content" xml:space="preserve">
+    <value>Beta (early versions, may have rough edges)</value>
+  </data>
+  <data name="UpdateCheckOnLaunchBox.Content" xml:space="preserve">
+    <value>Check for updates when the app starts</value>
+  </data>
+  <data name="UpdateNotesHeader.Text" xml:space="preserve">
+    <value>What changes in this version</value>
+  </data>
+  <data name="UpdateChecking" xml:space="preserve">
+    <value>Checking for updates...</value>
+  </data>
+  <data name="UpdateUpToDate" xml:space="preserve">
+    <value>You have the latest version.</value>
+  </data>
+  <data name="UpdateNotInstalled" xml:space="preserve">
+    <value>This copy was not installed with the installer, so it cannot update itself. Download the latest installer from the releases page to update.</value>
+  </data>
+  <data name="UpdateCheckFailed" xml:space="preserve">
+    <value>Could not check for updates. Check your internet connection, then press Check now.</value>
+  </data>
+  <data name="UpdateAvailable_Title" xml:space="preserve">
+    <value>Update available: {0}</value>
+  </data>
+  <data name="UpdateAvailable_Status" xml:space="preserve">
+    <value>Version {0} is ready to download. Press Restart to update when you are between runs.</value>
+  </data>
+  <data name="UpdateWaitForRun" xml:space="preserve">
+    <value>A run is in progress, so the app will not restart now. Press Restart to update again when the run has finished.</value>
+  </data>
+  <data name="UpdateDownloading" xml:space="preserve">
+    <value>Downloading the update...</value>
+  </data>
+  <data name="UpdateDownloadingPercent" xml:space="preserve">
+    <value>Downloading the update... {0}%</value>
+  </data>
+  <data name="UpdateRestarting" xml:space="preserve">
+    <value>Restarting to finish the update...</value>
+  </data>
+  <data name="UpdateDownloadFailed" xml:space="preserve">
+    <value>The update could not be downloaded. Check your internet connection, then press Restart to update again.</value>
+  </data>
+  <data name="UpdateSettingNotSaved" xml:space="preserve">
+    <value>That choice could not be saved because the settings file is locked. Close other programs using it, then change it again.</value>
+  </data>
   <data name="NewRunPresetExpander.Header" xml:space="preserve">
     <value>Option presets</value>
   </data>
@@ -1728,5 +1830,24 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="NewRunPillKind_SnapGene" xml:space="preserve">
     <value>SnapGene</value>
+  </data>
+  <!-- #686 GFF3 pairing: notices -->
+  <data name="NewRunNotice_AnnotationLinesSkipped" xml:space="preserve">
+    <value>{0} lines of the GFF3 were skipped because they are not nine columns separated by tabs with a whole-number start and end (the first is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationLinesSkipped_One" xml:space="preserve">
+    <value>1 line of the GFF3 was skipped because it is not nine columns separated by tabs with a whole-number start and end (it is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames" xml:space="preserve">
+    <value>{0} sequence names in the GFF3 match no record in the FASTA file, so their genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames_One" xml:space="preserve">
+    <value>1 sequence name in the GFF3 matches no record in the FASTA file, so its genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd" xml:space="preserve">
+    <value>{0} genes in the GFF3 run past the end of their sequence and are left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
+    <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
   </data>
 </root>

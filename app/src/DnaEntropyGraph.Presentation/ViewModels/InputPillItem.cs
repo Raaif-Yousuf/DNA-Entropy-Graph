@@ -62,6 +62,42 @@ public sealed partial class InputPillItem : ObservableObject
     /// <summary>True once checked with no problem. A pill still being checked is not valid.</summary>
     public bool IsValid => !IsChecking && !HasError;
 
+    /// <summary>The GFF3 paired with this FASTA (issue #686), or null. The run sends it as its annotation, and the worker uses its genes instead of finding them.</summary>
+    public string? AnnotationPath { get; private set; }
+
+    public bool HasAnnotation => AnnotationPath is not null;
+
+    /// <summary>"Genes from name.gff3: 12 genes. The gene finder (Prodigal) is skipped." Empty with no GFF3.</summary>
+    [ObservableProperty]
+    private string _annotationText = string.Empty;
+
+    /// <summary>What the GFF3 check noticed and carried on past (lines skipped, names with no sequence); empty when it had nothing to say.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAnnotationNotices))]
+    private string _annotationNoticesText = string.Empty;
+
+    public bool HasAnnotationNotices => AnnotationNoticesText.Length > 0;
+
+    /// <summary>Shows a GFF3 that fits this FASTA: its gene count and the checker's notices. Only a pair with no problem is ever applied.</summary>
+    public void ApplyAnnotation(string annotationPath, AnnotationCheckResult result)
+    {
+        ArgumentNullException.ThrowIfNull(annotationPath);
+        ArgumentNullException.ThrowIfNull(result);
+        AnnotationPath = annotationPath;
+        var genes = result.GeneCount == 1 ? _strings.GetString("NewRunPillGenesOne") : Format("NewRunPillGenesMany", result.GeneCount);
+        AnnotationText = Format("NewRunPillAnnotationLine", System.IO.Path.GetFileName(annotationPath), genes);
+        AnnotationNoticesText = string.Join('\n', result.NoticeCodes.Select(NoticeText).OfType<string>());
+        OnPropertyChanged(nameof(HasAnnotation));
+    }
+
+    /// <summary>Takes the GFF3 off this FASTA; the FASTA stays.</summary>
+    public void ClearAnnotation()
+    {
+        AnnotationPath = null;
+        AnnotationText = string.Empty;
+        AnnotationNoticesText = string.Empty;
+        OnPropertyChanged(nameof(HasAnnotation));
+    }
     partial void OnNoticesTextChanged(string value) => OnPropertyChanged(nameof(HasNotices));
 
     private int _generation;
