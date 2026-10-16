@@ -7,6 +7,13 @@ public interface ICostEstimateService
 {
     /// <summary>The estimate for a run on <paramref name="machineType"/> with a boot disk of <paramref name="bootDiskGb"/> GB. Never throws except for cancellation: a problem is a <see cref="CostEstimateResult"/> with a reason.</summary>
     Task<CostEstimateResult> EstimateAsync(string machineType, bool spot, long? bases, int bootDiskGb, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// What the monthly spending cap says about a run estimated at <paramref name="estimatedUsd"/> (issue #109). The default says
+    /// "no cap", so a service with no ledger behind it shows no card.
+    /// </summary>
+    Task<SpendCapStatus?> CheckSpendCapAsync(double? estimatedUsd, CancellationToken cancellationToken)
+        => Task.FromResult<SpendCapStatus?>(null);
 }
 
 /// <summary>Joins the shipped price list, this PC's run history and <see cref="CostEstimator"/>.</summary>
@@ -15,10 +22,31 @@ public sealed class CostEstimateService : ICostEstimateService
     private readonly Lazy<PricingLoadResult> _pricing;
     private readonly IRunRepository _runs;
 
-    public CostEstimateService(IPricingSource pricing, IRunRepository runs)
+    private readonly ISpendCapGate? _gate;
+
+    public CostEstimateService(IPricingSource pricing, IRunRepository runs, ISpendCapGate? gate = null)
     {
         _pricing = new Lazy<PricingLoadResult>(pricing.Load);
         _runs = runs;
+        _gate = gate;
+    }
+
+    public async Task<SpendCapStatus?> CheckSpendCapAsync(double? estimatedUsd, CancellationToken cancellationToken)
+    {
+        if (_gate is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _gate.CheckAsync(estimatedUsd, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The card is advice; a ledger that cannot be read must not take the page down. The engine's own check still runs at Run.
+            return null;
+        }
     }
 
     public async Task<CostEstimateResult> EstimateAsync(string machineType, bool spot, long? bases, int bootDiskGb, CancellationToken cancellationToken)

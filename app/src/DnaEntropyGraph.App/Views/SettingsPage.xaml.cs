@@ -20,6 +20,8 @@ public sealed partial class SettingsPage : Page
 
     public AdvancedSettingsViewModel Advanced { get; }
 
+    public SpendCapSettingsViewModel SpendCap { get; }
+
     public SettingsPage()
     {
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
@@ -28,6 +30,7 @@ public sealed partial class SettingsPage : Page
         Notifications = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<NotificationsSettingsViewModel>();
         FileAssociation = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FileAssociationSettingsViewModel>();
         Advanced = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<AdvancedSettingsViewModel>();
+        SpendCap = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SpendCapSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         InitializeComponent();
     }

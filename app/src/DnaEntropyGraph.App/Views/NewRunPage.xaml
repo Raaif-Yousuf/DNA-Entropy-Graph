@@ -178,6 +178,20 @@
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
+            <!-- Issue #109: the monthly spending cap card. A warning leaves Run allowed; the hard stop refuses the run at Run. -->
+            <TextBlock
+                Text="{x:Bind ViewModel.SpendCapText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.IsSpendCapWarning, Mode=OneWay}"
+                TextWrapping="Wrap"
+                AutomationProperties.LiveSetting="Polite"
+                Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+            <TextBlock
+                Text="{x:Bind ViewModel.SpendCapText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.IsSpendCapBlocked, Mode=OneWay}"
+                TextWrapping="Wrap"
+                AutomationProperties.LiveSetting="Assertive"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+
             <!-- Issue #136: option presets. The summary line under the picker lists what the next run will use. -->
             <Expander x:Uid="NewRunPresetExpander" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <StackPanel Spacing="8">

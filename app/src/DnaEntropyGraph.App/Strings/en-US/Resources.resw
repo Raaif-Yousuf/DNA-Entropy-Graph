@@ -385,6 +385,33 @@
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
   </data>
+  <data name="RunError_spend_cap" xml:space="preserve">
+    <value>This run was not started because your estimated spending this month has reached the cap you set, and the hard stop is on. Open Settings, raise the cap or turn the hard stop off, then start the run again.</value>
+  </data>
+  <data name="NewRunSpendCapWarning" xml:space="preserve">
+    <value>Your estimated spending this month is {0}, and this run would take it to your monthly warning cap of {1} or past it. You can still run. To change the cap, open Settings.</value>
+  </data>
+  <data name="NewRunSpendCapBlocked" xml:space="preserve">
+    <value>Your estimated spending this month is {0}, and this run would reach your monthly cap of {1} with the hard stop on, so it will not start. To allow it, open Settings and raise the cap or turn the hard stop off.</value>
+  </data>
+  <data name="SettingsSpendHeader.Text" xml:space="preserve">
+    <value>Spending</value>
+  </data>
+  <data name="SettingsSpendExplainer.Text" xml:space="preserve">
+    <value>Set a monthly warning cap in US dollars. The app adds up its own estimate of what your runs cost this calendar month (your PC's local time) and warns you before a run that would reach the cap. This is an estimate, not your Google bill. Leave the box empty for no cap.</value>
+  </data>
+  <data name="SpendCapBox.Header" xml:space="preserve">
+    <value>Monthly warning cap (US dollars)</value>
+  </data>
+  <data name="SpendHardStopBox.Content" xml:space="preserve">
+    <value>Hard stop: do not start a run once the cap is reached</value>
+  </data>
+  <data name="SpendCapInvalid" xml:space="preserve">
+    <value>Type a number above zero, such as 50, or empty the box for no cap. The cap was not changed.</value>
+  </data>
+  <data name="SpendMonthToDate" xml:space="preserve">
+    <value>Estimated spending so far this month: ${0}</value>
+  </data>
   <data name="RunError_vm_end_unconfirmed" xml:space="preserve">
     <value>The run stopped, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>

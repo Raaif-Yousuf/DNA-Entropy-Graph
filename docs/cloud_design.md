@@ -503,6 +503,22 @@ exercise.
  every signed-in account/project on this PC - the single most important money guard in
  the app, and the direct successor to the prototype keeper's `main()` exit-time reminder
  ("the GPU VM is still RUNNING and billing... delete it when done").
+- **Spend ledger and monthly cap (issue #109)**: `LedgerRecordingRunRepository` wraps the run
+ repository, so every writer of a run row (runner, reconciler, cleanup) feeds the ledger the first
+ time a row reaches an ended phase. `SpendLedger` appends one `vm_runtime` `CostLedger` row per run
+ (idempotent by run id): start to end of the run, times the machine's hourly rate (Spot rate for a
+ Spot run) plus the hourly share of the run's boot disk, from `pricing.json`. Every figure is an
+ ESTIMATE; a machine the price list lacks writes no row. THEORY (unverified): the run's own start
+ to end overstates a little (it includes upload time before the VM exists), and a run that failed
+ before creating a VM still has a machine type, so it is booked at about zero cost. Issue #557
+ will replace the estimate with the instance-timestamp figure. `MonthlySpend` is not stored: the
+ month-to-date is summed from the ledger over the local calendar month (the PC's time zone, by
+ when a row ended). Settings `spend_cap_usd` (empty or unusable is no cap) and
+ `spend_cap_hard_stop` drive `SpendLedger.CheckAsync`: month-to-date plus the run's estimate at or
+ above the cap is a warning (the New run page shows the card, Run stays allowed), or with the hard
+ stop on is blocked. The engine's own check at Run uses month-to-date only (no estimate), refuses
+ with `spend_cap` (action: Open Settings) before any file is staged or resource created. The
+ stopped-VM idle sweep (the third checkbox of the issue) is the reconciler's (#530).
 
 ## 11. The job runner and operation polling (issues #58, #256)
 

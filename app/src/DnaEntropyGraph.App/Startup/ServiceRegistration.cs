@@ -171,7 +171,18 @@ public static class ServiceRegistration
         // gets a factory registration rather than the type-to-type shorthand
         // the rest of this method uses.
         services.AddSingleton(_ => new SqliteDatabase(databasePath));
-        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
+        services.AddSingleton<RunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
+        // Issue #109: every writer of a run row (runner, reconciler, cleanup) goes through this decorator, which writes the run's
+        // CostLedger row the first time the row reaches an ended phase. The same SpendLedger is the cap gate the run start and the
+        // New run page ask, so the number that is written is the number that is checked.
+        services.AddSingleton<ICostLedgerRepository>(sp => new CostLedgerRepository(sp.GetRequiredService<SqliteDatabase>()));
+        services.AddSingleton<SpendLedger>(sp => new SpendLedger(
+            sp.GetRequiredService<ICostLedgerRepository>(),
+            sp.GetRequiredService<DnaEntropyGraph.Core.Cost.IPricingSource>(),
+            sp.GetRequiredService<ISettingsStore>(),
+            TimeProvider.System));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.ISpendCapGate>(sp => sp.GetRequiredService<SpendLedger>());
+        services.AddSingleton<IRunRepository>(sp => new LedgerRecordingRunRepository(sp.GetRequiredService<RunRepository>(), sp.GetRequiredService<SpendLedger>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
         services.AddSingleton<ISettingsStore>(sp => sp.GetRequiredService<SettingsStore>());
@@ -193,7 +204,7 @@ public static class ServiceRegistration
         // Issue #101: the Runs page's services. Output folders are only ever deleted from under the run's own
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
         services.AddSingleton<TimeProvider>(TimeProvider.System);
-        services.AddSingleton<IRunHistoryRemover>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
+        services.AddSingleton<IRunHistoryRemover>(sp => sp.GetRequiredService<RunRepository>());
         services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
             sp.GetRequiredService<IRunInputStore>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
@@ -344,6 +355,7 @@ public static class ServiceRegistration
         services.AddTransient<FilesSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
+        services.AddTransient<SpendCapSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();

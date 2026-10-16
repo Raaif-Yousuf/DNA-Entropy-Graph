@@ -4,6 +4,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Persistence;
@@ -36,6 +37,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IWorkerImageProvider _images;
     private readonly IAccessionLookup _accessionLookup;
     private readonly Func<string?> _downloadsFolder;
+    private readonly ISpendCapGate? _spendGate;
 
     public JobEngine(
         IMessenger messenger,
@@ -48,8 +50,10 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IWorkerImageProvider images,
         IAccessionLookup accessionLookup,
         ActiveRuns activeRuns,
-        Func<string?>? downloadsFolder = null)
+        Func<string?>? downloadsFolder = null,
+        ISpendCapGate? spendGate = null)
     {
+        _spendGate = spendGate;
         _activeRuns = activeRuns;
         _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
         _messenger = messenger;
@@ -72,6 +76,14 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         if (!IsCloudTarget(options.RunTarget))
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.TargetNotSupported, cancellationToken).ConfigureAwait(false);
+            return jobId;
+        }
+
+        // Issue #109: the hard stop refuses before anything exists. It checks this month's recorded spend (the run's own estimate is
+        // shown on the New run page's card); a warning never stops a run. A ledger that cannot be read does not block the user.
+        if (_spendGate is not null && await IsBlockedBySpendCapAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.SpendCap, cancellationToken).ConfigureAwait(false);
             return jobId;
         }
 
@@ -263,6 +275,18 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return null;
+        }
+    }
+
+    private async Task<bool> IsBlockedBySpendCapAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await _spendGate!.CheckAsync(null, cancellationToken).ConfigureAwait(false)).Level == SpendCapLevel.Blocked;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
         }
     }
 

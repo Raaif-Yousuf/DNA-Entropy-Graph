@@ -82,6 +82,7 @@ public static class RunErrorActions
         [RunErrorCodes.PermissionActAs] = RunErrorAction.CopyOwnerRequest,
         [RunErrorCodes.WorkerDefaultAccountMissing] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,
+        [RunErrorCodes.SpendCap] = RunErrorAction.OpenSettings,
         ["billing"] = RunErrorAction.GoogleConsole,
         ["api_disabled"] = RunErrorAction.GoogleConsole,
         ["quota"] = RunErrorAction.GoogleConsole,

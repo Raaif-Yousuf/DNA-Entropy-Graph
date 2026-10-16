@@ -22,6 +22,10 @@ Where the app keeps its own data: the app data folder, the run folders (each kee
 
 Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (off, so a finished run never pulls you away from what you are typing). When the app is not the window in front (or is minimized), the message also appears as a Windows notification, for a run that finished and for one that failed; **Open run** on it (or a click on the notification) opens that run's Results page, even if you had closed the app. If you do not see it, check that Windows Focus Assist is not hiding notifications. They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
 
+## Spending
+
+A monthly warning cap in US dollars and a **Hard stop** tick box, saved at once. The group also shows your estimated spending so far this month. An empty box means no cap; text that is not a number above zero is refused with a message and the cap stays as it was. See [Costs and cleanup](06-costs-and-cleanup.md) for what the warning and the hard stop do.
+
 ## Diagnostics
 
 **Save diagnostics** writes one file you can send to support. It includes your run logs, run

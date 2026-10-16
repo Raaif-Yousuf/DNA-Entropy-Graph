@@ -315,6 +315,22 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     public bool HasEstimateDisk => EstimateDiskText.Length > 0;
 
+    /// <summary>The spending-cap card (issue #109): empty when there is no cap or this run stays under it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSpendCap))]
+    [NotifyPropertyChangedFor(nameof(IsSpendCapWarning))]
+    private string _spendCapText = string.Empty;
+
+    /// <summary>True when the hard stop will refuse this run; the card then reads as an error. A warning leaves Run allowed.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSpendCapWarning))]
+    private bool _isSpendCapBlocked;
+
+    public bool HasSpendCap => SpendCapText.Length > 0;
+
+    /// <summary>The card in its warning tone: shown, and Run stays allowed.</summary>
+    public bool IsSpendCapWarning => HasSpendCap && !IsSpendCapBlocked;
+
     public bool HasStatusMessage => StatusMessage.Length > 0;
 
     /// <summary>True once there is more than one pill: the page then says Run runs only the selected one (#515 will run them together).</summary>
@@ -1060,11 +1076,13 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             EstimateText = string.Empty;
             EstimateDiskText = string.Empty;
+            SetSpendCap(null);
             return;
         }
 
         string text;
         string diskText;
+        SpendCapStatus? cap = null;
         try
         {
             var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
@@ -1072,6 +1090,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
                 : string.Empty;
+            cap = await _estimates.CheckSpendCapAsync(result.Estimate?.MaxUsd, CancellationToken.None);
         }
         catch (Exception)
         {
@@ -1083,7 +1102,24 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             EstimateText = text;
             EstimateDiskText = diskText;
+            SetSpendCap(cap);
         }
+    }
+
+    private void SetSpendCap(SpendCapStatus? status)
+    {
+        if (status is not { Level: not SpendCapLevel.None, CapUsd: { } cap })
+        {
+            SpendCapText = string.Empty;
+            IsSpendCapBlocked = false;
+            return;
+        }
+
+        IsSpendCapBlocked = status.Level == SpendCapLevel.Blocked;
+        SpendCapText = Format(
+            IsSpendCapBlocked ? "NewRunSpendCapBlocked" : "NewRunSpendCapWarning",
+            Format("NewRunEstimateMoney", status.MonthToDateUsd.ToString("0.00", CultureInfo.InvariantCulture)),
+            Format("NewRunEstimateMoney", cap.ToString("0.00", CultureInfo.InvariantCulture)));
     }
 
     private void ClearEstimate()
@@ -1091,6 +1127,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Interlocked.Increment(ref _estimateVersion);
         EstimateText = string.Empty;
         EstimateDiskText = string.Empty;
+        SetSpendCap(null);
     }
 
     private string EstimateLine(CostEstimateResult result)

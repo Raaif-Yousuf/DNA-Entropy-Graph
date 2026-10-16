@@ -965,6 +965,56 @@ public sealed class NewRunViewModelTests : IDisposable
         (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.01, about 1 minute");
     }
 
+    private async Task<string> SpendCapTextWhen(Func<string, bool> done)
+    {
+        for (var i = 0; i < 200 && !done(_viewModel.SpendCapText); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        return _viewModel.SpendCapText;
+    }
+
+    [Fact]
+    public async Task A_warning_from_the_spend_gate_shows_the_cap_card_and_leaves_Run_allowed()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Warning, 8.0, 10.0)));
+
+        await AddOne(Write("w.fasta", ">a\n" + Dna + "\n"));
+
+        (await SpendCapTextWhen(t => t.Length > 0)).ShouldBe("NewRunSpendCapWarning:$8.00:$10.00");
+        _viewModel.HasSpendCap.ShouldBeTrue();
+        _viewModel.IsSpendCapBlocked.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_block_from_the_spend_gate_shows_the_blocked_card()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Blocked, 12.0, 10.0)));
+
+        await AddOne(Write("b.fasta", ">a\n" + Dna + "\n"));
+
+        (await SpendCapTextWhen(t => t.Length > 0)).ShouldBe("NewRunSpendCapBlocked:$12.00:$10.00");
+        _viewModel.IsSpendCapBlocked.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task No_cap_means_no_card()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.None, 1.0, null)));
+
+        await AddOne(Write("n.fasta", ">a\n" + Dna + "\n"));
+        await EstimateTextWhen(t => t.Length > 0);
+
+        _viewModel.HasSpendCap.ShouldBeFalse();
+    }
+
     [Fact]
     public async Task A_file_with_a_problem_has_no_estimate_and_the_service_is_not_asked()
     {
@@ -1555,6 +1605,8 @@ public sealed class NewRunViewModelTests : IDisposable
             ["NewRunEstimateNoSpotPrice"] = "No estimate: no Spot price for this machine yet",
             ["NewRunEstimateModelPoint"] = "Estimate: about {0}, about {1}, no earlier runs",
             ["NewRunEstimateStoppedDisk"] = "Stopped disk: about {0} a day",
+            ["NewRunSpendCapWarning"] = "NewRunSpendCapWarning:{0}:{1}",
+            ["NewRunSpendCapBlocked"] = "NewRunSpendCapBlocked:{0}:{1}",
         };
 
         public string GetString(string key) => Templates.GetValueOrDefault(key, key);
