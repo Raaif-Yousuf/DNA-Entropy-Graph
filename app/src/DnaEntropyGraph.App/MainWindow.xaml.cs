@@ -38,6 +38,7 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SystemBackdrop = new MicaBackdrop();
         SetTitleBar(AppTitleBar);
+        NavSelectionBinder.Attach(RootNavigationView, ViewModel);
         // The window's content root, not the NavigationView: the title bar and the Mica backdrop sit outside the NavigationView (#639).
         windowThemeApplier.Attach(RootGrid, AppWindow);
         windowThemeApplier.Apply(ThemeApplier.ReadTheme(settingsStore) ?? "System");

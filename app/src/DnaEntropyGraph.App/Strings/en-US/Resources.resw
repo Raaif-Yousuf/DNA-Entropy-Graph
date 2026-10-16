@@ -2240,4 +2240,13 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
     <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
   </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
 </root>
