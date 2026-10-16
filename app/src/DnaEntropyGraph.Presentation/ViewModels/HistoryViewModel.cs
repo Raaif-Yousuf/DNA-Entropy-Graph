@@ -201,9 +201,11 @@ public sealed partial class HistoryViewModel : ObservableObject
 
     private static bool Matches(RunRecord run, string text)
     {
-        var inputName = RunOptionsJson.TryDeserialize(run.OptionsJson)?.InputPath;
+        var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
+        var inputName = options?.InputPath;
         return Contains(run.Name, text) || Contains(run.JobId, text) || Contains(run.Notes, text)
-               || Contains(string.IsNullOrWhiteSpace(inputName) ? null : Path.GetFileName(inputName), text);
+               || Contains(string.IsNullOrWhiteSpace(inputName) ? null : Path.GetFileName(inputName), text)
+               || Contains(options?.Accession, text) || Contains(options?.AccessionRange, text);
 
         static bool Contains(string? haystack, string needle) => haystack?.Contains(needle, StringComparison.OrdinalIgnoreCase) == true;
     }
@@ -346,8 +348,9 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.RerunNoOptions;
             }
 
-            var input = await Task.Run(() => _local.FindRerunInput(run, options));
-            if (input is null)
+            // Issue #684: an accession run has no file; it starts again from the same accession.
+            var input = options.Accession is not null ? null : await Task.Run(() => _local.FindRerunInput(run, options));
+            if (input is null && options.Accession is null)
             {
                 return RunsCopy.RerunNoInput;
             }

@@ -54,6 +54,15 @@ public sealed record RunOptions
     /// </summary>
     public string? AnnotationPath { get; init; }
 
+    /// <summary>
+    /// An NCBI accession the worker fetches on the VM instead of a file (issue #684), already checked by <c>AccessionInput</c>. Manifest: <c>inputs[].accession</c>.
+    /// When set, <see cref="InputPath"/> and <see cref="AnnotationPath"/> are null: there is no file to copy or upload.
+    /// </summary>
+    public string? Accession { get; init; }
+
+    /// <summary>The <c>start-end</c> part of <see cref="Accession"/> to fetch (1-based, inclusive), or null for the whole record. Manifest: <c>inputs[].accessionRange</c>.</summary>
+    public string? AccessionRange { get; init; }
+
     /// <summary>Manifest: <c>inputs[].informat</c>. Default "Auto" (auto-detect, matching <see cref="Inputs.SequenceSniffer" />).</summary>
     public InputFormat Format { get; init; } = InputFormat.Auto;
 
@@ -146,6 +155,9 @@ public sealed record RunOptions
     /// in <see cref="OutputFiles" />.
     /// </summary>
     public TrackFormat TrackFormat { get; init; } = TrackFormat.BedGraph;
+
+    /// <summary>The centred window, in bases, of the GC-percent track (<see cref="OutputFileKinds.Gc"/>). Manifest: <c>analysis.gcWindow</c>, sent only when the GC output is chosen. Odd, 1 to 100001; default 51, the worker's own default (#688).</summary>
+    public int GcWindow { get; init; } = 51;
 
     /// <summary>Tokens: <c>{file} {date:yyyy-MM-dd} {time:HHmm} {model} {n}</c>. A name colliding with an existing local folder gets <c>_2</c> appended by <c>RunNamer</c>.</summary>
     public string NameTemplate { get; init; } = "{file}";
@@ -262,6 +274,8 @@ public enum OutputFileKinds
     GeneSummary = 1 << 10,
     Probs = 1 << 11,
     ProbsNpy = 1 << 12,
+    Gc = 1 << 13,
+    Codons = 1 << 14,
 
     /// <summary>
     /// FROZEN at the eight files that existed before issue #103. A stored run says "All" by name (the JSON converter writes a

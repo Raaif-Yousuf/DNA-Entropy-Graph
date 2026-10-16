@@ -47,6 +47,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
     private readonly OutputSelectionStore _outputStore;
     private readonly IDiagnosticsLog _log;
+    private readonly IAccessionLookup? _accessionLookup;
     private readonly IClipboardTextReader? _clipboard;
     private readonly Func<string, string, Topology, AnnotationCheckResult> _validateAnnotation;
     private bool _applyingPreset;
@@ -111,8 +112,12 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         PresetPickerViewModel? presets = null,
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
         bool? offerAnnotation = null,
+        bool? offerAccession = null,
+        IAccessionLookup? accessionLookup = null,
         RunTargetPickerViewModel? runTarget = null)
     {
+        OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
+        _accessionLookup = accessionLookup;
         RunTarget = runTarget;
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
@@ -172,6 +177,40 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     /// <summary>True while the worker the run starts on reads a paired GFF3 (<see cref="WorkerManifestSupport.Annotation"/>): only then does the page offer Add GFF3 and take a dropped GFF3.</summary>
     public bool OffersAnnotation { get; }
+
+    /// <summary>True while the worker the run starts on fetches an NCBI accession (<see cref="WorkerManifestSupport.Accession"/>): only then does the page offer the Fetch from NCBI box.</summary>
+    public bool OffersAccession { get; }
+
+    /// <summary>The accession typed in the Fetch from NCBI box (issue #684).</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(AddAccessionCommand))]
+    private string _accessionText = string.Empty;
+
+    /// <summary>Where in the record to start (1-based), or empty for the whole record.</summary>
+    [ObservableProperty]
+    private string _accessionStartText = string.Empty;
+
+    /// <summary>Where in the record to stop (inclusive), or empty for the whole record.</summary>
+    [ObservableProperty]
+    private string _accessionEndText = string.Empty;
+
+    /// <summary>What is wrong with the typed accession or range, with the one thing to do; empty when there is nothing to say.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAccessionMessage))]
+    private string _accessionMessage = string.Empty;
+
+    public bool HasAccessionMessage => AccessionMessage.Length > 0;
+
+    /// <summary>True while NCBI is being asked whether the typed record exists and fits (Hard Rule 2); the page shows a progress line and Add waits.</summary>
+    [ObservableProperty]
+    private bool _isCheckingAccession;
+
+    // A message is about what was typed when it was made: any edit makes it stale.
+    partial void OnAccessionTextChanged(string value) => AccessionMessage = string.Empty;
+
+    partial void OnAccessionStartTextChanged(string value) => AccessionMessage = string.Empty;
+
+    partial void OnAccessionEndTextChanged(string value) => AccessionMessage = string.Empty;
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -711,6 +750,92 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 
+    // Literal keys, so the wiring check (and a reader) can see every string a lookup problem can show.
+    private static string LookupProblemKey(AccessionLookupProblem problem) => problem switch
+    {
+        AccessionLookupProblem.NotFound => "NewRunAccessionLookup_NotFound",
+        AccessionLookupProblem.RangeOutsideRecord => "NewRunAccessionLookup_RangeOutsideRecord",
+        AccessionLookupProblem.TooLarge => "NewRunAccessionLookup_TooLarge",
+        AccessionLookupProblem.RateLimited => "NewRunAccessionLookup_RateLimited",
+        AccessionLookupProblem.NcbiTrouble => "NewRunAccessionLookup_NcbiTrouble",
+        AccessionLookupProblem.TimedOut => "NewRunAccessionLookup_TimedOut",
+        _ => "NewRunAccessionLookup_Unreachable",
+    };
+
+    private bool CanAddAccession() => OffersAccession && !string.IsNullOrWhiteSpace(AccessionText);
+
+    /// <summary>
+    /// Fetch from NCBI (issue #684): checks the typed accession and range with the worker's own rules (Hard Rule 2), and makes a pill the run
+    /// fetches on the VM. A problem stays in the box with one line to fix it; nothing is requested from NCBI on this PC.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanAddAccession))]
+    private async Task AddAccessionAsync()
+    {
+        var check = AccessionInput.Check(AccessionText, AccessionStartText, AccessionEndText);
+        if (check.Problem is { } problem)
+        {
+            AccessionMessage = _strings.GetString(problem switch
+            {
+                AccessionProblem.RangeIncomplete => "NewRunAccessionProblem_RangeIncomplete",
+                AccessionProblem.RangeInvalid => "NewRunAccessionProblem_RangeInvalid",
+                _ => "NewRunAccessionProblem_NotAnAccession",
+            });
+            return;
+        }
+
+        if (Items.Any(item => item.IsAccession && item.Accession == check.Accession && item.AccessionRange == check.Range))
+        {
+            AccessionMessage = _strings.GetString("NewRunAccessionAlreadyAdded");
+            return;
+        }
+
+        // Hard Rule 2: one small request to NCBI from this PC (the same one the run makes again before it starts), so a typo that happens to be a
+        // well-formed accession, or a record the worker will not read, is told here and not after a rented computer is billed. Its answer also gives
+        // the pill a length, which the cost estimate needs.
+        long? length = null;
+        if (_accessionLookup is not null)
+        {
+            AccessionMessage = string.Empty;
+            IsCheckingAccession = true;
+            try
+            {
+                var found = await _accessionLookup.LookupAsync(check.Accession, check.Range, CancellationToken.None);
+                if (found.Problem is { } lookupProblem)
+                {
+                    AccessionMessage = _strings.GetString(LookupProblemKey(lookupProblem));
+                    return;
+                }
+
+                length = found.Length;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _log.Warning("new-run", null, ErrorClass(exception));
+                AccessionMessage = _strings.GetString(LookupProblemKey(AccessionLookupProblem.Unreachable));
+                return;
+            }
+            finally
+            {
+                IsCheckingAccession = false;
+            }
+        }
+
+        var pill = InputPillItem.ForAccession(check.Accession, check.Range, _strings);
+        if (length is { } bases)
+        {
+            pill.ApplyAccessionLength(bases);
+        }
+
+        Items.Add(pill);
+        SelectedItem ??= pill;
+        AccessionText = string.Empty;
+        AccessionStartText = string.Empty;
+        AccessionEndText = string.Empty;
+        AccessionMessage = string.Empty;
+        RefreshOutputChoices();
+        StartRunCommand.NotifyCanExecuteChanged();
+    }
+
     [RelayCommand(CanExecute = nameof(CanRemoveItem), AllowConcurrentExecutions = true)]
     private async Task RemoveItemAsync(InputPillItem? item)
     {
@@ -753,8 +878,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             ModelId = DefaultModelId,
             RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
-            InputPath = SelectedItem!.Path,
+            InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
             AnnotationPath = SelectedItem.AnnotationPath,
+            Accession = SelectedItem.Accession,
+            AccessionRange = SelectedItem.AccessionRange,
             TreatAsRna = IsTreatingAsRna,
             Direction = Presets?.Direction ?? Direction.BothCombined,
             ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
@@ -812,7 +939,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
         IsTreatingAsRna = value;
-        foreach (var item in Items.ToList())
+        foreach (var item in Items.Where(i => !i.IsAccession).ToList())
         {
             if (cancellationToken.IsCancellationRequested)
             {
