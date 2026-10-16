@@ -162,19 +162,9 @@ public sealed record RunOptions
     /// <summary>Boot disk size for the VM. Not sent to the worker manifest; consumed by <c>VmSpec</c>.</summary>
     public int BootDiskGb { get; init; } = 150;
 
-    // ---- Local / notifications (Appendix A section 2.3's "Advanced - Output and notifications", finer-grained than spec 4.3's 3-item "Local" row) ----
-
-    /// <summary>Open the igv.js viewer automatically once a run finishes. Default On (spec 4.3's "open results").</summary>
-    public bool OpenViewerWhenDone { get; init; } = true;
-
-    /// <summary>Show a toast notification once a run finishes. Default On (spec 4.3's "Notify when done").</summary>
-    public bool ToastWhenDone { get; init; } = true;
-
-    /// <summary>Open the output folder in Explorer once a run finishes. Default Off.</summary>
-    public bool OpenFolderWhenDone { get; init; }
-
-    /// <summary>Play a sound once a run finishes. Default Off.</summary>
-    public bool PlaySoundWhenDone { get; init; }
+    // ---- Local ----
+    // The "when a run finishes" switches (toast, open folder, open results) are NOT run options: they are app settings
+    // (Presentation/Services/NotificationSettings, issue #643) and were removed from here as dead duplicates.
 
     /// <summary>
     /// Copy the worker log into the output folder as well as the app-data copy that is

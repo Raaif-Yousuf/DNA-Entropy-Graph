@@ -145,4 +145,7 @@ public sealed class ResilientQuotaGateway : IQuotaGateway
 
     public Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Quota.GetGpuQuota", token => _inner.GetGpuQuotaAsync(projectId, region, acceleratorType, token), cancellationToken);
+
+    public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Quota.ReadQuota", token => _inner.ReadQuotaAsync(projectId, token), cancellationToken);
 }

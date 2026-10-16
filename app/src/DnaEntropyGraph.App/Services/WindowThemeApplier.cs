@@ -34,7 +34,9 @@ public sealed class WindowThemeApplier : IThemeApplier
         if (_titleBar is not null)
         {
             // A null palette (follow the system) resets every colour to the system default.
-            var palette = CaptionButtonPalette.For(resolved);
+            // Issue #110: under a Windows high contrast theme the system's own caption colours are the readable ones;
+            // the fixed black or white palette would sit on a background of the user's choosing, so it is not applied.
+            var palette = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? null : CaptionButtonPalette.For(resolved);
             _titleBar.ButtonForegroundColor = palette?.Foreground;
             _titleBar.ButtonHoverForegroundColor = palette?.Foreground;
             _titleBar.ButtonPressedForegroundColor = palette?.Foreground;

@@ -1,0 +1,1 @@
+- docs: NEXT_SESSION.md hands off the 2026-10-15 wave (landing queue order, #740, measured lessons, owner asks).

@@ -70,4 +70,12 @@ internal sealed class CloudRunSettings
     /// <see cref="CallTimeout"/>, so it gets 5 minutes. Abandoning it earlier would leave the gateway writing policies after the run failed.
     /// </summary>
     public TimeSpan WorkerIdentityTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// The budget for the whole quota read (#88): <c>regions.list</c> (one request per page) and <c>projects.get</c> in one gateway method,
+    /// each request with its own per-attempt cut and retries inside the pipeline, which is more than the 60 s <see cref="CallTimeout"/> allows.
+    /// THEORY (unverified, sized from the pipeline's worst case, not measured): two to three requests of up to 165 s each in the worst case, and
+    /// seconds in a healthy one, so 5 minutes. A read cut here is UNKNOWN (a network failure), and preflight proceeds (docs/cloud_design.md section 6.2).
+    /// </summary>
+    public TimeSpan QuotaReadTimeout { get; set; } = TimeSpan.FromMinutes(5);
 }
