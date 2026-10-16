@@ -117,11 +117,6 @@
         "notices": [
           "Read 1 record(s) with 2 gene feature(s) from the GenBank (not re-annotated)."
         ]
-      },
-      "csharp_divergence": {
-        "notices": [],
-        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
-        "issue": 689
       }
     },
     {
@@ -141,13 +136,6 @@
         "notices": [
           "Read 2 record(s) with 3 gene feature(s) from the GenBank (not re-annotated)."
         ]
-      },
-      "csharp_divergence": {
-        "notices": [
-          "Read 2 record(s) with 3 gene/CDS feature(s) from the GenBank (not re-annotated)."
-        ],
-        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
-        "issue": 689
       }
     },
     {
@@ -164,13 +152,6 @@
           "Skipped GenBank record 1 (id 9 chars): no nucleotide sequence.",
           "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
         ]
-      },
-      "csharp_divergence": {
-        "notices": [
-          "Skipped GenBank record 1 (locus 9 chars): no nucleotide sequence."
-        ],
-        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
-        "issue": 689
       }
     },
     {
@@ -187,13 +168,13 @@
           "Skipped GenBank record 1 (id 3 chars): no nucleotide sequence.",
           "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
         ]
-      },
-      "csharp_divergence": {
-        "notices": [
-          "Skipped GenBank record 1 (locus 3 chars): no nucleotide sequence."
-        ],
-        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
-        "issue": 689
+      }
+    },
+    {
+      "id": "every_record_without_a_sequence",
+      "text": "LOCUS       empty_one   0 bp\nORIGIN\n//\n",
+      "python": {
+        "error": "The GenBank file has no records with a nucleotide sequence (a truncated or sequence-less export). Re-export the file from the tool that made it, with its sequence included."
       }
     },
     {
@@ -201,11 +182,6 @@
       "text": "DEFINITION  no locus line at all.\nFEATURES             Location/Qualifiers\nORIGIN\n        1 acgtn\n//\n",
       "python": {
         "error": "No GenBank records found in the file."
-      },
-      "csharp_divergence": {
-        "error": "No GenBank records with a nucleotide sequence found (expected a LOCUS/ORIGIN block).",
-        "reason": "GenBankLite names the action in its own words; Biopython finds no records and the worker says so.",
-        "issue": 689
       }
     },
     {
@@ -213,11 +189,6 @@
       "text": "LOCUS       trunc    10 bp    DNA\nFEATURES             Location/Qualifiers\n     gene            1..5\n                     /gene=",
       "python": {
         "error": "Could not parse the GenBank file (record 1): Premature end of line during features table. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
-      },
-      "csharp_divergence": {
-        "error": "Could not parse the GenBank file (record 1): the feature table ends before the sequence starts (a truncated file). Check the file was not truncated or hand-edited, then re-export it from the tool that made it.",
-        "reason": "GenBankLite validates the feature table itself and words the cause in its own terms; Biopython's text is its scanner's.",
-        "issue": 689
       }
     },
     {
@@ -225,11 +196,6 @@
       "text": "LOCUS       nosource    5 bp    DNA\nDEFINITION  no origin block.\nFEATURES             Location/Qualifiers\n     gene            1..5\n                     /gene=\"x\"\n//\n",
       "python": {
         "error": "Could not parse the GenBank file (record 1): Premature end of features table, marker '//' found. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
-      },
-      "csharp_divergence": {
-        "error": "Could not parse the GenBank file (record 1): the feature table ends with the record terminator before the sequence starts. Check the file was not truncated or hand-edited, then re-export it from the tool that made it.",
-        "reason": "Same as truncated_mid_feature_table: GenBankLite's own wording for the same refusal.",
-        "issue": 689
       }
     }
   ]

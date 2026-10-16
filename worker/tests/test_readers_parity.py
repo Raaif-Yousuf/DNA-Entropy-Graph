@@ -74,7 +74,7 @@ def test_read_genbank_matches_the_fixture(case: dict, tmp_path: Path) -> None:
 
 def test_every_csharp_divergence_names_a_reason_and_a_tracking_issue() -> None:
     blocks = [c["csharp_divergence"] for c in DATA["genbank_cases"] if "csharp_divergence" in c]
-    assert blocks, "the divergences recorded for GenBankLite vanished from the fixture"
+    # Zero is the goal state (#689): every remaining block must still say why and name its issue.
     for block in blocks:
         assert block["reason"].strip()
         assert isinstance(block["issue"], int)

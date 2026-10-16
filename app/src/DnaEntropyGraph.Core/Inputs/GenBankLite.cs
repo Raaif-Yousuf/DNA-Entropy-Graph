@@ -113,7 +113,7 @@ public static class GenBankLite
             // `not seq or set(seq.upper()) <= {"N"}`): a placeholder, not data.
             if (recSeq.Length == 0 || recSeq.All(c => c == 'N'))
             {
-                notices.Add($"Skipped GenBank record {recordIndex} (locus {PrivacySafeText.DescribeLen(locusName)}): no nucleotide sequence.");
+                notices.Add($"Skipped GenBank record {recordIndex} (id {PrivacySafeText.DescribeLen(locusName)}): no nucleotide sequence.");
                 coded.Add(new InputNotice(InputNoticeCode.GenBankRecordSkippedNoSequence, recordIndex));
             }
             else
@@ -259,15 +259,17 @@ public static class GenBankLite
 
         if (records.Count == 0)
         {
-            throw new GenBankReadException("No GenBank records with a nucleotide sequence found (expected a LOCUS/ORIGIN block).");
+            // readers/genbank.py: no LOCUS record at all, or every record skipped for want of a sequence. Same words, #689.
+            throw new GenBankReadException(recordIndex == 0
+                ? "No GenBank records found in the file."
+                : "The GenBank file has no records with a nucleotide sequence (a truncated or sequence-less export). "
+                  + "Re-export the file from the tool that made it, with its sequence included.");
         }
 
-        if (records.Count > 1)
-        {
-            var totalFeatures = records.Sum(r => r.GeneCount + r.CdsCount);
-            notices.Add($"Read {records.Count} record(s) with {totalFeatures} gene/CDS feature(s) from the GenBank (not re-annotated).");
-            coded.Add(new InputNotice(InputNoticeCode.GenBankRead, records.Count, totalFeatures));
-        }
+        // The worker counts the features it maps: a record's gene features, else its CDS features (records_from_parsed).
+        var totalFeatures = records.Sum(r => r.GeneCount > 0 ? r.GeneCount : r.CdsCount);
+        notices.Add($"Read {records.Count} record(s) with {totalFeatures} gene feature(s) from the GenBank (not re-annotated).");
+        coded.Add(new InputNotice(InputNoticeCode.GenBankRead, records.Count, totalFeatures));
 
         return new GenBankLiteResult(records, notices) { NoticeCodes = coded };
     }

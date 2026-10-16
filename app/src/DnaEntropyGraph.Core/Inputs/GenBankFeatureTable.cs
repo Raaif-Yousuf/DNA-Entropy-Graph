@@ -67,7 +67,7 @@ internal static class GenBankFeatureTable
 
         while (true)
         {
-            var raw = Raw(index) ?? throw Refuse(recordNumber, "the feature table ends before the sequence starts (a truncated file)");
+            var raw = Raw(index) ?? throw RefuseLikeWorker(recordNumber, "Premature end of line during features table");
             if (IsSequenceHeader(raw))
             {
                 return features;
@@ -75,7 +75,7 @@ internal static class GenBankFeatureTable
             var line = PythonText.TrimEnd(raw);
             if (line == "//")
             {
-                throw Refuse(recordNumber, "the feature table ends with the record terminator before the sequence starts");
+                throw RefuseLikeWorker(recordNumber, "Premature end of features table, marker '//' found");
             }
             if (PythonText.Trim(Slice(line, 2, QualifierIndent)).Length == 0)
             {
@@ -208,6 +208,5 @@ internal static class GenBankFeatureTable
     public static GenBankReadException RefuseLikeWorker(int recordNumber, string biopythonReason) =>
         new($"Could not parse the GenBank file (record {recordNumber}): {biopythonReason}. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES.");
 
-    private static GenBankReadException Refuse(int recordNumber, string reason) =>
-        new($"Could not parse the GenBank file (record {recordNumber}): {reason}. Check the file was not truncated or hand-edited, then re-export it from the tool that made it.");
+    private static GenBankReadException Refuse(int recordNumber, string reason) => RefuseLikeWorker(recordNumber, reason);
 }
