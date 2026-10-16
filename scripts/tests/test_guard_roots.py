@@ -26,14 +26,18 @@ SKIPPED = {
 
 GUARDS = sorted(p.name for p in SCRIPTS_DIR.glob("check_*.py"))
 
-NOTHING_PHRASES = ("checked nothing", "does not exist", "not found", "not a git repository",
-                   "does not look like this repo", "no .git")
+NOTHING_PHRASES = ("checked nothing", "does not exist", "not found", "not a git repository", "does not look like this repo", "no .git")
 
 
 def _run(script: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / script)],
-        cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
     )
 
 
@@ -51,15 +55,13 @@ def test_guard_scans_its_own_repo_from_a_foreign_cwd(script: str, tmp_path: Path
     home = _run(script, REPO_ROOT)
     away = _run(script, foreign)
 
-    out_away = (away.stdout + away.stderr)
-    out_home = (home.stdout + home.stderr)
+    out_away = away.stdout + away.stderr
+    out_home = home.stdout + home.stderr
     low = out_away.lower()
     for phrase in NOTHING_PHRASES:
         assert phrase not in low, f"{script} from a foreign cwd says {phrase!r}:\n{out_away}"
     assert str(foreign).lower() not in low, f"{script} mentions the foreign cwd:\n{out_away}"
-    assert out_away == out_home, (
-        f"{script}: output differs by cwd\n--- foreign:\n{out_away}\n--- home:\n{out_home}"
-    )
+    assert out_away == out_home, f"{script}: output differs by cwd\n--- foreign:\n{out_away}\n--- home:\n{out_home}"
     assert away.returncode == home.returncode, (
         f"{script}: exit {away.returncode} from a foreign cwd vs {home.returncode} at the repo root\n"
         f"--- foreign:\n{out_away}\n--- home:\n{out_home}"
