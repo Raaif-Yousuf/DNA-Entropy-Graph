@@ -38,14 +38,22 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <ComboBox
-                x:Name="ContigSelector"
-                x:Uid="ViewerContigSelector"
-                MinWidth="240"
-                ItemsSource="{x:Bind ViewModel.Contigs}"
-                SelectedItem="{x:Bind ViewModel.SelectedContig, Mode=TwoWay}"
-                DisplayMemberPath="Name"
-                Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasContigs), Mode=OneWay}" />
+            <StackPanel
+                Orientation="Horizontal"
+                Spacing="8"
+                Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasContigs), Mode=OneWay}">
+                <ComboBox
+                    x:Name="ContigSelector"
+                    x:Uid="ViewerContigSelector"
+                    MinWidth="240"
+                    ItemsSource="{x:Bind ViewModel.Contigs}"
+                    SelectedItem="{x:Bind ViewModel.SelectedContig, Mode=TwoWay}"
+                    DisplayMemberPath="Name" />
+                <Button
+                    x:Uid="ViewerContigGo"
+                    VerticalAlignment="Bottom"
+                    Command="{x:Bind ViewModel.GoToContigCommand}" />
+            </StackPanel>
             <wv2:WebView2
                 x:Name="Viewer"
                 Grid.Row="1" />

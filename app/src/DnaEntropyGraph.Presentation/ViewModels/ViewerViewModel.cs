@@ -107,9 +107,26 @@ public sealed partial class ViewerViewModel : ObservableObject
     partial void OnSelectedContigChanged(ViewerContig? value)
     {
         // Only a choice made by the user while the page is drawn is a goto; filling the list is not.
-        if (!_settingSelection && value is not null && _pageReady && Status == ViewerStatus.Ready)
+        GoToContigCommand.NotifyCanExecuteChanged();
+        if (!_settingSelection)
         {
-            Send(new { cmd = "goto", locus = value.Name });
+            GoToSelectedContig();
+        }
+    }
+
+    /// <summary>Jumps to the selected record again (the list sends no change when the same record is picked after panning away).</summary>
+    [RelayCommand(CanExecute = nameof(CanGoToContig))]
+    private void GoToContig() => GoToSelectedContig();
+
+    private bool CanGoToContig() => SelectedContig is not null && _pageReady && Status == ViewerStatus.Ready;
+
+    private void GoToSelectedContig()
+    {
+        if (SelectedContig is { } contig && _pageReady && Status == ViewerStatus.Ready)
+        {
+            // An explicit range: a record named like a locus ("a:1-5") must not be parsed as one.
+            var locus = contig.Length > 0 ? $"{contig.Name}:1-{contig.Length}" : contig.Name;
+            Send(new { cmd = "goto", locus });
         }
     }
 
@@ -121,6 +138,7 @@ public sealed partial class ViewerViewModel : ObservableObject
             if (SetProperty(ref _status, value))
             {
                 RetryCommand.NotifyCanExecuteChanged();
+                GoToContigCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -211,8 +229,10 @@ public sealed partial class ViewerViewModel : ObservableObject
         {
             contigs = (await Task.Run(() => _overviewSource.Load(folder)))?.Contigs ?? [];
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Fire-and-forget: a malformed track (FormatException ...) must not fault the task unseen.
+            // The viewer itself still draws the run; only the selector and seam markers are lost.
             contigs = [];
         }
 

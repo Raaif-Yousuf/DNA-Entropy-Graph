@@ -132,7 +132,7 @@ reads your results from the folder on your computer. It follows the app's light 
 theme.
 
 If your file holds more than one sequence record, a **Sequence record** list appears above
-the viewer. Choose a record and the viewer jumps straight to it. For a run that read both
+the viewer. Choose a record and the viewer jumps straight to it; if you have scrolled away, press **Go to record** to jump back to the one that is chosen. For a run that read both
 directions and combined them, the viewer also marks the seam (see above) with a thin red
 band at that base on each record; point at it to read what it means. A run that has no
 seam shows no marker.

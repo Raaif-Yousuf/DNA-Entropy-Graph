@@ -82,19 +82,68 @@ public sealed class ViewerContigTests : IDisposable
         vm.SelectedContig = vm.Contigs[1];
 
         var gotoCmd = Sent("goto").ShouldHaveSingleItem();
-        gotoCmd.GetProperty("locus").GetString().ShouldBe("b");
+        // An explicit range, so igv cannot read a record named like a locus ("a:1-5") as one.
+        gotoCmd.GetProperty("locus").GetString().ShouldBe("b:1-200");
     }
 
     [Fact]
-    public async Task Choosing_a_contig_before_the_viewer_is_ready_sends_nothing()
+    public async Task Goto_for_a_record_named_like_a_locus_still_carries_the_explicit_range()
+    {
+        var vm = await ReadyViewer(Contig("x", 10), Contig("a:1-5", 50));
+
+        vm.SelectedContig = vm.Contigs[1];
+
+        Sent("goto").ShouldHaveSingleItem().GetProperty("locus").GetString().ShouldBe("a:1-5:1-50");
+    }
+
+    [Fact]
+    public async Task Choosing_a_contig_before_the_page_is_ready_sends_nothing_but_the_same_choice_works_once_loaded()
     {
         var vm = Make(Contig("a", 100), Contig("b", 200));
         vm.OpenRun(_dir);
         await vm.ContigsReady;
 
         vm.SelectedContig = vm.Contigs[1];
-
         _sent.ShouldBeEmpty();
+        vm.GoToContigCommand.CanExecute(null).ShouldBeFalse();
+
+        vm.OnViewerMessage(ReadyMsg);
+        _sent.Select(Root).Select(r => r.GetProperty("cmd").GetString()).ShouldBe(["load"]);
+        vm.SelectedContig = vm.Contigs[0];
+        vm.SelectedContig = vm.Contigs[1];
+        Sent("goto").ShouldBeEmpty();
+
+        vm.OnViewerMessage(LoadedMsg);
+        vm.SelectedContig = vm.Contigs[1];
+        Sent("goto").ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task The_go_command_sends_goto_again_for_the_already_selected_record()
+    {
+        var vm = await ReadyViewer(Contig("a", 100), Contig("b", 200));
+        vm.SelectedContig = vm.Contigs[1];
+        _sent.Clear();
+
+        vm.GoToContigCommand.CanExecute(null).ShouldBeTrue();
+        vm.GoToContigCommand.Execute(null);
+
+        Sent("goto").ShouldHaveSingleItem().GetProperty("locus").GetString().ShouldBe("b:1-200");
+    }
+
+    [Fact]
+    public async Task A_malformed_track_hides_the_selector_instead_of_faulting()
+    {
+        _overview.Load(Arg.Any<string>()).Returns(_ => throw new FormatException("bad number"));
+        var vm = new ViewerViewModel(_probe, _strings, _overview);
+        vm.OpenRun(_dir);
+
+        await vm.ContigsReady;
+
+        vm.ContigsReady.IsFaulted.ShouldBeFalse();
+        vm.HasContigs.ShouldBeFalse();
+        vm.Contigs.ShouldBeEmpty();
+        vm.Status.ShouldBe(ViewerStatus.Loading);
     }
 
     [Fact]
