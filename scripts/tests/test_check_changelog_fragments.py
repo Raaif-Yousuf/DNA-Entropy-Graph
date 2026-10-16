@@ -15,7 +15,9 @@ import check_changelog_fragments as ccf  # noqa: E402
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_changelog_fragments.py"), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -24,7 +26,9 @@ def test_self_test_passes():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_changelog_fragments.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
 
@@ -119,8 +123,15 @@ def test_docs_and_tests_only_changes_need_no_fragment(path):
 
 @pytest.mark.parametrize(
     "path",
-    ["worker/src/a.py", "worker/vm/startup.sh", "app/src/A/B.cs", "scripts/check_x.py", ".github/workflows/ci.yml",
-     "worker/pyproject.toml", "scripts/app_wiring_allowlist.json"],
+    [
+        "worker/src/a.py",
+        "worker/vm/startup.sh",
+        "app/src/A/B.cs",
+        "scripts/check_x.py",
+        ".github/workflows/ci.yml",
+        "worker/pyproject.toml",
+        "scripts/app_wiring_allowlist.json",
+    ],
 )
 def test_behaviour_paths_require_a_fragment(path):
     assert ccf.missing_fragment([("A", path)]) is not None
@@ -159,7 +170,10 @@ def test_base_mode_names_the_missing_fragment_end_to_end(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_changelog_fragments.py"), "--root", str(tmp_path), "--base", "main"],
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert proc.returncode == 1
     assert "worker/src/a.py" in proc.stderr
@@ -170,6 +184,9 @@ def test_base_mode_with_an_unknown_ref_is_a_usage_error_not_a_pass(tmp_path):
     _git(tmp_path, "init", "-q", "-b", "main")
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_changelog_fragments.py"), "--root", str(tmp_path), "--base", "nope/ref"],
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert proc.returncode == 2

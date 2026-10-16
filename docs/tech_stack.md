@@ -30,7 +30,7 @@ row under Worker below**, and `DECISION` issue #301.
 | CommunityToolkit.Mvvm | MIT | `[ObservableProperty]`, `[RelayCommand]` source generators | THEORY (unverified this session; well-known licence, per `CLAUDE.md`'s Stack table) |
 | Microsoft.Extensions.DependencyInjection | MIT | DI container | THEORY (unverified) |
 | igv.js | MIT | Embedded genome viewer, inside WebView2 | THEORY (unverified) |
-| ScottPlot.WinUI | MIT | Overview chart | THEORY (unverified) |
+| ScottPlot.WinUI | MIT | Overview chart | MEASURED 2026-10-15: 5.1.59 restores and builds against Windows App SDK 1.8 / net10.0-windows (issue #118), and its SkiaSharp natives draw a PNG headless in `App.UiTests`; on-screen rendering in a real window is unproven (ToTest #118) |
 | Google.Cloud.* / Google.Apis.Auth | Apache-2.0 | Every real Google Cloud call, confined to `DnaEntropyGraph.Cloud` (Hard Rule 7) | THEORY (unverified) |
 | Velopack | MIT | Installer / self-update | THEORY (unverified) |
 | Microsoft.Data.Sqlite + Dapper | MIT / Apache-2.0 | Run history | THEORY (unverified) |

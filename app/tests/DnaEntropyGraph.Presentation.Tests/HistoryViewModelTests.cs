@@ -49,6 +49,20 @@ public sealed class HistoryViewModelTests
     private static RunRecord Row(string id, JobPhase phase = JobPhase.Completed, DateTimeOffset? created = null, string? name = null, string? outputDir = null, string? options = null, string? notes = null)
         => new(id, phase, created ?? Now.AddHours(-1), Name: name, OutputDir: outputDir, OptionsJson: options ?? "{}", Notes: notes, Bucket: "b", JobPrefix: $"jobs/{id}/");
 
+    [Fact]
+    public async Task A_run_started_from_a_preset_shows_its_name_on_the_card_and_a_hand_set_run_shows_none()
+    {
+        _strings.GetString(RunsCopy.PresetLine).Returns("Preset: {0}");
+        var options = DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(
+            DnaEntropyGraph.Core.Presets.BuiltInPresets.PlasmidQc.ApplyTo(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }));
+
+        var vm = await Loaded(Row("preset", options: options), Row("plain"));
+
+        Item(vm, "preset").PresetText.ShouldBe("Preset: Plasmid QC");
+        Item(vm, "preset").HasPreset.ShouldBeTrue();
+        Item(vm, "plain").HasPreset.ShouldBeFalse();
+    }
+
     private async Task<HistoryViewModel> Loaded(params RunRecord[] rows)
     {
         _rows = [.. rows];
@@ -554,6 +568,36 @@ public sealed class HistoryViewModelTests
 
         await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
         _toasts.Received(1).ShowToast("Runs_Rerun_NoOptions_Title", "Runs_Rerun_NoOptions_Body", ToastSeverity.Warning);
+    }
+
+    [Fact]
+    public async Task Rerun_of_a_paired_run_carries_the_gff3_the_app_kept()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\gone\in.fasta", AnnotationPath = @"C:\gone\in.gff3" };
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\input\in.fasta");
+        _local.FindRerunAnnotation(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\annotation\in.gff3");
+        _engine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns("new-job");
+        var vm = await Loaded(Row("a", options: RunOptionsJson.Serialize(recorded)));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
+
+        await _engine.Received(1).StartRunAsync(
+            recorded with { InputPath = @"C:\app\runs\a\input\in.fasta", AnnotationPath = @"C:\app\runs\a\annotation\in.gff3" },
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Rerun_of_a_paired_run_whose_gff3_is_gone_does_not_start_without_it()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", AnnotationPath = @"C:\gone\in.gff3" };
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\input\in.fasta");
+        _local.FindRerunAnnotation(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns((string?)null);
+        var vm = await Loaded(Row("a", options: RunOptionsJson.Serialize(recorded)));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
+
+        await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body", ToastSeverity.Warning);
     }
 
     [Fact]
