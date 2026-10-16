@@ -127,12 +127,13 @@ MIRROR_DIR = REPO_ROOT / ".claude" / "memory"
 # come in.
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass(frozen=True)
 class SecretPattern:
-    name: str            # short, stable id -- printed in the refusal message
-    category: str        # one of the categories issue #273 / Appendix C section 4 names
+    name: str  # short, stable id -- printed in the refusal message
+    category: str  # one of the categories issue #273 / Appendix C section 4 names
     pattern: re.Pattern[str]
-    why: str             # one line: what this is and why it must never be pushed
+    why: str  # one line: what this is and why it must never be pushed
 
 
 SECRET_PATTERNS: tuple[SecretPattern, ...] = (
@@ -260,9 +261,7 @@ def find_secrets(text: str) -> list[SecretMatch]:
         for spec in SECRET_PATTERNS:
             m = spec.pattern.search(line)
             if m:
-                matches.append(
-                    SecretMatch(spec.name, spec.category, spec.why, i, _redact(m.group(0)))
-                )
+                matches.append(SecretMatch(spec.name, spec.category, spec.why, i, _redact(m.group(0))))
     return matches
 
 
@@ -399,11 +398,7 @@ def find_live_dir() -> pathlib.Path | None:
     # since macOS slugs preserve case and a Windows drive prefix will not match
     # a full-path comparison anyway.
     want = REPO_ROOT.name.lower()
-    candidates = [
-        d / "memory"
-        for d in sorted(projects.iterdir())
-        if d.is_dir() and (d / "memory").is_dir() and d.name.lower().endswith(want)
-    ]
+    candidates = [d / "memory" for d in sorted(projects.iterdir()) if d.is_dir() and (d / "memory").is_dir() and d.name.lower().endswith(want)]
     return candidates[0] if len(candidates) == 1 else None
 
 
@@ -466,9 +461,7 @@ def run(
         print("sync_memory: no live auto-memory directory for this repo on this machine; nothing to do")
         return 0
 
-    src, dst, label = (
-        (MIRROR_DIR, live, "mirror -> live") if direction == "pull" else (live, MIRROR_DIR, "live -> mirror")
-    )
+    src, dst, label = (MIRROR_DIR, live, "mirror -> live") if direction == "pull" else (live, MIRROR_DIR, "live -> mirror")
     if not src.is_dir():
         print(f"sync_memory: source {src} does not exist; nothing to do")
         return 0
@@ -515,8 +508,10 @@ def run(
         print(f"sync_memory [{'dry-run' if dry_run and apply_changes else 'status'}] {label}")
         print(f"  live   : {live}")
         print(f"  mirror : {MIRROR_DIR}")
-        print(f"  new={len(new)} changed={len(changed)} only-in-destination={len(only_dst)}"
-              f"{f' personal-skipped={len(personal_skipped)} flagged={len(flagged)}' if direction == 'push' else ''}")
+        print(
+            f"  new={len(new)} changed={len(changed)} only-in-destination={len(only_dst)}"
+            f"{f' personal-skipped={len(personal_skipped)} flagged={len(flagged)}' if direction == 'push' else ''}"
+        )
         for n in new:
             marker = _status_marker(n, personal_skipped, flagged)
             print(f"    new      {n}{marker}")
@@ -526,8 +521,10 @@ def run(
         for n in only_dst:
             print(f"    dst-only {n}   (never deleted automatically)")
         if memory_index_touched:
-            print(f"    {MEMORY_INDEX_FILENAME}: excluded from sync (hand-written index of this "
-                  "repo's own lesson files; not the same document as the session-memory index)")
+            print(
+                f"    {MEMORY_INDEX_FILENAME}: excluded from sync (hand-written index of this "
+                "repo's own lesson files; not the same document as the session-memory index)"
+            )
         if personal_skipped:
             print(f"\n  {verb}skip {len(personal_skipped)} personal file(s):")
             _print_skipped_personal(personal_skipped)
@@ -541,12 +538,13 @@ def run(
         _print_skipped_personal(personal_skipped)
 
     if memory_index_touched:
-        print(f"sync_memory: {MEMORY_INDEX_FILENAME} excluded from sync (hand-written index of "
-              "this repo's own lesson files; not the same document as the session-memory index)")
+        print(
+            f"sync_memory: {MEMORY_INDEX_FILENAME} excluded from sync (hand-written index of "
+            "this repo's own lesson files; not the same document as the session-memory index)"
+        )
 
     if flagged and not allow_flagged_skip:
-        print(f"sync_memory: REFUSING to push -- {len(flagged)} file(s) look like they contain a secret:",
-              file=sys.stderr)
+        print(f"sync_memory: REFUSING to push -- {len(flagged)} file(s) look like they contain a secret:", file=sys.stderr)
         _print_flagged(flagged)
         print(
             "\nNothing was copied. Remove the flagged content (or move it out of "
@@ -583,7 +581,9 @@ def run(
 
 
 def _status_marker(
-    name: str, personal_skipped: dict[str, str], flagged: dict[str, list[SecretMatch]],
+    name: str,
+    personal_skipped: dict[str, str],
+    flagged: dict[str, list[SecretMatch]],
 ) -> str:
     if name in personal_skipped:
         return f"  (PERSONAL, skipped: {personal_skipped[name]})"
@@ -646,8 +646,7 @@ def self_test() -> bool:
         ok = False
         print(f"FAIL  duplicate pattern name(s) in SECRET_PATTERNS: {names}")
 
-    print(f"\n{'PASS' if ok else 'FAIL'}: {len(_SELF_TEST_CASES)} case(s), "
-          f"{len(SECRET_PATTERNS)} pattern(s) registered")
+    print(f"\n{'PASS' if ok else 'FAIL'}: {len(_SELF_TEST_CASES)} case(s), {len(SECRET_PATTERNS)} pattern(s) registered")
     return ok
 
 
@@ -657,19 +656,24 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--pull", action="store_true", help="mirror -> live (SessionStart)")
     g.add_argument("--push", action="store_true", help="live -> mirror, secret-scanned (Stop)")
     g.add_argument("--status", action="store_true", help="report drift both ways, change nothing")
-    g.add_argument("--self-test", action="store_true",
-                    help="run the secret scanner against its own fixtures and exit")
-    g.add_argument("--list-patterns", action="store_true",
-                    help="print every registered secret pattern and exit")
-    ap.add_argument("--dry-run", action="store_true",
-                     help="with --push or --pull: report what would happen (including which "
-                          "files a push would refuse) without writing anything")
-    ap.add_argument("--allow-flagged-skip", action="store_true",
-                     help="with --push: copy every clean file and skip only the flagged one(s), "
-                          "instead of the default of refusing the whole push")
-    ap.add_argument("--include-personal", action="store_true",
-                     help="with --push: also publish user/feedback memory (personal notes) that "
-                          "would otherwise be skipped -- a deliberate, one-time exception, per issue #302")
+    g.add_argument("--self-test", action="store_true", help="run the secret scanner against its own fixtures and exit")
+    g.add_argument("--list-patterns", action="store_true", help="print every registered secret pattern and exit")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --push or --pull: report what would happen (including which files a push would refuse) without writing anything",
+    )
+    ap.add_argument(
+        "--allow-flagged-skip",
+        action="store_true",
+        help="with --push: copy every clean file and skip only the flagged one(s), instead of the default of refusing the whole push",
+    )
+    ap.add_argument(
+        "--include-personal",
+        action="store_true",
+        help="with --push: also publish user/feedback memory (personal notes) that "
+        "would otherwise be skipped -- a deliberate, one-time exception, per issue #302",
+    )
     args = ap.parse_args(argv)
 
     if args.list_patterns:

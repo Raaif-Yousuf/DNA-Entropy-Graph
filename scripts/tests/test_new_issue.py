@@ -24,7 +24,9 @@ pytestmark = pytest.mark.skipif(PWSH is None, reason="pwsh (PowerShell 7+) not f
 def _run(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(
         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT), *args],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -53,11 +55,16 @@ def test_missing_done_when_is_a_usage_error():
 
 def test_dry_run_prints_the_full_template_and_files_nothing():
     proc = _run(
-        "-Title", "scripts: example",
-        "-Why", "Users cannot do the thing.",
-        "-DoneWhen", "a runs shows the thing",
-        "-Observable", "the history row",
-        "-Labels", "P3,area:docs",
+        "-Title",
+        "scripts: example",
+        "-Why",
+        "Users cannot do the thing.",
+        "-DoneWhen",
+        "a runs shows the thing",
+        "-Observable",
+        "the history row",
+        "-Labels",
+        "P3,area:docs",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "[dry-run]" in proc.stdout
@@ -78,8 +85,14 @@ def test_dry_run_defaults_cloud_money_to_none():
 
 def test_whatif_overrides_apply_and_files_nothing():
     proc = _run(
-        "-Title", "scripts: example", "-DoneWhen", "x", "-Observable", "y",
-        "-Apply", "-WhatIf",
+        "-Title",
+        "scripts: example",
+        "-DoneWhen",
+        "x",
+        "-Observable",
+        "y",
+        "-Apply",
+        "-WhatIf",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "[dry-run]" in proc.stdout
@@ -101,13 +114,12 @@ def test_multiple_done_when_items_each_become_their_own_checklist_line():
     # directly. Exercising the real, documented usage means going through
     # `pwsh -Command`, so PowerShell itself parses the array literal, exactly
     # as it would for an interactive caller or an orchestrator's own .ps1.
-    command = (
-        f"& '{SCRIPT}' -Title 'scripts: example' -Observable 'y' "
-        "-DoneWhen 'first thing','second thing'"
-    )
+    command = f"& '{SCRIPT}' -Title 'scripts: example' -Observable 'y' -DoneWhen 'first thing','second thing'"
     proc = subprocess.run(
         [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "- [ ] first thing" in proc.stdout
