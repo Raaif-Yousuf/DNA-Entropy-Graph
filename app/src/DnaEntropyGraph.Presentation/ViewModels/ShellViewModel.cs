@@ -165,12 +165,20 @@ public sealed partial class ShellViewModel : ObservableObject
     {
         // The window selects the nav item that matches the page the frame shows (SelectedNavKey); that echo, and a cleared selection
         // (null), are not a navigation request.
-        if (string.IsNullOrEmpty(pageKey) || pageKey == _navigator.CurrentPageKey)
+        if (string.IsNullOrEmpty(pageKey))
         {
             return;
         }
 
+        // A click on the item already shown is still the user's choice (issue #244): it replaces a pending restore, even though nothing navigates.
         _userNavigated = true;
+        var pending = _pendingRestore;
+        _pendingRestore = null;
+        if (pageKey == _navigator.CurrentPageKey)
+        {
+            return;
+        }
+
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
@@ -178,8 +186,6 @@ public sealed partial class ShellViewModel : ObservableObject
 
         // Issue #244: the first time the remembered page's parent is shown at startup, open the remembered run on top of it. Once only,
         // and only if the user has not already chosen another page (that choice replaced the pending restore).
-        var pending = _pendingRestore;
-        _pendingRestore = null;
         if (pending is { SubPage: not null } && pending.NavKey == pageKey)
         {
             _navigator.NavigateTo(pending.SubPage, pending.Parameter);

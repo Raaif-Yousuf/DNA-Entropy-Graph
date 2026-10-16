@@ -239,6 +239,36 @@ public sealed class SessionRestoreTests
     }
 
     [Fact]
+    public async Task Clicking_the_nav_item_already_shown_during_startup_still_counts_as_the_users_choice()
+    {
+        // Cold review of #499: the "already showing, do nothing" shortcut in NavigateTo must not skip the user-choice bookkeeping.
+        HaveRuns(("job-1", JobPhase.Completed));
+        Store().Save(new SessionState("Results", "job-1"));
+        var shell = Shell(new SessionRestorer(Store(), _runs));
+        await shell.PrepareSessionAsync(CancellationToken.None);
+        _inner.CurrentPageKey.Returns("NewRun");
+
+        shell.NavigateToCommand.Execute("NewRun");
+        shell.NavigateToCommand.Execute("Runs");
+
+        _inner.DidNotReceive().NavigateTo("Results", "job-1");
+    }
+
+    [Fact]
+    public async Task A_click_on_the_shown_item_before_the_session_is_read_leaves_the_selection_alone()
+    {
+        HaveRuns(("job-1", JobPhase.Completed));
+        Store().Save(new SessionState("Results", "job-1"));
+        var shell = Shell(new SessionRestorer(Store(), _runs));
+        _inner.CurrentPageKey.Returns("Settings");
+
+        shell.NavigateToCommand.Execute("Settings");
+        await shell.PrepareSessionAsync(CancellationToken.None);
+
+        shell.StartupNavKey.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Choosing_a_different_page_first_drops_the_pending_restore()
     {
         HaveRuns(("job-1", JobPhase.Completed));

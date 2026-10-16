@@ -31,7 +31,9 @@ destination with no page registered in `Startup/NavigationRoutes.cs` shows the o
 `PlaceholderPage` instead of an empty frame; the OS window title is `AppDisplayName`.
 Header and selection follow the frame, not the click (#499, #701, #807): the shell subscribes to
 `INavigator.CurrentPageChanged`, so a nav item, a page's own `NavigateTo`, Back and a deep link all
-update `CurrentPageTitle` and `SelectedNavKey`. The rule for a page with no nav item (RunProgress,
+update `CurrentPageTitle` and `SelectedNavKey`. The in-page headings of RunProgress (the stage title), Results (the run's name) and Viewer (an
+error title only) say something other than the page name, so the NavigationView header is kept above them (checked
+2026-10-16: no page repeats its own `PageTitle_<key>`). The rule for a page with no nav item (RunProgress,
 Results, Viewer, Wizard): it shows its own `PageTitle_<key>` header and NO item is selected (a
 NavigationView raises no selection change for an already-selected item, so keeping the parent
 selected would make the parent's nav item unclickable). `NavSelectionBinder` mirrors
