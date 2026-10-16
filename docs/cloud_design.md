@@ -1403,9 +1403,17 @@ Every call that changes something in the user's Google Cloud project leaves one 
   interface (`Audited*Gateway` in `DnaEntropyGraph.Cloud/AuditedGateways.cs`) around whatever the container hands out: the
   `Resilient*` wrapper over `FakeGcp`, or the real Google gateway. One entry per logical call, with the whole duration including retries.
   `CloudAuditRegistration.Add` (ServiceRegistration) wraps the registered descriptors after the Google/Fake switch, so both backends are
-  audited the same way. A test (`Every_method_of_every_gateway_interface_is_classified_as_a_mutation_or_a_read`) holds a closed list of every method
-  of every gateway interface, as a mutation or a read; a new method fails it until someone classifies it and, for a mutation, routes
-  it through `CloudAuditor`. `ProductionCloudWiringTests` sees through `IAuditedGateway.Inner` to check the real gateway underneath.
+  audited the same way. `CloudAuditTests.Classified` is a closed list of every method of every gateway interface, as a mutation (with the
+  operation name its entry must carry) or a read. A reflection scan of every `I*Gateway` in Core
+  (`Every_gateway_interface_in_Core_is_classified...`) fails for a gateway nobody listed, `Every_method_of_every_gateway_interface_is_classified...`
+  for an unlisted method, and `Every_classified_mutation_has_an_audited_decorator_that_records_it` invokes EVERY listed mutation through
+  its decorator over a stub inner and asserts exactly one entry with that operation (and none for a read). `ProductionCloudWiringTests`
+  resolves every scanned gateway from the production container and requires its audit decorator, seeing through `IAuditedGateway.Inner`
+  to check the real gateway underneath.
+- **Not audited: the developer CloudCli.** `app/tools/DnaEntropyGraph.CloudCli` (dev-only, never shipped in the installer; driven by
+  `scripts/cloud_gpu_test.ps1`) builds the gateways itself with `GoogleCloudGateways.Create` in `CloudCliSessions`, outside
+  `CloudAuditRegistration`, so what it creates or deletes in the owner's test project leaves NO line in `cloud-audit.jsonl`. The
+  Settings explainer says so. Its trail is the script's own log and the resource labels.
 - **What is a mutation.** Compute create, reuse (claim, scheduling, metadata, start), stop, delete; Storage `EnsureBucket` (create and
   lifecycle patch) and object upload; the worker identity (service account, role, project and bucket bindings); Service Usage enable;
   `EnableComputeApi`; billing link; project create; start VM; delete disk; delete a job prefix; the quota-increase request
@@ -1414,22 +1422,29 @@ Every call that changes something in the user's Google Cloud project leaves one 
   each shows as that one entry. When one becomes its own interface method, the guard test above names it.
 - **An entry** (`CloudAuditEntry`): `timeUtc`, `installationId`, `jobId` (when the VM name or object key carries one), `operation`
   (`Compute.CreateVm`), `resource` (`zones/<zone>/instances/deg-<job>`, `buckets/<bucket>/jobs/<job>`, `projects/<project>`),
-  `requestId` and `operationId` (the Compute insert reports both through `CloudAuditContext.Note`; other calls leave them null because
-  the gateway interface does not surface them), `outcome` (`ok`, `cancelled`, or the `CloudErrorClassifier` bucket), `errorCode`
+  `requestId` and `operationId` (the Compute insert reports both through `CloudAuditContext`; other calls leave them null because
+  the gateway interface does not surface them). The insert's `requestId` is client-made: the create decorator mints it BEFORE the started
+  line (`mintRequestId`), the gateway sends that same id (`CloudAuditContext.RequestIdForCall`), so the started line and a finished line
+  for a refused insert (403) both carry it; `operationId` is added once Google answers. `outcome` (`ok`, `cancelled`, or the `CloudErrorClassifier` bucket), `errorCode`
   (Google's structured code, never the message) and `durationMs`.
 - **Never in it:** a sequence, an input file name, an object name below `jobs/<id>` (only the prefix is named), an error message, the
   email, a billing account id or the service account email. `CloudAuditTests.No_entry_names_an_input_file_the_email_or_a_message` and
   `Object_prefix_stops_at_the_job...` guard it.
-- **Started and finished lines.** A long mutation (create, reuse, start, delete a VM) writes a `phase: started` line (outcome
-  `started`) BEFORE the call and a `phase: finished` line with the outcome after, both with the same `correlationId`. A process killed
-  mid-call leaves the started line with no finished line: that is the evidence. Short mutations write only the finished line.
+- **Started and finished lines.** The multi-step, non-replayable mutations (create, reuse, start and delete a VM; `Storage.EnsureBucket`;
+  `Storage.DeletePrefix`; `Iam.EnsureWorkerIdentity`) write a `phase: started` line (outcome `started`) BEFORE the call and a
+  `phase: finished` line with the outcome after, both with the same `correlationId`. A process killed mid-call leaves the started line
+  with no finished line: that is the evidence. Single-request writes (stop VM, delete disk, upload, enable API or services, billing
+  link, project create, quota request) write only the finished line.
 - **Arguments are read inside the audit.** Each decorator passes the resource and job id as a function the auditor runs inside its
   guarded region, so a null argument is a recorded failure (`resource: (unknown)`, outcome `other`), not a synchronous throw.
 - **Never throws.** `CloudAuditor` and `JsonLinesCloudAuditLog` swallow every failure to write (full disk, locked file, bad path): the
   line is lost, the run is not.
 - **Size.** 1 MB, then the file moves to `cloud-audit.1.jsonl`, replacing the older one: at most about 2 MB. The cap is soft: if the move
   fails (the previous file is open in a reader or antivirus), the line is still appended to the current file and the rotation is tried
-  again on the next write.
+  again on the next write. Rotate plus append run under a machine-wide named mutex (`Global\deg-cloud-audit-<hash of the full path>`,
+  `JsonLinesCloudAuditLog.MutexName`), so two processes (or two log instances) sharing one data root cannot both move the same full file
+  and clobber `.1` with a nearly empty one. The wait is 250 ms; on a timeout, or where the platform gives no mutex, the line is appended
+  WITHOUT rotating, so the audit never holds a caller up (the next write rotates).
 - **Support bundle.** `DiagnosticsBundleBuilder` copies both generations as `files/logs/cloud-audit.jsonl` and `.1.jsonl`, redacted
   like a log. Settings > Diagnostics > Open cloud activity log reveals the live file (`CloudActivityLogSettingsViewModel`).
 

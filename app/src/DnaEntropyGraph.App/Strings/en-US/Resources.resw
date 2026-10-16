@@ -2103,7 +2103,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
   <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
-    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics.</value>
+    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics. Changes made by the developer-only command line tool, which is not part of the installed app, are not listed.</value>
   </data>
   <data name="CloudActivityLogOpenButton.Content" xml:space="preserve">
     <value>Open cloud activity log</value>

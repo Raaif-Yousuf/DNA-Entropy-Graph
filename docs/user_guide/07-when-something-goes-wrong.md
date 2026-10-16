@@ -29,7 +29,7 @@ instead. The app does not write its own log file yet; when it does, the same but
 If you want to see exactly what the app changed in your project (and when), open **Settings**, find **Diagnostics**, and choose
 **Open cloud activity log**. Each line is one change: starting, stopping or deleting a rented computer, creating or writing to the
 results storage bucket, or turning on a Google service. It shows the time, which run it was for, whether it worked, and how long it took.
-It never holds your sequences, your file names or your email address. The same file is included inside the zip when you choose
+It never holds your sequences, your file names or your email address. Changes made by the developer-only command line tool (not part of the installed app) are not listed. The same file is included inside the zip when you choose
 **Save diagnostics**, so support can see it. If nothing is listed yet, no cloud run has made a change on this computer.
 
 ## Signing in
