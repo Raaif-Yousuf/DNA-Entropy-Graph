@@ -1166,8 +1166,10 @@ def test_run_command_times_out_a_hung_gh_or_git(tmp_path: Path, monkeypatch: pyt
     assert rc == 124 and "TIMEOUT after" in out
 
 
-def test_land_wt_is_not_given_the_generic_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_land_wt_gets_a_bound_that_covers_premerge_and_the_checks_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
+
+    import land_wt
 
     seen: list[object] = []
 
@@ -1178,7 +1180,9 @@ def test_land_wt_is_not_given_the_generic_timeout(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(lq, "run_bounded", fake)
     lq.run_command(["py", "scripts/land_wt.py", "--branch", "b"], tmp_path)
     lq.run_command(["gh", "pr", "view", "7"], tmp_path)
-    assert seen[0] is None and seen[1] == lq.COMMAND_TIMEOUT_SECONDS
+    assert seen[1] == lq.COMMAND_TIMEOUT_SECONDS
+    assert seen[0] == lq.LAND_WT_TIMEOUT_SECONDS
+    assert lq.LAND_WT_TIMEOUT_SECONDS > land_wt.PREMERGE_TIMEOUT_SECONDS + land_wt.CHECKS_TIMEOUT_SECONDS
 
 
 def test_a_timeout_is_logged_to_flakes(env: lq.Env) -> None:
@@ -1190,31 +1194,81 @@ def test_a_timeout_is_logged_to_flakes(env: lq.Env) -> None:
 # ---- round 6 (orchestrator DECISION): a live pid is never replaced automatically; --replace is explicit ----
 
 
-def test_replace_takes_over_a_live_stuck_runner_and_records_it(env: lq.Env) -> None:
+def _stuck_runner(env: lq.Env, started: float | None = 100.0) -> list[int]:
+    """A live runner (pid 99) in runner.json whose process creation time matches; returns the list the fake killer appends to."""
+    killed: list[int] = []
     env.alive = lambda pid: True
+    env.start_time = lambda pid: 100.0 if pid == 99 else None
+    env.kill_runner = lambda pid: killed.append(pid) or True
     env.clock = lambda: 1_000_000.0
     env.state.mkdir(parents=True, exist_ok=True)
-    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    rec: dict[str, float] = {"pid": 99, "ts": 1.0}
+    if started is not None:
+        rec["started"] = started
+    (env.state / "runner.json").write_text(json.dumps(rec), encoding="utf-8")
+    return killed
+
+
+def test_replace_kills_the_old_runner_then_takes_over_and_records_it(env: lq.Env) -> None:
+    killed = _stuck_runner(env)
     lq.drain(env, replace=True)
-    assert "REPLACED pid 99" in (env.state / "done.log").read_text(encoding="utf-8")
+    assert killed == [99]
+    assert "REPLACED pid 99 (killed)" in (env.state / "done.log").read_text(encoding="utf-8")
     assert list(env.state.glob("runner.json.stale.*"))
 
 
-def test_replace_of_a_dead_runner_logs_nothing(env: lq.Env) -> None:
-    env.alive = lambda pid: False
-    env.state.mkdir(parents=True, exist_ok=True)
-    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+def test_replace_recovers_the_killed_runners_inflight_item(env: lq.Env) -> None:
+    _stuck_runner(env)
+    st = lq.State(env.state)
+    st.append_queue("feat/9-z|ccc|9|0|t (#9)")
+    st.mark_taken(parsed("feat/9-z|ccc|9|0|t"))
+    st.set_inflight(parsed("feat/9-z|ccc|9|0|t"), "waiting for checks on #5")
     lq.drain(env, replace=True)
+    done = (env.state / "done.log").read_text(encoding="utf-8")
+    assert "FAILED interrupted feat/9-z @ ccc" in done and done.index("REPLACED") < done.index("FAILED interrupted")
+
+
+def test_replace_never_takes_over_when_the_old_runner_survives_the_kill(env: lq.Env) -> None:
+    _stuck_runner(env)
+    env.kill_runner = lambda pid: False
+    with pytest.raises(lq.AlreadyRunning):
+        lq.drain(env, replace=True)
+    assert _hb(env)["pid"] == 99 and not list(env.state.glob("runner.json.stale.*"))
+
+
+def test_replace_never_kills_a_pid_it_cannot_verify(env: lq.Env) -> None:
+    killed = _stuck_runner(env, started=None)  # no recorded creation time: it could be any program
+    with pytest.raises(lq.AlreadyRunning):
+        lq.drain(env, replace=True)
+    assert killed == [] and _hb(env)["pid"] == 99
+
+
+def test_replace_never_kills_a_pid_whose_creation_time_differs(env: lq.Env) -> None:
+    killed = _stuck_runner(env, started=5.0)  # pid 99 now belongs to another program
+    lq.drain(env, replace=True)
+    assert killed == []
+    assert "REPLACED" not in (env.state / "done.log").read_text(encoding="utf-8") if (env.state / "done.log").exists() else True
+
+
+def test_replace_of_a_dead_runner_kills_and_logs_nothing(env: lq.Env) -> None:
+    killed = _stuck_runner(env)
+    env.alive = lambda pid: False
+    lq.drain(env, replace=True)
+    assert killed == []
     assert "REPLACED" not in (env.state / "done.log").read_text(encoding="utf-8") if (env.state / "done.log").exists() else True
 
 
 def test_the_cli_replace_flag_reaches_the_claim(tmp_path: Path) -> None:
     state = tmp_path / "s"
     state.mkdir()
-    (state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
-    assert lq.main(["--state", str(state), "run", "--once"], alive=lambda pid: True) == 1
-    assert lq.main(["--state", str(state), "run", "--once", "--replace"], alive=lambda pid: True) == 0
-    assert "REPLACED pid 99" in (state / "done.log").read_text(encoding="utf-8")
+    (state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0, "started": 100.0}), encoding="utf-8")
+    killed: list[int] = []
+    kw = {"alive": lambda pid: True, "start_time": lambda pid: 100.0 if pid == 99 else None, "kill": lambda pid: killed.append(pid) or True}
+    assert lq.main(["--state", str(state), "run", "--once"], **kw) == 1
+    assert killed == []
+    assert lq.main(["--state", str(state), "run", "--once", "--replace"], **kw) == 0
+    assert killed == [99]
+    assert "REPLACED pid 99 (killed)" in (state / "done.log").read_text(encoding="utf-8")
 
 
 def test_a_pid_with_a_different_creation_time_is_dead(env: lq.Env) -> None:

@@ -48,7 +48,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from land_wt import CHECKS_TIMEOUT_SECONDS, pid_alive, proc_start_time, run_bounded
+from land_wt import CHECKS_TIMEOUT_SECONDS, PREMERGE_TIMEOUT_SECONDS, kill_pid_tree, pid_alive, proc_start_time, run_bounded
 
 Runner = Callable[[list[str], "Path | None"], "tuple[int, str]"]
 
@@ -64,12 +64,14 @@ MERGEABLE_POLLS = 6
 
 
 COMMAND_TIMEOUT_SECONDS = 600.0
+# land_wt.py: premerge (heavy.py slot wait included) + the checks wait, twice (one rerun gets a fresh deadline) + git/gh calls and a margin.
+LAND_WT_TIMEOUT_SECONDS = PREMERGE_TIMEOUT_SECONDS + 2 * CHECKS_TIMEOUT_SECONDS + 30 * 60.0
 
 
 def run_command(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
     """Bytes in, text out (never text=True on Windows: it re-encodes). gh and git get a generous timeout (rc 124, `TIMEOUT after`)
-    that kills the whole process tree; land_wt.py has its own per-call deadlines and gets none."""
-    limit = None if any(Path(a).name == "land_wt.py" for a in argv[1:3]) else COMMAND_TIMEOUT_SECONDS
+    that kills the whole process tree; land_wt.py gets a longer bound (premerge + checks wait + margin) on top of its own per-call deadlines."""
+    limit = LAND_WT_TIMEOUT_SECONDS if any(Path(a).name == "land_wt.py" for a in argv[1:3]) else COMMAND_TIMEOUT_SECONDS
     try:
         proc = run_bounded(argv, cwd=cwd, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=limit)
     except subprocess.TimeoutExpired:
@@ -272,11 +274,14 @@ class State:
         start_time: Callable[[int], float | None] = proc_start_time,
         started: float | None = None,
         replace: bool = False,
+        kill: Callable[[int], bool] = kill_pid_tree,
     ) -> int | None:
         """Claim runner.json with O_EXCL so two starters cannot both win. Returns the pid it REPLACED (only with `replace`), else None.
 
         A runner whose pid is alive (and whose creation time still matches the recorded one) is NEVER replaced automatically,
-        however old its heartbeat: AlreadyRunning. `replace=True` (`run --replace`, a human's call) takes over a live-but-stuck one.
+        however old its heartbeat: AlreadyRunning. `replace=True` (`run --replace`, a human's call) takes over a live-but-stuck one:
+        its process tree is killed first (`kill`, only when pid AND recorded creation time are verified to match, and only
+        if it is really gone afterwards), so two runners can never work at once.
         An empty or unparsable file is a claim in progress (the winner has created it and not written yet): wait briefly, and
         only replace it when it is old. A parsed file whose pid is dead (or reused by another program) is stale:
         it is renamed to a unique name (atomic: only one racer wins the rename) and the claim retried."""
@@ -319,6 +324,14 @@ class State:
                         raise AlreadyRunning(
                             f"a runner is already alive (pid {judged}). Check `status`; `stop` ends it, `run --replace` takes over a stuck one"
                         )
+                    recorded, now = cur.get("started"), start_time(judged)
+                    if recorded is None or now is None or abs(now - float(recorded)) > 1.0:
+                        raise AlreadyRunning(
+                            f"pid {judged} cannot be verified as the runner (no matching creation time in runner.json). "
+                            f"End it by hand (Task Manager, pid {judged}), then run again"
+                        )
+                    if not kill(judged):
+                        raise AlreadyRunning(f"pid {judged} did not exit after being killed. End it by hand (Task Manager), then run again")
                     replaced = judged
             aside = self._p(f"runner.json.stale.{pid}.{attempt}")
             try:
@@ -393,6 +406,7 @@ class Env:
     pid: int = field(default_factory=os.getpid)
     alive: Callable[[int], bool] = pid_alive
     start_time: Callable[[int], float | None] = proc_start_time
+    kill_runner: Callable[[int], bool] = kill_pid_tree
     started: float | None = None  # our own creation time, recorded in runner.json by drain
     ff_main: bool = False
     heartbeat_seconds: float = 60.0
@@ -719,9 +733,11 @@ def drain(env: Env, *, forever: bool = False, replace: bool = False) -> None:
     st = State(env.state)
     env.progress = env.clock()
     env.started = env.start_time(env.pid)
-    replaced = st.claim_runner(env.pid, env.progress, env.alive, env.sleep, start_time=env.start_time, started=env.started, replace=replace)
+    replaced = st.claim_runner(
+        env.pid, env.progress, env.alive, env.sleep, start_time=env.start_time, started=env.started, replace=replace, kill=env.kill_runner
+    )
     if replaced is not None:
-        st.append_done(f"REPLACED pid {replaced} {env.now()}")
+        st.append_done(f"REPLACED pid {replaced} (killed) {env.now()}")
     _recover_interrupted(st)
     stop_beat = threading.Event()
 
@@ -815,7 +831,13 @@ def _invalid_add(branch: str, sha: str, title: str) -> str:
     return ""
 
 
-def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pid_alive) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    alive: Callable[[int], bool] = pid_alive,
+    start_time: Callable[[int], float | None] = proc_start_time,
+    kill: Callable[[int], bool] = kill_pid_tree,
+) -> int:
     ap = argparse.ArgumentParser(description="Land queued lane branches and merge each when green.")
     ap.add_argument("--state", type=Path, default=Path(tempfile.gettempdir()) / "deg-land-queue")
     ap.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent, help="the main checkout (git fetch runs here)")
@@ -838,7 +860,15 @@ def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pi
     retry = sub.add_parser("retry")
     retry.add_argument("key", help="branch@sha")
     args = ap.parse_args(argv)
-    env = Env(repo=args.repo, state=args.state, python=sys.executable, alive=alive, ff_main=getattr(args, "ff_main", False))
+    env = Env(
+        repo=args.repo,
+        state=args.state,
+        python=sys.executable,
+        alive=alive,
+        start_time=start_time,
+        kill_runner=kill,
+        ff_main=getattr(args, "ff_main", False),
+    )
     st = State(args.state)
     if args.cmd == "add":
         problem = _invalid_add(args.branch, args.sha, args.title)

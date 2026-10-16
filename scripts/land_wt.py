@@ -53,7 +53,9 @@ import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
+from typing import Any
 
 REMOTE = "origin"
 BASE = "main"
@@ -84,19 +86,69 @@ class LandError(Exception):
         self.code = code
 
 
+class LandTimeout(LandError):
+    """A git or gh call hit its timeout (its whole process tree was killed)."""
+
+
 def _text(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace").strip()
 
 
 GH_TIMEOUT_SECONDS = 300.0  # one gh call (pr checks / view / create / merge / run rerun)
 GIT_TIMEOUT_SECONDS = 600.0  # one git call (fetch / push / worktree add...)
+PREMERGE_TIMEOUT_SECONDS = 120 * 60.0  # the whole premerge run, heavy.py slot wait included
+
+
+_K32: list[object] = []
+
+
+def _kernel32() -> Any:  # noqa: ANN401  (a ctypes library object)
+    """kernel32 with explicit prototypes: a HANDLE is pointer sized, and ctypes' default int return truncates it on 64-bit Windows.
+    A private WinDLL, so the prototypes never leak into other code that shares `ctypes.windll.kernel32`."""
+    if not _K32:
+        import ctypes  # noqa: PLC0415
+        from ctypes import wintypes  # noqa: PLC0415
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+        k32.GetExitCodeProcess.restype = wintypes.BOOL
+        k32.GetProcessTimes.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        k32.GetProcessTimes.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        k32.CloseHandle.restype = wintypes.BOOL
+        _K32.append(k32)
+    return _K32[0]
+
+
+def _taskkill_tree(pid: int) -> None:
+    """`taskkill /T /F /PID <pid>`: that PID and its descendants only, never by image name."""
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False, timeout=30)
+
+
+def kill_pid_tree(pid: int, wait: float = 10.0) -> bool:
+    """Kill an unrelated process (one we did not start, e.g. a stuck queue runner) and its descendants, then wait up to `wait`
+    seconds for it to be gone. True when it is gone. The caller has verified pid + creation time first.
+    THEORY (unverified): on POSIX only the process itself is signalled (its group may be the user's shell), so its children can outlive it."""
+    if os.name == "nt":
+        _taskkill_tree(pid)
+    else:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    end = time.monotonic() + wait
+    while pid_alive(pid):
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.1)
+    return True
 
 
 def kill_tree(proc: subprocess.Popen[bytes]) -> None:
     """Kill `proc` and everything it started: taskkill /T on exactly this PID (never by image name), or the process group."""
     if os.name == "nt":
-        with contextlib.suppress(OSError, subprocess.SubprocessError):
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False, timeout=30)
+        _taskkill_tree(proc.pid)
     else:
         with contextlib.suppress(OSError):
             os.killpg(proc.pid, signal.SIGKILL)
@@ -145,7 +197,9 @@ def git(
     try:
         proc = run_bounded(["git", "-c", "core.quotepath=off", *args], cwd=cwd, env=env, stdin=stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise LandError(f"git {' '.join(args[:3])} timed out after {int(timeout or 0)} s. Check the network and git, then land again") from None
+        raise LandTimeout(
+            f"git {' '.join(args[:3])} timed out after {int(timeout or 0)} s. Check the network and git, then land again"
+        ) from None
     if check and proc.returncode != 0:
         raise LandError(f"git {' '.join(args[:3])} failed ({proc.returncode}): {_text(proc.stderr or proc.stdout)}")
     return proc
@@ -212,13 +266,14 @@ def pid_alive(pid: int) -> bool:
     """Is a process with this pid running? Never os.kill on Windows (any signal there TERMINATES the process)."""
     if os.name == "nt":
         import ctypes  # noqa: PLC0415
+        from ctypes import wintypes  # noqa: PLC0415
 
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = _kernel32()
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
             return False
         try:
-            code = ctypes.c_ulong()
+            code = wintypes.DWORD()
             return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
         finally:
             kernel32.CloseHandle(handle)
@@ -239,8 +294,7 @@ def proc_start_time(pid: int) -> float | None:
         import ctypes  # noqa: PLC0415
         from ctypes import wintypes  # noqa: PLC0415
 
-        kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32 = _kernel32()
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
             return None
@@ -281,8 +335,11 @@ def remove_tree_no_follow(path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_premerge(wt: Path, venv: Path, full: bool) -> tuple[int, str]:
-    """The real gate run: the venv's python reached THROUGH the worktree's junction, the worktree's sources first."""
+def run_premerge(wt: Path, venv: Path, full: bool, timeout: float | None = None) -> tuple[int, str]:
+    """The real gate run: the venv's python reached THROUGH the worktree's junction, the worktree's sources first.
+    Bounded by `timeout` (default PREMERGE_TIMEOUT_SECONDS, which includes the wait for heavy.py's machine-wide slot): on expiry the
+    whole tree is killed and the result is red (124), so nothing is pushed or merged."""
+    limit = PREMERGE_TIMEOUT_SECONDS if timeout is None else timeout
     py = wt / VENV_REL / "Scripts" / "python.exe"
     if not py.is_file():
         py = wt / VENV_REL / "bin" / "python"
@@ -294,7 +351,11 @@ def run_premerge(wt: Path, venv: Path, full: bool) -> tuple[int, str]:
         argv = [str(py), str(heavy), "--lane", f"land-{wt.name}"[:64], "--", *argv]
     env = dict(os.environ)
     env["PYTHONPATH"] = str(wt / "worker" / "src")
-    proc = subprocess.run(argv, cwd=wt, capture_output=True, check=False, env=env)
+    try:
+        proc = run_bounded(argv, cwd=wt, env=env, timeout=limit)
+    except subprocess.TimeoutExpired as err:
+        tail = _text((err.stdout or b"")[-2000:]) if isinstance(err.stdout, bytes) else ""
+        return 124, f"ERROR: premerge timed out after {int(limit)} s and was killed (a hung gate or heavy.py slot wait)\n{tail}"
     return proc.returncode, _text(proc.stdout) + "\n" + _text(proc.stderr)
 
 
@@ -310,6 +371,7 @@ class Ctx:
     monotonic: Callable[[], float] = time.monotonic
     log: list[str] = field(default_factory=list)
     gh_timeout: float = GH_TIMEOUT_SECONDS
+    git_timeout: float = GIT_TIMEOUT_SECONDS  # the push (fetch and the rest use git()'s own default)
     checks_error: str = ""  # why the last `gh pr checks` could not be read ("" = it could, or gh simply had no checks yet)
 
     def say(self, message: str) -> None:
@@ -499,6 +561,31 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
     git(wt, *ident, "commit", "--no-edit", "-q")
 
 
+def _push(ctx: Ctx, wt: Path, land_branch: str, sha: str) -> None:
+    """Push HEAD. A timed-out push is not a verdict: ask origin whether the branch arrived (a killed git can have finished remotely)."""
+    try:
+        git(wt, "push", REMOTE, f"HEAD:refs/heads/{land_branch}", timeout=ctx.git_timeout)
+        return
+    except LandTimeout as err:
+        pushed_err = err
+    try:
+        listing = _text(git(wt, "ls-remote", "--heads", REMOTE, f"refs/heads/{land_branch}", timeout=60.0).stdout)
+    except LandError:
+        raise LandError(
+            f"git push timed out and origin could not be asked; branch may exist on origin: {land_branch}. "
+            "Run `git ls-remote --heads origin` to check, delete it if it is wrong, then land again"
+        ) from None
+    if listing.split()[:1] == [sha]:
+        ctx.say(f"- push timed out but origin already has {land_branch} at {sha[:12]}; continuing")
+        return
+    if listing:
+        raise LandError(
+            f"push timed out and {land_branch} on origin is at {listing.split()[0][:12]}, not {sha[:12]}. "
+            "Check who pushed it, then land again with a different --land-branch"
+        ) from pushed_err
+    raise LandError(f"push timed out and {land_branch} is not on origin ({pushed_err}). Check the network, then land again") from None
+
+
 def _create_pr(ctx: Ctx, wt: Path, land_branch: str, title: str, body_file: Path) -> str:
     argv = [*ctx.gh, "pr", "create", "--base", BASE, "--head", land_branch, "--title", title, "--body-file", str(body_file)]
     try:
@@ -588,7 +675,7 @@ def _rerun_failed(ctx: Ctx, pr: str, red: Sequence[dict[str, str]]) -> bool:
     return ok
 
 
-def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
+def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
     """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green.
 
     With `rerun_failed_once`, the first red result (once no check is still running, because `gh run rerun --failed`
@@ -633,7 +720,30 @@ def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float, rerun_fail
             )
             return EXIT_CHECKS_PENDING
         ctx.sleep(min(poll, deadline - ctx.monotonic()))
-    argv = [*ctx.gh, "pr", "merge", pr, "--merge"]
+    # Never merge a head other than the one that was verified and pushed: read the PR's head now and pin the merge to it.
+    try:
+        view = run_bounded([*ctx.gh, "pr", "view", pr, "--json", "headRefOid"], timeout=ctx.gh_timeout)
+    except subprocess.TimeoutExpired:
+        ctx.say(
+            f"ERROR: not merging {pr}: gh could not read the PR head (timed out after {int(ctx.gh_timeout)} s). Merge by hand; the PR stays open"
+        )
+        return EXIT_CHECKS_PENDING
+    except OSError as err:
+        raise LandError(f"gh could not run ({err}). Merge {pr} by hand with `gh pr merge --merge`") from err
+    try:
+        current = str(json.loads(_text(view.stdout)).get("headRefOid", ""))
+    except (ValueError, AttributeError):
+        current = ""
+    if not current:
+        ctx.say(f"ERROR: not merging {pr}: gh could not read the PR head. Merge {pr} by hand; the PR stays open")
+        return EXIT_CHECKS_PENDING
+    if current != pushed_head:
+        ctx.say(
+            f"ERROR: not merging {pr}: its head changed since it was verified and pushed ({pushed_head[:12]} -> {current[:12]}). "
+            "Check who pushed to it; the PR stays open"
+        )
+        return EXIT_CHECKS_RED
+    argv = [*ctx.gh, "pr", "merge", pr, "--merge", "--match-head-commit", pushed_head]
     try:
         proc = run_bounded(argv, timeout=ctx.gh_timeout)
     except subprocess.TimeoutExpired:
@@ -691,12 +801,13 @@ def land(
             log.write_text(output, encoding="utf-8", newline="\n")
             fails = [ln for ln in output.splitlines() if re.search(r"\b(FAIL|ERROR)\b", ln)][:30]
             raise LandError("premerge is red; nothing was pushed. " + "; ".join(s.strip() for s in fails) + f" (full log: {log})", EXIT_RED)
-        git(wt, "push", REMOTE, f"HEAD:refs/heads/{land_branch}")
+        pushed_head = _text(git(wt, "rev-parse", "HEAD").stdout)
+        _push(ctx, wt, land_branch, pushed_head)
         pushed = True
         url = _create_pr(ctx, wt, land_branch, title, body_file)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
-            rc = _merge_when_green(ctx, url, checks_timeout, checks_poll, rerun_failed_once)
+            rc = _merge_when_green(ctx, url, pushed_head, checks_timeout, checks_poll, rerun_failed_once)
         else:
             ctx.say(f"OK: pushed {land_branch} and opened {url}. Merge with: gh pr merge {url.rsplit('/', 1)[-1]} --merge")
             rc = EXIT_OK
@@ -747,6 +858,12 @@ def main(argv: Sequence[str] | None = None, *, repo: Path | None = None, premerg
         default=True,
         help="with --merge-when-green: re-run failed checks once (flaky runners) before refusing; --no-rerun-failed-once disables",
     )
+    ap.add_argument(
+        "--premerge-timeout",
+        type=float,
+        default=PREMERGE_TIMEOUT_SECONDS,
+        help="seconds before a hung premerge (heavy.py slot wait included) is killed and refused (default 7200)",
+    )
     ap.add_argument("--venv", type=Path, default=None, help="real venv to junction (default: the running venv)")
     ap.add_argument("--gh", default=os.environ.get("LAND_WT_GH", "gh"), help="path of the gh executable (one path, spaces allowed)")
     args = ap.parse_args(argv)
@@ -754,8 +871,7 @@ def main(argv: Sequence[str] | None = None, *, repo: Path | None = None, premerg
         print(f"ERROR: --body-file {args.body_file} does not exist")
         return EXIT_USAGE
     ctx = Ctx(repo=repo, venv=args.venv or _default_venv(repo), gh=[args.gh])
-    if premerge is not None:
-        ctx.premerge = premerge
+    ctx.premerge = premerge if premerge is not None else partial(run_premerge, timeout=args.premerge_timeout)
     return land(
         ctx,
         args.branch,

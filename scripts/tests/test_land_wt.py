@@ -31,6 +31,21 @@ hang = Path(str(log) + ".hang")
 if hang.exists() and " ".join(sys.argv[2:4]) in hang.read_text(encoding="utf-8").split(","):
     import time
     time.sleep(60)
+if sys.argv[2:4] == ["pr", "view"]:
+    import subprocess
+    fixed = Path(str(log) + ".headoid")
+    oid = fixed.read_text(encoding="utf-8").strip() if fixed.exists() else ""
+    if not oid:
+        head = ""
+        for ln in log.read_text(encoding="utf-8").splitlines():
+            call = json.loads(ln)
+            if call[:2] == ["pr", "create"]:
+                head = call[call.index("--head") + 1]
+        origin = Path(str(log) + ".origin").read_text(encoding="utf-8").strip()
+        out = subprocess.run(["git", "ls-remote", origin, "refs/heads/" + head], capture_output=True, text=True).stdout.split()
+        oid = out[0] if out else ""
+    print(json.dumps({} if oid == "NONE" else {"headRefOid": oid}))
+    sys.exit(0)
 if sys.argv[2:4] == ["pr", "checks"]:
     # scripted replies: the Nth `pr checks` call gets replies[N] (the last one repeats); a string is raw stdout
     replies = json.loads(Path(str(log) + ".checks").read_text(encoding="utf-8"))
@@ -71,6 +86,7 @@ class World:
 
     def ctx(self) -> lw.Ctx:
         stub = self.root / "gh_stub.py"
+        Path(str(self.gh_log) + ".origin").write_text(str(self.origin), encoding="utf-8")
 
         def fake_premerge(wt: Path, venv: Path, full: bool) -> tuple[int, str]:
             self.premerge_calls.append((wt, full))
@@ -894,7 +910,7 @@ def test_hung_check_reads_still_reach_the_deadline(world, capsys):
     ctx.gh_timeout = 0.5
     clock = Clock()
     ctx.sleep, ctx.monotonic = clock.sleep, clock.monotonic
-    assert lw._merge_when_green(ctx, "https://github.com/o/r/pull/7", 30.0, 10.0) == lw.EXIT_CHECKS_PENDING
+    assert lw._merge_when_green(ctx, "https://github.com/o/r/pull/7", "a" * 40, 30.0, 10.0) == lw.EXIT_CHECKS_PENDING
     assert "timed out" in capsys.readouterr().out
     assert _calls(world, "merge") == []
 
@@ -926,3 +942,158 @@ def test_proc_start_time_is_stable_for_a_live_pid_and_none_for_a_dead_one():
     assert isinstance(first, float) and first > 0
     assert lw.proc_start_time(os.getpid()) == first
     assert lw.proc_start_time(_dead_pid()) is None
+
+
+# --- round 7 ---------------------------------------------------------------------------------------------------------
+
+
+def _origin_sha(world: World, branch: str) -> str:
+    return _git(world.origin, "rev-parse", f"refs/heads/{branch}")
+
+
+def test_the_merge_is_pinned_to_the_head_that_was_pushed(world):
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_OK
+    merge = _calls(world, "merge")[0]
+    assert merge[merge.index("--match-head-commit") + 1] == _origin_sha(world, "feat/66-x")
+
+
+def test_a_pr_head_that_moved_since_the_push_is_never_merged(world, capsys):
+    (world.root / "gh.log.headoid").write_text("f" * 40, encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_CHECKS_RED
+    assert _calls(world, "merge") == []
+    out = capsys.readouterr().out
+    assert "head" in out and "changed" in out and "https://github.com/o/r/pull/7" in out and out.isascii()
+
+
+def test_an_unreadable_pr_head_is_never_merged_blind(world):
+    (world.root / "gh.log.hang").write_text("pr view", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=1.0)
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert _calls(world, "merge") == []
+
+
+def test_a_pr_view_with_no_head_is_never_merged_blind(world):
+    (world.root / "gh.log.headoid").write_text("NONE", encoding="utf-8")  # the stub prints {}
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert _calls(world, "merge") == []
+
+
+def test_premerge_is_bounded_and_a_timeout_is_a_red_result(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake(argv, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, kw["timeout"], b"", b"")
+
+    monkeypatch.setattr(lw, "run_bounded", fake)
+    code, out = lw.run_premerge(tmp_path, tmp_path, False, timeout=42.0)
+    assert seen["timeout"] == 42.0
+    assert code == 124 and "ERROR" in out and "timed out after 42 s" in out
+    lw.run_premerge(tmp_path, tmp_path, False)
+    assert seen["timeout"] == lw.PREMERGE_TIMEOUT_SECONDS
+
+
+def test_the_premerge_timeout_flag_reaches_the_real_premerge(world, monkeypatch):
+    seen = []
+    monkeypatch.setattr(lw, "land", lambda ctx, *a, **k: seen.append(ctx.premerge) or 0)
+    body = world.root / "body.md"
+    body.write_text("b\n", encoding="utf-8", newline="\n")
+    args = ["--branch", "feat/1-x", "--sha", "a" * 40, "--title", "t", "--body-file", str(body)]
+    assert lw.main([*args, "--premerge-timeout", "5"], repo=world.clone) == 0
+    assert lw.main(args, repo=world.clone) == 0
+    assert seen[0].keywords["timeout"] == 5.0
+    assert seen[1].keywords["timeout"] == lw.PREMERGE_TIMEOUT_SECONDS
+
+
+def _hook(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(f"#!/bin/sh\n{body}\n".encode())
+
+
+def _land_with_push_timeout(world, branch):
+    sha = world.commit_on_branch(branch, {"b.txt": b"new\n"})
+    body = world.root / "body.md"
+    body.write_text("body\n", encoding="utf-8", newline="\n")
+    ctx = world.ctx()
+    ctx.git_timeout = 6.0
+    return lw.land(ctx, branch, sha, "feat: t", body), ctx
+
+
+def test_a_push_that_timed_out_but_reached_origin_carries_on(world, capsys):
+    _hook(world.origin / "hooks" / "post-receive", "sleep 25")  # the ref is updated, then the client waits on the hook
+    rc, _ = _land_with_push_timeout(world, "feat/77-x")
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_OK, out
+    assert "push timed out" in out and "origin already has" in out
+    assert "feat/77-x" in world.remote_branches()
+    assert _calls(world, "create")
+
+
+def test_a_push_that_timed_out_and_did_not_arrive_says_so(world, capsys):
+    _hook(world.clone / ".git" / "hooks" / "pre-push", "sleep 25")
+    rc, _ = _land_with_push_timeout(world, "feat/77-y")
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_FAILED
+    assert "push timed out" in out and "not on origin" in out
+    assert "feat/77-y" not in world.remote_branches()
+    assert not _calls(world, "create")
+
+
+def test_a_push_timeout_with_an_unanswerable_ls_remote_names_the_branch(world, capsys, monkeypatch):
+    real = lw.git
+
+    def spy(cwd, *args, **kw):
+        if args[:1] in (("push",), ("ls-remote",)):
+            raise lw.LandTimeout("git timed out after 1 s", lw.EXIT_FAILED)
+        return real(cwd, *args, **kw)
+
+    monkeypatch.setattr(lw, "git", spy)
+    sha = world.commit_on_branch("feat/77-z", {"b.txt": b"new\n"})
+    body = world.root / "body.md"
+    body.write_text("body\n", encoding="utf-8", newline="\n")
+    rc = lw.land(world.ctx(), "feat/77-z", sha, "feat: t", body)
+    assert rc == lw.EXIT_FAILED
+    assert "branch may exist on origin: feat/77-z" in capsys.readouterr().out
+
+
+def test_a_lock_left_in_the_throwaway_worktree_goes_with_the_worktree(world):
+    sha = world.commit_on_branch("feat/78-x", {"b.txt": b"new\n"})
+    wt = world.tmp_root / "feat-78-x-20200101000001"
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    _git(world.clone, "worktree", "add", "-q", "--detach", str(wt), sha)
+    gitdir = Path(_git(wt, "rev-parse", "--absolute-git-dir"))
+    (gitdir / "index.lock").write_bytes(b"")  # what a killed git can leave behind
+    lw._remove_worktree(world.ctx(), wt)
+    assert not wt.exists() and not gitdir.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="ctypes prototypes are a Windows concern")
+def test_the_win32_calls_have_pointer_safe_prototypes():
+    import ctypes
+
+    k32 = lw._kernel32()
+    assert k32.OpenProcess.restype is ctypes.c_void_p
+    assert k32.CloseHandle.argtypes == [ctypes.c_void_p]
+    assert k32.GetProcessTimes.argtypes[0] is ctypes.c_void_p
+    assert k32.GetExitCodeProcess.argtypes[0] is ctypes.c_void_p
+    assert lw.pid_alive(os.getpid()) is True
+
+
+def test_kill_pid_tree_ends_a_process_and_its_child_and_reports_it(tmp_path):
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(GRANDCHILD, encoding="utf-8", newline="\n")
+    proc = subprocess.Popen([sys.executable, str(script), str(pidfile)])
+    try:
+        end = time.time() + 10
+        while not pidfile.exists() and time.time() < end:
+            time.sleep(0.1)
+        assert lw.kill_pid_tree(proc.pid) is True
+        assert _pid_gone(int(pidfile.read_text()))
+        assert not lw.pid_alive(proc.pid)
+    finally:
+        proc.kill()
+        proc.wait()
