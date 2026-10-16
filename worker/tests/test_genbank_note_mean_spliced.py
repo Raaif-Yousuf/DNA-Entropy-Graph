@@ -72,3 +72,34 @@ def test_plain_gene_without_segments_is_unchanged(tmp_path: Path) -> None:
     plain = GeneFeature(begin=11, end=20, strand="+", gene_id="p")
     assert _note(tmp_path, plain, circular=False) == pytest.approx(2.0, abs=5e-4)
     assert _note(tmp_path, plain, circular=False) == pytest.approx(_table(plain, circular=False), abs=5e-4)
+
+
+def _write(tmp_path: Path, feature: GeneFeature, values: np.ndarray, *, circular: bool = False) -> str:
+    out = GenBankWriter().write_multi(
+        name="o", records=[("toy", SEQ, [feature], values, "")], out_dir=str(tmp_path), circular=[circular]
+    )
+    return Path(out).read_text(encoding="utf-8")
+
+
+def test_segments_all_past_the_track_write_the_gene_without_a_note(tmp_path: Path) -> None:
+    """Nothing to average (summarize_genes skips the row): no note, and no crash."""
+    ghost = GeneFeature(begin=5, end=60, strand="+", gene_id="ghost", segments=((200, 210), (220, 230)))
+    text = _write(tmp_path, ghost, _values())
+    assert "mean_entropy" not in text
+    assert "ghost" in text
+
+
+def test_a_track_shorter_than_the_sequence_does_not_raise(tmp_path: Path) -> None:
+    short = _values()[:50]
+    spliced = GeneFeature(begin=5, end=60, strand="+", gene_id="sp", segments=((5, 20), (40, 60)))
+    text = _write(tmp_path, spliced, short)
+    expected = (6 * 1.0 + 10 * 2.0 + 11 * 1.0) / 27  # exon 2 is clipped to 40..50
+    assert float(re.search(r"mean_entropy=([0-9.]+) bits", text).group(1)) == pytest.approx(
+        expected, abs=5e-4
+    )
+
+
+def test_a_wrapping_gene_on_a_short_track_does_not_raise(tmp_path: Path) -> None:
+    wrap = GeneFeature(begin=1, end=L, strand="+", gene_id="w", segments=((1, 10), (120, 126)))
+    text = _write(tmp_path, wrap, _values()[:50], circular=True)
+    assert float(re.search(r"mean_entropy=([0-9.]+) bits", text).group(1)) == pytest.approx(1.0, abs=5e-4)

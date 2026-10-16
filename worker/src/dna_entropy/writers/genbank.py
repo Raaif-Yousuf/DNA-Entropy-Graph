@@ -45,6 +45,16 @@ def wrap_parts(feature: GeneFeature, length: int) -> list[tuple[int, int]]:
     return segs[first:] + segs[:first]
 
 
+def _own_bases(values: np.ndarray, segments: Sequence[tuple[int, int]]) -> np.ndarray:
+    """The entropy values over a feature's own 1-based inclusive ``segments`` only, clipped to the
+    track so a segment past its end (or a short track) contributes nothing instead of raising."""
+    n = len(values)
+    parts = [np.arange(b - 1, min(e, n)) for b, e in segments if b <= min(e, n)]
+    if not parts:
+        return np.empty(0, dtype=float)
+    return np.asarray(values[np.concatenate(parts)], dtype=float)
+
+
 def _build_record(
     contig_name: str,
     seq: str,
@@ -79,8 +89,7 @@ def _build_record(
             location = CompoundLocation(
                 [FeatureLocation(b - 1, e, strand) for b, e in (parts if strand != -1 else parts[::-1])]
             )
-            index = np.concatenate([np.arange(b - 1, e) for b, e in parts])
-            segment = np.asarray(values[index], dtype=float)
+            segment = _own_bases(values, parts)
         else:
             begin0 = max(f.begin - 1, 0)  # 1-based inclusive -> 0-based half-open
             end = min(f.end, len(seq))
@@ -90,22 +99,18 @@ def _build_record(
             # issue #563: the note averages the feature's own bases (the joined exons), never the
             # introns inside the outer span; the same bases the gene table (#124) summarises.
             if len(f.segments) > 1:
-                index = np.concatenate(
-                    [
-                        np.arange(b - 1, min(e, len(seq)))
-                        for b, e in sorted(f.segments)
-                        if b <= min(e, len(seq))
-                    ]
-                )
-                segment = np.asarray(values[index], dtype=float)
+                segment = _own_bases(values, sorted(f.segments))
             else:
                 segment = np.asarray(values[begin0:end], dtype=float)
-        mean_h = float(segment.mean()) if segment.size else 0.0
-        quals: dict[str, list[str]] = {"note": [f"mean_entropy={mean_h:.3f} bits"]}
+        # No bases left (every segment past the end of the track): no note, as summarize_genes skips the row.
+        mean_h = float(segment.mean()) if segment.size else None
+        quals: dict[str, list[str]] = {}
+        if mean_h is not None:
+            quals["note"] = [f"mean_entropy={mean_h:.3f} bits"]
         if f.gene_id:
             quals["gene"] = [f.gene_id]
         if f.partial:
-            quals["note"].append("partial")
+            quals.setdefault("note", []).append("partial")
         record.features.append(
             SeqFeature(
                 location,
