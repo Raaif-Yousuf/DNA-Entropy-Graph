@@ -74,6 +74,36 @@ public class SqliteMigrationSetTests
     }
 
     [Fact]
+    public void A_newer_database_file_is_not_quarantined_or_deleted_when_opened()
+    {
+        using var paths = new TempPaths();
+        using (var seed = new SqliteConnection($"Data Source={paths.DatabasePath}"))
+        {
+            seed.Open();
+            using var set = seed.CreateCommand();
+            set.CommandText = "CREATE TABLE Marker (X INTEGER); PRAGMA user_version = 99;";
+            set.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+        var database = new SqliteDatabase(paths.DatabasePath);
+
+        Should.Throw<DatabaseNewerThanAppException>(() => database.OpenConnection());
+
+        database.RecoveredFromCorruptFileAt.ShouldBeNull();
+        File.Exists(paths.DatabasePath).ShouldBeTrue();
+        Directory.GetFiles(paths.Directory, "*.corrupt-*").ShouldBeEmpty();
+        SqliteConnection.ClearAllPools();
+        using var check = new SqliteConnection($"Data Source={paths.DatabasePath};Mode=ReadOnly");
+        check.Open();
+        using var read = check.CreateCommand();
+        read.CommandText = "PRAGMA user_version;";
+        Convert.ToInt64(read.ExecuteScalar()).ShouldBe(99L);
+        read.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name = 'Marker';";
+        Convert.ToInt64(read.ExecuteScalar()).ShouldBe(1L);
+    }
+
+    [Fact]
     public void A_database_newer_than_this_app_is_refused_with_an_action_and_left_untouched()
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
@@ -84,11 +114,13 @@ public class SqliteMigrationSetTests
             set.ExecuteNonQuery();
         }
 
-        var ex = Should.Throw<InvalidOperationException>(
+        var ex = Should.Throw<DatabaseNewerThanAppException>(
             () => SqliteMigrations.Apply(connection, [(1L, "SELECT 1;"), (2L, "SELECT 1;")]));
 
+        ex.DatabaseVersion.ShouldBe(9L);
+        ex.AppVersion.ShouldBe(2L);
         ex.Message.ShouldContain("newer");
-        ex.Message.ShouldContain("Update");
+        ex.Message.ShouldContain("Install the latest version");
         using var read = connection.CreateCommand();
         read.CommandText = "PRAGMA user_version;";
         Convert.ToInt64(read.ExecuteScalar()).ShouldBe(9L);

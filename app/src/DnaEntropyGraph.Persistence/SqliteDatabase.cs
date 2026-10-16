@@ -304,9 +304,7 @@ internal static class SqliteMigrations
         var latest = migrations.Count == 0 ? 0L : migrations.Max(m => m.Version);
         if (currentVersion > latest)
         {
-            throw new InvalidOperationException(
-                $"The run history database is at schema version {currentVersion}, newer than this version of the app understands ({latest}). " +
-                "It was written by a newer DNA Entropy Graph. Update the app to the latest version; do not delete the database.");
+            throw new DatabaseNewerThanAppException(currentVersion, latest);
         }
 
         foreach (var (version, sql) in migrations.OrderBy(m => m.Version))

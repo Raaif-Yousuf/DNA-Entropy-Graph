@@ -48,6 +48,13 @@ public static class Program
             return;
         }
 
+        // Issue #842: a run history written by a newer app ends the launch with a plain message, before any window.
+        if (!StartupDataRoot.TryOpenDatabase(StartupDataRoot.Current))
+        {
+            Environment.ExitCode = 2;
+            return;
+        }
+
         WinRT.ComWrappersSupport.InitializeComWrappers();
 
         // Issue #107/#108: a second launch (a clicked notification, a double-clicked file) goes to the running app and ends here.

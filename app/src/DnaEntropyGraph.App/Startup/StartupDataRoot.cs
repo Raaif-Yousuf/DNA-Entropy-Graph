@@ -31,6 +31,28 @@ public static class StartupDataRoot
         }
     }
 
+    /// <summary>
+    /// Opens the run history database once, before any window exists (issue #842). False when it was written by a newer
+    /// version of the app: the message has then been shown and the file is untouched (it is never treated as corrupt).
+    /// </summary>
+    public static bool TryOpenDatabase(AppDataRoot root, Action<string>? show = null, Presentation.Services.IStringResourceProvider? strings = null)
+    {
+        try
+        {
+            using var database = new Persistence.SqliteDatabase(root.DatabaseFile, portable: root.IsPortable);
+            database.OpenConnection().Dispose();
+            return true;
+        }
+        catch (Persistence.DatabaseNewerThanAppException ex)
+        {
+            (show ?? Show)(MessageFor(ex, strings ?? new ReswStringResourceProvider()));
+            return false;
+        }
+    }
+
+    public static string MessageFor(Persistence.DatabaseNewerThanAppException ex, Presentation.Services.IStringResourceProvider strings)
+        => string.Format(System.Globalization.CultureInfo.CurrentCulture, strings.GetString("DatabaseNewerThanApp"), ex.DatabaseVersion, ex.AppVersion);
+
     /// <summary>The root for this process: the command line, the environment, a <c>portable.flag</c> beside the exe, then the real folder (issue #144). Public so a test can prove the real program folder is the one asked.</summary>
     public static AppDataRoot ResolveForThisProcess(IReadOnlyList<string> args)
         => AppDataRoot.Resolve(args, Environment.GetEnvironmentVariable, Environment.CurrentDirectory, programDirectory: AppContext.BaseDirectory);

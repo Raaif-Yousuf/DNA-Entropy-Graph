@@ -1,1 +1,2 @@
 - Persistence: the embedded migration set is validated (names `NNNN_snake.sql`, versions exactly 1..N, no duplicates) and a database newer than the app is refused with an update action (#842).
+- Startup: a run history written by a newer app (DatabaseNewerThanAppException) ends the launch with a plain message (Install the latest version) and the file is never quarantined (#842).
