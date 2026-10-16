@@ -76,7 +76,7 @@
     <value>Starting or stopping</value>
   </data>
   <data name="CloudVm_AnotherComputer" xml:space="preserve">
-    <value>Another computer: created from a different copy of this app in the same project. You can see it here but not change it. Use that computer, or Google Cloud Console.</value>
+    <value>Another computer: created from a different copy of this app in the same project. You can see it here but not change it. To end it, use the copy of the app that created it.</value>
   </data>
   <data name="CloudVm_CostRunning" xml:space="preserve">
     <value>Up to about ${0} per hour while it runs.</value>
@@ -85,10 +85,10 @@
     <value>About ${0} per day for its disk until you delete it.</value>
   </data>
   <data name="CloudDisk_Attached" xml:space="preserve">
-    <value>{0} GB, in use by a computer ({1})</value>
+    <value>{0} GB, in use by a computer</value>
   </data>
   <data name="CloudDisk_Detached" xml:space="preserve">
-    <value>{0} GB, not in use ({1})</value>
+    <value>{0} GB, not in use</value>
   </data>
   <data name="CloudDisk_Cost" xml:space="preserve">
     <value>About ${0} per day.</value>
@@ -104,6 +104,21 @@
   </data>
   <data name="CloudDeleteAll_Body" xml:space="preserve">
     <value>This deletes {0} rented computer(s), {1} disk(s) and {2} job folder(s) with their results online ({3}). Runs still going end as cancelled. Results already downloaded to this PC stay. Google may keep deleted job folders for a few days before they are gone for good. This cannot be undone.</value>
+  </data>
+  <data name="CloudSize_GB" xml:space="preserve">
+    <value>{0} GB</value>
+  </data>
+  <data name="CloudSize_MB" xml:space="preserve">
+    <value>{0} MB</value>
+  </data>
+  <data name="CloudSize_KB" xml:space="preserve">
+    <value>{0} KB</value>
+  </data>
+  <data name="CloudSize_B" xml:space="preserve">
+    <value>{0} bytes</value>
+  </data>
+  <data name="CloudPage_DeleteAllInterrupted" xml:space="preserve">
+    <value>The cleanup was interrupted, so some items may already be deleted. Press Refresh to see what is left, then press Delete everything again.</value>
   </data>
   <data name="CloudKind_Vm" xml:space="preserve">
     <value>computer</value>
@@ -1792,7 +1807,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Skip for now</value>
   </data>
   <data name="WizardGpuAskButton.Content" xml:space="preserve">
-    <value>Ask Google for a GPU</value>
+    <value>Ask Google for a graphics card (GPU)</value>
   </data>
   <data name="WizardGpuAsk_Requested" xml:space="preserve">
     <value>Your request is with Google. A decision can take a day or two, and Google emails the address of this account. Press Check again later, or Skip for now and run on the computer's own graphics card.</value>
@@ -1807,16 +1822,16 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Check billing</value>
   </data>
   <data name="WizardGpuAsk_NoHistory" xml:space="preserve">
-    <value>Google only lets a project ask for a GPU after it has some past use. Open Google&apos;s quota page and ask there with a short note about your research, or press Skip for now.</value>
+    <value>Google only lets a project ask for a graphics card (GPU) after it has some past use. Open Google&apos;s page for limits (quota) and ask there with a short note about your research, or press Skip for now.</value>
   </data>
   <data name="WizardGpuAsk_NotEligible" xml:space="preserve">
-    <value>Google would not let this app ask for a GPU on this project. Open Google&apos;s quota page and ask there, or press Skip for now.</value>
+    <value>Google would not let this app ask for a graphics card (GPU) on this project. Open Google&apos;s page for limits (quota) and ask there, or press Skip for now.</value>
   </data>
   <data name="WizardGpuAsk_OpenQuotaPage" xml:space="preserve">
-    <value>Open Google&apos;s quota page</value>
+    <value>Open Google&apos;s page for limits (quota)</value>
   </data>
   <data name="WizardGpuAsk_Permission" xml:space="preserve">
-    <value>This account is not allowed to ask for more quota, or the quota service is switched off. Open Google&apos;s quota page, or ask the owner of the project to do it.</value>
+    <value>This account is not allowed to raise the project&apos;s limit on graphics cards (its quota), or the service that sets limits is switched off. Open Google&apos;s page for limits, or ask the owner of the project to do it.</value>
   </data>
   <data name="WizardGpuAsk_Failed" xml:space="preserve">
     <value>Google did not answer the request. Press Try again.</value>

@@ -101,12 +101,12 @@ you can submit it by hand. Approval, when it happens, is often within minutes; w
 does not happen automatically, it can take a few days as your billing account builds a
 little history.
 
-Press **Ask Google for a GPU** and the row tells you what Google said, with one button:
+Press **Ask Google for a graphics card (GPU)** and the row tells you what Google said, with one button:
 
 - **Allowed at once:** the row turns green by itself.
 - **Request sent:** Google is reviewing it and emails the address of your Google account. Press **Check again** later, or **Skip for now**.
 - **No billing account on the project:** press **Check billing**, fix it, then ask again.
-- **Too little past use, or Google will not take a request from the app:** press **Open Google's quota page** and ask there.
+- **Too little past use, or Google will not take a request from the app:** press **Open Google's page for limits (quota)** and ask there.
 - **Your account may not ask (or the quota service is off):** the same link, or ask the project's owner.
 - **Google did not answer:** press **Try again**.
 
@@ -141,7 +141,8 @@ people will not see this step at all.
 You never have to redo this setup. Once it is done, you can re-run the health check any
 time from **Settings > Account > Run setup check again**, which walks through the same
 checks (project reachable, billing on, services on, quota available) without recreating
-anything that already exists.
+anything that already exists. (This **Account** group is not in the app yet; until it is, the
+Google Cloud console shows the same four things.)
 
 ## Related
 

@@ -23,9 +23,16 @@ from ..annotators.base import GeneFeature
 
 
 def _build_record(
-    contig_name: str, seq: str, features: Sequence[GeneFeature], values: np.ndarray, source_id: str
+    contig_name: str,
+    seq: str,
+    features: Sequence[GeneFeature],
+    values: np.ndarray,
+    source_id: str,
+    circular: bool = False,
 ):
-    """Build one Biopython ``SeqRecord`` with per-gene mean-entropy notes."""
+    """Build one Biopython ``SeqRecord`` with per-gene mean-entropy notes. ``circular`` (issue
+    #524) writes ``circular`` in the LOCUS line; a linear record writes no topology word, as
+    Biopython does by default, so every linear file is byte-identical to before this existed."""
     from Bio.Seq import Seq
     from Bio.SeqFeature import FeatureLocation, SeqFeature
     from Bio.SeqRecord import SeqRecord
@@ -37,6 +44,8 @@ def _build_record(
     record = SeqRecord(Seq(seq), id=locus, name=locus, description=desc)
     record.annotations["molecule_type"] = "DNA"
     record.annotations["source"] = "DNA-Entropy"
+    if circular:
+        record.annotations["topology"] = "circular"
 
     for f in features:
         begin0 = max(f.begin - 1, 0)  # 1-based inclusive -> 0-based half-open
@@ -72,9 +81,12 @@ class GenBankWriter:
         start: int,
         features: Sequence[GeneFeature],
         out_dir: str,
+        circular: bool = False,
     ) -> str:
         """Write a single-record GenBank."""
-        return self.write_multi(name=name, records=[(name, seq, features, values, "")], out_dir=out_dir)
+        return self.write_multi(
+            name=name, records=[(name, seq, features, values, "")], out_dir=out_dir, circular=[circular]
+        )
 
     def write_multi(
         self,
@@ -82,16 +94,25 @@ class GenBankWriter:
         name: str,
         records: Sequence[tuple[str, str, Sequence[GeneFeature], np.ndarray, str]],
         out_dir: str,
+        circular: Sequence[bool] | None = None,
     ) -> str:
         """Write one GenBank file holding one record per contig.
 
         Each ``records`` item is ``(contig_name, seq, features, values, source_id)``.
+        ``circular`` (issue #524), when given, has one entry per record: the topology the contig
+        was analyzed with, written into its LOCUS line. ``None`` means every record is linear.
         """
         from Bio.SeqIO import write as _seqio_write
 
+        if circular is None:
+            circular = [False] * len(records)
+        if len(circular) != len(records):
+            raise ValueError("circular needs one entry per record.")
         seq_records = [
-            _build_record(contig_name, seq, features, values, source_id)
-            for contig_name, seq, features, values, source_id in records
+            _build_record(contig_name, seq, features, values, source_id, is_circular)
+            for (contig_name, seq, features, values, source_id), is_circular in zip(
+                records, circular, strict=True
+            )
         ]
         out_path = Path(out_dir) / f"{name}.gb"
         out_path.parent.mkdir(parents=True, exist_ok=True)

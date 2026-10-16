@@ -66,18 +66,7 @@ public sealed class ViewerCopyTests
 
     private static HashSet<string> ReswKeys()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var path = Path.Combine(dir.FullName, "app", "src", "DnaEntropyGraph.App", "Strings", "en-US", "Resources.resw");
-            if (File.Exists(path))
-            {
-                return Regex.Matches(File.ReadAllText(path), "<data name=\"([^\"]+)\"").Select(m => m.Groups[1].Value).ToHashSet();
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new FileNotFoundException("Resources.resw not found above " + AppContext.BaseDirectory);
+        // TestPaths.RepoRoot walks up from the test binary and then from its own source file (#495).
+        return Regex.Matches(File.ReadAllText(TestPaths.ReswPath), "<data name=\"([^\"]+)\"").Select(m => m.Groups[1].Value).ToHashSet();
     }
 }
