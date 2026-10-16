@@ -1,0 +1,5 @@
+##gff-version 3
+##sequence-region golden_1 1 58
+##sequence-region golden_2 1 57
+golden_1	dna-entropy	region	1	58	.	.	.	ID=high_entropy_1;Name=high_entropy_1;kind=high_entropy;length=58;mean_entropy=1.6018
+golden_2	dna-entropy	region	1	57	.	.	.	ID=high_entropy_2;Name=high_entropy_2;kind=high_entropy;length=57;mean_entropy=1.5739
