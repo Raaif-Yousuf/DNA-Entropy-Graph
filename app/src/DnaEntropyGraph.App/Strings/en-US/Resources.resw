@@ -2102,4 +2102,10 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunError_worker_stage_stuck" xml:space="preserve">
     <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
+  <data name="AuthError_CONSENT_INCOMPLETE" xml:space="preserve">
+    <value>Google signed you in, but the permission this app needs to set up and run your rented computer was not ticked on the permission page. Choose Sign in again and allow access, then leave every box ticked.</value>
+  </data>
+  <data name="AuthAction_AllowAccess" xml:space="preserve">
+    <value>Sign in again and allow access</value>
+  </data>
 </root>
