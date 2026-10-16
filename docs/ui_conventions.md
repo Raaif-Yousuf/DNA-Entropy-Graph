@@ -22,7 +22,9 @@ $0.00 this month`. Active runs show a badge on the **Runs** item so a user who n
 away never loses track of a job in progress. Keyboard: `Ctrl+N` new run, `Ctrl+O` add
 files, `Ctrl+Shift+V` paste sequence, `Ctrl+Enter` run, `Esc` cancel a dialog, `F5` refresh
 (Cloud/History), `Ctrl+,` Settings, `Ctrl+L` focus the locus box in the viewer, `Alt+Left`
-back.
+back. Viewer page keys (#247): Left/Right pan a quarter window, `+`/`-` zoom, `Home` or `1` whole record,
+`2`/`3` 10 kb / 1 kb about the centre, `Ctrl+L` focus the locus box. bridge.js only forwards the key
+(`{evt:"key"}`); `Viewer/ViewerKeyboard.cs` decides, so the rules are unit tested.
 
 Shell behaviour MEASURED 2026-10-02 (#489, #490): the header is the localized
 `PageTitle_<key>` string (`ShellViewModel.CurrentPageTitle`), never the page key; New run

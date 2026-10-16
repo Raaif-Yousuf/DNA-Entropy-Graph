@@ -51,7 +51,9 @@ the time igv.js asks for a file.
 failure. File names are the worker's writer names ([`science_and_formats.md`](science_and_formats.md)).
 
 - **Reference:** the one `<name>.fasta` that has an entropy file with the same stem, loaded with
-  `indexed:false` (the worker writes no `.fai`, so igv.js reads the whole FASTA into the page).
+  `indexed:false` (the worker writes no `.fai`, so igv.js reads the whole FASTA into the page). A FASTA over 50 MB (up to
+  1 GB) is loaded `indexed:true` with an `indexURL` on `https://fai.deg/`, a generated `.fai` in `AppDataRoot.FastaIndexDirectory`
+  (issue #497); `FastaIndexWriter` streams the file, so it never sits in memory.
 - **Entropy tracks:** `<name>.entropy.bedgraph`, and in the "separate tracks" direction mode also
   `<name>.entropy.fwd.*` and `<name>.entropy.rev.*`. bedGraph is preferred over `.wig` for each track; at most one
   file per track. Each is a `wig` track fixed to **0 to 2 bits with autoscale off** (Hard Rule 3), named
@@ -60,10 +62,10 @@ failure. File names are the worker's writer names ([`science_and_formats.md`](sc
 - URLs are `https://run.deg/` plus the URL-escaped file name.
 
 Failures never guess: no FASTA (`NoSequenceFile`), no entropy file for any FASTA (`NoEntropyTrack`), more than one
-FASTA with entropy (`AmbiguousSequenceFile`), a FASTA over **50 MB** (`SequenceTooLarge`, `ViewerLimits`), or a
+FASTA with entropy (`AmbiguousSequenceFile`), a FASTA over **1 GB** (`SequenceTooLarge`, `ViewerLimits.MaxIndexedFastaBytes`), one the indexer refuses (`IndexFailed`), or a
 missing folder. Each maps to one `ViewerStatus` and one message with one action. The appendix's fallback for
-inputs above about 50 MB (stream `features` arrays through `PostWebMessageAsJson`, generate a `.fai`) is **not
-built**; the viewer refuses instead.
+inputs above about 50 MB: the `.fai` half is built (#497); streaming `features` arrays through `PostWebMessageAsJson` is **not
+built**, and the viewer refuses above 1 GB.
 
 ## 3. The bridge (`bridge.js`)
 
@@ -177,7 +179,7 @@ WebView2. See [`ToTest.md`](ToTest.md) for what is unproven on a real build.
 | --- | --- |
 | `Profile.PreferredColorScheme` follows the app theme, `dark.css` overrides igv chrome | A `dark` body class and an invert/hue-rotate filter (section 5) |
 | `DenyCors` on the run folder | `Allow` (MEASURED 2026-10-02, section 1) |
-| Fallback for inputs above about 50 MB: chunked `features` arrays and a local `.fai` | Not built; `SequenceTooLarge` instead |
+| Fallback for inputs above about 50 MB: chunked `features` arrays and a local `.fai` | The local `.fai` is built (#497); chunked arrays are not, `SequenceTooLarge` above 1 GB |
 | A native ScottPlot overview chart and a contig dropdown outside the WebView | Not part of the Viewer page. Tracked separately, not in this file |
 | When the runtime is missing, hide the viewer and keep the native chart | The viewer shows the named-action error; there is no native chart fallback yet |
 | `Process.Start(geneious.exe, files)` | Plus program discovery, launch-safety refusals and the IGV batch-port protocol (section 7) |

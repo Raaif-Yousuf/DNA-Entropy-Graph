@@ -3,6 +3,7 @@ using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Tracks;
+using DnaEntropyGraph.Core.Viewers;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.Viewer;
 
@@ -18,6 +19,7 @@ public enum ViewerStatus
     NoEntropyTrack,
     AmbiguousSequenceFile,
     SequenceTooLarge,
+    IndexFailed,
     Loading,
     Ready,
     ViewerError,
@@ -43,6 +45,10 @@ public sealed partial class ViewerViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly IEntropyOverviewSource _overviewSource;
     private readonly long _maxFastaBytes;
+    private readonly IFastaIndexStore? _indexStore;
+    private readonly long _maxIndexedBytes;
+    private int _openGeneration;
+    private CancellationTokenSource? _openCts;
     private int _contigGeneration;
     private int _fallbackGeneration;
     private bool _settingSelection;
@@ -51,6 +57,8 @@ public sealed partial class ViewerViewModel : ObservableObject
     private string? _loadJson;
     private bool _pageReady;
     private bool _dark;
+    private ViewerLocus? _locus;
+    private bool _keysOn;
 
     // Issue #699: the locus the run was opened at (kept for a reload of the page), and the record it names.
     private string? _targetLocus;
@@ -119,8 +127,12 @@ public sealed partial class ViewerViewModel : ObservableObject
         IWebViewRuntimeProbe probe,
         IStringResourceProvider strings,
         IEntropyOverviewSource overviewSource,
-        long maxFastaBytes = ViewerLimits.MaxFastaBytes)
+        long maxFastaBytes = ViewerLimits.MaxFastaBytes,
+        IFastaIndexStore? indexStore = null,
+        long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes)
     {
+        _indexStore = indexStore;
+        _maxIndexedBytes = maxIndexedBytes;
         _probe = probe;
         _strings = strings;
         _overviewSource = overviewSource;
@@ -162,6 +174,22 @@ public sealed partial class ViewerViewModel : ObservableObject
             {
                 RetryCommand.NotifyCanExecuteChanged();
                 GoToContigCommand.NotifyCanExecuteChanged();
+                SyncPageKeys();
+            }
+        }
+    }
+
+    // The page swallows navigation keys only while the run is drawn (issue #247): a key the ViewModel would ignore must keep its
+    // normal browser meaning. Sent on change only; a page that reloads starts with keys off.
+    private void SyncPageKeys()
+    {
+        var want = _pageReady && _status == ViewerStatus.Ready;
+        if (want != _keysOn)
+        {
+            _keysOn = want;
+            if (_pageReady)
+            {
+                Send(new { cmd = "keys", enabled = want });
             }
         }
     }
@@ -226,8 +254,21 @@ public sealed partial class ViewerViewModel : ObservableObject
         }
     }
 
+    /// <summary>Completes when the index of a long FASTA (issue #497) of the last <see cref="OpenRun"/> is built and applied; already complete when none was needed.</summary>
+    public Task OpenReady { get; private set; } = Task.CompletedTask;
+
+    /// <summary>The page was left: stop a running index build (issue #497). Nothing of it is applied.</summary>
+    public void CancelOpen()
+    {
+        _openGeneration++;
+        _openCts?.Cancel();
+    }
+
     public void OpenRun(string? runFolder)
     {
+        CancelOpen();
+        _openGeneration++;
+        OpenReady = Task.CompletedTask;
         _lastRunFolder = runFolder;
         _fallbackGeneration++; // a slow fallback read for the previous run must not land on this one
         if (string.IsNullOrWhiteSpace(runFolder))
@@ -244,6 +285,46 @@ public sealed partial class ViewerViewModel : ObservableObject
         }
 
         var plan = IgvLoadPlanner.Plan(runFolder, _maxFastaBytes);
+        if (plan.Failure == IgvPlanFailure.SequenceTooLarge && _indexStore is not null && IsIndexable(plan.FastaPath))
+        {
+            // Issue #497: a long FASTA gets a .fai in the app's own folder; building it can take seconds, so not on this thread.
+            ResetRunState();
+            ShowLoading();
+            _openCts = new CancellationTokenSource();
+            OpenReady = OpenIndexedAsync(runFolder, _openGeneration, _openCts.Token);
+            return;
+        }
+
+        ApplyPlan(plan);
+    }
+
+    private bool IsIndexable(string? fastaPath) => fastaPath is not null && new FileInfo(fastaPath).Length <= _maxIndexedBytes;
+
+    private async Task OpenIndexedAsync(string runFolder, int generation, CancellationToken cancellationToken)
+    {
+        IgvLoadPlan plan;
+        try
+        {
+            plan = await Task.Run(() => IgvLoadPlanner.PlanCancellable(runFolder, _maxFastaBytes, _indexStore, _maxIndexedBytes, cancellationToken), CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception)
+        {
+            // Never leave the page on "Loading" for a file that vanished or an unreadable folder.
+            plan = new IgvLoadPlan(IgvPlanFailure.IndexFailed, runFolder, null);
+        }
+
+        if (generation == _openGeneration)
+        {
+            ApplyPlan(plan);
+        }
+    }
+
+    private void ApplyPlan(IgvLoadPlan plan)
+    {
         switch (plan.Failure)
         {
             case IgvPlanFailure.FolderMissing:
@@ -260,6 +341,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 return;
             case IgvPlanFailure.SequenceTooLarge:
                 Fail(ViewerStatus.SequenceTooLarge, ViewerFailure.SequenceTooLarge);
+                return;
+            case IgvPlanFailure.IndexFailed:
+                Fail(ViewerStatus.IndexFailed, ViewerFailure.IndexFailed);
                 return;
         }
 
@@ -388,6 +472,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         {
             case "ready":
                 _pageReady = true;
+                _keysOn = false;
                 if (_dark)
                 {
                     // The page starts light; only a dark app theme needs a theme command.
@@ -405,6 +490,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 if (Status == ViewerStatus.Loading)
                 {
                     IsLoading = false;
+
+                    // The page reports where it landed, so the keys work before the first mouse pan (the locus listener attaches after the first draw).
+                    _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var first) ? first : null;
                     Status = ViewerStatus.Ready;
                     // A freshly drawn page shows the first record; keep the selector in step with it.
                     SelectWithoutGoto(InitialContig());
@@ -426,13 +514,50 @@ public sealed partial class ViewerViewModel : ObservableObject
             case "error":
                 FailKeepingRun(ViewerFailure.ViewerError);
                 break;
+            case "locusChanged":
+                _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var locus) ? locus : null;
+                break;
+            case "key":
+                OnViewerKey(json);
+                break;
         }
+    }
+
+    // Issue #247: bridge.js forwards the key; the pan, zoom and preset decisions are ViewerKeyboard's.
+    private void OnViewerKey(string json)
+    {
+        if (!_pageReady || Status != ViewerStatus.Ready)
+        {
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(json);
+        var key = doc.RootElement.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() : null;
+        var ctrl = doc.RootElement.TryGetProperty("ctrl", out var c) && c.ValueKind == JsonValueKind.True;
+        int? length = _locus is { } l && Contigs.FirstOrDefault(x => x.Name == l.Chr) is { Length: > 0 } contig ? contig.Length : null;
+        var result = ViewerKeyboard.Resolve(key, ctrl, _locus, length);
+        switch (result.Kind)
+        {
+            case ViewerKeyKind.Goto:
+                Send(new { cmd = "goto", locus = result.Locus });
+                break;
+            case ViewerKeyKind.FocusLocus:
+                Send(new { cmd = "focusLocus" });
+                break;
+        }
+    }
+
+    private static string? ReadString(string json, string name)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
     }
 
     /// <summary>The WebView2 renderer or browser process died: the page is gone until the host reloads it.</summary>
     public void OnViewerProcessFailed()
     {
         _pageReady = false;
+        _keysOn = false;
         FailKeepingRun(ViewerFailure.ProcessFailed);
     }
 
@@ -473,6 +598,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private void ShowLoading()
     {
         _fallbackGeneration++;
+        _locus = null;
         FallbackContig = null;
         IsErrorVisible = false;
         IsViewerVisible = true;
@@ -495,12 +621,18 @@ public sealed partial class ViewerViewModel : ObservableObject
     // A problem with this run (or the control): nothing to show, nothing mapped, nothing to resend.
     private void Fail(ViewerStatus status, ViewerFailure failure, string? actionUrl = null)
     {
+        ResetRunState();
+        ShowError(status, failure, actionUrl);
+    }
+
+    private void ResetRunState()
+    {
         _loadJson = null;
+        _locus = null;
         MapRunFolder = null;
         _contigGeneration++;
         ClearContigs();
         FallbackContig = null;
-        ShowError(status, failure, actionUrl);
     }
 
     // A failure of the viewer page itself: keep the run so a retry or a reloaded page redraws it.
@@ -519,7 +651,14 @@ public sealed partial class ViewerViewModel : ObservableObject
         IsViewerVisible = false;
         IsLoading = false;
         ErrorTitle = _strings.GetString(copy.TitleKey);
-        ErrorBody = _strings.GetString(copy.BodyKey);
+        var body = _strings.GetString(copy.BodyKey);
+        if (failure == ViewerFailure.SequenceTooLarge)
+        {
+            // The limit in force: the in-page one with no index store, the indexed one with it. Formatted from the constants (issue #497).
+            body = string.Format(System.Globalization.CultureInfo.CurrentCulture, body, ViewerLimits.Describe(_indexStore is null ? _maxFastaBytes : _maxIndexedBytes));
+        }
+
+        ErrorBody = body;
         ActionUrl = actionUrl;
         ActionLabel = copy.ActionKey is null ? string.Empty : _strings.GetString(copy.ActionKey);
         IsErrorVisible = true;
