@@ -60,7 +60,7 @@ public static class OutputCatalog
     public static OutputFileKinds Normalize(OutputFileKinds kinds) => kinds.HasFlag(OutputFileKinds.BedGraph) ? kinds & ~OutputFileKinds.Wig : kinds;
 
     /// <summary>The group an input kind's choice belongs to: GenBank, or sequence (FASTA and pasted text).</summary>
-    public static OutputInputKinds GroupFor(InputKind kind) => kind == InputKind.GenBank ? OutputInputKinds.GenBank : OutputInputKinds.Sequence;
+    public static OutputInputKinds GroupFor(InputKind kind) => kind is InputKind.GenBank or InputKind.Embl or InputKind.SnapGene ? OutputInputKinds.GenBank : OutputInputKinds.Sequence;
 
     /// <summary>The files offered for a group, in the contract's order.</summary>
     public static IReadOnlyList<OutputEntry> For(OutputInputKinds group) => Entries.Where(e => (e.Offered & group) != 0).ToList();

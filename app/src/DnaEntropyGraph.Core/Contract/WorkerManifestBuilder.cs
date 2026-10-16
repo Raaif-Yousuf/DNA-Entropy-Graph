@@ -179,6 +179,8 @@ public static class WorkerManifestBuilder
         InputFormat.GenBank => "genbank",
         InputFormat.Fasta => "fasta",
         InputFormat.Plain => "paste",
+        InputFormat.Embl => "embl",
+        InputFormat.SnapGene => "snapgene",
         _ => "auto",
     };
 
