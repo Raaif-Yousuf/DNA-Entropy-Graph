@@ -2,6 +2,7 @@
     x:Class="DnaEntropyGraph.App.Views.ResultsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:DnaEntropyGraph.App.Controls"
     xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
 
     <!--
@@ -33,6 +34,17 @@
                 <Button x:Uid="ResultsOpenInViewerButton" Command="{x:Bind ViewModel.OpenInViewerCommand}" />
                 <Button x:Uid="ResultsOpenInIgvButton" Command="{x:Bind ViewModel.OpenInIgvCommand}" />
                 <Button x:Uid="ResultsOpenInGeneiousButton" Command="{x:Bind ViewModel.OpenInGeneiousCommand}" />
+                <Button x:Uid="ResultsExportPngButton" Command="{x:Bind ViewModel.ExportOverviewPngCommand}" />
+            </StackPanel>
+
+            <!-- Issue #118: the entropy overview strip. Shown only when the run wrote an entropy track; fills in just after the page. -->
+            <StackPanel Spacing="4" Visibility="{x:Bind ViewModel.HasOverview, Mode=OneWay}">
+                <TextBlock Text="{x:Bind ViewModel.OverviewTitle, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <controls:EntropyOverviewChart
+                    x:Uid="ResultsOverviewChart"
+                    Height="180"
+                    Contig="{x:Bind ViewModel.Overview, Mode=OneWay}" />
+                <TextBlock x:Uid="ResultsOverviewSeam" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.7" />
             </StackPanel>
 
             <TextBlock x:Uid="ResultsStatsHeading" Style="{StaticResource SubtitleTextBlockStyle}" />

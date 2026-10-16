@@ -129,6 +129,8 @@ jobs:
       # Lint first (#430): scripts/ruff.toml is the config; the guards are the last place to be unmaintained.
       - name: ruff check scripts
         run: uvx ruff check scripts
+      - name: ruff format --check scripts
+        run: uvx ruff format --check scripts
       - name: pytest scripts/tests
         run: uv run --with pytest --with pyyaml python -m pytest scripts/tests -q
 
