@@ -475,6 +475,9 @@
   <data name="RunError_worker_identity_not_applied" xml:space="preserve">
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
   </data>
+  <data name="RunError_cleanup_stopped" xml:space="preserve">
+    <value>This run ended because its rented computer was stopped when you closed the app, before the results were downloaded. Choose Run to start the run again.</value>
+  </data>
   <data name="RunError_cleanup_deleted" xml:space="preserve">
     <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
   </data>
@@ -1804,7 +1807,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Continue to reset, or Cancel to keep your settings.</value>
   </data>
   <data name="AdvancedResetDone" xml:space="preserve">
-    <value>Settings were reset. Close the app and open it again to finish.</value>
+    <value>Settings were reset to their starting values. The Settings page shows them now.</value>
   </data>
   <data name="AdvancedNotSaved" xml:space="preserve">
     <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
@@ -2110,6 +2113,76 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
     <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
+  <data name="LeftRunning_ExitTitle" xml:space="preserve">
+    <value>A rented computer is still running</value>
+  </data>
+  <data name="LeftRunning_ExitBody" xml:space="preserve">
+    <value>These rented computers (VMs) are still running and costing money:
+
+{0}
+
+A computer that keeps running ends itself at its time limit, but you pay until then. Press Stop to keep its disk and stop the cost of the computer, or Delete to remove it completely. {1}</value>
+  </data>
+  <data name="LeftRunning_VmLine" xml:space="preserve">
+    <value>{0} in {1}: ends itself in about {2} minutes. {3}</value>
+  </data>
+  <data name="LeftRunning_VmLineLive" xml:space="preserve">
+    <value>{0} in {1}: a run is still using it and its results are not downloaded yet. Stop it or Delete it ends that run and you lose those results. Otherwise it ends itself in about {2} minutes. {3}</value>
+  </data>
+  <data name="LeftRunning_VmLineNoLimit" xml:space="preserve">
+    <value>{0} in {1}: its time limit could not be read. Open the Cloud page to check it. {2}</value>
+  </data>
+  <data name="LeftRunning_CostPerHour" xml:space="preserve">
+    <value>Up to about ${0} per hour.</value>
+  </data>
+  <data name="LeftRunning_CostUnknown" xml:space="preserve">
+    <value>The price list could not be read.</value>
+  </data>
+  <data name="LeftRunning_DiskNote" xml:space="preserve">
+    <value>{0} stopped disk(s) also cost about ${1} per month until you delete them on the Cloud page.</value>
+  </data>
+  <data name="LeftRunning_DiskNoteNoPrice" xml:space="preserve">
+    <value>{0} stopped disk(s) also keep costing money until you delete them on the Cloud page.</value>
+  </data>
+  <data name="LeftRunning_Stop" xml:space="preserve">
+    <value>Stop it</value>
+  </data>
+  <data name="LeftRunning_Delete" xml:space="preserve">
+    <value>Delete it</value>
+  </data>
+  <data name="LeftRunning_Leave" xml:space="preserve">
+    <value>Leave it running</value>
+  </data>
+  <data name="LeftRunning_StopFailedTitle" xml:space="preserve">
+    <value>A computer could not be stopped</value>
+  </data>
+  <data name="LeftRunning_StopFailedBody" xml:space="preserve">
+    <value>Could not stop {0}. Close the app again to retry, or open the Cloud page and press Stop on it.</value>
+  </data>
+  <data name="LeftRunning_DeleteFailedTitle" xml:space="preserve">
+    <value>A computer could not be deleted</value>
+  </data>
+  <data name="LeftRunning_DeleteFailedBody" xml:space="preserve">
+    <value>Could not delete {0}. Close the app again to retry, or open the Cloud page and press Delete on it.</value>
+  </data>
+  <data name="LeftRunning_ToastTitle" xml:space="preserve">
+    <value>A rented computer is running with no run attached</value>
+  </data>
+  <data name="LeftRunning_ToastBody" xml:space="preserve">
+    <value>{0} in {1} is running and costing money. Open the Cloud page and press Stop on it if you are not waiting for it.</value>
+  </data>
+  <data name="LeftRunning_StillEndingTitle" xml:space="preserve">
+    <value>A computer is still being ended</value>
+  </data>
+  <data name="LeftRunning_StillEndingBody" xml:space="preserve">
+    <value>{0} is still being ended and will finish on Google's side. Open the Cloud page next time you start the app to check that it is gone.</value>
+  </data>
+  <data name="LeftRunning_ToastBodyMany" xml:space="preserve">
+    <value>{0} rented computers are running and costing money: {1}. Open the Cloud page and press Stop on each one you are not waiting for.</value>
+  </data>
+  <data name="LeftRunning_ToastMore" xml:space="preserve">
+    <value>and {0} more</value>
   </data>
   <data name="SettingsAboutHeader.Text" xml:space="preserve">
     <value>About and updates</value>

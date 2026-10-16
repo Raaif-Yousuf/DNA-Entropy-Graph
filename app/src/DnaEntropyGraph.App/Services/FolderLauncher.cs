@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 
 namespace DnaEntropyGraph.App.Services;
@@ -30,9 +31,15 @@ public sealed class FolderLauncher : IFolderLauncher
 
     public bool RevealFile(string filePath)
     {
+        // Explorer reads this switch with its own rules, so the quoting is DnaEntropyGraph.Core.ExplorerCommandLine's (tested); a path it refuses is "could not reveal".
+        if (ExplorerCommandLine.Select(filePath) is not { } arguments)
+        {
+            return false;
+        }
+
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{filePath}\"") { UseShellExecute = false });
+            Process.Start(new ProcessStartInfo("explorer.exe", arguments) { UseShellExecute = false });
             return true;
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
