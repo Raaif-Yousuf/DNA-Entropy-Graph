@@ -277,10 +277,14 @@ def _lock_path(ctx: Ctx, name: str) -> Path:
     return ctx.tmp_root / LOCK_DIR / f"{name}.json"
 
 
-def _write_lock(ctx: Ctx, name: str) -> None:
+def _write_lock(ctx: Ctx, name: str, sha: str | None = None) -> None:
+    """`sha` is the commit the throwaway checks out: scripts/prune_worktrees.py (#794) reads it to judge a leftover."""
     path = _lock_path(ctx, name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"pid": os.getpid(), "start": time.time()}), encoding="utf-8", newline="\n")
+    record: dict[str, object] = {"pid": os.getpid(), "start": time.time()}
+    if sha:
+        record["sha"] = sha
+    path.write_text(json.dumps(record), encoding="utf-8", newline="\n")
 
 
 def _run_is_live(ctx: Ctx, name: str) -> bool:
@@ -565,7 +569,7 @@ def land(
         ctx.tmp_root.mkdir(parents=True, exist_ok=True)
         _clean_stale(ctx, slug)
         wt = ctx.tmp_root / f"{slug}-{time.strftime('%Y%m%d%H%M%S')}"
-        _write_lock(ctx, wt.name)
+        _write_lock(ctx, wt.name, full_sha)
         git(ctx.repo, "worktree", "add", "-q", "--detach", str(wt), full_sha)
         make_dir_link(wt / VENV_REL, ctx.venv)
         _merge_origin_main(ctx, wt)
