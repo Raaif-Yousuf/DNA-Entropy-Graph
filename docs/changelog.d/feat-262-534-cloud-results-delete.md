@@ -1,0 +1,1 @@
+- Delete cloud copy on the Runs page now really deletes that run's files (#262, #534): only that run's own folder in your Google Cloud storage, never the saved model files or other runs, with a read-back so a partial delete is reported with the number of files left and finished by pressing the button again.

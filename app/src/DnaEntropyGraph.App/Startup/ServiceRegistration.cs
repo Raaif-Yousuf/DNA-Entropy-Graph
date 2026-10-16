@@ -193,7 +193,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<IRunInputStore>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             [root.Path]));
-        services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
+        // Issues #262 and #534: the real deleter, scoped to jobs/<job id>/ in a deg- bucket and read back afterwards.
+        services.AddSingleton<IJobObjectDeleter>(sp => new JobObjectDeleter(sp.GetRequiredService<IStorageGateway>()));
 
         // Issue #102: the Results page reads a run's own output folder and opens its files through Windows.
         services.AddSingleton<IRunOutputReader, RunOutputReader>();

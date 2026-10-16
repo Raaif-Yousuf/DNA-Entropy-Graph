@@ -15,6 +15,8 @@ public sealed partial class FakeGcp
     private CloudErrorKind? _getVmFailure;
     private Action<string>? _afterPrefixDelete;
     private int? _bucketSoftDeleteDays;
+    private int? _prefixDeleteFailAfter;
+    private CloudErrorKind _prefixDeleteFailKind;
 
     /// <summary>Every disk this fake holds, by name: the observable for "a disk was really deleted".</summary>
     public IReadOnlyList<DiskDescriptor> Disks => _disks.Values.OrderBy(d => d.Name, StringComparer.Ordinal).ToList();
@@ -71,6 +73,17 @@ public sealed partial class FakeGcp
     public FakeGcp WithBucketSoftDeleteDays(int days)
     {
         _bucketSoftDeleteDays = days;
+        return this;
+    }
+
+    /// <summary>
+    /// The next prefix delete removes <paramref name="objects"/> objects, then fails once with <paramref name="kind"/> (403 for Permission): a sweep that dies partway.
+    /// A retry after it runs clean.
+    /// </summary>
+    public FakeGcp WithPrefixDeleteFailingAfter(int objects, CloudErrorKind kind)
+    {
+        _prefixDeleteFailAfter = objects;
+        _prefixDeleteFailKind = kind;
         return this;
     }
 
@@ -209,6 +222,13 @@ public sealed partial class FakeGcp
         var deleted = 0;
         foreach (var key in keys)
         {
+            if (_prefixDeleteFailAfter is { } allowed && deleted >= allowed)
+            {
+                // Issue #262: a sweep that dies partway (a 403 or a dropped connection on object N), leaving the rest in place.
+                _prefixDeleteFailAfter = null;
+                throw Build(_prefixDeleteFailKind, "SCRIPTED_DELETE_FAILURE", _prefixDeleteFailKind == CloudErrorKind.Permission ? 403 : null, $"The delete under '{prefix}' was scripted to stop after {allowed} objects ({_prefixDeleteFailKind}).");
+            }
+
             if (_objects.TryRemove(key, out _))
             {
                 deleted++;

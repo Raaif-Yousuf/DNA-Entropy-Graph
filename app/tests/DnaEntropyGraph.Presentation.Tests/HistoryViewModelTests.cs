@@ -489,7 +489,7 @@ public sealed class HistoryViewModelTests
     public async Task A_redownload_or_cloud_delete_that_throws_toasts_the_failure_copy(Type exception)
     {
         _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<RedownloadResult>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
-        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudResultsStatus>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudDeleteResult>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
         var vm = await Loaded(Row("a"));
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
@@ -664,6 +664,29 @@ public sealed class HistoryViewModelTests
 
         await _cloud.Received(1).DeleteAsync(Arg.Is<RunRecord>(r => r.JobId == "a"), Arg.Any<CancellationToken>());
         _toasts.Received(1).ShowToast("Runs_DeleteCloud_Done_Title", "Runs_DeleteCloud_Done_Body", ToastSeverity.Success);
+    }
+
+    [Fact]
+    public async Task A_cloud_delete_that_stopped_partway_toasts_the_partial_copy_and_not_done()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 3));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body", ToastSeverity.Warning);
+        _toasts.DidNotReceive().ShowToast("Runs_DeleteCloud_Done_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
+    }
+
+    [Fact]
+    public async Task A_partial_cloud_delete_with_an_unknown_count_says_so_without_a_number()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
     }
 
     [Fact]

@@ -1381,6 +1381,16 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
   job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
   `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `JobObjectDeleter` (Core/Runs, issues #262 and #534): the real `IJobObjectDeleter` behind the Runs page "Delete cloud copy" (replaces the stand-in that always said
+  "not connected"). It deletes exactly `jobs/<job id>/` and nothing else: the bucket must be a `deg-` bucket and the prefix must match `^jobs/[a-z0-9_-]{1,63}/$`
+  (so `jobs/`, `cache/`, an empty or partial prefix, a nested path or a `..` is refused with no request), and `RunCloudResults.DeleteAsync` has already
+  checked the stored prefix equals `jobs/<run's own job id>/`. It calls `DeletePrefixAsync`, then reads the prefix back with `GetPrefixUsageAsync`: objects left, or a
+  delete that failed midway (403, network), throw `PartialCloudDeleteException(Remaining)`, which becomes `CloudResultsStatus.PartiallyDeleted` with the count. The
+  run row is marked `CloudResultsDeleted` only on a clean read-back, so the button stays offered and the next press finishes it (a repeat delete of an empty prefix is
+  success). Deleted objects are not recoverable beyond the bucket's soft-delete window, which the confirm dialog does not promise either way.
+  The `cache/` model weights have their own lifecycle rule (`matchesPrefix: ["cache/"]`, 365 days or longer) separate from the `jobs/` rule, so neither the retention
+  rule nor this delete can reach the other prefix (`GoogleStorageGatewayTests` pins both rules by prefix). `FakeGcp.WithPrefixDeleteFailingAfter(n, kind)` scripts a
+  sweep that dies after n objects.
 - `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
   never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
   every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),

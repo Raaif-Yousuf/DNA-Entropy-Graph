@@ -28,6 +28,18 @@ public enum CloudResultsStatus
     NotConnected,
 
     Failed,
+
+    /// <summary>A delete stopped partway: some objects are gone, some are not, and the same press finishes it.</summary>
+    PartiallyDeleted,
+}
+
+/// <summary>
+/// What a cloud-copy delete did. <see cref="ObjectsLeft"/> is how many objects were still in the bucket for <see cref="CloudResultsStatus.PartiallyDeleted"/>
+/// (null when that could not be read). A bare <see cref="CloudResultsStatus"/> converts to a result with none.
+/// </summary>
+public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null)
+{
+    public static implicit operator CloudDeleteResult(CloudResultsStatus status) => new(status);
 }
 
 /// <summary>
@@ -78,7 +90,7 @@ public interface IRunCloudResults
     Task<RedownloadResult> RedownloadAsync(RunRecord run, CancellationToken cancellationToken);
 
     /// <summary>Deletes the objects under this run's job-id prefix and records that the cloud copy is gone. Never anything outside that prefix (Hard Rule 11).</summary>
-    Task<CloudResultsStatus> DeleteAsync(RunRecord run, CancellationToken cancellationToken);
+    Task<CloudDeleteResult> DeleteAsync(RunRecord run, CancellationToken cancellationToken);
 }
 
 /// <summary>Moves one file without ever overwriting. A seam so a test can make a move fail where only a real disk race would.</summary>
@@ -168,7 +180,7 @@ public sealed class RunCloudResults : IRunCloudResults
         }
     }
 
-    public async Task<CloudResultsStatus> DeleteAsync(RunRecord run, CancellationToken cancellationToken)
+    public async Task<CloudDeleteResult> DeleteAsync(RunRecord run, CancellationToken cancellationToken)
     {
         if (run.CloudResultsDeleted || string.IsNullOrWhiteSpace(run.Bucket) || string.IsNullOrWhiteSpace(run.JobPrefix))
         {
@@ -188,6 +200,16 @@ public sealed class RunCloudResults : IRunCloudResults
         catch (CloudNotConnectedException)
         {
             return CloudResultsStatus.NotConnected;
+        }
+        catch (PartialCloudDeleteException partial)
+        {
+            // Some objects are gone and some are not: the row is NOT marked deleted, so Delete cloud copy stays offered and the next press finishes it.
+            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining);
+        }
+        catch (ArgumentException)
+        {
+            // The deleter refused the bucket or prefix shape: nothing was requested.
+            return CloudResultsStatus.Refused;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

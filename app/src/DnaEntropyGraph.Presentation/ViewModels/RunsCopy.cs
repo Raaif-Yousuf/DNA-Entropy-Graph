@@ -71,8 +71,12 @@ public static class RunsCopy
         CloudResultsStatus.NoCloudCopy => Pair("Runs_DeleteCloud_NoCloudCopy_Title", "Runs_DeleteCloud_NoCloudCopy_Body", ToastSeverity.Info),
         CloudResultsStatus.Refused => Pair("Runs_DeleteCloud_Refused_Title", "Runs_DeleteCloud_Refused_Body", ToastSeverity.Error),
         CloudResultsStatus.NotConnected => Pair("Runs_DeleteCloud_NotConnected_Title", "Runs_DeleteCloud_NotConnected_Body", ToastSeverity.Warning),
+        CloudResultsStatus.PartiallyDeleted => Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body", ToastSeverity.Warning),
         _ => Pair("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error),
     };
+
+    /// <summary>A cloud delete that stopped partway and could not read how many objects remain (so no count is promised).</summary>
+    public static readonly RunsMessage DeleteCloudPartialUnknown = Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
 
     public static RunsMessage DeleteLocal(LocalDeleteStatus status) => status switch
     {
@@ -95,6 +99,7 @@ public static class RunsCopy
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
+        .. Flatten(DeleteCloudPartialUnknown),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),
     ];
 

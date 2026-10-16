@@ -391,7 +391,20 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return null;
             }
 
-            return RunsCopy.DeleteCloud(await _cloud.DeleteAsync(run, CancellationToken.None));
+            var result = await _cloud.DeleteAsync(run, CancellationToken.None);
+            if (result.Status != CloudResultsStatus.PartiallyDeleted)
+            {
+                return RunsCopy.DeleteCloud(result.Status);
+            }
+
+            // Partway through: say how many are left (or that it could not be counted) and that the same button finishes it.
+            if (result.ObjectsLeft is { } left)
+            {
+                Toast(RunsCopy.DeleteCloud(CloudResultsStatus.PartiallyDeleted), left);
+                return null;
+            }
+
+            return RunsCopy.DeleteCloudPartialUnknown;
         },
         RunsCopy.DeleteCloud(CloudResultsStatus.Failed));
 
