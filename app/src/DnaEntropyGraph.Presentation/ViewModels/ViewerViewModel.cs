@@ -57,6 +57,8 @@ public sealed partial class ViewerViewModel : ObservableObject
     private string? _loadJson;
     private bool _pageReady;
     private bool _dark;
+    private ViewerLocus? _locus;
+    private bool _keysOn;
 
     // Status, ActionUrl and MapRunFolder are plain notifying properties, not [ObservableProperty]: no XAML
     // binds them (the page binds IsErrorVisible, ActionUri, HasLinkAction ...). Status feeds RetryCommand and
@@ -168,6 +170,22 @@ public sealed partial class ViewerViewModel : ObservableObject
             {
                 RetryCommand.NotifyCanExecuteChanged();
                 GoToContigCommand.NotifyCanExecuteChanged();
+                SyncPageKeys();
+            }
+        }
+    }
+
+    // The page swallows navigation keys only while the run is drawn (issue #247): a key the ViewModel would ignore must keep its
+    // normal browser meaning. Sent on change only; a page that reloads starts with keys off.
+    private void SyncPageKeys()
+    {
+        var want = _pageReady && _status == ViewerStatus.Ready;
+        if (want != _keysOn)
+        {
+            _keysOn = want;
+            if (_pageReady)
+            {
+                Send(new { cmd = "keys", enabled = want });
             }
         }
     }
@@ -420,6 +438,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         {
             case "ready":
                 _pageReady = true;
+                _keysOn = false;
                 if (_dark)
                 {
                     // The page starts light; only a dark app theme needs a theme command.
@@ -437,6 +456,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 if (Status == ViewerStatus.Loading)
                 {
                     IsLoading = false;
+
+                    // The page reports where it landed, so the keys work before the first mouse pan (the locus listener attaches after the first draw).
+                    _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var first) ? first : null;
                     Status = ViewerStatus.Ready;
                     // A freshly drawn page shows the first record; keep the selector in step with it.
                     SelectWithoutGoto(Contigs.FirstOrDefault());
@@ -447,13 +469,50 @@ public sealed partial class ViewerViewModel : ObservableObject
             case "error":
                 FailKeepingRun(ViewerFailure.ViewerError);
                 break;
+            case "locusChanged":
+                _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var locus) ? locus : null;
+                break;
+            case "key":
+                OnViewerKey(json);
+                break;
         }
+    }
+
+    // Issue #247: bridge.js forwards the key; the pan, zoom and preset decisions are ViewerKeyboard's.
+    private void OnViewerKey(string json)
+    {
+        if (!_pageReady || Status != ViewerStatus.Ready)
+        {
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(json);
+        var key = doc.RootElement.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() : null;
+        var ctrl = doc.RootElement.TryGetProperty("ctrl", out var c) && c.ValueKind == JsonValueKind.True;
+        int? length = _locus is { } l && Contigs.FirstOrDefault(x => x.Name == l.Chr) is { Length: > 0 } contig ? contig.Length : null;
+        var result = ViewerKeyboard.Resolve(key, ctrl, _locus, length);
+        switch (result.Kind)
+        {
+            case ViewerKeyKind.Goto:
+                Send(new { cmd = "goto", locus = result.Locus });
+                break;
+            case ViewerKeyKind.FocusLocus:
+                Send(new { cmd = "focusLocus" });
+                break;
+        }
+    }
+
+    private static string? ReadString(string json, string name)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
     }
 
     /// <summary>The WebView2 renderer or browser process died: the page is gone until the host reloads it.</summary>
     public void OnViewerProcessFailed()
     {
         _pageReady = false;
+        _keysOn = false;
         FailKeepingRun(ViewerFailure.ProcessFailed);
     }
 
@@ -494,6 +553,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private void ShowLoading()
     {
         _fallbackGeneration++;
+        _locus = null;
         FallbackContig = null;
         IsErrorVisible = false;
         IsViewerVisible = true;
@@ -523,6 +583,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private void ResetRunState()
     {
         _loadJson = null;
+        _locus = null;
         MapRunFolder = null;
         _contigGeneration++;
         ClearContigs();
