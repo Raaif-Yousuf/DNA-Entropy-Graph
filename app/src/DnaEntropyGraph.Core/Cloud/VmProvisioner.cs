@@ -124,9 +124,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
                         // token (the same instant, so the poller's would win and hide the abandoned create).
                         progress.VmStartMark = settings.StartClock();
-                        createTask = compute.CreateVmAsync(spec, zone, cancellationToken);
+                        createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
                         state.Create = createTask;
-                        TrackInflightCreate(request.JobId, createTask);
                         var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
                         return new OperationPoll<VmDescriptor>(true, vm, null);
                     }
@@ -595,9 +594,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 token =>
                 {
                     progress.VmStartMark = settings.StartClock();
-                    var reuse = compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token);
-                    TrackInflightCreate(request.JobId, reuse);
-                    return reuse;
+                    return TrackInflightCreate(request.JobId, () => compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token));
                 },
                 cancellationToken,
                 settings.CreateTimeout).ConfigureAwait(false);
@@ -666,18 +663,37 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         return true;
     }
 
-    private void TrackInflightCreate(string jobId, Task createTask)
+    /// <summary>
+    /// Starts a create or a reuse and tracks it for the cancel. The job is registered BEFORE the gateway is called (a placeholder that
+    /// completes when the real task does), because the gateway's synchronous part runs before it returns its task: a cancel that looked in
+    /// that window found nothing in flight, deleted nothing, and the VM then landed under a Cancelled record (#784).
+    /// </summary>
+    private Task<T> TrackInflightCreate<T>(string jobId, Func<Task<T>> start)
     {
-        _inflightCreates[createTask] = jobId;
-        _ = createTask.ContinueWith(
+        var placeholder = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _inflightCreates[placeholder.Task] = jobId;
+        Task<T> task;
+        try
+        {
+            task = start();
+        }
+        catch
+        {
+            _inflightCreates.TryRemove(placeholder.Task, out _);
+            throw;
+        }
+
+        _ = task.ContinueWith(
             t =>
             {
                 _ = t.Exception;
-                _inflightCreates.TryRemove(t, out _);
+                _inflightCreates.TryRemove(placeholder.Task, out _);
+                placeholder.TrySetResult();
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+        return task;
     }
 
     /// <summary>

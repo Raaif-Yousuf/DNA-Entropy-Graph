@@ -67,7 +67,14 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
 
     private readonly SqliteDatabase _database;
 
-    public RunRepository(SqliteDatabase database) => _database = database;
+    private readonly DataPathMapper _paths;
+
+    /// <param name="paths">Portable mode (issue #144): stores paths under the portable folder relative to it. Null stores every path as given.</param>
+    public RunRepository(SqliteDatabase database, DataPathMapper? paths = null)
+    {
+        _database = database;
+        _paths = paths ?? new DataPathMapper(null);
+    }
 
     public async Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
     {
@@ -91,7 +98,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 
-    private static RunRecord ToRecord(RunRow row) => new(
+    private RunRecord ToRecord(RunRow row) => new(
         JobId: row.Id,
         Phase: Enum.Parse<JobPhase>(row.Phase),
         CreatedUtc: Iso.Parse(row.CreatedAt)!.Value,
@@ -117,7 +124,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         LastProgressSeq: (int)row.LastProgressSeq,
         LastHeartbeatAt: Iso.Parse(row.LastHeartbeatAt),
         StatusGeneration: row.StatusGeneration is null ? null : (int)row.StatusGeneration,
-        OutputDir: row.OutputDir,
+        OutputDir: _paths.FromStored(row.OutputDir),
         EstimatedCostUsd: row.EstimatedCostUsd,
         ActualCostUsd: row.ActualCostUsd,
         VmSeconds: row.VmSeconds,
@@ -133,7 +140,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         TagsJson: row.TagsJson,
         PreemptionCount: (int)row.PreemptionCount);
 
-    private static RunRow ToRow(RunRecord run) => new()
+    private RunRow ToRow(RunRecord run) => new()
     {
         Id = run.JobId,
         Name = run.Name ?? run.JobId,
@@ -160,7 +167,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         LastProgressSeq = run.LastProgressSeq,
         LastHeartbeatAt = Iso.Format(run.LastHeartbeatAt),
         StatusGeneration = run.StatusGeneration,
-        OutputDir = run.OutputDir,
+        OutputDir = _paths.ToStored(run.OutputDir),
         EstimatedCostUsd = run.EstimatedCostUsd,
         ActualCostUsd = run.ActualCostUsd,
         VmSeconds = run.VmSeconds,
