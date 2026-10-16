@@ -1136,6 +1136,11 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
   each prefix. So the bucket holds the longest age any installation asked for. A rule counts as ours only if its condition is exactly an age and
   the one prefix with a Delete action; a user's `jobs/` rule with any extra condition (storage class, live state, noncurrent time, suffix...)
   is neither counted toward our age nor replaced.
+  **Where the retention comes from (issue #114).** `settings.json` key `results_retention_days` (`ResultsRetentionSetting.Days`; absent or
+  unusable is 90, above 3650 is clamped), read at each use through `GoogleCloudOptions.ResultsRetentionDaysSource`, which `ServiceRegistration`
+  sets for the real build. So a change reaches the bucket on the next `EnsureBucketAsync` (the start of the next run: that call lists, compares and
+  patches), and the same value is what the call's own read-back compares the rule against. The gateway reads the option once per `EnsureBucketAsync` (an `AsyncLocal` snapshot) because each read hits `settings.json`: a change landing mid-call must not make a bucket look drifted or fail the read-back. A separate Cloud page health comparison does not exist on this branch. The Settings "Cloud results" group (`CloudResultsSettingsViewModel`: 7, 30, 90, 180, 365 days, plus a hand-edited value) writes the key and says
+  the change applies at the start of the next run and that fewer days never shrink a longer bucket. A fixed value at startup, the earlier state, left the rule at 90 whatever was saved.
   Consequence: lowering retention in Settings against a longer bucket is silently ignored today. #598 owns the fix: an explicit, user-confirmed
   shortening, and the user seeing that the bucket keeps the longer age (copy names the action).
 - **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference
