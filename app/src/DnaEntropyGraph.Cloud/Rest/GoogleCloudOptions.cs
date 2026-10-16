@@ -38,7 +38,19 @@ public sealed class GoogleCloudOptions
     /// How many days a job's objects are kept before the bucket's own lifecycle rule deletes them: the user's "Cloud results
     /// retention" setting (<c>RunOptions.CloudResultsRetentionDays</c>, default 90). The cache has its own fixed 365 days.
     /// </summary>
-    public int ResultsRetentionDays { get; init; } = DnaEntropyGraph.Core.Cloud.ResultsBucket.DefaultRetentionDays;
+    public int ResultsRetentionDays
+    {
+        get => ResultsRetentionDaysSource?.Invoke() ?? _resultsRetentionDays;
+        init => _resultsRetentionDays = value;
+    }
+
+    private readonly int _resultsRetentionDays = DnaEntropyGraph.Core.Cloud.ResultsBucket.DefaultRetentionDays;
+
+    /// <summary>
+    /// Reads the retention at each use (issue #114), so a change in Settings reaches the very next <c>EnsureBucketAsync</c>. When set it
+    /// wins over a fixed <see cref="ResultsRetentionDays"/>. Production passes <c>ResultsRetentionSetting.Days</c> over the settings store.
+    /// </summary>
+    public Func<int>? ResultsRetentionDaysSource { get; init; }
 
     /// <summary>The multi-region the bucket is created in (the region group: "US", "EU" or "ASIA"). Data residency (#149) changes this.</summary>
     public string BucketLocation { get; init; } = DnaEntropyGraph.Core.Cloud.ResultsBucket.DefaultLocation;
