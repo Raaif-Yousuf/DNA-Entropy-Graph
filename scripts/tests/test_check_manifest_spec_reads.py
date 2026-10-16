@@ -78,7 +78,10 @@ def _allow(tmp_path: Path, allowed: dict) -> Path:
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_manifest_spec_reads.py"), "--self-test"],
-        capture_output=True, text=True, timeout=60, check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -118,26 +121,13 @@ def test_reads_resolved_through_parse_result_and_loop_over_a_list_field(tmp_path
 
 
 def test_a_write_and_a_keyword_argument_are_not_reads(tmp_path):
-    use = (
-        "from .manifest import AnalysisSpec\n"
-        "\n"
-        "def run(a: AnalysisSpec):\n"
-        "    a.stride = 3\n"
-        "    return AnalysisSpec(stride=4)\n"
-    )
+    use = "from .manifest import AnalysisSpec\n\ndef run(a: AnalysisSpec):\n    a.stride = 3\n    return AnalysisSpec(stride=4)\n"
     spec, root = _pkg(tmp_path, {"use.py": use})
     assert _keys(cms.check_specs(spec, [root], _allow(tmp_path, {}))[0]).get("AnalysisSpec.stride") == "UNREAD"
 
 
 def test_a_read_only_while_serializing_is_reported_separately(tmp_path):
-    use = (
-        "from .manifest import AnalysisSpec\n"
-        "\n"
-        "def f(a: AnalysisSpec):\n"
-        "    def to_dict():\n"
-        "        return a.stride\n"
-        "    return to_dict()\n"
-    )
+    use = "from .manifest import AnalysisSpec\n\ndef f(a: AnalysisSpec):\n    def to_dict():\n        return a.stride\n    return to_dict()\n"
     spec, root = _pkg(tmp_path, {"use.py": use})
     assert _keys(cms.check_specs(spec, [root], _allow(tmp_path, {}))[0]).get("AnalysisSpec.stride") == "SERIALIZED-ONLY"
 
