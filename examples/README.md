@@ -20,7 +20,7 @@ small enough that a run costs a few cents (see
 - **Licence:** NCBI states that it places no restrictions on the use or distribution of the
   data in GenBank and RefSeq. Treat the files as public domain; please still cite the record
   (`NC_001422.1`) if you publish a result from it. See
-  <https://www.ncbi.nlm.nih.gov/home/about/policies/>.
+  the policies page on the NCBI website (ncbi.nlm.nih.gov, then About, then Policies and Disclaimers).
 - The files are read-only inputs. The app keeps a copy of every input you run and never writes
   next to it.
 
