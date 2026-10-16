@@ -352,7 +352,18 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.RerunNoInput;
             }
 
-            var jobId = await _engine.StartRunAsync(options with { InputPath = input }, CancellationToken.None);
+            // Issue #686: a paired run starts again with its GFF3. One that cannot be found is a missing input, never a silent run without it.
+            string? annotation = null;
+            if (!string.IsNullOrWhiteSpace(options.AnnotationPath))
+            {
+                annotation = await Task.Run(() => _local.FindRerunAnnotation(run, options));
+                if (annotation is null)
+                {
+                    return RunsCopy.RerunNoInput;
+                }
+            }
+
+            var jobId = await _engine.StartRunAsync(options with { InputPath = input, AnnotationPath = annotation }, CancellationToken.None);
             _navigator.NavigateTo("RunProgress", jobId);
             return null;
         },
