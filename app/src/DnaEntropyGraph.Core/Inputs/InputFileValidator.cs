@@ -106,6 +106,7 @@ public static class InputFileValidator
         // extension; only an unknown extension needs the content, sniffed after the capped read.
         string text;
         InputKind kind;
+        byte[]? snapGeneBytes = null;
         try
         {
             var info = new FileInfo(path);
@@ -118,14 +119,26 @@ public static class InputFileValidator
                 InputFormat.GenBank => InputKind.GenBank,
                 InputFormat.Fasta => InputKind.Fasta,
                 InputFormat.Plain => InputKind.Paste,
-                _ => SequenceSniffer.DetectKindByExtension(path),
+                InputFormat.Embl => InputKind.Embl,
+                InputFormat.SnapGene => InputKind.SnapGene,
+                // Auto: a SnapGene file is decided by its first 13 bytes, whatever its extension says (detect.py).
+                _ => SequenceSniffer.FileIsSnapGene(path) ? InputKind.SnapGene : SequenceSniffer.DetectKindByExtension(path),
             };
             if (info.Length > limits.MaxFileBytes)
             {
                 // Kind is Paste (undecided) when only the content could have said.
                 return Fail(known ?? InputKind.Paste, InputProblemCode.FileTooLarge, null, null, $"The input file is {info.Length} bytes, over the {limits.MaxFileBytes} byte limit.");
             }
-            text = TextDecoder.ReadText(path);
+            if (known == InputKind.SnapGene)
+            {
+                // Binary: never decoded as text.
+                snapGeneBytes = File.ReadAllBytes(path);
+                text = string.Empty;
+            }
+            else
+            {
+                text = TextDecoder.ReadText(path);
+            }
             kind = known ?? SequenceSniffer.DetectKindFromContent(text);
         }
         catch (OutOfMemoryException)
@@ -151,6 +164,14 @@ public static class InputFileValidator
                     noticeCodes.AddRange(gb.NoticeCodes);
                     geneCount = gb.Records.Sum(r => r.GeneCount);
                     records = gb.Records.Select(r => (r.Seq, r.SourceIndex)).ToList();
+                    break;
+                case InputKind.Embl:
+                case InputKind.SnapGene:
+                    var annotated = kind == InputKind.Embl ? EmblLite.Read(text) : SnapGeneLite.Read(snapGeneBytes!);
+                    notices.AddRange(annotated.Notices);
+                    noticeCodes.AddRange(annotated.NoticeCodes);
+                    geneCount = annotated.Records.Sum(r => r.GeneCount);
+                    records = annotated.Records.Select(r => (r.Seq, r.SourceIndex)).ToList();
                     break;
                 case InputKind.Fasta:
                     var fa = FastaLite.Read(text);

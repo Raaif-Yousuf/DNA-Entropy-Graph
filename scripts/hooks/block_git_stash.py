@@ -114,6 +114,7 @@ def _strip_cat_heredoc_bodies(command: str) -> str:
             i += 1
     return "\n".join(out)
 
+
 MESSAGE = """`git stash` is blocked in this repository. Use the patch file instead.
 
 The stash stack is SHARED across every worktree and every concurrent Claude
@@ -181,12 +182,7 @@ _ALLOW_CASES = (
     "",
 )
 
-_HEREDOC_CASE = (
-    "git commit -m \"$(cat <<'EOF'\n"
-    "fix: document why we never git stash here\n"
-    "EOF\n"
-    ")\""
-)
+_HEREDOC_CASE = "git commit -m \"$(cat <<'EOF'\nfix: document why we never git stash here\nEOF\n)\""
 
 
 def self_test() -> int:
@@ -206,8 +202,7 @@ def self_test() -> int:
             print(f"self-test FAILED: expected allow for {command!r}", file=sys.stderr)
     if verdict(_HEREDOC_CASE) is not None:
         failures += 1
-        print("self-test FAILED: a `cat <<EOF` heredoc body must not be scanned as a command",
-              file=sys.stderr)
+        print("self-test FAILED: a `cat <<EOF` heredoc body must not be scanned as a command", file=sys.stderr)
 
     proc = subprocess.run(
         [sys.executable, __file__],
@@ -218,8 +213,7 @@ def self_test() -> int:
     )
     if proc.returncode != 0 or proc.stdout.strip() != "":
         failures += 1
-        print("self-test FAILED: malformed stdin must fail open (exit 0, silent stdout)",
-              file=sys.stderr)
+        print("self-test FAILED: malformed stdin must fail open (exit 0, silent stdout)", file=sys.stderr)
 
     total = len(_DENY_CASES) + len(_ALLOW_CASES) + 2
     if failures:

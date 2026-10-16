@@ -1,0 +1,21 @@
+LOCUS       golden                   126 bp    DNA              UNK 01-JAN-1980
+DEFINITION  DNA-Entropy per-position Shannon entropy for golden (source:
+            toy_locus).
+ACCESSION   golden
+VERSION     golden
+KEYWORDS    .
+SOURCE      DNA-Entropy
+  ORGANISM  .
+            .
+FEATURES             Location/Qualifiers
+     gene            1..42
+                     /note="mean_entropy=1.627 bits"
+                     /gene="geneA"
+     gene            complement(85..126)
+                     /note="mean_entropy=1.569 bits"
+                     /gene="geneB"
+ORIGIN
+        1 atgcgtacgt tagcactgac cggtattccg aaactggcgt aaccggttaa ccggttaacc
+       61 ggttaaccgg ttaaccggtt aaccatgaaa cgttttggca cctaaggcct taaggcctta
+      121 aggcct
+//
