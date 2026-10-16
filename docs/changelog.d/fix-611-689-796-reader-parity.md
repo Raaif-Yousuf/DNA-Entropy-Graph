@@ -1,0 +1,1 @@
+- The app now refuses, before any cloud resource exists, the two GenBank shapes the worker's reader refuses and the app used to accept: a lone `)` line after a feature location, and a `//` terminator in a record's header (and a header that ends the file). Refusal text matches the worker's (#611).

@@ -228,8 +228,13 @@ public static class GenBankLite
                 {
                     tableChecked = true; // no feature table in this record
                 }
+                else if (PythonText.TrimEnd(rawLine) == "//")
+                {
+                    // Scanner.parse_header: a record terminator before any feature table or sequence header (#611).
+                    throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, "Premature end of sequence data marker '//' found");
+                }
             }
-            if (rawLine.StartsWith("//", StringComparison.Ordinal))
+            if (PythonText.TrimEnd(rawLine) == "//") // Biopython compares the right-stripped line with "//" exactly
             {
                 FlushRecord();
                 continue;
@@ -242,6 +247,13 @@ public static class GenBankLite
         }
         if (locusName is not null)
         {
+            if (!inOrigin)
+            {
+                // Scanner.parse_header / parse_footer: the file ends before the sequence block starts (header only), or right after its
+                // header line with no sequence (#611). A file that ends INSIDE the sequence is only warned about, so it is read.
+                throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, tableChecked ? "Premature end of file" : "Premature end of line during sequence data");
+            }
+
             FlushRecord(); // file ended without a trailing "//"
         }
 

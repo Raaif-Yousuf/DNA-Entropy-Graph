@@ -151,7 +151,10 @@ internal static class GenBankFeatureTable
             var line = queue.Dequeue();
             if (iteration++ == 0 && line.StartsWith(')'))
             {
-                continue; // the location's closing parenthesis wrapped onto its own line
+                // Scanner.parse_feature: the location's closing parenthesis wrapped onto its own line is APPENDED to the location. When
+                // the location is already balanced the text is then "1..42)", which the location parser refuses (#611).
+                location += PythonText.Trim(line);
+                continue;
             }
             if (line[0] == '/')
             {
@@ -197,6 +200,13 @@ internal static class GenBankFeatureTable
     /// <summary>The refusal for a feature location Biopython raises on (not one it drops with a warning): named by record index, never by text (a location is user free text).</summary>
     public static GenBankReadException RefuseLocation(int recordNumber) =>
         Refuse(recordNumber, "a feature location is not valid GenBank (it cannot be read as a position or a range)");
+
+    /// <summary>
+    /// A refusal for a shape Biopython's own scanner raises on with a fixed text (<paramref name="biopythonReason" />, MEASURED), worded
+    /// exactly as the worker's <c>read_genbank</c> words it so a user who sees the app's text first and the worker's later reads one message (#611).
+    /// </summary>
+    public static GenBankReadException RefuseLikeWorker(int recordNumber, string biopythonReason) =>
+        new($"Could not parse the GenBank file (record {recordNumber}): {biopythonReason}. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES.");
 
     private static GenBankReadException Refuse(int recordNumber, string reason) =>
         new($"Could not parse the GenBank file (record {recordNumber}): {reason}. Check the file was not truncated or hand-edited, then re-export it from the tool that made it.");
