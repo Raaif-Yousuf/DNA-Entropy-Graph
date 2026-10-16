@@ -30,7 +30,7 @@ public sealed class DataFolderUnusableException(DataFolderProblem reason, string
 /// <summary>
 /// The one folder all app state lives under (issue #638). Resolved once at start-up, in this order: the
 /// <c>--profile &lt;dir&gt;</c> (or <c>--profile=&lt;dir&gt;</c>) switch, then the <c>DEG_DATA_DIR</c> environment
-/// variable, then <c>%LOCALAPPDATA%\DNAEntropyGraph</c>. The command line wins when both are set. A relative path
+/// variable, then a <c>portable.flag</c> beside the program (state in <c>data</c> beside it, issue #144), then <c>%LOCALAPPDATA%\DNAEntropyGraph</c>. The command line wins when both are set. A relative path
 /// resolves against the current directory; a missing override folder is created. Everything else (settings, the
 /// installation id, the database, auth, logs, run inputs, the WebView2 profile, the diagnostics source) is derived
 /// from this value, and nothing else in the app reads the Windows local-data folder
@@ -42,10 +42,17 @@ public sealed class AppDataRoot
 
     public const string SwitchName = "--profile";
 
-    private AppDataRoot(string path, bool isOverride)
+    /// <summary>An empty file beside the program that switches the app to portable mode (issue #144).</summary>
+    public const string PortableFlagFileName = "portable.flag";
+
+    /// <summary>The state folder created beside the program in portable mode.</summary>
+    public const string PortableDataFolderName = "data";
+
+    private AppDataRoot(string path, bool isOverride, bool isPortable = false)
     {
         Path = path;
         IsOverride = isOverride;
+        IsPortable = isPortable;
     }
 
     /// <summary>The absolute root folder.</summary>
@@ -53,6 +60,9 @@ public sealed class AppDataRoot
 
     /// <summary>True when this is not the real per-user folder, so the window says so.</summary>
     public bool IsOverride { get; }
+
+    /// <summary>True when <c>portable.flag</c> sits beside the program and state lives in <c>data</c> beside it (issue #144). Not an override: no sandbox banner.</summary>
+    public bool IsPortable { get; }
 
     public string SettingsFile => Combine("settings.json");
 
@@ -83,9 +93,17 @@ public sealed class AppDataRoot
     /// <summary>Resolves the root from the command-line arguments, then the environment, then the default; creates an override folder.</summary>
     /// <param name="writeProbe">Test seam: checks the folder is writable. Production creates and deletes a uniquely named file in it.</param>
     /// <exception cref="DataFolderUnusableException">The override is empty, malformed, a file, not writable, or cannot be created.</exception>
-    public static AppDataRoot Resolve(IReadOnlyList<string> args, Func<string, string?> getEnvironmentVariable, string currentDirectory, Action<string>? writeProbe = null)
+    public static AppDataRoot Resolve(IReadOnlyList<string> args, Func<string, string?> getEnvironmentVariable, string currentDirectory, Action<string>? writeProbe = null, string? programDirectory = null)
     {
         var requested = FromArguments(args) ?? FromEnvironment(getEnvironmentVariable);
+        var portable = false;
+        if (requested is null && programDirectory is not null
+            && File.Exists(System.IO.Path.Combine(programDirectory, PortableFlagFileName)))
+        {
+            requested = System.IO.Path.Combine(programDirectory, PortableDataFolderName);
+            portable = true;
+        }
+
         if (requested is null)
         {
             return Default();
@@ -114,6 +132,11 @@ public sealed class AppDataRoot
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or SecurityException)
         {
             throw new DataFolderUnusableException(DataFolderProblem.CannotCreate, full, ex);
+        }
+
+        if (portable)
+        {
+            return new AppDataRoot(full, isOverride: false, isPortable: true);
         }
 
         // A profile that points at the real folder is the real folder: no banner for it.

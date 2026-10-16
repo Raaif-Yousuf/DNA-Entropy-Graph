@@ -113,4 +113,24 @@ public sealed class DataFolderOverrideTests : IDisposable
 
         FilesUsingTheLocalDataFolder([planted]).ShouldBe([planted]);
     }
+
+    [Fact]
+    public void Startup_hands_the_program_directory_to_the_resolver_so_portable_flag_is_read()
+    {
+        // Issue #144: without this argument portable.flag is never looked at and the app silently uses %LOCALAPPDATA%.
+        var startup = RepoPaths.AllCSharpFiles.Single(p => Path.GetFileName(p) == "StartupDataRoot.cs");
+
+        File.ReadAllText(startup).ShouldContain("programDirectory: AppContext.BaseDirectory");
+    }
+
+    [Fact]
+    public void Only_AppDataRoot_names_the_portable_flag()
+    {
+        var users = RepoPaths.AllCSharpFiles
+            .Where(p => File.ReadAllText(p).Contains("\"portable.flag\"", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToArray();
+
+        users.ShouldBe(["AppDataRoot.cs"], "one resolver decides where state lives (#144); tests use AppDataRoot.PortableFlagFileName.");
+    }
 }

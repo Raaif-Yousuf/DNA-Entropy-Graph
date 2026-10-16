@@ -172,4 +172,81 @@ public sealed class AppDataRootTests : IDisposable
 
         Directory.GetFileSystemEntries(root.Path).ShouldBeEmpty();
     }
+
+    private string MakePortableProgramDir(bool withFlag = true)
+    {
+        var dir = Path.Combine(_scratch, "program");
+        Directory.CreateDirectory(dir);
+        if (withFlag)
+        {
+            File.WriteAllText(Path.Combine(dir, AppDataRoot.PortableFlagFileName), string.Empty);
+        }
+
+        return dir;
+    }
+
+    [Fact]
+    public void A_portable_flag_beside_the_program_puts_all_state_in_a_data_folder_beside_it_and_not_under_the_default()
+    {
+        var program = MakePortableProgramDir();
+
+        var root = AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: program);
+
+        root.IsPortable.ShouldBeTrue();
+        root.IsOverride.ShouldBeFalse("portable is the real profile for this copy, not a sandbox: no banner, no simulated cloud");
+        root.Path.ShouldBe(Path.Combine(program, "data"));
+        Directory.Exists(root.Path).ShouldBeTrue();
+        root.DatabaseFile.ShouldBe(Path.Combine(program, "data", "app.db"));
+        root.Path.ShouldNotStartWith(AppDataRoot.Default().Path);
+    }
+
+    [Fact]
+    public void Without_the_flag_the_program_directory_is_ignored_and_nothing_is_created()
+    {
+        var program = MakePortableProgramDir(withFlag: false);
+
+        var root = AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: program);
+
+        root.IsPortable.ShouldBeFalse();
+        root.Path.ShouldBe(AppDataRoot.Default().Path);
+        Directory.Exists(Path.Combine(program, "data")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void An_explicit_profile_or_environment_override_beats_the_portable_flag()
+    {
+        var program = MakePortableProgramDir();
+        var target = Path.Combine(_scratch, "explicit");
+
+        var fromArgs = AppDataRoot.Resolve(["--profile", target], NoEnv, _scratch, programDirectory: program);
+        var fromEnv = AppDataRoot.Resolve([], Env(target), _scratch, programDirectory: program);
+
+        fromArgs.Path.ShouldBe(target);
+        fromEnv.Path.ShouldBe(target);
+        fromArgs.IsPortable.ShouldBeFalse();
+        fromArgs.IsOverride.ShouldBeTrue();
+        Directory.Exists(Path.Combine(program, "data")).ShouldBeFalse("the losing source must not be touched");
+    }
+
+    [Fact]
+    public void A_portable_folder_that_cannot_be_written_fails_naming_it_and_never_falls_back_to_the_real_folder()
+    {
+        var program = MakePortableProgramDir();
+
+        var ex = Should.Throw<DataFolderUnusableException>(() => AppDataRoot.Resolve(
+            [], NoEnv, _scratch, writeProbe: _ => throw new UnauthorizedAccessException(), programDirectory: program));
+
+        ex.Reason.ShouldBe(DataFolderProblem.CannotCreate);
+        ex.Path.ShouldBe(Path.Combine(program, "data"));
+    }
+
+    [Fact]
+    public void A_data_path_that_is_a_file_beside_a_portable_flag_fails_as_not_a_folder()
+    {
+        var program = MakePortableProgramDir();
+        File.WriteAllText(Path.Combine(program, "data"), "x");
+
+        Should.Throw<DataFolderUnusableException>(() => AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: program))
+            .Reason.ShouldBe(DataFolderProblem.NotAFolder);
+    }
 }

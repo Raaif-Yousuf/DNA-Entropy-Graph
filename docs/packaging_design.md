@@ -111,7 +111,14 @@ badge (#638) are separate, and all three can show together.
   not bundle it. The app checks when the viewer opens (`WebViewRuntimeDecision`, issue #117) and shows the runtime-missing card with one
   action, a link to Microsoft's Evergreen bootstrapper; a missing runtime never shows a blank pane. `vpk pack --framework webview2` would
   make Setup.exe install it up front: not set in `release.yml` today (that file is not part of this change), recorded as an option.
-- *Uninstall keeps the user's data by default.* The data folder is `%LOCALAPPDATA%\DNAEntropyGraph` (history, settings, saved input copies,
+- *Portable mode (#144).* An empty file named `portable.flag` beside `DnaEntropyGraph.App.exe` makes `AppDataRoot.Resolve` use `<program folder>\data`
+  for every piece of state (settings, `app.db`, logs, run inputs, the WebView2 profile, sign-in files) and nothing under `%LOCALAPPDATA%`. Order:
+  `--profile`, then `DEG_DATA_DIR`, then `portable.flag`, then `%LOCALAPPDATA%\DNAEntropyGraph`. It is the real profile for that copy (no sandbox banner,
+  no simulated cloud). If the folder cannot be written (a copy under Program Files) the launch stops with the data-folder message and never
+  falls back to the real folder. The state folder is `data` rather than the program folder itself so the settings and database do not mix with the
+  program files. Limitation: sign-in files are DPAPI-encrypted for one Windows user on one PC, so a portable folder carried to another PC or
+  account cannot read them; `DpapiTokenStore.GetAsync` treats bytes it cannot decrypt as signed out, and the user signs in again on the new PC.
+  Everything else (history, settings, inputs) travels.- *Uninstall keeps the user's data by default.* The data folder is `%LOCALAPPDATA%\DNAEntropyGraph` (history, settings, saved input copies,
   logs, sign-in). Velopack's before-uninstall hook (`Program.OnBeforeUninstall`) now asks once, "Remove your data too?", default **No**
   (`UninstallDataPrompt`, a plain message box because the uninstaller has no window); only Yes deletes the folder
   (`UninstallDataCleanup`, tested with a fake prompt and delete). Result files in the output folder are never touched (Hard Rule 14).

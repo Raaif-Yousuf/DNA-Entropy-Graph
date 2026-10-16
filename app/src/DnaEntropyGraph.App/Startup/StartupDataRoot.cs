@@ -21,7 +21,7 @@ public static class StartupDataRoot
     {
         try
         {
-            Current = AppDataRoot.Resolve(args, Environment.GetEnvironmentVariable, Environment.CurrentDirectory);
+            Current = AppDataRoot.Resolve(args, Environment.GetEnvironmentVariable, Environment.CurrentDirectory, programDirectory: AppContext.BaseDirectory);
             return true;
         }
         catch (DataFolderUnusableException ex)
