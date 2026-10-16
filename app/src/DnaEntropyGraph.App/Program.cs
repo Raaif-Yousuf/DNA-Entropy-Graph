@@ -44,14 +44,7 @@ public static class Program
         // Issue #638: the data folder (--profile / DEG_DATA_DIR) is fixed before anything can touch app state.
         if (!StartupDataRoot.TryResolve(FakeCloudMode.Resolve(args)) || !FakeCloudMode.CheckProfile(StartupDataRoot.Current))
         {
-            Environment.ExitCode = 2;
-            return;
-        }
-
-        // Issue #842: a run history written by a newer app ends the launch with a plain message, before any window.
-        if (!StartupDataRoot.TryOpenDatabase(StartupDataRoot.Current))
-        {
-            Environment.ExitCode = 2;
+            Environment.ExitCode = StartupExitCodes.DataFolderUnusable;
             return;
         }
 
@@ -60,6 +53,15 @@ public static class Program
         // Issue #107/#108: a second launch (a clicked notification, a double-clicked file) goes to the running app and ends here.
         if (SingleInstance.HandedToRunningInstance(StartupDataRoot.Current.Path))
         {
+            return;
+        }
+
+        // Issue #842: only the first launch probes the run history (after the hand-off, so a second launch never touches
+        // the live database). A history from a newer app, or one in use, ends the launch with a plain message.
+        var databaseExit = StartupDataRoot.CheckDatabase(StartupDataRoot.Current);
+        if (databaseExit != StartupExitCodes.Ok)
+        {
+            Environment.ExitCode = databaseExit;
             return;
         }
 

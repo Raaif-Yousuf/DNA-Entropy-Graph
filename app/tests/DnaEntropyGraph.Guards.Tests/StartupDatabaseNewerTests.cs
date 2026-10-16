@@ -47,9 +47,9 @@ public sealed class StartupDatabaseNewerTests : IDisposable
         strings.GetString("DatabaseNewerThanApp").Returns("newer {0} app {1}");
         string? shown = null;
 
-        StartupDataRoot.TryOpenDatabase(root, m => shown = m, strings).ShouldBeFalse();
+        StartupDataRoot.CheckDatabase(root, m => shown = m, strings).ShouldBe(StartupExitCodes.DatabaseNewerThanApp);
 
-        shown.ShouldBe("newer 99 app 1");
+        shown.ShouldBe($"newer 99 app {DnaEntropyGraph.Persistence.DatabaseStartupCheck.LatestSchemaVersion}");
         File.Exists(root.DatabaseFile).ShouldBeTrue();
         Directory.GetFiles(Path.GetDirectoryName(root.DatabaseFile)!, "*.corrupt-*").ShouldBeEmpty();
     }
@@ -59,7 +59,59 @@ public sealed class StartupDatabaseNewerTests : IDisposable
     {
         var root = DnaEntropyGraph.Core.AppDataRoot.FromPath(_dir);
 
-        StartupDataRoot.TryOpenDatabase(root, _ => throw new InvalidOperationException("must not show"), Substitute.For<IStringResourceProvider>()).ShouldBeTrue();
+        StartupDataRoot.CheckDatabase(root, _ => throw new InvalidOperationException("must not show"), Substitute.For<IStringResourceProvider>())
+            .ShouldBe(StartupExitCodes.Ok);
+        File.Exists(root.DatabaseFile).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_database_in_use_maps_to_its_own_exit_code_and_message()
+    {
+        var root = DnaEntropyGraph.Core.AppDataRoot.FromPath(_dir);
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("DatabaseInUse").Returns("in use");
+        string? shown = null;
+
+        StartupDataRoot.CheckDatabase(root, m => shown = m, strings, _ => throw new DnaEntropyGraph.Persistence.DatabaseInUseException("x"))
+            .ShouldBe(StartupExitCodes.DatabaseInUse);
+
+        shown.ShouldBe("in use");
+    }
+
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(UnauthorizedAccessException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public void Any_other_probe_failure_shows_a_message_and_never_crashes(Type exceptionType)
+    {
+        var root = DnaEntropyGraph.Core.AppDataRoot.FromPath(_dir);
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString("DatabaseUnusable").Returns("unusable {0}");
+        string? shown = null;
+
+        StartupDataRoot.CheckDatabase(root, m => shown = m, strings, _ => throw (Exception)Activator.CreateInstance(exceptionType)!)
+            .ShouldBe(StartupExitCodes.DatabaseUnusable);
+
+        shown.ShouldBe($"unusable {root.Path}");
+    }
+
+    [Fact]
+    public void The_exit_codes_are_distinct()
+    {
+        new[] { StartupExitCodes.Ok, StartupExitCodes.DataFolderUnusable, StartupExitCodes.DatabaseNewerThanApp, StartupExitCodes.DatabaseInUse, StartupExitCodes.DatabaseUnusable }
+            .Distinct().Count().ShouldBe(5);
+    }
+
+    [Fact]
+    public void The_in_use_and_unusable_messages_name_one_action()
+    {
+        var resw = string.Concat(RepoPaths.AllReswFiles.Select(File.ReadAllText));
+        foreach (var (key, action) in new[] { ("DatabaseInUse", "Close the other copy"), ("DatabaseUnusable", "not read-only") })
+        {
+            var start = resw.IndexOf($"name=\"{key}\"", StringComparison.Ordinal);
+            start.ShouldBeGreaterThan(0, key);
+            resw.Substring(start, resw.IndexOf("</data>", start, StringComparison.Ordinal) - start).ShouldContain(action);
+        }
     }
 
     [Fact]

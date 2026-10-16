@@ -93,6 +93,8 @@ lands second renumbers (and updates its tests). A database whose `user_version` 
 newest embedded migration (a downgrade) is refused with "update the app" and left untouched, never
 opened with a newer schema than the code knows.
 
+At launch, after the single-instance hand-off, `StartupDataRoot.CheckDatabase` runs `DatabaseStartupCheck` (read-only, reads `user_version` only, never migrates). Exit codes are defined once in `StartupExitCodes` (2 data folder, 3 database newer than the app, 4 database in use, 5 database unusable). A busy or locked database is never treated as corrupt, and a damaged file that cannot be renamed aside is left in place, never deleted.
+
 `JobEngine` (in `App`, singleton) owns the active runs, survives navigation, and
 publishes `RunProgressChanged`/`RunPhaseChanged` over `WeakReferenceMessenger` so any page
 can subscribe without the runner needing a reference back to the UI.

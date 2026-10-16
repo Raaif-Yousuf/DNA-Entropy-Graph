@@ -32,21 +32,32 @@ public static class StartupDataRoot
     }
 
     /// <summary>
-    /// Opens the run history database once, before any window exists (issue #842). False when it was written by a newer
-    /// version of the app: the message has then been shown and the file is untouched (it is never treated as corrupt).
+    /// Cheap read-only probe of the run history database, before any window exists (issue #842). It reads the schema version
+    /// only (the app's normal first open migrates). Returns <see cref="StartupExitCodes.Ok"/>, or the exit code after the
+    /// message has been shown. Never throws, and never moves or deletes the file. <paramref name="probe"/> is a test seam.
     /// </summary>
-    public static bool TryOpenDatabase(AppDataRoot root, Action<string>? show = null, Presentation.Services.IStringResourceProvider? strings = null)
+    public static int CheckDatabase(AppDataRoot root, Action<string>? show = null, Presentation.Services.IStringResourceProvider? strings = null, Action<string>? probe = null)
     {
+        show ??= Show;
         try
         {
-            using var database = new Persistence.SqliteDatabase(root.DatabaseFile, portable: root.IsPortable);
-            database.OpenConnection().Dispose();
-            return true;
+            (probe ?? Persistence.DatabaseStartupCheck.Run)(root.DatabaseFile);
+            return StartupExitCodes.Ok;
         }
         catch (Persistence.DatabaseNewerThanAppException ex)
         {
-            (show ?? Show)(MessageFor(ex, strings ?? new ReswStringResourceProvider()));
-            return false;
+            show(MessageFor(ex, strings ?? new ReswStringResourceProvider()));
+            return StartupExitCodes.DatabaseNewerThanApp;
+        }
+        catch (Persistence.DatabaseInUseException)
+        {
+            show((strings ?? new ReswStringResourceProvider()).GetString("DatabaseInUse"));
+            return StartupExitCodes.DatabaseInUse;
+        }
+        catch (Exception)
+        {
+            show(string.Format(System.Globalization.CultureInfo.CurrentCulture, (strings ?? new ReswStringResourceProvider()).GetString("DatabaseUnusable"), root.Path));
+            return StartupExitCodes.DatabaseUnusable;
         }
     }
 

@@ -115,6 +115,7 @@ public sealed class SqliteDatabase : IDisposable
     {
         DataSource = _databasePath,
         Mode = SqliteOpenMode.ReadWriteCreate,
+        DefaultTimeout = 5,
     }.ToString();
 
     private void ConfigurePragmas(SqliteConnection connection)
@@ -161,6 +162,11 @@ public sealed class SqliteDatabase : IDisposable
             reason = "";
             return true;
         }
+        catch (SqliteException ex) when (DatabaseStartupCheck.IsBusy(ex))
+        {
+            // Busy or locked is "in use", not "corrupt": the live file is never moved or deleted for it.
+            throw DatabaseStartupCheck.InUse(ex);
+        }
         catch (SqliteException ex)
         {
             reason = ex.Message;
@@ -177,13 +183,10 @@ public sealed class SqliteDatabase : IDisposable
             File.Move(_databasePath, quarantinePath, overwrite: false);
             RecoveredFromCorruptFileAt = quarantinePath;
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            // Best effort. An app that cannot even rename the file aside
-            // must still be able to delete it and start fresh - hanging
-            // forever on a locked/corrupt file is worse than losing history.
-            File.Delete(_databasePath);
-            RecoveredFromCorruptFileAt = null;
+            // Never delete the user's history: if it cannot be moved aside, leave it and refuse (issue #842).
+            throw DatabaseStartupCheck.InUse(ex);
         }
 
         foreach (var strayExtension in new[] { "-wal", "-shm" })
