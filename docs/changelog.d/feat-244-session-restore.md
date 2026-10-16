@@ -1,0 +1,1 @@
+- App: opens on the page and run you left (Runs, Cloud, Settings, a run's progress or results); a run that finished while the app was closed opens on its results, a deleted run falls back to New run, and Open with or a notification still wins. The last page is saved by wrapping the navigator, so every navigation records it (#244).

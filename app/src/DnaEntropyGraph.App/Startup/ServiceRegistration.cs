@@ -64,7 +64,10 @@ public static class ServiceRegistration
         services.AddSingleton<IDispatcher, DispatcherAdapter>();
         services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
         services.AddSingleton<NavigationService>();
-        services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
+        // Issue #244: every navigation also records the page (and run) for session restore; the shell reads it back at startup.
+        services.AddSingleton<SessionStore>();
+        services.AddSingleton<SessionRestorer>();
+        services.AddSingleton<INavigator>(sp => new RecordingNavigator(sp.GetRequiredService<NavigationService>(), sp.GetRequiredService<SessionStore>()));
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
         services.AddSingleton<InAppMessageCenter>();
         services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());

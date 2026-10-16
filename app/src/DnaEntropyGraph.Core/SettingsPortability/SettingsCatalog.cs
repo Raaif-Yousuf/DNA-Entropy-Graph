@@ -56,6 +56,8 @@ public static class SettingsCatalog
         [WorkerImageSettingKeys.WorkerImage] = "An image the app would run on a rented computer; an imported file must not be able to choose one.",
         [ViewerSettingKeys.IgvPath] = "A program path on this PC.",
         [ViewerSettingKeys.GeneiousPath] = "A program path on this PC.",
+        ["session.page"] = "Where the user was when they closed the app (issue #244); about this PC's last session, not a preference.",
+        ["session.run"] = "The run the user was looking at when they closed the app (issue #244).",
         [PresetStore.SettingsKey] = "Presets travel in their own versioned block of the file, not as a raw setting.",
     };
 

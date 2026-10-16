@@ -33,6 +33,8 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly AppDataRoot? _dataRoot;
     private readonly SimulatedCloudMode? _simulatedCloud;
     private readonly BuildIdentity? _build;
+    private readonly SessionRestorer? _session;
+    private SessionTarget? _pendingRestore;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
     // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
@@ -51,8 +53,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The update check state (issue #179): the shell's Update available bar binds to it, and Settings > About shows the same instance. Null only in tests that do not exercise updates.</summary>
     public UpdateViewModel? Updates { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null)
     {
+        _session = session;
         Updates = updates;
         _build = build;
         _completion = completion;
@@ -134,6 +137,31 @@ public sealed partial class ShellViewModel : ObservableObject
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
+
+        // Issue #244: the first time the remembered page's parent is shown at startup, open the remembered run on top of it. Once only,
+        // and only if the user has not already chosen another page (that choice replaced the pending restore).
+        var pending = _pendingRestore;
+        _pendingRestore = null;
+        if (pending is { SubPage: not null } && pending.NavKey == pageKey)
+        {
+            _navigator.NavigateTo(pending.SubPage, pending.Parameter);
+        }
+    }
+
+    /// <summary>The navigation item the shell selects at startup: the remembered page's (issue #244), else New run. Valid after <see cref="PrepareSessionAsync"/>.</summary>
+    public string StartupNavKey { get; private set; } = InitialPageKeyValue;
+
+    /// <summary>Reads where the user left off (issue #244) before the first navigation. Never throws; a failure means "start on New run".</summary>
+    public async Task PrepareSessionAsync(CancellationToken cancellationToken)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        var target = await _session.ResolveAsync(cancellationToken);
+        _pendingRestore = target;
+        StartupNavKey = target?.NavKey ?? InitialPageKeyValue;
     }
 
     /// <summary>Alt+Left (issue #110): back to the previous page; nothing when there is none.</summary>

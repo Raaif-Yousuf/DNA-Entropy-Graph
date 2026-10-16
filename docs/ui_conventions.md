@@ -33,6 +33,14 @@ Window placement: nothing is saved while the window is minimized or maximized, a
 rect that is the minimized sentinel (-32000) or smaller than 320x200 is refused, and a
 first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the work area).
 
+Session restore (#244): `RecordingNavigator` wraps the app's `INavigator`, so every navigation (nav rail or any ViewModel) saves
+`session.page` and `session.run` (`SessionStore`). Only pages reopenable from a key are saved: New run, Runs, Cloud, Settings, and
+Results or Run progress with their run id; the viewer and the wizard leave the last page alone. At startup `MainWindow.Loaded`
+awaits `ShellViewModel.PrepareSessionAsync`, selects `StartupNavKey` (the remembered nav page, or Runs for a remembered run), and
+the first `NavigateTo` of that item opens the run page on top, once. A remembered run that is gone opens New run; a Run progress
+page whose run completed while the app was closed opens Results. An Open with or notification launch is routed by
+`ActivationRouter` after the shell is ready, so it still wins. Both keys are `Excluded` in `SettingsCatalog` (not shared).
+
 ## 2. Copy rules (CLAUDE.md rule 13; this is the rationale and the worked examples)
 
 - **Every user-visible string lives in `Strings/en-US/Resources.resw`**, referenced by
