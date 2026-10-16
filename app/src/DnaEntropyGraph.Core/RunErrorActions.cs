@@ -75,6 +75,7 @@ public static class RunErrorActions
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
         [RunErrorCodes.DeletedByCleanup] = RunErrorAction.StartAgain,
+        [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         ["billing"] = RunErrorAction.GoogleConsole,
         ["api_disabled"] = RunErrorAction.GoogleConsole,
         ["quota"] = RunErrorAction.GoogleConsole,
