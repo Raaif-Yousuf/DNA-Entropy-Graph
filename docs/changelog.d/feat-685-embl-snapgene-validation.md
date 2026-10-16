@@ -1,0 +1,1 @@
+- feat(app): EMBL (.embl, .emb) and SnapGene (.dna) files are checked on this PC before any cloud resource exists, with the worker's rules (#685): the same ambiguity policy, length caps and non-ASCII refusal, a damaged or hostile SnapGene file named and refused, the gene count on the pill, and the manifest `informat` values `embl` and `snapgene`.
