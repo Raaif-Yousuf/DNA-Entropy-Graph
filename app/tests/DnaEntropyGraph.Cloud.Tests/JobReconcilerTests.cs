@@ -32,11 +32,39 @@ public class JobReconcilerTests
     {
         public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
 
+        private readonly List<(Func<(string Source, string? JobId, string ErrorClass), bool> Match, TaskCompletionSource Signal)> _waiters = [];
+
         public void Warning(string source, string? jobId, string errorClass)
         {
             lock (Entries)
             {
                 Entries.Add((source, jobId, errorClass));
+                _waiters.RemoveAll(w =>
+                {
+                    if (!w.Match((source, jobId, errorClass)))
+                    {
+                        return false;
+                    }
+
+                    w.Signal.TrySetResult();
+                    return true;
+                });
+            }
+        }
+
+        /// <summary>Completes once an entry matching <paramref name="match"/> has been logged (already complete when one was): a signal instead of a poll of <see cref="Entries"/> on a real clock.</summary>
+        public Task WhenLoggedAsync(Func<(string Source, string? JobId, string ErrorClass), bool> match)
+        {
+            lock (Entries)
+            {
+                if (Entries.Any(match))
+                {
+                    return Task.CompletedTask;
+                }
+
+                var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((match, signal));
+                return signal.Task;
             }
         }
     }
@@ -537,10 +565,8 @@ public class JobReconcilerTests
     {
         env.Gcp.WithHungCalls(1);
         var launch = env.Reconciler().ReattachAsync(shutdown);
-        for (var waited = 0; (env.Gcp.HungCalls == 0 || !env.Active.IsActive(jobId)) && waited < 500; waited++)
-        {
-            await Task.Delay(10, CancellationToken.None);
-        }
+        await env.Active.WhenActiveAsync(jobId);
+        await env.Gcp.WhenHungAsync().WaitAsync(RunSignals.Safety);
 
         env.Gcp.HungCalls.ShouldBe(1, "precondition: the reattach is parked inside its look at the cloud");
         return launch;
@@ -568,11 +594,14 @@ public class JobReconcilerTests
         await env.SeedAsync("job-sd", JobPhase.Running, vm: true);
         using var shutdown = new CancellationTokenSource();
         var launch = await ReattachParkedInItsLookAsync(env, "job-sd", shutdown.Token);
-        var cancel = env.Active.CancelAsync("job-sd", () => Task.Delay(Timeout.Infinite));
-        for (var waited = 0; env.Active.IsActive("job-sd") && waited < 500; waited++)
+        // The cancel's own work runs only after the driver has ended (and left the registry): reaching it is the signal that the cancel has stopped the driver.
+        var driverStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancel = env.Active.CancelAsync("job-sd", () =>
         {
-            await Task.Delay(10, CancellationToken.None);
-        }
+            driverStopped.TrySetResult();
+            return Task.Delay(Timeout.Infinite);
+        });
+        await driverStopped.Task.WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
 
         env.Active.IsActive("job-sd").ShouldBeFalse("precondition: the cancel has stopped the driver");
         await shutdown.CancelAsync();

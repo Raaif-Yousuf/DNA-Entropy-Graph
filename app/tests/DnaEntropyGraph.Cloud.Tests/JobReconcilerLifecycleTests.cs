@@ -828,16 +828,19 @@ public class JobReconcilerLifecycleTests
 
         // The observer's FIRST pass (nothing else has touched job-long): it reattaches the run, whose worker never finishes, and must still
         // return (so the next reconnect is not coalesced behind it) while that run goes on.
+        var delLateVm = (await rig.VmsAsync("job-del-late")).Single().Name;
         observer.OnConnectivityChanged(offline: false);
-        await WaitUntilAsync(() => Task.FromResult(rig.Env.Active.IsActive("job-long")));
-        await WaitUntilAsync(async () => (await rig.VmsAsync("job-del-late")).Count == 0 && (await rig.VmsAsync("job-orphan-late")).Count == 0);
+        await rig.Env.Active.WhenActiveAsync("job-long");
+        await rig.Gcp.WhenVmDeletedAsync(delLateVm).WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
+        await rig.Gcp.WhenVmDeletedAsync(orphan.Spec.VmName).WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
         rig.Env.Active.IsActive("job-long").ShouldBeTrue("the long run is still going while the lifecycle and the sweep already ran");
 
         // A second reconnect is a pass of its own, not a flag waiting for the long run to end.
         await rig.SeedFinishedAsync("job-del-later", AfterTaskAction.Delete);
         await rig.StopAsync("job-del-later");
+        var delLaterVm = (await rig.VmsAsync("job-del-later")).Single().Name;
         observer.OnConnectivityChanged(offline: false);
-        await WaitUntilAsync(async () => (await rig.VmsAsync("job-del-later")).Count == 0);
+        await rig.Gcp.WhenVmDeletedAsync(delLaterVm).WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
         rig.Env.Active.IsActive("job-long").ShouldBeTrue();
 
         // Stop the long run's driver so nothing outlives the test.
@@ -850,9 +853,15 @@ public class JobReconcilerLifecycleTests
         var passes = 0;
         var heldRun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondPassStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstPassStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var observer = new ReconcileOnReconnect(new NullObserver(), _ =>
         {
-            if (Interlocked.Increment(ref passes) == 2)
+            var pass = Interlocked.Increment(ref passes);
+            if (pass == 1)
+            {
+                firstPassStarted.SetResult();
+            }
+            else if (pass == 2)
             {
                 secondPassStarted.SetResult();
             }
@@ -861,7 +870,7 @@ public class JobReconcilerLifecycleTests
         });
 
         observer.OnConnectivityChanged(offline: false);
-        await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref passes) == 1));
+        await firstPassStarted.Task.WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
         observer.OnConnectivityChanged(offline: false);
         await secondPassStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
@@ -919,7 +928,8 @@ public class JobReconcilerLifecycleTests
         var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
 
         observer.OnConnectivityChanged(offline: false);
-        await WaitUntilAsync(() => Task.FromResult(rig.Env.Log.Entries.Any(e => e.Source == "reconciler") && rig.Env.Active.IsActive("job-orphan2")));
+        await rig.Env.Log.WhenLoggedAsync(e => e.Source == "reconciler").WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
+        await rig.Env.Active.WhenActiveAsync("job-orphan2");
         var idle = observer.WhenIdleAsync();
 
         idle.IsCompleted.ShouldBeFalse("a run the pass reattached is still going");
@@ -959,7 +969,7 @@ public class JobReconcilerLifecycleTests
         for (var i = 1; i <= 5; i++)
         {
             observer.OnConnectivityChanged(offline: false);
-            await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == i));
+            await WhenTrackedAsync(observer, i);
         }
 
         observer.TrackedRunGroups.ShouldBe(5, "each pass's still-running group is tracked");
@@ -970,19 +980,33 @@ public class JobReconcilerLifecycleTests
             groups[i].SetResult();
         }
 
-        await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 1));
+        await WhenTrackedAsync(observer, 1);
         groups[2].SetResult();
         await observer.WhenIdleAsync();
-        await WaitUntilAsync(() => Task.FromResult(observer.TrackedRunGroups == 0));
+        await WhenTrackedAsync(observer, 0);
     }
 
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    /// <summary>Completes once the observer tracks exactly <paramref name="count"/> run groups: waits on <see cref="ReconcileOnReconnect.RunGroupsChanged"/> (subscribed before the first read), not on a poll.</summary>
+    private static async Task WhenTrackedAsync(ReconcileOnReconnect observer, int count)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (!await condition())
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler()
         {
-            (DateTime.UtcNow < deadline).ShouldBeTrue("the condition was not met within 10 s");
-            await Task.Delay(10, TestContext.Current.CancellationToken);
+            if (observer.TrackedRunGroups == count)
+            {
+                reached.TrySetResult();
+            }
+        }
+
+        observer.RunGroupsChanged += Handler;
+        try
+        {
+            Handler();
+            await reached.Task.WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            observer.RunGroupsChanged -= Handler;
         }
     }
 
