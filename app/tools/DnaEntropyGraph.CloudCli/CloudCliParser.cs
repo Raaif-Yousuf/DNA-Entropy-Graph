@@ -32,7 +32,26 @@ public sealed record VmCreateCommand(
     string AppVersion,
     string Lifecycle,
     TimeSpan MaxRunDuration,
-    bool Json) : CliCommand(Project, Json);
+    bool Json) : CliCommand(Project, Json)
+{
+    /// <summary>Issue #759: a full worker image reference pinned by digest. Null means no startup metadata at all (the VM boots idle).</summary>
+    public string? WorkerImage { get; init; }
+
+    /// <summary>The bucket the startup script writes to; required with <see cref="WorkerImage"/>.</summary>
+    public string? Bucket { get; init; }
+
+    /// <summary>Null or <c>worker</c> runs the job worker; <see cref="CloudCliParser.GpuTestMode"/> runs <c>pytest -m gpu</c> in the image.</summary>
+    public string? StartupMode { get; init; }
+
+    /// <summary>Whether the startup script waits for the GPU driver and passes <c>--gpus all</c>.</summary>
+    public bool ExpectGpu { get; init; }
+}
+
+/// <summary>Issue #759: prints one object from a bucket to stdout (a missing one is exit 5), so a script can pull a log back.</summary>
+public sealed record ObjectGetCommand(string Project, string Bucket, string Key, bool Json) : CliCommand(Project, Json);
+
+/// <summary>Issue #759: creates (idempotently) and names the project's DNA Entropy Graph bucket.</summary>
+public sealed record BucketEnsureCommand(string Project, bool Json) : CliCommand(Project, Json);
 
 public sealed record VmDeleteCommand(string Project, string Zone, string Name, bool Json) : CliCommand(Project, Json);
 
@@ -50,13 +69,18 @@ public static class CloudCliParser
     public const string DefaultLifecycle = "test";
     public const string DefaultAppVersion = "cli";
     public static readonly TimeSpan DefaultMaxRunDuration = TimeSpan.FromMinutes(30);
+    public const string WorkerMode = "worker";
+    public const string GpuTestMode = "gpu-test";
 
     public const string Usage =
         "Usage:\n"
         + "  resources list --project <id> [--install <id>] [--kind vm|bucket|all] [--json]\n"
         + "  bucket describe --project <id> [--name <bucket>] [--json]\n"
+        + "  bucket ensure --project <id> [--json]\n"
+        + "  object get --project <id> --bucket <bucket> --key <object> [--json]\n"
         + "  vm create --project <id> --zone <zone> --install <id> --service-account <email> [--job <id>] [--model <m>]\n"
-        + "            [--machine-type <t>] [--lifecycle <l>] [--app-version <v>] [--max-run-duration 90|90s|30m|2h] [--json]\n"
+        + "            [--machine-type <t>] [--lifecycle <l>] [--app-version <v>] [--max-run-duration 90|90s|30m|2h]\n"
+        + "            [--worker-image <name@sha256:...> --bucket <bucket> [--startup-mode worker|gpu-test] [--expect-gpu true|false]] [--json]\n"
         + "  vm delete --project <id> --zone <zone> --name <deg-...> [--json]";
 
     private static readonly Regex DurationPattern = new(@"^(?<n>\d{1,9})(?<unit>[smh]?)$", RegexOptions.Compiled);
@@ -64,7 +88,10 @@ public static class CloudCliParser
     private static readonly string[] ResourcesListFlags = ["project", "install", "kind"];
     private static readonly string[] BucketDescribeFlags = ["project", "name"];
     private static readonly string[] VmCreateFlags =
-        ["project", "zone", "install", "job", "model", "machine-type", "service-account", "app-version", "lifecycle", "max-run-duration", "instance-termination-action"];
+        ["project", "zone", "install", "job", "model", "machine-type", "service-account", "app-version", "lifecycle", "max-run-duration", "instance-termination-action",
+         "worker-image", "bucket", "startup-mode", "expect-gpu"];
+    private static readonly string[] BucketEnsureFlags = ["project"];
+    private static readonly string[] ObjectGetFlags = ["project", "bucket", "key"];
     private static readonly string[] VmDeleteFlags = ["project", "zone", "name"];
 
     public static CliParseResult Parse(IReadOnlyList<string> args)
@@ -79,6 +106,8 @@ public static class CloudCliParser
         {
             ("resources", "list") => ResourcesListFlags,
             ("bucket", "describe") => BucketDescribeFlags,
+            ("bucket", "ensure") => BucketEnsureFlags,
+            ("object", "get") => ObjectGetFlags,
             ("vm", "create") => VmCreateFlags,
             ("vm", "delete") => VmDeleteFlags,
             _ => null,
@@ -108,6 +137,8 @@ public static class CloudCliParser
         {
             ("resources", "list") => ParseResourcesList(project, Value("install"), Value("kind"), json),
             ("bucket", "describe") => Ok(new BucketDescribeCommand(project, Value("name"), json)),
+            ("bucket", "ensure") => Ok(new BucketEnsureCommand(project, json)),
+            ("object", "get") => ParseObjectGet(project, Value, json),
             ("vm", "create") => ParseVmCreate(project, Value, json),
             _ => ParseVmDelete(project, Value, json),
         };
@@ -184,9 +215,56 @@ public static class CloudCliParser
             return Fail("--max-run-duration must be a positive number of seconds, or a number ending in s, m or h (for example 90, 30m, 2h).");
         }
 
+        var workerImage = value("worker-image");
+        var bucket = value("bucket");
+        var startupMode = value("startup-mode");
+        var expectGpuText = value("expect-gpu");
+        if (string.IsNullOrWhiteSpace(workerImage))
+        {
+            if (bucket is not null || startupMode is not null || expectGpuText is not null)
+            {
+                return Fail("--bucket, --startup-mode and --expect-gpu only apply together with --worker-image <name@sha256:...>. Add --worker-image or remove them.");
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(bucket))
+        {
+            return Fail("Missing --bucket <bucket>: the startup script needs the bucket it writes to (run 'bucket ensure' to get its name).");
+        }
+
+        if (startupMode is not null && startupMode is not (WorkerMode or GpuTestMode))
+        {
+            return Fail($"--startup-mode must be {WorkerMode} or {GpuTestMode}.");
+        }
+
+        var expectGpu = false;
+        if (expectGpuText is not null && !bool.TryParse(expectGpuText, out expectGpu))
+        {
+            return Fail("--expect-gpu must be true or false.");
+        }
+
         return Ok(new VmCreateCommand(
             project, zone, install, value("job"), value("model") ?? DefaultModel, value("machine-type") ?? DefaultMachineType, serviceAccount,
-            value("app-version") ?? DefaultAppVersion, value("lifecycle") ?? DefaultLifecycle, duration, json));
+            value("app-version") ?? DefaultAppVersion, value("lifecycle") ?? DefaultLifecycle, duration, json)
+        {
+            WorkerImage = workerImage,
+            Bucket = bucket,
+            StartupMode = startupMode,
+            ExpectGpu = expectGpu,
+        });
+    }
+
+    private static CliParseResult ParseObjectGet(string project, Func<string, string?> value, bool json)
+    {
+        var bucket = value("bucket");
+        if (string.IsNullOrWhiteSpace(bucket))
+        {
+            return Fail("Missing --bucket <bucket>: the bucket to read from ('bucket describe' lists it).");
+        }
+
+        var key = value("key");
+        return string.IsNullOrWhiteSpace(key)
+            ? Fail("Missing --key <object>, for example jobs/<job id>/logs/gpu-test.log.")
+            : Ok(new ObjectGetCommand(project, bucket, key, json));
     }
 
     private static CliParseResult ParseVmDelete(string project, Func<string, string?> value, bool json)

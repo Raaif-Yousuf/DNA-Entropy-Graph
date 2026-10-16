@@ -134,14 +134,29 @@ this app created.*
 
 - The **status bar at the top of the app** always shows your estimated spending so far
   this month.
-- The **Cloud page** lists every computer and every storage bucket this app has ever
-  created for you, whether it is running, stopped, or gone, with an estimated cost for
-  each. From there you can stop, start, or delete anything, or use **Delete everything
-  this app created** to remove it all at once (this asks you to type your project's name
-  first, so it cannot happen by accident).
-- If you close the app while a computer is still running with no job attached to it, a
-  message tells you exactly how many minutes until it stops itself, and offers to stop or
-  delete it right then instead of waiting.
+- The **Cloud page** lists every rented computer, every disk and the size of your results
+  online that this copy of the app created in your project, with an estimated cost for each.
+  From there you can **Stop**, **Start** or **Delete** a computer, or use **Delete everything
+  this app created** to remove it all at once. That asks first and says exactly how many
+  computers, disks and job folders will go. Afterwards it lists every item with what became
+  of it, and says how many days Google keeps a deleted job folder in case you change your
+  mind.
+- If someone else uses another copy of this app on the same Google project, their computers
+  show up on your Cloud page tagged **Another computer**. You can see them (they cost money
+  on the same bill) but not stop or delete them from here.
+- The app checks for leftovers when it starts and then every 5 minutes. If a rented computer of
+  this copy of the app is running and no run is using it, a message names it and tells you to
+  press Stop on the Cloud page.
+- If you close the app while a computer is still running, a window lists each one with the
+  minutes left before it ends itself at its time limit and what it costs per hour. Press
+  **Stop it** (keeps the disk, stops the computer's cost), **Delete it**, or **Leave it
+  running**. A computer left running is never left forever: it always ends itself at its time
+  limit, but you pay until then. The same window says how much the stopped disks cost each
+  month. If a computer is still being used by a run, the window says its results are not downloaded
+  yet, and Stop or Delete ends that run. If a stop or delete does not work, the app stays open
+  and says which computer; close the app again to retry, or use the Cloud page. If Google is
+  slow to answer, the app closes after a short wait and says the stop will finish on Google's
+  side.
 - In **Settings > Budget**, you can set a monthly spending warning (a friendly reminder,
   $50 a month by default) or a hard stop that disables the Run button once you reach it.
 

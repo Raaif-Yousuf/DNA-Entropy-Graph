@@ -546,7 +546,8 @@ Benchling and IGV. When the contig is circular (`cfg.topology.resolve(contig.cir
 - `<name>.gb`: `join(120..126,1..10)` (the segment ending at `L` first), `complement(join(...))` on
   the minus strand, and the LOCUS line says `circular`. The `mean_entropy` note covers the gene's own
   bases only. A spliced feature on a linear contig keeps its outer span (GenBank's own `gene`
-  feature is the full span).
+  feature is the full span), but its `mean_entropy` note averages the joined exon bases only, the
+  same value the gene table reports (#563).
 - `<name>.genes.gff3`: one row per segment, all sharing one `ID`, plus a `region` row with
   `Is_circular=true` for every circular contig (the GFF3 convention for a discontinuous feature on a
   circular molecule). Positions carry the run's `start` offset like every other row.
@@ -740,6 +741,40 @@ are the file's own, Prodigal never runs). Differences worth knowing:
   `source_kind` stays `genbank` for EMBL and SnapGene so they take the GenBank output set.
 - The app does not yet validate these two formats locally before creating a VM (rule 2); that
   port is tracked in a follow-up issue.
+
+### 5e. Analysis commands on top of a run (issues #129, #130, #192)
+
+**Batch outlier QC (#192).** A run of three or more inputs (a multi-record file) scores every input
+in `stats.txt` / `<name>.summary.txt`. `analysis/batch_qc.py` reduces each input to its mean entropy
+and computes a robust z-score over the batch, `0.6745 * (mean - median) / MAD`; `|z| > 3.5` is
+flagged. The overall block gets `batch QC flagged:   N of M` and each `[contig]` block gets
+`batch QC z-score`, `batch QC median` and `batch QC flag` (`ok` or `OUTLIER`); those keys are new, so
+a reader that takes the first value of each key (the app's `RunSummaryReader`) is not shadowed. If
+every other input is exactly alike (MAD = 0) any input that differs is flagged, with z capped at
+99. Below three inputs nothing is flagged. Tests: `worker/tests/test_batch_qc.py` (the statistic and
+the summary file; a planted outlier is flagged alone, MEASURED 2026-10-15 on synthetic tracks, not on
+shuffled real plasmids, which is the ToTest row).
+
+**Compare two runs (#129).** `dna-entropy compare A.entropy.tsv B.entropy.tsv [--offset N] [--contig C]`
+writes `<name>.compare.bedgraph` (B minus A in bits, bedGraph coordinates like every other track,
+one row per position) and `<name>.compare.deviations.tsv` (the `--top` largest `|difference|`,
+1-based). B index `j` is compared with A index `j + offset`; with no offset the lengths must match,
+otherwise the command refuses and names `--offset`. Positions are A's coordinates. A run compared with
+itself gives an all-zero track. Stacking A, B and the difference in the viewer is app work. Tests:
+`worker/tests/test_compare.py`.
+
+**Variant effect scan (#130).** `dna-entropy variants -i seq.fasta (--variants v.tsv | --positions 12,40)`
+scores substitutions with one forward pass per variant (`--max-variants`, default 50, refuses more
+and names the option; `--dry-run` prints only the cost). The cost line ("N forward passes ... about N
+seconds on an L4 GPU") is printed before any pass. Each variant is scored on the window `pos +- K/2`
+(`--context-length`) of the reference and of the variant; `<name>.variants.tsv` has `position, ref,
+alt, window_start, window_end, delta_surprisal_bits` (variant window total surprisal minus the
+reference window's), `delta_mean_entropy_bits`, and `site_surprisal_ref_bits` / `site_surprisal_alt_bits`
+(from the reference window's own prediction). Reference windows are predicted once per distinct
+window. The variants file is `pos<TAB>ref<TAB>alt`; every ref must match the sequence. Tests:
+`worker/tests/test_variants.py` (mock predictor: plumbing and arithmetic, not biology).
+THEORY (unverified): a synonymous change in a conserved codon scores a smaller delta than a nonsense
+change on the TnpB test locus (the issue's observable); it needs a real model (docs/ToTest.md).
 
 ### 5d. Model-free companion tracks: GC percent and codon usage (issue #191)
 

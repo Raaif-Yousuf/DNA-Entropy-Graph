@@ -76,6 +76,19 @@ public sealed class RunCloudResultsTests : IDisposable
     }
 
     [Fact]
+    public async Task Redownload_of_a_cancelled_runs_partial_outputs_fetches_the_files_the_worker_uploaded_and_reports_partial_not_done()
+    {
+        // Issue #717: a graceful cancel leaves result.json with status "cancelled" and whatever files the worker finished; they must still come back (Hard Rule 14).
+        PutResult(status: "cancelled");
+        var folder = Path.Combine(_root, "sample");
+
+        var status = await Make().RedownloadAsync(Run(folder) with { Phase = JobPhase.Cancelled }, CancellationToken.None);
+
+        status.Status.ShouldBe(CloudResultsStatus.Partial);
+        File.ReadAllBytes(Path.Combine(folder, "sample.bedgraph")).ShouldBe(BedGraph);
+    }
+
+    [Fact]
     public async Task Redownload_with_no_recorded_folder_creates_a_unique_one_under_the_output_root_and_records_it()
     {
         PutResult();
