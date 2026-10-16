@@ -32,6 +32,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly AppDataRoot? _dataRoot;
     private readonly SimulatedCloudMode? _simulatedCloud;
+    private readonly BuildIdentity? _build;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
     // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
@@ -50,9 +51,10 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The update check state (issue #179): the shell's Update available bar binds to it, and Settings > About shows the same instance. Null only in tests that do not exercise updates.</summary>
     public UpdateViewModel? Updates { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null)
     {
         Updates = updates;
+        _build = build;
         _completion = completion;
         _dataRoot = dataRoot;
         _simulatedCloud = simulatedCloud;
@@ -107,6 +109,13 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>True when the app runs over the simulated cloud (issue #69): the banner is permanent, never dismissible.</summary>
     /// <summary>What the status pill does, for a screen reader: it opens the setup wizard (issue #99).</summary>
     public string StatusPillHelp => _strings.GetString("StatusPillHelp");
+
+    /// <summary>True for an unsigned build (issue #263): a development build or a CI artifact, never a release, so the title bar says so.</summary>
+    public bool HasDevBuildBanner => _build is { IsDevBuild: true };
+
+    public string DevBuildBannerText => _build is { IsDevBuild: true } build
+        ? string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("DevBuild_Banner"), build.Info.Display)
+        : string.Empty;
 
     public bool HasSimulatedCloud => _simulatedCloud is not null;
 

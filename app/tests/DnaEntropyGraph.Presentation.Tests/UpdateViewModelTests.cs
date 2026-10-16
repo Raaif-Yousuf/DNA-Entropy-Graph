@@ -25,7 +25,7 @@ public sealed class UpdateViewModelTests
 
     private readonly ManualDispatcher _dispatcher = new();
 
-    private UpdateViewModel Vm(TimeSpan? checkTimeout = null) => new(_source, new UpdateSettings(_store), _strings, _runs, _messenger, _dispatcher, checkTimeout);
+    private UpdateViewModel Vm(TimeSpan? checkTimeout = null) => new(_source, new UpdateSettings(_store), _strings, _runs, _messenger, dispatcher: _dispatcher, checkTimeout: checkTimeout);
 
     [Fact]
     public void Defaults_are_the_stable_channel_and_check_on_launch()

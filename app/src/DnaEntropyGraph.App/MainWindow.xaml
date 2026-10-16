@@ -45,6 +45,15 @@
                     Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}">
                     <TextBlock Text="{x:Bind ViewModel.SimulatedCloudBannerText}" TextTrimming="CharacterEllipsis" />
                 </Border>
+                <!-- Issue #263: an unsigned exe (a dev build or a CI artifact) is named here with its version and short sha, so it never passes for a release. -->
+                <Border
+                    Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasDevBuildBanner)}"
+                    Margin="12,0,0,0"
+                    Padding="8,2"
+                    CornerRadius="4"
+                    Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                    <TextBlock Text="{x:Bind ViewModel.DevBuildBannerText}" TextTrimming="CharacterEllipsis" />
+                </Border>
                 <Border
                     Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasProfileOverride)}"
                     Margin="12,0,0,0"

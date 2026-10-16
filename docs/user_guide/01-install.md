@@ -26,6 +26,10 @@ a new publisher's installer runs, even a properly signed one. Click "More info,"
 anyway," if you downloaded `Setup.exe` from the official GitHub Releases page and not
 from anywhere else.
 
+**If the title bar says "Development build":** you are running a copy that was built from the source code or downloaded as a test
+artifact, not the signed release. It is for testing and is labelled so it is never confused with the real app. Install `Setup.exe` from
+the GitHub Releases page to get the release. Settings > About and updates shows the exact build.
+
 **If your organization's IT department blocks the download or the install:** some
 university and company networks restrict what can be installed. Ask your IT department
 to allow it, or install it on a personal computer instead; the cloud account this app

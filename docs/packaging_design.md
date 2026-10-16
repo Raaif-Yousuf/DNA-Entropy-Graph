@@ -87,6 +87,17 @@ internal testing is never blocked on it; v1.0 (lab release) cannot ship this way
 Verification on a clean VM: `signtool verify /pa Setup.exe` must accept the signed
 artifact before a release is considered done (see `release_runbook.md`).
 
+**The dev-build banner (issue #263).** An unsigned exe is a development build or a CI artifact, never a release, so the title bar
+names it: `Development build 0.0.1 (abc1234): not a release` in the caution colour, and Settings > About shows `Build 0.0.1 (abc1234)` on every build.
+Chosen: a **run-time Authenticode check of the running exe** (`BuildIdentityFactory.HasAuthenticodeSignature`, which asks
+`X509Certificate.CreateFromSignedFile` for an embedded signer), not a build-time constant in `release.yml`. Why: the constant would have to be
+set by the same workflow whose signing step can silently no-op, so it could say "signed" for an unsigned exe; the file itself cannot.
+It checks that a signature is present, not that the chain is valid (a revoked certificate still reads as signed; `signtool verify /pa` in the
+verify job is what proves validity). The check is on the app's own binary (`ResolveOwnBinary`: the apphost exe beside the assembly, else the dll; `ProcessPath` only for a single-file publish), never the launching host, because `dotnet App.dll` makes `ProcessPath` Microsoft's signed dotnet.exe. Any failure to read reads as unsigned and is traced by class, so start-up never crashes. Chain validation (WinVerifyTrust) was judged not cheap (P/Invoke plus a revocation lookup at every start) and is not done. A `dotnet run` or CI artifact build is always a dev build. The sha stamp ignores git's stderr, accepts only 7 to 40 hex digits and otherwise stamps `unknown`.
+The short sha comes from `StampGitRevision` in the App csproj (`git rev-parse --short=7 HEAD` into `SourceRevisionId`, so the informational version is
+`0.0.1+abc1234`; a `-p:SourceRevisionId=` from CI wins, and a checkout without git shows no sha). The simulated-cloud banner (#69) and the sandbox-profile
+badge (#638) are separate, and all three can show together.
+
 ## 4. Update channel
 
 The in-app updater reads the GitHub **Releases** API, not the raw git tags. Two
