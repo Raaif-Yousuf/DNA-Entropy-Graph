@@ -85,6 +85,20 @@ public sealed class SettingsTransfer
     /// <summary>Reads and validates <paramref name="json"/> and says what applying it would change. Writes nothing.</summary>
     public SettingsImportPlan Plan(string? json)
     {
+        try
+        {
+            return PlanCore(json);
+        }
+        catch (ArgumentException)
+        {
+            // MEASURED 2026-10-16 (.NET 10): JsonNode.Parse accepts a duplicate key and throws ArgumentException later, on first access
+            // (at any nesting level), so the whole read is guarded, not just the parse.
+            return SettingsImportPlan.Failed(SettingsImportStatus.NotJson);
+        }
+    }
+
+    private SettingsImportPlan PlanCore(string? json)
+    {
         JsonObject? root;
         try
         {
@@ -142,10 +156,20 @@ public sealed class SettingsTransfer
         string? presetsJson = null;
         if (root["presets"] is JsonObject presets)
         {
-            // A dry run on a scratch store counts what Import would keep, so the preview is honest and nothing is written.
-            var dryRun = new PresetStore(new ScratchSettings()).Import(presets.ToJsonString());
-            presetCount = dryRun.Imported;
-            presetsJson = presetCount == 0 ? null : presets.ToJsonString();
+            // A dry run on a scratch copy of this PC's own presets, so name collisions (an identical preset is not a change; a
+            // repeated name in the file counts once) are counted as Import will really apply them.
+            var scratch = new ScratchSettings();
+            var real = _settings.GetString(PresetStore.SettingsKey);
+            if (real is not null)
+            {
+                scratch.SetString(PresetStore.SettingsKey, real);
+            }
+
+            var scratchStore = new PresetStore(scratch);
+            var before = scratchStore.List().Where(p => !p.BuiltIn).Select(p => p with { Id = string.Empty }).ToHashSet();
+            var dryRun = scratchStore.Import(presets.ToJsonString());
+            presetCount = scratchStore.List().Where(p => !p.BuiltIn).Select(p => p with { Id = string.Empty }).Distinct().Count(p => !before.Contains(p));
+            presetsJson = dryRun.Imported == 0 || presetCount == 0 ? null : presets.ToJsonString();
         }
 
         var status = changes.Count == 0 && presetCount == 0 ? SettingsImportStatus.NothingToImport : SettingsImportStatus.Ok;

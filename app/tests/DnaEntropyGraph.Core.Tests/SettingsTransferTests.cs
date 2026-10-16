@@ -107,6 +107,32 @@ public sealed class SettingsTransferTests
         => Make().Transfer.Plan(text).Status.ShouldBe(SettingsImportStatus.NotJson);
 
     [Fact]
+    public void A_duplicate_key_is_NotJson_not_a_crash()
+        => Make().Transfer.Plan("{\"format\":\"x\",\"format\":\"y\"}").Status.ShouldBe(SettingsImportStatus.NotJson);
+
+    [Fact]
+    public void Preview_counts_presets_against_this_pcs_own_store()
+    {
+        var (a, aStore) = Make();
+        var presets = new PresetStore(aStore);
+        presets.Save("Lab default", Direction.ForwardOnly, 8192, Topology.Circular, OutputFileKinds.BedGraph);
+        presets.Save("Second", Direction.ForwardOnly, 4096, Topology.Linear, OutputFileKinds.BedGraph);
+        var file = a.Export();
+
+        // The same file into the same store changes nothing, so the preview must not promise two presets.
+        a.Plan(file).PresetCount.ShouldBe(0);
+
+        // A fresh PC gets both; a PC that has one of them identical gets only the other.
+        var (b, bStore) = Make();
+        b.Plan(file).PresetCount.ShouldBe(2);
+        new PresetStore(bStore).Save("Second", Direction.ForwardOnly, 4096, Topology.Linear, OutputFileKinds.BedGraph);
+        b.Plan(file).PresetCount.ShouldBe(1);
+
+        // Planning never writes.
+        new PresetStore(bStore).List().Count(p => !p.BuiltIn).ShouldBe(1);
+    }
+
+    [Fact]
     public void A_json_file_that_is_not_ours_is_refused()
         => Make().Transfer.Plan("{\"schema\":1,\"settings\":{\"Theme\":\"Dark\"}}").Status.ShouldBe(SettingsImportStatus.NotOurFile);
 
