@@ -95,7 +95,16 @@
                                 TextWrapping="Wrap"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
+                            <TextBlock
+                                Text="{x:Bind AnnotationText, Mode=OneWay}"
+                                Visibility="{x:Bind HasAnnotation, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                Text="{x:Bind AnnotationNoticesText, Mode=OneWay}"
+                                Visibility="{x:Bind HasAnnotationNotices, Mode=OneWay}"
+                                TextWrapping="Wrap"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />                        </StackPanel>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>
@@ -120,6 +129,11 @@
                     Command="{x:Bind ViewModel.StopTreatingAsRnaCommand}" />
             </StackPanel>
 
+            <StackPanel Orientation="Horizontal" Spacing="12" Visibility="{x:Bind ViewModel.OffersAnnotation}">
+                <Button x:Uid="NewRunAddGff3" Command="{x:Bind ViewModel.AddAnnotationCommand}" />
+                <Button x:Uid="NewRunRemoveGff3" Command="{x:Bind ViewModel.RemoveAnnotationCommand}" CommandParameter="{x:Bind ViewModel.SelectedItem, Mode=OneWay}" />
+            </StackPanel>
+
             <TextBlock
                 x:Uid="NewRunRunsSelectedOnly"
                 Visibility="{x:Bind ViewModel.HasSeveralItems, Mode=OneWay}"
@@ -137,6 +151,42 @@
                 Visibility="{x:Bind ViewModel.HasEstimateDisk, Mode=OneWay}"
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <!-- Issue #136: option presets. The summary line under the picker lists what the next run will use. -->
+            <Expander x:Uid="NewRunPresetExpander" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                <StackPanel Spacing="8">
+                    <ComboBox
+                        x:Uid="NewRunPresetCombo"
+                        ItemsSource="{x:Bind ViewModel.Presets.Items}"
+                        SelectedItem="{x:Bind ViewModel.Presets.SelectedItem, Mode=TwoWay}"
+                        DisplayMemberPath="DisplayName"
+                        MinWidth="260" />
+                    <TextBlock
+                        Text="{x:Bind ViewModel.Presets.DetailText, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.Presets.HasDetail, Mode=OneWay}"
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock
+                        Text="{x:Bind ViewModel.Presets.SummaryText, Mode=OneWay}"
+                        TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBox
+                            x:Uid="NewRunPresetNameBox"
+                            MinWidth="220"
+                            Text="{x:Bind ViewModel.Presets.NewName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <Button x:Uid="NewRunPresetSave" Command="{x:Bind ViewModel.Presets.SaveCurrentCommand}" />
+                        <Button x:Uid="NewRunPresetDelete" Command="{x:Bind ViewModel.Presets.DeleteCommand}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Uid="NewRunPresetCopy" Command="{x:Bind ViewModel.Presets.CopyMineCommand}" />
+                        <Button x:Uid="NewRunPresetAdd" Command="{x:Bind ViewModel.Presets.AddFromClipboardCommand}" />
+                    </StackPanel>
+                    <TextBlock
+                        Text="{x:Bind ViewModel.Presets.StatusText, Mode=OneWay}"
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </Expander>
 
             <StackPanel Spacing="4" Visibility="{x:Bind ViewModel.HasOutputChoices, Mode=OneWay}">
                 <TextBlock

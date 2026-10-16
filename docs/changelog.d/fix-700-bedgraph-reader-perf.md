@@ -1,0 +1,1 @@
+- perf(app): BedGraphReader parses UTF-8 bytes in 1 MB blocks instead of a string per row; MEASURED 2026-10-15 (Release, 5 Mb one-row-per-base file, 147 MB) 600 ms to 220 ms, 50 Mb 7.5 s to 2.2 s, same results (reference-oracle test); a worker-side overview file is the next step if 200 ms is required (#700).

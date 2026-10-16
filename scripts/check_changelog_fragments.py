@@ -104,11 +104,7 @@ def needs_fragment(path: str) -> bool:
     parts = path.split("/")
     if path.startswith(EXEMPT_PREFIXES) or "tests" in parts[:-1] or path.endswith(".md"):
         return False
-    return (
-        path.startswith(BEHAVIOUR_PREFIXES)
-        or path in BEHAVIOUR_FILES
-        or path.startswith(BEHAVIOUR_FILE_PREFIXES)
-    )
+    return path.startswith(BEHAVIOUR_PREFIXES) or path in BEHAVIOUR_FILES or path.startswith(BEHAVIOUR_FILE_PREFIXES)
 
 
 def missing_fragment(changes: list[tuple[str, str]]) -> str | None:
@@ -176,6 +172,7 @@ def check(root: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
+
 
 def self_test() -> bool:
     import tempfile
@@ -260,8 +257,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Check that every docs/changelog.d/ fragment (other than README.md) starts with '- '.",
     )
     ap.add_argument("--root", type=Path, default=REPO_ROOT, help="repo root (default: the repo this script lives in)")
-    ap.add_argument("--base", metavar="REF", default=None,
-                    help="also require a fragment when behaviour files changed since merge-base(REF, HEAD)")
+    ap.add_argument(
+        "--base", metavar="REF", default=None, help="also require a fragment when behaviour files changed since merge-base(REF, HEAD)"
+    )
     ap.add_argument("--self-test", action="store_true", help="run against synthetic fixtures and exit")
     args = ap.parse_args(argv)
 
