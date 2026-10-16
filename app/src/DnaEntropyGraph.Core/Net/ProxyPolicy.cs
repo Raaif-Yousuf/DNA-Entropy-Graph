@@ -23,7 +23,8 @@ public sealed class ProxyPolicy : IProxyPolicy
 
     private readonly ProxySettingsStore _store;
     private readonly IProxyCredentialStore _credentials;
-    private volatile Snapshot _current;
+    private Snapshot? _snapshot;
+    private readonly object _gate = new();
 
     private sealed class FixedPolicy : IProxyPolicy
     {
@@ -38,15 +39,33 @@ public sealed class ProxyPolicy : IProxyPolicy
     {
         _store = new ProxySettingsStore(settings);
         _credentials = credentials;
-        _current = Read();
     }
 
-    public ProxySettings Settings => _current.Settings;
+    // Read on first use, not at construction: building the service graph must touch no disk (the guards build it), and a client that is never used never reads.
+    private Snapshot Current
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _snapshot ??= Read();
+            }
+        }
+        set
+        {
+            lock (_gate)
+            {
+                _snapshot = value;
+            }
+        }
+    }
 
-    public NetworkCredential? ManualCredential => _current.Credential;
+    public ProxySettings Settings => Current.Settings;
+
+    public NetworkCredential? ManualCredential => Current.Credential;
 
     /// <summary>Re-reads settings.json and the credential file (after Reset all settings).</summary>
-    public void Reload() => _current = Read();
+    public void Reload() => Current = Read();
 
     /// <summary>After Reset all settings emptied settings.json: forgets the saved sign-in too and follows Windows again. Never throws.</summary>
     public void ResetToDefault()
@@ -60,7 +79,7 @@ public sealed class ProxyPolicy : IProxyPolicy
             // A file that cannot be removed is also one that is never read back as a sign-in for a mode that does not use it.
         }
 
-        _current = new Snapshot(_store.Load(), null);
+        Current = new Snapshot(_store.Load(), null);
     }
 
     /// <summary>
@@ -80,7 +99,7 @@ public sealed class ProxyPolicy : IProxyPolicy
             _credentials.Save(credential);
         }
 
-        _current = new Snapshot(settings, credential);
+        Current = new Snapshot(settings, credential);
     }
 
     private Snapshot Read()
