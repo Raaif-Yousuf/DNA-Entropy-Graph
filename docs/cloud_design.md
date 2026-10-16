@@ -544,6 +544,23 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `maxRunDuration` plus 5 minutes). Ending first lets the runner give up on its own terms: end the
   VM per the user's choice, verify it, record `result_timeout`. A worker still uploading in the last
   3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
+- **The platform's limit is the user's cap plus 15 minutes (issue #89).** `CloudJobRequestFactory` sets `VmSpec.MaxRunDuration`
+  to `RunOptions.MaxRunDurationMinutes + 15 min` (`VmGrace`), with `instanceTerminationAction=DELETE` (`VmSpec` rejects anything else).
+  The worker enforces the user's cap itself (manifest `limits.maxRunSeconds`, `runner.py` `_RunDeadline`): past it no further record or input starts,
+  finished work is uploaded and `result.json` carries `RUN_TIME_LIMIT` (mapped to the app's `run_time_limit`), so a worker that is merely slow
+  stops its own VM before Compute Engine deletes it; the VM's own deadline is the backstop for a worker that hangs.
+  **The arithmetic.** The platform's `maxRunDuration` = cap + 15 min counts from VM start (THEORY (unverified) for a VM that was stopped and started again, see ToTest #94). The worker therefore counts its own cap from VM start too: it reads `/proc/uptime` once at start (only when `DEG_VM_NAME` is set, i.e. on an app-created VM, so a laptop's uptime never shortens a local run) and treats that as already elapsed. Boot (up to 8 min), image pull (15) and manifest download (15) are stage allowances that come OUT of the cap, not on top of it, so the worker's graceful stop always lands at cap from VM start and the 15 min grace is left for the upload, `result.json` and the VM's own stop/delete. The verdict is taken at a checkpoint (a window or contig boundary, or an input start), never from a clock read after the work ended: a last window that finished in time whose upload ran past the cap is a finished run. `startup.sh` reads the VM limit
+  (`deg-max-run-min`), so keep-alive is capped against the platform deadline, not the cap. A VM that was seen created, is now gone, and whose
+  `maxRunDuration` has passed with no `result.json` and no worker error code in `status.json` is recorded `run_time_limit` (not `vm_unhealthy`):
+  the run hit its limit while the app was not looking (a closed laptop lid, a resume). When the app is looking it ends the run first
+  (`result_timeout`, above). THEORY (unverified): Compute Engine deletes at exactly `creationTimestamp + maxRunDuration`; ToTest #89 measures it.
+  Already built before #89 and now covered by name: labels and `DELETE` guard (`VmSpec`), the Insert fields (`GoogleComputeGateway`),
+  the post-result stop/delete verification (`VmTerminator.EnsureVmEndedAsync`, `lifecycle_unverified` / `vm_end_unconfirmed`).
+- **Per-stage deadlines (issue #90).** `HeartbeatWatch` also remembers the `stage` in `status.json` and when it last CHANGED (on the app's clock, any
+  writer: the startup script's `booting`/`installing` count). A stage past its deadline (`booting` 8 min, `installing` 15, `restoring-cache` 15,
+  `model-loading` 15, `uploading` 10; `CloudJobRunner.StageDeadlines` overrides them) ends the run as `worker_stage_stuck` and the VM per the
+  user's choice, whatever the heartbeat says: this catches a hung main thread under a ticking heartbeat thread while it is in one of those
+  stages (#522's remaining case is a hang inside `running`). Numbers are the contract's (THEORY, unverified on a real VM).
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
@@ -1119,6 +1136,11 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
   each prefix. So the bucket holds the longest age any installation asked for. A rule counts as ours only if its condition is exactly an age and
   the one prefix with a Delete action; a user's `jobs/` rule with any extra condition (storage class, live state, noncurrent time, suffix...)
   is neither counted toward our age nor replaced.
+  **Where the retention comes from (issue #114).** `settings.json` key `results_retention_days` (`ResultsRetentionSetting.Days`; absent or
+  unusable is 90, above 3650 is clamped), read at each use through `GoogleCloudOptions.ResultsRetentionDaysSource`, which `ServiceRegistration`
+  sets for the real build. So a change reaches the bucket on the next `EnsureBucketAsync` (the start of the next run: that call lists, compares and
+  patches), and the same value is what the call's own read-back compares the rule against. The gateway reads the option once per `EnsureBucketAsync` (an `AsyncLocal` snapshot) because each read hits `settings.json`: a change landing mid-call must not make a bucket look drifted or fail the read-back. A separate Cloud page health comparison does not exist on this branch. The Settings "Cloud results" group (`CloudResultsSettingsViewModel`: 7, 30, 90, 180, 365 days, plus a hand-edited value) writes the key and says
+  the change applies at the start of the next run and that fewer days never shrink a longer bucket. A fixed value at startup, the earlier state, left the rule at 90 whatever was saved.
   Consequence: lowering retention in Settings against a longer bucket is silently ignored today. #598 owns the fix: an explicit, user-confirmed
   shortening, and the user seeing that the bucket keeps the longer age (copy names the action).
 - **Two PCs racing.** Both can list nothing and both insert. After its insert and read-back, a call lists again (same preference

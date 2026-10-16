@@ -93,6 +93,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
         var clockStart = settings.StartClock();
         string? lastTransient = null;
+        DateTimeOffset? vmCreatedAt = null;
 
         // The VM's maxRunDuration started when Compute Engine created it, not when it reached Running: a boot of several
         // minutes, or a resume, has already used part of it. With the default limit the clock is moved forward by the VM's
@@ -104,7 +105,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var watch = new HeartbeatWatch(
             VmProvisioner.ExpectsGpu(request.Spec.MachineType),
             settings.FirstHeartbeatTimeout,
-            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor));
+            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor),
+            settings.StageDeadlines);
 
         while (true)
         {
@@ -120,6 +122,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 lastTransient = null;
+                vmCreatedAt = vm?.CreatedAt ?? vmCreatedAt;
                 if (!ageKnown && vm?.CreatedAt is { } createdAt)
                 {
                     ageKnown = true;
@@ -137,7 +140,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                         return text;
                     }
 
-                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken).ConfigureAwait(false);
+                    // Only a VM that is GONE (not merely stopped or preempted) can be one the platform deleted at its limit.
+                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null ? vmCreatedAt : null).ConfigureAwait(false);
                 }
 
                 // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
@@ -187,15 +191,21 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// <c>status.json</c> and end the VM without ever writing result.json, so the cause is read from there
     /// rather than reported as a lost computer.
     /// </summary>
-    public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken)
+    public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, DateTimeOffset? vmCreatedAt = null)
     {
         var workerCode = await TryReadWorkerErrorCodeAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json", cancellationToken).ConfigureAwait(false);
         var note = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
         var mapped = RunErrorCodes.ForWorkerStatusCode(workerCode);
+
+        // #89: a VM that was seen created, is gone, and whose maxRunDuration has now passed was deleted by Compute Engine at its limit
+        // (Hard Rule 10's backstop), not lost. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
+        var pastLimit = vmCreatedAt is { } created && settings.TimeProvider.GetUtcNow() >= created + request.Spec.MaxRunDuration;
         return VmEndNotes.Apply(
             mapped is not null
                 ? new RunFailureException(CloudErrorKind.Other, mapped, $"The worker reported {workerCode} in status.json and no result.json followed. {reason}")
-                : new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, (reason ?? "The VM is no longer running.") + (workerCode is null ? string.Empty : $" status.json reported {workerCode}.")),
+                : pastLimit
+                    ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.RunTimeLimit, $"The VM was gone after its maxRunDuration of {request.Spec.MaxRunDuration.TotalMinutes.ToString("0.#", CultureInfo.InvariantCulture)} minutes and no result.json followed. {reason}")
+                    : new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, (reason ?? "The VM is no longer running.") + (workerCode is null ? string.Empty : $" status.json reported {workerCode}.")),
             note);
     }
 

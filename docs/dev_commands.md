@@ -52,7 +52,8 @@ package itself needs):
 ```powershell
 uvx ruff check worker
 uvx ruff format --check worker
-uvx ruff check scripts                      # lint only for scripts/ (#430): see the scripts/tests section
+uvx ruff check scripts                      # lint for scripts/ (#430): see the scripts/tests section
+uvx ruff format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -202,7 +203,34 @@ worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <ti
 
 `--merge-when-green` waits for the PR checks and merges only if none failed (exit 5 failed, 6 pending at the timeout).
 
-Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh).
+Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh), `scripts/tests/test_land_wt_resw.py` (the Resources.resw merge below).
+
+### Pruning landed worktrees: `scripts/prune_worktrees.py`
+
+Removes agent worktrees whose branch already landed (#794; MEASURED 2026-10-16: 151 registered worktrees). Dry run by default.
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\prune_worktrees.py                       # dry run: removed / kept-and-why table
+worker\.venv\Scripts\python.exe scripts\prune_worktrees.py --apply [--use-gh] [--delete-merged-branches] [--min-age-hours 6]
+```
+
+Every ambiguity resolves toward KEEP. Removed only when: not the primary checkout or the one it runs from (realpath compare), not locked, not itself a link, does not contain another worktree (agents nest under `.claude/worktrees/`), landed (HEAD an ancestor of origin/main, so detached heads too; with `--use-gh`, a MERGED PR into main whose head contains the worktree HEAD and no OPEN one, from one batched `gh pr list`; a CLOSED or stacked PR does not count), it has a commit of its own or is no longer fresh (a HEAD on origin/main's first-parent history is a lane just started and is kept only while touched within `--fresh-lane-hours`, default 48; older, it is a stale checkout and the other rules decide), no rebase/merge/cherry-pick/revert/bisect in progress, nothing touched within `--min-age-hours` (default 6; two directory levels plus git's own state files; an unreadable timestamp keeps it), no uncommitted/untracked changes, no skip-worktree/assume-unchanged files, no ignored file beyond build output at its known roots (`app\{src,tests}\<project>\{bin,obj}`, `.artifacts`, `__pycache__` under worker/scripts, the pytest/ruff/mypy caches, `worker\*.egg-info`; `worker\.venv` only as a link), nothing under `app\secrets`, and every directory scannable (long-path aware) with no nested repository (a dry run scans too). Every junction is unlinked and verified gone BEFORE `git worktree remove`; if one will not unlink, or git then fails, the links are recreated and the worktree stays. Orphan `%TEMP%\landwt\<slug>-<14 digits>` dirs git no longer lists are deleted only if they hold a `.git` file, no live lock, are old enough, and either git can read them (HEAD in origin/main, clean) or, the real killed-run case where `git worktree prune` already deleted the admin dir, land_wt's lock record (`sha`, written since #794) names a commit that is pushed to origin; older leftovers with no recorded sha are kept for a human (never `locks` or `logs`; the root must be named `landwt` unless `--allow-any-tmp-root`). A dry run does not fetch (`--fetch` to; `--apply` fetches). It ends with `git worktree prune`, and `--delete-merged-branches` drops local branches merged into origin/main whose tip is NOT on its first-parent history (a pre-created lane is; a real merged feature branch is not), or PR-merged into main with `--use-gh`, that no surviving worktree has checked out, never main, master, develop or release/*. Limitation: a live process whose cwd is in a worktree is not detected (Windows has no cheap way); `--min-age-hours` is the protection. Run the dry run at the start of each wave.
+
+Tests: `scripts/tests/test_prune_worktrees.py` (temp repo, bare fake origin, real junction on Windows with a sentinel dir that must survive, stub gh).
+
+### Resources.resw merge driver: `scripts/resw_merge.py`
+
+Nearly every branch appends keys to the end of `Resources.resw`, so a plain text merge conflicts there every time (and `git merge-file --union` is banned for it: overlapping hunks break the XML). `scripts/resw_merge.py %O %A %B` is a git merge driver that merges per `<data name=...>` block: a key added on one side (or on both with identical content) is kept, theirs' new keys go after ours' last block, a key deleted on one side and untouched on the other is deleted, and the same key changed differently on both sides (or deleted vs changed) is a real conflict with markers around only that block. The result must parse as XML with no duplicate names. Every failure exit (real conflict, invalid XML, duplicate name, unterminated block, undecodable bytes) leaves conflict markers in the file (whole-file when it is not one block), so a later `git add` cannot silently drop theirs. Line endings follow ours' first line ending. Reordering of existing keys on theirs is ignored (key set and content only).
+
+`.gitattributes` routes the file to the driver (`merge=resw`), but git only runs a driver that is defined in config. One-time setup per clone, from the primary checkout (every worktree shares that `.git/config`, so once is enough). The script passes the value to git as an argument list, so it behaves the same in Windows PowerShell 5.1, PowerShell 7 and bash (a hand-typed `git config` with nested quotes loses its inner quotes in 5.1):
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\setup_git_drivers.py
+```
+
+Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/DnaEntropyGraph.App/Strings/en-US/Resources.resw` (must print `merge: resw`). Without the config git silently falls back to the text merge. Re-run it if the checkout or the venv moves.
+
+`land_wt.py` does not depend on that setup: for its merge of origin/main it passes the driver (this checkout's script, the running venv python) as `-c merge.resw.driver=...` and the attribute through a unique temp `core.attributesFile` (the user's own global attributes text plus the resw line, deleted after the merge), so a lane branch that predates the `.gitattributes` line still merges and nothing leaks into the shared repo config. It is not written to `info/attributes`: MEASURED 2026-10-16, git reads that only from the common dir (a linked worktree's own copy is ignored), so it would leak into the shared repo. A real conflict still refuses and names the file.
 
 ## Landing a queue of worktree branches: `scripts/land_queue.py`
 
@@ -388,9 +416,10 @@ uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
-There is deliberately **no `ruff format --check scripts` gate yet**: MEASURED 2026-10-02, `uvx ruff format --check
-scripts` would rewrite 42 of 44 files (about 1,700 changed lines at the 145 limit). A mass reformat is its own
-mechanical commit and is not wired until someone lands it; the preview is `uvx ruff format --diff scripts`.
+**Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
+(`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
+`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the
+preview is `uvx ruff format --diff scripts`.
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 
@@ -513,29 +542,31 @@ anything marked `gpu` needs a real CUDA GPU the dev box does not have
 
 ```powershell
 scripts\cloud_gpu_test.ps1                   # dry-run (default): prints the plan, machine type, zone, estimated cost/minutes, creates nothing
-scripts\cloud_gpu_test.ps1 -Apply            # NOT functional yet — see below
+scripts\cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <worker sa email> -Apply   # create, delete and leak-scan ONE labelled VM (UNVERIFIED, billed)
+scripts\cloud_gpu_test.ps1 -PrintApplyArgs -ProjectId <id> -ServiceAccount <email>    # print the create/delete/list/leak argument lists as JSON, no cloud call
 scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
-**Updated 2026-10-03: the script exists (issue #317), dry-run is real,
-`CloudCli` exists (issue #60), and `-Apply` is still UNVERIFIED.** The dry-run
-path (labels, cost/duration math, the leak-check and interrupt-safety contract)
-is provable today with zero cloud spend and is exercised by `-SelfTest`.
-`-Apply` calls the built `CloudCli` (see "CloudCli" above) and fails clearly,
-naming #60/#61/#24, if the executable is not built, rather than silently
-falling back to a raw `gcloud` call: Appendix C's permission design denies
-`gcloud` to an agent on purpose. The `vm create` arguments the script builds
-do not yet match the CLI's real flags (#619), so `-Apply` refuses (exit 3, naming
-#619) before it invokes the CLI, even when a built CloudCli exists; #619 removes
-that gate. The leak check treats unparsable output or a non-zero exit as a failed
-check, never as "nothing left running". `docs/ToTest.md` carries the row for
-exercising it for real. Once it works: launches a labelled VM in the
-owner's GCP project (blocked on `OWNER_TODO.md` item 2 / issue #24 until a
-project and GPU quota exist), runs `pytest -m gpu` on it, and tears the VM
-down. Read `working-on-gcp` before running it for real: it creates real,
-billed cloud resources. Launch detached and poll
-rather than blocking a single tool call on it (a real run is 6-20 minutes;
-see the `a-tool-call-caps-at-600s` memory seed).
+**Updated 2026-10-16: `-Apply` builds its `vm create` arguments from CloudCli's own flag list (#619), but it is still UNVERIFIED
+against a real project and does not yet run `pytest -m gpu` (#83 stays open).** The argument list is `New-VmCreateArgs`: only flags
+`CloudCliParser` accepts (`--project --zone --install --job --model --machine-type --service-account --app-version --lifecycle
+--max-run-duration`). CloudCli builds the six labels, `DELETE` and the duration through `VmSpec`, so the script cannot weaken them.
+Consequences: the GPU comes from `-MachineType` (L4 with `g2-standard-8`), `-AcceleratorType`/`-AcceleratorCount` and the `purpose`
+label are plan-only, `-DiskSizeGb` other than 150 is refused, and `-Image` is refused (CloudCli has no image or startup-metadata flag).
+`-Apply` needs `-ProjectId` and `-ServiceAccount` (exit 2 without them) and a built CloudCli (exit 3 without one; pass `-CloudCliPath`
+or build `app/tools/DnaEntropyGraph.CloudCli`). It never falls back to a raw cloud CLI call: Appendix C denies one to agents on purpose.
+What it does today: `vm create`, then `vm delete` in a `finally` (so a failed create or a Ctrl+C does not leave a billing VM), the leak
+scan (`resources list --kind vm --json`; unparsable output or a non-zero exit fails the check), and last of all CloudCli's resource
+table, whose final line is `OK: 0 resource(s)` when nothing is left. A failed create is never read as clean: the delete is retried
+up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete exit 5 is reported as "not proof it is gone", the scan and the
+table still run, and the run exits 1. A failing final table call also exits 1. `-MaxRunDurationSeconds` must be 1 to 86400 (24 h) or
+`-Apply` exits 2. `-PrintApplyArgs` prints `{create, delete, list, leak}`, all four argument lists. It prints `pytest -m gpu: NOT RUN`: the created VM has no startup
+script (CloudCli cannot set metadata) and `worker/vm/startup.sh` only runs the worker. Default `-MaxRunDurationSeconds` is 3600 because
+that limit is the only backstop if the delete fails. The contract is tested twice: `-SelfTest` checks the list against a recorded flag
+list and runs the whole flow against a stub CloudCli, and `app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/CloudGpuTestScriptContractTests.cs`
+feeds the script's real `-PrintApplyArgs` output to the real parser over `FakeGcp`. `docs/ToTest.md` carries the row for a real run.
+Read `working-on-gcp` before running it for real: it creates real, billed cloud resources. Launch detached and poll rather than
+blocking a single tool call on it (see the `a-tool-call-caps-at-600s` memory seed).
 
 ## PowerShell equivalents of common Unix commands
 

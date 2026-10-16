@@ -39,6 +39,7 @@ def _commit(root: Path, path: str, content: str, message: str) -> None:
 # Repo identity and this repo's own path/label conventions
 # ---------------------------------------------------------------------------
 
+
 def test_repo_constant_targets_dna_entropy_graph():
     assert ip.REPO == "Raaif-Yousuf/DNA-Entropy-Graph"
 
@@ -71,6 +72,7 @@ def test_doc_prefixes_have_no_clair_specific_filenames():
 # Evidence.deferred / IssueMeta.deferred: post-v1, not CLAIR's post-alpha
 # ---------------------------------------------------------------------------
 
+
 def test_evidence_deferred_on_post_v1_milestone():
     e = ip.Evidence(number=1, milestone="post-v1")
     assert e.deferred is True
@@ -95,6 +97,7 @@ def test_issue_meta_deferred_matches_evidence_deferred():
 # ---------------------------------------------------------------------------
 # Evidence.verdict()
 # ---------------------------------------------------------------------------
+
 
 def test_verdict_open_with_no_trace_is_ok():
     e = ip.Evidence(number=1, state="open")
@@ -133,6 +136,7 @@ def test_verdict_closed_with_implementing_commit_is_ok():
 # scan_commits(): the commit-graph fact the whole script rests on
 # ---------------------------------------------------------------------------
 
+
 def test_scan_commits_finds_source_changing_commit_by_subject(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
@@ -140,6 +144,7 @@ def test_scan_commits_finds_source_changing_commit_by_subject(tmp_path):
     _commit(root, "worker/src/dna_entropy/cli.py", "print('hi')\n", "feat(#42): add a thing")
 
     import re
+
     patterns = {42: re.compile(r"#42(?![0-9])")}
     found = ip.scan_commits(root, patterns, use_cache=False)
     assert 42 in found
@@ -152,10 +157,13 @@ def test_scan_commits_matches_body_not_only_subject(tmp_path):
     root.mkdir()
     _init_repo(root)
     _commit(
-        root, "worker/src/dna_entropy/cli.py", "print('hi')\n",
+        root,
+        "worker/src/dna_entropy/cli.py",
+        "print('hi')\n",
         "feat(worker): unrelated subject\n\n#99: the real reference is in the body",
     )
     import re
+
     patterns = {99: re.compile(r"#99(?![0-9])")}
     found = ip.scan_commits(root, patterns, use_cache=False)
     assert 99 in found
@@ -167,6 +175,7 @@ def test_scan_commits_trailing_lookahead_does_not_match_longer_number(tmp_path):
     _init_repo(root)
     _commit(root, "worker/src/dna_entropy/cli.py", "x\n", "feat(#521): unrelated")
     import re
+
     patterns = {52: re.compile(r"#52(?![0-9])")}
     found = ip.scan_commits(root, patterns, use_cache=False)
     assert 52 not in found  # #521 must never be read as a reference to #52
@@ -179,6 +188,7 @@ def test_issue_refs_extracts_and_dedupes():
 # ---------------------------------------------------------------------------
 # scan() end to end, fully offline (state="unknown" everywhere)
 # ---------------------------------------------------------------------------
+
 
 def test_scan_offline_reports_evidence_without_gh(tmp_path):
     root = tmp_path / "repo"
@@ -232,6 +242,7 @@ def test_print_footer_reports_suspect_count_and_exit_code(capsys):
 # instead of each independently re-fetching the same body+comments.
 # ---------------------------------------------------------------------------
 
+
 def test_get_issue_thread_uses_prefetched_text_without_any_gh_call(monkeypatch):
     calls = []
     monkeypatch.setattr(ip, "_run", lambda cmd, root: calls.append(cmd) or "SHOULD NOT BE CALLED")
@@ -264,10 +275,13 @@ def test_get_issue_thread_fetches_and_caches_when_not_prefetched(monkeypatch):
 # CLI surface
 # ---------------------------------------------------------------------------
 
+
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "issue_precheck.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert "--all-open" in proc.stdout
@@ -282,7 +296,9 @@ def test_cli_no_gh_against_fake_repo_reports_note(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "issue_precheck.py"), "7", "--no-gh", "--root", str(root)],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0  # NOTE is not SUSPECT
     assert "#7" in proc.stdout
@@ -292,7 +308,9 @@ def test_cli_no_gh_against_fake_repo_reports_note(tmp_path):
 def test_cli_requires_a_number_or_all_open():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "issue_precheck.py"), "--no-gh"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2
 
@@ -300,7 +318,9 @@ def test_cli_requires_a_number_or_all_open():
 def test_cli_all_open_and_no_gh_together_is_a_usage_error():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "issue_precheck.py"), "--all-open", "--no-gh"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2
 
@@ -308,7 +328,9 @@ def test_cli_all_open_and_no_gh_together_is_a_usage_error():
 def test_cli_label_without_all_open_is_a_usage_error():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "issue_precheck.py"), "1", "--no-gh", "--label", "area:docs"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2
 
@@ -316,7 +338,9 @@ def test_cli_label_without_all_open_is_a_usage_error():
 def test_help_documents_limit_label_and_progress_flags():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "issue_precheck.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     for flag in ("--limit", "--label", "--no-progress"):
@@ -330,10 +354,10 @@ def test_stdout_is_reconfigured_for_line_buffering():
     a fresh subprocess, since the reconfigure runs at module import time and
     this test process's own stdout is already whatever pytest set it to."""
     proc = subprocess.run(
-        [sys.executable, "-c",
-         f"import sys; sys.path.insert(0, {str(SCRIPTS_DIR)!r}); import issue_precheck; "
-         "print(sys.stdout.line_buffering)"],
-        capture_output=True, text=True, timeout=15,
+        [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(SCRIPTS_DIR)!r}); import issue_precheck; print(sys.stdout.line_buffering)"],
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "True"
@@ -355,6 +379,7 @@ def test_stdout_is_reconfigured_for_line_buffering():
 # sleep/poll race) and does not depend on any of that.
 # ---------------------------------------------------------------------------
 
+
 def test_first_issue_streams_before_second_issue_finishes_processing(monkeypatch, tmp_path):
     import io
     import threading
@@ -369,6 +394,7 @@ def test_first_issue_streams_before_second_issue_finishes_processing(monkeypatch
     _init_repo(root)
     (root / "README.md").write_text("x\n", encoding="utf-8")
     import subprocess as _sp
+
     _sp.run(["git", "add", "README.md"], cwd=root, check=True, capture_output=True)
     _sp.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True, capture_output=True)
 
@@ -410,10 +436,12 @@ def test_first_issue_streams_before_second_issue_finishes_processing(monkeypatch
 
     def run():
         result["rc"] = ip.run_stream(
-            root, [1, 2],
-            known={1: ip.IssueMeta(state="open", title="issue one"),
-                   2: ip.IssueMeta(state="open", title="issue two")},
-            use_cache=False, suspect_only=False, show_progress=False,
+            root,
+            [1, 2],
+            known={1: ip.IssueMeta(state="open", title="issue one"), 2: ip.IssueMeta(state="open", title="issue two")},
+            use_cache=False,
+            suspect_only=False,
+            show_progress=False,
         )
 
     t = threading.Thread(target=run, daemon=True)

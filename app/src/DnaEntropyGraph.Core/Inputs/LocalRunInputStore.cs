@@ -38,7 +38,27 @@ public sealed class LocalRunInputStore : IRunInputStore
         return Task.FromResult(first is null ? null : new StagedInput(first, Path.GetFileName(first)));
     }
 
-    public async Task<StagedInput> StageAsync(string jobId, string sourcePath, CancellationToken cancellationToken)
+    public Task<StagedInput> StageAsync(string jobId, string sourcePath, CancellationToken cancellationToken)
+        => CopyAsync(jobId, sourcePath, "input", isAnnotation: false, cancellationToken);
+
+    /// <summary>The GFF3 goes under <c>annotation\</c>, not <c>input\</c>: the first file in <c>input\</c> is "the" input (<see cref="FindAsync"/>, a re-run), and a GFF3 named to sort first must never be mistaken for it.</summary>
+    public Task<StagedInput> StageAnnotationAsync(string jobId, string sourcePath, CancellationToken cancellationToken)
+        => CopyAsync(jobId, sourcePath, "annotation", isAnnotation: true, cancellationToken);
+
+    public Task<StagedInput?> FindAnnotationAsync(string jobId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsPlainName(jobId))
+        {
+            return Task.FromResult<StagedInput?>(null);
+        }
+
+        var directory = Path.Combine(_root, "runs", jobId, "annotation");
+        var first = Directory.Exists(directory) ? Directory.EnumerateFiles(directory).Order(StringComparer.Ordinal).FirstOrDefault() : null;
+        return Task.FromResult(first is null ? null : new StagedInput(first, Path.GetFileName(first), IsAnnotation: true));
+    }
+
+    private async Task<StagedInput> CopyAsync(string jobId, string sourcePath, string folder, bool isAnnotation, CancellationToken cancellationToken)
     {
         if (!IsPlainName(jobId))
         {
@@ -52,7 +72,7 @@ public sealed class LocalRunInputStore : IRunInputStore
         }
 
         var fileName = Path.GetFileName(sourcePath);
-        var directory = Path.Combine(_root, "runs", jobId, "input");
+        var directory = Path.Combine(_root, "runs", jobId, folder);
         Directory.CreateDirectory(directory);
         var destination = Path.Combine(directory, fileName);
 
@@ -62,7 +82,7 @@ public sealed class LocalRunInputStore : IRunInputStore
             await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
         }
 
-        return new StagedInput(destination, fileName);
+        return new StagedInput(destination, fileName, isAnnotation);
     }
 
     public string? TryFindStagedInput(string jobId)

@@ -63,6 +63,10 @@ public class InputNoticeResourceTests
                 InputNoticeCode.AmbiguityKept,
                 InputNoticeCode.ShortSequence,
                 InputNoticeCode.DigitsRemoved,
+                InputNoticeCode.AnnotationLinesSkipped,
+                InputNoticeCode.AnnotationUnmatchedNames,
+                InputNoticeCode.AnnotationFeaturesPastEnd,
+                InputNoticeCode.GenBankFeaturesDropped,
             ],
             ignoreOrder: true);
         foreach (var code in counted)

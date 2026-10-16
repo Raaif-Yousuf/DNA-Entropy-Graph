@@ -42,11 +42,7 @@ _SOFT_WORKFLOW = (
     "      fi\n"
 )
 
-_HARDENED_WORKFLOW = (
-    "steps:\n"
-    "  - name: guarded thing\n"
-    "    run: echo real check unconditionally\n"
-)
+_HARDENED_WORKFLOW = "steps:\n  - name: guarded thing\n    run: echo real check unconditionally\n"
 
 _FIXTURE_GUARD = cgd.GuardEntry(
     name="fixture guard",
@@ -113,7 +109,9 @@ def test_missing_workflow_file_is_not_a_crash_and_not_a_finding(tmp_path):
 def test_self_test_flag_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_guard_drift.py"), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -122,7 +120,9 @@ def test_self_test_flag_passes():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_guard_drift.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
 
@@ -130,7 +130,9 @@ def test_help_exits_zero():
 def test_cli_exits_2_when_root_is_not_a_repo(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_guard_drift.py"), "--root", str(tmp_path)],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2
 

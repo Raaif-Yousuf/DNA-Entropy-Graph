@@ -1,0 +1,1 @@
+- chore(scripts): `ruff format scripts` applied once (56 files, no behaviour change), and `ruff format --check scripts` is now a gate in premerge (`ruff-scripts-format`) and in ci-docs.

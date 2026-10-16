@@ -1,5 +1,8 @@
 namespace DnaEntropyGraph.Core.Inputs;
 
+/// <summary>One feature of a record's feature table: its key (<c>gene</c>, <c>CDS</c> ...) and its location text, lines joined, as the scanner hands it to the parser.</summary>
+internal sealed record GenBankTableFeature(string Key, string Location);
+
 /// <summary>
 /// C# port of the feature-table REFUSALS of Biopython's <c>Bio.GenBank.Scanner.GenBankScanner</c>
 /// (<c>parse_features</c> and <c>parse_feature</c>), the parser behind the worker's
@@ -26,11 +29,35 @@ internal static class GenBankFeatureTable
     /// <see cref="GenBankReadException" /> where the scanner would raise. <paramref name="recordNumber" /> is the
     /// 1-based record being read (named by index, never by id: a record id is user free text).
     /// </summary>
-    public static void Validate(IReadOnlyList<string> lines, int start, int recordNumber)
+    public static List<GenBankTableFeature> Validate(IReadOnlyList<string> lines, int start, int recordNumber)
     {
+        var features = new List<GenBankTableFeature>();
         var count = lines.Count > 0 && lines[^1].Length == 0 ? lines.Count - 1 : lines.Count; // the "" after a final newline is end of file
         // Python counts code points; fold each surrogate pair to one placeholder char so every length and column below does too.
-        string? Raw(int i) => i < count ? FoldCodePoints(lines[i]) : null;
+        // Each distinct supplementary code point gets its own private-use character, so a location keeps its identity for the
+        // parser and the notice (Unfold puts the code point back).
+        var placeholders = new Dictionary<int, char>();
+        var originals = new Dictionary<char, int>();
+        string Fold(string s) => s.Any(char.IsSurrogate)
+            ? string.Concat(s.EnumerateRunes().Select(r =>
+            {
+                if (r.IsBmp)
+                {
+                    return r.ToString();
+                }
+
+                if (!placeholders.TryGetValue(r.Value, out var placeholder))
+                {
+                    placeholder = (char)Math.Min(0xE000 + placeholders.Count, 0xF8FF);
+                    placeholders[r.Value] = placeholder;
+                    originals[placeholder] = r.Value;
+                }
+
+                return placeholder.ToString();
+            }))
+            : s;
+        string Unfold(string s) => originals.Count == 0 ? s : string.Concat(s.Select(c => originals.TryGetValue(c, out var v) ? char.ConvertFromUtf32(v) : c.ToString()));
+        string? Raw(int i) => i < count ? Fold(lines[i]) : null;
 
         var index = start;
         while (Raw(index) is { } marker && IsStartMarker(marker))
@@ -43,7 +70,7 @@ internal static class GenBankFeatureTable
             var raw = Raw(index) ?? throw Refuse(recordNumber, "the feature table ends before the sequence starts (a truncated file)");
             if (IsSequenceHeader(raw))
             {
-                return;
+                return features;
             }
             var line = PythonText.TrimEnd(raw);
             if (line == "//")
@@ -67,6 +94,7 @@ internal static class GenBankFeatureTable
             }
 
             var featureLines = new List<string>();
+            string key;
             if (line[QualifierIndent] != ' ' && line.AsSpan(QualifierIndent).Contains(' '))
             {
                 // Over-indented key (IMGT style): "key location" split on the first whitespace run.
@@ -76,10 +104,12 @@ internal static class GenBankFeatureTable
                 {
                     throw Refuse(recordNumber, "a feature key has no location");
                 }
+                key = rest[..cut];
                 featureLines.Add(PythonText.TrimStart(rest[cut..]));
             }
             else
             {
+                key = PythonText.Trim(Slice(line, 2, QualifierIndent));
                 featureLines.Add(line[QualifierIndent..]);
             }
             index++;
@@ -88,12 +118,12 @@ internal static class GenBankFeatureTable
                 featureLines.Add(PythonText.Trim(next.Length > QualifierIndent ? next[QualifierIndent..] : string.Empty));
                 index++; // a blank line in the middle of a feature belongs to it
             }
-            ParseFeature(featureLines, recordNumber);
+            features.Add(new GenBankTableFeature(Unfold(key), Unfold(ParseFeature(featureLines, recordNumber))));
         }
     }
 
-    // Scanner.parse_feature: the location (possibly wrapped over several lines), then the qualifiers.
-    private static void ParseFeature(List<string> lines, int recordNumber)
+    // Scanner.parse_feature: the location (possibly wrapped over several lines), then the qualifiers. Returns the location text.
+    private static string ParseFeature(List<string> lines, int recordNumber)
     {
         var queue = new Queue<string>(lines.Where(l => l.Length > 0));
         string Next() => queue.Count > 0
@@ -155,15 +185,18 @@ internal static class GenBankFeatureTable
                 throw Refuse(recordNumber, "a feature qualifier line is missing its leading slash (it should start with '/', for example /gene=\"name\")");
             }
         }
-    }
 
-    private static string FoldCodePoints(string s) =>
-        s.Any(char.IsSurrogate) ? string.Concat(s.EnumerateRunes().Select(r => r.IsBmp ? r.ToString() : "")) : s;
+        return location;
+    }
 
     private static int Count(string s, char c) => s.Count(x => x == c);
 
     // Python's s[a:b] never throws on a short string.
     private static string Slice(string s, int from, int to) => from >= s.Length ? string.Empty : s[from..Math.Min(to, s.Length)];
+
+    /// <summary>The refusal for a feature location Biopython raises on (not one it drops with a warning): named by record index, never by text (a location is user free text).</summary>
+    public static GenBankReadException RefuseLocation(int recordNumber) =>
+        Refuse(recordNumber, "a feature location is not valid GenBank (it cannot be read as a position or a range)");
 
     private static GenBankReadException Refuse(int recordNumber, string reason) =>
         new($"Could not parse the GenBank file (record {recordNumber}): {reason}. Check the file was not truncated or hand-edited, then re-export it from the tool that made it.");

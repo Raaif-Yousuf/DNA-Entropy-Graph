@@ -16,6 +16,10 @@ public static class InputNoticeCopy
             InputNoticeCode.AmbiguityKept => "NewRunNotice_AmbiguityKept_One",
             InputNoticeCode.ShortSequence => "NewRunNotice_ShortSequence_One",
             InputNoticeCode.DigitsRemoved => "NewRunNotice_DigitsRemoved_One",
+            InputNoticeCode.AnnotationLinesSkipped => "NewRunNotice_AnnotationLinesSkipped_One",
+            InputNoticeCode.AnnotationUnmatchedNames => "NewRunNotice_AnnotationUnmatchedNames_One",
+            InputNoticeCode.AnnotationFeaturesPastEnd => "NewRunNotice_AnnotationFeaturesPastEnd_One",
+            InputNoticeCode.GenBankFeaturesDropped => "NewRunNotice_GenBankFeaturesDropped_One",
             _ => KeyFor(code),
         }
         : KeyFor(code);
@@ -28,12 +32,16 @@ public static class InputNoticeCopy
         InputNoticeCode.EmptyHeaders => "NewRunNotice_EmptyHeaders",
         InputNoticeCode.RepeatedIds => "NewRunNotice_RepeatedIds",
         InputNoticeCode.GenBankRecordSkippedNoSequence => "NewRunNotice_GenBankRecordSkippedNoSequence",
+        InputNoticeCode.GenBankFeaturesDropped => "NewRunNotice_GenBankFeaturesDropped",
         InputNoticeCode.RnaConverted => "NewRunNotice_RnaConverted",
         InputNoticeCode.AmbiguityMasked => "NewRunNotice_AmbiguityMasked",
         InputNoticeCode.AmbiguityKept => "NewRunNotice_AmbiguityKept",
         InputNoticeCode.ShortSequence => "NewRunNotice_ShortSequence",
         InputNoticeCode.LeadingHeaderIgnored => "NewRunNotice_LeadingHeaderIgnored",
         InputNoticeCode.DigitsRemoved => "NewRunNotice_DigitsRemoved",
+        InputNoticeCode.AnnotationLinesSkipped => "NewRunNotice_AnnotationLinesSkipped",
+        InputNoticeCode.AnnotationUnmatchedNames => "NewRunNotice_AnnotationUnmatchedNames",
+        InputNoticeCode.AnnotationFeaturesPastEnd => "NewRunNotice_AnnotationFeaturesPastEnd",
         _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unmapped InputNoticeCode: add it to InputNoticeCopy and Resources.resw."),
     };
 }

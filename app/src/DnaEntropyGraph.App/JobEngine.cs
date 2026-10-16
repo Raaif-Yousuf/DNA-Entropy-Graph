@@ -5,6 +5,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
@@ -20,8 +21,9 @@ namespace DnaEntropyGraph.App;
 /// every phase and its phase callback (wired in <c>ServiceRegistration</c>)
 /// publishes <see cref="RunPhaseChangedMessage"/> over <see cref="IMessenger"/>
 /// (docs/architecture.md section 3), so any page can react with no direct
-/// reference back to this class. A local-engine run is <c>LocalJobRunner</c>'s
-/// own issue (#174) and fails visibly here until it lands.
+/// reference back to this class. A This PC run
+/// (issues #173 and #174) is handed to <see cref="LocalRunDriver"/> and <c>LocalJobRunner</c>; <see cref="IRunTargetResolver"/> decides
+/// where Auto goes, and an explicit This PC is never quietly switched to the cloud.
 /// </summary>
 public sealed class JobEngine : IJobEngine, IRunVmActions
 {
@@ -35,6 +37,8 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IRunInputStore _inputs;
     private readonly IWorkerImageProvider _images;
     private readonly Func<string?> _downloadsFolder;
+    private readonly IRunTargetResolver _targets;
+    private readonly LocalRunDriver _local;
 
     public JobEngine(
         IMessenger messenger,
@@ -46,8 +50,12 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IRunInputStore inputs,
         IWorkerImageProvider images,
         ActiveRuns activeRuns,
+        IRunTargetResolver targets,
+        LocalRunDriver local,
         Func<string?>? downloadsFolder = null)
     {
+        _targets = targets;
+        _local = local;
         _activeRuns = activeRuns;
         _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
         _messenger = messenger;
@@ -66,7 +74,14 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     {
         var jobId = JobId.NewId(DateTimeOffset.UtcNow, Random.Shared);
 
-        if (!IsCloudTarget(options.RunTarget))
+        var decision = await _targets.ResolveAsync(options, cancellationToken).ConfigureAwait(false);
+        if (RunTargets.IsThisPc(decision.Target))
+        {
+            await _local.StartAsync(jobId, options, AppVersion(), cancellationToken, decision.Readiness).ConfigureAwait(false);
+            return jobId;
+        }
+
+        if (!IsCloudTarget(decision.Target))
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.TargetNotSupported, cancellationToken).ConfigureAwait(false);
             return jobId;
@@ -108,6 +123,29 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             return jobId;
         }
 
+        // Issue #686 / Hard Rule 2: a paired GFF3 is copied under the run's own folder too, and checked against the staged FASTA
+        // with this run's topology before anything exists in the cloud. The FASTA stays first in the list (the output folder is named from it).
+        var uploads = new List<StagedInput> { staged };
+        if (!string.IsNullOrWhiteSpace(options.AnnotationPath))
+        {
+            var annotation = await StageAnnotationAsync(jobId, options.AnnotationPath, cancellationToken).ConfigureAwait(false);
+            if (annotation is null)
+            {
+                await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputMissing, cancellationToken).ConfigureAwait(false);
+                return jobId;
+            }
+
+            var pair = AnnotationPairValidator.Check(staged.LocalPath, annotation.LocalPath, options.Topology);
+            if (pair.Problem is { } annotationProblem)
+            {
+                // The code only: the problem's own text can hold a sequence name from the user's file.
+                await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputInvalid, cancellationToken, "Annotation " + annotationProblem.Code).ConfigureAwait(false);
+                return jobId;
+            }
+
+            uploads.Add(annotation);
+        }
+
         // #558: the id lives in its own write-once file. If it cannot be read or is unusable we
         // fail the run here, before any cloud resource exists, rather than mint a new id (that
         // would orphan every labelled resource, Hard Rules 9 and 10) or crash the UI thread.
@@ -135,7 +173,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             installationId,
             AppVersion(),
             image.Reference,
-            [staged],
+            uploads,
             string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder);
 
         // Write-ahead (docs/architecture.md section 6): the row exists
@@ -169,9 +207,21 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
     public async Task CancelRunAsync(string jobId, CancellationToken cancellationToken)
     {
+        if (await IsLocalRunAsync(jobId, cancellationToken).ConfigureAwait(false))
+        {
+            await _local.CancelAsync(jobId).ConfigureAwait(false);
+            return;
+        }
+
         // Stop and await whatever drives this run (one the engine started or one the reconciler reattached) before the
         // cancel writes its own phase, so there is one writer at a time.
         await _activeRuns.CancelAsync(jobId, () => _runner.CancelAsync(jobId, cancellationToken)).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsLocalRunAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var rows = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        return RunTargets.IsLocalRecord(rows.LastOrDefault(r => r.JobId == jobId)?.Target);
     }
 
     public Task StopVmAsync(string jobId, CancellationToken cancellationToken) => _runner.StopVmAsync(jobId, cancellationToken);
@@ -189,6 +239,19 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         try
         {
             return await _inputs.StageAsync(jobId, options.InputPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The staged copy of the paired GFF3, or null when it cannot be read (the caller records <see cref="RunErrorCodes.InputMissing"/>).</summary>
+    private async Task<StagedInput?> StageAnnotationAsync(string jobId, string annotationPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _inputs.StageAnnotationAsync(jobId, annotationPath, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

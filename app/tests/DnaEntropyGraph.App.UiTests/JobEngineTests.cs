@@ -5,6 +5,8 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
 using Shouldly;
@@ -92,6 +94,82 @@ public class JobEngineTests
         }
     }
 
+    private sealed class StaticReadiness(LocalReadiness readiness) : ILocalReadinessSource
+    {
+        public int Checks { get; private set; }
+
+        public Task<LocalReadiness> CheckAsync(CancellationToken cancellationToken)
+        {
+            Checks++;
+            return Task.FromResult(readiness);
+        }
+    }
+
+    private sealed class NoProcessLauncher : IProcessLauncher
+    {
+        public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null) => throw new ProcessStartFailedException(spec.FileName);
+    }
+
+    /// <summary>A worker that finishes at once and writes a result listing one good track, the way the real mock worker does.</summary>
+    private sealed class FinishingWorkerLauncher : IProcessLauncher
+    {
+        public List<ProcessSpec> Started { get; } = [];
+
+        public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null)
+        {
+            Started.Add(spec);
+            var root = spec.Arguments[spec.Arguments.ToList().IndexOf("--root") + 1];
+            Directory.CreateDirectory(Path.Combine(root, "output", "SetTnpB"));
+            File.WriteAllText(Path.Combine(root, "output", "SetTnpB", "SetTnpB.entropy.bedgraph"), "x 0 10 1.0\n");
+            File.WriteAllText(
+                Path.Combine(root, "result.json"),
+                "{\"schema\":1,\"status\":\"done\",\"inputs\":[{\"id\":\"in1\",\"status\":\"done\",\"files\":[{\"path\":\"output/SetTnpB/SetTnpB.entropy.bedgraph\"}]}]}");
+            return new Finished();
+        }
+
+        private sealed class Finished : IRunningProcess
+        {
+            public Task<int> Exited { get; } = Task.FromResult(0);
+
+            public void Kill(bool entireTree)
+            {
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+    }
+
+    private sealed class HangingLauncher : IProcessLauncher
+    {
+        public TaskCompletionSource<int> Exit { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool Killed { get; private set; }
+
+        public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null) => new Hanging(this);
+
+        private sealed class Hanging(HangingLauncher owner) : IRunningProcess
+        {
+            public Task<int> Exited => owner.Exit.Task;
+
+            public void Kill(bool entireTree)
+            {
+                owner.Killed = true;
+                owner.Exit.TrySetResult(-1);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+    }
+
+    private static LocalReadiness HealthyPc(bool gpu)
+        => new(
+            gpu ? new LocalCapability(true, [], new GpuInfo("NVIDIA GeForce RTX 4090", 24564, "551.61"), 100L << 30) : new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 100L << 30),
+            new LocalEngineHealth(LocalEngineState.Healthy, "0.0.1", gpu, gpu, string.Empty));
+
     private sealed class MemoryProjects : IProjectRepository
     {
         public Task<IReadOnlyList<ProjectRecord>> GetAllAsync(CancellationToken cancellationToken)
@@ -104,7 +182,7 @@ public class JobEngineTests
 
     private sealed class Harness
     {
-        public Harness(FakeGcp gcp, WorkerImageResolution? image = null, Func<string?>? downloads = null)
+        public Harness(FakeGcp gcp, WorkerImageResolution? image = null, Func<string?>? downloads = null, LocalReadiness? readiness = null, IProcessLauncher? launcher = null)
         {
             ImageProvider = new StaticImageProvider(image ?? new WorkerImageResolution(WorkerImageStatus.Available, Pinned));
             AppData = Path.Combine(TempRoot, "appdata-" + Guid.NewGuid().ToString("N"));
@@ -125,10 +203,33 @@ public class JobEngineTests
                 ResultPollInterval = TimeSpan.FromMilliseconds(1),
                 ResultTimeout = TimeSpan.FromSeconds(5),
             };
-            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), new LocalRunInputStore(AppData), ImageProvider, new ActiveRuns(), downloads);
+            var activeRuns = new ActiveRuns();
+            ActiveRuns = activeRuns;
+            var ready = new StaticReadiness(readiness ?? new LocalReadiness(new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 0), LocalEngineHealth.NotInstalled()));
+            var inputs = new LocalRunInputStore(AppData);
+            var localRunner = new LocalJobRunner(
+                launcher ?? new NoProcessLauncher(),
+                Runs,
+                new LocalEngineLayout(Path.Combine(AppData, "engine")),
+                Path.Combine(AppData, "runs"),
+                (id, phase) => Messenger.Send(new RunPhaseChangedMessage(id, phase)))
+            {
+                PollInterval = TimeSpan.FromMilliseconds(10),
+                CancelGrace = TimeSpan.FromMilliseconds(100),
+            };
+            Ready = ready;
+            var local = new LocalRunDriver(Messenger, localRunner, ready, Settings, Runs, inputs, activeRuns, downloads);
+            Local = local;
+            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), inputs, ImageProvider, activeRuns, new RunTargetResolver(ready), local, downloads);
         }
 
         public StaticImageProvider ImageProvider { get; }
+
+        public StaticReadiness Ready { get; }
+
+        public LocalRunDriver Local { get; }
+
+        public ActiveRuns ActiveRuns { get; }
 
         public string AppData { get; }
 
@@ -295,6 +396,61 @@ public class JobEngineTests
         h.Gcp.CreateAttempts.ShouldBe(0);
         h.Gcp.CreatedSpecs.ShouldBeEmpty();
         h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
+    private static string PairFiles(string fastaSeqName, string gffSeqName, out string gff)
+    {
+        var dir = Path.Combine(TempRoot, "user-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var fasta = Path.Combine(dir, "pair.fasta");
+        File.WriteAllText(fasta, ">" + fastaSeqName + "\nACGTACGTACGTACGTACGT\n");
+        gff = Path.Combine(dir, "pair.gff3");
+        File.WriteAllText(gff, "##gff-version 3\n" + gffSeqName + "\tsrc\tgene\t1\t9\t.\t+\t.\tID=g1\n");
+        return fasta;
+    }
+
+    [Fact]
+    public async Task A_paired_gff3_is_staged_beside_the_input_checked_and_uploaded_with_it()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var fasta = PairFiles("chr1", "chr1", out var gff);
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: fasta) with { AnnotationPath = gff }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        File.Exists(Path.Combine(h.AppData, "runs", jobId, "annotation", "pair.gff3")).ShouldBeTrue();
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldContain(key => key.EndsWith("pair.gff3", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_paired_gff3_that_names_no_sequence_of_the_fasta_fails_locally_and_creates_nothing()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var fasta = PairFiles("chr1", "secretchrom", out var gff);
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: fasta) with { AnnotationPath = gff }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(RunErrorCodes.InputInvalid);
+        row.ErrorDetail.ShouldNotBeNull().ShouldContain("NoNameMatch");
+        row.ErrorDetail.ShouldNotContain("secretchrom", Case.Insensitive);
+        h.Gcp.CreateAttempts.ShouldBe(0);
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_paired_gff3_that_has_gone_missing_fails_as_a_missing_input_and_creates_nothing()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var fasta = PairFiles("chr1", "chr1", out var gff);
+        File.Delete(gff);
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: fasta) with { AnnotationPath = gff }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe(RunErrorCodes.InputMissing);
+        h.Gcp.CreateAttempts.ShouldBe(0);
     }
 
     [Fact]
@@ -510,5 +666,156 @@ public class JobEngineTests
         await h.Engine.CancelRunAsync(jobId, CancellationToken.None);
 
         h.Messages.Count.ShouldBe(before);
+    }
+
+    [Fact]
+    public async Task This_PC_with_a_healthy_engine_runs_the_worker_locally_with_no_cloud_resource_and_no_cloud_phases()
+    {
+        var worker = new FinishingWorkerLauncher();
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: worker);
+
+        var jobId = await h.Engine.StartRunAsync(Options(target: "This PC") with { Predictor = PredictorSelection.MockTestPredictor }, CancellationToken.None);
+
+        var phase = await h.TerminalAsync();
+        var failed = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        phase.ShouldBe(JobPhase.Completed, failed.ErrorCode + " " + failed.ErrorDetail);
+        worker.Started.Single().Arguments.ShouldContain("localdir");
+        (await h.Gcp.FindByJobIdAsync(jobId, CancellationToken.None)).ShouldBeEmpty("the observable: a This PC run creates nothing in the cloud");
+        h.Messages.Select(m => m.Phase).ShouldNotContain(JobPhase.Provisioning);
+        h.Messages.Select(m => m.Phase).ShouldNotContain(JobPhase.Uploading);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.Target.ShouldBe("local");
+        row.OptionsJson.ShouldContain("This PC");
+        Directory.EnumerateFiles(row.OutputDir!, "*.bedgraph", SearchOption.AllDirectories).ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public async Task This_PC_with_no_engine_fails_with_an_action_instead_of_quietly_using_the_cloud()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        var jobId = await h.Engine.StartRunAsync(Options(target: "This PC"), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe("local_engine_not_ready");
+        row.Target.ShouldBe("local");
+        (await h.Gcp.FindByJobIdAsync(jobId, CancellationToken.None)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task This_PC_with_a_real_model_and_no_nvidia_gpu_fails_with_the_gpu_code()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: new FinishingWorkerLauncher());
+
+        var jobId = await h.Engine.StartRunAsync(Options(target: "This PC"), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe("local_gpu_not_usable");
+    }
+
+    [Fact]
+    public async Task This_PC_with_a_Hopper_only_model_fails_even_on_a_fast_gpu()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: true), launcher: new FinishingWorkerLauncher());
+
+        var jobId = await h.Engine.StartRunAsync(Options(target: "This PC") with { ModelId = "evo2_20b" }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe("model_needs_hopper");
+    }
+
+    [Fact]
+    public async Task Auto_runs_on_this_PC_when_it_is_ready_and_in_the_cloud_when_it_is_not()
+    {
+        var local = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: true), launcher: new FinishingWorkerLauncher());
+        var localJob = await local.Engine.StartRunAsync(Options(target: "Auto"), CancellationToken.None);
+        (await local.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        (await local.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == localJob).Target.ShouldBe("local");
+
+        var cloud = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var cloudJob = await cloud.Engine.StartRunAsync(Options(target: "Auto"), CancellationToken.None);
+        (await cloud.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        (await cloud.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == cloudJob).Target.ShouldBe("cloud");
+    }
+
+    [Fact]
+    public async Task Cancelling_a_This_PC_run_stops_the_worker_and_records_Cancelled()
+    {
+        var hanging = new HangingLauncher();
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: hanging);
+        var jobId = await h.Engine.StartRunAsync(Options(target: "This PC") with { Predictor = PredictorSelection.MockTestPredictor }, CancellationToken.None);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!h.Messages.Any(m => m.Phase == JobPhase.Running) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        await h.Engine.CancelRunAsync(jobId, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Cancelled);
+        hanging.Killed.ShouldBeTrue("the worker ignored the cancel file, so its process tree was killed");
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).Phase.ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task Auto_that_picks_this_PC_looks_at_this_PC_once_not_twice()
+    {
+        // MEASURED 2026-10-15 (review of #173): the resolver checked, then the driver checked again, a second 60 s health run and a second chance to disagree.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: true), launcher: new FinishingWorkerLauncher());
+
+        await h.Engine.StartRunAsync(Options(target: "Auto"), CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+
+        h.Ready.Checks.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_unexpected_exception_in_a_This_PC_run_ends_the_row_Failed_with_a_code_instead_of_leaving_it_Running()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: new ThrowingLauncher());
+
+        var jobId = await h.Engine.StartRunAsync(Options(target: "This PC") with { Predictor = PredictorSelection.MockTestPredictor }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe("other");
+        row.ErrorDetail.ShouldBe("InvalidOperationException");
+        row.FinishedAt.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_refused_start_ends_the_row_Failed_with_a_code()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: new FinishingWorkerLauncher());
+        _ = h.ActiveRuns.TryStart("job-dup", token => Task.Delay(Timeout.Infinite, token));
+
+        await h.Local.StartAsync("job-dup", Options(target: "This PC") with { Predictor = PredictorSelection.MockTestPredictor }, "0.0.1", CancellationToken.None);
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "job-dup");
+        row.Phase.ShouldBe(JobPhase.Failed);
+        row.ErrorCode.ShouldBe("other");
+        row.FinishedAt.ShouldNotBeNull();
+        await h.ActiveRuns.CancelAsync("job-dup", () => Task.CompletedTask);
+    }
+
+    [Fact]
+    public async Task A_real_model_run_on_this_PC_pins_the_worker_to_the_card_that_was_judged()
+    {
+        var worker = new FinishingWorkerLauncher();
+        var ready = new LocalReadiness(
+            new LocalCapability(true, [], new GpuInfo("NVIDIA GeForce RTX 4090", 24564, "551.61", "GPU-abc"), 100L << 30),
+            new LocalEngineHealth(LocalEngineState.Healthy, "0.0.1", true, true, string.Empty));
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: ready, launcher: worker);
+
+        await h.Engine.StartRunAsync(Options(target: "This PC"), CancellationToken.None);
+        await h.TerminalAsync();
+
+        worker.Started.Single().Environment!["CUDA_VISIBLE_DEVICES"].ShouldBe("GPU-abc");
+    }
+
+    private sealed class ThrowingLauncher : IProcessLauncher
+    {
+        public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null) => throw new InvalidOperationException("boom with a path C:\\Users\\someone");
     }
 }

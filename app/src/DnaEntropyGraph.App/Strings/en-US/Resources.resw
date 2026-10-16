@@ -193,11 +193,17 @@
   <data name="RunError_worker_image_refused" xml:space="preserve">
     <value>This app does not recognise the analysis software your computer is set to use, so it will not send it to the rented computer. Check the app's download page for a newer version of the app, install it, then start the run again.</value>
   </data>
+  <data name="RunError_run_time_limit" xml:space="preserve">
+    <value>The run reached its time limit and the rented computer was removed automatically. Start the run again with a longer time limit.</value>
+  </data>
   <data name="RunError_result_timeout" xml:space="preserve">
     <value>The rented computer did not finish in time, so we shut it down. Start the run again.</value>
   </data>
   <data name="RunError_worker_no_heartbeat" xml:space="preserve">
     <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
+  </data>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
@@ -292,6 +298,12 @@
   <data name="ViewerRuntimeMissing_Action" xml:space="preserve">
     <value>Install the WebView2 Runtime</value>
   </data>
+  <data name="ViewerFallbackNote.Text" xml:space="preserve">
+    <value>Until the genome viewer works, here is the entropy track of this run. It is a simple picture: you cannot zoom or see the sequence.</value>
+  </data>
+  <data name="ViewerFallbackChart.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along the sequence</value>
+  </data>
   <data name="ViewerNoRun_Title" xml:space="preserve">
     <value>No run selected</value>
   </data>
@@ -351,6 +363,18 @@
   </data>
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>
+  </data>
+  <data name="ViewerContigSelector.Header" xml:space="preserve">
+    <value>Sequence record</value>
+  </data>
+  <data name="ViewerContigSelector.PlaceholderText" xml:space="preserve">
+    <value>Choose a record to jump to</value>
+  </data>
+  <data name="ViewerContigGo.Content" xml:space="preserve">
+    <value>Go to record</value>
+  </data>
+  <data name="ViewerSeamLabel" xml:space="preserve">
+    <value>Where the reverse read hands over to the forward read</value>
   </data>
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
@@ -426,6 +450,42 @@
   </data>
   <data name="NewRunRemoveItem.Content" xml:space="preserve">
     <value>Remove</value>
+  </data>
+  <data name="NewRunAddGff3.Content" xml:space="preserve">
+    <value>Add GFF3</value>
+  </data>
+  <data name="NewRunRemoveGff3.Content" xml:space="preserve">
+    <value>Remove GFF3</value>
+  </data>
+  <data name="NewRunPillAnnotationLine" xml:space="preserve">
+    <value>Genes from {0}: {1}. The gene finder (Prodigal) is skipped for this file.</value>
+  </data>
+  <data name="NewRunStatusAnnotationUnavailable" xml:space="preserve">
+    <value>Pairing a GFF3 is not available in this version of the app yet. Remove the GFF3 and run the FASTA alone, or update the app.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNoFasta" xml:space="preserve">
+    <value>A GFF3 needs a FASTA file to go with. Add the FASTA file first, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAmbiguous" xml:space="preserve">
+    <value>There is more than one FASTA file and the GFF3 name does not match any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileUnreadable" xml:space="preserve">
+    <value>The GFF3 or its FASTA file could not be read. Check that both still exist and are not open in another program, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileTooLarge" xml:space="preserve">
+    <value>The GFF3 file is too large to pair. Choose a smaller GFF3, or run the FASTA without it.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NotFasta" xml:space="preserve">
+    <value>A GFF3 can only be paired with a FASTA file. Use a FASTA copy of the sequence, or run a GenBank file, which already carries its genes.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoFeatures" xml:space="preserve">
+    <value>The GFF3 has no gene or CDS rows we can read. Check that it is a GFF3 file with nine tab-separated columns, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoNameMatch" xml:space="preserve">
+    <value>No sequence name in the GFF3 matches a sequence name in the FASTA file. Make the first column of the GFF3 match the FASTA header, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoneFit" xml:space="preserve">
+    <value>Every gene in the GFF3 runs past the end of its sequence. Check that the GFF3 belongs to this FASTA file, then add it again.</value>
   </data>
   <data name="NewRunTreatAsRna.Content" xml:space="preserve">
     <value>Treat as RNA</value>
@@ -957,6 +1017,21 @@
   </data>
   <data name="Results_CopyFailed" xml:space="preserve">
     <value>The path could not be copied because Windows would not let the app use the clipboard. Close other programs that copy text, then choose Copy path again.</value>
+  </data>
+  <data name="Results_ExportPngFailed" xml:space="preserve">
+    <value>The picture could not be saved. Check that the results folder still exists and has free space, then choose Save picture again.</value>
+  </data>
+  <data name="ResultsExportPngButton.Content" xml:space="preserve">
+    <value>Save picture</value>
+  </data>
+  <data name="ResultsOverviewChart.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along the sequence</value>
+  </data>
+  <data name="RunsSparkline.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along this run's first sequence, as a small line</value>
+  </data>
+  <data name="ResultsOverviewSeam.Text" xml:space="preserve">
+    <value>The dashed line marks where the two reading directions were joined.</value>
   </data>
   <data name="Results_Direction_BothCombined" xml:space="preserve">
     <value>Both directions, combined</value>
@@ -1601,5 +1676,421 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="WizardCheckAllButton.Content" xml:space="preserve">
     <value>Check everything again</value>
+  </data>
+  <data name="NewRunPresetExpander.Header" xml:space="preserve">
+    <value>Option presets</value>
+  </data>
+  <data name="NewRunPresetCombo.Header" xml:space="preserve">
+    <value>Preset</value>
+  </data>
+  <data name="NewRunPresetCombo.PlaceholderText" xml:space="preserve">
+    <value>My own choices</value>
+  </data>
+  <data name="NewRunPresetNameBox.PlaceholderText" xml:space="preserve">
+    <value>Name for a new preset</value>
+  </data>
+  <data name="NewRunPresetSave.Content" xml:space="preserve">
+    <value>Save as preset</value>
+  </data>
+  <data name="NewRunPresetDelete.Content" xml:space="preserve">
+    <value>Delete preset</value>
+  </data>
+  <data name="NewRunPresetCopy.Content" xml:space="preserve">
+    <value>Copy my presets</value>
+  </data>
+  <data name="NewRunPresetAdd.Content" xml:space="preserve">
+    <value>Add presets from the clipboard</value>
+  </data>
+  <data name="PresetSummary_Line" xml:space="preserve">
+    <value>Strands: {0}. Shape: {1}. Context: {2} bases. Files: {3}.</value>
+  </data>
+  <data name="PresetSummary_NoFiles" xml:space="preserve">
+    <value>none chosen yet</value>
+  </data>
+  <data name="PresetDirection_BothCombined" xml:space="preserve">
+    <value>both strands combined</value>
+  </data>
+  <data name="PresetDirection_BothAveraged" xml:space="preserve">
+    <value>both strands averaged</value>
+  </data>
+  <data name="PresetDirection_BothSeparate" xml:space="preserve">
+    <value>both strands kept apart</value>
+  </data>
+  <data name="PresetDirection_ForwardOnly" xml:space="preserve">
+    <value>the forward strand only</value>
+  </data>
+  <data name="PresetDirection_ReverseOnly" xml:space="preserve">
+    <value>the reverse strand only</value>
+  </data>
+  <data name="PresetTopology_Auto" xml:space="preserve">
+    <value>decided by the file</value>
+  </data>
+  <data name="PresetTopology_Linear" xml:space="preserve">
+    <value>a line</value>
+  </data>
+  <data name="PresetTopology_Circular" xml:space="preserve">
+    <value>a circle (a plasmid)</value>
+  </data>
+  <data name="Preset_quick_look_Name" xml:space="preserve">
+    <value>Quick look</value>
+  </data>
+  <data name="Preset_quick_look_Detail" xml:space="preserve">
+    <value>One pass over the forward strand and only the few files a first look needs. The fastest, cheapest run.</value>
+  </data>
+  <data name="Preset_publication_Name" xml:space="preserve">
+    <value>Publication</value>
+  </data>
+  <data name="Preset_publication_Detail" xml:space="preserve">
+    <value>Both strands combined and every default file, including the smoothed tracks, region calls and gene summary a figure draws on.</value>
+  </data>
+  <data name="Preset_plasmid_qc_Name" xml:space="preserve">
+    <value>Plasmid QC</value>
+  </data>
+  <data name="Preset_plasmid_qc_Detail" xml:space="preserve">
+    <value>Reads the sequence as a circle on both strands with no seam, and calls the low and high entropy regions.</value>
+  </data>
+  <data name="PresetStatus_NeedFile" xml:space="preserve">
+    <value>Choose a sequence file first, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_EmptyName" xml:space="preserve">
+    <value>Type a name for the preset, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_NameTaken" xml:space="preserve">
+    <value>That name belongs to a built-in preset. Type a different name, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_Saved" xml:space="preserve">
+    <value>Saved the preset {0}.</value>
+  </data>
+  <data name="PresetStatus_Deleted" xml:space="preserve">
+    <value>Deleted the preset {0}.</value>
+  </data>
+  <data name="PresetStatus_NothingToCopy" xml:space="preserve">
+    <value>You have no presets of your own yet. Save one first, then choose Copy my presets.</value>
+  </data>
+  <data name="PresetStatus_Copied" xml:space="preserve">
+    <value>Copied your presets. Paste them into a message or a file to share them.</value>
+  </data>
+  <data name="PresetStatus_CopyFailed" xml:space="preserve">
+    <value>Windows would not let the app copy. Close the program that is using the clipboard, then choose Copy my presets.</value>
+  </data>
+  <data name="PresetStatus_Imported" xml:space="preserve">
+    <value>Added {0} preset(s) from the clipboard.</value>
+  </data>
+  <data name="PresetStatus_ImportNone" xml:space="preserve">
+    <value>The clipboard does not hold presets this app can read. Copy the presets text again, then choose Add presets from the clipboard.</value>
+  </data>
+  <data name="Runs_PresetLine" xml:space="preserve">
+    <value>Preset: {0}</value>
+  </data>
+  <!-- app8 wave 2026-10-15: #685 EMBL and SnapGene inputs -->
+  <data name="NewRunPillKind_Embl" xml:space="preserve">
+    <value>EMBL</value>
+  </data>
+  <data name="NewRunPillKind_SnapGene" xml:space="preserve">
+    <value>SnapGene</value>
+  </data>
+  <!-- #686 GFF3 pairing: notices -->
+  <data name="NewRunNotice_AnnotationLinesSkipped" xml:space="preserve">
+    <value>{0} lines of the GFF3 were skipped because they are not nine columns separated by tabs with a whole-number start and end (the first is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationLinesSkipped_One" xml:space="preserve">
+    <value>1 line of the GFF3 was skipped because it is not nine columns separated by tabs with a whole-number start and end (it is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames" xml:space="preserve">
+    <value>{0} sequence names in the GFF3 match no record in the FASTA file, so their genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames_One" xml:space="preserve">
+    <value>1 sequence name in the GFF3 matches no record in the FASTA file, so its genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd" xml:space="preserve">
+    <value>{0} genes in the GFF3 run past the end of their sequence and are left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
+    <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
+  <data name="SettingsAboutHeader.Text" xml:space="preserve">
+    <value>About and updates</value>
+  </data>
+  <data name="AboutVersion_Text" xml:space="preserve">
+    <value>Version {0}</value>
+  </data>
+  <data name="UpdateCheckNowButton.Content" xml:space="preserve">
+    <value>Check now</value>
+  </data>
+  <data name="UpdateRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateBarRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateChannelChoices.Header" xml:space="preserve">
+    <value>Which updates to offer</value>
+  </data>
+  <data name="UpdateChannelStable.Content" xml:space="preserve">
+    <value>Stable (recommended)</value>
+  </data>
+  <data name="UpdateChannelBeta.Content" xml:space="preserve">
+    <value>Beta (early versions, may have rough edges)</value>
+  </data>
+  <data name="UpdateCheckOnLaunchBox.Content" xml:space="preserve">
+    <value>Check for updates when the app starts</value>
+  </data>
+  <data name="UpdateNotesHeader.Text" xml:space="preserve">
+    <value>What changes in this version</value>
+  </data>
+  <data name="UpdateChecking" xml:space="preserve">
+    <value>Checking for updates...</value>
+  </data>
+  <data name="UpdateUpToDate" xml:space="preserve">
+    <value>You have the latest version.</value>
+  </data>
+  <data name="UpdateNotInstalled" xml:space="preserve">
+    <value>This copy was not installed with the installer, so it cannot update itself. Download the latest installer from the releases page to update.</value>
+  </data>
+  <data name="UpdateCheckFailed" xml:space="preserve">
+    <value>Could not check for updates. Check your internet connection, then press Check now.</value>
+  </data>
+  <data name="UpdateAvailable_Title" xml:space="preserve">
+    <value>Update available: {0}</value>
+  </data>
+  <data name="UpdateAvailable_Status" xml:space="preserve">
+    <value>Version {0} is ready to download. Press Restart to update when you are between runs.</value>
+  </data>
+  <data name="UpdateWaitForRun" xml:space="preserve">
+    <value>A run is in progress, so the app will not restart now. Press Restart to update again when the run has finished.</value>
+  </data>
+  <data name="UpdateDownloading" xml:space="preserve">
+    <value>Downloading the update...</value>
+  </data>
+  <data name="UpdateDownloadingPercent" xml:space="preserve">
+    <value>Downloading the update... {0}%</value>
+  </data>
+  <data name="UpdateRestarting" xml:space="preserve">
+    <value>Restarting to finish the update...</value>
+  </data>
+  <data name="UpdateDownloadFailed" xml:space="preserve">
+    <value>The update could not be downloaded. Check your internet connection, then press Restart to update again.</value>
+  </data>
+  <data name="UpdateSettingNotSaved" xml:space="preserve">
+    <value>That choice could not be saved because the settings file is locked. Close other programs using it, then change it again.</value>
+  </data>
+  <data name="DevBuild_Banner" xml:space="preserve">
+    <value>Development build {0}: not a release</value>
+  </data>
+  <data name="AboutBuild_Text" xml:space="preserve">
+    <value>Build {0}</value>
+  </data>
+  <data name="UninstallRemoveData_Title" xml:space="preserve">
+    <value>Remove your data too?</value>
+  </data>
+  <data name="UninstallRemoveData_Body" xml:space="preserve">
+    <value>DNA Entropy Graph is being removed. Also delete your run history, settings and saved copies of your input files from this computer? Choose No to keep them for a later reinstall. Your result files in your output folder are never deleted.</value>
+  </data>
+  <data name="RunError_local_engine_not_ready" xml:space="preserve">
+    <value>This PC is not set up to run the analysis yet. Open Settings, find This PC, choose Install, then start the run again.</value>
+  </data>
+  <data name="RunError_local_gpu_not_usable" xml:space="preserve">
+    <value>This PC does not have a graphics card that can run this model. Choose Cloud as the place to run, then start the run again.</value>
+  </data>
+  <data name="RunError_local_worker_crashed" xml:space="preserve">
+    <value>The analysis program on this PC stopped unexpectedly. Open Settings, choose Repair under This PC, then start the run again.</value>
+  </data>
+  <data name="RunError_local_worker_no_heartbeat" xml:space="preserve">
+    <value>The analysis program on this PC started but never reported in, so it was stopped. Open Settings, choose Repair under This PC, then start the run again.</value>
+  </data>
+  <data name="RunError_local_worker_stalled" xml:space="preserve">
+    <value>The analysis program on this PC stopped reporting in, so it was stopped. Start the run again, and if it happens again choose Repair under This PC in Settings.</value>
+  </data>
+  <data name="RunError_local_worker_timed_out" xml:space="preserve">
+    <value>The analysis on this PC ran longer than the time allowed, so it was stopped. Start the run again with a shorter sequence, or choose Cloud as the place to run.</value>
+  </data>
+  <data name="RunError_local_worker_exit_nonzero" xml:space="preserve">
+    <value>The analysis finished and its results are saved, but the analysis program reported a problem as it closed. If the results look wrong, choose Repair under This PC in Settings and run again.</value>
+  </data>
+  <data name="RunError_local_run_interrupted" xml:space="preserve">
+    <value>The app was closed while this run was in progress, so it did not finish. Start the run again.</value>
+  </data>
+  <data name="LocalEngineError_local_uv_missing" xml:space="preserve">
+    <value>The installer part of the app is missing, so the engine could not be set up. Install the app again from the download page, then choose Install.</value>
+  </data>
+  <data name="LocalEngineError_local_lock_missing" xml:space="preserve">
+    <value>The list of packages that ships with the app is missing, so the engine could not be set up. Install the app again from the download page, then choose Install.</value>
+  </data>
+  <data name="LocalEngineError_local_install_failed" xml:space="preserve">
+    <value>The engine could not be set up on this PC. Check your internet connection and the free disk space, then choose Install or Repair again.</value>
+  </data>
+  <data name="LocalEngineError_local_check_failed" xml:space="preserve">
+    <value>The engine was installed but did not pass its check. Choose Repair to set it up again.</value>
+  </data>
+  <data name="LocalEngineError_local_remove_refused" xml:space="preserve">
+    <value>The engine folder is not where the app expects it, so nothing was deleted. Choose Save diagnostics in Settings and send the file to support.</value>
+  </data>
+  <data name="LocalEngineError_local_cancelled" xml:space="preserve">
+    <value>The setup was cancelled. Choose Repair to finish it, or Remove to delete what was installed.</value>
+  </data>
+  <data name="RunTarget_Cloud" xml:space="preserve">
+    <value>Cloud (a rented computer)</value>
+  </data>
+  <data name="RunTarget_ThisPc" xml:space="preserve">
+    <value>This PC</value>
+  </data>
+  <data name="RunTarget_Auto" xml:space="preserve">
+    <value>Auto</value>
+  </data>
+  <data name="RunTargetNotSaved" xml:space="preserve">
+    <value>This choice could not be saved because another copy of the app has the settings file open. Close the other copies, then choose again.</value>
+  </data>
+  <data name="RunTargetAutoLocal" xml:space="preserve">
+    <value>Auto will run on this PC.</value>
+  </data>
+  <data name="RunTargetAutoCloud" xml:space="preserve">
+    <value>Auto will run in the cloud, because this PC cannot run the model right now.</value>
+  </data>
+  <data name="RunTargetReason_NoNvidiaGpu" xml:space="preserve">
+    <value>This PC has no NVIDIA graphics card, so it cannot run the model. Choose Cloud.</value>
+  </data>
+  <data name="RunTargetReason_NotEnoughGpuMemory" xml:space="preserve">
+    <value>The graphics card in this PC has less than 24 GB of memory, which the model needs. Choose Cloud.</value>
+  </data>
+  <data name="RunTargetReason_DriverTooOld" xml:space="preserve">
+    <value>The NVIDIA driver on this PC is too old. Update it from the NVIDIA website, then choose Check again.</value>
+  </data>
+  <data name="RunTargetReason_GpuToolFailed" xml:space="preserve">
+    <value>The NVIDIA driver on this PC is not working. Reinstall or update the NVIDIA driver from the NVIDIA website, restart the PC, then choose Check again.</value>
+  </data>
+  <data name="RunTargetReason_NotEnoughDisk" xml:space="preserve">
+    <value>This PC has less than 30 GB of free disk space. Free some space, then choose Check again.</value>
+  </data>
+  <data name="RunTargetReason_NoCuda" xml:space="preserve">
+    <value>The engine on this PC cannot use the graphics card. Choose Repair under This PC.</value>
+  </data>
+  <data name="RunTargetReason_NotInstalled" xml:space="preserve">
+    <value>The engine for this PC is not installed. Choose Install under This PC.</value>
+  </data>
+  <data name="RunTargetReason_EngineProblem" xml:space="preserve">
+    <value>The engine on this PC is not working. Choose Repair under This PC.</value>
+  </data>
+  <data name="RunTargetReason_unknown" xml:space="preserve">
+    <value>This PC could not be checked. Choose Check again under This PC.</value>
+  </data>
+  <data name="ThisPcNoGpu" xml:space="preserve">
+    <value>Graphics card: no NVIDIA graphics card was found.</value>
+  </data>
+  <data name="ThisPcGpuFormat" xml:space="preserve">
+    <value>Graphics card: {0}, {1} GB of memory, driver {2}.</value>
+  </data>
+  <data name="ThisPcDiskFormat" xml:space="preserve">
+    <value>Free disk space: {0} GB.</value>
+  </data>
+  <data name="ThisPcEngine_NotInstalled" xml:space="preserve">
+    <value>Engine: not installed.</value>
+  </data>
+  <data name="ThisPcEngine_Broken" xml:space="preserve">
+    <value>Engine: installed but not working. Choose Repair.</value>
+  </data>
+  <data name="ThisPcEngine_WorkerVersionMismatch" xml:space="preserve">
+    <value>Engine: out of date for this version of the app. Choose Repair.</value>
+  </data>
+  <data name="ThisPcEngine_Healthy" xml:space="preserve">
+    <value>Engine: installed and working.</value>
+  </data>
+  <data name="ThisPcEngineNoCuda" xml:space="preserve">
+    <value>It cannot use the graphics card, so only the test model can run. Choose Repair.</value>
+  </data>
+  <data name="ThisPcBlocker_NoNvidiaGpu" xml:space="preserve">
+    <value>This PC needs an NVIDIA graphics card to run the model.</value>
+  </data>
+  <data name="ThisPcBlocker_NotEnoughGpuMemory" xml:space="preserve">
+    <value>The graphics card needs about 24 GB of memory.</value>
+  </data>
+  <data name="ThisPcBlocker_DriverTooOld" xml:space="preserve">
+    <value>The NVIDIA driver needs to be version 550 or newer.</value>
+  </data>
+  <data name="ThisPcBlocker_GpuToolFailed" xml:space="preserve">
+    <value>The NVIDIA driver is not working. Reinstall or update the NVIDIA driver, restart the PC, then choose Check again.</value>
+  </data>
+  <data name="ThisPcBlocker_NotEnoughDisk" xml:space="preserve">
+    <value>At least 30 GB of free disk space is needed.</value>
+  </data>
+  <data name="ThisPcCheckFailed" xml:space="preserve">
+    <value>This PC could not be checked. Choose Check again to try once more.</value>
+  </data>
+  <data name="ThisPcStep_CreatingEnvironment" xml:space="preserve">
+    <value>Setting up Python...</value>
+  </data>
+  <data name="ThisPcStep_InstallingPackages" xml:space="preserve">
+    <value>Installing the model software (this is several gigabytes)...</value>
+  </data>
+  <data name="ThisPcStep_InstallingWorker" xml:space="preserve">
+    <value>Installing the analysis program...</value>
+  </data>
+  <data name="ThisPcStep_Checking" xml:space="preserve">
+    <value>Checking the engine...</value>
+  </data>
+  <data name="ThisPcStep_Removing" xml:space="preserve">
+    <value>Removing the engine...</value>
+  </data>
+  <data name="ThisPcInstalled" xml:space="preserve">
+    <value>The engine is ready.</value>
+  </data>
+  <data name="ThisPcRemoved" xml:space="preserve">
+    <value>The engine was removed. Your results and input copies were not touched.</value>
+  </data>
+  <data name="ThisPcRemoveConfirmTitle" xml:space="preserve">
+    <value>Remove the engine?</value>
+  </data>
+  <data name="ThisPcRemoveConfirmMessage" xml:space="preserve">
+    <value>This deletes the model software installed for This PC. Your results and input copies are not touched. You can install it again later.</value>
+  </data>
+  <data name="SettingsThisPcHeader.Text" xml:space="preserve">
+    <value>This PC</value>
+  </data>
+  <data name="SettingsThisPcExplainer.Text" xml:space="preserve">
+    <value>Run the analysis on this computer instead of a rented one. It needs an NVIDIA graphics card with about 24 GB of memory. Auto uses this PC when it can and the cloud when it cannot.</value>
+  </data>
+  <data name="RunTargetBox.Header" xml:space="preserve">
+    <value>Where to run</value>
+  </data>
+  <data name="ThisPcHealthHeader.Text" xml:space="preserve">
+    <value>This PC&apos;s health check</value>
+  </data>
+  <data name="ThisPcRefreshButton.Content" xml:space="preserve">
+    <value>Check again</value>
+  </data>
+  <data name="ThisPcInstallButton.Content" xml:space="preserve">
+    <value>Install</value>
+  </data>
+  <data name="ThisPcRepairButton.Content" xml:space="preserve">
+    <value>Repair</value>
+  </data>
+  <data name="ThisPcRemoveButton.Content" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="ThisPcCancelButton.Content" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="SettingsCloudResultsHeader.Text" xml:space="preserve">
+    <value>Cloud results</value>
+  </data>
+  <data name="SettingsCloudResultsExplainer.Text" xml:space="preserve">
+    <value>Each run's results are also stored in a storage area in your own Google Cloud project (a bucket), so you can download them again. Google deletes them automatically after the number of days you choose here.</value>
+  </data>
+  <data name="CloudRetentionBox.Header" xml:space="preserve">
+    <value>Keep stored results for</value>
+  </data>
+  <data name="CloudRetentionChoiceFormat" xml:space="preserve">
+    <value>{0} days</value>
+  </data>
+  <data name="SettingsCloudResultsNote.Text" xml:space="preserve">
+    <value>A change applies when your next run starts. Choosing fewer days than the bucket already keeps does not shrink it, because other copies of this app may share the same bucket and we never delete results early. To go back to a longer time, choose it here.</value>
+  </data>
+  <data name="CloudRetentionSaved" xml:space="preserve">
+    <value>Saved. It applies when your next run starts. A time shorter than the one already set on the storage for your results (the bucket) never shortens it, so older results may stay. To remove them sooner, delete them in the Cloud Storage page of your Google Cloud project.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesDropped" xml:space="preserve">
+    <value>{0} genes in record {1} were left out because their positions could not be read. Fix the positions in the file (for example 1..42 or complement(85..126)) and add the file again to include them.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
   </data>
 </root>

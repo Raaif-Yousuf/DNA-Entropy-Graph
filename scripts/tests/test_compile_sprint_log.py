@@ -170,7 +170,9 @@ def test_find_stray_changelog_dirs_guard_against_this_repo():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "compile_sprint_log.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert "--dry-run" in proc.stdout
@@ -186,7 +188,9 @@ def test_cli_nonzero_exit_on_malformed_fragment(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "compile_sprint_log.py"), "--root", str(root)],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 1
     assert "must start with a '- ' bullet" in proc.stderr
@@ -198,6 +202,7 @@ def test_cli_nonzero_exit_on_malformed_fragment(tmp_path):
 # require sprint_log.md to exist at all (a branch has fragments long before
 # anyone runs a real fold).
 # ---------------------------------------------------------------------------
+
 
 def test_check_passes_and_touches_nothing_with_well_formed_fragments(tmp_path):
     root = tmp_path / "repo"
@@ -256,7 +261,9 @@ def test_cli_check_flag_exits_nonzero_on_malformed_fragment(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "compile_sprint_log.py"), "--check", "--root", str(root)],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 1
 
@@ -271,7 +278,9 @@ def test_check_against_this_repos_real_changelog_fragments():
 def test_check_and_dry_run_are_mutually_exclusive():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "compile_sprint_log.py"), "--check", "--dry-run"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2
 
@@ -290,7 +299,10 @@ def _commit_file(root: Path, rel: str, content: str, ts: int) -> None:
     subprocess.run(["git", "add", rel], cwd=root, check=True, capture_output=True)
     subprocess.run(
         ["git", "commit", "-q", "-m", f"commit {rel}"],
-        cwd=root, check=True, capture_output=True, env=env,
+        cwd=root,
+        check=True,
+        capture_output=True,
+        env=env,
     )
 
 
