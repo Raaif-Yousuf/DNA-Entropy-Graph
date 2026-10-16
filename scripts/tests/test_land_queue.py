@@ -786,6 +786,8 @@ def test_a_heartbeat_retries_a_transient_failure(env: lq.Env, monkeypatch: pytes
             raise PermissionError("busy")
         real(a, b)  # type: ignore[arg-type]
 
+    (env.state).mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": env.pid, "ts": 1.0}), encoding="utf-8")
     monkeypatch.setattr(os, "replace", flaky)
     lq._heartbeat(env)
     assert json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["pid"] == env.pid
@@ -830,12 +832,12 @@ def test_an_open_pr_that_contains_the_sha_through_a_merged_main_is_resumed(env: 
     assert not r.matching("py")
 
 
-def test_a_pr_for_another_sha_is_ignored(env: lq.Env) -> None:
+def test_an_open_pr_for_another_sha_blocks_a_second_pr(env: lq.Env) -> None:
     r = runner_of(env)
     r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
     r.first("git", "merge-base", "--is-ancestor", answer=(1, ""))
-    lq.process_item(env, item())
-    assert r.matching("py")
+    assert lq.process_item(env, item()).startswith("FAILED open PR #7 has unverified commits")
+    assert not r.matching("py")
 
 
 def test_a_failed_pr_lookup_is_a_failure_not_a_duplicate_pr(env: lq.Env) -> None:
@@ -916,9 +918,9 @@ def test_the_heartbeat_keeps_beating_during_a_long_item(env: lq.Env) -> None:
 
     def slow(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
         if argv[:1] == ["py"]:
-            seen.append(json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["ts"])
+            seen.append(json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["beat"])
             time.sleep(0.4)
-            seen.append(json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["ts"])
+            seen.append(json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["beat"])
         return original(argv, cwd)
 
     env.runner = slow
@@ -938,8 +940,8 @@ def test_resume_refuses_a_head_with_unverified_commits(env: lq.Env) -> None:
     r = runner_of(env)
     r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
     r.first("git", "rev-list", answer=(0, f"{SHA_B} {SHA_A}"))  # one parent: a real commit on top, not a merge of main
-    lq.process_item(env, item())
-    assert r.matching("py")
+    assert lq.process_item(env, item()).startswith("FAILED open PR #7 has unverified commits")
+    assert not r.matching("py")
     assert not r.matching("gh", "pr", "merge", "7")
 
 
@@ -948,8 +950,8 @@ def test_resume_refuses_a_merge_of_something_other_than_main(env: lq.Env) -> Non
     r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
     r.first("git", "rev-list", answer=(0, f"{SHA_B} {SHA_A} {SHA_C}"))
     r.first("git", "merge-base", "--is-ancestor", SHA_C, "origin/main", answer=(1, ""))
-    lq.process_item(env, item())
-    assert r.matching("py")
+    assert lq.process_item(env, item()).startswith("FAILED open PR #7 has unverified commits")
+    assert not r.matching("py")
 
 
 def test_merge_pins_the_head_commit_it_verified(env: lq.Env) -> None:
@@ -1058,5 +1060,122 @@ def test_resume_refuses_a_head_whose_chain_does_not_reach_the_sha(env: lq.Env) -
     r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
     r.first("git", "rev-list", answer=(0, f"{SHA_B} {SHA_C} {SHA_C}"))  # a merge of main, but on top of some other base
     r.first("git", "merge-base", "--is-ancestor", SHA_C, "origin/main", answer=(0, ""))
-    lq.process_item(env, item())
-    assert r.matching("py")
+    assert lq.process_item(env, item()).startswith("FAILED open PR #7 has unverified commits")
+    assert not r.matching("py")
+
+
+# ---- round 4 ----
+
+
+def _hb(env: lq.Env) -> dict[str, float]:
+    return json.loads((env.state / "runner.json").read_text(encoding="utf-8"))
+
+
+def test_the_beater_writes_the_main_threads_progress_not_its_own_clock(env: lq.Env) -> None:
+    import itertools
+    import time
+
+    env.heartbeat_seconds = 0.02
+    tick = itertools.count(1000)
+    env.clock = lambda: float(next(tick))
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    seen: list[dict[str, float]] = []
+    original = runner_of(env).__call__
+
+    def hung(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
+        if argv[:1] == ["py"]:
+            time.sleep(0.15)  # let the beater write the latest progress once
+            seen.append(_hb(env))
+            time.sleep(0.3)  # the main thread makes no progress while blocked here
+            seen.append(_hb(env))
+        return original(argv, cwd)
+
+    env.runner = hung
+    lq.drain(env)
+    assert seen[1]["beat"] > seen[0]["beat"]  # the beater is alive
+    assert seen[1]["ts"] == seen[0]["ts"]  # but progress did not move, so staleness can fire
+
+
+def test_staleness_is_judged_on_progress_not_on_the_beat(env: lq.Env) -> None:
+    env.alive = lambda pid: True
+    env.clock = lambda: 1_000_000.0
+    env.state.mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0, "beat": 999_990.0}), encoding="utf-8")
+    assert "STALE?" in lq.status(env)
+    lq.drain(env)  # a new runner may replace it
+
+
+def test_progress_moves_when_a_subprocess_returns(env: lq.Env) -> None:
+    t = [10.0]
+    env.clock = lambda: t[0]
+    env.progress = 0.0
+    t[0] = 55.0
+    env.run("git", "status")
+    assert env.progress == 55.0
+
+
+def test_a_beater_never_overwrites_a_new_owners_claim(env: lq.Env) -> None:
+    (env.state).mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 4321, "ts": 5.0}), encoding="utf-8")
+    assert lq.State(env.state).write_runner(env.pid, 9.0) is False
+    assert _hb(env)["pid"] == 4321
+    (env.state / "runner.json").write_text(json.dumps({"pid": env.pid, "ts": 5.0}), encoding="utf-8")
+    assert lq.State(env.state).write_runner(env.pid, 9.0) is True
+    assert _hb(env)["ts"] == 9.0
+
+
+def test_a_beater_error_is_logged_and_the_beating_goes_on(env: lq.Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    env.heartbeat_seconds = 0.01
+    calls = [0]
+    real = lq.State.write_runner
+
+    def flaky(self: lq.State, *a: object, **k: object) -> bool:
+        calls[0] += 1
+        if 2 <= calls[0] <= 4:
+            raise RuntimeError("boom")
+        return real(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(lq.State, "write_runner", flaky)
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    original = runner_of(env).__call__
+
+    def slow(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
+        if argv[:1] == ["py"]:
+            time.sleep(0.3)
+        return original(argv, cwd)
+
+    env.runner = slow
+    lq.drain(env)
+    assert calls[0] > 5
+    assert "HEARTBEAT-FAIL RuntimeError" in (env.state / "flakes.log").read_text(encoding="utf-8")
+
+
+def test_run_command_times_out_a_hung_gh_or_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    monkeypatch.setattr(lq, "COMMAND_TIMEOUT_SECONDS", 0.5)
+    rc, out = lq.run_command([sys.executable, "-c", "import time; time.sleep(30)"], tmp_path)
+    assert rc == 124 and "TIMEOUT after" in out
+
+
+def test_land_wt_is_not_given_the_generic_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    seen: list[object] = []
+
+    def fake(argv: list[str], **kw: object) -> subprocess.CompletedProcess[bytes]:
+        seen.append(kw.get("timeout"))
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    lq.run_command(["py", "scripts/land_wt.py", "--branch", "b"], tmp_path)
+    lq.run_command(["gh", "pr", "view", "7"], tmp_path)
+    assert seen[0] is None and seen[1] == lq.COMMAND_TIMEOUT_SECONDS
+
+
+def test_a_timeout_is_logged_to_flakes(env: lq.Env) -> None:
+    runner_of(env).first("gh", "pr", "view", answer=(124, "TIMEOUT after 600 s: gh pr view 7"))
+    env.run("gh", "pr", "view", "7")
+    assert "TIMEOUT gh pr view 7" in (env.state / "flakes.log").read_text(encoding="utf-8")

@@ -63,10 +63,17 @@ RERUN_SETTLE_SECONDS = 60
 MERGEABLE_POLLS = 6
 
 
+COMMAND_TIMEOUT_SECONDS = 600.0
+
+
 def run_command(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
-    """Bytes in, text out (never text=True on Windows: it re-encodes)."""
+    """Bytes in, text out (never text=True on Windows: it re-encodes). gh and git get a generous timeout (rc 124, `TIMEOUT after`);
+    land_wt.py has its own deadlines and gets none."""
+    limit = None if any(Path(a).name == "land_wt.py" for a in argv[1:3]) else COMMAND_TIMEOUT_SECONDS
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=limit)
+    except subprocess.TimeoutExpired:
+        return 124, f"TIMEOUT after {int(limit or 0)} s: {' '.join(argv[:4])}"
     except OSError as err:
         return 127, f"cannot run {argv[0]}: {err}"
     if proc.returncode == 0:  # stdout only: stderr noise must never reach a json.loads
@@ -207,20 +214,25 @@ class State:
     def consume_stop(self) -> None:
         self._p("runner.stop").unlink(missing_ok=True)
 
-    def write_runner(self, pid: int, ts: float, sleep: Callable[[float], None] = time.sleep) -> None:
-        """Heartbeat: replace our own runner.json atomically. Another process (`status`) may hold it open (PermissionError on
-        Windows): retry a few times, then give up quietly. A heartbeat failure must never end the runner."""
+    def write_runner(self, pid: int, ts: float, sleep: Callable[[float], None] = time.sleep, beat: float | None = None) -> bool:
+        """Heartbeat: replace our own runner.json atomically; `ts` is the main thread's last PROGRESS, `beat` the beater's own clock.
+        Returns False (and writes nothing) when the file no longer holds our pid: a new owner's claim is never overwritten.
+        Another process (`status`) may hold it open (PermissionError on Windows): retry, then give up quietly."""
         tmp = self._p(f"runner.json.{pid}.tmp")
         for attempt in range(4):
+            kind, cur = self._runner_raw()
+            if kind in {"missing", "ok"} and (cur is None or int(cur["pid"]) != pid):
+                return False
             try:
-                tmp.write_text(json.dumps({"pid": pid, "ts": ts}), encoding="utf-8", newline="\n")
+                tmp.write_text(json.dumps({"pid": pid, "ts": ts, "beat": ts if beat is None else beat}), encoding="utf-8", newline="\n")
                 os.replace(tmp, self._p("runner.json"))
-                return
+                return True
             except OSError:
                 if attempt < 3:
                     sleep(0.2)
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
+        return True
 
     def claim_runner(
         self,
@@ -245,7 +257,7 @@ class State:
                 raise AlreadyRunning("runner.json is in use by another process. Check `status`") from None
             else:
                 with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(json.dumps({"pid": pid, "ts": ts}))
+                    fh.write(json.dumps({"pid": pid, "ts": ts, "beat": ts}))
                 return
             kind, cur = self._runner_raw()
             if kind == "missing":
@@ -300,7 +312,7 @@ class State:
             return "empty", None
         try:
             data = json.loads(text)
-            return "ok", {"pid": int(data["pid"]), "ts": float(data.get("ts", 0))}
+            return "ok", {"pid": int(data["pid"]), "ts": float(data.get("ts", 0)), "beat": float(data.get("beat", data.get("ts", 0)))}
         except (ValueError, TypeError, KeyError, AttributeError):
             return "bad", None
 
@@ -341,16 +353,22 @@ class Env:
     alive: Callable[[int], bool] = pid_alive
     ff_main: bool = False
     heartbeat_seconds: float = 60.0
+    progress: float = 0.0  # clock() at the main thread's last progress (a subprocess returned, a poll ran, a stage began)
     checks_timeout: float = CHECKS_TIMEOUT_SECONDS
     known_red: tuple[str, ...] = field(default_factory=lambda: tuple(n.strip() for n in os.environ.get("KNOWN_RED", "").split(",") if n.strip()))
 
     def run(self, *argv: str) -> tuple[int, str]:
         rc, out = self.runner(list(argv), self.repo)
+        self.progress = self.clock()
+        if rc == 124 and out.startswith("TIMEOUT"):
+            State(self.state).append_flake(f"{self.now()} TIMEOUT {' '.join(argv[:4])}")
         return rc, out.replace(STDERR_MARK, "\n")
 
     def run_json_text(self, *argv: str) -> str:
         """stdout only, whatever the exit code (`gh pr checks --json` exits 8/1 WITH valid JSON on stdout)."""
-        return self.runner(list(argv), self.repo)[1].split(STDERR_MARK)[0].strip()
+        out = self.runner(list(argv), self.repo)[1]
+        self.progress = self.clock()
+        return out.split(STDERR_MARK)[0].strip()
 
     @property
     def stale_after(self) -> float:
@@ -385,6 +403,7 @@ def _settle(env: Env, pr: str) -> tuple[list[dict[str, str]], bool]:
         if env.clock() >= deadline:
             return checks, True
         env.sleep(20)
+        env.progress = env.clock()
 
 
 def _failing(checks: Sequence[dict[str, str]], ignore: set[str]) -> list[dict[str, str]]:
@@ -524,6 +543,9 @@ def _find_existing_pr(env: Env, it: Item) -> tuple[str, str, str, str] | str | N
                     return f"FAILED cannot verify merged PR #{num} (head not fetchable; check it by hand, then `retry`) {it.branch} @ {it.sha}"
             elif oid and _head_is_sha_plus_main_merges(env, it, oid):
                 return state, num, ref, oid
+            else:
+                what = "not this sha plus merges of main"
+                return f"FAILED open PR #{num} has unverified commits ({what}); close or merge it by hand, then `retry` {it.branch} @ {it.sha}"
     return None
 
 
@@ -531,6 +553,7 @@ def process_item(env: Env, it: Item) -> str:
     """Land one item. Without known-red checks the merge is land_wt's own `--merge-when-green` (exit 5/6 leave the PR open);
     with them (`red=` or KNOWN_RED) land_wt stops at the open PR and the merge loop here ignores the named checks."""
     st = State(env.state)
+    env.progress = env.clock()
     st.set_inflight(it, "landing")
     land_branch: str | None = None
     rc, remote = env.run("git", "ls-remote", "--heads", "origin", f"refs/heads/{it.branch}")
@@ -591,9 +614,15 @@ def process_item(env: Env, it: Item) -> str:
         return f"REFUSED #{pr} {detail} {it.branch} @ {it.sha}"
 
 
-def _heartbeat(env: Env) -> None:
-    with _HB_LOCK:
-        State(env.state).write_runner(env.pid, env.clock(), env.sleep)
+def _heartbeat(env: Env) -> bool:
+    """Write runner.json with the main thread's last progress. Never raises; False once the file is no longer ours."""
+    try:
+        with _HB_LOCK:
+            return State(env.state).write_runner(env.pid, env.progress, env.sleep, env.clock())
+    except Exception as err:  # noqa: BLE001  (a heartbeat failure must never end the runner)
+        with contextlib.suppress(Exception):
+            State(env.state).append_flake(f"{env.now()} HEARTBEAT-FAIL {type(err).__name__}: {err}")
+        return True
 
 
 def _stacked_on(env: Env, failed: set[str], it: Item) -> str | None:
@@ -645,18 +674,21 @@ def _recover_interrupted(st: State) -> None:
 
 def drain(env: Env, *, forever: bool = False) -> None:
     st = State(env.state)
-    st.claim_runner(env.pid, env.clock(), env.alive, env.stale_after, env.sleep)
+    env.progress = env.clock()
+    st.claim_runner(env.pid, env.progress, env.alive, env.stale_after, env.sleep)
     _recover_interrupted(st)
     stop_beat = threading.Event()
 
     def beat() -> None:
         while not stop_beat.wait(env.heartbeat_seconds):
-            _heartbeat(env)
+            if not _heartbeat(env):
+                return  # a new runner owns the file now: stop beating over it
 
     beater = threading.Thread(target=beat, name="land-queue-heartbeat", daemon=True)
     beater.start()
     try:
         while True:
+            env.progress = env.clock()
             _heartbeat(env)
             if st.stop_requested():
                 st.append_done(f"STOPPED {env.now()}")
