@@ -39,7 +39,48 @@ public sealed class SqliteDatabase : IDisposable
     private readonly object _gate = new();
     private bool _migrated;
 
-    public SqliteDatabase(string databasePath) => _databasePath = databasePath;
+    private readonly string _journalMode;
+
+    /// <param name="portable">Portable mode (issue #144): the file may sit on a USB stick, so the rollback journal is used instead of WAL.</param>
+    public SqliteDatabase(string databasePath, bool portable = false)
+    {
+        _databasePath = databasePath;
+        _journalMode = ChooseJournalMode(databasePath, portable);
+    }
+
+    /// <summary>
+    /// <c>DELETE</c> in portable mode and on a removable or network drive, <c>WAL</c> otherwise. WAL keeps a shared-memory index file beside the
+    /// database that is unreliable on network shares and leaves <c>-wal</c> files behind when a stick is pulled without closing the app.
+    /// </summary>
+    /// <param name="driveTypeOf">Test seam: the drive type for a path (null when unknown). Production asks <see cref="DriveInfo"/>.</param>
+    public static string ChooseJournalMode(string databasePath, bool portable, Func<string, DriveType?>? driveTypeOf = null)
+    {
+        if (portable)
+        {
+            return "DELETE";
+        }
+
+        var type = (driveTypeOf ?? RealDriveType)(databasePath);
+        return type is DriveType.Removable or DriveType.Network ? "DELETE" : "WAL";
+    }
+
+    private static DriveType? RealDriveType(string path)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(Path.GetFullPath(path));
+            if (string.IsNullOrEmpty(root))
+            {
+                return null;
+            }
+
+            return root.StartsWith(@"\\", StringComparison.Ordinal) ? DriveType.Network : new DriveInfo(root).DriveType;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Set the moment a corrupt <c>app.db</c> was quarantined and replaced.
@@ -76,10 +117,10 @@ public sealed class SqliteDatabase : IDisposable
         Mode = SqliteOpenMode.ReadWriteCreate,
     }.ToString();
 
-    private static void ConfigurePragmas(SqliteConnection connection)
+    private void ConfigurePragmas(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
+        command.CommandText = $"PRAGMA journal_mode={_journalMode}; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
         command.ExecuteNonQuery();
     }
 
