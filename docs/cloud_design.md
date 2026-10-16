@@ -1419,6 +1419,14 @@ Round 3 (the end of one computer, `InstallationCleanup.EndVmAsync`):
 - **A run row phase write is atomic per job (H2).** `RunRowStore` takes one process-wide lock per job id for the read and the write, and writes through `IRunRepository.TryUpsertIfPhaseAsync(row, phaseThatWasRead)`, which the SQLite repository does as one `BEGIN IMMEDIATE` transaction (check and write, never resurrecting a removed row). A writer that lost the race re-reads and re-validates; a terminal phase is never left (`JobStateMachine` throws for any move out of one), so a late driver cannot overwrite the cleanup's Cancelled. The interface default is a plain upsert for single-writer test doubles; a repository other writers can reach must override it.
 - Logging: a fault the guard awaits is logged once by the awaiting code; only a call the timeout abandoned is observed for a late fault (with the job id when there is one).
 
+Round 4 (same method):
+
+- **The job is released once the row is ended, not when the operation is done (M1).** The cancel scope (`ActiveRuns.TryBeginCancel`) is disposed right after the run's row is Cancelled; a runner cancel, "Delete everything" and the reconciler no longer see `AlreadyEnding` or wait out a GPU stop. The end's entry stays published until the operation is done, so a second `EndVmAsync` for the job still joins it.
+- **Taking the job and publishing the entry are one step (L4)** under one lock, so a concurrent second call always finds either our entry or someone else's cancel.
+- **A superseding Delete owns the outcome (M2).** When a Delete is accepted behind an accepted Stop, the Stop's end reports the Delete's outcome if the Stop's own operation later ends in error (the computer was deleted under it). THEORY (unverified): that a real Stop operation errors when its computer is deleted; the guard never shows "stop failed" for a deleted computer either way.
+- **A caller token cancelled after acceptance is acceptance (L3)**: Done, row Cancelled, driver stopped. Cancelled before acceptance throws and touches nothing. Both are pinned by tests (the code already did this).
+- **Annotations are conditional too (L5)**: `RunRowStore.UpdateRowAsync` takes the same per-job lock and writes through `TryUpsertIfPhaseAsync`, re-reading and re-applying the change if it lost a race.
+
 THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes back populated in an instances aggregatedList on a real project.
 ## Related
 

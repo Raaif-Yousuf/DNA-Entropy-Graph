@@ -55,10 +55,24 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
     public async Task UpdateRowAsync(string jobId, Func<RunRecord, RunRecord> change, CancellationToken cancellationToken)
     {
         using var _ = await LockJobAsync(jobId, cancellationToken).ConfigureAwait(false);
-        var existing = await LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
-        if (existing is not null)
+        for (var attempt = 0; ; attempt++)
         {
-            await runs.UpsertAsync(change(existing), cancellationToken).ConfigureAwait(false);
+            var existing = await LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (existing is null)
+            {
+                return;
+            }
+
+            // Conditional on the phase that was read, like a phase write: an annotation that read Running must not turn a Cancelled back into Running.
+            if (await runs.TryUpsertIfPhaseAsync(change(existing), existing.Phase, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            if (attempt >= MaxLostRaces)
+            {
+                throw new InvalidOperationException($"The run row of job '{jobId}' kept changing under an annotation.");
+            }
         }
     }
 

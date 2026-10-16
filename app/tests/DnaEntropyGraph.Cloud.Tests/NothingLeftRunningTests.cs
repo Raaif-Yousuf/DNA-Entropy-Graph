@@ -845,6 +845,121 @@ public class NothingLeftRunningTests
         rig.LatestPhase("job-live").ShouldBe(JobPhase.Running);
     }
 
+    private static void AcceptingStub(IComputeGateway stub, Func<bool, Task> operation)
+        => stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            call.ArgAt<Action?>(3)?.Invoke();
+            return operation(call.ArgAt<bool>(2));
+        });
+
+    [Fact]
+    public async Task The_cancel_scope_is_released_once_the_row_is_ended_even_while_the_operation_is_still_running()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var active = new ActiveRuns();
+        var stub = Substitute.For<IComputeGateway>();
+        AcceptingStub(stub, _ => new TaskCompletionSource().Task); // accepted, and the operation never reaches DONE
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, active, clock: rig.Clock);
+
+        _ = cleanup.EndVmAsync(rig.Installation, await OnlyVmAsync(rig), false, null, CancellationToken.None);
+        await WaitUntilAsync(() => rig.LatestPhase("job-live") == JobPhase.Cancelled);
+        await WaitUntilAsync(() =>
+        {
+            using var scope = active.TryBeginCancel("job-live"); // the runner's cancel, "Delete everything" and the reconciler wait on this marker
+            return scope is not null;
+        });
+    }
+
+    [Fact]
+    public async Task A_stops_late_error_does_not_override_the_outcome_of_the_delete_that_superseded_it()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var stopOperation = new TaskCompletionSource();
+        var stub = Substitute.For<IComputeGateway>();
+        AcceptingStub(stub, delete => delete ? Task.CompletedTask : stopOperation.Task);
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+        var descriptor = await OnlyVmAsync(rig);
+
+        var stop = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+        await WaitUntilAsync(() => rig.LatestPhase("job-live") == JobPhase.Cancelled);
+        var delete = await cleanup.EndVmAsync(rig.Installation, descriptor, true, null, CancellationToken.None);
+        stopOperation.SetException(Forbidden()); // the stop's operation ends in error because the computer was deleted under it
+
+        delete.ShouldBe(VmEndResult.Done);
+        (await stop.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Done);
+    }
+
+    [Fact]
+    public async Task A_caller_cancelled_after_the_request_was_accepted_is_accepted_not_failed()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var stub = Substitute.For<IComputeGateway>();
+        AcceptingStub(stub, _ => Task.FromCanceled(new CancellationToken(true))); // accepted, then the caller's token ended the wait for DONE
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+        var accepted = false;
+
+        var result = await cleanup.EndVmAsync(rig.Installation, await OnlyVmAsync(rig), false, () => accepted = true, CancellationToken.None);
+
+        result.ShouldBe(VmEndResult.Done);
+        accepted.ShouldBeTrue();
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task A_caller_cancelled_before_the_request_was_accepted_throws_and_touches_nothing()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var stub = Substitute.For<IComputeGateway>();
+        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(_ => Task.FromCanceled(new CancellationToken(true)));
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+        var accepted = false;
+        var descriptor = await OnlyVmAsync(rig);
+
+        await Should.ThrowAsync<OperationCanceledException>(() => cleanup.EndVmAsync(rig.Installation, descriptor, false, () => accepted = true, CancellationToken.None));
+
+        accepted.ShouldBeFalse();
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Running);
+    }
+
+    [Fact]
+    public async Task Many_ends_for_one_job_started_at_once_send_one_request_and_none_is_told_someone_else_owns_it()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var descriptor = await OnlyVmAsync(rig);
+
+        for (var round = 0; round < 40; round++)
+        {
+            var stub = Substitute.For<IComputeGateway>();
+            var operation = new TaskCompletionSource();
+            AcceptingStub(stub, _ => operation.Task);
+            var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+            var go = new TaskCompletionSource();
+            var calls = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+            {
+                await go.Task;
+                return await cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+            }, TestContext.Current.CancellationToken)).ToArray();
+
+            go.SetResult();
+            await WaitUntilAsync(() => calls.Count(c => c.IsCompleted) >= 7); // the seven that joined are answered while the owner's operation is still running
+            operation.SetResult();
+            var results = await Task.WhenAll(calls).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            results.ShouldAllBe(r => r == VmEndResult.Done, $"round {round}");
+            EndVmCalls(stub).ShouldBe(1, $"round {round}");
+        }
+    }
+
     [Fact]
     public async Task A_second_end_behind_a_first_that_fails_makes_its_own_attempt()
     {

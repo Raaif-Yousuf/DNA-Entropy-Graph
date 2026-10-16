@@ -83,6 +83,9 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 
+    /// <summary>Test seam: runs inside <see cref="TryUpsertIfPhaseAsync"/> between its read of the stored phase and its write, so a test can force another writer into that gap. Null in production.</summary>
+    internal Func<Task>? BetweenPhaseReadAndWrite { get; set; }
+
     /// <summary>
     /// Issue #113 (H2): the check and the write are ONE step, under <c>BEGIN IMMEDIATE</c> (the write lock is taken before the read, so two writers
     /// that read the same phase cannot both pass the check). A row that is gone is never resurrected: expecting a phase needs that row.
@@ -94,6 +97,11 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         try
         {
             var stored = await connection.QuerySingleOrDefaultAsync<string?>(new CommandDefinition("SELECT Phase FROM Runs WHERE Id = @Id;", new { Id = run.JobId }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            if (BetweenPhaseReadAndWrite is { } hook)
+            {
+                await hook().ConfigureAwait(false);
+            }
+
             if (stored != expectedPhase?.ToString())
             {
                 await connection.ExecuteAsync("ROLLBACK;").ConfigureAwait(false);
