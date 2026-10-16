@@ -13,6 +13,61 @@ internal static class PythonText
     /// <summary>Python <c>str.isspace()</c> for one UTF-16 unit: Unicode white space plus U+001C..U+001F.</summary>
     public static bool IsSpace(char c) => char.IsWhiteSpace(c) || c is >= '\u001c' and <= '\u001f';
 
+    /// <summary>Python <c>s[start:end]</c> for non-negative <paramref name="start" />; a negative <paramref name="end" /> counts from the end. Never throws.</summary>
+    public static string Slice(string s, int start, int end)
+    {
+        var to = Math.Min(end < 0 ? s.Length + end : end, s.Length);
+        return start >= to ? string.Empty : s[start..to];
+    }
+
+    /// <summary>
+    /// Python <c>ascii(s)</c>: a quoted literal that is pure ASCII (a non-ASCII code point becomes <c>\xNN</c>, <c>\uNNNN</c> or
+    /// <c>\UNNNNNNNN</c>). Single quotes unless the text holds a single quote and no double quote.
+    /// </summary>
+    public static string Ascii(string s)
+    {
+        var quote = s.Contains('\'') && !s.Contains('"') ? '"' : '\'';
+        var sb = new System.Text.StringBuilder().Append(quote);
+        foreach (var rune in s.EnumerateRunes())
+        {
+            var v = rune.Value;
+            if (v == quote || v == '\\')
+            {
+                sb.Append('\\').Append((char)v);
+            }
+            else if (v == '\t')
+            {
+                sb.Append("\\t");
+            }
+            else if (v == '\n')
+            {
+                sb.Append("\\n");
+            }
+            else if (v == '\r')
+            {
+                sb.Append("\\r");
+            }
+            else if (v is >= 0x20 and < 0x7f)
+            {
+                sb.Append((char)v);
+            }
+            else if (v <= 0xff)
+            {
+                sb.Append("\\x").Append(v.ToString("x2", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else if (v <= 0xffff)
+            {
+                sb.Append("\\u").Append(v.ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                sb.Append("\\U").Append(v.ToString("x8", System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+
+        return sb.Append(quote).ToString();
+    }
+
     /// <summary>Characters Python's <c>str.splitlines()</c> treats as a line boundary (besides CR LF as one).</summary>
     private static bool IsLineBreak(char c) =>
         c is '\n' or '\r' or '\u000b' or '\u000c' or '\u001c' or '\u001d' or '\u001e' or '\u0085' or '\u2028' or '\u2029';
