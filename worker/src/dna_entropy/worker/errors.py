@@ -125,6 +125,14 @@ WORKER_ERROR_CODES: tuple[ErrorCodeSpec, ...] = (
         note="Matches docs/copy_catalog.md's ImagePullFailed row. Written by the startup "
         "script, not any Python module.",
     ),
+    ErrorCodeSpec(
+        "RUN_TIME_LIMIT",
+        "dna_entropy.worker.runner.RunTimeLimitError",
+        retriable=False,
+        note="Issue #89: the worker enforces manifest limits.maxRunSeconds itself. Past it "
+        "no further record or input starts, what finished is uploaded, and result.json "
+        "says this. Matches docs/copy_catalog.md's RunTimeLimit row.",
+    ),
 )
 
 WORKER_ERROR_CODE_INDEX: dict[str, ErrorCodeSpec] = {spec.code: spec for spec in WORKER_ERROR_CODES}
