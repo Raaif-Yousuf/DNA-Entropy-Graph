@@ -40,6 +40,12 @@ public class ResilientStorageTransferTests
         public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
 
         public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken) => inner.ListBucketsAsync(projectId, cancellationToken);
+
+        public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);
+
+        public Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.ListChildPrefixesAsync(bucket, prefix, cancellationToken);
+
+        public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.DeletePrefixAsync(bucket, prefix, cancellationToken);
     }
 
     [Fact]

@@ -140,3 +140,31 @@ def test_a_cancellation_that_appears_during_the_throttle_window_is_still_caught_
     clock["t"] += 5.1  # now past the interval
     with pytest.raises(JobCancelledError):
         watcher.check_or_raise()
+
+
+# --- issue #675 review: the worker acknowledges a cancel explicitly --------------------
+
+
+def test_on_seen_fires_exactly_once_when_the_cancel_is_first_seen(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    seen: list[int] = []
+    watcher = CancelWatcher(store, poll_interval_seconds=0, on_seen=lambda: seen.append(1))
+    assert watcher.poll() is False
+    assert seen == []
+    store.write_text(CANCEL_PATH, "")
+    assert watcher.poll() is True
+    assert watcher.poll() is True
+    assert seen == [1]
+
+
+def test_a_failing_on_seen_never_breaks_the_cancel(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    store.write_text(CANCEL_PATH, "")
+
+    def boom() -> None:
+        raise RuntimeError("ack write failed")
+
+    watcher = CancelWatcher(store, on_seen=boom)
+    assert watcher.poll() is True
+    with pytest.raises(JobCancelledError):
+        watcher.check_or_raise()

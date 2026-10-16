@@ -202,6 +202,12 @@
   <data name="RunError_worker_no_heartbeat" xml:space="preserve">
     <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
   </data>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
+  </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
+  </data>
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
   </data>
@@ -282,6 +288,9 @@
   </data>
   <data name="RunError_worker_identity_not_applied" xml:space="preserve">
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
+  </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Start the run again.</value>
   </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
@@ -2089,5 +2098,14 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
     <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
+  </data>
+  <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
+    <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
+  </data>
+  <data name="DataFolderUnusable_Portable_NotAFolder" xml:space="preserve">
+    <value>The app is in portable mode but {0} is a file, not a folder. Rename or move that file, or delete the file portable.flag next to the app to use the normal folder instead.</value>
+  </data>
+  <data name="OpenWithPortable" xml:space="preserve">
+    <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
   </data>
 </root>

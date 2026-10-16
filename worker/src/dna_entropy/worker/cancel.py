@@ -8,6 +8,7 @@ be interrupted partway.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from collections.abc import Callable
 
@@ -55,12 +56,16 @@ class CancelWatcher:
         *,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         time_source: Callable[[], float] = time.monotonic,
+        on_seen: Callable[[], None] | None = None,
     ) -> None:
         self._store = store
         self._cancelled = False
         self._poll_interval = poll_interval_seconds
         self._time_source = time_source
         self._last_poll_time: float | None = None
+        # Issue #675: called once, the first time the cancel is seen, so the worker can ACKNOWLEDGE it
+        # (status.json cancelSeen) instead of the app guessing from a heartbeat tick.
+        self._on_seen = on_seen
 
     def poll(self) -> bool:
         """Return the current cancelled state. Does a real store round-trip only when not
@@ -72,6 +77,10 @@ class CancelWatcher:
             if due:
                 self._last_poll_time = now
                 self._cancelled = self._store.exists(CANCEL_PATH)
+                if self._cancelled and self._on_seen is not None:
+                    # The acknowledgement is best effort; the cancel itself must still happen.
+                    with contextlib.suppress(Exception):
+                        self._on_seen()
         return self._cancelled
 
     def check_or_raise(self) -> None:

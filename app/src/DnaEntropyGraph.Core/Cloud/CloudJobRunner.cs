@@ -107,6 +107,27 @@ public sealed class CloudJobRunner
     /// <summary>How long a worker heartbeat may stay unchanged before the run fails. Null means 20 times the manifest's heartbeat interval (600 s).</summary>
     public TimeSpan? HeartbeatStaleTimeout { get => _settings.HeartbeatStaleTimeout; init => _settings.HeartbeatStaleTimeout = value; }
 
+    /// <summary>How long the worker's progress fields may stay unchanged while its heartbeat ticks in the running stage before the run fails as <c>worker_progress_stalled</c> (default 20 minutes, issue #723).</summary>
+    public TimeSpan ProgressStallTimeout { get => _settings.ProgressStallTimeout; init => _settings.ProgressStallTimeout = value; }
+
+    /// <summary>Per-stage deadlines replacing the defaults for the stages named (docs/job_contract.md section 5); null means the defaults.</summary>
+    public IReadOnlyDictionary<string, TimeSpan>? StageDeadlines { get => _settings.StageDeadlines; init => _settings.StageDeadlines = value; }
+
+    /// <summary>Issue #675: told when a stage is taking longer than usual (75 percent of its deadline) and when a stall question opens or is withdrawn. Called on the runner's own task: a UI must marshal. A handler that throws is ignored.</summary>
+    public Action<RunNotice>? OnNotice { get => _settings.OnNotice; init => _settings.OnNotice = value; }
+
+    /// <summary>Issue #675: asked to choose Stop, Delete or Keep waiting when the heartbeat watch fires, instead of the VM being ended at once; see <see cref="StallDecision"/>. Null keeps the old behaviour.</summary>
+    public StallDecision? OnStall { get => _settings.OnStall; init => _settings.OnStall = value; }
+
+    /// <summary>Issue #675 review: how long a stall question may stay unanswered before it counts as no answer; see <see cref="CloudRunSettings.StallAnswerTimeout"/>.</summary>
+    public TimeSpan? StallAnswerTimeout { get => _settings.StallAnswerTimeout; init => _settings.StallAnswerTimeout = value; }
+
+    /// <summary>How long a cancel waits for the worker to show a sign of life after <c>control/cancel</c> is written (default 60 s, docs/job_contract.md section 6); zero turns the graceful step off.</summary>
+    public TimeSpan CancelAckTimeout { get => _settings.CancelAckTimeout; init => _settings.CancelAckTimeout = value; }
+
+    /// <summary>After the worker acknowledged a cancel, how long to wait for it to finish before the VM is deleted anyway (default 2 minutes).</summary>
+    public TimeSpan CancelFinishTimeout { get => _settings.CancelFinishTimeout; init => _settings.CancelFinishTimeout = value; }
+
     /// <summary>The longest one gateway call may take before the runner treats it as a transient failure and looks again.</summary>
     public TimeSpan CallTimeout { get => _settings.CallTimeout; init => _settings.CallTimeout = value; }
 
@@ -162,10 +183,61 @@ public sealed class CloudJobRunner
         _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls, _settings);
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
-        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator);
-        _canceller = new VmCanceller(_rows, _provisioner, _terminator);
+        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync, quotaGateway, BucketLocationAsync, ClaimZoneAsync);
+        _canceller = new VmCanceller(_rows, _provisioner, _terminator, new GracefulCancel(computeGateway, storageGateway, _calls, _settings));
         _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
+    }
+
+    /// <summary>
+    /// Issue #94: whether the run that last used a stopped VM has ended (its row is terminal, or this history has no row for it, as the
+    /// idle-VM sweep reads it). A history that cannot be read answers false: a VM that may belong to a run underway is never reused.
+    /// </summary>
+    private async Task<bool> JobIsFinishedAsync(string jobId)
+    {
+        try
+        {
+            var row = await _rows.LatestRecordAsync(jobId, CancellationToken.None).ConfigureAwait(false);
+            return row is null || JobStateMachine.IsTerminal(row.Phase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The location of the run's bucket (issue #670: the ladder prefers zones on its continent), or null when it is not known yet or cannot be read.</summary>
+    private async Task<string?> BucketLocationAsync(RunProgress progress, CancellationToken cancellationToken)
+    {
+        if (progress.Bucket is not { } bucket || progress.ProjectId is not { } project)
+        {
+            return null;
+        }
+
+        var buckets = await _calls.CallAsync(token => _storage.ListBucketsAsync(project, token), cancellationToken).ConfigureAwait(false);
+        return buckets.FirstOrDefault(b => string.Equals(b.Name, bucket, StringComparison.Ordinal))?.Location;
+    }
+
+    /// <summary>
+    /// Issue #670: writes the zone this provision means the VM to be in (an empty zone clears the claim) to <c>jobs/&lt;jobId&gt;/control/zone</c>. A VM that boots in any other zone reads it (before
+    /// it writes anything under the job prefix, <c>worker/vm/startup.sh</c>) and deletes itself, so an extra that outlives its deletion by a few
+    /// seconds cannot overwrite the winner's status.json or log. A failure is the caller's to ignore: the extras are deleted by API regardless.
+    /// </summary>
+    private async Task ClaimZoneAsync(RunProgress progress, string zone, CancellationToken cancellationToken)
+    {
+        if (progress.Bucket is not { } bucket || progress.JobId is not { } jobId)
+        {
+            return;
+        }
+
+        await _calls.CallAsync(
+            async token =>
+            {
+                using var content = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(zone));
+                await _storage.UploadAsync(bucket, WorkerManifestBuilder.JobPrefix(jobId) + "control/zone", content, token).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<JobPhase> GetPhaseAsync(string jobId, CancellationToken cancellationToken)
@@ -267,11 +339,20 @@ public sealed class CloudJobRunner
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested) && progress.VmMayExist && !VmEndNotes.AlreadyAttempted(ex))
         {
+            // Issue #687: a cancel that arrived while this run was provisioning set the row to Cancelling; when the in-flight create or reuse
+            // lands, this run's own next step is an illegal Cancelling -> Preparing transition. That is the cancel winning the race, not a
+            // failure: the run stands down, CancelAsync (which waits for the in-flight create and deletes by label) owns the VM and records
+            // the one terminal state, Cancelled.
+            if (ex is InvalidOperationException && await _rows.TryLatestRecordAsync(request.JobId).ConfigureAwait(false) is { Phase: JobPhase.Cancelling or JobPhase.Cancelled } standDown)
+            {
+                return RunRowStore.ResultFromRow(standDown);
+            }
+
             // Hard Rule 11: whatever fails once a VM may exist (a failed call, a bad transition, a failing repository),
             // the VM must not be left billing under a terminal Failed record nothing will ever look at again. The VM is
             // found by the zone when known and by its job-id label when not. Only the CALLER cancelling is not this (CancelAsync owns that
             // delete): an OperationCanceledException with the caller's token live is a gateway's own deadline, a failure like any other.
-            var note = await _terminator.EndVmAfterFailureAsync(request, progress.Zone).ConfigureAwait(false);
+            var note = await _terminator.EndVmAfterFailureAsync(progress.Resolve(request), progress.Zone).ConfigureAwait(false);
             throw VmEndNotes.Apply(ex, note);
         }
     }
@@ -294,6 +375,9 @@ public sealed class CloudJobRunner
         // Step 5 of the preflight order (docs/cloud_design.md section 2): the bucket exists.
         var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
 
+        progress.Bucket = bucket;
+        progress.ProjectId = request.Spec.ProjectId;
+        progress.JobId = request.JobId;
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Uploading, cancellationToken).ConfigureAwait(false);
 
         // docs/job_contract.md section 3: the manifest is immutable once the worker may be reading
@@ -324,8 +408,22 @@ public sealed class CloudJobRunner
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Preparing, cancellationToken).ConfigureAwait(false);
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Running, cancellationToken).ConfigureAwait(false);
                 var owned = await _calls.CallAsync(token => _compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+                if (owned.Count > 0)
+                {
+                    // A crash in the middle of a parallel batch can leave several: finish on one, delete and verify the rest (#670).
+                    var (kept, extrasNote) = await _provisioner.KeepOneOwnedVmAsync(request, owned, cancellationToken).ConfigureAwait(false);
+                    if (extrasNote is not null)
+                    {
+                        return await _outcome.FailAsync(request.JobId, CloudErrorKind.Other, RunErrorCodes.For(CloudErrorKind.Other), "More than one VM was found for this job and an extra could not be deleted.", extrasNote).ConfigureAwait(false);
+                    }
+
+                    owned = [kept];
+                }
+
                 progress.Zone = owned.Count > 0 ? owned[0].Zone : null;
-                return await _outcome.FinishAsync(request, bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
+                progress.VmName = owned.Count > 0 ? owned[0].Name : null;
+                await RecordVmNameAsync(request.JobId, progress.VmName, cancellationToken).ConfigureAwait(false);
+                return await _outcome.FinishAsync(progress.Resolve(request), bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -337,9 +435,34 @@ public sealed class CloudJobRunner
         }
 
         progress.Zone = provisioned.Zone!;
-        return await RunOnVmAsync(request, bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+        progress.VmName = provisioned.VmName ?? progress.VmName;
+        // No name from the provisioner or the progress means the run created the VM itself, under the planned name.
+        await RecordVmNameAsync(request.JobId, progress.VmName ?? request.Spec.VmName, cancellationToken).ConfigureAwait(false);
+        return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Issue #679: the run row names the VM the run actually used. A reused VM (#94) keeps the name of the job that made it, so the planned
+    /// <c>deg-&lt;jobId&gt;</c> the row was written with is wrong; the diagnostics bundle and the Cloud page read this column. Only a name actually
+    /// known is written: the planned one only for a VM this run created, never as a stand-in for an adopted VM or for none (a name nobody made). The write is a record, not a step:
+    /// a failure here must not abandon a live VM, so it is swallowed and the run goes on to the wait and the VM's end.
+    /// </summary>
+    private async Task RecordVmNameAsync(string jobId, string? vmName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(vmName))
+        {
+            return;
+        }
+
+        try
+        {
+            await _rows.UpdateRowAsync(jobId, row => row with { VmName = vmName }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The row keeps the planned name; nothing about the VM changes.
+        }
+    }
     /// <summary>
     /// Issue #606: the spec to create. The provisioner asks for it only when no VM exists for the job, so a run that adopts a VM
     /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured
@@ -362,7 +485,7 @@ public sealed class CloudJobRunner
     }
 
     /// <summary>Everything from the moment a VM exists. <see cref="RunCoreAsync"/> ends the VM for any exception that leaves here without having done so.</summary>
-    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken)
+    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null)
     {
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Preparing, cancellationToken).ConfigureAwait(false);
 
@@ -394,7 +517,7 @@ public sealed class CloudJobRunner
         // RUNNING is not working (CLAUDE.md Critical Pitfalls): the VM being up says nothing about the
         // job. result.json is the worker's own terminal signal (docs/job_contract.md section 7), so wait
         // for it, checking on the VM between looks so a lost VM ends the run instead of waiting it out.
-        var resultText = await _waiter.AwaitResultAsync(request, bucket, zone, cancellationToken).ConfigureAwait(false);
+        var resultText = await _waiter.AwaitResultAsync(request, bucket, zone, cancellationToken, vmStartMark).ConfigureAwait(false);
         return await _outcome.FinishAsync(request, bucket, zone, resultText, cancellationToken).ConfigureAwait(false);
     }
 
