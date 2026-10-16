@@ -132,6 +132,8 @@ public class WorkerManifestBuilderTests
     [InlineData(InputFormat.GenBank, "genbank")]
     [InlineData(InputFormat.Fasta, "fasta")]
     [InlineData(InputFormat.Plain, "paste")]
+    [InlineData(InputFormat.Embl, "embl")]
+    [InlineData(InputFormat.SnapGene, "snapgene")]
     public void Informat_maps_every_value(InputFormat format, string wire)
         => Build(Opts(o => o with { Format = format })).GetProperty("inputs")[0].GetProperty("informat").GetString().ShouldBe(wire);
 
