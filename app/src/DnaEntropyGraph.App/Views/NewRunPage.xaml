@@ -95,7 +95,16 @@
                                 TextWrapping="Wrap"
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
+                            <TextBlock
+                                Text="{x:Bind AnnotationText, Mode=OneWay}"
+                                Visibility="{x:Bind HasAnnotation, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                Text="{x:Bind AnnotationNoticesText, Mode=OneWay}"
+                                Visibility="{x:Bind HasAnnotationNotices, Mode=OneWay}"
+                                TextWrapping="Wrap"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />                        </StackPanel>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>
@@ -118,6 +127,11 @@
                     x:Uid="NewRunStopTreatAsRna"
                     Visibility="{x:Bind ViewModel.IsTreatingAsRna, Mode=OneWay}"
                     Command="{x:Bind ViewModel.StopTreatingAsRnaCommand}" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="12" Visibility="{x:Bind ViewModel.OffersAnnotation}">
+                <Button x:Uid="NewRunAddGff3" Command="{x:Bind ViewModel.AddAnnotationCommand}" />
+                <Button x:Uid="NewRunRemoveGff3" Command="{x:Bind ViewModel.RemoveAnnotationCommand}" CommandParameter="{x:Bind ViewModel.SelectedItem, Mode=OneWay}" />
             </StackPanel>
 
             <TextBlock
