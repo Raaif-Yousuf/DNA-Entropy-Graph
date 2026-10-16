@@ -36,7 +36,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 NAME_RE = re.compile(r"""<data\s[^>]*?\bname=(["'])(.*?)\1""")
-COMMENT_RE = re.compile(r"<!--.*?-->")
+COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 class Parsed:
