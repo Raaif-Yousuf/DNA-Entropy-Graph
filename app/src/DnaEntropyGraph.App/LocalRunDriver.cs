@@ -37,7 +37,8 @@ public sealed class LocalRunDriver
         IRunRepository runs,
         IRunInputStore inputs,
         ActiveRuns activeRuns,
-        Func<string?>? downloadsFolder = null)
+        Func<string?>? downloadsFolder = null,
+        AppDataRoot? dataRoot = null)
     {
         _messenger = messenger;
         _runner = runner;
@@ -46,7 +47,7 @@ public sealed class LocalRunDriver
         _runs = runs;
         _inputs = inputs;
         _activeRuns = activeRuns;
-        _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
+        _downloadsFolder = downloadsFolder ?? (dataRoot ?? AppDataRoot.Default()).DefaultOutputSource(Services.KnownFolders.Downloads);
     }
 
     /// <summary>

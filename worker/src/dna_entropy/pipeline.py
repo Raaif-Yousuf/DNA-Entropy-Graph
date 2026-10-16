@@ -572,6 +572,7 @@ def _write_genbank_outputs(
             start=cfg.start,
             out_dir=cfg.out_dir,
             source="genbank",
+            circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
         )
         outputs.append(genes_gff)
     if cfg.include_gene_summary:
@@ -699,6 +700,7 @@ def _write_standard_outputs(
                     start=cfg.start,
                     out_dir=cfg.out_dir,
                     source="gff3" if annotated else "pyrodigal",
+                    circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
                 )
             )
 
