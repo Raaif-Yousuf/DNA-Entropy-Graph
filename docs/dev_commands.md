@@ -205,6 +205,19 @@ worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <ti
 
 Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh), `scripts/tests/test_land_wt_resw.py` (the Resources.resw merge below).
 
+### Pruning landed worktrees: `scripts/prune_worktrees.py`
+
+Removes agent worktrees whose branch already landed (#794; MEASURED 2026-10-16: 151 registered worktrees). Dry run by default.
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\prune_worktrees.py                       # dry run: removed / kept-and-why table
+worker\.venv\Scripts\python.exe scripts\prune_worktrees.py --apply [--use-gh] [--delete-merged-branches] [--min-age-hours 6]
+```
+
+Removed only when: not the primary checkout or the one it runs from, not locked, no uncommitted or untracked changes (the `worker\.venv` link is ignored), nothing touched within `--min-age-hours` (default 6), and landed (HEAD an ancestor of origin/main, so detached heads too; with `--use-gh`, also a MERGED/CLOSED PR and no OPEN one, from one batched `gh pr list`). Every junction in the worktree is unlinked and verified gone BEFORE `git worktree remove`; if one will not unlink, the worktree stays. Also deletes orphan `%TEMP%\landwt\<name>` dirs git no longer lists (never `locks` or `logs`), ends with `git worktree prune`, and `--delete-merged-branches` drops local branches merged into origin/main that no surviving worktree has checked out. Limitation: a live process whose cwd is in a worktree is not detected (Windows has no cheap way); `--min-age-hours` is the protection. Run the dry run at the start of each wave.
+
+Tests: `scripts/tests/test_prune_worktrees.py` (temp repo, bare fake origin, real junction on Windows with a sentinel dir that must survive, stub gh).
+
 ### Resources.resw merge driver: `scripts/resw_merge.py`
 
 Nearly every branch appends keys to the end of `Resources.resw`, so a plain text merge conflicts there every time (and `git merge-file --union` is banned for it: overlapping hunks break the XML). `scripts/resw_merge.py %O %A %B` is a git merge driver that merges per `<data name=...>` block: a key added on one side (or on both with identical content) is kept, theirs' new keys go after ours' last block, a key deleted on one side and untouched on the other is deleted, and the same key changed differently on both sides (or deleted vs changed) is a real conflict with markers around only that block. The result must parse as XML with no duplicate names. Every failure exit (real conflict, invalid XML, duplicate name, unterminated block, undecodable bytes) leaves conflict markers in the file (whole-file when it is not one block), so a later `git add` cannot silently drop theirs. Line endings follow ours' first line ending. Reordering of existing keys on theirs is ignored (key set and content only).
