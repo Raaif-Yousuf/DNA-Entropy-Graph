@@ -4,7 +4,7 @@
 
 On the **New run** page, either:
 
-- Drag files, or a folder of them, onto the drop area (GenBank, FASTA, or plain text; from a
+- Drag files, or a folder of them, onto the drop area (GenBank, EMBL, SnapGene, FASTA, or plain text; from a
   folder the app takes the sequence files directly inside it, not those in sub-folders; a `.txt` file in a folder is taken only when its first line starts with `>` or `LOCUS`, so notes and logs are left alone. To add a plain-letters `.txt` file, use **Add files**), or
 - Click **Add files** (or press Ctrl+O), or
 - In File Explorer, right-click a `.gb`, `.gbk`, `.fasta`, `.fa` or `.fna` file, choose **Open with**, then **DNA Entropy Graph**. The file is added to **New run** in the window that is already open (or the app starts with it). The entry is listed only if you turned on "Show DNA Entropy Graph in Open with" in Settings (Files); it never becomes the program a file opens in when you double-click it. If New run is open, the file is added below what you already entered. Files on a network address (for example `\\server\share`) are not opened this way; copy them to this PC or a mapped drive first. Or,
@@ -21,8 +21,10 @@ policy: a batch large enough to matter for your bill should be caught before you
 Run, not discovered afterward. If you go over it, the app tells you your batch's actual
 numbers against the limit and lets you either split the batch or raise the limit yourself;
 see [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for why the ceiling is set where it
-is. GenBank and FASTA files are detected automatically by their contents, not just their
-file extension, so a renamed file still works.
+is. GenBank, EMBL, SnapGene and FASTA files are detected automatically by their contents, not just their
+file extension, so a renamed file still works. An EMBL file (`.embl`) or a SnapGene file (`.dna`) is read like a GenBank file: the genes it already carries are used as they are. If a SnapGene file is damaged, the app says so before anything is created; export it from SnapGene as GenBank and add that file instead.
+
+If you have a FASTA file and a GFF3 file that lists its genes, drop them together, or choose **Add GFF3** under the file list. The app pairs a GFF3 with the FASTA that has the same name (plasmid.fasta and plasmid.gff3), or with the only FASTA on the page. With several FASTA files and no matching name, select the FASTA file first and then choose **Add GFF3**. The file's line then shows how many genes the GFF3 has, and the run uses those genes instead of finding them itself. **Remove GFF3** takes it off again. A GFF3 whose sequence names do not match the FASTA, or whose genes all run past the end of the sequence, is refused before anything is created, with one thing to fix. Running again from the Runs page uses the same GFF3. This needs a worker version that reads GFF3 files; until then the button does not appear.
 
 Two optional extra files need no model and no graphics card: a GC-content track (`--gc`, how G/C-rich each stretch is) and a codon-usage table per gene (`--codons`). They are off by default. The app does not offer them as checkboxes yet.
 
@@ -61,6 +63,7 @@ reasonable for most sequences.
   that kind the same boxes are ticked. If you clear every box, the page asks you to tick at least one file before
   **Run** works. The entropy track comes in one format per run, so the IGV track and the WIG track are alternatives: ticking one clears the other. See
   [04-view.md](04-view.md) for what each file is for.
+- **Option presets**: above the file list, the **Option presets** section has a picker that sets several options at once. **Quick look** reads the forward strand only and returns a few files, the fastest and cheapest run. **Publication** reads both strands combined and returns every default file, including the smoothed tracks, region calls and gene summary. **Plasmid QC** reads the sequence as a circle on both strands, so the start and end of the plasmid get real context and there is no seam, and it calls the low and high entropy regions. Under the picker, a line lists the strands, the shape, the context length and the files the next run will use. Changing a file tick box by hand drops the preset, because the options are then yours. To keep your own set, choose your files, type a name and choose **Save as preset**; **Delete preset** removes one of yours (the three built in cannot be deleted). **Copy my presets** puts your presets on the clipboard as text you can send to a colleague, and **Add presets from the clipboard** adds presets someone sent you. A run started from a preset shows "Preset: <name>" on its card on the Runs page.
 - **Save to**: where results land on your computer. Defaults to your Downloads folder.
 - **Where to run**: in the cloud (the normal choice) or on this computer, if you installed
   the local engine in [02-connect-google-cloud.md](02-connect-google-cloud.md)'s Step 8.

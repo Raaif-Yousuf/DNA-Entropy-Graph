@@ -28,6 +28,9 @@ public static class Program
         {
             System.Diagnostics.Trace.TraceWarning($"open with entries could not be removed: {ex.GetType().Name}");
         }
+
+        // Issue #264: the user's data is kept unless they say otherwise (one question, default No).
+        _ = UninstallDataPrompt.Run();
     }
 
     [STAThread]
