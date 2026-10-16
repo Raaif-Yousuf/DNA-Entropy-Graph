@@ -1428,6 +1428,24 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunPartial_Body" xml:space="preserve">
     <value>Some result files could not be made. Choose Results in the Runs list to see which ones.</value>
   </data>
+  <data name="SettingsCloudResultsHeader.Text" xml:space="preserve">
+    <value>Cloud results</value>
+  </data>
+  <data name="SettingsCloudResultsExplainer.Text" xml:space="preserve">
+    <value>Each run's results are also stored in a storage area in your own Google Cloud project (a bucket), so you can download them again. Google deletes them automatically after the number of days you choose here.</value>
+  </data>
+  <data name="CloudRetentionBox.Header" xml:space="preserve">
+    <value>Keep stored results for</value>
+  </data>
+  <data name="CloudRetentionChoiceFormat" xml:space="preserve">
+    <value>{0} days</value>
+  </data>
+  <data name="SettingsCloudResultsNote.Text" xml:space="preserve">
+    <value>A change applies when your next run starts. Choosing fewer days than the bucket already keeps does not shrink it, because other copies of this app may share the same bucket and we never delete results early. To go back to a longer time, choose it here.</value>
+  </data>
+  <data name="CloudRetentionSaved" xml:space="preserve">
+    <value>Saved. It applies when your next run starts.</value>
+  </data>
   <data name="SettingsAdvancedHeader.Text" xml:space="preserve">
     <value>Advanced</value>
   </data>

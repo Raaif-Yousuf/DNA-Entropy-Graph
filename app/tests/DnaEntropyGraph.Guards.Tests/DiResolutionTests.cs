@@ -257,6 +257,11 @@ public class DiResolutionTests
             options.ResultsRetentionDays.ShouldBe(90);
             settings.SetString(DnaEntropyGraph.Core.Cloud.ResultsRetentionSetting.Key, "30");
             options.ResultsRetentionDays.ShouldBe(30);
+
+            // The Settings control itself: choosing a length in the real ViewModel changes what the gateway's options read.
+            var vm = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.CloudResultsSettingsViewModel>();
+            vm.SelectedChoice = vm.Choices.Single(c => c.Days == 180);
+            options.ResultsRetentionDays.ShouldBe(180);
         }
         finally
         {
