@@ -83,9 +83,13 @@ public sealed class ViewerFallbackTests : IDisposable
     {
         _probe.GetVersion().Returns("130.0.1");
         var vm = Make(Contig("a"));
+        _overview.ClearReceivedCalls(); // the stub setup in Make itself calls Load
         vm.OpenRun(_dir);
         await vm.FallbackReady;
         vm.HasFallbackChart.ShouldBeFalse();
+        // Only the record list's own read: a fallback read would make it two.
+        await vm.ContigsReady;
+        _overview.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IEntropyOverviewSource.Load)).ShouldBe(1);
     }
 
     [Fact]
@@ -111,5 +115,70 @@ public sealed class ViewerFallbackTests : IDisposable
         await vm.FallbackReady;
         vm.Status.ShouldBe(ViewerStatus.ViewerError);
         vm.HasFallbackChart.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Init_failure_after_a_specific_error_keeps_that_error_and_loads_nothing()
+    {
+        _probe.GetVersion().Returns("130.0.1");
+        var vm = Make(Contig("a"));
+        var empty = Path.Combine(_dir, "empty");
+        Directory.CreateDirectory(empty);
+        vm.OpenRun(empty);
+        vm.Status.ShouldBe(ViewerStatus.NoSequenceFile);
+        vm.OnViewerInitFailed();
+        await vm.FallbackReady;
+        vm.Status.ShouldBe(ViewerStatus.NoSequenceFile);
+        vm.ErrorTitle.ShouldBe("[ViewerNoSequenceFile_Title]");
+        vm.HasFallbackChart.ShouldBeFalse();
+        _overview.DidNotReceive().Load(Arg.Any<string>());
+    }
+
+    [Theory]
+    [InlineData("{\"evt\":\"error\"}")]
+    public async Task Page_error_also_shows_the_chart_and_keeps_the_contigs(string message)
+    {
+        _probe.GetVersion().Returns("130.0.1");
+        var vm = Make(Contig("a"), Contig("b"));
+        vm.OpenRun(_dir);
+        await vm.ContigsReady;
+        vm.OnViewerMessage(message);
+        await vm.FallbackReady;
+        vm.Status.ShouldBe(ViewerStatus.ViewerError);
+        vm.HasFallbackChart.ShouldBeTrue();
+        vm.Contigs.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Process_failure_also_shows_the_chart()
+    {
+        _probe.GetVersion().Returns("130.0.1");
+        var vm = Make(Contig("a"));
+        vm.OpenRun(_dir);
+        vm.OnViewerProcessFailed();
+        await vm.FallbackReady;
+        vm.HasFallbackChart.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_slow_load_for_an_earlier_run_does_not_overwrite_the_newer_run()
+    {
+        _probe.GetVersion().Returns((string?)null);
+        var gate = new TaskCompletionSource();
+        _overview.Load("run-a").Returns(_ =>
+        {
+            gate.Task.Wait();
+            return new EntropyOverview([Contig("from-a")]);
+        });
+        _overview.Load("run-b").Returns(new EntropyOverview([Contig("from-b")]));
+        var vm = new ViewerViewModel(_probe, _strings, _overview);
+        vm.OpenRun("run-a");
+        var slowA = vm.FallbackReady;
+        vm.OpenRun("run-b");
+        await vm.FallbackReady;
+        vm.FallbackContig!.Name.ShouldBe("from-b");
+        gate.SetResult();
+        await slowA;
+        vm.FallbackContig!.Name.ShouldBe("from-b");
     }
 }

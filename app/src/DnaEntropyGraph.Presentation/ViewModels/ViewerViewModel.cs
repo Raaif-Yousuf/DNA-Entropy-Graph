@@ -44,6 +44,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private readonly IEntropyOverviewSource _overviewSource;
     private readonly long _maxFastaBytes;
     private int _contigGeneration;
+    private int _fallbackGeneration;
     private bool _settingSelection;
 
     // The current run's load command (kept after sending, see the class comment).
@@ -198,6 +199,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     public void OpenRun(string? runFolder)
     {
         _lastRunFolder = runFolder;
+        _fallbackGeneration++; // a slow fallback read for the previous run must not land on this one
         if (string.IsNullOrWhiteSpace(runFolder))
         {
             Fail(ViewerStatus.NoRun, ViewerFailure.NoRun);
@@ -243,7 +245,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     // Off the UI thread, read once; a missing or malformed track just means no chart (the action card still shows).
     private async Task LoadFallbackAsync(string folder)
     {
-        var generation = ++_contigGeneration;
+        var generation = ++_fallbackGeneration;
         EntropyContig? first;
         try
         {
@@ -254,7 +256,7 @@ public sealed partial class ViewerViewModel : ObservableObject
             first = null;
         }
 
-        if (generation == _contigGeneration)
+        if (generation == _fallbackGeneration)
         {
             FallbackContig = first;
         }
@@ -392,6 +394,12 @@ public sealed partial class ViewerViewModel : ObservableObject
     /// <summary>The WebView2 control could not start (corrupt runtime, unwritable profile folder).</summary>
     public void OnViewerInitFailed()
     {
+        if (IsErrorVisible && Status != ViewerStatus.ViewerError)
+        {
+            // The run already failed for a more specific reason (no sequence file ...): that error is the one to fix first.
+            return;
+        }
+
         Fail(ViewerStatus.ViewerError, ViewerFailure.InitFailed);
         if (!string.IsNullOrWhiteSpace(_lastRunFolder))
         {
@@ -419,6 +427,8 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     private void ShowLoading()
     {
+        _fallbackGeneration++;
+        FallbackContig = null;
         IsErrorVisible = false;
         IsViewerVisible = true;
         IsLoading = true;
@@ -449,7 +459,14 @@ public sealed partial class ViewerViewModel : ObservableObject
     }
 
     // A failure of the viewer page itself: keep the run so a retry or a reloaded page redraws it.
-    private void FailKeepingRun(ViewerFailure failure) => ShowError(ViewerStatus.ViewerError, failure, null);
+    private void FailKeepingRun(ViewerFailure failure)
+    {
+        ShowError(ViewerStatus.ViewerError, failure, null);
+        if (!string.IsNullOrWhiteSpace(_lastRunFolder))
+        {
+            FallbackReady = LoadFallbackAsync(_lastRunFolder);
+        }
+    }
 
     private void ShowError(ViewerStatus status, ViewerFailure failure, string? actionUrl)
     {
