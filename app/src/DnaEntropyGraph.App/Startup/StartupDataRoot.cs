@@ -21,7 +21,7 @@ public static class StartupDataRoot
     {
         try
         {
-            Current = AppDataRoot.Resolve(args, Environment.GetEnvironmentVariable, Environment.CurrentDirectory, programDirectory: AppContext.BaseDirectory);
+            Current = ResolveForThisProcess(args);
             return true;
         }
         catch (DataFolderUnusableException ex)
@@ -31,9 +31,13 @@ public static class StartupDataRoot
         }
     }
 
-    internal static string MessageFor(DataFolderUnusableException ex, Presentation.Services.IStringResourceProvider strings)
+    /// <summary>The root for this process: the command line, the environment, a <c>portable.flag</c> beside the exe, then the real folder (issue #144). Public so a test can prove the real program folder is the one asked.</summary>
+    public static AppDataRoot ResolveForThisProcess(IReadOnlyList<string> args)
+        => AppDataRoot.Resolve(args, Environment.GetEnvironmentVariable, Environment.CurrentDirectory, programDirectory: AppContext.BaseDirectory);
+
+    public static string MessageFor(DataFolderUnusableException ex, Presentation.Services.IStringResourceProvider strings)
     {
-        var template = ex.Reason switch
+        var template = ex.IsPortable ? PortableTemplate(ex, strings) : ex.Reason switch
         {
             DataFolderProblem.MissingValue => strings.GetString("DataFolderUnusable_MissingValue"),
             DataFolderProblem.NotAFolder => strings.GetString("DataFolderUnusable_NotAFolder"),
@@ -42,6 +46,11 @@ public static class StartupDataRoot
         };
         return string.Format(System.Globalization.CultureInfo.CurrentCulture, template, ex.Path);
     }
+
+    private static string PortableTemplate(DataFolderUnusableException ex, Presentation.Services.IStringResourceProvider strings)
+        => ex.Reason == DataFolderProblem.NotAFolder
+            ? strings.GetString("DataFolderUnusable_Portable_NotAFolder")
+            : strings.GetString("DataFolderUnusable_Portable_CannotCreate");
 
     internal static void ShowMessage(string message) => Show(message);
 

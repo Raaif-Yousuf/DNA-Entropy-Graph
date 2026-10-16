@@ -249,4 +249,91 @@ public sealed class AppDataRootTests : IDisposable
         Should.Throw<DataFolderUnusableException>(() => AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: program))
             .Reason.ShouldBe(DataFolderProblem.NotAFolder);
     }
+
+    private string MakeVelopackLayout(bool flagAtRoot, bool flagInCurrent = false)
+    {
+        var root = Path.Combine(_scratch, "install");
+        var current = Path.Combine(root, "current");
+        Directory.CreateDirectory(current);
+        File.WriteAllText(Path.Combine(root, "Update.exe"), string.Empty);
+        if (flagAtRoot)
+        {
+            File.WriteAllText(Path.Combine(root, AppDataRoot.PortableFlagFileName), string.Empty);
+        }
+
+        if (flagInCurrent)
+        {
+            File.WriteAllText(Path.Combine(current, AppDataRoot.PortableFlagFileName), string.Empty);
+        }
+
+        return current;
+    }
+
+    [Fact]
+    public void In_the_Velopack_layout_the_flag_and_the_data_folder_live_beside_Update_exe_so_an_update_cannot_swap_them_away()
+    {
+        var current = MakeVelopackLayout(flagAtRoot: true);
+
+        var root = AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: current);
+
+        root.IsPortable.ShouldBeTrue();
+        root.Path.ShouldBe(Path.Combine(_scratch, "install", "data"));
+        Directory.Exists(Path.Combine(current, "data")).ShouldBeFalse();
+        root.PortableBase.ShouldBe(Path.Combine(_scratch, "install"));
+    }
+
+    [Fact]
+    public void In_the_Velopack_layout_a_flag_only_inside_current_is_ignored_because_an_update_would_delete_it()
+    {
+        var current = MakeVelopackLayout(flagAtRoot: false, flagInCurrent: true);
+
+        AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: current).IsPortable.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_folder_named_current_without_Update_exe_beside_it_is_an_ordinary_portable_folder()
+    {
+        var current = Path.Combine(_scratch, "stick", "current");
+        Directory.CreateDirectory(current);
+        File.WriteAllText(Path.Combine(current, AppDataRoot.PortableFlagFileName), string.Empty);
+
+        var root = AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: current);
+
+        root.Path.ShouldBe(Path.Combine(current, "data"));
+    }
+
+    [Fact]
+    public void Portable_mode_has_a_portable_base_and_an_outputs_folder_beside_data_and_normal_mode_has_neither()
+    {
+        var program = MakePortableProgramDir();
+
+        var portable = AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: program);
+        var normal = AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: Path.Combine(_scratch, "no-flag-here"));
+
+        portable.PortableBase.ShouldBe(program);
+        portable.PortableOutputsDirectory.ShouldBe(Path.Combine(program, "outputs"));
+        normal.PortableBase.ShouldBeNull();
+        normal.PortableOutputsDirectory.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_portable_failure_says_it_was_portable_and_an_explicit_override_failure_does_not()
+    {
+        var program = MakePortableProgramDir();
+        File.WriteAllText(Path.Combine(program, "data"), "x");
+
+        Should.Throw<DataFolderUnusableException>(() => AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: program))
+            .IsPortable.ShouldBeTrue();
+        Should.Throw<DataFolderUnusableException>(() => AppDataRoot.Resolve(["--profile"], NoEnv, _scratch))
+            .IsPortable.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_default_output_source_is_the_portable_outputs_folder_in_portable_mode_and_the_given_downloads_otherwise()
+    {
+        var program = MakePortableProgramDir();
+
+        AppDataRoot.Resolve([], NoEnv, _scratch, programDirectory: program).DefaultOutputSource(() => "DL")().ShouldBe(Path.Combine(program, "outputs"));
+        AppDataRoot.Resolve([], NoEnv, _scratch).DefaultOutputSource(() => "DL")().ShouldBe("DL");
+    }
 }

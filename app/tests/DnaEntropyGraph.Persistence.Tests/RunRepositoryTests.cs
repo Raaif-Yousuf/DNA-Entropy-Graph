@@ -160,4 +160,40 @@ public class RunRepositoryTests
         row.TagsJson.ShouldBe("""["important"]""");
         row.Phase.ShouldBe(JobPhase.Completed);
     }
+
+    [Fact]
+    public async Task A_portable_output_folder_is_stored_relative_and_found_again_after_the_stick_changes_drive_letter()
+    {
+        using var paths = new TempPaths();
+        var run = new RunRecord("job-p", JobPhase.Completed, DateTimeOffset.UtcNow) { OutputDir = @"D:\stick\outputs\run one" };
+        await new RunRepository(new SqliteDatabase(paths.DatabasePath), new DataPathMapper(@"D:\stick")).UpsertAsync(run, CancellationToken.None);
+
+        var raw = RawOutputDir(paths.DatabasePath);
+        var moved = await new RunRepository(new SqliteDatabase(paths.DatabasePath), new DataPathMapper(@"E:\lab\stick")).GetAllAsync(CancellationToken.None);
+
+        raw.ShouldBe(@"portable:outputs\run one");
+        moved.Single().OutputDir.ShouldBe(@"E:\lab\stick\outputs\run one");
+    }
+
+    [Fact]
+    public async Task Without_a_mapper_the_output_folder_is_stored_exactly_as_given()
+    {
+        using var paths = new TempPaths();
+        var run = new RunRecord("job-q", JobPhase.Completed, DateTimeOffset.UtcNow) { OutputDir = @"D:\stick\outputs\x" };
+        var repository = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+
+        await repository.UpsertAsync(run, CancellationToken.None);
+
+        RawOutputDir(paths.DatabasePath).ShouldBe(@"D:\stick\outputs\x");
+        (await repository.GetAllAsync(CancellationToken.None)).Single().OutputDir.ShouldBe(@"D:\stick\outputs\x");
+    }
+
+    private static string RawOutputDir(string databasePath)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={databasePath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT OutputDir FROM Runs LIMIT 1;";
+        return (string)command.ExecuteScalar()!;
+    }
 }

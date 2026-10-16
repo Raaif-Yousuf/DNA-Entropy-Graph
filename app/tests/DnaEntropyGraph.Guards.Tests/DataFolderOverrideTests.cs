@@ -5,6 +5,7 @@ using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Presentation.Services;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -115,14 +116,60 @@ public sealed class DataFolderOverrideTests : IDisposable
     }
 
     [Fact]
-    public void Startup_hands_the_program_directory_to_the_resolver_so_portable_flag_is_read()
+    public void Startup_resolves_against_the_real_program_directory_so_a_portable_flag_beside_the_exe_is_honoured()
     {
-        // Issue #144: without this argument portable.flag is never looked at and the app silently uses %LOCALAPPDATA%.
-        var startup = RepoPaths.AllCSharpFiles.Single(p => Path.GetFileName(p) == "StartupDataRoot.cs");
+        // Issue #144: behavioural. A flag planted beside the test host (AppContext.BaseDirectory, what production passes) must switch the
+        // resolver the app actually starts with to portable mode; if Startup stopped passing the program directory the flag is never looked at.
+        Environment.GetEnvironmentVariable(AppDataRoot.EnvironmentVariable).ShouldBeNull("the test needs DEG_DATA_DIR unset");
+        var flag = Path.Combine(AppContext.BaseDirectory, AppDataRoot.PortableFlagFileName);
+        var data = Path.Combine(AppContext.BaseDirectory, AppDataRoot.PortableDataFolderName);
+        File.Exists(flag).ShouldBeFalse();
+        Directory.Exists(data).ShouldBeFalse();
+        try
+        {
+            File.WriteAllText(flag, string.Empty);
 
-        File.ReadAllText(startup).ShouldContain("programDirectory: AppContext.BaseDirectory");
+            var root = StartupDataRoot.ResolveForThisProcess([]);
+
+            root.IsPortable.ShouldBeTrue();
+            root.Path.ShouldBe(data);
+        }
+        finally
+        {
+            File.Delete(flag);
+            if (Directory.Exists(data))
+            {
+                Directory.Delete(data, recursive: true);
+            }
+        }
     }
 
+    [Theory]
+    [InlineData(DataFolderProblem.CannotCreate, "DataFolderUnusable_Portable_CannotCreate")]
+    [InlineData(DataFolderProblem.NotAFolder, "DataFolderUnusable_Portable_NotAFolder")]
+    public void A_portable_failure_uses_the_portable_copy_and_an_override_failure_keeps_the_profile_copy(DataFolderProblem problem, string portableKey)
+    {
+        var strings = NSubstitute.Substitute.For<IStringResourceProvider>();
+        strings.GetString(NSubstitute.Arg.Any<string>()).Returns(call => call.Arg<string>() + " {0}");
+
+        StartupDataRoot.MessageFor(new DataFolderUnusableException(problem, "P", isPortable: true), strings).ShouldBe(portableKey + " P");
+        StartupDataRoot.MessageFor(new DataFolderUnusableException(problem, "P"), strings).ShouldNotContain("Portable");
+    }
+
+    [Fact]
+    public void The_portable_failure_copy_names_one_action_and_never_the_profile_switch()
+    {
+        var resw = string.Concat(RepoPaths.AllReswFiles.Select(File.ReadAllText));
+        foreach (var key in new[] { "DataFolderUnusable_Portable_CannotCreate", "DataFolderUnusable_Portable_NotAFolder" })
+        {
+            var start = resw.IndexOf($"name=\"{key}\"", StringComparison.Ordinal);
+            start.ShouldBeGreaterThan(0, key);
+            var text = resw.Substring(start, resw.IndexOf("</data>", start, StringComparison.Ordinal) - start);
+            text.ShouldContain("portable.flag");
+            text.ShouldNotContain("--profile");
+            text.ShouldNotContain("you chose");
+        }
+    }
     [Fact]
     public void Only_AppDataRoot_names_the_portable_flag()
     {

@@ -19,12 +19,15 @@ public enum DataFolderProblem
 }
 
 /// <summary>An override folder (issue #638) that cannot be used. The app shows <see cref="Path"/> and one action; it never falls back to the real folder.</summary>
-public sealed class DataFolderUnusableException(DataFolderProblem reason, string path, Exception? inner = null)
+public sealed class DataFolderUnusableException(DataFolderProblem reason, string path, Exception? inner = null, bool isPortable = false)
     : Exception($"data folder unusable: {reason} ({path})", inner)
 {
     public DataFolderProblem Reason { get; } = reason;
 
     public string Path { get; } = path;
+
+    /// <summary>True when the folder came from <c>portable.flag</c> rather than <c>--profile</c> or <c>DEG_DATA_DIR</c>, so the message names the portable fix (issue #144).</summary>
+    public bool IsPortable { get; } = isPortable;
 }
 
 /// <summary>
@@ -48,11 +51,13 @@ public sealed class AppDataRoot
     /// <summary>The state folder created beside the program in portable mode.</summary>
     public const string PortableDataFolderName = "data";
 
-    private AppDataRoot(string path, bool isOverride, bool isPortable = false)
+    public const string PortableOutputsFolderName = "outputs";
+
+    private AppDataRoot(string path, bool isOverride, string? portableBase = null)
     {
         Path = path;
         IsOverride = isOverride;
-        IsPortable = isPortable;
+        PortableBase = portableBase;
     }
 
     /// <summary>The absolute root folder.</summary>
@@ -62,7 +67,23 @@ public sealed class AppDataRoot
     public bool IsOverride { get; }
 
     /// <summary>True when <c>portable.flag</c> sits beside the program and state lives in <c>data</c> beside it (issue #144). Not an override: no sandbox banner.</summary>
-    public bool IsPortable { get; }
+    public bool IsPortable => PortableBase is not null;
+
+    /// <summary>The folder that holds <c>portable.flag</c> and <c>data</c> (and <c>outputs</c>): beside the exe, or beside <c>Update.exe</c> in a Velopack install. Null when not portable.</summary>
+    public string? PortableBase { get; }
+
+    /// <summary>Where results go by default in portable mode, beside <c>data</c>; null when not portable.</summary>
+    public string? PortableOutputsDirectory => PortableBase is null ? null : System.IO.Path.Combine(PortableBase, PortableOutputsFolderName);
+
+    /// <summary>The "where do results go when the user chose nothing" lookup: the portable outputs folder in portable mode, else <paramref name="downloads"/> (issue #144).</summary>
+    public Func<string?> DefaultOutputSource(Func<string?> downloads)
+    {
+        var portable = PortableOutputsDirectory;
+        return portable is null ? downloads : () => portable;
+    }
+
+    /// <summary>Stores paths under <see cref="PortableBase"/> relative to it, so a changed drive letter does not lose results.</summary>
+    public DataPathMapper PathMapper => new(PortableBase);
 
     public string SettingsFile => Combine("settings.json");
 
@@ -96,12 +117,15 @@ public sealed class AppDataRoot
     public static AppDataRoot Resolve(IReadOnlyList<string> args, Func<string, string?> getEnvironmentVariable, string currentDirectory, Action<string>? writeProbe = null, string? programDirectory = null)
     {
         var requested = FromArguments(args) ?? FromEnvironment(getEnvironmentVariable);
-        var portable = false;
-        if (requested is null && programDirectory is not null
-            && File.Exists(System.IO.Path.Combine(programDirectory, PortableFlagFileName)))
+        string? portableBase = null;
+        if (requested is null && programDirectory is not null)
         {
-            requested = System.IO.Path.Combine(programDirectory, PortableDataFolderName);
-            portable = true;
+            var candidate = PortableBaseFor(programDirectory);
+            if (File.Exists(System.IO.Path.Combine(candidate, PortableFlagFileName)))
+            {
+                portableBase = candidate;
+                requested = System.IO.Path.Combine(candidate, PortableDataFolderName);
+            }
         }
 
         if (requested is null)
@@ -116,12 +140,12 @@ public sealed class AppDataRoot
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or SecurityException)
         {
-            throw new DataFolderUnusableException(DataFolderProblem.InvalidPath, requested.Replace('\0', '?'), ex);
+            throw new DataFolderUnusableException(DataFolderProblem.InvalidPath, requested.Replace('\0', '?'), ex, portableBase is not null);
         }
 
         if (File.Exists(full))
         {
-            throw new DataFolderUnusableException(DataFolderProblem.NotAFolder, full);
+            throw new DataFolderUnusableException(DataFolderProblem.NotAFolder, full, isPortable: portableBase is not null);
         }
 
         try
@@ -131,12 +155,12 @@ public sealed class AppDataRoot
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or SecurityException)
         {
-            throw new DataFolderUnusableException(DataFolderProblem.CannotCreate, full, ex);
+            throw new DataFolderUnusableException(DataFolderProblem.CannotCreate, full, ex, portableBase is not null);
         }
 
-        if (portable)
+        if (portableBase is not null)
         {
-            return new AppDataRoot(full, isOverride: false, isPortable: true);
+            return new AppDataRoot(full, isOverride: false, portableBase);
         }
 
         // A profile that points at the real folder is the real folder: no banner for it.
@@ -145,6 +169,22 @@ public sealed class AppDataRoot
             Default().Path,
             StringComparison.OrdinalIgnoreCase);
         return new AppDataRoot(full, isOverride);
+    }
+
+    /// <summary>
+    /// The folder the flag and the data live in. A Velopack install runs the exe from <c>&lt;root&gt;\current</c> and an update swaps that folder
+    /// for a new one, so state kept inside it would be lost: when the program folder is named <c>current</c> and <c>Update.exe</c> sits beside it,
+    /// the parent is the portable base (issue #144, #805).
+    /// </summary>
+    private static string PortableBaseFor(string programDirectory)
+    {
+        var dir = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(programDirectory));
+        var parent = System.IO.Path.GetDirectoryName(dir);
+        return parent is not null
+            && string.Equals(System.IO.Path.GetFileName(dir), "current", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(System.IO.Path.Combine(parent, "Update.exe"))
+            ? parent
+            : dir;
     }
 
     private static string? FromArguments(IReadOnlyList<string> args)
