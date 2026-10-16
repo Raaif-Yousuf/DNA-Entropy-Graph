@@ -301,7 +301,7 @@ PY
   printf '{"schema":1,"jobId":"%s","mode":"gpu-test","exitCode":%s,"timedOut":%s,"error":%s,"image":"%s","vm":{"name":"%s","zone":"%s"},"finishedAt":"%s"}\n' \
     "$JOB" "$rc" "$timed_out" "$err_json" "$IMAGE" "$NAME" "$ZONE" "$(date -u +%FT%TZ)" > "$result"
   if [ "$rc" = "0" ]; then
-    status done
+    status "done"
   else
     status failed '{"code":"GPU_TESTS_FAILED","retriable":false}'
   fi
