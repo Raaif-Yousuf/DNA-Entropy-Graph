@@ -16,7 +16,11 @@ internal static class RepoPaths
 
     public static string[] AllReswFiles => Directory.GetFiles(Path.Combine(AppRoot, "src"), "*.resw", SearchOption.AllDirectories);
 
-    public static string[] AllXamlFiles => Directory.GetFiles(Path.Combine(AppRoot, "src"), "*.xaml", SearchOption.AllDirectories);
+    /// <summary>Every real .xaml file under src/; obj/bin copies are excluded, since an in-tree build copies XAML there and a name lookup would match twice.</summary>
+    public static string[] AllXamlFiles => Directory.GetFiles(Path.Combine(AppRoot, "src"), "*.xaml", SearchOption.AllDirectories)
+        .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+            && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
 
     /// <summary>Every real, source-controlled .cs file under src/ - generated obj/bin output excluded, since a scan of generated code is not a scan of anything anyone wrote.</summary>
     public static string[] AllCSharpFiles => Directory.GetFiles(Path.Combine(AppRoot, "src"), "*.cs", SearchOption.AllDirectories)
