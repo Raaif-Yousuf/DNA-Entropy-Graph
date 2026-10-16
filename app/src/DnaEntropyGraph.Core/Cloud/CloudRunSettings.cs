@@ -45,6 +45,9 @@ internal sealed class CloudRunSettings
     /// <summary>How long a heartbeat may stay unchanged before the worker process is called dead or frozen (a hung main thread under the free-running heartbeat thread is not caught, #522). Null means 20 times <c>limits.heartbeatSeconds</c> (600 s, docs/job_contract.md section 5).</summary>
     public TimeSpan? HeartbeatStaleTimeout { get; set; }
 
+    /// <summary>Per-stage deadlines that replace <see cref="HeartbeatWatch.DefaultStageDeadlines"/> for the stages named (#90). Null means the defaults.</summary>
+    public IReadOnlyDictionary<string, TimeSpan>? StageDeadlines { get; set; }
+
     public TimeSpan CallTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     /// <summary>

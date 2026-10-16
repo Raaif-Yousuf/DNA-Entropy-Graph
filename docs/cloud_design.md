@@ -556,6 +556,11 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   (`result_timeout`, above). THEORY (unverified): Compute Engine deletes at exactly `creationTimestamp + maxRunDuration`; ToTest #89 measures it.
   Already built before #89 and now covered by name: labels and `DELETE` guard (`VmSpec`), the Insert fields (`GoogleComputeGateway`),
   the post-result stop/delete verification (`VmTerminator.EnsureVmEndedAsync`, `lifecycle_unverified` / `vm_end_unconfirmed`).
+- **Per-stage deadlines (issue #90).** `HeartbeatWatch` also remembers the `stage` in `status.json` and when it last CHANGED (on the app's clock, any
+  writer: the startup script's `booting`/`installing` count). A stage past its deadline (`booting` 8 min, `installing` 15, `restoring-cache` 15,
+  `model-loading` 15, `uploading` 10; `CloudJobRunner.StageDeadlines` overrides them) ends the run as `worker_stage_stuck` and the VM per the
+  user's choice, whatever the heartbeat says: this catches a hung main thread under a ticking heartbeat thread while it is in one of those
+  stages (#522's remaining case is a hang inside `running`). Numbers are the contract's (THEORY, unverified on a real VM).
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two

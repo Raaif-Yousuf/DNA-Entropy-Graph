@@ -107,6 +107,9 @@ public sealed class CloudJobRunner
     /// <summary>How long a worker heartbeat may stay unchanged before the run fails. Null means 20 times the manifest's heartbeat interval (600 s).</summary>
     public TimeSpan? HeartbeatStaleTimeout { get => _settings.HeartbeatStaleTimeout; init => _settings.HeartbeatStaleTimeout = value; }
 
+    /// <summary>Per-stage deadlines replacing the defaults for the stages named (docs/job_contract.md section 5); null means the defaults.</summary>
+    public IReadOnlyDictionary<string, TimeSpan>? StageDeadlines { get => _settings.StageDeadlines; init => _settings.StageDeadlines = value; }
+
     /// <summary>The longest one gateway call may take before the runner treats it as a transient failure and looks again.</summary>
     public TimeSpan CallTimeout { get => _settings.CallTimeout; init => _settings.CallTimeout = value; }
 

@@ -12,8 +12,25 @@ internal sealed record HeartbeatVerdict(string Code, string Message, bool Delete
 /// by minutes); only whether <c>heartbeatSeq</c>/<c>updatedAt</c> CHANGED between looks is used, so skew cannot fake or hide a death.
 /// One instance per wait; holds that wait's observations.
 /// </summary>
-internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTimeout, TimeSpan staleTimeout)
+internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTimeout, TimeSpan staleTimeout, IReadOnlyDictionary<string, TimeSpan>? stageDeadlines = null)
 {
+    /// <summary>
+    /// How long one stage may last, by <c>status.json</c> <c>stage</c> (docs/job_contract.md section 5, #90). A stage with no entry
+    /// (<c>running</c>: its length depends on the input; <c>idle</c>; the terminal ones) has no deadline here: the result limit and the
+    /// heartbeat judge it. <c>provisioning</c> is the create wait and is not a worker stage. THEORY (unverified): these are the
+    /// contract's numbers, not measured on a real VM.
+    /// </summary>
+    public static IReadOnlyDictionary<string, TimeSpan> DefaultStageDeadlines { get; } = new Dictionary<string, TimeSpan>(StringComparer.Ordinal)
+    {
+        ["booting"] = TimeSpan.FromMinutes(8),
+        ["installing"] = TimeSpan.FromMinutes(15),
+        ["restoring-cache"] = TimeSpan.FromMinutes(15),
+        ["model-loading"] = TimeSpan.FromMinutes(15),
+        ["uploading"] = TimeSpan.FromMinutes(10),
+    };
+
+    private string? _stage;
+    private TimeSpan _stageSince;
     private bool _workerSeen;
     private bool _gpuVerified;
     private long? _lastSeq;
@@ -27,6 +44,17 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
     public HeartbeatVerdict? Observe(string? statusJson, string? progressJsonl, TimeSpan elapsed)
     {
         var status = statusJson is null ? null : WorkerStatusReader.TryParseStatus(statusJson);
+
+        // The stage clock restarts whenever the stage NAME changes, whoever wrote it (the startup script writes booting and installing).
+        // A stage already running when this watch first sees it (a resume, a reattach) has already used part of its allowance: the worker
+        // reports when the stage began (stageStartedAt) and when it last wrote (updatedAt), both on ITS clock, so the difference is the
+        // stage's age with no skew against the app's clock. A status without them (an older worker) starts the clock at this look.
+        if (status?.Stage is { Length: > 0 } stage && !string.Equals(stage, _stage, StringComparison.Ordinal))
+        {
+            _stage = stage;
+            _stageSince = elapsed - StageAgeAtLastWrite(status);
+        }
+
         if (status is { WorkerOwned: true })
         {
             if (!_workerSeen || status.HeartbeatSeq != _lastSeq || status.UpdatedAt != _lastUpdatedAt)
@@ -54,6 +82,16 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
             }
         }
 
+        // A worker whose heartbeat thread ticks while its main thread is stuck in one stage (#90, partly #522) is caught here: the
+        // stage deadline does not care that the heartbeat moves.
+        if (_stage is not null && DeadlineFor(_stage) is { } deadline && elapsed - _stageSince >= deadline)
+        {
+            return new HeartbeatVerdict(
+                RunErrorCodes.WorkerStageStuck,
+                $"The worker stayed in stage '{_stage}' for {Format(elapsed - _stageSince)}, past that stage's {Format(deadline)} deadline.",
+                DeleteVm: false);
+        }
+
         if (!_workerSeen)
         {
             return elapsed >= firstHeartbeatTimeout
@@ -70,6 +108,28 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
                 $"The worker's heartbeat in status.json has not changed for {Format(staleTimeout)} (last heartbeatSeq {_lastSeq?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}).",
                 DeleteVm: false)
             : null;
+    }
+
+    private static TimeSpan StageAgeAtLastWrite(WorkerStatusSnapshot status)
+    {
+        if (DateTimeOffset.TryParse(status.StageStartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var began)
+            && DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote)
+            && wrote >= began)
+        {
+            return wrote - began;
+        }
+
+        return TimeSpan.Zero;
+    }
+
+    private TimeSpan? DeadlineFor(string stage)
+    {
+        if (stageDeadlines is not null && stageDeadlines.TryGetValue(stage, out var overridden))
+        {
+            return overridden;
+        }
+
+        return DefaultStageDeadlines.TryGetValue(stage, out var standard) ? standard : null;
     }
 
     private static string Format(TimeSpan span) => $"{span.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} s";

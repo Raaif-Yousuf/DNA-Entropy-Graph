@@ -202,6 +202,9 @@
   <data name="RunError_worker_no_heartbeat" xml:space="preserve">
     <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
   </data>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
+  </data>
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
   </data>
