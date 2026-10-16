@@ -21,6 +21,10 @@ public static class RunErrorCodes
     public const string ResultTimeout = "result_timeout";
     /// <summary>Compute Engine deleted the VM at its <c>maxRunDuration</c> (Hard Rule 10's backstop) before any result.json (#89).</summary>
     public const string RunTimeLimit = "run_time_limit";
+    /// <summary>The worker stayed in one stage past that stage's deadline while its heartbeat may still tick (#90).</summary>
+    public const string WorkerStageStuck = "worker_stage_stuck";
+    /// <summary>The worker's heartbeat ticks in the running stage but <c>windowsDone</c> and <c>lastProgressAt</c> have not moved for the progress bound: a wedged compute thread (#723, the app half of #522).</summary>
+    public const string WorkerProgressStalled = "worker_progress_stalled";
     public const string WorkerNoHeartbeat = "worker_no_heartbeat";
     public const string WorkerHeartbeatStale = "worker_heartbeat_stale";
     public const string WorkerFailed = "worker_failed";
@@ -86,16 +90,18 @@ public static class RunErrorCodes
 
     /// <summary>The <c>CloudError.Code</c> a gateway with no real cloud behind it throws; the runner records it as <see cref="CloudNotConnected"/>.</summary>
     public const string NotConnectedGatewayCode = "CLOUD_NOT_CONNECTED";
+    /// <summary>The run was ended because the user deleted everything this installation made in the project (issue #105): its VM is gone, so the row is Cancelled, never left Running.</summary>
+    public const string DeletedByCleanup = "cleanup_deleted";
     public const string Other = "other";
 
     /// <summary>Every code a run can be recorded under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
-        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
+        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -171,7 +177,7 @@ public static class RunErrorCodes
     /// because docs/copy_catalog.md has no row, and so no user action, for them. A guard test fails when a code in the
     /// contract is neither mapped by <see cref="ForWorkerStatusCode"/> nor listed here, and when an entry here goes stale.
     /// </summary>
-    public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN"];
+    public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN", "GPU_TESTS_FAILED"];
 
     /// <summary>The <c>Resources.resw</c> key for a code (plain, non-dotted: it is read from code, not through <c>x:Uid</c>). An unknown code gets the generic message.</summary>
     public static string ResourceKey(string? code) => code switch
@@ -186,6 +192,8 @@ public static class RunErrorCodes
         WorkerImageRefused => "RunError_worker_image_refused",
         ResultTimeout => "RunError_result_timeout",
         RunTimeLimit => "RunError_run_time_limit",
+        WorkerStageStuck => "RunError_worker_stage_stuck",
+        WorkerProgressStalled => "RunError_worker_progress_stalled",
         WorkerNoHeartbeat => "RunError_worker_no_heartbeat",
         WorkerHeartbeatStale => "RunError_worker_heartbeat_stale",
         WorkerFailed => "RunError_worker_failed",
@@ -222,6 +230,7 @@ public static class RunErrorCodes
         PermissionActAs => "RunError_permission_actas",
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
         WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",
+        DeletedByCleanup => "RunError_cleanup_deleted",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",
         "quota" => "RunError_quota",

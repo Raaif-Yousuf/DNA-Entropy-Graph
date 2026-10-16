@@ -26,6 +26,21 @@ public class WorkerStatusReaderTests
     }
 
     [Fact]
+    public void The_forward_progress_fields_are_read_and_absent_in_an_older_workers_status()
+    {
+        var withProgress = WorkerStatusReader.TryParseStatus(WorkerStatus.Replace("\"error\":null", "\"error\":null,\"windowsDone\":5,\"lastProgressAt\":\"2026-09-18T15:19:58Z\"", StringComparison.Ordinal));
+        var older = WorkerStatusReader.TryParseStatus(WorkerStatus);
+        var wrongTypes = WorkerStatusReader.TryParseStatus(WorkerStatus.Replace("\"error\":null", "\"error\":null,\"windowsDone\":\"five\",\"lastProgressAt\":7", StringComparison.Ordinal));
+
+        withProgress.ShouldNotBeNull().WindowsDone.ShouldBe(5);
+        withProgress.LastProgressAt.ShouldBe("2026-09-18T15:19:58Z");
+        older.ShouldNotBeNull().WindowsDone.ShouldBeNull();
+        older.LastProgressAt.ShouldBeNull();
+        wrongTypes.ShouldNotBeNull().WindowsDone.ShouldBeNull("a foreign type is no information, never an exception");
+        wrongTypes.LastProgressAt.ShouldBeNull();
+    }
+
+    [Fact]
     public void A_status_the_startup_script_wrote_is_not_worker_owned()
     {
         var status = WorkerStatusReader.TryParseStatus(StartupStatus);
@@ -70,4 +85,14 @@ public class WorkerStatusReaderTests
     [InlineData("{\"message\":\"something else entirely\"}\n")]
     public void Without_the_worker_starting_line_the_report_is_unknown(string jsonl)
         => WorkerStatusReader.ReadGpuReport(jsonl).ShouldBe(WorkerGpuReport.Unknown);
+
+    [Theory]
+    [InlineData("{\"stage\":\"running\",\"worker\":{\"version\":\"1\"},\"cancelSeen\":true}", true)]
+    [InlineData("{\"stage\":\"running\",\"worker\":{\"version\":\"1\"},\"cancelSeen\":false}", false)]
+    [InlineData("{\"stage\":\"running\",\"worker\":{\"version\":\"1\"}}", false)]
+    [InlineData("{\"stage\":\"running\",\"cancelSeen\":\"true\"}", false)]
+    public void CancelSeen_is_true_only_for_a_JSON_true(string json, bool expected)
+    {
+        WorkerStatusReader.TryParseStatus(json)!.CancelSeen.ShouldBe(expected);
+    }
 }

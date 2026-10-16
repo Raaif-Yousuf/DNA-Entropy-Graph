@@ -192,12 +192,18 @@ class _SharedPredictor:
             )
             restored = False
             was_empty = False
+            if self._cancel is not None:
+                # A cancel that arrived while the input was staged: no cache restore, no model load.
+                self._cancel.check_or_raise()
             if use_cache:
                 restored = self._restore_weights(cfg.model, status)
                 try:
                     was_empty = not snapshot_tree(self._hf_dir)  # type: ignore[arg-type]
                 except OSError:
                     was_empty = False
+            if self._cancel is not None:
+                # The cache restore can take minutes: look again before the longest step.
+                self._cancel.check_or_raise()
             status.update(stage="model-loading")
             try:
                 self._predictor = self._factory(cfg)
@@ -353,6 +359,7 @@ def _run_one_input(
     deadline.check_or_raise()
 
     def _on_window() -> None:
+        status.mark_progress()  # #522: the compute thread is alive and moving, unlike the heartbeat thread
         cancel.check_or_raise()
         deadline.check_or_raise()
 
@@ -554,7 +561,11 @@ def run_job_outcome(
         )
     # issue #338: manifest.limits.cancelPollSeconds now actually reaches the throttle
     # CancelWatcher applies to its own store round-trips (see cancel.py's docstring).
-    cancel = CancelWatcher(store, poll_interval_seconds=float(manifest.limits.cancel_poll_seconds))
+    cancel = CancelWatcher(
+        store,
+        poll_interval_seconds=float(manifest.limits.cancel_poll_seconds),
+        on_seen=status.mark_cancel_seen,
+    )
     # Issue #89: limits.maxRunSeconds was parsed and never read; the worker now enforces the user's cap.
     deadline = _RunDeadline(
         float(manifest.limits.max_run_seconds), time_source, already_elapsed=vm_uptime_seconds()

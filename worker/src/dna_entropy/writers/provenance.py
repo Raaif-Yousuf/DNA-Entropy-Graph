@@ -118,6 +118,7 @@ def build_run_provenance(
     wall_time_seconds: float,
     generated_at: str | None = None,
     topology: str = "auto",
+    input_format: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the full provenance dict. ``contigs`` is a list of
@@ -152,6 +153,10 @@ def build_run_provenance(
         "contigs": contigs,
         WALL_TIME_KEY: wall_time_seconds,
     }
+    if input_format:
+        # issue #134: the format actually read (genbank|embl|snapgene|fasta|paste); EMBL and
+        # SnapGene take the GenBank output set but are not GenBank files.
+        data["run"]["input_format"] = input_format
     data.update(_WORKER_LAYER_DEFAULTS)
     if extra:
         data.update(extra)

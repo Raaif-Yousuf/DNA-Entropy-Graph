@@ -17,5 +17,6 @@
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CurrentPhase": "#66, done: RunProgressPage binds the derived StageTitle text, not the raw JobPhase enum; a future accessibility pass (docs/ui_conventions.md section 5's LiveSetting=Polite) may bind CurrentPhase directly for Narrator, which would clear this entry.",
 
   "UNBOUND-COMMAND:CloudResourcesViewModel.ConfirmDeleteCommand": "#105 builds the Cloud page",
-  "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests."
+  "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests.",
+  "DEAD-REGISTRATION:GpuQuotaRequester": "#99: the wizard GPU step (app lane) is its first consumer; delete this entry in that PR"
 }

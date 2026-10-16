@@ -39,16 +39,34 @@ gs://deg-<projectNumber>-<rand6>/               (or a local dir for LocalBlobsto
     manifest.json                               # written by the app, immutable once the worker starts reading it
     input/<original filename(s)>
     control/cancel                              # presence (0 bytes) = cancel requested; absence = not cancelled
+    control/zone                                # the zone a parallel zone ladder kept (#670), written by the app; a VM in any other zone deletes itself (worker/vm/startup.sh) before writing here
     status.json                                 # worker overwrites atomically; small; includes the heartbeat
     progress.jsonl                              # re-uploaded whole every 5-10 s (object storage has no append)
     logs/worker.log
     logs/startup.log
+    logs/gpu-test.log                           # gpu-test mode only (#759, scripts/cloud_gpu_test.ps1): the whole `pytest -m gpu` output, or the one-line reason an early failure left
+    logs/gpu-test-result.json                   # gpu-test mode only: written LAST, the object the caller polls for (like result.json for a job); see "gpu-test mode" below
     output/<name>/...                           # the file set from science_and_formats.md section 5, per input
     output/provenance.json
     result.json                                 # written LAST, after every output is uploaded
   vms/<vmName>/queue/<jobId>                    # keep-alive follow-up pointers
   vms/<vmName>/lease.json                       # {installationId, jobId, leasedUntil}; conditional write
 ```
+
+**gpu-test mode (#759).** A VM created with `deg-mode=gpu-test` has no manifest and no job: `worker/vm/startup.sh` runs `pytest -m gpu` in the
+image instead. Its only outputs are `jobs/<jobId>/logs/gpu-test.log` (uploaded first) and `jobs/<jobId>/logs/gpu-test-result.json` (uploaded
+last, so its existence means the log is complete):
+
+```json
+{"schema":1,"jobId":"...","mode":"gpu-test","exitCode":0,"timedOut":false,"image":"name@sha256:...","vm":{"name":"deg-<jobId>","zone":"..."},"finishedAt":"2026-10-16T12:00:00Z"}
+```
+
+`exitCode` is pytest's, with these additions: `6` = every gpu test skipped or none ran, or a gpu-marked test file could not be collected
+(`"error":"GPU_TEST_COLLECTION_ERROR"`; never a pass), `8` = the test log could not be written (`"error":"GPU_TEST_LOG_NOT_WRITTEN"`), `124` = the deadline passed
+(`timedOut` is `true`; the container was killed by name), `7` = the VM failed before any test could start (GPU never visible, image pull
+failed, or an unexpected boot-step error: `"error":"GPU_NOT_VISIBLE"`, `"IMAGE_PULL_FAILED"` or `"WORKER_CRASH"`), in which case the log is that one line. `error` is `null` otherwise. The
+deadline is counted from boot and ends 10 minutes before `maxRunDuration`. A caller must treat the result as its own only when `image` and
+`vm.name` match what it created, and must not reuse a job id whose result object already exists (`cloud_gpu_test.ps1` refuses both).
 
 For a local run (`storage.kind = "localdir"`), the same relative layout is rooted at
 `%LOCALAPPDATA%\DNAEntropyGraph\runs\<jobId>\` instead of a bucket prefix; every file name
@@ -62,7 +80,16 @@ the runner uploads a folder file by file). Every path is relative to the job pre
 absolute paths (a leading `/` or backslash, or a drive letter) and any `..` component are
 refused by both implementations. Writes are atomic for a reader: `LocalBlobstore` writes a
 temp sibling and `os.replace`s it for `write_text`, `upload_file` and `download_file` alike,
-and a GCS object upload is atomic by itself. `GcsBlobstore.list_prefix` follows
+and a GCS object upload is atomic by itself. File transfers are streamed (issue #496), so peak
+memory is one chunk, never the file size: `LocalBlobstore` copies with `shutil.copyfile`;
+`GcsBlobstore.upload_file` sends a file larger than one chunk (8 MiB, always a multiple of
+256 KiB) as a GCS resumable upload with a `Content-Range` per chunk and, after a retryable
+failure, asks the session what it committed (`bytes */total`) and resumes from there; it polls
+the caller's optional `should_stop` between chunks and raises `TransferCancelled`, leaving no
+object (the weights mirror uses this so a multi-GB shard cannot hold a cancel hostage).
+`download_file` streams to `<dest>.part`, resumes a cut stream with a `Range` request, and
+renames on success, so a failed download leaves no file at the destination.
+`GcsBlobstore.list_prefix` follows
 `nextPageToken`, so a listing is complete past the API's 1000-object page.
 `worker/tests/test_blobstore_contract.py` runs one contract against both implementations
 (GCS over an in-memory fake, marker `gcs`).
@@ -213,6 +240,7 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
     "direction": "forward"
   },
   "startedAt": "2026-09-18T14:23:10Z",
+  "stageStartedAt": "2026-09-18T14:31:44Z",
   "updatedAt": "2026-09-18T15:20:03Z",
   "heartbeatSeq": 118,
   "vm": {
@@ -225,9 +253,16 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
     "version": "1.0.0",
     "image": "sha256:9f2b...redacted"
   },
-  "error": null
+  "error": null,
+  "cancelSeen": false,
+  "windowsDone": 5,
+  "lastProgressAt": "2026-09-18T15:19:58Z"
 }
 ```
+
+`windowsDone` and `lastProgressAt` (issue #522) are the **forward-progress signal**, separate from the heartbeat. The heartbeat is written by a background thread, so it keeps ticking (`heartbeatSeq` and `updatedAt` move) even when the compute thread is wedged in a hung CUDA call or a deadlock. These two move only when the compute thread does something: `windowsDone` counts windows finished across the whole job (never resets between inputs or contigs), and `lastProgressAt` is the UTC time, on the worker's clock, of the last window finished or stage change. They are written in memory per window and reach `status.json` with the next heartbeat tick (at most 30 s later). A reader judges them by CHANGE between its own looks, the same way it judges the heartbeat, never by comparing `lastProgressAt` with its own clock. A status without them (an older worker) has no progress signal and must not be judged stuck by it.
+
+`cancelSeen` (issue #675) is `false` until the worker first sees `control/cancel`, then `true` (written at once): the worker's explicit acknowledgement of a cancel request (section 6).
 
 `error`, when non-null, is `{code, message, detail, retriable, remediation}`, with `code`
 drawn from the error taxonomy in `cloud_design.md` section 5. **The worker's own subset of
@@ -310,7 +345,8 @@ actually emit these two stages, is an open question for whoever picks it up next
  at least every 20 x `limits.heartbeatSeconds` (600 s at the 30 s default), judged by change between the app's looks and not
  by comparing `updatedAt` with the app's clock; and the worker's first progress line (`worker starting; GPU: ...`) must not
  say `no GPU detected` on a GPU machine type. Failures are `worker_no_heartbeat`, `worker_heartbeat_stale` and
- `gpu_not_visible`, each ending the VM. The rest of this section (180 s rule, per-stage deadlines) is not enforced yet.
+ `gpu_not_visible`, each ending the VM. Per-stage deadlines are enforced too (issue #90, `HeartbeatWatch.DefaultStageDeadlines`): the stage name in `status.json` (written by the startup script or the worker) restarts a clock when it changes (a stage already running when the app first looks, after a resume, counts its age as `updatedAt` minus `stageStartedAt`, both the worker's clock, so a resume does not grant a stuck stage a fresh allowance; `stageStartedAt` is written by the worker when the stage name changes and by `startup.sh` with each infra snapshot, and a status without it starts the clock at the first look), and `booting` 8 min, `installing` 15 min, `restoring-cache` 15 min, `model-loading` 15 min and `uploading` 10 min end the run as `worker_stage_stuck` even while the heartbeat ticks. `running` has no stage deadline (the result limit and the heartbeat judge it). The 180 s rule is covered by the runner's own `instances.get` look on every poll: a VM that is not RUNNING ends the wait at once (`VmLostAsync`), earlier than 180 s. Not built: the 60 s cancel-ack rule (the app's cancel deletes the VM directly and writes no `control/cancel`), and the soft "taking longer than usual" warnings and the Stop / Delete / Keep waiting choice (a UI half, filed separately).
+- **Forward progress (issue #522; worker half and app half built, #723).** In the `running` stage a worker is alive-but-stuck when the heartbeat ticks but `windowsDone`, `lastProgressAt` and `stage` have all stayed unchanged for a bound. Proposed bound: **20 minutes** (THEORY (unverified): one window of the 7B model on an L4 takes well under a minute, so 20 minutes of no finished window means a wedge, not a slow window; confirm on the first real run, ToTest). Other stages already have their own deadlines (above), so this signal is only needed for `running`. The app ends such a run as `worker_progress_stalled` and ends the VM per the user's stall choice, like `worker_heartbeat_stale`; the bound is `CloudRunSettings.ProgressStallTimeout`. A status without the two fields (an older worker) is never judged by it.
 - On death, the app offers "Delete VM and show logs" - `logs/startup.log` (uploaded by the
  startup script's own trap) and, as a last resort before any worker log exists,
  `instances.getSerialPortOutput`.
@@ -341,6 +377,11 @@ actually emit these two stages, is an open question for whoever picks it up next
 - If no heartbeat arrives within **60 s** of the app writing `control/cancel`, the app
  calls `instances.stop`/`instances.delete` on the VM directly rather than continuing to
  wait for a worker that may already be gone.
+- **Implemented 2026-10-15 (issue #675; DECISION, agent-made, reversible):** `CloudJobRunner.CancelAsync` writes `control/cancel` first, but only for a run whose row knows its bucket, whose
+ VM is RUNNING and whose `status.json` is worker-written (a worker that never started has nobody to answer, so no wait). It then waits up to `CancelAckTimeout` (60 s; zero turns
+ the graceful step off) for the worker's explicit acknowledgement (`cancelSeen: true` in `status.json`, a terminal stage, or `result.json`; a heartbeat tick alone is NOT one), then, once acknowledged, up to `CancelFinishTimeout` (2 minutes,
+ THEORY unverified) for a terminal stage, and only then deletes the VM exactly as before and records `Cancelled`. A request that cannot be written, a caller that gives up, or a
+ worker that never answers all end in the delete: the graceful step can never keep a VM alive. **Review fixes (rc675, 2026-10-15):** the worker now ACKNOWLEDGES explicitly: `status.json` carries `cancelSeen` (false until the worker's `CancelWatcher` first sees `control/cancel`, then true and written at once, `StatusWriter.mark_cancel_seen`), and the worker also looks for the cancel before the cache restore and before the model load (the long stages), not only between windows. A worker built before this never sets it, so the app waits the 60 s and deletes the VM as it did before #675 (partial outputs only if it uploaded them on its own). An acknowledged or finished cancel records the job folder on the row (`Bucket`, `JobPrefix`) so the partial outputs can be downloaded again while the objects exist (Hard Rule 14); **DECISION (agent-made, reversible):** the cancel does not download them itself (it has no output folder or request, only the row), the app lane's "download again" does. The graceful ask runs inside the same guard as the delete, so any exception from it still deletes the VM and ends the row.
 
 ---
 

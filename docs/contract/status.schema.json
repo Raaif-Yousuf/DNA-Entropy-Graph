@@ -22,6 +22,9 @@
     "startedAt": {
       "type": "string"
     },
+    "stageStartedAt": {
+      "type": "string"
+    },
     "updatedAt": {
       "type": "string"
     },
@@ -103,6 +106,15 @@
         "code",
         "message"
       ]
+    },
+    "cancelSeen": {
+      "type": "boolean"
+    },
+    "windowsDone": {
+      "type": "integer"
+    },
+    "lastProgressAt": {
+      "type": "string"
     }
   },
   "required": [
@@ -112,6 +124,7 @@
     "percent",
     "detail",
     "startedAt",
+    "stageStartedAt",
     "updatedAt",
     "heartbeatSeq",
     "vm",

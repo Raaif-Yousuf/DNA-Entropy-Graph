@@ -17,9 +17,18 @@ from ..annotators.base import GeneFeature
 from ..config import RunConfig
 from ..validation.validators import ValidationError, validate_sequence
 from . import detect
+from .embl import read_embl
 from .fasta import read_fasta
 from .genbank import read_genbank
+from .gff3 import fit_to_sequence, read_gff3
 from .paste import PasteReader
+from .snapgene import read_snapgene
+
+_ANNOTATED_FLAT_FILE_READERS = {
+    detect.GENBANK: read_genbank,
+    detect.EMBL: read_embl,
+    detect.SNAPGENE: read_snapgene,
+}
 
 
 @dataclass
@@ -39,7 +48,8 @@ class LoadedInput:
 
     contigs: list[Contig]
     notices: list[str] = field(default_factory=list)
-    source_kind: str = detect.PASTE
+    source_kind: str = detect.PASTE  # which output set the pipeline takes (EMBL and SnapGene use GENBANK)
+    input_format: str = ""  # the REAL format read (genbank|embl|snapgene|fasta|paste), for provenance
 
     @property
     def seq(self) -> str:
@@ -175,9 +185,14 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     ``N``); the paste path stays strict A/C/G/T.
     """
     kind = cfg.informat or detect.detect_kind(cfg.input_path)
+    if cfg.annotation_path is not None and kind != detect.FASTA:
+        raise ValidationError(
+            "A GFF3 annotation can only be paired with a FASTA file; this input is not FASTA. "
+            "Remove the GFF3, or add the sequence as a FASTA file."
+        )
 
-    if kind == detect.GENBANK:
-        records, notices = read_genbank(cfg.input_path)
+    if kind in _ANNOTATED_FLAT_FILE_READERS:
+        records, notices = _ANNOTATED_FLAT_FILE_READERS[kind](cfg.input_path)
         contigs: list[Contig] = []
         running_total = 0
         for i, rec in enumerate(records):
@@ -197,12 +212,21 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
                 )
             )
         _assert_unique_contig_names(contigs)
-        return LoadedInput(contigs=contigs, notices=notices, source_kind=kind)
+        # EMBL and SnapGene are annotated flat files read into the same records as GenBank
+        # (issue #134), so they take the GenBank output set: their own genes, never Prodigal.
+        return LoadedInput(contigs=contigs, notices=notices, source_kind=detect.GENBANK, input_format=kind)
 
     if kind == detect.FASTA:
         records, notices = read_fasta(cfg.input_path)
+        paired: dict[str, list[GeneFeature]] = {}
+        gff_circular: set[str] = set()
+        if cfg.annotation_path is not None:
+            paired, gff_notices, gff_circular = read_gff3(cfg.annotation_path)
+            notices += gff_notices
         contigs: list[Contig] = []
         running_total = 0
+        matched: set[str] = set()
+        declared_circular = 0
         for i, rec in enumerate(records):
             v = validate_sequence(
                 rec.seq, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy
@@ -210,17 +234,50 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
             notices += v.notices
             running_total += len(v.seq)
             _check_whole_input_cap(running_total, cfg.max_total_len)
+            features: list[GeneFeature] = []
+            seqid = rec.header.split(None, 1)[0] if rec.header else ""
+            # The GFF3's Is_circular=true is the input declaring a circular molecule, like a GenBank
+            # LOCUS line; the run's own --topology still decides (linear overrides it).
+            is_circular = seqid in gff_circular
+            if seqid in paired:
+                matched.add(seqid)
+                analysed_circular = cfg.topology.resolve(is_circular)
+                declared_circular += int(is_circular and analysed_circular)
+                features, fit_notices = fit_to_sequence(paired[seqid], len(v.seq), analysed_circular)
+                notices += fit_notices
             contigs.append(
                 Contig(
                     name=_safe_contig_name(cfg.name, i, len(records), out_dir=cfg.out_dir),
                     seq=v.seq,
+                    features=features,
                     source_id=rec.header,
+                    circular=is_circular and seqid in paired,
                 )
             )
+        if declared_circular:
+            notices.append(
+                f"The GFF3 declares {declared_circular} sequence(s) circular (Is_circular=true), so "
+                "they are analysed as circular. Run with --topology linear to analyse them as linear."
+            )
+        if paired:
+            if not matched:
+                raise ValidationError(
+                    "None of the sequence names in the GFF3 match a FASTA record name (the text "
+                    "after > up to the first space), so none of its genes can be placed. Make "
+                    "the GFF3's first column match the FASTA header names, or pick the right pair."
+                )
+            unmatched = len(set(paired) - matched)
+            if unmatched:
+                notices.append(
+                    f"{unmatched} sequence name(s) in the GFF3 match no FASTA record; their genes "
+                    "were not used."
+                )
         _assert_unique_contig_names(contigs)
-        return LoadedInput(contigs=contigs, notices=notices, source_kind=kind)
+        return LoadedInput(contigs=contigs, notices=notices, source_kind=kind, input_format=kind)
 
     text = raw if raw is not None else PasteReader(cfg.input_path).read()
     v = validate_sequence(text, max_len=cfg.max_total_len, rna=cfg.rna, ambiguity_policy=cfg.ambiguity_policy)
     contig = Contig(name=_safe_contig_name(cfg.name, 0, 1, out_dir=cfg.out_dir), seq=v.seq)
-    return LoadedInput(contigs=[contig], notices=v.notices, source_kind=detect.PASTE)
+    return LoadedInput(
+        contigs=[contig], notices=v.notices, source_kind=detect.PASTE, input_format=detect.PASTE
+    )

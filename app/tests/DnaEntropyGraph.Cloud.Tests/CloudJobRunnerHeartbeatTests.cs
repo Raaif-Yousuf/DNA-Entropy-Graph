@@ -97,6 +97,31 @@ public class CloudJobRunnerHeartbeatTests
     }
 
     [Fact]
+    public async Task A_worker_stuck_in_model_loading_with_a_ticking_heartbeat_fails_at_the_stage_deadline_and_the_VM_is_ended()
+    {
+        // The heartbeat thread keeps ticking, so the stale rule alone would wait for the result limit (20 s here).
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromSeconds(20),
+            HeartbeatStaleTimeout = TimeSpan.FromSeconds(20),
+            StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(60) },
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+        };
+
+        var result = await runner.RunAsync(TestInputs.Request("job-stuck", Spec("job-stuck")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
+        LastRow(repo, "job-stuck").ErrorCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
+        (await VmStatusAsync(gcp, "job-stuck")).ShouldBe("STOPPED");
+    }
+
+    [Fact]
     public async Task A_worker_whose_heartbeat_keeps_advancing_is_not_failed_and_finishes()
     {
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
