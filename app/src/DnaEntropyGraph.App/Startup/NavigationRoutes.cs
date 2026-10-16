@@ -31,6 +31,9 @@ public static class NavigationRoutes
         // groups to this same page. The nav item's Tag is "Settings".
         navigationService.RegisterPage("Settings", typeof(SettingsPage));
 
+        // Issue #99: the first-run wizard (steps 1 to 8 as OK/Fix rows). Reached from the status pill in the title bar.
+        navigationService.RegisterPage("Wizard", typeof(WizardPage));
+
         // Issue #490: every destination without a page of its own lands on one
         // generic "not built yet" page rather than an empty frame.
         navigationService.RegisterFallbackPage(typeof(PlaceholderPage));

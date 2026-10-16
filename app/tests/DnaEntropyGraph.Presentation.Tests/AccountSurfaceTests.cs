@@ -93,7 +93,8 @@ public class AccountSurfaceTests
 
         viewModel.SignInErrorText.ShouldBeEmpty();
         viewModel.SignInActionText.ShouldBeEmpty();
-        navigator.Received(1).NavigateTo("Wizard/Project");
+        // The project step is on the same wizard page now (issue #99), so there is nowhere to navigate to.
+        navigator.DidNotReceive().NavigateTo(Arg.Any<string>());
     }
 
     [Fact]
