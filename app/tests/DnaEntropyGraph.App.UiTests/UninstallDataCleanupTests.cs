@@ -67,9 +67,9 @@ public sealed class UninstallDataCleanupTests : IDisposable
     }
 
     [Theory]
-    [InlineData(@"C:\Users\x\AppData\Local\DNAEntropyGraph", @"C:\Users\x\AppData\Local\DnaEntropyGraph")]
-    [InlineData(@"C:\Users\x\AppData\Local\DNAEntropyGraph", @"C:\Users\x\AppData\Local\DNAEntropyGraph\sub")]
-    [InlineData(@"C:\Users\x\AppData\Local\DNAEntropyGraph\", @"C:\Users\x\AppData\Local\dnaentropygraph")]
+    [InlineData(@"C:\L\DNAEntropyGraph", @"C:\L\DnaEntropyGraph")]
+    [InlineData(@"C:\L\DNAEntropyGraph", @"C:\L\DNAEntropyGraph\sub")]
+    [InlineData(@"C:\L\DNAEntropyGraph\", @"C:\L\dnaentropygraph")]
     public void A_data_folder_that_is_the_install_folder_is_not_asked_about(string data, string install)
         => UninstallDataCleanup.Overlaps(data, install).ShouldBeTrue();
 
