@@ -11,7 +11,7 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// <summary>
 /// The real, Google-backed gateways, each already wrapped in the resilience pipeline. <see cref="ProjectSetup"/> is
 /// the preflight chain (<see cref="IProjectSetupGateway"/>) that <c>CloudJobRunner</c> consumes; the next three are
-/// the wizard's steps 3 to 5, <see cref="Storage"/> is the results bucket and the object calls (issue #53), and <see cref="WorkerIdentity"/> is the worker service account, its role and its bindings (issue #54), and <see cref="Quota"/> is the read of the regional and project-wide quota (issue #88).
+/// the wizard's steps 3 to 5, <see cref="Storage"/> is the results bucket and the object calls (issue #53), and <see cref="WorkerIdentity"/> is the worker service account, its role and its bindings (issue #54), and <see cref="Quota"/> is the read of the regional and project-wide quota (issue #88), and <see cref="PricingCatalog"/> is the Cloud Billing price catalog (issue #214).
 /// </summary>
 public sealed record GoogleCloudGatewaySet(
     IProjectCatalogGateway ProjectCatalog,
@@ -21,7 +21,8 @@ public sealed record GoogleCloudGatewaySet(
     IStorageGateway Storage,
     IComputeGateway Compute,
     IWorkerIdentityGateway WorkerIdentity,
-    IQuotaGateway Quota);
+    IQuotaGateway Quota,
+    IPricingCatalogGateway PricingCatalog);
 
 /// <summary>
 /// The one place the real gateways are built, and so the one place production switches from <see cref="FakeGcp"/> to
@@ -70,6 +71,8 @@ public static class GoogleCloudGateways
             // the pipeline itself, and the policy writes carry the etag they read, so a replay conflicts instead of overwriting.
             workerIdentity,
             // Not wrapped: both reads (regions.list, projects.get) go through the pipeline per request, and a failed read is a value (UNKNOWN), never a zero.
-            new GoogleQuotaGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline));
+            new GoogleQuotaGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline),
+            // Not wrapped: a read-only list whose every page goes through the pipeline (issue #214).
+            new GooglePricingCatalogGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline));
     }
 }

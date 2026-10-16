@@ -13,18 +13,27 @@ public interface ICostEstimateService
 public sealed class CostEstimateService : ICostEstimateService
 {
     private readonly Lazy<PricingLoadResult> _pricing;
+    private readonly IPricingSource _source;
     private readonly IRunRepository _runs;
 
     public CostEstimateService(IPricingSource pricing, IRunRepository runs)
     {
         _pricing = new Lazy<PricingLoadResult>(pricing.Load);
+        _source = pricing;
         _runs = runs;
     }
 
     public async Task<CostEstimateResult> EstimateAsync(string machineType, bool spot, long? bases, int bootDiskGb, CancellationToken cancellationToken)
     {
-        // The list ships with the build and cannot change under a running app, so it is read once.
-        if (_pricing.Value.Table is not { } table)
+        // Issue #214: a source that can ask the price catalog (at most once a day, never longer than its own timeout) does so first and is
+        // read again each time, because its answer can change under a running app. The shipped list cannot, so it is read once.
+        if (_source is IPricingRefresh refresh)
+        {
+            await refresh.RefreshIfStaleAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var pricing = _source is IPricingRefresh ? _source.Load() : _pricing.Value;
+        if (pricing.Table is not { } table)
         {
             return CostEstimateResult.Unavailable(EstimateUnavailable.PriceListUnreadable);
         }
