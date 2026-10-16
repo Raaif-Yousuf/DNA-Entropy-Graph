@@ -1022,6 +1022,10 @@ def test_a_read_error_on_runner_json_is_not_an_empty_claim(env: lq.Env, monkeypa
     (env.state).mkdir(parents=True, exist_ok=True)
     f = env.state / "runner.json"
     f.write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    import os
+    import time
+
+    os.utime(f, (time.time() - 3600, time.time() - 3600))  # old, so an "empty" misreading would rename it aside
     real = Path.read_text
 
     def deny(self: Path, *a: object, **k: object) -> str:
@@ -1047,3 +1051,12 @@ def test_a_hand_edited_runner_file_never_crashes_run_or_status(env: lq.Env, cont
     old = time.time() - 3600
     os.utime(f, (old, old))
     lq.drain(env)  # an old unparsable claim is replaced, no ValueError
+
+
+def test_resume_refuses_a_head_whose_chain_does_not_reach_the_sha(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
+    r.first("git", "rev-list", answer=(0, f"{SHA_B} {SHA_C} {SHA_C}"))  # a merge of main, but on top of some other base
+    r.first("git", "merge-base", "--is-ancestor", SHA_C, "origin/main", answer=(0, ""))
+    lq.process_item(env, item())
+    assert r.matching("py")
