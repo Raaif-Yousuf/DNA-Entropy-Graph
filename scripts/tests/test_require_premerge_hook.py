@@ -63,7 +63,10 @@ def _run_hook(payload: dict | str) -> tuple[int, dict | None]:
 def test_self_tests_pass(module):
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / module), "--self-test"],
-        capture_output=True, text=True, timeout=60, check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -90,16 +93,25 @@ def test_bad_mode_is_rejected(repo):
         stamp.write_stamp(repo, "partial")
 
 
-@pytest.mark.parametrize("command", ["gh pr create --title x", "gh pr merge 3 --merge --delete-branch",
-                                     "cd app && gh pr create", "GH_TOKEN=x gh pr create", "gh -R a/b pr merge 1"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create --title x",
+        "gh pr merge 3 --merge --delete-branch",
+        "cd app && gh pr create",
+        "GH_TOKEN=x gh pr create",
+        "gh -R a/b pr merge 1",
+    ],
+)
 def test_denied_without_a_stamp(repo, command):
     reason = hook.verdict(command, repo)
     assert reason is not None
     assert "premerge.py" in reason
 
 
-@pytest.mark.parametrize("command", ["gh pr view 3", "gh pr checks 3", "gh issue create -t x", "grep 'gh pr create' x.md",
-                                     "echo gh pr merge is blocked", ""])
+@pytest.mark.parametrize(
+    "command", ["gh pr view 3", "gh pr checks 3", "gh issue create -t x", "grep 'gh pr create' x.md", "echo gh pr merge is blocked", ""]
+)
 def test_unrelated_commands_are_allowed(repo, command):
     assert hook.verdict(command, repo) is None
 
@@ -145,7 +157,10 @@ def test_runs_under_the_dispatcher(repo):
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "run_hook.py"), "require_premerge_before_pr"],
         input=json.dumps({"tool_input": {"command": "gh pr create"}, "cwd": str(repo)}),
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert proc.returncode == 0
     assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
