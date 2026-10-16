@@ -147,7 +147,7 @@ public sealed class ViewerKeyboardTests : IDisposable
         ViewerKeyboard.Resolve("Home", true, L(1, 100), 1000).Kind.ShouldBe(ViewerKeyKind.None);
     }
 
-    private async Task<ViewerViewModel> ReadyViewer(int length)
+    private async Task<ViewerViewModel> ReadyViewer(int length, string? loadedLocus = null)
     {
         _overview.Load(Arg.Any<string>()).Returns(new EntropyOverview([new EntropyContig("a", length, 1, [1f])]));
         var vm = new ViewerViewModel(_probe, _strings, _overview);
@@ -155,7 +155,7 @@ public sealed class ViewerKeyboardTests : IDisposable
         vm.OpenRun(_dir);
         await vm.ContigsReady;
         vm.OnViewerMessage("{\"evt\":\"ready\"}");
-        vm.OnViewerMessage("{\"evt\":\"loaded\"}");
+        vm.OnViewerMessage(loadedLocus is null ? "{\"evt\":\"loaded\"}" : JsonSerializer.Serialize(new { evt = "loaded", locus = loadedLocus }));
         _sent.Clear();
         return vm;
     }
@@ -185,6 +185,34 @@ public sealed class ViewerKeyboardTests : IDisposable
         vm.OnViewerMessage(Key("ArrowRight"));
 
         Sent("goto").ShouldHaveSingleItem().GetProperty("locus").GetString().ShouldBe("a:1251-2250");
+    }
+
+    [Fact]
+    public async Task The_locus_reported_with_loaded_seeds_the_keys_before_any_mouse_pan()
+    {
+        var vm = await ReadyViewer(10_000, loadedLocus: "a:1-1000");
+
+        vm.OnViewerMessage(Key("ArrowRight"));
+
+        Sent("goto").ShouldHaveSingleItem().GetProperty("locus").GetString().ShouldBe("a:251-1250");
+    }
+
+    [Fact]
+    public async Task Keys_are_enabled_in_the_page_only_while_the_run_is_drawn()
+    {
+        _overview.Load(Arg.Any<string>()).Returns(new EntropyOverview([new EntropyContig("a", 100, 1, [1f])]));
+        var vm = new ViewerViewModel(_probe, _strings, _overview);
+        vm.MessageToViewer += _sent.Add;
+        vm.OpenRun(_dir);
+        await vm.ContigsReady;
+        vm.OnViewerMessage("{\"evt\":\"ready\"}");
+        Sent("keys").ShouldBeEmpty();
+
+        vm.OnViewerMessage("{\"evt\":\"loaded\"}");
+        Sent("keys").ShouldHaveSingleItem().GetProperty("enabled").GetBoolean().ShouldBeTrue();
+
+        vm.OnViewerMessage("{\"evt\":\"error\"}");
+        Sent("keys").Select(k => k.GetProperty("enabled").GetBoolean()).ToArray().ShouldBe([true, false]);
     }
 
     [Fact]

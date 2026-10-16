@@ -3,7 +3,8 @@
 //   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}, {cmd:"focusLocus"}.
 // Events out (postMessage): {evt:"ready"}, {evt:"loaded"}, {evt:"warning", message},
 //   {evt:"error", message} (fatal: the run could not be drawn), {evt:"locusChanged", locus},
-//   {evt:"snapshot", svg}, {evt:"key", key, ctrl} (issue #247: the host decides what a key does).
+//   {evt:"snapshot", svg}, {evt:"key", key, ctrl} (issue #247: the host decides what a key does),
+//   and {evt:"loaded", locus} carries the locus first shown. Commands in also include {cmd:"keys", enabled}.
 // Runs with no network: igv.js is vendored beside this file and every URL it fetches is
 // https://run.deg/... (the run's output folder, mapped by the host).
 (function () {
@@ -28,6 +29,12 @@
   window.addEventListener('error', function (e) { post({ evt: 'warning', message: describe(e.error || e.message) }); });
   window.addEventListener('unhandledrejection', function (e) { post({ evt: 'warning', message: describe(e.reason) }); });
 
+  // The locus the first reference frame shows, in the same form as locusChanged.
+  function currentLocus() {
+    var f = browser && browser.referenceFrameList && browser.referenceFrameList[0];
+    return f ? f.chr + ':' + Math.floor(f.start + 1) + '-' + Math.floor(f.end) : null;
+  }
+
   async function load(config) {
     if (browser) {
       igv.removeBrowser(browser);
@@ -43,7 +50,7 @@
       var f = frames && frames[0];
       if (f) { post({ evt: 'locusChanged', locus: f.chr + ':' + Math.floor(f.start + 1) + '-' + Math.floor(f.end) }); }
     });
-    post({ evt: 'loaded' });
+    post({ evt: 'loaded', locus: currentLocus() });
   }
 
   // Seam markers (issue #116): one thin region of interest per contig at the 0-based base where the
@@ -70,6 +77,7 @@
       case 'seams': if (browser) { await markSeams(cmd.seams, cmd.label); } break;
       case 'theme': document.body.classList.toggle('dark', !!cmd.dark); break;
       case 'focusLocus': focusLocusBox(); break;
+      case 'keys': keysOn = !!cmd.enabled; break;
       case 'snapshot': if (browser) { post({ evt: 'snapshot', svg: browser.toSVG() }); } break;
     }
   }
@@ -81,10 +89,14 @@
 
   // Issue #247: forward the navigation keys. No decision here (the host's ViewerKeyboard owns them), except to
   // stay out of the way while the user types in the locus box or an igv dialog.
+  var keysOn = false; // set by the host ({cmd:"keys"}) only while a run is drawn, so no key is swallowed otherwise
   var FORWARDED = ['ArrowLeft', 'ArrowRight', '+', '=', '-', '_', 'Home', '1', '2', '3'];
   document.addEventListener('keydown', function (e) {
+    if (!keysOn) { return; }
     var t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) && !(e.ctrlKey && !e.altKey && !e.metaKey)) { return; }
+    var typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable ||
+      (t.closest && t.closest('[role="listbox"], [role="combobox"], select')));
+    if (typing && !(e.ctrlKey && !e.altKey && !e.metaKey)) { return; }
     var ctrl = e.ctrlKey || e.metaKey;
     if (e.altKey || (ctrl ? String(e.key).toLowerCase() !== 'l' : FORWARDED.indexOf(e.key) < 0)) { return; }
     e.preventDefault();

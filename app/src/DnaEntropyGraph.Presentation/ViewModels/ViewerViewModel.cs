@@ -52,6 +52,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private bool _pageReady;
     private bool _dark;
     private ViewerLocus? _locus;
+    private bool _keysOn;
 
     // Status, ActionUrl and MapRunFolder are plain notifying properties, not [ObservableProperty]: no XAML
     // binds them (the page binds IsErrorVisible, ActionUri, HasLinkAction ...). Status feeds RetryCommand and
@@ -159,6 +160,22 @@ public sealed partial class ViewerViewModel : ObservableObject
             {
                 RetryCommand.NotifyCanExecuteChanged();
                 GoToContigCommand.NotifyCanExecuteChanged();
+                SyncPageKeys();
+            }
+        }
+    }
+
+    // The page swallows navigation keys only while the run is drawn (issue #247): a key the ViewModel would ignore must keep its
+    // normal browser meaning. Sent on change only; a page that reloads starts with keys off.
+    private void SyncPageKeys()
+    {
+        var want = _pageReady && _status == ViewerStatus.Ready;
+        if (want != _keysOn)
+        {
+            _keysOn = want;
+            if (_pageReady)
+            {
+                Send(new { cmd = "keys", enabled = want });
             }
         }
     }
@@ -355,6 +372,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         {
             case "ready":
                 _pageReady = true;
+                _keysOn = false;
                 if (_dark)
                 {
                     // The page starts light; only a dark app theme needs a theme command.
@@ -372,6 +390,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 if (Status == ViewerStatus.Loading)
                 {
                     IsLoading = false;
+
+                    // The page reports where it landed, so the keys work before the first mouse pan (the locus listener attaches after the first draw).
+                    _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var first) ? first : null;
                     Status = ViewerStatus.Ready;
                     // A freshly drawn page shows the first record; keep the selector in step with it.
                     SelectWithoutGoto(Contigs.FirstOrDefault());
@@ -425,6 +446,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     public void OnViewerProcessFailed()
     {
         _pageReady = false;
+        _keysOn = false;
         FailKeepingRun(ViewerFailure.ProcessFailed);
     }
 
