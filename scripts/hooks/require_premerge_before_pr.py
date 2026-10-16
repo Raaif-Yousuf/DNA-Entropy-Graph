@@ -57,12 +57,10 @@ import premerge_stamp as stamp  # noqa: E402
 
 BYPASS_VAR = "DEG_SKIP_PREMERGE"
 
-_PR = re.compile(
-    r"(?:^|[;&|\n]|&&|\|\|)\s*"
-    r"(?P<env>(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*)"
-    r"gh\b[^;&|\n]*?\bpr\s+(?P<verb>create|merge)\b",
-    re.IGNORECASE,
-)
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_PS_BYPASS = re.compile(rf"\$env:{BYPASS_VAR}\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s;]+)", re.IGNORECASE)
+# `gh pr merge` flags that take a value in the next token (`--flag=value` carries its own).
+_MERGE_VALUE_FLAGS = {"-R", "--repo", "--match-head-commit", "-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email"}
 
 MESSAGE = """`gh pr {verb}` is blocked until scripts/premerge.py has passed on this HEAD.
 
@@ -76,25 +74,119 @@ Run it now, from the repo root (about a minute; full mode before a merge that cl
 Committing changes HEAD, so run it AFTER the last commit. If a gate fails, fix that first:
 the summary names it. To override deliberately, with a reason that is logged:
 
-    DEG_SKIP_PREMERGE="<reason>" gh pr {verb} ..."""
+    bash:        DEG_SKIP_PREMERGE="<reason>" gh pr {verb} ...
+    PowerShell:  $env:DEG_SKIP_PREMERGE="<reason>"; gh pr {verb} ..."""
+
+LANDED_HINT = """
+
+For a PR that scripts/land_wt.py opened, `gh pr merge` is allowed without a stamp when it names the PR
+number and pins the head land_wt verified:
+
+    gh pr merge {pr} --merge --match-head-commit {sha}"""
+
+BARE_MERGE_HINT = (
+    "\n\nName the pull request number explicitly (`gh pr merge <pull request number> ...`); "
+    "a bare `gh pr merge` merges whatever the current branch is."
+)
 
 
-def _bypass_reason(env_prefix: str) -> str | None:
-    match = re.search(rf"\b{BYPASS_VAR}=(\S*)", env_prefix)
-    if match:
-        return match.group(1).strip("'\"") or "(no reason given)"
-    return os.environ.get(BYPASS_VAR) or None
+def _segments(text: str) -> list[list[str]]:
+    """Split a shell or PowerShell command into commands of tokens, honouring ' and " quoting.
+
+    Separators (; & | ( ) and newlines) only count outside quotes, and quote characters are removed from
+    the tokens, so `gh issue comment 5 --body "see gh pr merge"` is one command whose body is one token."""
+    segments: list[list[str]] = []
+    tokens: list[str] = []
+    word: list[str] = []
+    in_word = False
+    quote = ""
+    i = 0
+
+    def end_word() -> None:
+        nonlocal in_word
+        if in_word:
+            tokens.append("".join(word))
+            word.clear()
+            in_word = False
+
+    def end_segment() -> None:
+        nonlocal tokens
+        end_word()
+        if tokens:
+            segments.append(tokens)
+        tokens = []
+
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if quote == '"' and ch in "\\`" and i + 1 < len(text) and text[i + 1] == '"':
+                word.append('"')
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            else:
+                word.append(ch)
+        elif ch in "'\"":
+            quote = ch
+            in_word = True
+        elif ch in ";&|()\n\r":
+            end_segment()
+        elif ch.isspace():
+            end_word()
+        else:
+            word.append(ch)
+            in_word = True
+        i += 1
+    end_segment()
+    return segments
 
 
-def _merge_target(scanned: str, end: int) -> str | None:
-    """The PR number after `gh pr merge` (a number, or the tail of a PR URL), or None."""
-    rest = re.split(r"[;&|\n]", scanned[end:], maxsplit=1)[0]
-    for token in rest.split():
-        if token.startswith("-"):
-            continue
-        tail = token.strip("\"'").rstrip("/").rsplit("/", 1)[-1]
-        return tail if tail.isdigit() else None
+def _gh_pr_call(tokens: list[str]) -> tuple[str, list[str], str | None] | None:
+    """(verb, args after the verb, bash-style inline bypass reason) when this command is `gh [flags] pr create|merge`."""
+    i, bypass = 0, None
+    while i < len(tokens) and _ENV_ASSIGN.match(tokens[i]):
+        name, _, value = tokens[i].partition("=")
+        if name == BYPASS_VAR:
+            bypass = value or "(no reason given)"
+        i += 1
+    if i >= len(tokens) or Path(tokens[i].replace("\\", "/")).name.lower() not in ("gh", "gh.exe"):
+        return None
+    i += 1
+    while i < len(tokens) and tokens[i].startswith("-"):  # gh's global flags before the subcommand
+        i += 2 if tokens[i] in ("-R", "--repo") else 1
+    if i + 1 < len(tokens) and tokens[i].lower() == "pr" and tokens[i + 1].lower() in ("create", "merge"):
+        return tokens[i + 1].lower(), tokens[i + 2 :], bypass
     return None
+
+
+def _merge_args(args: list[str]) -> tuple[str | None, str | None]:
+    """(pull request number, --match-head-commit value) of `gh pr merge`'s arguments, skipping flag values."""
+    target = match_head = None
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok.startswith("-"):
+            name, eq, value = tok.partition("=")
+            if not eq and tok in _MERGE_VALUE_FLAGS:
+                value = args[i + 1] if i + 1 < len(args) else ""
+                i += 1
+            if name == "--match-head-commit":
+                match_head = value
+        elif target is None:
+            tail = tok.rstrip("/").rsplit("/", 1)[-1]
+            target = tail if tail.isdigit() else ""
+        i += 1
+    return (target or None), match_head
+
+
+def _bypass_reason(inline: str | None, whole_command: str) -> str | None:
+    if inline:
+        return inline
+    ps = _PS_BYPASS.search(whole_command)
+    if ps:
+        return ps.group(1).strip("'\"") or "(no reason given)"
+    return os.environ.get(BYPASS_VAR) or None
 
 
 def _log_bypass(repo: Path, verb: str, reason: str) -> None:
@@ -112,23 +204,31 @@ def _log_bypass(repo: Path, verb: str, reason: str) -> None:
 def verdict(command: str, cwd: str | Path | None) -> str | None:
     """The reason to deny, or None to stay silent."""
     scanned = _stash._strip_cat_heredoc_bodies(command or "")
-    for match in _PR.finditer(scanned):
-        verb = match.group("verb").lower()
+    for tokens in _segments(scanned):
+        call = _gh_pr_call(tokens)
+        if call is None:
+            continue
+        verb, args, inline = call
         repo = Path(cwd) if cwd else Path.cwd()
-        bypass = _bypass_reason(match.group("env"))
+        bypass = _bypass_reason(inline, scanned)
         ok, reason = stamp.check_stamp(repo)
+        if ok:
+            continue
         if bypass:
-            if not ok:
-                _log_bypass(repo, verb, bypass)
-            return None
-        if not ok and verb == "merge":
-            # land_wt.py (the sanctioned path) verified this PR in a throwaway worktree; the merge is
-            # usually run from another checkout whose HEAD has no stamp of its own.
-            target = _merge_target(scanned, match.end())
-            if target and stamp.check_landed(repo, target):
+            _log_bypass(repo, verb, bypass)
+            continue
+        message = MESSAGE.format(verb=verb, reason=reason)
+        if verb == "merge":
+            target, match_head = _merge_args(args)
+            if target is None:
+                return message + BARE_MERGE_HINT
+            landed = stamp.landed_head(repo, target)
+            if landed is None:
+                return message
+            if match_head and len(match_head) >= 7 and (landed.startswith(match_head) or match_head.startswith(landed)):
                 continue
-        if not ok:
-            return MESSAGE.format(verb=verb, reason=reason)
+            return message + LANDED_HINT.format(pr=target, sha=landed)
+        return message
     return None
 
 
@@ -175,14 +275,12 @@ def self_test() -> int:
             heredoc = "git commit -m \"$(cat <<'EOF'\nsay gh pr create here\nEOF\n)\""
             expect("a cat heredoc body is not a command", verdict(heredoc, repo), False)
 
-            expect(
-                "merge of a PR land_wt verified is allowed",
-                (stamp.record_landed(repo, "77", "x"), verdict("gh pr merge 77 --merge", repo))[1],
-                False,
-            )
-            expect("merge by URL of a verified PR is allowed", verdict("gh pr merge https://github.com/o/r/pull/77", repo), False)
-            expect("merge of another PR is still denied", verdict("gh pr merge 78 --merge", repo), True)
+            stamp.record_landed(repo, "77", "a1b2c3d4e5f6")
+            expect("a landed merge without the pinned head is denied", verdict("gh pr merge 77 --merge", repo), True)
+            expect("a landed merge with the pinned head is allowed", verdict("gh pr merge 77 --match-head-commit a1b2c3d4e5f6", repo), False)
+            expect("merge of another PR is still denied", verdict("gh pr merge 78 --match-head-commit a1b2c3d4e5f6", repo), True)
             expect("create is not unlocked by a landed PR", verdict("gh pr create", repo), True)
+            expect("a quoted mention is not a command", verdict('gh issue comment 1 --body "gh pr merge"', repo), False)
             stamp.write_stamp(repo, "fast")
             expect("a fresh stamp allows gh pr create", verdict("gh pr create", repo), False)
             (repo / "a.txt").write_text("2\n", encoding="utf-8", newline="\n")

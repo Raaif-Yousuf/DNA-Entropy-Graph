@@ -33,10 +33,13 @@ finished with exit code 0; a partial run proves nothing about the rest.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -80,27 +83,68 @@ def _read_landed(path: Path) -> dict[str, dict]:
     return data if isinstance(data, dict) else {}
 
 
+LANDED_MAX_AGE_SECONDS = 72 * 3600  # a lane landed in the evening is merged the next morning
+_LOCK_STALE_SECONDS = 30.0
+_LOCK_WAIT_SECONDS = 10.0
+
+
+@contextlib.contextmanager
+def _landed_lock(path: Path):
+    """An O_EXCL lock file next to the records, with retry; a lock older than 30 s is a dead writer's and is taken over."""
+    lock = path.with_name("landed-prs.lock")
+    deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+    while True:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > _LOCK_STALE_SECONDS:
+                    lock.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"could not take {lock}") from None
+            time.sleep(0.02)
+    try:
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _fresh(record: object, now: float) -> bool:
+    try:
+        return now - float(record["time"]) <= LANDED_MAX_AGE_SECONDS  # type: ignore[index]
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def record_landed(repo: Path, pr: str, sha: str, now: float | None = None) -> None:
-    """scripts/land_wt.py calls this after it opened PR `pr` from a premerge-green throwaway worktree."""
+    """scripts/land_wt.py calls this after it opened PR `pr` from a premerge-green throwaway worktree.
+
+    Read-modify-write under a lock file, written to a temp file and os.replace()d so a reader never sees
+    half a file; expired records are pruned on every write."""
     path = landed_path(repo)
     if path is None:
         return
-    records = _read_landed(path)
-    records[str(pr)] = {"head": sha, "time": time.time() if now is None else now}
-    path.write_text(json.dumps(records), encoding="utf-8", newline="\n")
+    stamp_time = time.time() if now is None else now
+    with _landed_lock(path):
+        records = {k: v for k, v in _read_landed(path).items() if _fresh(v, stamp_time)}
+        records[str(pr)] = {"head": sha, "time": stamp_time}
+        tmp = path.with_name(f"landed-prs.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(records), encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
 
 
-def check_landed(repo: Path, pr: str, now: float | None = None) -> bool:
-    """True when land_wt.py verified and opened PR `pr` within MAX_AGE_SECONDS."""
+def landed_head(repo: Path, pr: str, now: float | None = None) -> str | None:
+    """The head sha land_wt.py verified for PR `pr` (within LANDED_MAX_AGE_SECONDS), else None."""
     path = landed_path(repo)
     record = _read_landed(path).get(str(pr)) if path is not None else None
-    if not isinstance(record, dict):
-        return False
-    try:
-        age = (time.time() if now is None else now) - float(record["time"])
-    except (KeyError, TypeError, ValueError):
-        return False
-    return age <= MAX_AGE_SECONDS
+    if not isinstance(record, dict) or not _fresh(record, time.time() if now is None else now):
+        return None
+    head = record.get("head")
+    return head if isinstance(head, str) and head else None
 
 
 def write_stamp(repo: Path, mode: str, now: float | None = None) -> Path:

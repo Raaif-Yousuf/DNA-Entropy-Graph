@@ -29,11 +29,19 @@ Seven hooks live here, all registered as `PreToolUse` hooks in `.claude/settings
 - `require_premerge_before_pr.py` -- refuses `gh pr create` and `gh pr merge` unless
   `scripts/premerge.py` passed (green, unfiltered) on the CURRENT HEAD, recorded by
   `scripts/premerge_stamp.py` in `<git-dir>/premerge-stamp.json` (12 hour expiry). Escape hatch, logged to
-  `<git-dir>/premerge-bypass.log`: `DEG_SKIP_PREMERGE=<reason> gh pr create ...` or the same variable in the
-  environment. Registered in `.claude/settings.json` (matcher `Bash|PowerShell`, via `run_hook.py`). It only fires in
-  agent sessions, never in the owner's own terminal. `scripts/land_wt.py` is the sanctioned path: its `gh pr create`
-  is a child process the hook never sees, and it records the PR in `<common-git-dir>/landed-prs.json` so a later
-  `gh pr merge <n>` of that PR (from any checkout) is allowed.
+  `<git-dir>/premerge-bypass.log`: `DEG_SKIP_PREMERGE=<reason> gh pr create ...` (bash), `$env:DEG_SKIP_PREMERGE="<reason>"; gh pr
+  create ...` (PowerShell), or the same variable in the environment. Registered in `.claude/settings.json` (matcher
+  `Bash|PowerShell`, via `run_hook.py`). It only fires in agent sessions, never in the owner's own terminal. The
+  command is tokenized (quotes honoured, both shells), and only `gh [-R repo] pr create|merge` in command position
+  matches, so `gh issue comment --body "see gh pr merge"` is untouched. `scripts/land_wt.py` is the sanctioned path:
+  its `gh pr create` is a child process the hook never sees, and it records `{pr: verified head sha}` in
+  `<common-git-dir>/landed-prs.json` (locked, atomic replace, 72 hour expiry, expired records pruned). A later
+  `gh pr merge <n> --match-head-commit <that sha>` of that PR is allowed from any checkout; without the pin, or with
+  a bare `gh pr merge`, it is denied and the message prints the exact command.
+  Known bypasses, by design (the hook is a speed bump for an agent that forgot, not a security boundary):
+  a command built at run time (`$cmd = "gh pr create"; iex $cmd`, `sh -c "gh pr create"`, `python -c ...`), an
+  alias or wrapper script around `gh`, `gh api repos/.../pulls` (create) or `.../merge`, the GitHub MCP
+  `create_pull_request` / `merge_pull_request` tools (not Bash, so no hook sees them), and the web UI.
 - `gcloud_read_only.py` -- lets a session READ Google Cloud state (`list`, `describe`,
   `get-iam-policy`, `ls`, `config list`, `auth list`) and refuses every other `gcloud`, `gsutil`
   or `bq` call, including an unknown verb and `auth print-access-token`. It replaced the blanket
