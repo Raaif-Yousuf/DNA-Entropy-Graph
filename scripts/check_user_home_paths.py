@@ -87,9 +87,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def tracked_files(root: Path = REPO_ROOT) -> list[str]:
-    out = subprocess.run(
-        ["git", "ls-files"], check=True, capture_output=True, text=True, cwd=root
-    ).stdout
+    out = subprocess.run(["git", "ls-files"], check=True, capture_output=True, text=True, cwd=root).stdout
     return [p for p in out.split("\n") if p]
 
 
@@ -97,9 +95,7 @@ def check(root: Path = REPO_ROOT) -> int:
     files = tracked_files(root)
     hits: list[str] = []
     for path in files:
-        if path.startswith(EXEMPT_PREFIXES) or path.rsplit("/", 1)[-1].startswith(
-            EXEMPT_BASENAME_PREFIXES
-        ):
+        if path.startswith(EXEMPT_PREFIXES) or path.rsplit("/", 1)[-1].startswith(EXEMPT_BASENAME_PREFIXES):
             continue
         try:
             with open(root / path, encoding="utf-8") as handle:
@@ -113,8 +109,7 @@ def check(root: Path = REPO_ROOT) -> int:
 
     if hits:
         print(
-            "::error title=user-home path committed::Replace it with "
-            "%USERPROFILE%, $HOME, or a placeholder account name.",
+            "::error title=user-home path committed::Replace it with %USERPROFILE%, $HOME, or a placeholder account name.",
             file=sys.stderr,
         )
         print("\n".join(hits), file=sys.stderr)
@@ -145,8 +140,7 @@ def self_test() -> int:
         if flagged != should_flag:
             failures += 1
             print(
-                f"self-test FAILED: {text!r} -> flagged={flagged}, "
-                f"expected {should_flag}",
+                f"self-test FAILED: {text!r} -> flagged={flagged}, expected {should_flag}",
                 file=sys.stderr,
             )
     if failures:

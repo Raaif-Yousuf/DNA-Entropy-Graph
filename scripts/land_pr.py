@@ -106,8 +106,7 @@ class Ctx:
         self.log.append(message)
 
 
-def run(argv: Sequence[str], cwd: Path, stdin: bytes | None = None, env: dict[str, str] | None = None
-        ) -> subprocess.CompletedProcess[bytes]:
+def run(argv: Sequence[str], cwd: Path, stdin: bytes | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
     full_env = dict(os.environ if env is None else env)
     full_env["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(list(argv), cwd=cwd, input=stdin, capture_output=True, check=False, env=full_env)
@@ -204,8 +203,7 @@ def normalise_path(ctx: Ctx, raw: str) -> str:
         raise LandError(f"{raw}: is outside the repository {ctx.repo}", EXIT_REFUSED) from None
 
 
-def preflight(ctx: Ctx, branch: str, paths: Sequence[str], hunk_specs: dict[str, list[int]],
-              require_premerge: bool = False) -> list[str]:
+def preflight(ctx: Ctx, branch: str, paths: Sequence[str], hunk_specs: dict[str, list[int]], require_premerge: bool = False) -> list[str]:
     problems: list[str] = []
     if require_premerge:
         fresh, why = premerge_stamp.check_stamp(ctx.repo)
@@ -261,8 +259,7 @@ def _gh(ctx: Ctx, *args: str) -> subprocess.CompletedProcess[bytes]:
     return run([*ctx.gh, *args], ctx.repo, env=ctx.gh_env)
 
 
-def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: bool,
-                    grace: float = DEFAULT_GRACE_SECONDS) -> None:
+def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: bool, grace: float = DEFAULT_GRACE_SECONDS) -> None:
     """MEASURED 2026-10-02 (#472): GitHub registers no checks for a few seconds after `gh pr create`, so an empty
     list inside `grace` seconds means "not yet", not "none". Only after the grace period is it "no checks"."""
     deadline = ctx.clock() + timeout
@@ -286,7 +283,9 @@ def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: 
                 f"PR {pr} has no checks reported after waiting {grace:.0f} s, so there is nothing "
                 f"proving it green. Run `gh workflow run ci-docs.yml "
                 f"--ref <branch>` or the local gates (scripts/premerge.py) and re-run with --allow-no-checks once satisfied. "
-                f"You are on the branch; the PR is open.", EXIT_RED)
+                f"You are on the branch; the PR is open.",
+                EXIT_RED,
+            )
         red = [r["name"] for r in rows if r.get("bucket") in ("fail", "cancel")]
         if red:
             raise LandError(f"check(s) failed on PR {pr}: {', '.join(red)}. Nothing was merged; you are on the branch.", EXIT_RED)
@@ -303,9 +302,21 @@ def wait_for_checks(ctx: Ctx, pr: str, poll: float, timeout: float, allow_none: 
 # ---------------------------------------------------------------------------
 
 
-def land(ctx: Ctx, branch: str, paths: Sequence[str], hunk_specs: dict[str, list[int]], title: str, body_file: Path | None,
-         allow_no_checks: bool, dry_run: bool, poll: float, timeout: float, merge: bool = True,
-         require_premerge: bool = False, grace: float = DEFAULT_GRACE_SECONDS) -> int:
+def land(
+    ctx: Ctx,
+    branch: str,
+    paths: Sequence[str],
+    hunk_specs: dict[str, list[int]],
+    title: str,
+    body_file: Path | None,
+    allow_no_checks: bool,
+    dry_run: bool,
+    poll: float,
+    timeout: float,
+    merge: bool = True,
+    require_premerge: bool = False,
+    grace: float = DEFAULT_GRACE_SECONDS,
+) -> int:
     problems = preflight(ctx, branch, paths, hunk_specs, require_premerge)
     if problems:
         for problem in problems:
@@ -361,8 +372,9 @@ def land(ctx: Ctx, branch: str, paths: Sequence[str], hunk_specs: dict[str, list
     except LandError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return exc.code
-    ctx.say(f"LANDED: PR #{pr} merged; local {BASE} is at {git_text(ctx, 'rev-parse', '--short', BASE)}; "
-            "other working-tree edits were not touched.")
+    ctx.say(
+        f"LANDED: PR #{pr} merged; local {BASE} is at {git_text(ctx, 'rev-parse', '--short', BASE)}; other working-tree edits were not touched."
+    )
     return EXIT_OK
 
 
@@ -385,7 +397,7 @@ def return_to_main(ctx: Ctx, branch: str, commit: str) -> None:
 # Self-test world: a bare remote, a clone, and a stub `gh`. Never the real checkout, never GitHub.
 # ---------------------------------------------------------------------------
 
-STUB_GH = r'''
+STUB_GH = r"""
 import json, os, subprocess, sys, tempfile
 from pathlib import Path
 
@@ -433,7 +445,7 @@ if args[:2] == ["pr", "merge"]:
     state["merged"] = n
     done()
 sys.exit("stub gh: unhandled " + repr(args))
-'''
+"""
 
 
 @dataclass
@@ -504,13 +516,19 @@ def self_test() -> bool:
         code = land(ctx, "fix/a", [], {"f.txt": [0]}, "fix: issue A", None, False, False, 0.0, 30.0)
         expect("landing one hunk exits 0", code == EXIT_OK, str(code))
         expect("another lane's modified file is byte-identical", (world.work / "unrelated.txt").read_bytes() == before_unrelated)
-        expect("the other hunk is still an uncommitted working-tree edit", (world.work / "f.txt").read_bytes() == before_f
-               and len(list_hunks(ctx, "f.txt")) == 1)
+        expect(
+            "the other hunk is still an uncommitted working-tree edit",
+            (world.work / "f.txt").read_bytes() == before_f and len(list_hunks(ctx, "f.txt")) == 1,
+        )
         expect("main gained exactly one merge commit", world.g("rev-list", "--merges", "--count", "main") == "1")
-        expect("the merged file has hunk A and not hunk B",
-               "issue A" in world.g("show", "origin/main:f.txt") and "issue B" not in world.g("show", "origin/main:f.txt"))
-        expect("the branch is gone locally and on the remote",
-               world.g("branch", "--list", "fix/a") == "" and world.g("ls-remote", "--heads", "origin", "fix/a") == "")
+        expect(
+            "the merged file has hunk A and not hunk B",
+            "issue A" in world.g("show", "origin/main:f.txt") and "issue B" not in world.g("show", "origin/main:f.txt"),
+        )
+        expect(
+            "the branch is gone locally and on the remote",
+            world.g("branch", "--list", "fix/a") == "" and world.g("ls-remote", "--heads", "origin", "fix/a") == "",
+        )
         expect("the section sign survived the patch round trip", "\u00a7" in world.g("show", "origin/main:f.txt"))
     print(f"\n{'PASS' if ok else 'FAIL'}: land_pr self-test")
     return ok
@@ -529,16 +547,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--list-hunks", metavar="FILE", help="print the hunks of FILE's working-tree diff and exit")
     ap.add_argument("--title", help="commit subject and PR title")
     ap.add_argument("--body-file", type=Path, help="PR body (also the commit body)")
-    ap.add_argument("--allow-no-checks", action="store_true",
-                    help="merge even when the PR reports no checks AFTER the grace period; never a fix for 'checks not registered yet'")
+    ap.add_argument(
+        "--allow-no-checks",
+        action="store_true",
+        help="merge even when the PR reports no checks AFTER the grace period; never a fix for 'checks not registered yet'",
+    )
     ap.add_argument("--no-merge", action="store_true", help="stop after opening the PR")
-    ap.add_argument("--no-premerge-check", action="store_true",
-                    help="do not require a green scripts/premerge.py stamp on HEAD (use deliberately)")
+    ap.add_argument(
+        "--no-premerge-check", action="store_true", help="do not require a green scripts/premerge.py stamp on HEAD (use deliberately)"
+    )
     ap.add_argument("--dry-run", action="store_true", help="run the preflight and stop; changes nothing")
     ap.add_argument("--gh", default=os.environ.get("LAND_PR_GH", "gh"), help="gh command (default: gh; for tests)")
     ap.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
-    ap.add_argument("--grace-seconds", type=float, default=DEFAULT_GRACE_SECONDS,
-                    help="how long to wait for the first check to appear before calling it 'no checks'")
+    ap.add_argument(
+        "--grace-seconds",
+        type=float,
+        default=DEFAULT_GRACE_SECONDS,
+        help="how long to wait for the first check to appear before calling it 'no checks'",
+    )
     ap.add_argument("--wait-seconds", type=float, default=DEFAULT_WAIT_SECONDS)
     ap.add_argument("--repo", type=Path, default=Path.cwd(), help="repository (default: cwd)")
     ap.add_argument("--self-test", action="store_true")
@@ -568,9 +594,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             ap.error("--branch and --title are required (unless --list-hunks or --self-test)")
         paths = [normalise_path(ctx, p) for p in args.paths]
         hunk_specs = {normalise_path(ctx, p): idx for p, idx in parse_hunk_specs(args.hunks).items()}
-        return land(ctx, args.branch, paths, hunk_specs, args.title, args.body_file, args.allow_no_checks, args.dry_run,
-                    args.poll_seconds, args.wait_seconds, merge=not args.no_merge,
-                    require_premerge=not args.no_premerge_check, grace=args.grace_seconds)
+        return land(
+            ctx,
+            args.branch,
+            paths,
+            hunk_specs,
+            args.title,
+            args.body_file,
+            args.allow_no_checks,
+            args.dry_run,
+            args.poll_seconds,
+            args.wait_seconds,
+            merge=not args.no_merge,
+            require_premerge=not args.no_premerge_check,
+            grace=args.grace_seconds,
+        )
     except LandError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return exc.code

@@ -7,6 +7,10 @@ on the **Runs** page, grouped by day. Each entry shows its name, what was in it,
 model and computer type were used, how long it took, roughly what it cost, and whether
 its results are still available in the cloud or only on your own computer.
 
+A finished run whose results are still on your computer also shows a small line on its row:
+its entropy along the first sequence, at a glance. The lines fill in a moment after the list
+appears. A run with no entropy track, or whose folder was moved or deleted, has no line.
+
 ## Re-running and re-downloading
 
 - **Run again**: starts a new run using the exact same files and settings as a past one.

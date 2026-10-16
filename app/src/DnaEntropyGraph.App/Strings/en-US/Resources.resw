@@ -287,7 +287,7 @@
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
   </data>
   <data name="RunError_cleanup_deleted" xml:space="preserve">
-    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start it again.</value>
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Start the run again.</value>
   </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
@@ -300,6 +300,12 @@
   </data>
   <data name="ViewerRuntimeMissing_Action" xml:space="preserve">
     <value>Install the WebView2 Runtime</value>
+  </data>
+  <data name="ViewerFallbackNote.Text" xml:space="preserve">
+    <value>Until the genome viewer works, here is the entropy track of this run. It is a simple picture: you cannot zoom or see the sequence.</value>
+  </data>
+  <data name="ViewerFallbackChart.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along the sequence</value>
   </data>
   <data name="ViewerNoRun_Title" xml:space="preserve">
     <value>No run selected</value>
@@ -360,6 +366,18 @@
   </data>
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>
+  </data>
+  <data name="ViewerContigSelector.Header" xml:space="preserve">
+    <value>Sequence record</value>
+  </data>
+  <data name="ViewerContigSelector.PlaceholderText" xml:space="preserve">
+    <value>Choose a record to jump to</value>
+  </data>
+  <data name="ViewerContigGo.Content" xml:space="preserve">
+    <value>Go to record</value>
+  </data>
+  <data name="ViewerSeamLabel" xml:space="preserve">
+    <value>Where the reverse read hands over to the forward read</value>
   </data>
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
@@ -435,6 +453,42 @@
   </data>
   <data name="NewRunRemoveItem.Content" xml:space="preserve">
     <value>Remove</value>
+  </data>
+  <data name="NewRunAddGff3.Content" xml:space="preserve">
+    <value>Add GFF3</value>
+  </data>
+  <data name="NewRunRemoveGff3.Content" xml:space="preserve">
+    <value>Remove GFF3</value>
+  </data>
+  <data name="NewRunPillAnnotationLine" xml:space="preserve">
+    <value>Genes from {0}: {1}. The gene finder (Prodigal) is skipped for this file.</value>
+  </data>
+  <data name="NewRunStatusAnnotationUnavailable" xml:space="preserve">
+    <value>Pairing a GFF3 is not available in this version of the app yet. Remove the GFF3 and run the FASTA alone, or update the app.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNoFasta" xml:space="preserve">
+    <value>A GFF3 needs a FASTA file to go with. Add the FASTA file first, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAmbiguous" xml:space="preserve">
+    <value>There is more than one FASTA file and the GFF3 name does not match any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileUnreadable" xml:space="preserve">
+    <value>The GFF3 or its FASTA file could not be read. Check that both still exist and are not open in another program, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileTooLarge" xml:space="preserve">
+    <value>The GFF3 file is too large to pair. Choose a smaller GFF3, or run the FASTA without it.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NotFasta" xml:space="preserve">
+    <value>A GFF3 can only be paired with a FASTA file. Use a FASTA copy of the sequence, or run a GenBank file, which already carries its genes.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoFeatures" xml:space="preserve">
+    <value>The GFF3 has no gene or CDS rows we can read. Check that it is a GFF3 file with nine tab-separated columns, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoNameMatch" xml:space="preserve">
+    <value>No sequence name in the GFF3 matches a sequence name in the FASTA file. Make the first column of the GFF3 match the FASTA header, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoneFit" xml:space="preserve">
+    <value>Every gene in the GFF3 runs past the end of its sequence. Check that the GFF3 belongs to this FASTA file, then add it again.</value>
   </data>
   <data name="NewRunTreatAsRna.Content" xml:space="preserve">
     <value>Treat as RNA</value>
@@ -966,6 +1020,21 @@
   </data>
   <data name="Results_CopyFailed" xml:space="preserve">
     <value>The path could not be copied because Windows would not let the app use the clipboard. Close other programs that copy text, then choose Copy path again.</value>
+  </data>
+  <data name="Results_ExportPngFailed" xml:space="preserve">
+    <value>The picture could not be saved. Check that the results folder still exists and has free space, then choose Save picture again.</value>
+  </data>
+  <data name="ResultsExportPngButton.Content" xml:space="preserve">
+    <value>Save picture</value>
+  </data>
+  <data name="ResultsOverviewChart.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along the sequence</value>
+  </data>
+  <data name="RunsSparkline.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along this run's first sequence, as a small line</value>
+  </data>
+  <data name="ResultsOverviewSeam.Text" xml:space="preserve">
+    <value>The dashed line marks where the two reading directions were joined.</value>
   </data>
   <data name="Results_Direction_BothCombined" xml:space="preserve">
     <value>Both directions, combined</value>
@@ -1610,5 +1679,214 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="WizardCheckAllButton.Content" xml:space="preserve">
     <value>Check everything again</value>
+  </data>
+  <data name="NewRunPresetExpander.Header" xml:space="preserve">
+    <value>Option presets</value>
+  </data>
+  <data name="NewRunPresetCombo.Header" xml:space="preserve">
+    <value>Preset</value>
+  </data>
+  <data name="NewRunPresetCombo.PlaceholderText" xml:space="preserve">
+    <value>My own choices</value>
+  </data>
+  <data name="NewRunPresetNameBox.PlaceholderText" xml:space="preserve">
+    <value>Name for a new preset</value>
+  </data>
+  <data name="NewRunPresetSave.Content" xml:space="preserve">
+    <value>Save as preset</value>
+  </data>
+  <data name="NewRunPresetDelete.Content" xml:space="preserve">
+    <value>Delete preset</value>
+  </data>
+  <data name="NewRunPresetCopy.Content" xml:space="preserve">
+    <value>Copy my presets</value>
+  </data>
+  <data name="NewRunPresetAdd.Content" xml:space="preserve">
+    <value>Add presets from the clipboard</value>
+  </data>
+  <data name="PresetSummary_Line" xml:space="preserve">
+    <value>Strands: {0}. Shape: {1}. Context: {2} bases. Files: {3}.</value>
+  </data>
+  <data name="PresetSummary_NoFiles" xml:space="preserve">
+    <value>none chosen yet</value>
+  </data>
+  <data name="PresetDirection_BothCombined" xml:space="preserve">
+    <value>both strands combined</value>
+  </data>
+  <data name="PresetDirection_BothAveraged" xml:space="preserve">
+    <value>both strands averaged</value>
+  </data>
+  <data name="PresetDirection_BothSeparate" xml:space="preserve">
+    <value>both strands kept apart</value>
+  </data>
+  <data name="PresetDirection_ForwardOnly" xml:space="preserve">
+    <value>the forward strand only</value>
+  </data>
+  <data name="PresetDirection_ReverseOnly" xml:space="preserve">
+    <value>the reverse strand only</value>
+  </data>
+  <data name="PresetTopology_Auto" xml:space="preserve">
+    <value>decided by the file</value>
+  </data>
+  <data name="PresetTopology_Linear" xml:space="preserve">
+    <value>a line</value>
+  </data>
+  <data name="PresetTopology_Circular" xml:space="preserve">
+    <value>a circle (a plasmid)</value>
+  </data>
+  <data name="Preset_quick_look_Name" xml:space="preserve">
+    <value>Quick look</value>
+  </data>
+  <data name="Preset_quick_look_Detail" xml:space="preserve">
+    <value>One pass over the forward strand and only the few files a first look needs. The fastest, cheapest run.</value>
+  </data>
+  <data name="Preset_publication_Name" xml:space="preserve">
+    <value>Publication</value>
+  </data>
+  <data name="Preset_publication_Detail" xml:space="preserve">
+    <value>Both strands combined and every default file, including the smoothed tracks, region calls and gene summary a figure draws on.</value>
+  </data>
+  <data name="Preset_plasmid_qc_Name" xml:space="preserve">
+    <value>Plasmid QC</value>
+  </data>
+  <data name="Preset_plasmid_qc_Detail" xml:space="preserve">
+    <value>Reads the sequence as a circle on both strands with no seam, and calls the low and high entropy regions.</value>
+  </data>
+  <data name="PresetStatus_NeedFile" xml:space="preserve">
+    <value>Choose a sequence file first, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_EmptyName" xml:space="preserve">
+    <value>Type a name for the preset, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_NameTaken" xml:space="preserve">
+    <value>That name belongs to a built-in preset. Type a different name, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_Saved" xml:space="preserve">
+    <value>Saved the preset {0}.</value>
+  </data>
+  <data name="PresetStatus_Deleted" xml:space="preserve">
+    <value>Deleted the preset {0}.</value>
+  </data>
+  <data name="PresetStatus_NothingToCopy" xml:space="preserve">
+    <value>You have no presets of your own yet. Save one first, then choose Copy my presets.</value>
+  </data>
+  <data name="PresetStatus_Copied" xml:space="preserve">
+    <value>Copied your presets. Paste them into a message or a file to share them.</value>
+  </data>
+  <data name="PresetStatus_CopyFailed" xml:space="preserve">
+    <value>Windows would not let the app copy. Close the program that is using the clipboard, then choose Copy my presets.</value>
+  </data>
+  <data name="PresetStatus_Imported" xml:space="preserve">
+    <value>Added {0} preset(s) from the clipboard.</value>
+  </data>
+  <data name="PresetStatus_ImportNone" xml:space="preserve">
+    <value>The clipboard does not hold presets this app can read. Copy the presets text again, then choose Add presets from the clipboard.</value>
+  </data>
+  <data name="Runs_PresetLine" xml:space="preserve">
+    <value>Preset: {0}</value>
+  </data>
+  <!-- app8 wave 2026-10-15: #685 EMBL and SnapGene inputs -->
+  <data name="NewRunPillKind_Embl" xml:space="preserve">
+    <value>EMBL</value>
+  </data>
+  <data name="NewRunPillKind_SnapGene" xml:space="preserve">
+    <value>SnapGene</value>
+  </data>
+  <!-- #686 GFF3 pairing: notices -->
+  <data name="NewRunNotice_AnnotationLinesSkipped" xml:space="preserve">
+    <value>{0} lines of the GFF3 were skipped because they are not nine columns separated by tabs with a whole-number start and end (the first is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationLinesSkipped_One" xml:space="preserve">
+    <value>1 line of the GFF3 was skipped because it is not nine columns separated by tabs with a whole-number start and end (it is line {1}). The other lines are used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames" xml:space="preserve">
+    <value>{0} sequence names in the GFF3 match no record in the FASTA file, so their genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationUnmatchedNames_One" xml:space="preserve">
+    <value>1 sequence name in the GFF3 matches no record in the FASTA file, so its genes are not used.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd" xml:space="preserve">
+    <value>{0} genes in the GFF3 run past the end of their sequence and are left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
+  <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
+    <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
+  </data>
+  <data name="SettingsAboutHeader.Text" xml:space="preserve">
+    <value>About and updates</value>
+  </data>
+  <data name="AboutVersion_Text" xml:space="preserve">
+    <value>Version {0}</value>
+  </data>
+  <data name="UpdateCheckNowButton.Content" xml:space="preserve">
+    <value>Check now</value>
+  </data>
+  <data name="UpdateRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateBarRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateChannelChoices.Header" xml:space="preserve">
+    <value>Which updates to offer</value>
+  </data>
+  <data name="UpdateChannelStable.Content" xml:space="preserve">
+    <value>Stable (recommended)</value>
+  </data>
+  <data name="UpdateChannelBeta.Content" xml:space="preserve">
+    <value>Beta (early versions, may have rough edges)</value>
+  </data>
+  <data name="UpdateCheckOnLaunchBox.Content" xml:space="preserve">
+    <value>Check for updates when the app starts</value>
+  </data>
+  <data name="UpdateNotesHeader.Text" xml:space="preserve">
+    <value>What changes in this version</value>
+  </data>
+  <data name="UpdateChecking" xml:space="preserve">
+    <value>Checking for updates...</value>
+  </data>
+  <data name="UpdateUpToDate" xml:space="preserve">
+    <value>You have the latest version.</value>
+  </data>
+  <data name="UpdateNotInstalled" xml:space="preserve">
+    <value>This copy was not installed with the installer, so it cannot update itself. Download the latest installer from the releases page to update.</value>
+  </data>
+  <data name="UpdateCheckFailed" xml:space="preserve">
+    <value>Could not check for updates. Check your internet connection, then press Check now.</value>
+  </data>
+  <data name="UpdateAvailable_Title" xml:space="preserve">
+    <value>Update available: {0}</value>
+  </data>
+  <data name="UpdateAvailable_Status" xml:space="preserve">
+    <value>Version {0} is ready to download. Press Restart to update when you are between runs.</value>
+  </data>
+  <data name="UpdateWaitForRun" xml:space="preserve">
+    <value>A run is in progress, so the app will not restart now. Press Restart to update again when the run has finished.</value>
+  </data>
+  <data name="UpdateDownloading" xml:space="preserve">
+    <value>Downloading the update...</value>
+  </data>
+  <data name="UpdateDownloadingPercent" xml:space="preserve">
+    <value>Downloading the update... {0}%</value>
+  </data>
+  <data name="UpdateRestarting" xml:space="preserve">
+    <value>Restarting to finish the update...</value>
+  </data>
+  <data name="UpdateDownloadFailed" xml:space="preserve">
+    <value>The update could not be downloaded. Check your internet connection, then press Restart to update again.</value>
+  </data>
+  <data name="UpdateSettingNotSaved" xml:space="preserve">
+    <value>That choice could not be saved because the settings file is locked. Close other programs using it, then change it again.</value>
+  </data>
+  <data name="DevBuild_Banner" xml:space="preserve">
+    <value>Development build {0}: not a release</value>
+  </data>
+  <data name="AboutBuild_Text" xml:space="preserve">
+    <value>Build {0}</value>
+  </data>
+  <data name="UninstallRemoveData_Title" xml:space="preserve">
+    <value>Remove your data too?</value>
+  </data>
+  <data name="UninstallRemoveData_Body" xml:space="preserve">
+    <value>DNA Entropy Graph is being removed. Also delete your run history, settings and saved copies of your input files from this computer? Choose No to keep them for a later reinstall. Your result files in your output folder are never deleted.</value>
   </data>
 </root>
