@@ -51,6 +51,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private string? _loadJson;
     private bool _pageReady;
     private bool _dark;
+    private ViewerLocus? _locus;
 
     // Status, ActionUrl and MapRunFolder are plain notifying properties, not [ObservableProperty]: no XAML
     // binds them (the page binds IsErrorVisible, ActionUri, HasLinkAction ...). Status feeds RetryCommand and
@@ -381,7 +382,43 @@ public sealed partial class ViewerViewModel : ObservableObject
             case "error":
                 FailKeepingRun(ViewerFailure.ViewerError);
                 break;
+            case "locusChanged":
+                _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var locus) ? locus : null;
+                break;
+            case "key":
+                OnViewerKey(json);
+                break;
         }
+    }
+
+    // Issue #247: bridge.js forwards the key; the pan, zoom and preset decisions are ViewerKeyboard's.
+    private void OnViewerKey(string json)
+    {
+        if (!_pageReady || Status != ViewerStatus.Ready)
+        {
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(json);
+        var key = doc.RootElement.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() : null;
+        var ctrl = doc.RootElement.TryGetProperty("ctrl", out var c) && c.ValueKind == JsonValueKind.True;
+        int? length = _locus is { } l && Contigs.FirstOrDefault(x => x.Name == l.Chr) is { Length: > 0 } contig ? contig.Length : null;
+        var result = ViewerKeyboard.Resolve(key, ctrl, _locus, length);
+        switch (result.Kind)
+        {
+            case ViewerKeyKind.Goto:
+                Send(new { cmd = "goto", locus = result.Locus });
+                break;
+            case ViewerKeyKind.FocusLocus:
+                Send(new { cmd = "focusLocus" });
+                break;
+        }
+    }
+
+    private static string? ReadString(string json, string name)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
     }
 
     /// <summary>The WebView2 renderer or browser process died: the page is gone until the host reloads it.</summary>
@@ -428,6 +465,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private void ShowLoading()
     {
         _fallbackGeneration++;
+        _locus = null;
         FallbackContig = null;
         IsErrorVisible = false;
         IsViewerVisible = true;
@@ -451,6 +489,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private void Fail(ViewerStatus status, ViewerFailure failure, string? actionUrl = null)
     {
         _loadJson = null;
+        _locus = null;
         MapRunFolder = null;
         _contigGeneration++;
         ClearContigs();

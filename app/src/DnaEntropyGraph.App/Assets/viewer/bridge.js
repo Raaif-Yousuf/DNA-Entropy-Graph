@@ -1,9 +1,9 @@
 // Bridge between the WinUI host (IgvViewerHost) and igv.js (issues #72, #73).
 // Commands in (window.chrome.webview 'message'): {cmd:"load", config}, {cmd:"goto", locus},
-//   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}.
+//   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}, {cmd:"focusLocus"}.
 // Events out (postMessage): {evt:"ready"}, {evt:"loaded"}, {evt:"warning", message},
 //   {evt:"error", message} (fatal: the run could not be drawn), {evt:"locusChanged", locus},
-//   {evt:"snapshot", svg}.
+//   {evt:"snapshot", svg}, {evt:"key", key, ctrl} (issue #247: the host decides what a key does).
 // Runs with no network: igv.js is vendored beside this file and every URL it fetches is
 // https://run.deg/... (the run's output folder, mapped by the host).
 (function () {
@@ -69,9 +69,27 @@
       case 'goto': if (browser) { await browser.search(cmd.locus); } break;
       case 'seams': if (browser) { await markSeams(cmd.seams, cmd.label); } break;
       case 'theme': document.body.classList.toggle('dark', !!cmd.dark); break;
+      case 'focusLocus': focusLocusBox(); break;
       case 'snapshot': if (browser) { post({ evt: 'snapshot', svg: browser.toSVG() }); } break;
     }
   }
+
+  function focusLocusBox() {
+    var box = container.querySelector('.igv-search-input') || container.querySelector('input[type="text"]');
+    if (box) { box.focus(); box.select(); }
+  }
+
+  // Issue #247: forward the navigation keys. No decision here (the host's ViewerKeyboard owns them), except to
+  // stay out of the way while the user types in the locus box or an igv dialog.
+  var FORWARDED = ['ArrowLeft', 'ArrowRight', '+', '=', '-', '_', 'Home', '1', '2', '3'];
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) && !(e.ctrlKey && !e.altKey && !e.metaKey)) { return; }
+    var ctrl = e.ctrlKey || e.metaKey;
+    if (e.altKey || (ctrl ? String(e.key).toLowerCase() !== 'l' : FORWARDED.indexOf(e.key) < 0)) { return; }
+    e.preventDefault();
+    post({ evt: 'key', key: e.key, ctrl: ctrl });
+  });
 
   if (wv) {
     wv.addEventListener('message', function (e) {
