@@ -26,6 +26,8 @@ file extension, so a renamed file still works. An EMBL file (`.embl`) or a SnapG
 
 If you have a FASTA file and a GFF3 file that lists its genes, drop them together, or choose **Add GFF3** under the file list. The app pairs a GFF3 with the FASTA that has the same name (plasmid.fasta and plasmid.gff3), or with the only FASTA on the page. With several FASTA files and no matching name, select the FASTA file first and then choose **Add GFF3**. The file's line then shows how many genes the GFF3 has, and the run uses those genes instead of finding them itself. **Remove GFF3** takes it off again. A GFF3 whose sequence names do not match the FASTA, or whose genes all run past the end of the sequence, is refused before anything is created, with one thing to fix. Running again from the Runs page uses the same GFF3. This needs a worker version that reads GFF3 files; until then the button does not appear.
 
+Two optional extra files need no model and no graphics card: a GC-content track (`--gc`, how G/C-rich each stretch is) and a codon-usage table per gene (`--codons`). They are off by default. The app does not offer them as checkboxes yet.
+
 Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
 
 Each file you add gets its own small summary: how many records it contains, how many
