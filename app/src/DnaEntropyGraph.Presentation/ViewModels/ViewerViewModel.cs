@@ -1,6 +1,8 @@
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.Viewer;
 
@@ -21,6 +23,9 @@ public enum ViewerStatus
     ViewerError,
 }
 
+/// <summary>One record of the shown run: its name (the igv chromosome name), length and, for a combined-direction run, the seam base from provenance.</summary>
+public sealed record ViewerContig(string Name, int Length, int? Seam);
+
 /// <summary>
 /// State for the embedded igv.js viewer page (issues #72, #73). The WebView2 host in the App layer
 /// maps <see cref="MapRunFolder"/> to <c>run.deg</c>, posts every <see cref="MessageToViewer"/> string
@@ -36,7 +41,10 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     private readonly IWebViewRuntimeProbe _probe;
     private readonly IStringResourceProvider _strings;
+    private readonly IEntropyOverviewSource _overviewSource;
     private readonly long _maxFastaBytes;
+    private int _contigGeneration;
+    private bool _settingSelection;
 
     // The current run's load command (kept after sending, see the class comment).
     private string? _loadJson;
@@ -71,11 +79,55 @@ public sealed partial class ViewerViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(HasRetryAction))]
     private string _actionLabel = string.Empty;
 
-    public ViewerViewModel(IWebViewRuntimeProbe probe, IStringResourceProvider strings, long maxFastaBytes = ViewerLimits.MaxFastaBytes)
+    /// <summary>The records of the shown run, for the contig selector (issue #116). Empty until the run's overview is read.</summary>
+    public ObservableCollection<ViewerContig> Contigs { get; } = [];
+
+    /// <summary>The selector is shown only when there is something to switch between (two or more records).</summary>
+    [ObservableProperty]
+    private bool _hasContigs;
+
+    [ObservableProperty]
+    private ViewerContig? _selectedContig;
+
+    /// <summary>Completes when the contig list of the last <see cref="OpenRun"/> is filled (or known to be unavailable).</summary>
+    public Task ContigsReady { get; private set; } = Task.CompletedTask;
+
+    public ViewerViewModel(
+        IWebViewRuntimeProbe probe,
+        IStringResourceProvider strings,
+        IEntropyOverviewSource overviewSource,
+        long maxFastaBytes = ViewerLimits.MaxFastaBytes)
     {
         _probe = probe;
         _strings = strings;
+        _overviewSource = overviewSource;
         _maxFastaBytes = maxFastaBytes;
+    }
+
+    partial void OnSelectedContigChanged(ViewerContig? value)
+    {
+        // Only a choice made by the user while the page is drawn is a goto; filling the list is not.
+        GoToContigCommand.NotifyCanExecuteChanged();
+        if (!_settingSelection)
+        {
+            GoToSelectedContig();
+        }
+    }
+
+    /// <summary>Jumps to the selected record again (the list sends no change when the same record is picked after panning away).</summary>
+    [RelayCommand(CanExecute = nameof(CanGoToContig))]
+    private void GoToContig() => GoToSelectedContig();
+
+    private bool CanGoToContig() => SelectedContig is not null && _pageReady && Status == ViewerStatus.Ready;
+
+    private void GoToSelectedContig()
+    {
+        if (SelectedContig is { } contig && _pageReady && Status == ViewerStatus.Ready)
+        {
+            // An explicit range: a record named like a locus ("a:1-5") must not be parsed as one.
+            var locus = contig.Length > 0 ? $"{contig.Name}:1-{contig.Length}" : contig.Name;
+            Send(new { cmd = "goto", locus });
+        }
     }
 
     public ViewerStatus Status
@@ -86,6 +138,7 @@ public sealed partial class ViewerViewModel : ObservableObject
             if (SetProperty(ref _status, value))
             {
                 RetryCommand.NotifyCanExecuteChanged();
+                GoToContigCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -163,6 +216,74 @@ public sealed partial class ViewerViewModel : ObservableObject
         MapRunFolder = plan.RunFolder;
         ShowLoading();
         SendLoadIfReady();
+        ContigsReady = LoadContigsAsync(plan.RunFolder!);
+    }
+
+    // The record list and seams come from the run's own entropy track and provenance (off the UI thread, read once).
+    private async Task LoadContigsAsync(string folder)
+    {
+        var generation = ++_contigGeneration;
+        ClearContigs();
+        IReadOnlyList<EntropyContig> contigs;
+        try
+        {
+            contigs = (await Task.Run(() => _overviewSource.Load(folder)))?.Contigs ?? [];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Fire-and-forget: a malformed track (FormatException ...) must not fault the task unseen.
+            // The viewer itself still draws the run; only the selector and seam markers are lost.
+            contigs = [];
+        }
+
+        if (generation != _contigGeneration)
+        {
+            return;
+        }
+
+        foreach (var c in contigs)
+        {
+            Contigs.Add(new ViewerContig(c.Name, c.Length, c.Seam));
+        }
+
+        SelectWithoutGoto(Contigs.FirstOrDefault());
+        HasContigs = Contigs.Count > 1;
+        SendSeamsIfReady();
+    }
+
+    private void ClearContigs()
+    {
+        Contigs.Clear();
+        SelectWithoutGoto(null);
+        HasContigs = false;
+    }
+
+    private void SelectWithoutGoto(ViewerContig? contig)
+    {
+        _settingSelection = true;
+        try
+        {
+            SelectedContig = contig;
+        }
+        finally
+        {
+            _settingSelection = false;
+        }
+    }
+
+    // Seams are drawn in the page, so they go out once it has drawn the run and the list is known; either order works.
+    private void SendSeamsIfReady()
+    {
+        if (!_pageReady || Status != ViewerStatus.Ready)
+        {
+            return;
+        }
+
+        var seams = Contigs.Where(c => c.Seam is not null).Select(c => new { chr = c.Name, pos = c.Seam!.Value }).ToArray();
+        if (seams.Length > 0)
+        {
+            Send(new { cmd = "seams", label = _strings.GetString("ViewerSeamLabel"), seams });
+        }
     }
 
     /// <summary>Handles one event posted by bridge.js. Anything unrecognised, and non-fatal <c>warning</c> noise, is ignored.</summary>
@@ -208,6 +329,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 {
                     IsLoading = false;
                     Status = ViewerStatus.Ready;
+                    // A freshly drawn page shows the first record; keep the selector in step with it.
+                    SelectWithoutGoto(Contigs.FirstOrDefault());
+                    SendSeamsIfReady();
                 }
 
                 break;
@@ -270,6 +394,8 @@ public sealed partial class ViewerViewModel : ObservableObject
     {
         _loadJson = null;
         MapRunFolder = null;
+        _contigGeneration++;
+        ClearContigs();
         ShowError(status, failure, actionUrl);
     }
 
