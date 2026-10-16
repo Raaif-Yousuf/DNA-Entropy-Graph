@@ -93,7 +93,7 @@ LANDWT_NAME = re.compile(r"^.+-\d{14}$")
 PROTECTED_BRANCHES = ("main", "master", "develop", "release/*")
 BUILD_OUTPUT = re.compile(
     r"^(?:app/(?:src|tests)/[^/]+/(?:bin|obj)"
-    r"|\.artifacts"
+    r"|(?:app/)?\.artifacts"
     r"|(?:(?:worker|scripts)/(?:[^/]+/)*)?__pycache__"
     r"|(?:(?:worker|scripts)/)?\.(?:pytest|ruff|mypy)_cache"
     r"|worker/(?:src/)?[^/]+\.egg-info)(?:/|$)"

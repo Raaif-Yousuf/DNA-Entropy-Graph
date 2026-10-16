@@ -646,6 +646,9 @@ def test_known_build_output_alone_does_not_keep_a_worktree(world):
     (wt / "app" / "src" / "App" / "obj" / "x.dll").write_bytes(b"x")
     (wt / "worker" / "pkg.egg-info").mkdir()
     (wt / "worker" / "pkg.egg-info" / "PKG-INFO").write_bytes(b"x")
+    (wt / "app" / ".artifacts" / "lane" / "bin").mkdir(parents=True)  # MEASURED 2026-10-16: the real build output root
+    (wt / "app" / ".artifacts" / "lane" / "bin" / "App.xbf").write_bytes(b"x")
+    world.exclude(wt, ".artifacts/")
     (wt / "worker" / "sub").mkdir()
     (wt / "worker" / "sub" / "__pycache__").mkdir()
     (wt / "worker" / "sub" / "__pycache__" / "m.pyc").write_bytes(b"x")
