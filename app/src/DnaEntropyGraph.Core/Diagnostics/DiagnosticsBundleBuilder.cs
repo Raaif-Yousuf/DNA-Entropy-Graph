@@ -37,6 +37,9 @@ public static partial class DiagnosticsBundleBuilder
         Result,
         Progress,
         Log,
+
+        /// <summary>Issue #245: the cloud audit log (both generations), copied under its own name and redacted like a log.</summary>
+        CloudAudit,
     }
 
     private sealed record Loaded(string Path, FileKind Kind, string Text, bool Truncated);
@@ -49,6 +52,9 @@ public static partial class DiagnosticsBundleBuilder
 
     [GeneratedRegex(@"^(?:logs/[A-Za-z0-9_.-]{1,100}|runs/[A-Za-z0-9_-]{1,64}/logs/[A-Za-z0-9_.-]{1,100})\.(?:log|txt)$")]
     private static partial Regex LogFile();
+
+    [GeneratedRegex(@"^logs/cloud-audit(?:\.1)?\.jsonl$")]
+    private static partial Regex CloudAuditFile();
 
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction; no zip is produced.</exception>
     public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info)
@@ -153,6 +159,11 @@ public static partial class DiagnosticsBundleBuilder
         if (RunJsonLines().IsMatch(path))
         {
             return FileKind.Progress;
+        }
+
+        if (CloudAuditFile().IsMatch(path))
+        {
+            return FileKind.CloudAudit;
         }
 
         return LogFile().IsMatch(path) ? FileKind.Log : null;

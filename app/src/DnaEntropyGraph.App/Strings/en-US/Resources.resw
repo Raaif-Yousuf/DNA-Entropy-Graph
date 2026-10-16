@@ -2102,4 +2102,16 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunError_worker_stage_stuck" xml:space="preserve">
     <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
+  <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
+    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics.</value>
+  </data>
+  <data name="CloudActivityLogOpenButton.Content" xml:space="preserve">
+    <value>Open cloud activity log</value>
+  </data>
+  <data name="CloudActivityLogNone" xml:space="preserve">
+    <value>Nothing has been recorded yet. Start a cloud run, then choose Open cloud activity log again.</value>
+  </data>
+  <data name="CloudActivityLogOpenFailed" xml:space="preserve">
+    <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
+  </data>
 </root>

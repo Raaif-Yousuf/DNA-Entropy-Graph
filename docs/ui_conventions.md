@@ -306,6 +306,15 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).
 
+## 14. Settings > Diagnostics: cloud activity log (issue #245)
+
+- One button, **Open cloud activity log**, under the Save diagnostics row, bound to `CloudActivityLogSettingsViewModel.OpenCloudActivityLogCommand`
+  (its own small ViewModel, like the Files group, so `SettingsViewModel` is unchanged). It reveals `logs\cloud-audit.jsonl` in Explorer.
+- No file yet: the status line under it says so and names the next step (`CloudActivityLogNone`); a launcher that fails or throws
+  is reported the same way (`CloudActivityLogOpenFailed`, which points at the Files group's Logs folder). Never a dialog, never a throw.
+- All three strings and the explainer live in `Resources.resw`; the explainer states plainly that the log holds no sequences, file
+  names or email address.
+
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text

@@ -24,6 +24,14 @@ as `<user>` or `<path>`. If the app finds anything in the file that looks like s
 sign-in code it refuses to save and tells you so; describe the problem in the issue without a file
 instead. The app does not write its own log file yet; when it does, the same button will include it.
 
+## What the app did in your Google Cloud project
+
+If you want to see exactly what the app changed in your project (and when), open **Settings**, find **Diagnostics**, and choose
+**Open cloud activity log**. Each line is one change: starting, stopping or deleting a rented computer, creating or writing to the
+results storage bucket, or turning on a Google service. It shows the time, which run it was for, whether it worked, and how long it took.
+It never holds your sequences, your file names or your email address. The same file is included inside the zip when you choose
+**Save diagnostics**, so support can see it. If nothing is listed yet, no cloud run has made a change on this computer.
+
 ## Signing in
 
 **"Your Google sign-in expired"**, this happens on its own, roughly once a week, while

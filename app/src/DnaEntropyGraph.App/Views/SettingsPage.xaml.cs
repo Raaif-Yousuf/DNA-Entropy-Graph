@@ -26,8 +26,11 @@ public sealed partial class SettingsPage : Page
 
     public UpdateViewModel Updates { get; }
 
+    public CloudActivityLogSettingsViewModel CloudActivity { get; }
+
     public SettingsPage()
     {
+        CloudActivity = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudActivityLogSettingsViewModel>();
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();

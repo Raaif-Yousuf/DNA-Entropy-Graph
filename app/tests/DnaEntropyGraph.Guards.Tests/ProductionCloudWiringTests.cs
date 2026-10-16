@@ -6,6 +6,7 @@ using DnaEntropyGraph.Cloud.Auth;
 using DnaEntropyGraph.Cloud.Rest;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cloud.Audit;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Shouldly;
@@ -100,8 +101,33 @@ public class ProductionCloudWiringTests : IDisposable
 
         // A Resilient* decorator around a gateway whose every HTTP call already goes through the pipeline would replay a whole
         // create on a transient error (GoogleComputeGateway and GoogleStorageGateway class docs).
-        provider.GetRequiredService(serviceType).GetType().FullName.ShouldBe(expected);
+        // Issue #245: the one wrapper allowed is the audit decorator, which only records and passes through; what it wraps must be the real type.
+        var resolved = provider.GetRequiredService(serviceType);
+        var audited = resolved.ShouldBeAssignableTo<IAuditedGateway>($"{serviceType.Name} must be audited (issue #245)");
+        audited.Inner.GetType().FullName.ShouldBe(expected);
     }
+
+    public static TheoryData<Type> AuditedInterfaces() => new()
+    {
+        typeof(IComputeGateway),
+        typeof(IStorageGateway),
+        typeof(IWorkerIdentityGateway),
+        typeof(IProjectSetupGateway),
+        typeof(IProjectCatalogGateway),
+        typeof(IBillingGateway),
+        typeof(IServiceEnablementGateway),
+    };
+
+    [Theory]
+    [MemberData(nameof(AuditedInterfaces))]
+    public void Every_gateway_with_a_mutating_call_resolves_to_its_audit_decorator(Type serviceType)
+    {
+        using var provider = Build();
+
+        provider.GetRequiredService(serviceType).ShouldBeAssignableTo<IAuditedGateway>();
+        provider.GetRequiredService<ICloudAuditLog>().ShouldBeOfType<DnaEntropyGraph.Core.Cloud.Audit.JsonLinesCloudAuditLog>();
+    }
+
     [Fact]
     public void The_token_refresher_is_the_real_account_and_the_token_source_is_the_same_account()
     {

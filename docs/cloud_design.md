@@ -1343,6 +1343,37 @@ account and a role and edits two policies, and a whole-method retry would replay
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
+## 18. The cloud audit log (issue #245)
+
+Every call that changes something in the user's Google Cloud project leaves one line in `logs\cloud-audit.jsonl` under the data root
+(so portable mode and `--profile` follow it). Support reads it to answer "what did the app do, and when".
+
+- **Where it hooks.** Not in `CloudCallPipeline` (the pipeline sees an operation name and a closure, not the resource, and the real
+  Google gateways run it once per HTTP request, so a pipeline hook would log a retry as a second mutation). It is a decorator per gateway
+  interface (`Audited*Gateway` in `DnaEntropyGraph.Cloud/AuditedGateways.cs`) around whatever the container hands out: the
+  `Resilient*` wrapper over `FakeGcp`, or the real Google gateway. One entry per logical call, with the whole duration including retries.
+  `CloudAuditRegistration.Add` (ServiceRegistration) wraps the registered descriptors after the Google/Fake switch, so both backends are
+  audited the same way. A test (`Every_mutating_method_of_every_gateway_interface_is_known_to_the_audit`) fails when a non-read method
+  is added to a gateway interface without being routed through `CloudAuditor`.
+- **What is a mutation.** Compute create, reuse (claim, scheduling, metadata, start), stop, delete; Storage `EnsureBucket` (create and
+  lifecycle patch) and object upload; the worker identity (service account, role, project and bucket bindings); Service Usage enable;
+  `EnableComputeApi`; billing link; project create. Reads (get, list, find, download, quota) are never logged. MEASURED 2026-10-16
+  (read of the interfaces): there is no `setLabels`, bucket-patch or object-delete call at the interface today; they are inside `ReuseVm` and `EnsureBucket`, so
+  each shows as that one entry. When one becomes its own interface method, the guard test above names it.
+- **An entry** (`CloudAuditEntry`): `timeUtc`, `installationId`, `jobId` (when the VM name or object key carries one), `operation`
+  (`Compute.CreateVm`), `resource` (`zones/<zone>/instances/deg-<job>`, `buckets/<bucket>/jobs/<job>`, `projects/<project>`),
+  `requestId` and `operationId` (the Compute insert reports both through `CloudAuditContext.Note`; other calls leave them null because
+  the gateway interface does not surface them), `outcome` (`ok`, `cancelled`, or the `CloudErrorClassifier` bucket), `errorCode`
+  (Google's structured code, never the message) and `durationMs`.
+- **Never in it:** a sequence, an input file name, an object name below `jobs/<id>` (only the prefix is named), an error message, the
+  email, a billing account id or the service account email. `CloudAuditTests.No_entry_names_an_input_file_the_email_or_a_message` and
+  `Object_prefix_stops_at_the_job...` guard it.
+- **Never throws.** `CloudAuditor` and `JsonLinesCloudAuditLog` swallow every failure to write (full disk, locked file, bad path): the
+  line is lost, the run is not.
+- **Size.** 1 MB, then the file moves to `cloud-audit.1.jsonl`, replacing the older one: at most about 2 MB.
+- **Support bundle.** `DiagnosticsBundleBuilder` copies both generations as `files/logs/cloud-audit.jsonl` and `.1.jsonl`, redacted
+  like a log. Settings > Diagnostics > Open cloud activity log reveals the live file (`CloudActivityLogSettingsViewModel`).
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

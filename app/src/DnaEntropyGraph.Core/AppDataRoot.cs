@@ -95,6 +95,9 @@ public sealed class AppDataRoot
 
     public string LogsDirectory => Combine("logs");
 
+    /// <summary>Issue #245: the append-only audit of every cloud mutation (a size-bounded JSON-lines file; the previous generation sits beside it as <c>cloud-audit.1.jsonl</c>). Under the data root, so portable mode and an override follow it.</summary>
+    public string CloudAuditLogFile => System.IO.Path.Combine(LogsDirectory, "cloud-audit.jsonl");
+
     /// <summary>Local run folders; each run's saved input copy lives under <c>runs\&lt;jobId&gt;\input</c>.</summary>
     public string RunsDirectory => Combine("runs");
 

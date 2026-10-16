@@ -760,6 +760,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
     {
+        // Issue #245: the same id a real insert would send as its requestId (here deterministic, per #257), for the audit entry.
+        DnaEntropyGraph.Core.Cloud.Audit.CloudAuditContext.Note(spec.JobId, null);
         var gate = _createGate;
         if (_createDelay > TimeSpan.Zero)
         {

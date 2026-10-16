@@ -91,6 +91,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 return insert.ExecuteAsync(token);
             },
             cancellationToken).ConfigureAwait(false);
+        // Issue #245: the ids support needs to find this insert in Google's own logs.
+        DnaEntropyGraph.Core.Cloud.Audit.CloudAuditContext.Note(requestId, operation.Name);
         await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
 
         // A 404 here means the outcome is unknown, not that nothing was made (the operation said DONE): Network class, so it is
