@@ -491,7 +491,7 @@ exercise.
  New run page (`NewRunViewModel.EstimateText`) shows it from the selected, valid file's
  base count, always labelled an estimate. The shipped prices are THEORY (unverified):
  gathered 2026-09-19 for us-central1 from public pages, not checked against the Billing
- Catalog (#214, #303); the A100 Spot prices are left null because sources disagree 4x.
+ Catalog (#214, #303); the Spot prices were read from Google's own pricing pages on 2026-10-16 (#303, MEASURED).
  Still open under #98: the daily Billing Catalog refresh (#214), the live ticker (#217) and
  the actual cost on the Results page (#557).
 - Thresholds: warn above a single-job estimate of $2 (user setting), warn at month-to-date
