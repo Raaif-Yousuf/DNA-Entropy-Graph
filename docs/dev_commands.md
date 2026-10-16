@@ -236,8 +236,8 @@ Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/D
 
 ```powershell
 worker\.venv\Scripts\python.exe scripts\land_queue.py add feat/1-x <sha> 1 "feat: x (#1)" [--full] [--red "<check>"]
-worker\.venv\Scripts\python.exe scripts\land_queue.py run [--once]     # land_wt.py then merge when green, one item at a time
-worker\.venv\Scripts\python.exe scripts\land_queue.py status | stop | retry feat/1-x@<sha>
+worker\.venv\Scripts\python.exe scripts\land_queue.py run [--once]     # land_wt.py --merge-when-green, one item at a time; run it detached
+worker\.venv\Scripts\python.exe scripts\land_queue.py status [--check] | stop | retry feat/1-x@<sha>   # status: runner alive/DEAD
 ```
 
 Tests: `scripts/tests/test_land_queue.py` (fake gh/git runner, no network). Details: `branching_and_prs.md`.

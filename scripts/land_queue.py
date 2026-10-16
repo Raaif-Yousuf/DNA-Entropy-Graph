@@ -7,7 +7,7 @@
     worker\\.venv\\Scripts\\python.exe scripts\\land_queue.py stop              # creates runner.stop; the loop exits before the next item
 
 It replaces the orchestrator's scratchpad land_queue.sh + merge_green.sh. State lives in `--state` (default
-`%TEMP%\\deg-land-queue`): queue.txt, taken.log, done.log, flakes.log, runner.stop, inflight.json, body-<slug>-<sha7>.md.
+`%TEMP%\\deg-land-queue`): queue.txt, taken.log, done.log, flakes.log, runner.stop, runner.json, inflight.json, land-<slug>-<sha7>.log, body-<slug>-<sha7>.md.
 
 QUEUE LINE: `branch|sha|issue|full(0/1)|title` plus an optional sixth field `red=<check>[,<check>]` (checks ignored for
 this item only, KNOWN_RED). The title may contain `|`. Blank lines and `#` lines are skipped.
@@ -23,9 +23,10 @@ MEASURED 2026-10-15 DEFECTS OF THE SCRIPTS THIS REPLACES, AND THE FIX
 (d) KNOWN_RED per item (`red=`), plus the KNOWN_RED environment variable (comma separated) for every item.
 (e) `status`.
 
-OVERLAP: PR #724 (feat/666) adds `--merge-when-green` to land_wt.py. That is a single-PR tool with no queue, no
-mergeability recheck and no per-item known-red. When it lands, this runner can pass `--merge-when-green` instead of its
-own merge loop; until then the loop here is the only merge path (land_wt.py without the flag stops at the open PR).
+MERGE: land_wt.py `--merge-when-green` (#666) does the wait, one rerun and the merge; exit 5/6 leave the PR open and are recorded. An item
+with known-red checks lands without the flag and the merge loop here ignores them. `run` is built to be launched detached: it writes
+runner.json (pid + heartbeat) for `status [--check]`, refuses a second runner, consumes runner.stop on exit, skips (SKIPPED-STACK) any
+item stacked on a failed sha, and every log is append-only (`retry` appends RETRY lines).
 
 Console output is ASCII.
 """
@@ -44,7 +45,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from land_wt import pid_alive
+
 Runner = Callable[[list[str], "Path | None"], "tuple[int, str]"]
+
+_DONE_KEY = re.compile(r"(\S+) @ ([0-9A-Za-z]+)\s*$")
+_PR_URL = re.compile(r"pull/(\d+)")
 
 IDLE_POLL_SECONDS = 30
 RERUN_SETTLE_SECONDS = 60
@@ -143,7 +149,29 @@ class State:
         self._append("flakes.log", line)
 
     def taken(self) -> set[str]:
-        return {ln.strip() for ln in self._read("taken.log").splitlines() if ln.strip()}
+        """Replay taken.log: `key` takes it, `RETRY key` gives it back. Append-only, so `tail -F` never replays."""
+        out: set[str] = set()
+        for raw in self._read("taken.log").splitlines():
+            ln = raw.strip()
+            if ln.startswith("RETRY "):
+                out.discard(ln[6:].strip())
+            elif ln:
+                out.add(ln)
+        return out
+
+    def failed_keys(self) -> set[str]:
+        """Keys whose latest done.log verdict is FAILED / REFUSED (a later MERGED or RETRY line clears it)."""
+        out: set[str] = set()
+        for raw in self._read("done.log").splitlines():
+            m = _DONE_KEY.search(raw)
+            if not m:
+                continue
+            key = f"{m.group(1)}@{m.group(2)}"
+            if raw.startswith(("FAILED", "REFUSED")):
+                out.add(key)
+            elif raw.startswith(("MERGED", "RETRY")):
+                out.discard(key)
+        return out
 
     def mark_taken(self, it: Item) -> None:
         self._append("taken.log", it.key)
@@ -152,14 +180,34 @@ class State:
         return pending_items(self._read("queue.txt"), self.taken())
 
     def retry(self, key: str) -> bool:
-        keys = [ln for ln in self._read("taken.log").splitlines() if ln.strip()]
-        if key not in keys:
+        """Append-only: never rewrites taken.log or done.log in place (a rewrite makes `tail -F` monitors replay the file)."""
+        if key not in self.taken():
             return False
-        self._p("taken.log").write_text("".join(k + "\n" for k in keys if k != key), encoding="utf-8", newline="\n")
+        self._append("taken.log", f"RETRY {key}")
+        branch, _, sha = key.rpartition("@")
+        self._append("done.log", f"RETRY {branch} @ {sha}")
         return True
 
     def stop_requested(self) -> bool:
         return self._p("runner.stop").exists()
+
+    def consume_stop(self) -> None:
+        self._p("runner.stop").unlink(missing_ok=True)
+
+    def write_runner(self, pid: int, ts: float) -> None:
+        self._p("runner.json").write_text(json.dumps({"pid": pid, "ts": ts}), encoding="utf-8", newline="\n")
+
+    def runner(self) -> dict[str, float] | None:
+        try:
+            data = json.loads(self._read("runner.json"))
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) and "pid" in data else None
+
+    def clear_runner(self, pid: int) -> None:
+        cur = self.runner()
+        if cur is not None and int(cur["pid"]) == pid:
+            self._p("runner.json").unlink(missing_ok=True)
 
     def set_inflight(self, it: Item, stage: str) -> None:
         self._p("inflight.json").write_text(json.dumps({"key": it.key, "title": it.title, "stage": stage}), encoding="utf-8", newline="\n")
@@ -185,6 +233,9 @@ class Env:
     runner: Runner = run_command
     sleep: Callable[[float], None] = time.sleep
     now: Callable[[], str] = lambda: time.strftime("%Y-%m-%dT%H:%M:%S")
+    clock: Callable[[], float] = time.time
+    pid: int = field(default_factory=os.getpid)
+    alive: Callable[[int], bool] = pid_alive
     known_red: tuple[str, ...] = field(default_factory=lambda: tuple(n.strip() for n in os.environ.get("KNOWN_RED", "").split(",") if n.strip()))
 
     def run(self, *argv: str) -> tuple[int, str]:
@@ -280,7 +331,7 @@ def merge_green(env: Env, pr: str, known_red: Sequence[str] = ()) -> tuple[str, 
 # ---------------------------------------------------------------------------
 
 
-def _land(env: Env, it: Item, land_branch: str | None) -> tuple[int, str, str | None]:
+def _land(env: Env, it: Item, land_branch: str | None, delegate_merge: bool) -> tuple[int, str, str | None]:
     body = env.state / f"body-{it.slug}-{it.sha[:7]}.md"
     if not body.is_file():
         body.write_text(
@@ -291,32 +342,44 @@ def _land(env: Env, it: Item, land_branch: str | None) -> tuple[int, str, str | 
     argv = [env.python, "scripts/land_wt.py", "--branch", it.branch, "--sha", it.sha, "--title", it.title, "--body-file", str(body)]
     if it.full:
         argv.append("--full")
+    if delegate_merge:
+        argv.append("--merge-when-green")
     if land_branch:
         argv += ["--land-branch", land_branch]
     rc, out = env.run(*argv)
-    found = re.findall(r"pull/(\d+)", out)
+    (env.state / f"land-{it.slug}-{it.sha[:7]}.log").write_text(out + "\n", encoding="utf-8", newline="\n")
+    found = _PR_URL.findall(out)
     return rc, out, found[-1] if found else None
 
 
 def process_item(env: Env, it: Item) -> str:
+    """Land one item. Without known-red checks the merge is land_wt's own `--merge-when-green` (exit 5/6 leave the PR open);
+    with them (`red=` or KNOWN_RED) land_wt stops at the open PR and the merge loop here ignores the named checks."""
     st = State(env.state)
     st.set_inflight(it, "landing")
     land_branch: str | None = None
     _, remote = env.run("git", "ls-remote", "--heads", "origin", it.branch)
     if remote.strip():  # (b) a closed PR's branch is still there: never push over it
         land_branch = f"{it.branch}-{it.sha[:7]}"
+    delegate = not (set(env.known_red) | set(it.known_red))
     attempt = 1
     while True:
-        rc, out, pr = _land(env, it, land_branch)
-        if rc != 0:
-            return f"FAILED land_wt rc={rc} {it.branch} @ {it.sha}"
-        if pr is None:
+        rc, out, pr = _land(env, it, land_branch, delegate)
+        tag = f"(PR #{pr} stays open) " if pr else ""
+        if delegate and rc == 0:
+            return f"MERGED #{pr} {it.branch} @ {it.sha}" if pr else f"MERGED {it.branch} @ {it.sha}"
+        if delegate and rc == 4 and pr and _mergeability(env, pr) == "DIRTY":
+            verdict, detail = "DIRTY", ""  # land_wt could not merge: another merge made the PR conflict (c)
+        elif rc != 0:
+            return f"FAILED land_wt rc={rc} {tag}{it.branch} @ {it.sha}"
+        elif pr is None:
             return f"FAILED land_wt printed no PR url {it.branch} @ {it.sha}"
-        st.set_inflight(it, f"waiting for checks on #{pr}")
-        verdict, detail = merge_green(env, pr, it.known_red)
-        if verdict == "MERGED":
-            return f"MERGED #{pr} {it.branch} @ {it.sha}"
-        if verdict == "DIRTY" and attempt == 1:  # (c) re-land the same sha on top of the new main
+        else:
+            st.set_inflight(it, f"waiting for checks on #{pr}")
+            verdict, detail = merge_green(env, pr, it.known_red)
+            if verdict == "MERGED":
+                return f"MERGED #{pr} {it.branch} @ {it.sha}"
+        if verdict == "DIRTY" and attempt == 1 and pr:  # (c) re-land the same sha on top of the new main
             env.run(
                 "gh", "pr", "close", pr, "--delete-branch", "--comment", "Conflicts with main after another merge; re-landing the same commit."
             )
@@ -329,32 +392,81 @@ def process_item(env: Env, it: Item) -> str:
         return f"REFUSED #{pr} {detail} {it.branch} @ {it.sha}"
 
 
+class AlreadyRunning(RuntimeError):
+    """Another runner for this state directory is alive."""
+
+
+def _heartbeat(env: Env) -> None:
+    State(env.state).write_runner(env.pid, env.clock())
+
+
+def _stacked_on(env: Env, failed: set[str], it: Item) -> str | None:
+    """The failed key whose sha is an ancestor of this item's sha (a stack on top of a failure), else None."""
+    for key in sorted(failed):
+        base = key.rpartition("@")[2]
+        if base == it.sha or env.run("git", "merge-base", "--is-ancestor", base, it.sha)[0] == 0:
+            return key
+    return None
+
+
+def _fast_forward_main(env: Env) -> None:
+    """After a merge: bring the main checkout up to date, but only when it is ON main (the shell runner did this)."""
+    env.run("git", "fetch", "-q", "origin")
+    rc, branch = env.run("git", "rev-parse", "--abbrev-ref", "HEAD")
+    if rc == 0 and branch.strip() == "main":
+        env.run("git", "merge", "-q", "--ff-only", "origin/main")
+
+
 def drain(env: Env, *, forever: bool = False) -> None:
     st = State(env.state)
-    while True:
-        if st.stop_requested():
-            st.append_done(f"STOPPED {env.now()}")
-            return
-        pending = st.pending()
-        if not pending:
-            if not forever:
+    cur = st.runner()
+    if cur is not None and int(cur["pid"]) != env.pid and env.alive(int(cur["pid"])):
+        raise AlreadyRunning(f"a runner is already alive (pid {int(cur['pid'])}). Check `status`; `stop` ends it")
+    _heartbeat(env)
+    try:
+        while True:
+            _heartbeat(env)
+            if st.stop_requested():
+                st.append_done(f"STOPPED {env.now()}")
+                st.consume_stop()
                 return
-            env.sleep(IDLE_POLL_SECONDS)
-            continue
-        it = pending[0]
-        st.mark_taken(it)
-        try:
-            result = process_item(env, it)
-        except Exception as err:  # noqa: BLE001  (one bad item never stops the queue)
-            result = f"FAILED unexpected {type(err).__name__}: {err} {it.branch} @ {it.sha}"
-        st.append_done(result)
-        st.clear_inflight()
-        env.run("git", "fetch", "-q", "origin")
+            pending = st.pending()
+            if not pending:
+                if not forever:
+                    return
+                env.sleep(IDLE_POLL_SECONDS)
+                continue
+            it = pending[0]
+            st.mark_taken(it)
+            blocker = _stacked_on(env, st.failed_keys(), it)
+            if blocker is not None:  # 3: never attempt what stands on a failure
+                st.append_done(f"SKIPPED-STACK {it.branch} @ {it.sha} (stacked on failed {blocker.replace('@', ' @ ')})")
+                continue
+            try:
+                result = process_item(env, it)
+            except Exception as err:  # noqa: BLE001  (one bad item never stops the queue)
+                result = f"FAILED unexpected {type(err).__name__}: {err} {it.branch} @ {it.sha}"
+            st.append_done(result)
+            st.clear_inflight()
+            _fast_forward_main(env) if result.startswith("MERGED") else env.run("git", "fetch", "-q", "origin")
+    finally:
+        st.clear_runner(env.pid)
+
+
+def runner_line(env: Env) -> tuple[str, bool]:
+    """(text, alive). `alive` is the pid check; the heartbeat age is context (an item can wait 30 min on checks)."""
+    cur = State(env.state).runner()
+    if cur is None:
+        return "runner: not running", False
+    pid, age = int(cur["pid"]), int(env.clock() - float(cur.get("ts", 0)))
+    if env.alive(pid):
+        return f"runner: alive pid {pid}, heartbeat {age} s ago", True
+    return f"runner: DEAD (pid {pid} is gone; last heartbeat {age} s ago). Start it again with `run`", False
 
 
 def status(env: Env) -> str:
     st = State(env.state)
-    lines = []
+    lines = [runner_line(env)[0]]
     pend = st.pending()
     lines.append(f"pending ({len(pend)}):")
     lines += [f"  {it.branch} @ {it.sha}  {it.title}" for it in pend]
@@ -371,7 +483,7 @@ def status(env: Env) -> str:
     return "\n".join(lines)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pid_alive) -> int:
     ap = argparse.ArgumentParser(description="Land queued lane branches and merge each when green.")
     ap.add_argument("--state", type=Path, default=Path(tempfile.gettempdir()) / "deg-land-queue")
     ap.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent, help="the main checkout (git fetch runs here)")
@@ -385,21 +497,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     add.add_argument("--red", default="", help="comma separated check names to ignore for this item")
     run = sub.add_parser("run")
     run.add_argument("--once", action="store_true")
-    sub.add_parser("status")
+    sub.add_parser("status").add_argument("--check", action="store_true", help="exit 1 when the runner is not alive")
     sub.add_parser("stop")
     retry = sub.add_parser("retry")
     retry.add_argument("key", help="branch@sha")
     args = ap.parse_args(argv)
-    env = Env(repo=args.repo, state=args.state, python=sys.executable)
+    env = Env(repo=args.repo, state=args.state, python=sys.executable, alive=alive)
     st = State(args.state)
     if args.cmd == "add":
         red = tuple(n.strip() for n in args.red.split(",") if n.strip())
         st.append_queue(Item(args.branch, args.sha, args.issue, args.full, args.title, red).line())
         print(f"OK: queued {args.branch} @ {args.sha}")
     elif args.cmd == "run":
-        drain(env, forever=not args.once)
+        try:
+            drain(env, forever=not args.once)
+        except AlreadyRunning as err:
+            print(f"ERROR: {err}")
+            return 1
     elif args.cmd == "status":
         print(status(env))
+        if args.check and not runner_line(env)[1]:
+            return 1
     elif args.cmd == "stop":
         (args.state / "runner.stop").write_text("", encoding="utf-8", newline="\n")
         print("OK: runner.stop created")

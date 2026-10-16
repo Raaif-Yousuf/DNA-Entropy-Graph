@@ -171,19 +171,24 @@ shared checkout.
 ## Landing many branches: `scripts/land_queue.py`
 
 The orchestrator's queue runner, in the repo. It takes `branch|sha|issue|full|title` lines (optional sixth field
-`red=<check>[,<check>]`, a KNOWN_RED override for that item only), runs `land_wt.py` for each, waits for the PR's checks, reruns
-the failed runs once (logged to `flakes.log`) and merges with `gh pr merge --merge`.
+`red=<check>[,<check>]`, a KNOWN_RED override for that item only), runs `land_wt.py --merge-when-green` for each (land_wt waits for the checks, reruns failed runs once and merges; exit 5/6 leave the PR open and
+are logged `FAILED rc=5|6 (PR #n stays open)`). An item with `red=` (or the KNOWN_RED env var) lands without the flag and the queue's own merge loop
+ignores the named checks, reruns the failed runs once (logged to `flakes.log`) and merges with `gh pr merge --merge`.
 
 ```powershell
 worker\.venv\Scripts\python.exe scripts\land_queue.py add feat/1-x <sha> 1 "feat: x (#1)" [--full] [--red "build and test"]
 worker\.venv\Scripts\python.exe scripts\land_queue.py run          # the loop; `run --once` drains and returns
-worker\.venv\Scripts\python.exe scripts\land_queue.py status       # pending, in flight, last results, recent flakes
+worker\.venv\Scripts\python.exe scripts\land_queue.py status [--check]  # runner alive/DEAD, pending, in flight, last results; --check exits 1 if not alive
 worker\.venv\Scripts\python.exe scripts\land_queue.py retry feat/1-x@<sha>   # an item already taken, again
 worker\.venv\Scripts\python.exe scripts\land_queue.py stop         # runner.stop: exits before the next item
 ```
 
 State is under `--state` (default `%TEMP%\deg-land-queue`): `queue.txt`, `taken.log`, `done.log`, `flakes.log`,
-`inflight.json`, `body-<slug>-<sha7>.md`. MEASURED 2026-10-15 defects of the scratchpad scripts it replaces, each with a test:
+`inflight.json`, `runner.json` (pid + heartbeat), `land-<slug>-<sha7>.log` (one per item), `body-<slug>-<sha7>.md`. `run` refuses to start while
+the pid in `runner.json` is alive and exits clean after `stop` (the stop file is consumed). It is built to run detached and survive the session that
+started it: a later session reads `status`. Every log is append-only: `retry` appends `RETRY <key>` to `taken.log` and `RETRY <branch> @ <sha>` to
+`done.log` (a rewrite would make `tail -F` monitors replay the file). When an item fails, a later queued item whose sha has the failed sha as an
+ancestor is logged `SKIPPED-STACK` and never attempted. After a merge the main checkout is fast-forwarded, only when it is on `main`. MEASURED 2026-10-15 defects of the scratchpad scripts it replaces, each with a test:
 
 - Items are keyed `branch@sha`, not by the whole line, so editing a queued title (or a trailing space) never re-takes a landed
   branch; a new sha of the same branch is a new item.
@@ -191,8 +196,7 @@ State is under `--state` (default `%TEMP%\deg-land-queue`): `queue.txt`, `taken.
 - Before merging, `mergeStateStatus` is read (UNKNOWN is polled). A DIRTY PR (another PR was merged by hand while this one was
   in CI, PR #674) is closed with its branch deleted and the same sha is re-landed once on `<branch>-<sha7>-r2`; DIRTY twice is
   REFUSED.
-- The merge-when-green loop here overlaps PR #724 (`land_wt.py --merge-when-green`, #666). That one handles a single PR; this
-  one adds the queue, the recheck and per-item known-red. Once #724 is on main this runner can pass its flag instead.
+- `land_wt.py --merge-when-green` (#666) is now on main, so the queue delegates the merge to it; only known-red items keep the loop here.
 
 ## Closing keywords
 
