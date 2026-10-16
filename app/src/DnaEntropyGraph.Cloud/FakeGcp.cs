@@ -121,6 +121,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
     private int? _allRegionsGpuCap;
+    private readonly Dictionary<(string Region, string Accelerator), int> _regionalUsed = new();
     private CloudErrorKind? _quotaReadFailure;
     private const int DefaultRegionalQuota = 1;
 
@@ -448,13 +449,26 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
 
     /// <summary>
-    /// The platform deletes a VM once its <c>maxRunDuration</c> has passed since it was created (Hard Rule 10's
+    /// The platform deletes a running VM once its <c>maxRunDuration</c> has passed since it last started (Hard Rule 10's
     /// <c>instanceTerminationAction=DELETE</c>); off by default. A VM past its limit is gone at the next look,
     /// by <see cref="GetVmAsync"/> or <see cref="FindByJobIdAsync"/>, measured on this fake's <see cref="TimeProvider"/>.
     /// </summary>
     public FakeGcp WithMaxRunDurationEnforced()
     {
         _enforceMaxRunDuration = true;
+        return this;
+    }
+
+    private bool _runClockFromCreation;
+
+    /// <summary>
+    /// The other reading of the platform's <c>maxRunDuration</c>: its clock counts from the instance's CREATION and never restarts, so a VM
+    /// reused days later is deleted soon after it starts. THEORY (unverified, ToTest #94) which reading is real; the app must end such a
+    /// run in a recorded terminal state with nothing left billing under either. Needs <see cref="WithMaxRunDurationEnforced"/>.
+    /// </summary>
+    public FakeGcp WithRunClockFromCreation()
+    {
+        _runClockFromCreation = true;
         return this;
     }
 
@@ -468,7 +482,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var now = _timeProvider.GetUtcNow();
         foreach (var (key, vm) in _vms)
         {
-            if (vm.CreatedAt is { } created && _maxRunByVm.TryGetValue(key, out var limit) && now >= created + limit)
+            // The platform limits a VM that is running. THEORY (unverified, ToTest #94): its clock restarts at each start (lastStartTimestamp),
+            // not at creation. The other reading is available through WithRunClockFromCreation so the app is tested safe under either.
+            var basis = _runClockFromCreation ? vm.CreatedAt : vm.RunClockStart;
+            if (vm.Status is not ("STOPPED" or "TERMINATED" or "STOPPING") && basis is { } clockStart && _maxRunByVm.TryGetValue(key, out var limit) && now >= clockStart + limit)
             {
                 _vms.TryRemove(key, out _);
             }
@@ -687,6 +704,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    /// <summary>Sets the regional GPU quota to a limit of <paramref name="limit"/> with <paramref name="used"/> already in use (the quota read then reports limit and usage, so the remainder is their difference).</summary>
+    public FakeGcp WithGpuQuotaUsed(string region, string acceleratorType, int limit, int used)
+    {
+        _regionalQuota[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = limit;
+        _regionalUsed[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = used;
+        return this;
+    }
+
     /// <summary>
     /// Sets the project-wide <c>GPUS_ALL_REGIONS</c> cap, which
     /// <see cref="GetGpuQuotaAsync"/> then applies as a ceiling under every
@@ -840,23 +865,196 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels());
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow());
+        // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
+        RunSimulatedWorker(spec, zone);
         _vms[key] = vm;
+        _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)
         {
             _bootPollsLeft[key] = _bootPolls;
         }
 
-        RunSimulatedWorker(spec, zone);
         return Task.FromResult(vm);
     }
 
+    private readonly ConcurrentDictionary<string, string[]> _acceleratorZones = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The zones that offer <paramref name="acceleratorType"/> (issue #670): what <see cref="ListAcceleratorZonesAsync"/> answers, in this order.
+    /// An accelerator nobody scripted answers an empty list ("not known"), so a test that names its zones in the request keeps its ladder.
+    /// </summary>
+    public FakeGcp WithAcceleratorZones(string acceleratorType, params string[] zones)
+    {
+        _acceleratorZones[acceleratorType] = zones;
+        return this;
+    }
+
+    public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        IReadOnlyList<string> zones = _acceleratorZones.TryGetValue(acceleratorType, out var scripted) ? scripted : [];
+        return Task.FromResult(zones);
+    }
+
+    /// <summary>How many times <see cref="ReuseVmAsync"/> was called (issue #94).</summary>
+    public int ReuseAttempts => Volatile.Read(ref _reuseAttempts);
+
+    private int _reuseAttempts;
+    private CloudErrorKind? _reuseStartFailure;
+
+    /// <summary>
+    /// The start of a reused VM fails with this kind of error AFTER the VM was claimed (relabelled for the new job), as the real
+    /// gateway's start can (a stockout, billing turned off). Issue #94.
+    /// </summary>
+    public FakeGcp WithReuseStartFailure(CloudErrorKind kind)
+    {
+        _reuseStartFailure = kind;
+        return this;
+    }
+
+    private bool _reuseResponseLost;
+    private Func<VmSpec, Task>? _reuseBarrier;
+
+    /// <summary>
+    /// The start of a reused VM SUCCEEDS but the answer is lost (a 503 on the final look, a dropped connection): the VM is running for the new
+    /// job and the call throws a <see cref="CloudErrorKind.Network"/> error, once. The real gateway's last step can fail this way. Issue #94.
+    /// </summary>
+    public FakeGcp WithReuseResponseLost()
+    {
+        _reuseResponseLost = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="barrier"/> inside <see cref="ReuseVmAsync"/> after the VM was read and before anything is written, so a test can make two
+    /// installations' jobs read the same stopped VM and then race to claim it. Issue #94.
+    /// </summary>
+    public FakeGcp WithReuseBarrier(Func<VmSpec, Task> barrier)
+    {
+        _reuseBarrier = barrier;
+        return this;
+    }
+
+    /// <summary>The <c>maxRunDuration</c> the VM was last given (create, or a reuse's scheduling write), or null when there is no such VM.</summary>
+    public TimeSpan? MaxRunDurationOf(string vmName, string zone) => _maxRunByVm.TryGetValue((vmName, zone), out var limit) ? limit : null;
+
+    // The real labelFingerprint is fresh when an instance is created, moves on EVERY labels write (this app's claim, or anyone
+    // else's), and a deleted-and-recreated instance never shares one with its predecessor. A global counter gives the same three
+    // properties; an entry is dropped with its VM.
+    private readonly ConcurrentDictionary<(string Name, string Zone), long> _labelFingerprints = new();
+    private readonly object _claimLock = new();
+    private long _fingerprintClock;
+
+    private long NextFingerprint() => Interlocked.Increment(ref _fingerprintClock);
+
+    /// <summary>
+    /// Someone else (the console, gcloud, another tool) rewrote this VM's labels: merges <paramref name="labels"/> into them and moves the
+    /// labelFingerprint, as any real <c>setLabels</c> does, so a reuse that read the VM before it fails its claim with a 412. Issue #94 review.
+    /// </summary>
+    public FakeGcp SimulateExternalRelabel(string vmName, string zone, IReadOnlyDictionary<string, string> labels)
+    {
+        var key = (vmName, zone);
+        lock (_claimLock)
+        {
+            if (_vms.TryGetValue(key, out var vm))
+            {
+                var merged = new Dictionary<string, string>(vm.Labels ?? new Dictionary<string, string>());
+                foreach (var (k, v) in labels)
+                {
+                    merged[k] = v;
+                }
+
+                _vms[key] = vm with { Labels = merged };
+                _labelFingerprints[key] = NextFingerprint();
+            }
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// Issue #94: claims and starts a stopped VM for <paramref name="spec"/>'s job, as the real gateway does: refuses a VM that is
+    /// not stopped before any change, CLAIMS it first (rewrites the labels, which carry a fingerprint: of two jobs that read the same VM only
+    /// one passes, the other gets a 412 and has written nothing), then rewrites the lifetime limit, then starts it (the VM then reads RUNNING;
+    /// its <c>creationTimestamp</c> stays and its <c>lastStartTimestamp</c> moves; THEORY (unverified, ToTest #94): its <c>maxRunDuration</c> clock restarts with it) and lets the simulated
+    /// worker act for the new job. Under the VM's own, old name.
+    /// </summary>
+    public async Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        var reuse = spec with { ExistingVmName = existingVmName };
+        reuse.EnsurePreconditions();
+        Interlocked.Increment(ref _reuseAttempts);
+        var key = (existingVmName, zone);
+        if (!_vms.TryGetValue(key, out var vm))
+        {
+            throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+        }
+
+        if (vm.Status is not ("STOPPED" or "TERMINATED"))
+        {
+            throw Build(CloudErrorKind.Other, "VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{vm.Status}', not stopped.");
+        }
+
+        var readFingerprint = _labelFingerprints.GetValueOrDefault(key);
+        if (_reuseBarrier is { } barrier)
+        {
+            await barrier(spec).ConfigureAwait(false);
+        }
+
+        // The claim comes before everything else, so a start that fails leaves the VM labelled for this job (the caller ends it).
+        lock (_claimLock)
+        {
+            if (!_vms.TryGetValue(key, out vm))
+            {
+                throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+            }
+
+            if (_labelFingerprints.GetValueOrDefault(key) != readFingerprint)
+            {
+                throw Build(CloudErrorKind.Other, "CONDITION_NOT_MET", 412, "The labels fingerprint is invalid: another job claimed this VM first.");
+            }
+
+            _labelFingerprints[key] = NextFingerprint();
+            vm = vm with { Labels = reuse.ToLabels() };
+            _vms[key] = vm;
+            _maxRunByVm[key] = reuse.MaxRunDuration;
+        }
+
+        if (_reuseStartFailure is { } kind)
+        {
+            throw kind switch
+            {
+                CloudErrorKind.Stockout => Build(CloudErrorKind.Stockout, "ZONE_RESOURCE_POOL_EXHAUSTED", null, $"The zone '{zone}' does not have enough resources available to fulfill the request."),
+                CloudErrorKind.Billing => Build(CloudErrorKind.Billing, "BILLING_DISABLED", 403, "This API method requires billing to be enabled."),
+                _ => Build(kind, null, null, "The start failed."),
+            };
+        }
+
+        ThrowIfProjectWide(spec.ProjectId);
+        vm = vm with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
+        RunSimulatedWorker(reuse, zone);
+        _vms[key] = vm;
+        if (_reuseResponseLost)
+        {
+            _reuseResponseLost = false;
+            throw Build(CloudErrorKind.Network, null, 503, "The service is unavailable: the answer to the start was lost.");
+        }
+
+        return vm;
+    }
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         if (ConsumeHang())
         {
             return HangAsync<VmDescriptor?>(cancellationToken);
+        }
+
+        if (_getVmFailure is { } getVmFailure)
+        {
+            throw Build(getVmFailure, "SCRIPTED_GET_VM_FAILURE", null, "The VM read was scripted to fail.");
         }
 
         ThrowIfScriptedTransient();
@@ -907,7 +1105,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _vms[key] = vm;
         }
 
-        return Task.FromResult<VmDescriptor?>(vm);
+        return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });
     }
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
@@ -963,7 +1161,19 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        ThrowIfDeleteScripted(vmName);
+        if (_silentNoOpDeletes)
+        {
+            return;
+        }
+
         var existed = _vms.TryRemove((vmName, zone), out _);
+        if (existed)
+        {
+            DetachDisksOf(vmName);
+        }
+
+        _labelFingerprints.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
             _nextDeleteRacesAWorkerDelete = false;
@@ -1010,7 +1220,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ExpireOverdueVms();
         var name = $"deg-{jobId}";
-        IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
+        // By the job-id label, as the real gateway does (a reused VM keeps its old name, #94); a VM seeded without labels, such as WithAlreadyExists's, by name.
+        IReadOnlyList<VmDescriptor> matches = _vms.Values
+            .Where(v => v.Labels is null ? v.Name == name : v.Labels.TryGetValue("job-id", out var owner) && owner == jobId)
+            .ToList();
         return Task.FromResult(matches);
     }
 
@@ -1109,7 +1322,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfScriptedTransient();
         IReadOnlyList<BucketDescriptor> buckets = _bucketProjects.ContainsKey(projectId)
-            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null)]
+            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null, _bucketSoftDeleteDays)]
             : [];
         return Task.FromResult(buckets);
     }
@@ -1126,9 +1339,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ThrowIfScriptedTransient();
+        ThrowIfUploadScripted(objectKey);
         using var copy = new MemoryStream();
         await content.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
         _objects[(bucket, objectKey)] = copy.ToArray();
+        OnObjectStored(bucket, objectKey);
     }
 
     public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
@@ -1212,11 +1427,24 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var vmKey = (spec.VmName, zone);
         var resultKey = (bucket, prefix + "result.json");
 
-        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone)
+        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading or FakeWorkerMode.StuckInRunning)
         {
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
-            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1));
-            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
+            var stuck = workerMode == FakeWorkerMode.StuckInModelLoading;
+            var wedged = workerMode == FakeWorkerMode.StuckInRunning;
+            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running", windowsDone: wedged ? 3 : null));
+            if (wedged)
+            {
+                // Issue #723: the heartbeat thread ticks on every look; the compute thread is wedged, so windowsDone and lastProgressAt never move.
+                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3);
+            }
+
+            if (stuck)
+            {
+                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading");
+            }
+
+            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(_workerGpuLineMissing ? WorkerWarmupProgressLine() : WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
             if (workerMode == FakeWorkerMode.HeartbeatingThenDone)
             {
                 _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done));
@@ -1321,20 +1549,30 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish);
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false, int? WindowsDone = null);
 
-    private static string WorkerStatusJson(string jobId, long seq)
-        => new JsonObject
+    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false, int? windowsDone = null)
+    {
+        var doc = new JsonObject
         {
             ["schema"] = 1,
             ["jobId"] = jobId,
-            ["stage"] = "running",
+            ["stage"] = stage,
             ["heartbeatSeq"] = seq,
             ["updatedAt"] = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
             ["vm"] = new JsonObject { ["gpu"] = "NVIDIA L4" },
             ["worker"] = new JsonObject { ["version"] = "1.0.0", ["image"] = "sha256:fake" },
             ["error"] = null,
-        }.ToJsonString();
+            ["cancelSeen"] = cancelSeen,
+        };
+        if (windowsDone is { } done)
+        {
+            doc["windowsDone"] = done;
+            doc["lastProgressAt"] = "2026-09-18T15:19:58Z"; // frozen on purpose: the wedged compute thread never advances it
+        }
+
+        return doc.ToJsonString();
+    }
 
     private static string WorkerFirstProgressLine(bool gpu)
         => new JsonObject
@@ -1349,7 +1587,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private void TickLiveWorker(string bucket, string statusKey, LiveWorker live)
     {
         var next = live with { Seq = live.Seq + 1, ReadsLeft = live.ReadsLeft - 1 };
-        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq));
+        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage, live.CancelSeen, live.WindowsDone));
         if (next.ReadsLeft <= 0)
         {
             _liveWorkers.TryRemove((bucket, statusKey), out _);
@@ -1461,9 +1699,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var scripted = new Dictionary<(string Region, string Metric), int>();
+        var used = new Dictionary<(string Region, string Metric), int>();
         foreach (var ((region, accelerator), available) in _regionalQuota)
         {
             scripted[(region, MetricOf(accelerator))] = available;
+        }
+
+        foreach (var ((region, accelerator), inUse) in _regionalUsed)
+        {
+            used[(region, MetricOf(accelerator))] = inUse;
         }
 
         var regionNames = new HashSet<string>(DefaultQuotaRegions, StringComparer.OrdinalIgnoreCase);
@@ -1484,7 +1728,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
 
             table[region] = metricNames
-                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, 0))
+                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, used.GetValueOrDefault((region.ToLowerInvariant(), m))))
                 .ToList();
         }
 
@@ -1529,13 +1773,17 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     private static bool Consume(Dictionary<string, int> remainingByKey, string key)
     {
-        if (!remainingByKey.TryGetValue(key, out var remaining) || remaining <= 0)
+        // Parallel ladder attempts (#670) consume from the same dictionary.
+        lock (remainingByKey)
         {
-            return false;
-        }
+            if (!remainingByKey.TryGetValue(key, out var remaining) || remaining <= 0)
+            {
+                return false;
+            }
 
-        remainingByKey[key] = remaining - 1;
-        return true;
+            remainingByKey[key] = remaining - 1;
+            return true;
+        }
     }
 
     private static CloudOperationException Build(CloudErrorKind kind, string? code, int? httpStatus, string message)

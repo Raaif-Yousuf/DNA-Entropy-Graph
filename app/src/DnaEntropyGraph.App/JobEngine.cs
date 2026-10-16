@@ -52,12 +52,13 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         ActiveRuns activeRuns,
         IRunTargetResolver targets,
         LocalRunDriver local,
-        Func<string?>? downloadsFolder = null)
+        Func<string?>? downloadsFolder = null,
+        AppDataRoot? dataRoot = null)
     {
         _targets = targets;
         _local = local;
         _activeRuns = activeRuns;
-        _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
+        _downloadsFolder = downloadsFolder ?? (dataRoot ?? AppDataRoot.Default()).DefaultOutputSource(Services.KnownFolders.Downloads);
         _messenger = messenger;
         _runner = runner;
         _account = account;
@@ -192,6 +193,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 StartedAt: DateTimeOffset.UtcNow,
                 OptionsJson: RunOptionsJson.Serialize(options),
                 ProjectId: projectId,
+                // The planned name: it keeps the diagnostics redaction key for a run that fails before any VM exists. The runner overwrites it with the VM the run actually uses (a reused VM keeps its old name, issue #679).
                 VmName: request.Spec.VmName,
                 MachineType: request.Spec.MachineType,
                 AppVersion: request.Spec.AppVersion,

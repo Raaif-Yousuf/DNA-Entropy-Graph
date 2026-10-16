@@ -1,0 +1,2 @@
+- Cloud (#90): the runner now enforces per-stage deadlines (booting 8 min, installing 15, restoring-cache 15, model-loading 15, uploading 10) from the stage in `status.json`, ending a run whose worker is stuck in one stage even while its heartbeat ticks (`worker_stage_stuck`). `status.json` gains `stageStartedAt`, so a resumed run counts the stage's real age instead of granting a fresh allowance.
+- Declared the run error action row(s) for WorkerStageStuck in `RunErrorActions`, so the #176 error-action guard stays green (#791).

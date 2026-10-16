@@ -12,9 +12,15 @@ public static class RunOutputFolders
     /// <c>Downloads</c> under the user profile only when that lookup returns nothing or throws.
     /// The Windows lookup lives in the App project (<c>KnownFolders</c>), so Core stays testable.
     /// </summary>
-    public static string DefaultParent(Func<string?> downloadsKnownFolder)
+    public static string DefaultParent(Func<string?> downloadsKnownFolder, string? portableOutputs = null)
     {
         ArgumentNullException.ThrowIfNull(downloadsKnownFolder);
+        if (!string.IsNullOrWhiteSpace(portableOutputs))
+        {
+            // Portable mode (issue #144): results stay on the stick, never in the host PC's Downloads.
+            return portableOutputs;
+        }
+
         string? found = null;
         try
         {
