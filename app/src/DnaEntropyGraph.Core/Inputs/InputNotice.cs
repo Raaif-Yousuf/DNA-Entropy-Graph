@@ -25,6 +25,9 @@ public enum InputNoticeCode
     /// <summary>A GenBank file was read. Count is the records, <see cref="InputNotice.Other"/> the gene and CDS features (the pill already shows both).</summary>
     GenBankRead,
 
+    /// <summary>Genes (or CDS features, in a record with no gene features) whose location text cannot be read were left out, as the worker leaves them out (issues #543, #788). Count is how many, <see cref="InputNotice.Other"/> the 1-based record number.</summary>
+    GenBankFeaturesDropped,
+
     /// <summary>U was read as T because the run treats input as RNA. Count is how many.</summary>
     RnaConverted,
 
