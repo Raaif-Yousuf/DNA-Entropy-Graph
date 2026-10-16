@@ -75,6 +75,7 @@ public static class RunErrorActions
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
         [RunErrorCodes.DeletedByCleanup] = RunErrorAction.StartAgain,
+        [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         [RunErrorCodes.LocalEngineNotReady] = RunErrorAction.OpenSettings,
         [RunErrorCodes.LocalGpuNotUsable] = RunErrorAction.ChooseCloud,
         [RunErrorCodes.LocalWorkerCrashed] = RunErrorAction.OpenSettings,

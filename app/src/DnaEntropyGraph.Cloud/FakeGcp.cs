@@ -1427,11 +1427,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var vmKey = (spec.VmName, zone);
         var resultKey = (bucket, prefix + "result.json");
 
-        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading)
+        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading or FakeWorkerMode.StuckInRunning)
         {
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
             var stuck = workerMode == FakeWorkerMode.StuckInModelLoading;
-            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running"));
+            var wedged = workerMode == FakeWorkerMode.StuckInRunning;
+            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running", windowsDone: wedged ? 3 : null));
+            if (wedged)
+            {
+                // Issue #723: the heartbeat thread ticks on every look; the compute thread is wedged, so windowsDone and lastProgressAt never move.
+                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3);
+            }
+
             if (stuck)
             {
                 _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading");
@@ -1542,10 +1549,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false);
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false, int? WindowsDone = null);
 
-    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false)
-        => new JsonObject
+    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false, int? windowsDone = null)
+    {
+        var doc = new JsonObject
         {
             ["schema"] = 1,
             ["jobId"] = jobId,
@@ -1556,7 +1564,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             ["worker"] = new JsonObject { ["version"] = "1.0.0", ["image"] = "sha256:fake" },
             ["error"] = null,
             ["cancelSeen"] = cancelSeen,
-        }.ToJsonString();
+        };
+        if (windowsDone is { } done)
+        {
+            doc["windowsDone"] = done;
+            doc["lastProgressAt"] = "2026-09-18T15:19:58Z"; // frozen on purpose: the wedged compute thread never advances it
+        }
+
+        return doc.ToJsonString();
+    }
 
     private static string WorkerFirstProgressLine(bool gpu)
         => new JsonObject
@@ -1571,7 +1587,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private void TickLiveWorker(string bucket, string statusKey, LiveWorker live)
     {
         var next = live with { Seq = live.Seq + 1, ReadsLeft = live.ReadsLeft - 1 };
-        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage, live.CancelSeen));
+        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage, live.CancelSeen, live.WindowsDone));
         if (next.ReadsLeft <= 0)
         {
             _liveWorkers.TryRemove((bucket, statusKey), out _);
