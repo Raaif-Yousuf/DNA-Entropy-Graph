@@ -202,4 +202,5 @@ public class GoogleBudgetGatewayTests
         {
             amount.GetProperty("nanos").GetInt32().ShouldBe(nanos.Value);
         }
-    }}
+    
+}
