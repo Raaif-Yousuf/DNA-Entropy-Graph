@@ -187,6 +187,22 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_gene_with_an_unreadable_position_is_a_valid_file_with_a_notice_and_one_gene_fewer()
+    {
+        // Issues #543 and #788: the worker leaves the gene out and runs the rest, so the pill must not refuse the file.
+        var gb = "LOCUS       T1                     24 bp    DNA     linear   UNK 01-JAN-1980\n"
+            + "FEATURES             Location/Qualifiers\n     gene            abc\n     gene            13..24\nORIGIN\n"
+            + "        1 acgtacgtac gtacgtacgt acgt\n//\n";
+
+        var pill = await AddOne(Write("bad-position.gb", gb));
+
+        pill.IsValid.ShouldBeTrue();
+        pill.HasNotices.ShouldBeTrue();
+        pill.NoticesText.ShouldBe("NewRunNotice_GenBankFeaturesDropped_One");
+        pill.SummaryText.ShouldBe("1 record, 24 bases, 1 gene");
+    }
+
+    [Fact]
     public async Task An_error_pill_names_the_problem_in_resw_copy_and_where_it_is()
     {
         var pill = await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));

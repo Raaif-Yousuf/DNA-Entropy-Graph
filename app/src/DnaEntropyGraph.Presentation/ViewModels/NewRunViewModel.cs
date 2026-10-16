@@ -87,6 +87,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
     private string _statusMessage = string.Empty;
 
+    /// <summary>The Cloud / This PC / Auto choice (issues #120 and #173); null in a host that has none, which means Cloud.</summary>
+    public RunTargetPickerViewModel? RunTarget { get; }
+
     public NewRunViewModel(
         IFilePicker filePicker,
         IJobEngine jobEngine,
@@ -105,13 +108,15 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
         bool? offerAnnotation = null,
         bool? offerAccession = null,
-        IAccessionLookup? accessionLookup = null)
+        IAccessionLookup? accessionLookup = null,
+        RunTargetPickerViewModel? runTarget = null)
     {
         // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
         Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
         Gpu.Changed += OnGpuPlanChanged;
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _accessionLookup = accessionLookup;
+        RunTarget = runTarget;
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
         OffersAnnotation = offerAnnotation ?? WorkerManifestSupport.Annotation;
@@ -933,7 +938,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private RunOptions BuildRunOptions(InputPillItem item, OutputFileKinds outputs) => new()
     {
         ModelId = Gpu.ModelId,
-        RunTarget = "Cloud",
+        RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
         InputPath = item.IsAccession ? null : item.Path,
         AnnotationPath = item.AnnotationPath,
         Accession = item.Accession,

@@ -8,6 +8,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Setup;
 using DnaEntropyGraph.LocalEngine;
@@ -248,9 +249,38 @@ public static class ServiceRegistration
             Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
-        // LocalEngine.
-        services.AddSingleton<LocalEngineManager>();
-        services.AddSingleton<RunTargetResolver>();
+        // LocalEngine (issues #120, #172, #173, #174): the This PC path. Everything that starts a program goes through the one
+        // IProcessLauncher (Hard Rule 6), so a test or a dev run can replace it.
+        // One kill-on-close Job Object for the whole app (issue #734): every child it starts dies with it, however the app ends. The container disposes it at a clean exit.
+        services.AddSingleton<WindowsKillOnCloseJob>();
+        services.AddSingleton<IProcessLauncher>(sp => new SystemProcessLauncher(sp.GetRequiredService<WindowsKillOnCloseJob>()));
+        services.AddSingleton<IGpuDetector>(sp => new NvidiaSmiGpuDetector(sp.GetRequiredService<IProcessLauncher>(), NvidiaSmiGpuDetector.WindowsCandidates()));
+        services.AddSingleton<IFreeDiskSpace, DriveFreeDiskSpace>();
+        services.AddSingleton<LocalEngineLayout>(sp => LocalEngineSetup.Layout(sp.GetRequiredService<AppDataRoot>()));
+        services.AddSingleton<LocalEngineManager>(sp => new LocalEngineManager(
+            sp.GetRequiredService<IGpuDetector>(),
+            sp.GetRequiredService<IFreeDiskSpace>(),
+            sp.GetRequiredService<IProcessLauncher>(),
+            sp.GetRequiredService<LocalEngineLayout>(),
+            JobEngine.AppVersion()));
+        services.AddSingleton<ILocalReadinessSource>(sp => sp.GetRequiredService<LocalEngineManager>());
+        services.AddSingleton<IRunTargetResolver, RunTargetResolver>();
+        services.AddSingleton<ILocalEngineInstaller>(sp => LocalEngineSetup.Installer(
+            sp.GetRequiredService<IProcessLauncher>(),
+            sp.GetRequiredService<LocalEngineLayout>(),
+            sp.GetRequiredService<AppDataRoot>(),
+            sp.GetRequiredService<LocalEngineManager>()));
+        services.AddSingleton<LocalJobRunner>(sp =>
+        {
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new LocalJobRunner(
+                sp.GetRequiredService<IProcessLauncher>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<LocalEngineLayout>(),
+                sp.GetRequiredService<AppDataRoot>().RunsDirectory,
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
+        services.AddSingleton<LocalRunDriver>();
 
         // App-owned singleton that survives navigation (docs/architecture.md section 3).
         // Registered once as its own concrete type and exposed through both
@@ -360,6 +390,9 @@ public static class ServiceRegistration
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
         services.AddTransient<SpendCapSettingsViewModel>();
+        // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
+        services.AddSingleton<RunTargetPickerViewModel>();
+        services.AddTransient<ThisPcSettingsViewModel>();
         services.AddTransient<CloudResultsSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.

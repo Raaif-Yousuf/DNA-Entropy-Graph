@@ -61,6 +61,30 @@ public static class RunErrorCodes
     /// <summary>NCBI could not be asked from this PC (offline, slow, limiting or in trouble) before the run started (issue #684).</summary>
     public const string InputAccessionUnreachable = "input_accession_unreachable";
 
+    /// <summary>A This PC run was chosen but the local engine is not installed or did not pass its health check (issues #173, #174).</summary>
+    public const string LocalEngineNotReady = "local_engine_not_ready";
+
+    /// <summary>A This PC run with a real model was chosen but this PC has no usable NVIDIA GPU for it (issue #120).</summary>
+    public const string LocalGpuNotUsable = "local_gpu_not_usable";
+
+    /// <summary>The worker process on this PC ended without writing a result (WORKER_CRASH for a local run, issue #174).</summary>
+    public const string LocalWorkerCrashed = "local_worker_crashed";
+
+    /// <summary>The worker on this PC wrote no heartbeat within the app's first-heartbeat deadline, so the app ended it (issue #174, review 2026-10-15).</summary>
+    public const string LocalWorkerNoHeartbeat = "local_worker_no_heartbeat";
+
+    /// <summary>The worker on this PC stopped changing its heartbeat, so the app ended it.</summary>
+    public const string LocalWorkerStalled = "local_worker_stalled";
+
+    /// <summary>The worker on this PC passed the run's maximum duration, so the app ended it.</summary>
+    public const string LocalWorkerTimedOut = "local_worker_timed_out";
+
+    /// <summary>A note, not a failure: the run completed and its files are verified, but the worker's exit code was not zero.</summary>
+    public const string LocalWorkerExitedNonzero = "local_worker_exit_nonzero";
+
+    /// <summary>The app was closed or killed while a This PC run was in progress and no result was written (issue #734).</summary>
+    public const string LocalRunInterrupted = "local_run_interrupted";
+
     /// <summary>The installation id file was unusable and set aside (#558). Minimal copy only; the recovery UX is owner-only DECISION #404.</summary>
     public const string InstallationIdUnusable = "installation_id_unusable";
 
@@ -91,7 +115,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, SpendCap,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, SpendCap,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -212,6 +236,14 @@ public static class RunErrorCodes
         InputAccessionTooLarge => "RunError_input_accession_too_large",
         InputAccessionUnreachable => "RunError_input_accession_unreachable",
         InstallationIdUnusable => "RunError_installation_id_unusable",
+        LocalEngineNotReady => "RunError_local_engine_not_ready",
+        LocalGpuNotUsable => "RunError_local_gpu_not_usable",
+        LocalWorkerCrashed => "RunError_local_worker_crashed",
+        LocalWorkerNoHeartbeat => "RunError_local_worker_no_heartbeat",
+        LocalWorkerStalled => "RunError_local_worker_stalled",
+        LocalWorkerTimedOut => "RunError_local_worker_timed_out",
+        LocalWorkerExitedNonzero => "RunError_local_worker_exit_nonzero",
+        LocalRunInterrupted => "RunError_local_run_interrupted",
         WorkerDefaultAccount => "RunError_worker_default_account",
         PermissionActAs => "RunError_permission_actas",
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
