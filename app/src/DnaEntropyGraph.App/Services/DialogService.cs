@@ -50,7 +50,11 @@ public sealed class DialogService : IDialogService, IChoiceDialogService
     /// Issue #675: up to three labelled buttons (primary, secondary, close). Returns the pressed index, or null when there is no window or root yet or the token closed the
     /// dialog: no answer is never a choice. Shares the one-dialog-at-a-time gate with <see cref="ConfirmAsync"/>.
     /// </summary>
-    public async Task<int?> ChooseAsync(string title, string message, IReadOnlyList<string> buttonLabels, CancellationToken cancellationToken)
+    public Task<int?> ChooseAsync(string title, string message, IReadOnlyList<string> buttonLabels, CancellationToken cancellationToken)
+        => ChooseAsync(title, message, buttonLabels, Timeout.InfiniteTimeSpan, cancellationToken);
+
+    /// <summary>Issue #113: as above, but a gate that does not free within <paramref name="gateTimeout"/> answers null (the app is closing and must not wait behind another open dialog).</summary>
+    public async Task<int?> ChooseAsync(string title, string message, IReadOnlyList<string> buttonLabels, TimeSpan gateTimeout, CancellationToken cancellationToken)
     {
         var window = _window;
         if (window is null || buttonLabels.Count is < 1 or > 3)
@@ -59,7 +63,11 @@ public sealed class DialogService : IDialogService, IChoiceDialogService
             return null;
         }
 
-        await _one.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (!await _one.WaitAsync(gateTimeout, cancellationToken).ConfigureAwait(false))
+        {
+            Trace.TraceWarning("DialogService: another dialog held the window past the wait; answering nothing.");
+            return null;
+        }
         try
         {
             cancellationToken.ThrowIfCancellationRequested();

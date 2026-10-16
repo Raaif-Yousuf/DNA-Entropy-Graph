@@ -2107,10 +2107,10 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>{0} in {1}: ends itself in about {2} minutes. {3}</value>
   </data>
   <data name="LeftRunning_VmLineLive" xml:space="preserve">
-    <value>{0} in {1}: a run is still using it, and it ends itself in about {2} minutes. {3}</value>
+    <value>{0} in {1}: a run is still using it and its results are not downloaded yet. Stop it or Delete it ends that run and you lose those results. Otherwise it ends itself in about {2} minutes. {3}</value>
   </data>
   <data name="LeftRunning_VmLineNoLimit" xml:space="preserve">
-    <value>{0} in {1}: it ends itself at its time limit. {2}</value>
+    <value>{0} in {1}: its time limit could not be read. Open the Cloud page to check it. {2}</value>
   </data>
   <data name="LeftRunning_CostPerHour" xml:space="preserve">
     <value>Up to about ${0} per hour.</value>
@@ -2150,5 +2150,17 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="LeftRunning_ToastBody" xml:space="preserve">
     <value>{0} in {1} is running and costing money. Open the Cloud page and press Stop on it if you are not waiting for it.</value>
+  </data>
+  <data name="LeftRunning_StillEndingTitle" xml:space="preserve">
+    <value>A computer is still being ended</value>
+  </data>
+  <data name="LeftRunning_StillEndingBody" xml:space="preserve">
+    <value>{0} is still being ended and will finish on Google's side. Open the Cloud page next time you start the app to check that it is gone.</value>
+  </data>
+  <data name="LeftRunning_ToastBodyMany" xml:space="preserve">
+    <value>{0} rented computers are running and costing money: {1}. Open the Cloud page and press Stop on each one you are not waiting for.</value>
+  </data>
+  <data name="LeftRunning_ToastMore" xml:space="preserve">
+    <value>and {0} more</value>
   </data>
 </root>

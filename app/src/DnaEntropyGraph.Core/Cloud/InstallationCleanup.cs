@@ -302,6 +302,59 @@ public sealed class InstallationCleanup
     public const string DiskListingName = "(disk listing)";
 
     /// <summary>
+    /// Issue #113: stops or deletes ONE computer of this installation (the exit window's Stop / Delete) through the same run-ending path as "Delete everything": a VM that
+    /// carries a <c>job-id</c> is ended under <see cref="ActiveRuns.CancelAsync"/>, so its driver is stopped first and a run that was still live is ended as Cancelled
+    /// (<see cref="RunErrorCodes.DeletedByCleanup"/>) instead of being left Running (Hard Rule 11). Refuses a VM not labelled for <paramref name="installationId"/> (false, nothing touched).
+    /// True when the stop or delete was accepted (a delete also read back as gone); never throws for a cloud failure, so the caller can name the computer and the action.
+    /// </summary>
+    public async Task<bool> EndVmAsync(string installationId, VmDescriptor vm, bool delete, CancellationToken cancellationToken)
+    {
+        RequireInstallation(installationId);
+        if (!BelongsTo(vm, installationId))
+        {
+            return false;
+        }
+
+        if (delete)
+        {
+            var items = new List<CleanupItem>();
+            await DeleteVmAndEndItsRunAsync(vm, items, cancellationToken).ConfigureAwait(false);
+            return items.Count > 0 && items.All(i => i.Outcome == CleanupOutcome.Deleted);
+        }
+
+        var jobId = vm.Labels is { } labels && labels.TryGetValue("job-id", out var id) ? id : null;
+        var stopped = false;
+
+        async Task StopAsync()
+        {
+            try
+            {
+                await _compute.StopVmAsync(vm.Name, vm.Zone, cancellationToken).ConfigureAwait(false);
+                stopped = true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return;
+            }
+
+            if (jobId is not null)
+            {
+                await EndRunRowAsync(jobId).ConfigureAwait(false);
+            }
+        }
+
+        if (_active is not null && jobId is not null)
+        {
+            await _active.CancelAsync(jobId, StopAsync).ConfigureAwait(false);
+        }
+        else
+        {
+            await StopAsync().ConfigureAwait(false);
+        }
+
+        return stopped;
+    }
+    /// <summary>
     /// Deletes one VM and reads it back, contained: a failed delete or read back is an item, never an exception. When the VM carries a <c>job-id</c> the
     /// work runs under <see cref="ActiveRuns.CancelAsync"/>, so the run's driver is stopped first and one writer owns the row; a VM verified gone then
     /// ends the run's row (Hard Rule 11: a run whose VM is gone is never left Running).

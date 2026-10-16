@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Services;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 
@@ -26,54 +27,14 @@ public sealed class AppWindowService : IAppWindow
         window.Activated += (_, args) => _active = args.WindowActivationState != WindowActivationState.Deactivated;
         if (confirmExit is not null)
         {
-            window.AppWindow.Closing += (_, args) => OnClosing(args, confirmExit);
+            var confirmation = new CloseConfirmation(confirmExit);
+            window.AppWindow.Closing += (_, args) => OnClosing(args, confirmation);
         }
     }
 
-    // Issue #113: the close is cancelled at once (the handler never blocks the UI thread) and the exit question runs asynchronously;
-    // when it allows the exit, the window closes again with the question skipped. A second close while it is open is ignored.
-    private bool _exitConfirmed;
-    private bool _asking;
-
-    private void OnClosing(AppWindowClosingEventArgs args, Func<CancellationToken, Task<bool>> confirmExit)
-    {
-        if (_exitConfirmed)
-        {
-            return;
-        }
-
-        args.Cancel = true;
-        if (_asking)
-        {
-            return;
-        }
-
-        _asking = true;
-        _ = AskThenCloseAsync(confirmExit);
-    }
-
-    private async Task AskThenCloseAsync(Func<CancellationToken, Task<bool>> confirmExit)
-    {
-        var allowed = true;
-        try
-        {
-            allowed = await confirmExit(CancellationToken.None);
-        }
-        catch (Exception)
-        {
-            // The question is a safety net; a failure in it never traps the user in the app.
-        }
-        finally
-        {
-            _asking = false;
-        }
-
-        if (allowed)
-        {
-            _exitConfirmed = true;
-            _window?.Close();
-        }
-    }
+    // Issue #113: the decision (cancel at once, ask once, re-close without asking again) is CloseConfirmation, tested without a window.
+    private void OnClosing(AppWindowClosingEventArgs args, CloseConfirmation confirmation)
+        => args.Cancel = confirmation.ShouldCancelClose(() => _window?.Close());
 
     /// <summary>Always called on the UI thread (<c>ActivationRouter</c> goes through the dispatcher).</summary>
     public void BringToFront()

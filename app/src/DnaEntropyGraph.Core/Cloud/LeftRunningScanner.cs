@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// expiry: a computer left running is never left indefinitely), null when the limit is unknown. <paramref name="UsdPerHour"/> is the computer's own rate, null when
 /// the price list could not be read. <paramref name="HasLiveRun"/> is true when a run of this installation that has not ended carries the VM's job id.
 /// </summary>
-public sealed record LeftRunningVm(string Name, string Zone, string? JobId, TimeSpan? Remaining, double? UsdPerHour, bool HasLiveRun);
+public sealed record LeftRunningVm(string Name, string Zone, string? JobId, TimeSpan? Remaining, double? UsdPerHour, bool HasLiveRun, VmDescriptor Descriptor);
 
 /// <summary>A disk of this installation that no running computer holds: it keeps billing every month until it is deleted.</summary>
 public sealed record LeftStoppedDisk(string Name, string Zone, int SizeGb, double? UsdPerMonth);
@@ -45,7 +45,7 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
         {
             var jobId = vm.Labels is not null && vm.Labels.TryGetValue("job-id", out var job) ? job : null;
             var machine = vm.MachineType is { Length: > 0 } type ? table?.Find(type[(type.LastIndexOf('/') + 1)..]) : null;
-            return new LeftRunningVm(vm.Name, vm.Zone, jobId, RemainingOf(vm, now), machine?.OnDemandUsdPerHour, jobId is not null && live.Contains(jobId));
+            return new LeftRunningVm(vm.Name, vm.Zone, jobId, RemainingOf(vm, now), machine?.OnDemandUsdPerHour, jobId is not null && live.Contains(jobId), vm);
         }).ToList();
 
         var runningNames = running.Select(v => v.Name).ToHashSet(StringComparer.Ordinal);

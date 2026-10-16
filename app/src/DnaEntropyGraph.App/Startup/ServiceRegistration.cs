@@ -295,7 +295,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<LeftRunningGuard>(sp => new LeftRunningGuard(
             sp.GetRequiredService<LeftRunningScanner>(),
-            sp.GetRequiredService<IComputeGateway>(),
+            sp.GetRequiredService<InstallationCleanup>(),
+            sp.GetRequiredService<ISettingsStore>(),
             sp.GetRequiredService<IChoiceDialogService>(),
             sp.GetRequiredService<IToastService>(),
             sp.GetRequiredService<IStringResourceProvider>(),

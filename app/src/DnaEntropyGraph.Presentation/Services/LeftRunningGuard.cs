@@ -17,8 +17,18 @@ public sealed class LeftRunningGuard : IDisposable
     /// <summary>How often the background scan runs.</summary>
     public static readonly TimeSpan Period = TimeSpan.FromMinutes(5);
 
+    /// <summary>The longest a scan may take (a captive network can hang a listing forever): past it the scan is abandoned, and closing the app is allowed.</summary>
+    public static readonly TimeSpan ScanTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>The longest the exit waits for a Stop or Delete to be accepted: past it the window closes and the call finishes on Google's side.</summary>
+    public static readonly TimeSpan EndTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>The longest the exit waits behind another open dialog before giving up on showing its own.</summary>
+    public static readonly TimeSpan DialogGateTimeout = TimeSpan.FromSeconds(10);
+
     private readonly LeftRunningScanner _scanner;
-    private readonly IComputeGateway _compute;
+    private readonly InstallationCleanup _cleanup;
+    private readonly ISettingsStore _settings;
     private readonly IChoiceDialogService _dialog;
     private readonly IToastService _toasts;
     private readonly IStringResourceProvider _strings;
@@ -29,10 +39,11 @@ public sealed class LeftRunningGuard : IDisposable
     private ITimer? _timer;
     private bool _scanning;
 
-    public LeftRunningGuard(LeftRunningScanner scanner, IComputeGateway compute, IChoiceDialogService dialog, IToastService toasts, IStringResourceProvider strings, IDiagnosticsLog log, TimeProvider clock)
+    public LeftRunningGuard(LeftRunningScanner scanner, InstallationCleanup cleanup, ISettingsStore settings, IChoiceDialogService dialog, IToastService toasts, IStringResourceProvider strings, IDiagnosticsLog log, TimeProvider clock)
     {
         _scanner = scanner;
-        _compute = compute;
+        _cleanup = cleanup;
+        _settings = settings;
         _dialog = dialog;
         _toasts = toasts;
         _strings = strings;
@@ -68,6 +79,9 @@ public sealed class LeftRunningGuard : IDisposable
         }
     }
 
+    private Task<LeftRunningReport> BoundedScanAsync(CancellationToken cancellationToken)
+        => _scanner.ScanAsync(cancellationToken).WaitAsync(ScanTimeout, _clock, cancellationToken);
+
     private async Task ScanAndWarnAsync(CancellationToken cancellationToken)
     {
         lock (_gate)
@@ -83,7 +97,7 @@ public sealed class LeftRunningGuard : IDisposable
 
         try
         {
-            var report = await _scanner.ScanAsync(cancellationToken).ConfigureAwait(false);
+            var report = await BoundedScanAsync(cancellationToken).ConfigureAwait(false);
             var orphans = report.RunningVms.Where(v => !v.HasLiveRun).ToList();
             List<LeftRunningVm> fresh;
             lock (_gate)
@@ -93,9 +107,21 @@ public sealed class LeftRunningGuard : IDisposable
                 fresh = orphans.Where(v => _announced.Add((v.Name, v.Zone))).ToList();
             }
 
-            foreach (var vm in fresh)
+            if (fresh.Count == 1)
             {
-                _toasts.ShowToast(Text("LeftRunning_ToastTitle"), Text("LeftRunning_ToastBody", vm.Name, vm.Zone), ToastSeverity.Warning);
+                _toasts.ShowToast(Text("LeftRunning_ToastTitle"), Text("LeftRunning_ToastBody", fresh[0].Name, fresh[0].Zone), ToastSeverity.Warning);
+            }
+            else if (fresh.Count > 1)
+            {
+                // The message bar holds one message, so every computer found in one scan is ONE toast: the count and the first names.
+                var names = fresh.Select(v => v.Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
+                var shown = string.Join(", ", names.Take(3));
+                if (names.Count > 3)
+                {
+                    shown += " " + Text("LeftRunning_ToastMore", (names.Count - 3).ToString(CultureInfo.InvariantCulture));
+                }
+
+                _toasts.ShowToast(Text("LeftRunning_ToastTitle"), Text("LeftRunning_ToastBodyMany", fresh.Count.ToString(CultureInfo.InvariantCulture), shown), ToastSeverity.Warning);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -121,7 +147,7 @@ public sealed class LeftRunningGuard : IDisposable
         LeftRunningReport report;
         try
         {
-            report = await _scanner.ScanAsync(cancellationToken).ConfigureAwait(false);
+            report = await BoundedScanAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -140,39 +166,63 @@ public sealed class LeftRunningGuard : IDisposable
             Text("LeftRunning_ExitTitle"),
             body,
             [Text("LeftRunning_Stop"), Text("LeftRunning_Delete"), Text("LeftRunning_Leave")],
+            DialogGateTimeout,
             cancellationToken).ConfigureAwait(false);
 
         return choice switch
         {
-            0 => await EndAllAsync(report.RunningVms, (vm, ct) => _compute.StopVmAsync(vm.Name, vm.Zone, ct), "LeftRunning_StopFailed", cancellationToken).ConfigureAwait(false),
-            1 => await EndAllAsync(report.RunningVms, (vm, ct) => _compute.DeleteVmAsync(vm.Name, vm.Zone, ct), "LeftRunning_DeleteFailed", cancellationToken).ConfigureAwait(false),
+            0 => await EndAllAsync(report.RunningVms, false, "LeftRunning_StopFailed", cancellationToken).ConfigureAwait(false),
+            1 => await EndAllAsync(report.RunningVms, true, "LeftRunning_DeleteFailed", cancellationToken).ConfigureAwait(false),
             _ => true,
         };
     }
 
-    private async Task<bool> EndAllAsync(IReadOnlyList<LeftRunningVm> vms, Func<LeftRunningVm, CancellationToken, Task> end, string failureKey, CancellationToken cancellationToken)
+    private enum EndResult
     {
-        var failed = new List<string>();
-        foreach (var vm in vms)
+        Done,
+        Failed,
+        StillEnding,
+    }
+
+    /// <summary>
+    /// Stops or deletes every named computer at once, each bounded by <see cref="EndTimeout"/>, through <see cref="InstallationCleanup.EndVmAsync"/> (which ends a live run's row, Hard Rule 11).
+    /// A call still not answered at the bound is not a failure: the window closes and says it will finish on Google's side.
+    /// </summary>
+    private async Task<bool> EndAllAsync(IReadOnlyList<LeftRunningVm> vms, bool delete, string failureKey, CancellationToken cancellationToken)
+    {
+        var installation = InstallationId.GetOrCreate(_settings);
+        var results = await Task.WhenAll(vms.Select(async vm =>
         {
             try
             {
-                await end(vm, cancellationToken).ConfigureAwait(false);
+                var ok = await _cleanup.EndVmAsync(installation, vm.Descriptor, delete, cancellationToken).WaitAsync(EndTimeout, _clock, cancellationToken).ConfigureAwait(false);
+                return (vm, ok ? EndResult.Done : EndResult.Failed);
+            }
+            catch (TimeoutException)
+            {
+                return (vm, EndResult.StillEnding);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log.Warning("left-running-exit", vm.JobId, ex.GetType().Name);
-                failed.Add(vm.Name);
+                return (vm, EndResult.Failed);
             }
-        }
+        })).ConfigureAwait(false);
 
-        if (failed.Count == 0)
+        var failed = results.Where(r => r.Item2 == EndResult.Failed).Select(r => r.vm.Name).ToList();
+        if (failed.Count > 0)
         {
-            return true;
+            _toasts.ShowToast(Text(failureKey + "Title"), Text(failureKey + "Body", string.Join(", ", failed)), ToastSeverity.Error);
+            return false;
         }
 
-        _toasts.ShowToast(Text(failureKey + "Title"), Text(failureKey + "Body", string.Join(", ", failed)), ToastSeverity.Error);
-        return false;
+        var pending = results.Where(r => r.Item2 == EndResult.StillEnding).Select(r => r.vm.Name).ToList();
+        if (pending.Count > 0)
+        {
+            _toasts.ShowToast(Text("LeftRunning_StillEndingTitle"), Text("LeftRunning_StillEndingBody", string.Join(", ", pending)), ToastSeverity.Info);
+        }
+
+        return true;
     }
 
     private string LineOf(LeftRunningVm vm)

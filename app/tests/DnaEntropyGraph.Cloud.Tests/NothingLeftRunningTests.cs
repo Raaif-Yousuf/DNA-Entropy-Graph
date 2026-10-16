@@ -56,8 +56,35 @@ public class NothingLeftRunningTests
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             var timer = new ManualTimer(() => callback(state), period);
-            Timers.Add(timer);
+            lock (Timers)
+            {
+                Timers.Add(timer);
+            }
+
             return timer;
+        }
+
+        /// <summary>Waits for a timeout timer somebody armed (not yet disposed) and fires it: the clock reaching the deadline of a call that never answers.</summary>
+        public async Task FireNextTimeoutAsync()
+        {
+            for (var i = 0; i < 400; i++)
+            {
+                ManualTimer? pending;
+                lock (Timers)
+                {
+                    pending = Timers.FirstOrDefault(t => !t.Disposed && t.Period == Timeout.InfiniteTimeSpan);
+                }
+
+                if (pending is not null)
+                {
+                    pending.Fire();
+                    return;
+                }
+
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            throw new TimeoutException("No timeout timer was armed.");
         }
     }
 
@@ -75,7 +102,10 @@ public class NothingLeftRunningTests
             ["LeftRunning_DiskNoteNoPrice"] = 1,
             ["LeftRunning_StopFailedBody"] = 1,
             ["LeftRunning_DeleteFailedBody"] = 1,
+            ["LeftRunning_StillEndingBody"] = 1,
             ["LeftRunning_ToastBody"] = 2,
+            ["LeftRunning_ToastBodyMany"] = 2,
+            ["LeftRunning_ToastMore"] = 1,
         };
 
         public string GetString(string key) => key + string.Concat(Enumerable.Range(0, Arity.GetValueOrDefault(key)).Select(i => "|{" + i + "}"));
@@ -89,12 +119,13 @@ public class NothingLeftRunningTests
             Gcp = new FakeGcp(Clock);
             Settings = new MemorySettingsStore();
             Installation = InstallationId.GetOrCreate(Settings);
-            Runs.GetAllAsync(Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<RunRecord>>(RunRows));
             var pricing = Substitute.For<IPricingSource>();
             pricing.Load().Returns(PricingTable.Parse(PricingJson));
+            Pricing = pricing;
             Scanner = new LeftRunningScanner(Gcp, Settings, Runs, pricing, Clock);
-            Guard = new LeftRunningGuard(Scanner, Gcp, Dialog, Toasts, new EchoStrings(), NullDiagnosticsLog.Instance, Clock);
-            Dialog.ChooseAsync(Arg.Any<string>(), Arg.Do<string>(m => Body = m), Arg.Do<IReadOnlyList<string>>(b => Buttons = b), Arg.Any<CancellationToken>())
+            Cleanup = new InstallationCleanup(Gcp, Gcp, Runs);
+            Guard = NewGuard(Scanner, Cleanup);
+            Dialog.ChooseAsync(Arg.Any<string>(), Arg.Do<string>(m => Body = m), Arg.Do<IReadOnlyList<string>>(b => Buttons = b), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
                 .Returns(call => Task.FromResult<int?>(Choice));
         }
 
@@ -106,15 +137,17 @@ public class NothingLeftRunningTests
 
         public string Installation { get; }
 
-        public IRunRepository Runs { get; } = Substitute.For<IRunRepository>();
+        public IPricingSource Pricing { get; }
 
-        public List<RunRecord> RunRows { get; } = [];
+        public InMemoryRunRepository Runs { get; } = new();
 
         public IChoiceDialogService Dialog { get; } = Substitute.For<IChoiceDialogService>();
 
         public IToastService Toasts { get; } = Substitute.For<IToastService>();
 
         public LeftRunningScanner Scanner { get; }
+
+        public InstallationCleanup Cleanup { get; }
 
         public LeftRunningGuard Guard { get; }
 
@@ -124,11 +157,18 @@ public class NothingLeftRunningTests
 
         public int? Choice { get; set; } = 2;
 
+        public LeftRunningGuard NewGuard(LeftRunningScanner scanner, InstallationCleanup cleanup)
+            => new(scanner, cleanup, Settings, Dialog, Toasts, new EchoStrings(), NullDiagnosticsLog.Instance, Clock);
+
         public async Task<VmDescriptor> CreateVmAsync(string installation, string job, TimeSpan maxRun)
         {
             var spec = new VmSpec("p", installation, job, "evo2_7b", "0.1.0", "stop", "g2-standard-8", maxRun, "DELETE");
             return await Gcp.CreateVmAsync(spec, Zone, CancellationToken.None);
         }
+
+        public Task AddRunAsync(string job, JobPhase phase) => Runs.UpsertAsync(new RunRecord(job, phase, Start), CancellationToken.None);
+
+        public JobPhase LatestPhase(string job) => Runs.AllRecordedInOrder.Last(r => r.JobId == job).Phase;
     }
 
     [Fact]
@@ -142,9 +182,9 @@ public class NothingLeftRunningTests
 
         allowed.ShouldBeTrue();
         rig.Body.ShouldNotBeNull();
-        rig.Body.ShouldContain(vm.Name);
-        rig.Body.ShouldContain("|60|"); // 90 minute limit, 30 minutes in
-        rig.Body.ShouldContain("0.85"); // the hourly cost
+        rig.Body!.ShouldContain(vm.Name);
+        rig.Body!.ShouldContain("|60|"); // 90 minute limit, 30 minutes in
+        rig.Body!.ShouldContain("0.85"); // the hourly cost
         rig.Buttons!.Count.ShouldBe(3);
         rig.Buttons[0].ShouldStartWith("LeftRunning_Stop");
         rig.Buttons[1].ShouldStartWith("LeftRunning_Delete");
@@ -158,20 +198,30 @@ public class NothingLeftRunningTests
 
         (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
 
-        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task Another_installations_running_vm_is_never_named_or_touched()
+    public async Task Another_installations_vm_and_disk_that_a_gateway_hands_back_unfiltered_are_never_named_or_touched()
     {
         var rig = new Rig();
-        var theirs = await rig.CreateVmAsync("inst-other", "job-x", TimeSpan.FromMinutes(90));
+        var labels = new Dictionary<string, string> { ["app"] = "dna-entropy-graph", ["installation-id"] = "inst-other", ["job-id"] = "job-x" };
+        var theirs = new VmDescriptor("deg-job-x", Zone, "RUNNING", Labels: labels, CreatedAt: Start, MachineType: "g2-standard-8", MaxRunDuration: TimeSpan.FromMinutes(90));
+        var stub = Substitute.For<IComputeGateway>();
+        stub.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([theirs]));
+        stub.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([new DiskDescriptor("deg-job-x", Zone, 150, "READY", labels)]));
+        var scanner = new LeftRunningScanner(stub, rig.Settings, rig.Runs, rig.Pricing, rig.Clock);
+        var guard = rig.NewGuard(scanner, new InstallationCleanup(stub, rig.Gcp, rig.Runs));
         rig.Choice = 0;
 
-        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+        var report = await scanner.ScanAsync(CancellationToken.None);
+        (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
 
-        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
-        (await rig.Gcp.GetVmAsync(theirs.Name, Zone, CancellationToken.None))!.Status.ShouldBe("RUNNING");
+        report.IsClean.ShouldBeTrue();
+        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -199,15 +249,46 @@ public class NothingLeftRunningTests
     }
 
     [Fact]
+    public async Task Delete_of_a_vm_with_a_live_run_ends_the_run_row_and_the_modal_warns_the_results_are_not_downloaded()
+    {
+        var rig = new Rig();
+        var vm = await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        rig.Choice = 1;
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        rig.Body!.ShouldContain("LeftRunning_VmLineLive");
+        (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None)).ShouldBeNull();
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task Stop_of_a_vm_with_a_live_run_ends_the_run_row_too()
+    {
+        var rig = new Rig();
+        var vm = await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        rig.Choice = 0;
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None))!.Status.ShouldNotBe("RUNNING");
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
     public async Task Leave_running_touches_nothing_and_allows_exit()
     {
         var rig = new Rig();
-        var vm = await rig.CreateVmAsync(rig.Installation, "job-1", TimeSpan.FromMinutes(90));
+        var vm = await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
         rig.Choice = 2;
 
         (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
 
         (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None))!.Status.ShouldBe("RUNNING");
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Running);
     }
 
     [Fact]
@@ -230,8 +311,7 @@ public class NothingLeftRunningTests
         failing.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.Arg<string>(), CancellationToken.None));
         failing.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.Arg<string>(), CancellationToken.None));
         failing.StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new IOException("boom"));
-        var scanner = new LeftRunningScanner(failing, rig.Settings, rig.Runs, null, rig.Clock);
-        var guard = new LeftRunningGuard(scanner, failing, rig.Dialog, rig.Toasts, new EchoStrings(), NullDiagnosticsLog.Instance, rig.Clock);
+        var guard = rig.NewGuard(new LeftRunningScanner(failing, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(failing, rig.Gcp, rig.Runs));
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeFalse();
 
@@ -244,10 +324,55 @@ public class NothingLeftRunningTests
         var rig = new Rig();
         var broken = Substitute.For<IComputeGateway>();
         broken.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new IOException("offline"));
-        var scanner = new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock);
-        var guard = new LeftRunningGuard(scanner, broken, rig.Dialog, rig.Toasts, new EchoStrings(), NullDiagnosticsLog.Instance, rig.Clock);
+        var guard = rig.NewGuard(new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(broken, rig.Gcp, rig.Runs));
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_listing_that_never_answers_times_out_and_lets_the_app_close()
+    {
+        var rig = new Rig();
+        var hung = Substitute.For<IComputeGateway>();
+        hung.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource<IReadOnlyList<VmDescriptor>>().Task);
+        var guard = rig.NewGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs));
+
+        var closing = guard.ConfirmExitAsync(CancellationToken.None);
+        await rig.Clock.FireNextTimeoutAsync();
+
+        (await closing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
+        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_stop_that_never_answers_says_it_will_finish_on_googles_side_and_lets_the_app_close()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-1", TimeSpan.FromMinutes(90));
+        rig.Choice = 0;
+        var hung = Substitute.For<IComputeGateway>();
+        hung.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.Arg<string>(), CancellationToken.None));
+        hung.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.Arg<string>(), CancellationToken.None));
+        hung.StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
+        var guard = rig.NewGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs));
+
+        var closing = guard.ConfirmExitAsync(CancellationToken.None);
+        await rig.Clock.FireNextTimeoutAsync();
+
+        (await closing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
+        rig.Toasts.Received().ShowToast(Arg.Is<string>(t => t.StartsWith("LeftRunning_StillEndingTitle")), Arg.Is<string>(b => b.StartsWith("LeftRunning_StillEndingBody")), ToastSeverity.Info);
+    }
+
+    [Fact]
+    public async Task A_dialog_gate_that_never_frees_gives_no_answer_within_the_bound_the_guard_asks_for()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-1", TimeSpan.FromMinutes(90));
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        await rig.Dialog.Received(1).ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), LeftRunningGuard.DialogGateTimeout, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -267,6 +392,22 @@ public class NothingLeftRunningTests
     }
 
     [Fact]
+    public async Task A_vm_with_no_known_time_limit_gets_the_neutral_line_not_a_claim_it_ends_itself()
+    {
+        var rig = new Rig();
+        var labels = new Dictionary<string, string> { ["app"] = "dna-entropy-graph", ["installation-id"] = rig.Installation, ["job-id"] = "job-n" };
+        var noLimit = new VmDescriptor("deg-job-n", Zone, "RUNNING", Labels: labels, CreatedAt: Start, MachineType: "g2-standard-8");
+        var stub = Substitute.For<IComputeGateway>();
+        stub.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([noLimit]));
+        stub.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([]));
+        var guard = rig.NewGuard(new LeftRunningScanner(stub, rig.Settings, rig.Runs, rig.Pricing, rig.Clock), new InstallationCleanup(stub, rig.Gcp, rig.Runs));
+
+        await guard.ConfirmExitAsync(CancellationToken.None);
+
+        rig.Body!.ShouldContain("LeftRunning_VmLineNoLimit|deg-job-n");
+    }
+
+    [Fact]
     public async Task The_five_minute_timer_scans_again_and_warns_once_about_a_vm_with_no_live_run()
     {
         var rig = new Rig();
@@ -274,11 +415,11 @@ public class NothingLeftRunningTests
 
         await rig.Guard.StartAsync(CancellationToken.None);
 
-        rig.Clock.Timers.ShouldHaveSingleItem().Period.ShouldBe(TimeSpan.FromMinutes(5));
+        rig.Clock.Timers.Single(t => t.Period == LeftRunningGuard.Period);
         // The launch scan already found it.
         rig.Toasts.Received(1).ShowToast(Arg.Is<string>(t => t.StartsWith("LeftRunning_ToastTitle")), Arg.Is<string>(b => b.Contains(vm.Name)), ToastSeverity.Warning);
 
-        rig.Clock.Timers[0].Fire();
+        rig.Clock.Timers.Single(t => t.Period == LeftRunningGuard.Period).Fire();
         await rig.Guard.LastTickAsync;
 
         // Same VM, no second toast.
@@ -293,10 +434,30 @@ public class NothingLeftRunningTests
         rig.Toasts.ReceivedWithAnyArgs(0).ShowToast(default!, default!, default);
 
         var vm = await rig.CreateVmAsync(rig.Installation, "job-late", TimeSpan.FromMinutes(90));
-        rig.Clock.Timers[0].Fire();
+        rig.Clock.Timers.Single(t => t.Period == LeftRunningGuard.Period).Fire();
         await rig.Guard.LastTickAsync;
 
         rig.Toasts.Received(1).ShowToast(Arg.Any<string>(), Arg.Is<string>(b => b.Contains(vm.Name)), ToastSeverity.Warning);
+    }
+
+    [Fact]
+    public async Task Several_vms_found_in_one_scan_make_one_toast_naming_the_count_and_the_first_names()
+    {
+        var rig = new Rig();
+        var names = new List<string>();
+        for (var i = 0; i < 5; i++)
+        {
+            names.Add((await rig.CreateVmAsync(rig.Installation, $"job-{i}", TimeSpan.FromMinutes(90))).Name);
+        }
+
+        await rig.Guard.StartAsync(CancellationToken.None);
+
+        var calls = rig.Toasts.ReceivedCalls().Where(c => c.GetMethodInfo().Name == nameof(IToastService.ShowToast)).ToList();
+        calls.Count.ShouldBe(1);
+        var body = (string)calls[0].GetArguments()[1]!;
+        body.ShouldStartWith("LeftRunning_ToastBodyMany|5|");
+        body.ShouldContain(names.OrderBy(n => n, StringComparer.Ordinal).First());
+        body.ShouldContain("LeftRunning_ToastMore|2");
     }
 
     [Fact]
@@ -304,7 +465,7 @@ public class NothingLeftRunningTests
     {
         var rig = new Rig();
         var vm = await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
-        rig.RunRows.Add(new RunRecord("job-live", JobPhase.Running, Start));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
 
         await rig.Guard.StartAsync(CancellationToken.None);
         rig.Toasts.ReceivedWithAnyArgs(0).ShowToast(default!, default!, default);
@@ -322,6 +483,6 @@ public class NothingLeftRunningTests
 
         rig.Guard.Dispose();
 
-        rig.Clock.Timers[0].Disposed.ShouldBeTrue();
+        rig.Clock.Timers.Single(t => t.Period == LeftRunningGuard.Period).Disposed.ShouldBeTrue();
     }
 }
