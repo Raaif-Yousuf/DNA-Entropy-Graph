@@ -282,6 +282,63 @@ public class CloudResourcesViewModelTests
     }
 
     [Fact]
+    public async Task A_failure_on_the_second_computer_still_shows_the_report_with_the_first_as_deleted_and_never_says_nothing_was_deleted()
+    {
+        // #740 round 2 (M1): the first computer is gone when the second one fails with something that is not a cloud error.
+        var viewModel = await LoadedAsync();
+        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        _compute.DeleteVmAsync("deg-job-2", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new InvalidOperationException("boom"));
+
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+
+        viewModel.HasReport.ShouldBeTrue();
+        viewModel.ReportHeadline.ShouldContain("CloudReport_Incomplete");
+        viewModel.ReportLines.ShouldContain(l => l.Contains("CloudReport_Deleted ") && l.Contains("deg-job-1"));
+        viewModel.ReportLines.ShouldContain(l => l.Contains("CloudReport_Failed") && l.Contains("deg-job-2"));
+        viewModel.ErrorText.ShouldNotContain("CloudPage_DeleteAllFailed");
+    }
+
+    [Fact]
+    public async Task A_report_from_an_earlier_delete_is_cleared_when_the_next_one_ends_early()
+    {
+        // #740 round 2 (M2): stale ReportLines and ReportHeadline must not sit under a new error.
+        var viewModel = await LoadedAsync();
+        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+        viewModel.HasReport.ShouldBeTrue();
+
+        _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+        viewModel.HasReport.ShouldBeFalse("the old report belongs to the old delete");
+        viewModel.ReportLines.ShouldBeEmpty();
+
+        _compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("x"));
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+        viewModel.HasReport.ShouldBeFalse();
+        viewModel.ErrorText.ShouldContain("CloudPage_ListFailed");
+    }
+
+    [Fact]
+    public async Task A_cancelled_sweep_still_refreshes_the_lists_so_deleted_items_are_not_shown()
+    {
+        var viewModel = await LoadedAsync();
+        var listsBefore = _compute.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IComputeGateway.ListAppVmsAsync));
+        _compute.DeleteVmAsync("deg-job-2", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new OperationCanceledException());
+
+        try
+        {
+            await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+        }
+        catch (OperationCanceledException)
+        {
+            // Either way: what matters is below.
+        }
+
+        viewModel.IsBusy.ShouldBeFalse();
+        _compute.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IComputeGateway.ListAppVmsAsync)).ShouldBeGreaterThan(listsBefore, "the page must list again after a sweep that did anything");
+    }
+
+    [Fact]
     public async Task A_refused_stop_that_is_not_a_cloud_error_still_names_the_computer()
     {
         var viewModel = await LoadedAsync();
