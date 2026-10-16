@@ -1,0 +1,1 @@
+- Handoff for the 2026-10-15/16 wave: ordered landing queue, held branches (#782, #112, land-queue-tool), and what was measured.
