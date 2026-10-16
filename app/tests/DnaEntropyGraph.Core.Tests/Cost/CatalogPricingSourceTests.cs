@@ -193,11 +193,93 @@ public sealed class CatalogPricingSourceTests
     }
 
     [Fact]
-    public async Task Cancellation_is_not_a_fallback()
+    public async Task A_caller_that_cancels_inside_the_catalog_read_gets_the_cancellation_and_no_fallback_is_recorded()
     {
-        GatewayFails(new OperationCanceledException());
+        using var cts = new CancellationTokenSource();
+        _gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<CatalogSku>>>(_ =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        });
+        var source = Source();
 
-        await Should.ThrowAsync<OperationCanceledException>(() => Source().RefreshIfStaleAsync(new CancellationToken(true)));
+        await Should.ThrowAsync<OperationCanceledException>(() => source.RefreshIfStaleAsync(cts.Token));
+
+        source.Current.Reason.ShouldBe(PricingFallbackReason.None);
+        _gateway.ClearReceivedCalls();
+        _gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<CatalogSku>>(CatalogFixtures.G2AndDisk()));
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+        await _gateway.Received(1).ListComputeSkusAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_catalog_that_never_answers_is_a_network_fallback_after_the_read_timeout_not_a_hang()
+    {
+        _gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns(call => HangsUntilCancelled(call.Arg<CancellationToken>()));
+        var source = new CatalogPricingSource(_shipped, _gateway, _cache, _clock, readTimeout: TimeSpan.FromMilliseconds(50));
+
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        source.Current.Reason.ShouldBe(PricingFallbackReason.Network);
+    }
+
+    private static async Task<IReadOnlyList<CatalogSku>> HangsUntilCancelled(CancellationToken token)
+    {
+        await Task.Delay(Timeout.Infinite, token);
+        return [];
+    }
+
+    [Fact]
+    public async Task Being_signed_out_does_not_start_the_one_hour_back_off_so_signing_in_is_noticed_at_once()
+    {
+        GatewayFails(new AccountAuthException(AuthErrorCodes.SigninExpired, "gone"));
+        var source = Source();
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        _gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<CatalogSku>>(CatalogFixtures.G2AndDisk()));
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        source.Current.Origin.ShouldBe(PricingOrigin.Catalog);
+        source.Current.Reason.ShouldBe(PricingFallbackReason.None);
+    }
+
+    [Fact]
+    public async Task A_cache_written_beside_an_older_shipped_list_is_not_used_after_the_app_is_updated()
+    {
+        await Source().RefreshIfStaleAsync(CancellationToken.None);
+        _gateway.ClearReceivedCalls();
+        _shipped.Load().Returns(PricingTable.Parse(PricingTableTests.Good.Replace("3.67", "3.99")));
+
+        var updated = Source();
+        updated.Current.Origin.ShouldBe(PricingOrigin.Shipped);
+        await updated.RefreshIfStaleAsync(CancellationToken.None);
+
+        await _gateway.Received(1).ListComputeSkusAsync(Arg.Any<CancellationToken>());
+        updated.Load().Table!.Find("a2-highgpu-1g")!.OnDemandUsdPerHour.ShouldBe(3.99);
+    }
+
+    [Fact]
+    public async Task A_session_that_crosses_midnight_and_fails_to_refresh_reports_the_old_prices_as_stale_not_as_catalog()
+    {
+        var source = Source();
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+        _clock.Advance(TimeSpan.FromDays(1));
+        GatewayFails(Failure(CloudErrorKind.Network));
+
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        source.Current.ShouldBe(new PricingSnapshot(PricingOrigin.CacheStale, new DateOnly(2026, 10, 16), PricingFallbackReason.Network));
+    }
+
+    [Fact]
+    public async Task Even_before_a_failed_refresh_yesterdays_prices_are_not_called_todays()
+    {
+        var source = Source();
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        _clock.Advance(TimeSpan.FromDays(1));
+
+        source.Current.Origin.ShouldBe(PricingOrigin.CacheStale);
     }
 
     [Fact]

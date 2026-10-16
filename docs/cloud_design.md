@@ -449,8 +449,19 @@ exercise.
  file `pricing-cache.json` in the app data folder, the same schema as `pricing.json`, `asOf` = the day it was read), waits at most 10 seconds, and after a failure
  does not ask again for an hour. `CostEstimateService` calls it before each estimate, so the first estimate of a day waits for the read and every other one is instant.
  `IPricingStatus.Current` is `(Origin: Shipped | Catalog | Cache | CacheStale, AsOf, Reason: None | SignedOut | PermissionDenied | ApiDisabled | Network | Other | NoMatch)`
- for the page to say which list the numbers come from and why it fell back. THEORY (unverified, no live read): the SKU description wording and the service id match the
- live catalog, and a signed-in user's token may list it; MEASURED 2026-10-16 only that the resolver, gateway and fallback behave on scripted payloads.
+ for the page to say which list the numbers come from and why it fell back (the page line is issue #814). A kept Spot price (the catalog gave none) is
+ named in the table's `source` note. A cache is only used beside the exact shipped list it was made with (a hash of that list is stored in it), so an app update never serves rows kept from an older build.
+ MEASURED 2026-10-16 (SKU explorer, public pages cloud.google.com/skus/sku-groups/{on-demand,spot-preemptible}-{g2,a2}-vms and on-demand-balanced-persistent-disk): the
+ Compute Engine service id is `6F81-5844-456A` and the Americas SKU descriptions (id) are: `G2 Instance Core running in Americas` (D18E-3563-415F), `G2 Instance Ram running in Americas`
+ (F0A4-E3D3-33BD), `Nvidia L4 GPU running in Americas` (A88A-5A60-E821), `Spot Preemptible G2 Instance Core running in Americas` (59A6-9C49-BDDB), `Spot Preemptible G2 Instance Ram running in Americas`
+ (BF80-650A-78E6), `Nvidia L4 GPU attached to Spot Preemptible VMs running in Americas` (AEC2-3D5C-61BF), `A2 Instance Core running in Americas` (2922-40C5-B19F), `A2 Instance Ram running in Americas`
+ (2390-DCAF-DA38), `Nvidia Tesla A100 GPU running in Americas` (039F-D0DA-4055), `Nvidia Tesla A100 80GB GPU running in Americas` (EDA0-3A70-3138), `Spot Preemptible A2 Instance Core running in Americas`
+ (3178-715E-CFB6), `Spot Preemptible A2 Instance Ram running in Americas` (65A3-16DB-D57A), `Nvidia Tesla A100 GPU attached to Spot Preemptible VMs running in Americas` (39D4-516A-0317),
+ `Nvidia Tesla A100 80GB GPU attached to Spot Preemptible VMs running in Americas` (DD90-547C-2AAA), and the disk `Balanced PD Capacity` (6AE1-525F-8B80, with `Balanced PD Capacity in <place>` per location).
+ Separate `G2 Custom Instance Core/Ram` SKUs exist for custom shapes and are ignored on purpose, as are `Regional Balanced PD Capacity`. The explorer lists no `A2 Ultra` core or memory SKU, so
+ THEORY (unverified): a2-ultragpu-1g is the A2 core and memory SKUs plus the 80GB GPU. THEORY (unverified, no live read): the `resourceFamily`/`usageType`/`serviceRegions` values of these SKUs
+ (the explorer does not show them), whether a signed-in user's token may list the catalog, and which exact `serviceRegions` the Americas SKUs carry; docs/ToTest.md carries the row.
+ Resolver, gateway and fallback behaviour are MEASURED 2026-10-16 only against scripted payloads that use these real descriptions.
 - `scripts/gen_pricing_json.py --catalog <pages.json> --as-of <date>` regenerates `Assets/pricing.json` from a catalog dump a person with a project fetched (the
  script never calls Google). Same rules as the resolver; `scripts/tests/test_gen_pricing_json.py` fails if its machine shapes drift from the C# ones.
  Those model constants are THEORY (unverified) until the first GPU acceptance run records

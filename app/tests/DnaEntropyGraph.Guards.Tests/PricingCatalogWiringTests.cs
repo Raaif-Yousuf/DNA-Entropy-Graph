@@ -80,4 +80,21 @@ public class PricingCatalogWiringTests : IDisposable
         status.Origin.ShouldBe(PricingOrigin.Shipped);
         status.Reason.ShouldBe(PricingFallbackReason.PermissionDenied);
     }
+
+    [Fact]
+    public async Task The_real_google_build_with_nobody_signed_in_keeps_the_shipped_prices_says_signed_out_and_asks_again_at_once()
+    {
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(_appData, CloudBackend.Google);
+        using var provider = services.BuildServiceProvider();
+        var machine = CloudJobRequestFactory.MachineTypeFor(GpuTier.CheapestAvailable);
+        var estimates = provider.GetRequiredService<ICostEstimateService>();
+
+        var result = await estimates.EstimateAsync(machine, spot: false, bases: 5_000, bootDiskGb: 150, TestContext.Current.CancellationToken);
+
+        result.Estimate.ShouldNotBeNull();
+        var status = provider.GetRequiredService<IPricingStatus>().Current;
+        status.Origin.ShouldBe(PricingOrigin.Shipped);
+        status.Reason.ShouldBe(PricingFallbackReason.SignedOut);
+    }
 }

@@ -50,7 +50,7 @@ def g2_and_disk() -> list[dict]:
         sku("Nvidia L4 GPU running in Americas", "Compute", "OnDemand", 0.5),
         sku("Spot Preemptible G2 Instance Core running in Americas", "Compute", "Preemptible", 0.01),
         sku("Spot Preemptible G2 Instance Ram running in Americas", "Compute", "Preemptible", 0.001, "GBy.h"),
-        sku("Spot Preemptible Nvidia L4 GPU running in Americas", "Compute", "Preemptible", 0.1),
+        sku("Nvidia L4 GPU attached to Spot Preemptible VMs running in Americas", "Compute", "Preemptible", 0.1),
         sku("Balanced PD Capacity", "Storage", "OnDemand", 0.12, "GBy.mo"),
         sku("G2 Instance Core running in Frankfurt", "Compute", "OnDemand", 9.99, regions=("europe-west3",)),
         sku("Regional Balanced PD Capacity", "Storage", "OnDemand", 9.99, "GBy.mo"),
@@ -79,6 +79,33 @@ def test_machines_the_catalog_does_not_price_keep_the_previous_row_and_the_sourc
 
     assert doc["machines"]["a2-highgpu-1g"] == shipped["machines"]["a2-highgpu-1g"]
     assert "a2-highgpu-1g" in doc["source"]
+
+
+def test_an_unresolved_spot_price_keeps_the_previous_spot_price_and_says_so(shipped):
+    skus = [s for s in g2_and_disk() if s["category"]["usageType"] != "Preemptible"]
+
+    doc = gen.resolve(skus, shipped, "2026-10-16")
+
+    assert doc["machines"]["g2-standard-8"]["spotUsdPerHour"] == shipped["machines"]["g2-standard-8"]["spotUsdPerHour"]
+    assert "Spot price kept" in doc["source"] and "g2-standard-8" in doc["source"]
+
+
+def test_the_pricing_entry_in_force_wins_whatever_the_order(shipped):
+    skus = g2_and_disk()
+    core = skus[0]
+    base = core["pricingInfo"][0]
+    old = json.loads(json.dumps(base))
+    old["effectiveTime"] = "2020-01-01T00:00:00Z"
+    future = json.loads(json.dumps(base))
+    future["effectiveTime"] = "2099-01-01T00:00:00Z"
+    future["pricingExpression"]["tieredRates"][1]["unitPrice"]["nanos"] = 900_000_000
+    now_entry = json.loads(json.dumps(base))
+    now_entry["effectiveTime"] = "2026-10-01T00:00:00Z"
+    core["pricingInfo"] = [now_entry, old, future]
+
+    doc = gen.resolve(skus, shipped, "2026-10-16")
+
+    assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)
 
 
 def test_a_catalog_with_no_disk_or_no_machine_is_refused(shipped):

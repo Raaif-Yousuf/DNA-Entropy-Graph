@@ -18,6 +18,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime, time
 from pathlib import Path
 
 DEFAULT_FILE = Path(__file__).resolve().parent.parent / "app" / "src" / "DnaEntropyGraph.App" / "Assets" / "pricing.json"
@@ -41,7 +42,7 @@ class Shape:
 SHAPES = (
     Shape("g2-standard-8", "1x NVIDIA L4", 8, 32, "G2 Instance Core", "G2 Instance Ram", "Nvidia L4 GPU"),
     Shape("a2-highgpu-1g", "1x NVIDIA A100 40GB", 12, 85, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 GPU"),
-    Shape("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Ultra Instance Core", "A2 Ultra Instance Ram", "Nvidia Tesla A100 80GB GPU"),
+    Shape("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 80GB GPU"),
 )
 
 
@@ -56,11 +57,28 @@ def flatten(raw: object) -> list[dict]:
     return skus
 
 
-def to_rows(skus: list[dict]) -> list[dict]:
-    """The same reduction the app makes: first tier (starts at zero), dollars only, one row per SKU that has a price."""
+def _effective(info: dict) -> datetime:
+    text = info.get("effectiveTime")
+    try:
+        return datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+
+
+def current_pricing(entries: list[dict], now: datetime) -> dict:
+    """The entry in force: the latest whose effective time has come; if all are in the future, the earliest (the app does the same)."""
+    entries = [e for e in entries if isinstance(e, dict)]
+    if not entries:
+        return {}
+    in_force = [e for e in entries if _effective(e) <= now]
+    return max(in_force, key=_effective) if in_force else min(entries, key=_effective)
+
+
+def to_rows(skus: list[dict], now: datetime) -> list[dict]:
+    """The app's reduction: the pricing entry in force, first tier (starts at zero), dollars only, one row per priced SKU."""
     rows = []
     for sku in skus:
-        info = (sku.get("pricingInfo") or [None])[0] or {}
+        info = current_pricing(sku.get("pricingInfo") or [], now)
         expression = info.get("pricingExpression") or {}
         tier = next((t for t in expression.get("tieredRates") or [] if float(t.get("startUsageAmount") or 0) == 0), None)
         price = (tier or {}).get("unitPrice") or {}
@@ -92,11 +110,11 @@ def _single(matches: list[dict]) -> float | None:
 
 def _price(rows: list[dict], shape: Shape, usage: str) -> float | None:
     def pick(unit: str, token: str) -> float | None:
-        return _single(
-            [r for r in rows if r["family"] == "Compute" and r["usage"] == usage and r["unit"] == unit and _named(r, token + " running")]
-        )
+        return _single([r for r in rows if r["family"] == "Compute" and r["usage"] == usage and r["unit"] == unit and _named(r, token)])
 
-    core, ram, gpu = pick("h", shape.core_token), pick("GBy.h", shape.ram_token), pick("h", shape.gpu_token)
+    core = pick("h", shape.core_token + " running")
+    ram = pick("GBy.h", shape.ram_token + " running")
+    gpu = pick("h", shape.gpu_token)
     if core is None or ram is None or gpu is None:
         return None
     return shape.vcpus * core + shape.ram_gb * ram + shape.gpus * gpu
@@ -105,7 +123,8 @@ def _price(rows: list[dict], shape: Shape, usage: str) -> float | None:
 def resolve(skus: list[dict], shipped: dict, as_of: str) -> dict | None:
     """A new price list document, or None when the catalog prices no disk or no machine (the caller keeps the old file)."""
     region = shipped["region"]
-    rows = [r for r in to_rows(skus) if r["usd"] > 0 and region.lower() in [x.lower() for x in r["regions"]]]
+    now = datetime.combine(datetime.fromisoformat(as_of).date(), time.max, tzinfo=UTC)
+    rows = [r for r in to_rows(skus, now) if r["usd"] > 0 and region.lower() in [x.lower() for x in r["regions"]]]
     disk = _single(
         [r for r in rows if r["family"] == "Storage" and r["usage"] == ON_DEMAND and r["unit"] == "GBy.mo" and _named(r, "Balanced PD Capacity")]
     )
@@ -114,6 +133,7 @@ def resolve(skus: list[dict], shipped: dict, as_of: str) -> dict | None:
 
     machines: dict[str, dict] = {}
     kept: list[str] = []
+    spot_kept: list[str] = []
     for shape in SHAPES:
         on_demand = _price(rows, shape, ON_DEMAND)
         if on_demand is None:
@@ -122,6 +142,10 @@ def resolve(skus: list[dict], shipped: dict, as_of: str) -> dict | None:
                 kept.append(shape.machine_type)
             continue
         spot = _price(rows, shape, SPOT)
+        previous = (shipped["machines"].get(shape.machine_type) or {}).get("spotUsdPerHour")
+        if spot is None and previous is not None:
+            spot = previous
+            spot_kept.append(shape.machine_type)
         machines[shape.machine_type] = {
             "accelerator": shape.accelerator,
             "onDemandUsdPerHour": round(on_demand, 6),
@@ -138,6 +162,8 @@ def resolve(skus: list[dict], shipped: dict, as_of: str) -> dict | None:
     source = f"Cloud Billing Catalog API, {region}, read {as_of}. An estimate, not a quote."
     if kept:
         source += " Kept from the previous list (the catalog did not price them): " + ", ".join(kept) + "."
+    if spot_kept:
+        source += " Spot price kept from the previous list (the catalog gave none): " + ", ".join(spot_kept) + "."
     return {
         "schema": 1,
         "asOf": as_of,

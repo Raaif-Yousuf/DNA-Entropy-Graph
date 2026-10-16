@@ -138,4 +138,24 @@ public class GooglePricingCatalogGatewayTests
 
         ex.Kind.ShouldBe(CloudErrorKind.Network);
     }
+
+    private static string Info(string effective, string units, int nanos)
+        => "{\"effectiveTime\":\"" + effective + "\",\"pricingExpression\":{\"usageUnit\":\"h\",\"tieredRates\":[" + Rate(0, units, nanos) + "]}}";
+
+    private static string SkuWithInfos(params string[] infos)
+        => "{\"skuId\":\"MULTI\",\"description\":\"G2 Instance Core running in Americas\",\"category\":{\"resourceFamily\":\"Compute\",\"resourceGroup\":\"CPU\",\"usageType\":\"OnDemand\"},"
+            + "\"serviceRegions\":[\"us-central1\"],\"pricingInfo\":[" + string.Join(",", infos) + "]}";
+
+    [Fact]
+    public async Task With_several_pricing_entries_the_latest_one_already_in_force_is_used_whatever_their_order()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(
+            HttpMethod.Get,
+            Skus,
+            200,
+            Page(SkuWithInfos(Info("2026-10-01T00:00:00Z", "0", 40_000_000), Info("2020-01-01T00:00:00Z", "0", 10_000_000), Info("2099-01-01T00:00:00Z", "0", 90_000_000))));
+
+        (await rig.Gateways.PricingCatalog.ListComputeSkusAsync(CancellationToken.None)).Single().UsdPerUnit.ShouldBe(0.04, 1e-12);
+    }
 }

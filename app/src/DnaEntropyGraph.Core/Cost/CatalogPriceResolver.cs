@@ -8,8 +8,11 @@ public sealed record CatalogResolveResult(PricingTable? Table, string? Problem);
 /// <summary>
 /// What one machine type is made of, for pricing: Compute Engine bills a core, a GB of memory and (for these tiers) a GPU as separate SKUs.
 /// The shapes are Google's published machine types. <see cref="CoreToken"/> and <see cref="RamToken"/> are the words that name the family in the
-/// SKU description; <see cref="GpuToken"/> names the GPU. THEORY (unverified, no live catalog read): the wording matches the live catalog;
-/// docs/ToTest.md carries the real-catalog row. A machine whose parts are not found is left to the shipped list, never guessed.
+/// SKU description; <see cref="GpuToken"/> names the GPU. MEASURED 2026-10-16 (public SKU explorer, docs/cloud_design.md section 10): the descriptions are
+/// "G2 Instance Core running in Americas", "Spot Preemptible G2 Instance Ram running in Americas", "Nvidia L4 GPU running in Americas" and
+/// "Nvidia L4 GPU attached to Spot Preemptible VMs running in Americas", so a GPU is matched by name alone (the usage type tells Spot from on demand).
+/// THEORY (unverified): a2-ultragpu-1g is billed from the A2 core and memory SKUs plus the 80GB GPU (the explorer lists no A2 Ultra core or memory SKU).
+/// A machine whose parts are not found is left to the shipped list, never guessed.
 /// </summary>
 internal sealed record MachineShape(string MachineType, string Accelerator, int VCpus, int RamGb, string CoreToken, string RamToken, string GpuToken, int Gpus = 1);
 
@@ -30,7 +33,7 @@ public static class CatalogPriceResolver
     [
         new("g2-standard-8", "1x NVIDIA L4", 8, 32, "G2 Instance Core", "G2 Instance Ram", "Nvidia L4 GPU"),
         new("a2-highgpu-1g", "1x NVIDIA A100 40GB", 12, 85, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 GPU"),
-        new("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Ultra Instance Core", "A2 Ultra Instance Ram", "Nvidia Tesla A100 80GB GPU"),
+        new("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 80GB GPU"),
     ];
 
     public static CatalogResolveResult Resolve(IReadOnlyList<CatalogSku> skus, PricingTable shipped, DateOnly asOf)
@@ -49,6 +52,7 @@ public static class CatalogPriceResolver
 
         var machines = new List<MachinePrice>();
         var kept = new List<string>();
+        var spotKept = new List<string>();
         foreach (var shape in Shapes)
         {
             var onDemand = Price(inRegion, shape, OnDemand);
@@ -64,7 +68,14 @@ public static class CatalogPriceResolver
                 continue;
             }
 
+            // A Spot price the catalog did not give is not "no Spot price": the previous list's one is kept (and named), unless it is now above on demand.
             var spot = Price(inRegion, shape, Spot);
+            if (spot is null && fromShipped?.SpotUsdPerHour is { } previous)
+            {
+                spot = previous;
+                spotKept.Add(shape.MachineType);
+            }
+
             machines.Add(new MachinePrice(shape.MachineType, shape.Accelerator, onDemand.Value, spot is { } s && s <= onDemand.Value ? s : null));
         }
 
@@ -81,7 +92,8 @@ public static class CatalogPriceResolver
         }
 
         var source = $"Cloud Billing Catalog API, {region}, read {asOf:yyyy-MM-dd}. An estimate, not a quote."
-            + (kept.Count > 0 ? " Kept from the list that ships with the app (the catalog did not price them): " + string.Join(", ", kept) + "." : string.Empty);
+            + (kept.Count > 0 ? " Kept from the list that ships with the app (the catalog did not price them): " + string.Join(", ", kept) + "." : string.Empty)
+            + (spotKept.Count > 0 ? " Spot price kept from the list that ships with the app (the catalog gave none): " + string.Join(", ", spotKept) + "." : string.Empty);
         return new CatalogResolveResult(PricingTable.Create(asOf, region, source, diskPrice, machines), null);
     }
 
@@ -89,7 +101,7 @@ public static class CatalogPriceResolver
     {
         var core = Single(skus.Where(s => s.ResourceFamily == "Compute" && s.UsageType == usage && s.UsageUnit == "h" && Named(s, shape.CoreToken + " running")));
         var ram = Single(skus.Where(s => s.ResourceFamily == "Compute" && s.UsageType == usage && s.UsageUnit == "GBy.h" && Named(s, shape.RamToken + " running")));
-        var gpu = Single(skus.Where(s => s.ResourceFamily == "Compute" && s.UsageType == usage && s.UsageUnit == "h" && Named(s, shape.GpuToken + " running")));
+        var gpu = Single(skus.Where(s => s.ResourceFamily == "Compute" && s.UsageType == usage && s.UsageUnit == "h" && Named(s, shape.GpuToken)));
         return core is { } c && ram is { } r && gpu is { } g ? (shape.VCpus * c) + (shape.RamGb * r) + (shape.Gpus * g) : null;
     }
 

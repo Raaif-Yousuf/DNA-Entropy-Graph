@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
 using DnaEntropyGraph.Core.Cloud;
 
 namespace DnaEntropyGraph.Core.Cost;
@@ -105,6 +108,7 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     private readonly IPricingCatalogGateway _gateway;
     private readonly IPricingCacheStore _cache;
     private readonly TimeProvider _time;
+    private readonly TimeSpan _readTimeout;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _state = new();
 
@@ -112,8 +116,9 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     private PricingSnapshot? _snapshot;
     private DateTimeOffset? _lastFailure;
 
-    public CatalogPricingSource(IPricingSource shipped, IPricingCatalogGateway gateway, IPricingCacheStore cache, TimeProvider time)
+    public CatalogPricingSource(IPricingSource shipped, IPricingCatalogGateway gateway, IPricingCacheStore cache, TimeProvider time, TimeSpan? readTimeout = null)
     {
+        _readTimeout = readTimeout ?? ReadTimeout;
         _shipped = shipped;
         _gateway = gateway;
         _cache = cache;
@@ -127,7 +132,10 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
             EnsureLoaded();
             lock (_state)
             {
-                return _snapshot!;
+                // Catalog prices read on an earlier day are stale however they got here (a session can cross midnight).
+                return _snapshot!.Origin is PricingOrigin.Catalog or PricingOrigin.Cache && _snapshot.AsOf < Today()
+                    ? _snapshot with { Origin = PricingOrigin.CacheStale }
+                    : _snapshot;
             }
         }
     }
@@ -164,7 +172,7 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(ReadTimeout);
+                timeout.CancelAfter(_readTimeout);
                 skus = await _gateway.ListComputeSkusAsync(timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -202,7 +210,7 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
                 return;
             }
 
-            _cache.Write(table.ToJson());
+            _cache.Write(WithFingerprint(table.ToJson(), Fingerprint(shippedTable)));
             lock (_state)
             {
                 _serving = new PricingLoadResult(table, null, null);
@@ -216,13 +224,36 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
         }
     }
 
+    /// <summary>Which shipped list a cache was made beside: a hash of its own JSON form, so any change to it (not only its date) invalidates the cache.</summary>
+    private static string Fingerprint(PricingTable? shipped)
+        => shipped is null ? "none" : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(shipped.ToJson())))[..16];
+
+    private static string WithFingerprint(string tableJson, string fingerprint)
+    {
+        var document = JsonNode.Parse(tableJson)!.AsObject();
+        document["shippedFingerprint"] = fingerprint;
+        return document.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }).Replace("\r\n", "\n") + "\n";
+    }
+
+    private static bool FingerprintMatches(string json, PricingTable? shipped)
+    {
+        try
+        {
+            return JsonNode.Parse(json) is JsonObject document && (string?)document["shippedFingerprint"] == Fingerprint(shipped);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
+
     private DateOnly Today() => DateOnly.FromDateTime(_time.GetUtcNow().UtcDateTime);
 
     private bool NeedsRefresh()
     {
         lock (_state)
         {
-            if (_snapshot!.Origin is PricingOrigin.Catalog or PricingOrigin.Cache && _snapshot.AsOf == Today())
+            if (_snapshot!.Origin is PricingOrigin.Catalog or PricingOrigin.Cache && _snapshot.AsOf >= Today())
             {
                 return false;
             }
@@ -235,7 +266,8 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     {
         lock (_state)
         {
-            _lastFailure = _time.GetUtcNow();
+            // Signed out is not a reason to wait an hour: the next estimate after signing in must try at once, and a refused token costs nothing.
+            _lastFailure = reason == PricingFallbackReason.SignedOut ? null : _time.GetUtcNow();
             _snapshot = _snapshot! with { Reason = reason };
         }
     }
@@ -251,8 +283,8 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
 
             var shipped = _shipped.Load();
 
-            // A cache older than the list in this build (the app was updated since) is not better than the list.
-            if (_cache.Read() is { } json && PricingTable.Parse(json) is { Table: { } cached } && (shipped.Table is not { } built || cached.AsOf >= built.AsOf))
+            // A cache written beside another shipped list (the app was updated since) can hold rows kept from that older list, so it is not used.
+            if (_cache.Read() is { } json && FingerprintMatches(json, shipped.Table) && PricingTable.Parse(json) is { Table: { } cached })
             {
                 var fresh = cached.AsOf == Today();
                 _serving = new PricingLoadResult(cached, null, null);

@@ -3,9 +3,9 @@ using DnaEntropyGraph.Core.Cloud;
 namespace DnaEntropyGraph.Core.Tests.Cost;
 
 /// <summary>
-/// SKU lists shaped like the Cloud Billing Catalog API's Compute Engine service (description wording, resource family and group, usage type,
-/// service regions). The prices are invented round numbers, NOT recorded from the live catalog (no GCP access in this build): they let a test
-/// check the arithmetic by hand. THEORY (unverified): the description wording matches the live catalog; docs/ToTest.md carries the real-catalog row.
+/// SKU lists shaped like the Cloud Billing Catalog API's Compute Engine service. The DESCRIPTIONS are the real ones (MEASURED 2026-10-16,
+/// public SKU explorer, docs/cloud_design.md section 10); the prices are invented round numbers so a test can check the arithmetic by hand.
+/// THEORY (unverified): the category fields (resource family, group, usage type) and the service-region lists; docs/ToTest.md carries the real-catalog row.
 /// </summary>
 internal static class CatalogFixtures
 {
@@ -28,7 +28,7 @@ internal static class CatalogFixtures
         Sku("Nvidia L4 GPU running in Americas", "Compute", "L4GPU", "OnDemand", L4),
         Sku("Spot Preemptible G2 Instance Core running in Americas", "Compute", "CPU", "Preemptible", G2CoreSpot),
         Sku("Spot Preemptible G2 Instance Ram running in Americas", "Compute", "RAM", "Preemptible", G2RamSpot, "GBy.h"),
-        Sku("Spot Preemptible Nvidia L4 GPU running in Americas", "Compute", "L4GPU", "Preemptible", L4Spot),
+        Sku("Nvidia L4 GPU attached to Spot Preemptible VMs running in Americas", "Compute", "L4GPU", "Preemptible", L4Spot),
         Sku("Balanced PD Capacity", "Storage", "SSD", "OnDemand", BalancedPd, "GBy.mo"),
 
         // Noise: another region, a commitment, a regional disk, a custom shape.
@@ -36,6 +36,8 @@ internal static class CatalogFixtures
         Sku("Commitment v1: G2 Cpu in Americas for 1 Year", "Compute", "CPU", "Commit1Yr", 9.99),
         Sku("Regional Balanced PD Capacity", "Storage", "SSD", "OnDemand", 9.99, "GBy.mo"),
         Sku("G2 Custom Instance Core running in Americas", "Compute", "CPU", "OnDemand", 9.99),
+        Sku("G2 Custom Instance Ram running in Americas", "Compute", "RAM", "OnDemand", 9.99, "GBy.h"),
+        Sku("Spot Preemptible G2 Custom Instance Ram running in Americas", "Compute", "RAM", "Preemptible", 9.99, "GBy.h"),
     ];
 
     public static double G2OnDemand => (8 * G2Core) + (32 * G2Ram) + L4;

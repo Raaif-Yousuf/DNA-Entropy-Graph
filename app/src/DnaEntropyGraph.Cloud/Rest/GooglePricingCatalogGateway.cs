@@ -20,11 +20,13 @@ internal sealed class GooglePricingCatalogGateway : IPricingCatalogGateway
 
     private readonly CloudbillingService _service;
     private readonly CloudCallPipeline _pipeline;
+    private readonly TimeProvider _time;
 
-    public GooglePricingCatalogGateway(CloudbillingService service, CloudCallPipeline pipeline)
+    public GooglePricingCatalogGateway(CloudbillingService service, CloudCallPipeline pipeline, TimeProvider? time = null)
     {
         _service = service;
         _pipeline = pipeline;
+        _time = time ?? TimeProvider.System;
     }
 
     public async Task<IReadOnlyList<CatalogSku>> ListComputeSkusAsync(CancellationToken cancellationToken)
@@ -45,7 +47,7 @@ internal sealed class GooglePricingCatalogGateway : IPricingCatalogGateway
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            skus.AddRange((page.Skus ?? []).Select(ToSku).OfType<CatalogSku>());
+            skus.AddRange((page.Skus ?? []).Select(s => ToSku(s, _time.GetUtcNow())).OfType<CatalogSku>());
 
             var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
             if (next is not null && next == pageToken)
@@ -63,9 +65,20 @@ internal sealed class GooglePricingCatalogGateway : IPricingCatalogGateway
         return skus;
     }
 
-    private static CatalogSku? ToSku(BillingData.Sku sku)
+    /// <summary>
+    /// A SKU can list several pricing entries (a price that changes on a date): the one in force now is the latest whose effective time has
+    /// come; when every entry is still in the future, the earliest of them is the next best answer.
+    /// </summary>
+    internal static BillingData.PricingInfo? CurrentPricing(IList<BillingData.PricingInfo>? entries, DateTimeOffset now)
     {
-        var expression = sku.PricingInfo?.FirstOrDefault()?.PricingExpression;
+        var dated = (entries ?? []).Select(e => (Entry: e, At: e.EffectiveTimeDateTimeOffset ?? DateTimeOffset.MinValue)).ToList();
+        var inForce = dated.Where(d => d.At <= now).OrderByDescending(d => d.At).FirstOrDefault();
+        return inForce.Entry ?? dated.OrderBy(d => d.At).FirstOrDefault().Entry;
+    }
+
+    private static CatalogSku? ToSku(BillingData.Sku sku, DateTimeOffset now)
+    {
+        var expression = CurrentPricing(sku.PricingInfo, now)?.PricingExpression;
         var tier = expression?.TieredRates?.FirstOrDefault(r => (r.StartUsageAmount ?? 0) == 0);
         if (expression is null || tier?.UnitPrice is not { } price || price.CurrencyCode != "USD" || string.IsNullOrEmpty(sku.SkuId))
         {

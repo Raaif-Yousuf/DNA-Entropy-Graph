@@ -46,11 +46,46 @@ public sealed class CatalogPriceResolverTests
     }
 
     [Fact]
-    public void A_missing_spot_sku_leaves_spot_unknown_not_free()
+    public void A_missing_spot_sku_with_no_shipped_spot_either_leaves_spot_unknown_not_free()
     {
         var skus = CatalogFixtures.G2AndDisk().Where(s => s.UsageType != "Preemptible").ToList();
 
+        var noSpotShipped = PricingTable.Parse(PricingTableTests.Good.Replace("\"spotUsdPerHour\": 0.18", "\"spotUsdPerHour\": null")).Table!;
+
+        CatalogPriceResolver.Resolve(skus, noSpotShipped, Today).Table!.Find("g2-standard-8")!.SpotUsdPerHour.ShouldBeNull();
+    }
+
+    [Fact]
+    public void An_unresolved_spot_price_keeps_the_shipped_spot_price_and_the_source_says_so_not_null()
+    {
+        var skus = CatalogFixtures.G2AndDisk().Where(s => s.UsageType != "Preemptible").ToList();
+
+        var table = CatalogPriceResolver.Resolve(skus, Shipped(), Today).Table!;
+
+        table.Find("g2-standard-8")!.OnDemandUsdPerHour.ShouldBe(CatalogFixtures.G2OnDemand, 1e-9);
+        table.Find("g2-standard-8")!.SpotUsdPerHour.ShouldBe(0.18);
+        table.Source.ShouldContain("Spot");
+        table.Source.ShouldContain("g2-standard-8");
+    }
+
+    [Fact]
+    public void A_kept_spot_price_above_the_new_on_demand_price_is_dropped_not_kept()
+    {
+        var skus = CatalogFixtures.G2AndDisk().Where(s => s.UsageType != "Preemptible").Select(s => s with { UsdPerUnit = s.UsdPerUnit * 0.01 }).ToList();
+        skus.Add(CatalogFixtures.Sku("Balanced PD Capacity", "Storage", "SSD", "OnDemand", 0.12, "GBy.mo"));
+        skus.RemoveAll(s => s.Description == "Balanced PD Capacity" && s.UsdPerUnit < 0.12);
+
         CatalogPriceResolver.Resolve(skus, Shipped(), Today).Table!.Find("g2-standard-8")!.SpotUsdPerHour.ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_spot_gpu_sku_worded_attached_to_Spot_Preemptible_VMs_is_found()
+    {
+        var spotGpu = CatalogFixtures.G2AndDisk().Single(s => s.Description.StartsWith("Nvidia L4 GPU attached to Spot", StringComparison.Ordinal));
+        spotGpu.UsageType.ShouldBe("Preemptible");
+
+        CatalogPriceResolver.Resolve(CatalogFixtures.G2AndDisk(), Shipped(), Today).Table!.Find("g2-standard-8")!.SpotUsdPerHour
+            .ShouldBe(CatalogFixtures.G2Spot);
     }
 
     [Fact]
