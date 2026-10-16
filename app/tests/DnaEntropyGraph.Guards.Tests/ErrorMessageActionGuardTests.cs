@@ -56,6 +56,13 @@ public class ErrorMessageActionGuardTests
     }
 
     [Fact]
+    public void The_local_timeout_message_offers_no_time_limit_option_because_no_page_sets_one()
+    {
+        // MaxRunDurationMinutes has no UI (only the 240 minute default reaches a local run), so the message must not name it as an action (Rule 13).
+        Resw()[RunErrorCodes.ResourceKey(RunErrorCodes.LocalWorkerTimedOut)].ShouldNotContain("time limit", Case.Insensitive);
+    }
+
+    [Fact]
     public void The_owner_request_code_declares_the_copy_button()
     {
         RunErrorActions.TryGet(RunErrorCodes.PermissionActAs, out var action).ShouldBeTrue();
