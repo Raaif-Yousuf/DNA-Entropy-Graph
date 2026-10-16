@@ -70,6 +70,6 @@ The app opens on the page you were on when you closed it. If you were looking at
 If you used the earlier command-line version of this tool, the app looks once, the first time it starts, for the runs it saved: a folder in your Downloads folder named after the run, holding a file ending `.entropy.bedgraph`. If it finds some, it asks before adding them to Runs. Choose **Continue** to add them or **Cancel** to leave them out; either way it does not ask again on its own. To look again later, open Settings and choose **Look for earlier runs**.
 
 - Each earlier run opens from the folder it is already in. Nothing is copied, moved or changed, and the app only reads those folders.
-- An earlier run has no copy in the cloud, so Download again and Delete cloud copy are greyed out for it, and Run again may need you to add the sequence file again, because the earlier version did not keep a copy of it.
+- An earlier run has no copy in the cloud, so Download again and Delete cloud copy are greyed out for it, **Delete files on this PC** is greyed out too (the folder is your own, so the app never deletes it; delete it in File Explorer if you want it gone), and Run again may need you to add the sequence file again, because the earlier version did not keep a copy of it.
 - The question also mentions the zone the earlier version last used and the SSH key file it used. They are for your information only: this version picks a zone itself and uses no SSH keys.
 - Folders this app made itself are never offered, and a folder already in Runs is not added twice.

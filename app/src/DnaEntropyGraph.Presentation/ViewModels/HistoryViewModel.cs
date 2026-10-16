@@ -239,6 +239,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             OwnerRequestFor(run))
         {
             PresetText = PresetLine(run),
+            DeleteLocalHint = run.Imported ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
         };
     }
 
@@ -402,6 +403,12 @@ public sealed partial class HistoryViewModel : ObservableObject
             if (!IsFinished(run.Phase))
             {
                 return null;
+            }
+
+            // Hard Rule 14: an imported run's folder is the user's own. The button is off; this stops a command fired another way.
+            if (run.Imported)
+            {
+                return RunsCopy.DeleteLocal(LocalDeleteStatus.Refused);
             }
 
             var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.DeleteLocalConfirmBody), run.OutputDir);

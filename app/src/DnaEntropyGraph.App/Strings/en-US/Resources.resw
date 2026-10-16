@@ -2217,13 +2217,13 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Earlier runs found</value>
   </data>
   <data name="PrototypeImportBody" xml:space="preserve">
-    <value>Found {0} runs saved by the earlier command-line version in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
   </data>
   <data name="PrototypeImportZoneLine" xml:space="preserve">
     <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
   </data>
   <data name="PrototypeImportSshLine" xml:space="preserve">
-    <value>The earlier version used the SSH key file {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
   </data>
   <data name="PrototypeImportDone" xml:space="preserve">
     <value>Added {0} earlier runs to Runs.</value>
@@ -2236,5 +2236,8 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="PrototypeImportFailed" xml:space="preserve">
     <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
+    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
   </data>
 </root>

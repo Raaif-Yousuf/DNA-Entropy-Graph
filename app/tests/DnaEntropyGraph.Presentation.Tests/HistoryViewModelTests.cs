@@ -214,6 +214,40 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task An_imported_run_offers_no_local_delete_and_says_why_and_the_command_does_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
+        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Bucket = null, JobPrefix = null };
+        var vm = await Loaded(imported, Row("own", outputDir: @"C:\out\own"));
+
+        Item(vm, "legacy-1").CanDeleteLocal.ShouldBeFalse();
+        Item(vm, "legacy-1").DeleteLocalHint.ShouldBe("imported-hint");
+        Item(vm, "own").CanDeleteLocal.ShouldBeTrue();
+        Item(vm, "own").DeleteLocalHint.ShouldBeNull();
+
+        await Item(vm, "legacy-1").DeleteLocalCommand.ExecuteAsync(null);
+        _local.DidNotReceive().DeleteOutputFolder(Arg.Is<RunRecord>(r => r.JobId == "legacy-1"));
+        await _dialogs.DidNotReceiveWithAnyArgs().ConfirmAsync(default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task An_imported_run_offers_no_redownload_or_cloud_delete_and_run_again_finds_no_input_and_starts_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(false);
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false);
+        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Bucket = null, JobPrefix = null };
+        var vm = await Loaded(imported);
+
+        Item(vm, "legacy-1").CanRedownload.ShouldBeFalse();
+        Item(vm, "legacy-1").CanDeleteCloud.ShouldBeFalse();
+
+        await Item(vm, "legacy-1").RerunCommand.ExecuteAsync(null);
+        await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task A_live_run_never_offers_local_deletion_and_the_command_does_nothing()
     {
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);

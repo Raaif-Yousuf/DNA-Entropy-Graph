@@ -95,6 +95,46 @@ public sealed class PrototypeImportViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task The_offer_is_only_marked_done_once_the_user_has_answered()
+    {
+        LegacyRun("a");
+        var answer = new TaskCompletionSource<bool>();
+        var asked = new TaskCompletionSource();
+        _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            asked.TrySetResult();
+            return answer.Task;
+        });
+        var vm = Make();
+
+        var offering = vm.OfferOnFirstLaunchAsync(CancellationToken.None);
+        await asked.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        _settings.Values.ContainsKey(PrototypeImportViewModel.DoneKey).ShouldBeFalse("closing the app with the dialog open must not use up the offer");
+
+        answer.SetResult(false);
+        await offering;
+        _settings.Values[PrototypeImportViewModel.DoneKey].ShouldBe("true");
+    }
+
+    [Fact]
+    public async Task A_dialog_that_is_cancelled_by_closing_the_app_leaves_the_offer_for_next_launch()
+    {
+        LegacyRun("a");
+        _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => Task.FromCanceled<bool>(CanceledToken()));
+
+        await Make().OfferOnFirstLaunchAsync(CancellationToken.None);
+
+        _settings.Values.ContainsKey(PrototypeImportViewModel.DoneKey).ShouldBeFalse();
+    }
+
+    private static CancellationToken CanceledToken()
+    {
+        var source = new CancellationTokenSource();
+        source.Cancel();
+        return source.Token;
+    }
+
+    [Fact]
     public async Task Nothing_found_asks_nothing_and_is_not_asked_about_again()
     {
         var vm = Make();

@@ -72,20 +72,28 @@ public sealed partial class PrototypeImportViewModel : ObservableObject
         try
         {
             var scan = await Task.Run(() => PrototypeScanner.Scan(_paths.ConfigPath, _paths.Downloads), cancellationToken);
-            if (markDone)
-            {
-                MarkDone();
-            }
-
             var fresh = await _importer.NewRunsAsync(scan, cancellationToken);
             if (fresh.Count == 0)
             {
+                // Nothing to ask about, so nothing is left to offer.
+                if (markDone)
+                {
+                    MarkDone();
+                }
+
                 // The zone and key alone are not worth a question: there is nothing to add.
                 Status = askEvenIfNothingNew ? _strings.GetString(scan.Runs.Count == 0 ? "PrototypeImportNothingFound" : "PrototypeImportAlreadyDone") : string.Empty;
                 return;
             }
 
             var yes = await _dialogs.ConfirmAsync(_strings.GetString("PrototypeImportTitle"), Describe(scan, fresh.Count), cancellationToken);
+
+            // Marked only now, after any answer: a window closed while the dialog was open must be asked again next launch.
+            if (markDone)
+            {
+                MarkDone();
+            }
+
             if (!yes)
             {
                 Status = string.Empty;

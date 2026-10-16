@@ -66,6 +66,7 @@ public sealed partial class RunListItem : ObservableObject
         DetailText = detailText;
         var finished = HistoryViewModel.IsFinished(run.Phase);
         HasLocalFiles = finished && hasLocalFiles;
+        CanDeleteLocal = HasLocalFiles && !run.Imported;
         CanRedownload = finished && cloudAvailable;
         CanDeleteCloud = finished && cloudAvailable && canDeleteCloud;
         DeleteCloudHint = deleteCloudHint;
@@ -93,6 +94,12 @@ public sealed partial class RunListItem : ObservableObject
     public string DetailText { get; }
 
     public bool HasLocalFiles { get; }
+
+    /// <summary>Whether Delete files on this PC is on: the run has files here and the app wrote them. An imported run's folder is the user's own (Hard Rule 14).</summary>
+    public bool CanDeleteLocal { get; }
+
+    /// <summary>Why Delete files on this PC is off for an imported run (its tooltip); null when it is not off for that reason.</summary>
+    public string? DeleteLocalHint { get; init; }
 
     public bool CanRedownload { get; }
 
