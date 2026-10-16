@@ -144,6 +144,11 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             return;
         }
 
+        // The last delete's report belongs to that delete: never leave it under a new error or a declined dialog (#740).
+        ReportLines.Clear();
+        ReportHeadline = string.Empty;
+        var attempted = false;
+        var pendingError = string.Empty;
         IsBusy = true;
         try
         {
@@ -171,24 +176,24 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             CleanupReport report;
             try
             {
+                attempted = true;
                 // Only what the dialog named: a computer, disk or folder that appeared meanwhile is left alone and reported (#740).
                 report = await _cleanup.DeleteAllAsync(project, installation, cancellationToken, inventory);
             }
             catch (CloudOperationException)
             {
-                // Thrown only by the listings that come before the first delete: nothing has been deleted.
-                ErrorText = Format("CloudPage_DeleteAllFailed");
+                // The sweep contains every per-item failure and reports it (InstallationCleanup), so a cloud error reaches here only from the listings that come before the first delete.
+                pendingError = Format("CloudPage_DeleteAllFailed");
                 return;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Anything else may have struck mid-sweep, so this message does not claim nothing was deleted.
+                // Anything else is not something the sweep promised to contain, so this message does not claim nothing was deleted.
                 LogFailure("delete everything", ex);
-                ErrorText = Format("CloudPage_DeleteAllInterrupted");
+                pendingError = Format("CloudPage_DeleteAllInterrupted");
                 return;
             }
 
-            ReportLines.Clear();
             foreach (var item in report.Items)
             {
                 ReportLines.Add(Line(item));
@@ -200,9 +205,17 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+            if (attempted)
+            {
+                // Whatever ended the sweep (a report, an error, the user's cancel), something may be gone: list again so the page never shows a deleted item. The cancelled token is not
+                // used for that read. A failed listing says so by itself; an error from the delete is put back after it.
+                await RefreshAsync(CancellationToken.None);
+                if (pendingError.Length > 0)
+                {
+                    ErrorText = pendingError;
+                }
+            }
         }
-
-        await RefreshAsync(cancellationToken);
     }
 
     private string Line(CleanupItem item)
