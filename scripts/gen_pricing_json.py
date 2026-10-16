@@ -60,7 +60,8 @@ def flatten(raw: object) -> list[dict]:
 def _effective(info: dict) -> datetime:
     text = info.get("effectiveTime")
     try:
-        return datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     except ValueError:
         return datetime.min.replace(tzinfo=UTC)
 

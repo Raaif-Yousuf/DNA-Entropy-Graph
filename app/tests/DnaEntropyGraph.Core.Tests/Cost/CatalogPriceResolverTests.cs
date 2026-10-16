@@ -66,6 +66,7 @@ public sealed class CatalogPriceResolverTests
         table.Find("g2-standard-8")!.SpotUsdPerHour.ShouldBe(0.18);
         table.Source.ShouldContain("Spot");
         table.Source.ShouldContain("g2-standard-8");
+        CatalogPriceResolver.Resolve(skus, Shipped(), Today).SpotKept.ShouldBe(["g2-standard-8"]);
     }
 
     [Fact]

@@ -3,7 +3,7 @@ using DnaEntropyGraph.Core.Cloud;
 namespace DnaEntropyGraph.Core.Cost;
 
 /// <summary>A table made from the catalog, or the one reason none could be (for logs and tests, never shown to a user).</summary>
-public sealed record CatalogResolveResult(PricingTable? Table, string? Problem);
+public sealed record CatalogResolveResult(PricingTable? Table, string? Problem, IReadOnlyList<string>? SpotKept = null);
 
 /// <summary>
 /// What one machine type is made of, for pricing: Compute Engine bills a core, a GB of memory and (for these tiers) a GPU as separate SKUs.
@@ -24,6 +24,13 @@ internal sealed record MachineShape(string MachineType, string Accelerator, int 
 /// </summary>
 public static class CatalogPriceResolver
 {
+    /// <summary>
+    /// Bump this whenever the matching rules or the machine shapes change: it is part of the cache fingerprint, so an app update that
+    /// changes what the resolver makes of the same SKUs does not keep serving today's cache. History: 1 first version, 2 real SKU wording
+    /// (GPU matched by name, Spot kept from the shipped list), 3 the kept-Spot list is recorded.
+    /// </summary>
+    public const int Version = 3;
+
     private const string OnDemand = "OnDemand";
     private const string Spot = "Preemptible";
 
@@ -94,7 +101,7 @@ public static class CatalogPriceResolver
         var source = $"Cloud Billing Catalog API, {region}, read {asOf:yyyy-MM-dd}. An estimate, not a quote."
             + (kept.Count > 0 ? " Kept from the list that ships with the app (the catalog did not price them): " + string.Join(", ", kept) + "." : string.Empty)
             + (spotKept.Count > 0 ? " Spot price kept from the list that ships with the app (the catalog gave none): " + string.Join(", ", spotKept) + "." : string.Empty);
-        return new CatalogResolveResult(PricingTable.Create(asOf, region, source, diskPrice, machines), null);
+        return new CatalogResolveResult(PricingTable.Create(asOf, region, source, diskPrice, machines), null, spotKept.Count > 0 ? spotKept : null);
     }
 
     private static double? Price(List<CatalogSku> skus, MachineShape shape, string usage)

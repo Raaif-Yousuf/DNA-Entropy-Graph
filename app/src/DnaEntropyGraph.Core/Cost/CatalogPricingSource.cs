@@ -36,7 +36,8 @@ public enum PricingFallbackReason
 }
 
 /// <summary>What the page needs to say "prices as of <see cref="AsOf"/>, from the catalog / from the list that came with the app, because ...".</summary>
-public sealed record PricingSnapshot(PricingOrigin Origin, DateOnly AsOf, PricingFallbackReason Reason);
+/// <param name="SpotKeptFromShipped">Machines whose Spot price is the shipped list's because the catalog gave none; null when there are none (so the status line can say so).</param>
+public sealed record PricingSnapshot(PricingOrigin Origin, DateOnly AsOf, PricingFallbackReason Reason, IReadOnlyList<string>? SpotKeptFromShipped = null);
 
 /// <summary>The prices in use, and where they came from.</summary>
 public interface IPricingStatus
@@ -109,6 +110,7 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     private readonly IPricingCacheStore _cache;
     private readonly TimeProvider _time;
     private readonly TimeSpan _readTimeout;
+    private readonly int _resolverVersion;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _state = new();
 
@@ -116,8 +118,9 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     private PricingSnapshot? _snapshot;
     private DateTimeOffset? _lastFailure;
 
-    public CatalogPricingSource(IPricingSource shipped, IPricingCatalogGateway gateway, IPricingCacheStore cache, TimeProvider time, TimeSpan? readTimeout = null)
+    public CatalogPricingSource(IPricingSource shipped, IPricingCatalogGateway gateway, IPricingCacheStore cache, TimeProvider time, TimeSpan? readTimeout = null, int? resolverVersion = null)
     {
+        _resolverVersion = resolverVersion ?? CatalogPriceResolver.Version;
         _readTimeout = readTimeout ?? ReadTimeout;
         _shipped = shipped;
         _gateway = gateway;
@@ -210,11 +213,11 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
                 return;
             }
 
-            _cache.Write(WithFingerprint(table.ToJson(), Fingerprint(shippedTable)));
+            _cache.Write(WithMetadata(table.ToJson(), Fingerprint(shippedTable), resolved.SpotKept));
             lock (_state)
             {
                 _serving = new PricingLoadResult(table, null, null);
-                _snapshot = new PricingSnapshot(PricingOrigin.Catalog, today, PricingFallbackReason.None);
+                _snapshot = new PricingSnapshot(PricingOrigin.Catalog, today, PricingFallbackReason.None, resolved.SpotKept);
                 _lastFailure = null;
             }
         }
@@ -225,17 +228,29 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     }
 
     /// <summary>Which shipped list a cache was made beside: a hash of its own JSON form, so any change to it (not only its date) invalidates the cache.</summary>
-    private static string Fingerprint(PricingTable? shipped)
-        => shipped is null ? "none" : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(shipped.ToJson())))[..16];
+    private string Fingerprint(PricingTable? shipped)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes((shipped?.ToJson() ?? "none") + "|resolver-v" + _resolverVersion)))[..16];
 
-    private static string WithFingerprint(string tableJson, string fingerprint)
+    private static string WithMetadata(string tableJson, string fingerprint, IReadOnlyList<string>? spotKept)
     {
         var document = JsonNode.Parse(tableJson)!.AsObject();
         document["shippedFingerprint"] = fingerprint;
+        if (spotKept is { Count: > 0 })
+        {
+            document["spotKeptFromShipped"] = new JsonArray(spotKept.Select(m => (JsonNode?)JsonValue.Create(m)).ToArray());
+        }
+
         return document.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }).Replace("\r\n", "\n") + "\n";
     }
 
-    private static bool FingerprintMatches(string json, PricingTable? shipped)
+    private static IReadOnlyList<string>? ReadSpotKept(string json)
+    {
+        var names = (JsonNode.Parse(json) as JsonObject)?["spotKeptFromShipped"] as JsonArray;
+        var kept = names?.Select(n => (string?)n).OfType<string>().ToList();
+        return kept is { Count: > 0 } ? kept : null;
+    }
+
+    private bool FingerprintMatches(string json, PricingTable? shipped)
     {
         try
         {
@@ -288,7 +303,7 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
             {
                 var fresh = cached.AsOf == Today();
                 _serving = new PricingLoadResult(cached, null, null);
-                _snapshot = new PricingSnapshot(fresh ? PricingOrigin.Cache : PricingOrigin.CacheStale, cached.AsOf, PricingFallbackReason.None);
+                _snapshot = new PricingSnapshot(fresh ? PricingOrigin.Cache : PricingOrigin.CacheStale, cached.AsOf, PricingFallbackReason.None, ReadSpotKept(json));
                 return;
             }
 

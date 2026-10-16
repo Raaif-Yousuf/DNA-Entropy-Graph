@@ -154,3 +154,20 @@ def test_machine_shapes_match_the_csharp_resolver():
 
     assert found, "the scanner found no MachineShape in CatalogPriceResolver.cs, so it checks nothing"
     assert found == [(s.machine_type, s.accelerator, s.vcpus, s.ram_gb, s.core_token, s.ram_token, s.gpu_token) for s in gen.SHAPES]
+
+
+def test_a_date_only_or_naive_effective_time_is_read_as_utc_and_never_raises(shipped):
+    skus = g2_and_disk()
+    base = skus[0]["pricingInfo"][0]
+    dated = json.loads(json.dumps(base))
+    dated["effectiveTime"] = "2026-10-01"
+    naive = json.loads(json.dumps(base))
+    naive["effectiveTime"] = "2020-01-01T00:00:00"
+    future = json.loads(json.dumps(base))
+    future["effectiveTime"] = "2099-01-01"
+    future["pricingExpression"]["tieredRates"][1]["unitPrice"]["nanos"] = 900_000_000
+    skus[0]["pricingInfo"] = [naive, future, dated]
+
+    doc = gen.resolve(skus, shipped, "2026-10-16")
+
+    assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)

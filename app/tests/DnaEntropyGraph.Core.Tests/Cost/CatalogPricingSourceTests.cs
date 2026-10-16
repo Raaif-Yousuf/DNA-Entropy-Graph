@@ -259,6 +259,44 @@ public sealed class CatalogPricingSourceTests
     }
 
     [Fact]
+    public async Task A_cache_made_by_an_older_resolver_is_not_used_even_when_the_shipped_list_is_unchanged()
+    {
+        await new CatalogPricingSource(_shipped, _gateway, _cache, _clock, resolverVersion: CatalogPriceResolver.Version - 1).RefreshIfStaleAsync(CancellationToken.None);
+        _gateway.ClearReceivedCalls();
+
+        var updated = Source();
+        updated.Current.Origin.ShouldBe(PricingOrigin.Shipped);
+        await updated.RefreshIfStaleAsync(CancellationToken.None);
+
+        await _gateway.Received(1).ListComputeSkusAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_kept_spot_price_is_named_in_the_status_and_survives_the_cache()
+    {
+        _gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult<IReadOnlyList<CatalogSku>>(CatalogFixtures.G2AndDisk().Where(s => s.UsageType != "Preemptible").ToList()));
+        var source = Source();
+
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        source.Current.SpotKeptFromShipped.ShouldBe(["g2-standard-8"]);
+        var next = Source();
+        next.Current.Origin.ShouldBe(PricingOrigin.Cache);
+        next.Current.SpotKeptFromShipped.ShouldBe(["g2-standard-8"]);
+    }
+
+    [Fact]
+    public async Task When_every_spot_price_came_from_the_catalog_nothing_is_listed_as_kept()
+    {
+        var source = Source();
+
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        source.Current.SpotKeptFromShipped.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_session_that_crosses_midnight_and_fails_to_refresh_reports_the_old_prices_as_stale_not_as_catalog()
     {
         var source = Source();
