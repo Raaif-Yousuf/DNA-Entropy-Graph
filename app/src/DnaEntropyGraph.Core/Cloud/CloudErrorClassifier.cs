@@ -156,7 +156,7 @@ public static partial class CloudErrorClassifier
 
         // Issue #92. THEORY (unverified, no live project): a queued flex-start request that is not granted in time ends with a code naming FLEX_START. After every rule above
         // (quota, permission, 403, org policy), and only when the code or message is about capacity: an invalid field or any other FLEX_START refusal is not a stockout.
-        if (code.Contains("FLEX_START", StringComparison.Ordinal) && IsCapacityShaped(code.ToLowerInvariant() + " " + lower))
+        if (code.Contains("FLEX_START", StringComparison.Ordinal) && status != 400 && IsFlexExpiry(code.ToLowerInvariant() + " " + lower))
         {
             return CloudErrorKind.Stockout;
         }
@@ -200,12 +200,23 @@ public static partial class CloudErrorClassifier
     [System.Text.RegularExpressions.GeneratedRegex(@"permission\s+'[a-z0-9_.]+'\s+denied")]
     private static partial System.Text.RegularExpressions.Regex PermissionNamedDenied();
 
+    /// <summary>
+    /// Round 3 (F1, F4, F5): a FLEX_START refusal is a stockout only when it is about capacity or the wait running out, never when it is quota-shaped (quota
+    /// wins: "exhausted" alone is not capacity wording) and never when it is connection phrasing. THEORY (unverified, no live project): the real expiry wording.
+    /// </summary>
+    private static bool IsFlexExpiry(string s)
+        => !s.Contains("quota", StringComparison.Ordinal)
+            && !IsConnectionPhrasing(s)
+            && IsCapacityShaped(s);
+
     private static bool IsCapacityShaped(string s)
         => s.Contains("capacity", StringComparison.Ordinal)
             || s.Contains("expired", StringComparison.Ordinal)
-            || s.Contains("exhausted", StringComparison.Ordinal)
-            || s.Contains("unavailable", StringComparison.Ordinal)
-            || s.Contains("not granted", StringComparison.Ordinal);
+            || s.Contains("not granted", StringComparison.Ordinal)
+            || s.Contains("not fulfilled", StringComparison.Ordinal)
+            || s.Contains("not be fulfilled", StringComparison.Ordinal)
+            || (s.Contains("requestvalidforduration", StringComparison.Ordinal) && s.Contains("elapsed", StringComparison.Ordinal))
+            || (s.Contains("unavailable", StringComparison.Ordinal) && s.Contains("resource", StringComparison.Ordinal));
 
     /// <summary>The phrasings of a failure to reach Google at all; they win over any capacity wording in the same message (issue #92).</summary>
     private static bool IsConnectionPhrasing(string s)

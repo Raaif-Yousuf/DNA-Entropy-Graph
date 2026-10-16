@@ -282,4 +282,43 @@ public class CloudErrorClassifierTests
     [InlineData("Could not reach the server; capacity request timed out")]
     public void Connection_phrasing_wins_over_a_capacity_timeout(string message)
         => CloudErrorClassifier.Classify(new CloudError("OPERATION_ERROR", null, message)).ShouldBe(CloudErrorKind.Network);
-}
+
+    // ---- Issue #92 round 3 (F1, F4, F5) ----
+
+    [Fact]
+    public void F1_a_flex_quota_exhausted_with_a_zero_limit_is_Quota_not_a_stockout()
+        => CloudErrorClassifier.Classify(new CloudError("FLEX_START_QUOTA_EXCEEDED", null, "Quota 'GPUS_ALL_REGIONS' exhausted. Limit: 0.0.")).ShouldBe(CloudErrorKind.Quota);
+
+    [Fact]
+    public void F1_a_quota_message_that_also_says_capacity_is_still_Quota_for_a_flex_code()
+        => CloudErrorClassifier.Classify(new CloudError("FLEX_START_QUOTA_EXCEEDED", null, "Quota GPUS_ALL_REGIONS exceeded: no capacity in your quota.")).ShouldBe(CloudErrorKind.Quota);
+
+    [Fact]
+    public void F1_exhausted_alone_is_not_capacity_wording_for_a_flex_code()
+        => CloudErrorClassifier.Classify(new CloudError("FLEX_START_ERROR", null, "Some resource is exhausted.")).ShouldNotBe(CloudErrorKind.Stockout);
+
+    [Theory]
+    [InlineData("FLEX_START_ERROR", "Connection reset: capacity request expired")]
+    [InlineData("FLEX_START_ERROR", "Could not reach the server; the request has expired")]
+    [InlineData("FLEX_START_ERROR", "Network is unreachable, capacity not granted")]
+    public void F4_connection_phrasing_wins_on_the_flex_path_too(string code, string message)
+        => CloudErrorClassifier.Classify(new CloudError(code, null, message)).ShouldBe(CloudErrorKind.Network);
+
+    [Fact]
+    public void F4_plain_unavailable_is_not_capacity_for_a_flex_code()
+        => CloudErrorClassifier.Classify(new CloudError("FLEX_START_ERROR", null, "Service unavailable.")).ShouldNotBe(CloudErrorKind.Stockout);
+
+    [Theory]
+    [InlineData("FLEX_START_ERROR", "The request could not be fulfilled.")]
+    [InlineData("FLEX_START_ERROR", "Capacity request was not fulfilled.")]
+    [InlineData("FLEX_START_ERROR", "The wait given by requestValidForDuration elapsed.")]
+    [InlineData("FLEX_START_ERROR", "Resource unavailable in this zone.")]
+    public void F5_flex_expiry_and_unfulfilled_shapes_are_a_stockout(string code, string message)
+        => CloudErrorClassifier.Classify(new CloudError(code, null, message)).ShouldBe(CloudErrorKind.Stockout);
+
+    [Fact]
+    public void F5_a_400_that_names_the_wait_field_is_never_a_stockout()
+    {
+        CloudErrorClassifier.Classify(new CloudError("FLEX_START_INVALID", 400, "requestValidForDuration elapsed value is out of range.")).ShouldNotBe(CloudErrorKind.Stockout);
+        CloudErrorClassifier.Classify(new CloudError("INVALID_FIELD_VALUE", 400, "requestValidForDuration expired")).ShouldNotBe(CloudErrorKind.Stockout);
+    }}
