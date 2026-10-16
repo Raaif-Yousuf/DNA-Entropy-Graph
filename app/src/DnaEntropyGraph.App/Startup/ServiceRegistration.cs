@@ -213,7 +213,8 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
         // Issue #111: Find runs from other computers (read-only listing of the project's results bucket).
-        services.AddSingleton<IRunImporter>(sp => new RunImporter(sp.GetRequiredService<IStorageGateway>(), sp.GetRequiredService<IRunRepository>()));
+        services.AddSingleton<ImportedRunDismissals>(sp => new ImportedRunDismissals(sp.GetRequiredService<ISettingsStore>()));
+        services.AddSingleton<IRunImporter>(sp => new RunImporter(sp.GetRequiredService<IStorageGateway>(), sp.GetRequiredService<IRunRepository>(), sp.GetRequiredService<ImportedRunDismissals>()));
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),

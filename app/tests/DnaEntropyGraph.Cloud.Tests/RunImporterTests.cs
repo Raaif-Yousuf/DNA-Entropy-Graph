@@ -201,4 +201,58 @@ public sealed class RunImporterTests : IDisposable
         status.Status.ShouldBe(CloudResultsStatus.Done);
         Directory.GetFiles(downloads, "*.bedgraph", SearchOption.AllDirectories).Single().ShouldEndWith("20261014-aaaa.bedgraph");
     }
+
+    [Fact]
+    public async Task One_malformed_or_future_schema_result_does_not_stop_the_scan()
+    {
+        var importer = await MakeAsync();
+        PutJob("20261014-aaaa");
+        PutJob("20261014-bbbb");
+        _gcp.PutObject(_bucket, "jobs/20261014-bbbb/result.json", Encoding.UTF8.GetBytes("""{"schema":2,"status":"done"}"""));
+        PutJob("20261014-cccc");
+        _gcp.PutObject(_bucket, "jobs/20261014-cccc/result.json", Encoding.UTF8.GetBytes("not json at all"));
+
+        var result = await importer.ImportAsync(Project, TestContext.Current.CancellationToken);
+
+        result.Imported.ShouldBe(1);
+        result.Skipped.ShouldBe(2);
+        (await _runs.GetAllAsync(TestContext.Current.CancellationToken)).Single().JobId.ShouldBe("20261014-aaaa");
+    }
+
+    [Fact]
+    public async Task An_oversized_manifest_or_result_is_skipped_and_never_stored()
+    {
+        var importer = await MakeAsync();
+        var padding = new string('x', RunImporter.MaxObjectBytes + 1);
+        PutJob("20261014-aaaa", manifest: Manifest("20261014-aaaa", name: padding));
+        PutJob("20261014-bbbb");
+        _gcp.PutObject(_bucket, "jobs/20261014-bbbb/result.json", Encoding.UTF8.GetBytes($$$"""{"schema":1,"status":"done","inputs":[],"pad":"{{{padding}}}"}"""));
+        PutJob("20261014-cccc");
+
+        var result = await importer.ImportAsync(Project, TestContext.Current.CancellationToken);
+
+        result.Imported.ShouldBe(1);
+        result.Skipped.ShouldBe(2);
+        (await _runs.GetAllAsync(TestContext.Current.CancellationToken)).Single().JobId.ShouldBe("20261014-cccc");
+    }
+
+    [Fact]
+    public async Task A_dismissed_run_is_not_imported_again()
+    {
+        _bucket = await _gcp.EnsureBucketAsync(Project, TestContext.Current.CancellationToken);
+        var settings = new Dictionary<string, string>();
+        var store = Substitute.For<ISettingsStore>();
+        store.GetString(Arg.Any<string>()).Returns(ci => settings.GetValueOrDefault(ci.Arg<string>()));
+        store.When(x => x.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(ci => settings[ci.ArgAt<string>(0)] = ci.ArgAt<string>(1));
+        var dismissals = new ImportedRunDismissals(store);
+        PutJob("20261014-aaaa");
+        PutJob("20261014-bbbb");
+        dismissals.Add("20261014-aaaa");
+
+        var result = await new RunImporter(_gcp, _runs, dismissals).ImportAsync(Project, TestContext.Current.CancellationToken);
+
+        result.Imported.ShouldBe(1);
+        (await _runs.GetAllAsync(TestContext.Current.CancellationToken)).Single().JobId.ShouldBe("20261014-bbbb");
+        new ImportedRunDismissals(store).Load().ShouldContain("20261014-aaaa");
+    }
 }

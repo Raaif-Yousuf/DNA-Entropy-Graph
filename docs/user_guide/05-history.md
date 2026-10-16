@@ -58,6 +58,9 @@ after **Download again** has fetched its files, and you can **Remove from list**
 run it again or delete its cloud copy from this computer (do that from the computer that made
 it). A run already in your list is never added twice, and a run that is still going, or whose
 files were already deleted from the cloud, is not listed.
+If you **Remove from list** an added run, it stays off the list on later searches. To bring removed
+runs back, use **Reset all settings** in Settings, then search again. A result file the app cannot
+read, or one over 1 MiB, is skipped without stopping the search.
 
 ## Related
 

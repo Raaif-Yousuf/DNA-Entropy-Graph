@@ -1031,7 +1031,19 @@
     <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
   </data>
   <data name="Runs_Import_Failed" xml:space="preserve">
-    <value>Could not look for runs from other computers. Check your internet connection, then choose Find runs from other computers again.</value>
+    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
+  </data>
+  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
+  </data>
+  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
+    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed_Network" xml:space="preserve">
+    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
+  </data>
+  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
+    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
   </data>
   <data name="Runs_Imported_Badge" xml:space="preserve">
     <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>

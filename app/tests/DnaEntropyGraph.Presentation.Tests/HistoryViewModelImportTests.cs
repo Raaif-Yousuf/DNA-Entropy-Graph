@@ -26,7 +26,10 @@ public sealed class HistoryViewModelImportTests
 
     private readonly IRunRepository _repository = Substitute.For<IRunRepository>();
     private readonly IStorageGateway _storage = Substitute.For<IStorageGateway>();
-    private readonly IRunCloudResults _cloud = Substitute.For<IRunCloudResults>();
+    private readonly IRunCloudResults _cloud;
+    private readonly Dictionary<string, string> _settings = [];
+    private readonly ISettingsStore _settingsStore = Substitute.For<ISettingsStore>();
+    private readonly IRunHistoryRemover _remover = Substitute.For<IRunHistoryRemover>();
     private readonly IGcpAccount _account = Substitute.For<IGcpAccount>();
     private readonly IStringResourceProvider _strings = Substitute.For<IStringResourceProvider>();
     private readonly Dictionary<string, string> _objects = [];
@@ -43,8 +46,16 @@ public sealed class HistoryViewModelImportTests
             return Task.CompletedTask;
         });
         _account.SelectedProjectId.Returns("proj");
-        _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(ci => ci.Arg<RunRecord>().Bucket is not null);
-        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(ci => !ci.Arg<RunRecord>().Imported);
+        var deleter = Substitute.For<IJobObjectDeleter>();
+        deleter.IsAvailable.Returns(true);
+        _cloud = new RunCloudResults(_storage, deleter, _repository, () => Path.GetTempPath(), new UtcClock());
+        _settingsStore.GetString(Arg.Any<string>()).Returns(ci => _settings.GetValueOrDefault(ci.Arg<string>()));
+        _settingsStore.When(x => x.SetString(Arg.Any<string>(), Arg.Any<string>())).Do(ci => _settings[ci.ArgAt<string>(0)] = ci.ArgAt<string>(1));
+        _remover.DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
+        {
+            _rows.RemoveAll(r => r.JobId == ci.Arg<string>());
+            return Task.CompletedTask;
+        });
         _storage.ListBucketsAsync("proj", Arg.Any<CancellationToken>()).Returns([new BucketDescriptor(Bucket, "US", new Dictionary<string, string>(), null)]);
         _storage.ListChildPrefixesAsync(Bucket, "jobs/", Arg.Any<CancellationToken>()).Returns(_ => _objects.Keys.Select(k => string.Join('/', k.Split('/').Take(2)) + "/").Distinct().ToList());
         _storage.TryDownloadAsync(Bucket, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
@@ -58,9 +69,17 @@ public sealed class HistoryViewModelImportTests
     }
 
     private HistoryViewModel Make(IRunImporter? importer = null) => new(
-        _repository, Substitute.For<IRunHistoryRemover>(), Substitute.For<INavigator>(), _cloud, Substitute.For<ILocalRunFiles>(), Substitute.For<IJobEngine>(),
-        Substitute.For<IDialogService>(), Substitute.For<IToastService>(), _strings, Substitute.For<IShellLauncher>(), _account, new UtcClock(),
-        importer: importer ?? new RunImporter(_storage, _repository));
+        _repository, _remover, Substitute.For<INavigator>(), _cloud, Substitute.For<ILocalRunFiles>(), Substitute.For<IJobEngine>(),
+        Confirming(), Substitute.For<IToastService>(), _strings, Substitute.For<IShellLauncher>(), _account, new UtcClock(),
+        importer: importer ?? new RunImporter(_storage, _repository, new ImportedRunDismissals(_settingsStore)),
+        dismissals: new ImportedRunDismissals(_settingsStore));
+
+    private static IDialogService Confirming()
+    {
+        var dialogs = Substitute.For<IDialogService>();
+        dialogs.ConfirmAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs(true);
+        return dialogs;
+    }
 
     private static List<RunListItem> Items(HistoryViewModel vm) => [.. vm.Groups.SelectMany(g => g.Items)];
 
@@ -132,5 +151,45 @@ public sealed class HistoryViewModelImportTests
 
         vm.ImportStatusText.ShouldBe("Runs_Import_Failed");
         vm.IsImporting.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_run_removed_from_the_list_does_not_come_back_on_the_next_scan()
+    {
+        PutForeignRun("20261014-aaaa", "inst-pc-a");
+        var vm = Make();
+        await vm.ImportRunsCommand.ExecuteAsync(null);
+        Items(vm).Count.ShouldBe(1);
+
+        await Items(vm).Single().RemoveCommand.ExecuteAsync(null);
+        Items(vm).ShouldBeEmpty();
+        await vm.ImportRunsCommand.ExecuteAsync(null);
+
+        Items(vm).ShouldBeEmpty();
+        vm.ImportStatusText.ShouldBe("Runs_Import_None");
+    }
+
+    public static TheoryData<Exception, string> Failures => new()
+    {
+        { new CloudOperationException(new CloudError("PERMISSION_DENIED", 403, "denied"), CloudErrorKind.Permission), "Runs_Import_Failed_Permission" },
+        { new CloudOperationException(new CloudError("ORG", 403, "org"), CloudErrorKind.OrgPolicy), "Runs_Import_Failed_Permission" },
+        { new CloudOperationException(new CloudError("BILLING", 403, "off"), CloudErrorKind.Billing), "Runs_Import_Failed_Setup" },
+        { new CloudOperationException(new CloudError("API", 403, "off"), CloudErrorKind.ApiDisabled), "Runs_Import_Failed_Setup" },
+        { new CloudOperationException(new CloudError("NET", null, "down"), CloudErrorKind.Network), "Runs_Import_Failed_Network" },
+        { new AccountAuthException("expired"), "Runs_Import_Failed_SignIn" },
+        { new InvalidOperationException("boom"), "Runs_Import_Failed" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Failures))]
+    public async Task A_failed_scan_shows_the_message_for_its_kind(Exception failure, string expectedKey)
+    {
+        var importer = Substitute.For<IRunImporter>();
+        importer.ImportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<RunImportResult>(_ => throw failure);
+        var vm = Make(importer);
+
+        await vm.ImportRunsCommand.ExecuteAsync(null);
+
+        vm.ImportStatusText.ShouldBe(expectedKey);
     }
 }

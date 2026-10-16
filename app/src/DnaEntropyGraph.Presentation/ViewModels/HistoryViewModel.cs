@@ -34,6 +34,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly TimeProvider _time;
     private readonly IEntropyOverviewSource? _overview;
     private readonly IRunImporter? _importer;
+    private readonly ImportedRunDismissals? _dismissals;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
 
@@ -64,8 +65,10 @@ public sealed partial class HistoryViewModel : ObservableObject
         IGcpAccount account,
         TimeProvider time,
         IEntropyOverviewSource? overview = null,
-        IRunImporter? importer = null)
+        IRunImporter? importer = null,
+        ImportedRunDismissals? dismissals = null)
     {
+        _dismissals = dismissals;
         _overview = overview;
         _importer = importer;
         _runRepository = runRepository;
@@ -132,15 +135,24 @@ public sealed partial class HistoryViewModel : ObservableObject
         {
             ImportStatusText = string.Empty;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            ImportStatusText = _strings.GetString(RunsCopy.ImportFailed);
+            ImportStatusText = _strings.GetString(ImportFailureKey(ex));
         }
         finally
         {
             IsImporting = false;
         }
     }
+
+    private static string ImportFailureKey(Exception failure) => failure switch
+    {
+        CloudOperationException { Kind: CloudErrorKind.Permission or CloudErrorKind.OrgPolicy } => RunsCopy.ImportFailedPermission,
+        CloudOperationException { Kind: CloudErrorKind.Billing or CloudErrorKind.ApiDisabled } => RunsCopy.ImportFailedSetup,
+        CloudOperationException { Kind: CloudErrorKind.Network } => RunsCopy.ImportFailedNetwork,
+        AccountAuthException => RunsCopy.ImportFailedSignIn,
+        _ => RunsCopy.ImportFailed,
+    };
 
     public IReadOnlyList<RunStatusFilterOption> StatusFilters { get; }
 
@@ -494,6 +506,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 || !await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.RemoveConfirmTitle), _strings.GetString(RunsCopy.RemoveConfirmBody), CancellationToken.None))
             {
                 return null;
+            }
+
+            // Issue #111: remember an imported run was dismissed, or the next scan would add it straight back.
+            if (run.Imported)
+            {
+                _dismissals?.Add(run.JobId);
             }
 
             await _remover.DeleteAsync(run.JobId, CancellationToken.None);

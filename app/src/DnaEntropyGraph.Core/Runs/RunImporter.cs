@@ -21,12 +21,16 @@ public interface IRunImporter
 /// is for (Hard Rule 9 is about never sharing a resource; reading is not sharing), so the manifest's installation id is kept on the row to say
 /// where the run came from. Read-only to the cloud: it only lists and downloads. A job id already in the local history is never touched.
 /// </summary>
-public sealed class RunImporter(IStorageGateway storage, IRunRepository runs) : IRunImporter
+public sealed class RunImporter(IStorageGateway storage, IRunRepository runs, ImportedRunDismissals? dismissals = null) : IRunImporter
 {
+    /// <summary>Issue #111: the most bytes read from a foreign manifest.json or result.json; anything larger is skipped, never stored.</summary>
+    public const int MaxObjectBytes = 1024 * 1024;
+
     public async Task<RunImportResult> ImportAsync(string projectId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
         var known = (await runs.GetAllAsync(cancellationToken).ConfigureAwait(false)).Select(r => r.JobId).ToHashSet(StringComparer.Ordinal);
+        var dismissed = dismissals?.Load() ?? new HashSet<string>();
         int imported = 0, alreadyKnown = 0, skipped = 0;
 
         foreach (var bucket in await storage.ListBucketsAsync(projectId, cancellationToken).ConfigureAwait(false))
@@ -38,6 +42,12 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs) : 
                 if (known.Contains(jobId))
                 {
                     alreadyKnown++;
+                    continue;
+                }
+
+                if (dismissed.Contains(jobId))
+                {
+                    skipped++;
                     continue;
                 }
 
@@ -105,8 +115,9 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs) : 
                 InstallationId: Str(createdBy, "installationId"),
                 Imported: true);
         }
-        catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is not (OperationCanceledException or CloudOperationException))
         {
+            // Foreign content: a result this app does not understand (InvalidDataException, schema 2, bad JSON) skips this folder only.
             return null;
         }
     }
@@ -119,8 +130,20 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs) : 
             return null;
         }
 
-        using var reader = new StreamReader(stream);
-        return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        // Read one byte past the cap: that byte is how an oversized object is told from one that is exactly at the cap.
+        using var buffer = new MemoryStream();
+        var chunk = new byte[16 * 1024];
+        int read;
+        while ((read = await stream.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, MaxObjectBytes + 1L - buffer.Length)), cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            buffer.Write(chunk, 0, read);
+            if (buffer.Length > MaxObjectBytes)
+            {
+                return null;
+            }
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
     }
 
     private static string? FirstInputName(JsonElement root)

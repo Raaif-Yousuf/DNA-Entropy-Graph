@@ -45,6 +45,10 @@ public static class RunsCopy
     public const string ImportDoneMany = "Runs_Import_Done_Many";
     public const string ImportNoProject = "Runs_Import_NoProject";
     public const string ImportFailed = "Runs_Import_Failed";
+    public const string ImportFailedPermission = "Runs_Import_Failed_Permission";
+    public const string ImportFailedSetup = "Runs_Import_Failed_Setup";
+    public const string ImportFailedNetwork = "Runs_Import_Failed_Network";
+    public const string ImportFailedSignIn = "Runs_Import_Failed_SignIn";
 
     public static readonly RunsMessage OwnerRequestCopied = Pair("Runs_OwnerRequest_Copied_Title", "Runs_OwnerRequest_Copied_Body", ToastSeverity.Success);
     public static readonly RunsMessage OwnerRequestCopyFailed = Pair("Runs_OwnerRequest_CopyFailed_Title", "Runs_OwnerRequest_CopyFailed_Body", ToastSeverity.Error);
@@ -103,7 +107,7 @@ public static class RunsCopy
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
-        DeleteCloudHintImported, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed,
+        DeleteCloudHintImported, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn,
         RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
