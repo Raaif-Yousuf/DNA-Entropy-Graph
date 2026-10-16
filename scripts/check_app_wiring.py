@@ -1304,9 +1304,8 @@ def self_test() -> int:
         # 3c. The two parser shortcuts of #478 (balanced scanning; revert it and each of these fails).
         check(
             "a parenthesised default does not hide a later required parameter",
-            _constructor_parameters(
-                "public class Foo { public Foo(IBar bar = default(IBar), IBaz baz) { } }", "Foo", skip_defaults=True
-            ) == ["IBaz"],
+            _constructor_parameters("public class Foo { public Foo(IBar bar = default(IBar), IBaz baz) { } }", "Foo", skip_defaults=True)
+            == ["IBaz"],
         )
         check(
             "a nested generic registration is one type, not two half-types",
