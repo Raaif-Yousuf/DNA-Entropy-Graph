@@ -37,6 +37,13 @@ internal sealed class RunProgress
     /// </summary>
     public long? VmStartMark { get; set; }
 
+    /// <summary>
+    /// Wall-clock time at which a create (or the start of a reused VM) by THIS run was answered with success, so billing for the VM began
+    /// at or just before it (issue #109). Set by the provisioner the moment it knows, also for a create that answered late and was
+    /// then deleted; the runner copies it to <c>RunRecord.VmReadyAt</c> even when provisioning goes on to fail. Null when no VM was made.
+    /// </summary>
+    public DateTimeOffset? VmCreatedAt { get; set; }
+
     /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
     public string? VmName { get; set; }
 

@@ -153,6 +153,12 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 // if it cannot be confirmed the run says so (vm_end_unconfirmed). The VM's own maxRunDuration
                 // (Hard Rule 10) is the backstop.
                 var settleNote = await SettleAbandonedCreateAsync(request, createTask!, zone).ConfigureAwait(false);
+                if (createTask!.IsCompletedSuccessfully)
+                {
+                    // The abandoned create did land (and was deleted above): that VM billed from about now back to its landing, so the run books it.
+                    progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
+                }
+
                 if (settleNote is not null)
                 {
                     return ZoneAttempt.Aborted(zone, ProvisionResult.Failed(CloudErrorKind.Network, outcome.Error!.Message, settleNote));
@@ -161,6 +167,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             if (outcome.Success)
             {
+                // Issue #109: the create was answered, so the VM exists and bills from here; stamped now, not when provisioning returns.
+                progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
                 return ZoneAttempt.Win(zone);
             }
 
@@ -602,6 +610,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 cancellationToken,
                 settings.CreateTimeout).ConfigureAwait(false);
             progress.VmName = started.Name;
+            progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
             return ProvisionResult.Ok(started.Zone, started.Name);
         }
         catch (CloudOperationException ex)
@@ -611,6 +620,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             if (ex.Kind == CloudErrorKind.Network && await TryAdoptReusedAsync(request, cancellationToken).ConfigureAwait(false) is { } adopted)
             {
                 progress.VmName = adopted.Name;
+                progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
                 return ProvisionResult.Ok(adopted.Zone, adopted.Name);
             }
 

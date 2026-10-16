@@ -269,6 +269,57 @@ public class SpendLedgerTests
     }
 
     [Fact]
+    public async Task A_run_on_this_PC_rather_than_in_the_cloud_books_nothing()
+    {
+        var (ledger, repo, _, paths) = Make();
+        using (paths)
+        {
+            await ledger.RecordRunAsync(Finished("r1", 2) with { Target = "local" }, CancellationToken.None);
+
+            (await repo.GetAllAsync(CancellationToken.None)).ShouldBeEmpty("a local-engine run rents no VM");
+        }
+    }
+
+    [Fact]
+    public async Task A_run_whose_ledger_append_failed_is_booked_the_next_time_the_month_is_read_and_only_once()
+    {
+        var runs = new MemoryRuns();
+        var (ledger, repo, _, paths) = Make(runs);
+        using (paths)
+        {
+            runs.Rows.Add(Finished("lost", 2));
+
+            var first = await ledger.MonthToDateAsync(CancellationToken.None);
+            var second = await ledger.MonthToDateAsync(CancellationToken.None);
+
+            first.RecordedUsd.ShouldBe(2 * 1.015, 1e-9);
+            second.RecordedUsd.ShouldBe(2 * 1.015, 1e-9);
+            (await repo.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1);
+        }
+    }
+
+    [Fact]
+    public async Task A_run_row_left_in_progress_for_thirty_days_accrues_no_more_than_its_max_run_duration()
+    {
+        var runs = new MemoryRuns();
+        var (ledger, _, settings, paths) = Make(runs);
+        using (paths)
+        {
+            // Thirty days ago it was last month and its VM is long gone; three days ago it is this month and capped.
+            runs.Rows.Add(new RunRecord("orphan30", JobPhase.Running, Now.AddDays(-30), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddDays(-30)));
+            runs.Rows.Add(new RunRecord("orphan3", JobPhase.Running, Now.AddDays(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddDays(-3)));
+            settings.Values[SpendCapSettings.CapUsdKey] = "100";
+            settings.Values[SpendCapSettings.HardStopKey] = "true";
+
+            var summary = await ledger.MonthToDateAsync(CancellationToken.None);
+
+            // The default run limit is 240 minutes plus the 15 minute grace the VM is created with: the VM cannot outlive it.
+            summary.InProgressUsd.ShouldBe(4.25 * 1.015, 1e-9);
+            (await ledger.CheckAsync(null, CancellationToken.None)).Level.ShouldBe(SpendCapLevel.None);
+        }
+    }
+
+    [Fact]
     public async Task The_cap_check_includes_runs_in_progress()
     {
         var runs = new MemoryRuns();

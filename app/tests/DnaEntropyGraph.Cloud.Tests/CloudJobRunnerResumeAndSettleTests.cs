@@ -138,6 +138,33 @@ public class CloudJobRunnerResumeAndSettleTests
     }
 
     [Fact]
+    public async Task A_VM_that_was_created_and_then_lost_inside_provisioning_still_has_its_start_recorded_for_the_spend_ledger()
+    {
+        var gcp = new FakeGcp().WithCreateDelay(TimeSpan.FromMilliseconds(150));
+        var repo = new InMemoryRunRepository();
+
+        var result = await WithinAsync(Runner(gcp, repo).RunAsync(TestInputs.Request("job-s3", Spec("job-s3")), CancellationToken.None), "hung");
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        var row = LastRow(repo, "job-s3");
+        row.VmReadyAt.ShouldNotBeNull("the late create landed, billed until it was deleted, and the failed row must say when it started");
+        row.FinishedAt.ShouldNotBeNull();
+        row.VmReadyAt!.Value.ShouldBeLessThanOrEqualTo(row.FinishedAt!.Value);
+    }
+
+    [Fact]
+    public async Task A_run_that_never_got_a_VM_has_no_start_recorded()
+    {
+        var gcp = new FakeGcp().WithZoneStockout(Zone);
+        var repo = new InMemoryRunRepository();
+
+        var result = await WithinAsync(Runner(gcp, repo).RunAsync(TestInputs.Request("job-s4", Spec("job-s4")), CancellationToken.None), "hung");
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        LastRow(repo, "job-s4").VmReadyAt.ShouldBeNull("a stockout creates nothing, so nothing is booked");
+    }
+
+    [Fact]
     public async Task A_cancel_waits_for_an_insert_still_in_flight_and_then_deletes_what_landed()
     {
         var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);

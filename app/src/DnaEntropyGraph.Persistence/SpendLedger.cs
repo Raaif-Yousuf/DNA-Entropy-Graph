@@ -24,6 +24,9 @@ public sealed class SpendLedger : ISpendCapGate
     /// <summary>The boot disk <c>RunOptions.BootDiskGb</c> defaults to, used when a row's options cannot be read.</summary>
     private const int DefaultBootDiskGb = 150;
 
+    /// <summary>The run limit <c>RunOptions.MaxRunDurationMinutes</c> defaults to, used when a row's options cannot be read.</summary>
+    private const int DefaultMaxRunMinutes = 240;
+
     private readonly ICostLedgerRepository _ledger;
     private readonly IPricingSource _pricing;
     private readonly ISettingsStore _settings;
@@ -54,7 +57,10 @@ public sealed class SpendLedger : ISpendCapGate
     public CostLedgerEntry? Quote(RunRecord run)
     {
         ArgumentNullException.ThrowIfNull(run);
-        if (!JobStateMachine.IsTerminal(run.Phase)
+        // A local-engine run (Target "local") rents no VM and books nothing. There is deliberately no fallback to StartedAt for a row with no
+        // VmReadyAt: the engine writes the planned VM name up front, so a name is no proof a VM ever existed.
+        if (!string.Equals(run.Target, "cloud", StringComparison.Ordinal)
+            || !JobStateMachine.IsTerminal(run.Phase)
             || run.VmReadyAt is not { } vmStart
             || run.FinishedAt is not { } finished
             || UsdFor(run, vmStart, finished) is not { } usd)
@@ -72,7 +78,7 @@ public sealed class SpendLedger : ISpendCapGate
     public async Task<SpendSummary> MonthToDateAsync(CancellationToken cancellationToken)
     {
         var (start, end) = MonthBounds();
-        var rows = await _ledger.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await ReconcileAsync(await _ledger.GetAllAsync(cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
         var recorded = rows
             .Where(r => r.UsdEst is not null && (r.EndedUtc ?? r.StartedUtc) is var when && when >= start && when < end)
             .Sum(r => r.UsdEst!.Value);
@@ -95,6 +101,39 @@ public sealed class SpendLedger : ISpendCapGate
         return new SpendCapStatus(SpendCapSettings.IsHardStop(_settings) ? SpendCapLevel.Blocked : SpendCapLevel.Warning, summary.TotalUsd, cap, summary.InProgressUsd);
     }
 
+    /// <summary>
+    /// Books every ended run that has a VM and no ledger row yet (a ledger append that failed after its run row was stored is otherwise
+    /// never re-driven). Idempotent through the unique index. Every read of the month, so every cap check, runs it. Returns the rows
+    /// including what it added.
+    /// </summary>
+    private async Task<IReadOnlyList<CostLedgerEntry>> ReconcileAsync(IReadOnlyList<CostLedgerEntry> rows, CancellationToken cancellationToken)
+    {
+        if (_runs is null)
+        {
+            return rows;
+        }
+
+        var booked = rows.Where(r => r.RunId is not null && r.Kind == VmRuntimeKind).Select(r => r.RunId!).ToHashSet(StringComparer.Ordinal);
+        List<CostLedgerEntry>? added = null;
+        foreach (var run in LatestPerJob(await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false)))
+        {
+            if (booked.Contains(run.JobId) || Quote(run) is not { } quote)
+            {
+                continue;
+            }
+
+            if (await _ledger.TryAppendAsync(quote, cancellationToken).ConfigureAwait(false) is { } entry)
+            {
+                (added ??= []).Add(entry);
+            }
+        }
+
+        return added is null ? rows : [.. rows, .. added];
+    }
+
+    private static IEnumerable<RunRecord> LatestPerJob(IReadOnlyList<RunRecord> runs)
+        => runs.GroupBy(r => r.JobId).Select(g => g.OrderBy(r => r.CreatedUtc).Last());
+
     private async Task<double> InProgressUsdAsync(IReadOnlyList<CostLedgerEntry> ledgerRows, DateTimeOffset monthStart, CancellationToken cancellationToken)
     {
         if (_runs is null)
@@ -104,13 +143,11 @@ public sealed class SpendLedger : ISpendCapGate
 
         var booked = ledgerRows.Where(r => r.RunId is not null && r.Kind == VmRuntimeKind).Select(r => r.RunId!).ToHashSet(StringComparer.Ordinal);
         var now = _time.GetUtcNow();
-        var latest = (await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false))
-            .GroupBy(r => r.JobId)
-            .Select(g => g.OrderBy(r => r.CreatedUtc).Last());
+        var latest = LatestPerJob(await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false));
         var total = 0.0;
         foreach (var run in latest)
         {
-            if (JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
+            if (!string.Equals(run.Target, "cloud", StringComparison.Ordinal) || JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
             {
                 continue;
             }
@@ -134,7 +171,21 @@ public sealed class SpendLedger : ISpendCapGate
         }
 
         var rate = run.IsSpot == true ? machine.SpotUsdPerHour ?? machine.OnDemandUsdPerHour : machine.OnDemandUsdPerHour;
-        var diskGb = RunOptionsJson.TryDeserialize(run.OptionsJson)?.BootDiskGb ?? DefaultBootDiskGb;
+        var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
+        var diskGb = options?.BootDiskGb ?? DefaultBootDiskGb;
+
+        // The VM cannot outlive its maxRunDuration (the run limit plus the grace it is created with, Hard Rule 10), so a row stuck
+        // in progress (an orphan) stops accruing there instead of growing forever and blocking every run.
+        if (run.VmReadyAt is { } start)
+        {
+            var limit = TimeSpan.FromMinutes(options?.MaxRunDurationMinutes ?? DefaultMaxRunMinutes) + CloudJobRequestFactory.VmGrace;
+            var latestEnd = start + limit;
+            if (to > latestEnd)
+            {
+                to = latestEnd;
+            }
+        }
+
         return (rate + table.DiskUsdPerHour(diskGb)) * Math.Max(0, (to - from).TotalHours);
     }
 

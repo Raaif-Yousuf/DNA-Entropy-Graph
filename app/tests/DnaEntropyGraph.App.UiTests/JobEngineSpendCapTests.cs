@@ -247,6 +247,27 @@ public class JobEngineSpendCapTests
         h.Gcp.CreatedSpecs.ShouldBeEmpty();
     }
 
+    // The run's own estimate is its MaxUsd: 12 minutes (a fresh computer) at the machine's rate plus the disk, so about 0.2 * (rate + 0.015).
+    // With 6 already spent and a cap of 10, a rate of 19.5 estimates about 3.9 (6 + 3.9 stays under 10) and 20.5 about 4.1 (reaches it).
+    [Theory]
+    [InlineData(19.5, true)]
+    [InlineData(20.5, false)]
+    public async Task A_price_just_under_the_cap_starts_and_one_just_over_is_refused_so_the_estimate_is_what_decides(double rate, bool starts)
+    {
+        var priced = PricingJson
+            .Replace("\"onDemandUsdPerHour\":1.0", FormattableString.Invariant($"\"onDemandUsdPerHour\":{rate}"), StringComparison.Ordinal)
+            .Replace("\"spotUsdPerHour\":0.4", FormattableString.Invariant($"\"spotUsdPerHour\":{rate / 2}"), StringComparison.Ordinal);
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), priced);
+        await h.Ledger.AppendAsync(new CostLedgerEntry("vm_runtime", DateTimeOffset.UtcNow, "earlier", EndedUtc: DateTimeOffset.UtcNow, UsdEst: 6), CancellationToken.None);
+        h.Settings.SetString(SpendCapSettings.CapUsdKey, "10");
+        h.Settings.SetString(SpendCapSettings.HardStopKey, "true");
+
+        await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(starts ? JobPhase.Completed : JobPhase.Failed);
+        h.Gcp.CreatedSpecs.Count.ShouldBe(starts ? 1 : 0);
+    }
+
     [Fact]
     public async Task The_same_run_at_a_price_that_stays_under_the_cap_starts()
     {

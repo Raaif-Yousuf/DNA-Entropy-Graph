@@ -1003,6 +1003,23 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task The_estimate_and_the_card_price_the_same_options_the_run_starts_with_including_Spot_and_the_tier()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _viewModel.SpotVm = true;
+        _viewModel.GpuTier = GpuTier.A100_40;
+
+        await AddOne(Write("spot.fasta", ">a\n" + Dna + "\n"));
+        await EstimateTextWhen(t => t.Length > 0);
+
+        await _estimates.Received().EstimateAsync("a2-highgpu-1g", true, Dna.Length, 150, Arg.Any<CancellationToken>());
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+        await _jobEngine.Received().StartRunAsync(
+            Arg.Is<RunOptions>(o => o.SpotVm && o.GpuTier == GpuTier.A100_40),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task A_blocked_card_also_disables_Run_and_a_warning_does_not()
     {
         EstimateReturns(Point(9, 0.13));

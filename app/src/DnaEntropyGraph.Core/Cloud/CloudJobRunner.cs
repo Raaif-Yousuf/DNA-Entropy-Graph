@@ -355,6 +355,7 @@ public sealed class CloudJobRunner
             // the VM must not be left billing under a terminal Failed record nothing will ever look at again. The VM is
             // found by the zone when known and by its job-id label when not. Only the CALLER cancelling is not this (CancelAsync owns that
             // delete): an OperationCanceledException with the caller's token live is a gateway's own deadline, a failure like any other.
+            await StampVmCreatedAsync(request.JobId, progress).ConfigureAwait(false);
             var note = await _terminator.EndVmAfterFailureAsync(progress.Resolve(request), progress.Zone).ConfigureAwait(false);
             throw VmEndNotes.Apply(ex, note);
         }
@@ -437,6 +438,8 @@ public sealed class CloudJobRunner
         {
             await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
             var provisioned = await _provisioner.ProvisionAsync(attempt, token => CompleteSpecAsync(attempt, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
+            // Before the failure branch: a VM that was created and then lost inside provisioning still billed, and the ledger books from here.
+            await StampVmCreatedAsync(request.JobId, progress).ConfigureAwait(false);
             if (!provisioned.Success)
             {
                 return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
@@ -482,6 +485,27 @@ public sealed class CloudJobRunner
     /// known is written: the planned one only for a VM this run created, never as a stand-in for an adopted VM or for none (a name nobody made). The write is a record, not a step:
     /// a failure here must not abandon a live VM, so it is swallowed and the run goes on to the wait and the VM's end.
     /// </summary>
+    /// <summary>
+    /// Issue #109: copies the moment this run's VM was created (<see cref="RunProgress.VmCreatedAt"/>) to <c>RunRecord.VmReadyAt</c>, the start of what
+    /// the spend ledger books. Kept if already set (a re-attach must not move it). A record, not a step: a failure here is swallowed.
+    /// </summary>
+    private async Task StampVmCreatedAsync(string jobId, RunProgress progress)
+    {
+        if (progress.VmCreatedAt is not { } createdAt)
+        {
+            return;
+        }
+
+        try
+        {
+            await _rows.UpdateRowAsync(jobId, row => row.VmReadyAt is null ? row with { VmReadyAt = createdAt } : row, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The row keeps no start; RecordVmNameAsync stamps one a moment later when the VM is known.
+        }
+    }
+
     private async Task RecordVmNameAsync(string jobId, string? vmName, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(vmName))

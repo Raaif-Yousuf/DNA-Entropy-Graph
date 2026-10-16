@@ -507,10 +507,23 @@ exercise.
  repository, so every writer of a run row (runner, reconciler, cleanup) feeds the ledger the first
  time a row reaches an ended phase. `SpendLedger` appends one `vm_runtime` `CostLedger` row per run
  (idempotent: migration 0003's unique index on (RunId, Kind) plus INSERT OR IGNORE, so two writers
- book it once). COUNTED: VM time only, from `RunRecord.VmReadyAt` (set by the runner in
- `RecordVmNameAsync`, the moment it knows its VM exists, kept if already set) to the run's end,
- times the machine's hourly rate (Spot rate for a Spot run) plus the hourly share of the run's boot
- disk, from `pricing.json`; a run with no VM books nothing. Runs still going are counted apart as
+ book it once; 0003 first deletes any duplicate rows of a (RunId, Kind), keeping the lowest Id, so
+ a file that already holds duplicates still opens). COUNTED: VM time only, from
+ `RunRecord.VmReadyAt` to the run's end. The provisioner stamps `RunProgress.VmCreatedAt` the
+ moment a create (or a reused VM's start) is answered with success, also for a create that
+ answered late and was then deleted, and the runner copies it to `VmReadyAt` right after
+ provisioning returns, success or failure (kept if already set); `RecordVmNameAsync` is the
+ fallback for an adopted VM. There is deliberately no fallback to `StartedAt` for a row with no
+ `VmReadyAt`: the engine writes the planned VM name up front, so a name proves no VM existed.
+ Local-engine runs (`Target` is not `cloud`) rent no VM and book nothing. An in-progress row
+ accrues at most to its `MaxRunDurationMinutes` plus the 15 minute grace (the VM cannot outlive
+ its maxRunDuration), so an orphaned row cannot grow forever. Every read of the month first books
+ any ended run with a VM and no ledger row (a ledger append that failed after its run row was
+ stored), idempotently. Migrations apply in order 0001, 0002 (Spot preemption count), 0003,
+ and a test upgrades a 0001 file through all of them. The rate is the machine's hourly rate
+ (Spot rate for a Spot run) plus the hourly share of the run's boot disk, from `pricing.json`;
+ a run with no VM books nothing. The New run card prices the same `RunOptions` the run starts
+ with (one builder: tier, Spot flag and boot disk). Runs still going are counted apart as
  `InProgressUsd` (VM time so far, from the later of VM start and the start of the month, to now),
  so the gate and the card see work in flight, and both say "includes runs in progress". NOT
  COUNTED: a VM kept alive or left stopped after its run ended (the run's row stops at its end;

@@ -24,13 +24,14 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     // and a cost estimate first), so this is the one model the app offers, not a property nothing binds.
     private const string DefaultModelId = "evo2_7b";
 
-    // The tier and VM kind the page's Run uses (RunOptions defaults: the cheapest GPU, on-demand), so the estimate prices the
-    // machine a run on this page really starts. When a tier or Spot picker lands it must feed both StartRunAsync and the estimate.
-    private const GpuTier DefaultTier = GpuTier.CheapestAvailable;
-    private static readonly bool DefaultSpot = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.SpotVm;
+    /// <summary>
+    /// Whether the next run asks for a Spot VM. The one setting a Spot picker (issue #91's UI) writes: <see cref="BuildRunOptions"/> reads it, and that
+    /// one builder feeds both the start and the cost estimate and cap card, so what is priced is what is started. False (on-demand) until a picker sets it.
+    /// </summary>
+    public bool SpotVm { get; set; }
 
-    // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
-    private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
+    /// <summary>The GPU tier of the next run; written by a tier picker (issue #87) and read through <see cref="BuildRunOptions"/> like <see cref="SpotVm"/>.</summary>
+    public GpuTier GpuTier { get; set; } = GpuTier.CheapestAvailable;
 
     // A count of this many characters or fewer is worked out on the spot; a bigger paste is counted off the UI thread.
     private const int InlineCountLimit = 20_000;
@@ -888,24 +889,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     {
         var group = _shownOutputGroup!.Value;
         var outputs = _outputSelections[group];
-        var options = new RunOptions
-        {
-            ModelId = DefaultModelId,
-            RunTarget = "Cloud",
-            InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
-            AnnotationPath = SelectedItem.AnnotationPath,
-            Accession = SelectedItem.Accession,
-            AccessionRange = SelectedItem.AccessionRange,
-            TreatAsRna = IsTreatingAsRna,
-            Direction = Presets?.Direction ?? Direction.BothCombined,
-            ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
-            Topology = Presets?.Topology ?? Topology.Auto,
-            PresetId = Presets?.PresetId,
-            PresetName = Presets?.PresetName,
-            OutputFiles = outputs,
-            // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
-            TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
-        };
+        var options = BuildRunOptions(SelectedItem!, outputs);
         string jobId;
         try
         {
@@ -934,6 +918,32 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             RememberOutputs(group, outputs);
         }
     }
+
+    /// <summary>
+    /// The options a run of <paramref name="item"/> starts with. The ONE builder: Run sends this to the engine and the cost estimate and spending-cap
+    /// card (issue #109) read their machine, Spot flag and boot disk from it, so a picker, a preset or a default can never make the card price a
+    /// different run than the one that starts.
+    /// </summary>
+    private RunOptions BuildRunOptions(InputPillItem item, OutputFileKinds outputs) => new()
+    {
+        ModelId = DefaultModelId,
+        RunTarget = "Cloud",
+        InputPath = item.IsAccession ? null : item.Path,
+        AnnotationPath = item.AnnotationPath,
+        Accession = item.Accession,
+        AccessionRange = item.AccessionRange,
+        TreatAsRna = IsTreatingAsRna,
+        Direction = Presets?.Direction ?? Direction.BothCombined,
+        ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
+        Topology = Presets?.Topology ?? Topology.Auto,
+        PresetId = Presets?.PresetId,
+        PresetName = Presets?.PresetName,
+        GpuTier = GpuTier,
+        SpotVm = SpotVm,
+        OutputFiles = outputs,
+        // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
+        TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
+    };
 
     private void RememberOutputs(OutputInputKinds group, OutputFileKinds outputs)
     {
@@ -1105,7 +1115,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             // The same shared path the engine asks at Run (issue #109), so the card and the refusal cannot disagree. A cap check that
             // throws is no card and never takes the estimate away (the helper keeps them apart).
-            var (result, status) = await _estimates.CheckAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
+            var priced = BuildRunOptions(SelectedItem!, default);
+            var (result, status) = await _estimates.CheckAsync(CloudJobRequestFactory.MachineTypeFor(priced.GpuTier), priced.SpotVm, bases, priced.BootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
