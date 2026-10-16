@@ -14,7 +14,7 @@ public enum DataFolderProblem
     /// <summary>The folder could not be created or is not writable.</summary>
     CannotCreate,
 
-    /// <summary>The value is not a path the system can use (for example an embedded NUL or <c>C::b:c</c>).</summary>
+    /// <summary>The value is not a path the system can use (for example an embedded NUL or <c>C:\a:b:c</c>).</summary>
     InvalidPath,
 }
 
@@ -66,6 +66,9 @@ public sealed class AppDataRoot
 
     /// <summary>Local run folders; each run's saved input copy lives under <c>runs\&lt;jobId&gt;\input</c>.</summary>
     public string RunsDirectory => Combine("runs");
+
+    /// <summary>The local engine (issue #172): its venv, its managed Python and its package cache. Remove deletes exactly this folder.</summary>
+    public string EngineDirectory => Combine("engine");
 
     public string WebView2Directory => Combine("webview2");
 
