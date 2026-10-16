@@ -358,16 +358,31 @@ Nothing here has run on a real tag yet; `docs/ToTest.md` carries the row.
   in `app/releases` is never uploaded, but a `*.nupkg` glob would have attested it: `scripts/release_assets.py stage` reads
   `assets.win.json` instead (refusing a nupkg of another version, requiring the full nupkg and `Setup.exe`), and `check` verifies the
   published asset NAMES, anchored (the full nupkg of this version, not only a delta).
-- **Containers (#255).** The `images` job runs `scripts/release_dockerfile_base_pinned.py` (named `release_*`, not `check_*`, so premerge and ci-docs do not run it on every PR: it gates a release, and fails by design until #37 pins Dockerfile.cuda) (tested against fixture Dockerfiles): EVERY
+- **Containers (#255).** The `images` job runs `scripts/release_dockerfile_base_pinned.py` (named `release_*`, not `check_*`, so premerge and ci-docs do not run it on every PR: it gates a release) (tested against fixture Dockerfiles): EVERY
   `FROM` must be pinned by `@sha256` (a multi-stage file with one pinned stage fails; `FROM <earlier stage>` and `scratch` are
-  exempt). The job then builds with
-  `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true`, pushes, then runs Trivy (Apache-2.0) on the pushed digest and fails on a
-  fixable HIGH or CRITICAL finding. The publish job needs it, and a digest that failed the scan is never written into
-  `worker-images.json`, so no released app can run it. The tag it pushed stays in GHCR. MEASURED 2026-09 (issue #255 thread):
+  exempt). Both Dockerfiles now carry a literal digest with the human-readable tag it was resolved from in a comment above the
+  `FROM` (the NGC base digest was read from the registry's manifest list on 2026-10-16, a manifest HEAD with no pull). To move a
+  base, resolve the new digest and change the tag comment and the digest together.
+  `Dockerfile.cpu` bootstraps `uv` and the build backend (setuptools, wheel) from `worker/build-requirements.txt` (exact versions, sha256, PyPI JSON URLs recorded in the file, `--require-hashes`), installs from `uv.lock` with its hashes kept: `uv export --locked` (fails if `uv.lock` is stale) then
+  `pip install --require-hashes --no-deps`, so a file PyPI serves under a pinned version but with a different hash fails the
+  build, and installs the project with `--no-deps --no-build-isolation` so no unhashed build requirement is fetched. The `Dockerfile.cuda` NGC digest could not be checked against a real pull offline: the first release run is what verifies it (ToTest row). `Dockerfile.cuda` still installs `.[genes,evo]` unlocked: `uv.lock` cannot know which torch/evo2 the NGC base is
+  compatible with (issue #37 owns that lock).
+  The job then builds with
+  `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true`, pushes, then scans the pushed digest with Trivy (Apache-2.0, CI only, never
+  shipped). Three steps, in this order: a SARIF report of every HIGH and CRITICAL finding (fixable or not, never fails),
+  uploaded to code scanning under category `trivy-<variant>`; then the gate, which fails on a **fixable HIGH or CRITICAL** finding
+  (`ignore-unfixed`; an unfixed one is only in the report). The upload is `if: always()` and `continue-on-error`, so a code-scanning outage
+  never blocks a release, while the gate step itself is never non-fatal. The publish job needs the gate, and a digest that failed the scan
+  is never written into `worker-images.json`, so no released app can run it. The tag it pushed stays in GHCR.
+  Accepted CVEs live in `.trivyignore.yaml` (`id`, `statement`, `expired_at`). `scripts/check_trivy_allowlist.py` (a
+  `check_*` gate, so premerge runs it on every change, and the `images` job runs it before the build) fails on an entry that
+  expires today or earlier, one more than 90 days out, or one missing a field; Trivy itself stops honouring an expired
+  entry, so the scan fails as well. The Trivy and upload-sarif actions are pinned by commit sha. MEASURED 2026-10-16 (trivy-action at the pinned sha, `entrypoint.sh` lines 22-73, https://raw.githubusercontent.com/aquasecurity/trivy-action/ed142fd0673e97e23eac54620cfb913e5ce36c25/entrypoint.sh): a single `*.yaml` `trivyignores` value is exported as `TRIVY_IGNOREFILE` and parsed by Trivy as YAML (so `expired_at` is honoured); only a list of plain files is concatenated, and mixing the two is an error. Both scan steps pass exactly `.trivyignore.yaml` (tested).
+  MEASURED 2026-09 (issue #255 thread):
   two clean `docker build`s of `Dockerfile.cpu` had identical installed package versions but different image digests, so
   "same tag gives the same digest" is NOT yet true; the timestamp rewrite is the next lever and is THEORY (unverified) until two
-  release builds are compared. `Dockerfile.cuda` still builds from an unpinned NGC tag (#37), so a release cannot be cut until
-  that base is pinned: the gate is working as intended, not a bug.
+  release builds are compared. Worker image digests are written into `worker-images.json` by `scripts/write_worker_images.py`
+  in the `app` job before `dotnet publish` (#480, already in place).
 - **Draft until complete.** `vpk upload github` (in the `upload` job) without `--publish` creates a draft. The `publish` job downloads it, adds the
   wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, asserts every expected asset name is present (exact, anchored), and only then runs
   `gh release edit --draft=false` (a tag containing `-` becomes a pre-release instead of the latest release).
