@@ -89,6 +89,9 @@ public sealed class CloudJobRunner
     /// <summary>How long to wait between looks for the worker's <c>result.json</c>.</summary>
     public TimeSpan ResultPollInterval { get => _settings.ResultPollInterval; init => _settings.ResultPollInterval = value; }
 
+    /// <summary>Issue #91: the wait between two looks for a recorded Spot preemption (three looks).</summary>
+    public TimeSpan PreemptionLookupInterval { get => _settings.PreemptionLookupInterval; init => _settings.PreemptionLookupInterval = value; }
+
     /// <summary>
     /// How long to wait for <c>result.json</c> after the VM is running. Null means <see cref="ResultWaitLimit"/>: the VM's own
     /// <c>maxRunDuration</c> less a short margin, measured from the VM's creation (its <c>maxRunDuration</c> clock), not from Running.
@@ -428,6 +431,7 @@ public sealed class CloudJobRunner
         }
 
         // Issue #91: a Spot VM Google takes back is answered with exactly one automatic retry on an on-demand VM; the second attempt is never Spot, so it cannot loop.
+        _terminator.ClearAppRequestedEnd(request.JobId);
         var attempt = request;
         while (true)
         {

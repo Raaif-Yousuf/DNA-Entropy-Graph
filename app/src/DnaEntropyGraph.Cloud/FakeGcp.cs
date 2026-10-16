@@ -752,7 +752,27 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private readonly ConcurrentDictionary<(string Name, string Zone), byte> _preemptingKeys = new();
     private bool _preemptionLookupFails;
     private int _preemptionLookups;
-    private readonly ConcurrentDictionary<(string Name, string Zone), byte> _preemptedOperations = new();
+    private readonly ConcurrentQueue<(string Name, string Zone, ulong? Id, DateTimeOffset At)> _preemptedOperations = new();
+    private long _nextInstanceId = 1000;
+    private int _preemptionRecordedAtLookup = 1;
+
+    /// <summary>Issue #91: Compute records a preemption a moment after the instance is gone: a look before the <paramref name="lookup"/>th one finds nothing (default 1: visible at once).</summary>
+    public FakeGcp WithPreemptionVisibleFromLookup(int lookup)
+    {
+        _preemptionRecordedAtLookup = lookup;
+        return this;
+    }
+
+    /// <summary>Issue #91: Compute recorded a preemption of the named VM, as if it had been taken back (the id is the current incarnation's, or unknown when no such VM exists).</summary>
+    public void RecordPreemptionOf(string vmName, string zone)
+        => _preemptedOperations.Enqueue((vmName, zone, _vms.TryGetValue((vmName, zone), out var vm) ? vm.InstanceId : null, _timeProvider.GetUtcNow()));
+
+    /// <summary>Issue #91: an old preemption record for a name and zone, left by an EARLIER incarnation (<paramref name="instanceId"/>), which must never count for a newer VM of the same name.</summary>
+    public FakeGcp WithStalePreemptionRecord(string vmName, string zone, ulong instanceId, DateTimeOffset at)
+    {
+        _preemptedOperations.Enqueue((vmName, zone, instanceId, at));
+        return this;
+    }
 
     /// <summary>
     /// Issue #91: the next <paramref name="count"/> on-demand VMs created are lost at their first look (<c>TERMINATED</c>, never answering) and Compute records NO
@@ -774,16 +794,25 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>How many times <see cref="WasPreemptedAsync"/> was asked (issue #91).</summary>
     public int PreemptionLookups => Volatile.Read(ref _preemptionLookups);
 
-    public Task<bool> WasPreemptedAsync(string vmName, string zone, CancellationToken cancellationToken)
+    public Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
-        Interlocked.Increment(ref _preemptionLookups);
+        var lookup = Interlocked.Increment(ref _preemptionLookups);
         if (_preemptionLookupFails)
         {
             throw Build(CloudErrorKind.Network, null, null, "Could not reach the server; the zone operations could not be read");
         }
 
-        return Task.FromResult(_preemptedOperations.ContainsKey((vmName, zone)));
+        if (lookup < _preemptionRecordedAtLookup || (incarnation.InstanceId is null && incarnation.CreatedAt is null))
+        {
+            return Task.FromResult(false);
+        }
+
+        // The same rule as the real gateway: the instance id when known (form-free), else the name and an operation no older than the VM's creation.
+        var found = _preemptedOperations.Any(op => incarnation.InstanceId is { } id
+            ? op.Id == id
+            : op.Name == vmName && op.Zone == zone && incarnation.CreatedAt is { } created && op.At >= created);
+        return Task.FromResult(found);
     }
 
     public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
@@ -921,7 +950,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow());
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow(), InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
         _vms[key] = vm;
         _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
@@ -1176,7 +1205,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _preemptAt.Remove(key);
             if (_preemptingKeys.TryRemove(key, out _))
             {
-                _preemptedOperations[key] = 0; // Compute records the preemption only for a Spot VM it took back
+                _preemptedOperations.Enqueue((key.vmName, key.zone, vm.InstanceId, _timeProvider.GetUtcNow())); // Compute records the preemption only for a Spot VM it took back
             }
         }
 

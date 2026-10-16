@@ -46,8 +46,8 @@ public sealed class ResilientComputeGateway : IComputeGateway
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.GetVm", token => _inner.GetVmAsync(vmName, zone, token), cancellationToken);
 
-    public Task<bool> WasPreemptedAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.WasPreempted", token => _inner.WasPreemptedAsync(vmName, zone, token), cancellationToken, bypassBreaker: true);
+    public Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.WasPreempted", token => _inner.WasPreemptedAsync(vmName, zone, incarnation, token), cancellationToken, bypassBreaker: true);
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.StopVm", token => _inner.StopVmAsync(vmName, zone, token), cancellationToken, bypassBreaker: true);

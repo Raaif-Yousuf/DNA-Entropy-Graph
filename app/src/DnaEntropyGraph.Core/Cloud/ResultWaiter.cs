@@ -48,6 +48,17 @@ internal enum BootOutcome
 /// </summary>
 internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator)
 {
+    /// <summary>The newest incarnation (instance id, creation time) of each job's VM this waiter has looked at alive: what a preemption lookup is bound to (#91).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, VmIncarnation> _seenIncarnations = new(StringComparer.Ordinal);
+
+    private void Observe(string jobId, VmDescriptor? vm)
+    {
+        if (vm is not null && (vm.InstanceId is not null || vm.CreatedAt is not null))
+        {
+            _seenIncarnations[jobId] = new VmIncarnation(vm.InstanceId, vm.CreatedAt);
+        }
+    }
+
     /// <summary>How long before the VM's own <c>maxRunDuration</c> the default result timeout ends.</summary>
     private static readonly TimeSpan ResultMargin = TimeSpan.FromMinutes(3);
 
@@ -83,6 +94,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             try
             {
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
+                Observe(request.JobId, vm);
                 if (vm is { Status: "RUNNING" })
                 {
                     return (BootOutcome.Running, null);
@@ -274,6 +286,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 }
 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
+                Observe(request.JobId, vm);
                 lastTransient = null;
                 vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
                 platform = PlatformClock.Read(vm?.ServerNow, settings.TimeProvider.GetUtcNow(), settings.StartClock()) ?? platform;
@@ -429,15 +442,30 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         // as a lost VM (its message names the action: start the run again). A preempted VM is deleted whatever the user chose for after a run.
         var preempted = false;
         var lookupFailed = false;
+        _seenIncarnations.TryRemove(request.JobId, out var seen);
         if (request.Spec.Spot && mapped is null && !pastLimit && !terminator.AppRequestedEnd(request.JobId))
         {
-            try
+            // Bound to this VM's own life: the id it was seen with, else the moment it was created (when the run knows it), else nothing (and then nothing is confirmed).
+            var incarnation = seen ?? new VmIncarnation(null, clock?.RunClockStart);
+            for (var look = 1; ; look++)
             {
-                preempted = await calls.CallAsync(token => compute.WasPreemptedAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
-            }
-            catch (CloudOperationException)
-            {
-                lookupFailed = true;
+                try
+                {
+                    preempted = await calls.CallAsync(token => compute.WasPreemptedAsync(request.Spec.VmName, zone, incarnation, token), cancellationToken).ConfigureAwait(false);
+                }
+                catch (CloudOperationException)
+                {
+                    lookupFailed = true;
+                    break;
+                }
+
+                // Compute may record the operation a moment after the instance is gone: look again before concluding "not preempted".
+                if (preempted || look >= settings.PreemptionLookupAttempts)
+                {
+                    break;
+                }
+
+                await settings.DelayAsync(settings.PreemptionLookupInterval, cancellationToken).ConfigureAwait(false);
             }
         }
 

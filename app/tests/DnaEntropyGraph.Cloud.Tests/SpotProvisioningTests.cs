@@ -37,6 +37,7 @@ public class SpotProvisioningTests
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = resultTimeout ?? TimeSpan.FromMilliseconds(200),
+            PreemptionLookupInterval = TimeSpan.FromMilliseconds(1),
             CallTimeout = TimeSpan.FromMilliseconds(100),
             EnsureBucketTimeout = TimeSpan.FromMilliseconds(100),
             CreateTimeout = TimeSpan.FromMilliseconds(100),
@@ -166,6 +167,7 @@ public class SpotProvisioningTests
         var runner = Runner(gcp, repo, TimeSpan.FromSeconds(30));
         var (run, jobId) = await StartRunningAsync(runner, repo, "job-h1a");
 
+        gcp.RecordPreemptionOf($"deg-{jobId}", Zone); // Compute even has a preemption on record for this VM: the app's own Delete still wins
         await runner.DeleteVmAsync(jobId, CancellationToken.None);
         var result = await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
@@ -182,6 +184,7 @@ public class SpotProvisioningTests
         var runner = Runner(gcp, repo, TimeSpan.FromSeconds(30));
         var (run, jobId) = await StartRunningAsync(runner, repo, "job-h1b");
 
+        gcp.RecordPreemptionOf($"deg-{jobId}", Zone);
         await runner.CancelAsync(jobId, CancellationToken.None);
         await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
@@ -207,20 +210,63 @@ public class SpotProvisioningTests
     }
 
     [Fact]
-    public async Task When_this_app_has_asked_to_end_the_VM_even_a_recorded_preemption_is_not_retried()
+    public async Task A_Delete_pressed_before_this_runs_VM_existed_does_not_silence_its_retry()
     {
         var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
         var gcp = new FakeGcp(time).WithSpotPreemptions(1);
         var repo = new InMemoryRunRepository();
         var runner = Runner(gcp, repo);
 
-        await runner.DeleteVmAsync("job-h1e", CancellationToken.None); // the person pressed Delete VM now: from here a gone VM is this app's doing
+        await runner.DeleteVmAsync("job-h1e", CancellationToken.None); // an earlier, kept-alive VM of this job was deleted by hand: nothing to do with the VM about to exist
         var result = await runner.RunAsync(TestInputs.Request("job-h1e", Spec("job-h1e", spot: true)), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        gcp.CreatedSpecs.Select(s => s.Spot).ShouldBe([true, false]);
+        LastRow(repo, "job-h1e").PreemptionCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_preemption_recorded_a_moment_late_is_still_found_on_the_third_look()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
+        var gcp = new FakeGcp(time).WithSpotPreemptions(1).WithPreemptionVisibleFromLookup(3);
+        var repo = new InMemoryRunRepository();
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-l3", Spec("job-l3", spot: true)), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        gcp.PreemptionLookups.ShouldBe(3);
+        gcp.CreatedSpecs.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_preemption_never_recorded_is_asked_about_exactly_three_times_and_not_retried()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-16T08:00:00Z"));
+        var gcp = new FakeGcp(time).WithSpotPreemptions(1).WithPreemptionVisibleFromLookup(99);
+        var repo = new InMemoryRunRepository();
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-l4", Spec("job-l4", spot: true)), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        gcp.PreemptionLookups.ShouldBe(3);
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_old_preemption_record_for_the_same_name_does_not_count_for_a_new_VM()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never).WithStalePreemptionRecord("deg-job-h2b", Zone, instanceId: 1, at: DateTimeOffset.Parse("2020-01-01T00:00:00Z"));
+        var repo = new InMemoryRunRepository();
+        var runner = Runner(gcp, repo, TimeSpan.FromSeconds(30));
+        var (run, jobId) = await StartRunningAsync(runner, repo, "job-h2b");
+
+        await gcp.DeleteVmAsync($"deg-{jobId}", Zone, CancellationToken.None); // gone with no preemption of THIS VM on record
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         gcp.CreatedSpecs.Count.ShouldBe(1);
-        gcp.PreemptionLookups.ShouldBe(0);
-        LastRow(repo, "job-h1e").PreemptionCount.ShouldBe(0);
+        LastRow(repo, jobId).PreemptionCount.ShouldBe(0);
     }
 
     [Fact]

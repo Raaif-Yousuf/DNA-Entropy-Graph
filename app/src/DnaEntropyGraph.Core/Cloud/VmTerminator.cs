@@ -16,7 +16,13 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// </summary>
     public void NoteAppRequestedEnd(string jobId) => _appRequestedEnds[jobId] = 0;
 
-    /// <summary>True once <see cref="NoteAppRequestedEnd"/> was called for the job.</summary>
+    /// <summary>
+    /// Forgets the mark. The runner calls it just before it provisions a job's first VM: a Stop or Delete the person pressed on an earlier VM of this job (a kept-alive
+    /// one) says nothing about the VM about to exist, and must not silence its retry for the rest of the process. A Stop, Delete or cancel DURING the run sets it again.
+    /// </summary>
+    public void ClearAppRequestedEnd(string jobId) => _appRequestedEnds.TryRemove(jobId, out _);
+
+    /// <summary>True once <see cref="NoteAppRequestedEnd"/> was called for the job (and not cleared since).</summary>
     public bool AppRequestedEnd(string jobId) => _appRequestedEnds.ContainsKey(jobId);
 
     /// <summary>

@@ -130,11 +130,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         return children.ToList();
     }
 
-    /// <summary>
-    /// Lists the objects under the prefix (one page at a time) and deletes each by its exact name; one already gone (404) counts as deleted. A prefix that is
-    /// not a folder path is refused before any request (<see cref="StoragePrefixes.RequireDeletable"/>), so a typo can never empty the bucket. Each delete is one
-    /// HTTP request through the pipeline; a failure stops the sweep and throws, leaving the rest in place for the caller's read-back to report.
-    /// </summary>
+    /// <summary>Issue #91: deletes exactly one object by its exact name; one already gone (404) counts as deleted. One HTTP request through the pipeline.</summary>
     public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync(
             "Storage.DeleteObject",
@@ -157,6 +153,11 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             bypassBreaker: true,
             singleRequest: true);
 
+    /// <summary>
+    /// Lists the objects under the prefix (one page at a time) and deletes each by its exact name; one already gone (404) counts as deleted. A prefix that is
+    /// not a folder path is refused before any request (<see cref="StoragePrefixes.RequireDeletable"/>), so a typo can never empty the bucket. Each delete is one
+    /// HTTP request through the pipeline; a failure stops the sweep and throws, leaving the rest in place for the caller's read-back to report.
+    /// </summary>
     public async Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
     {
         StoragePrefixes.RequireDeletable(prefix);

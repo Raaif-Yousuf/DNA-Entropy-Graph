@@ -432,12 +432,20 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);
 
     /// <summary>
-    /// Issue #91: <c>zoneOperations.list</c> filtered to the preemption operation on this instance. The answer is also checked on the client (operation type and
-    /// target), so a filter Compute reads more loosely than meant can never turn another operation into a "preemption". THEORY (unverified, no live project): that
-    /// a preempted instance records an operation of type <c>compute.instances.preempted</c> whose <c>targetLink</c> is the instance, and that this filter syntax matches (ToTest row #91).
+    /// Issue #91: <c>zoneOperations.list</c> filtered on the operation TYPE only, then matched on the client to this VM's incarnation: by the instance's numeric id
+    /// (<c>targetId</c>, unique per incarnation and form-free) when the run saw the VM alive, else by the target's name and an operation no older than the VM's creation.
+    /// With neither an id nor a creation time nothing bounds the question and the answer is false. No server filter names the target, so a difference in how Compute spells
+    /// the target link can never hide a real preemption. THEORY (unverified, no live project): that a preempted instance records an operation of type
+    /// <c>compute.instances.preempted</c> with <c>targetId</c> set to the instance id, and that the type filter syntax matches (ToTest row #91).
     /// </summary>
-    public async Task<bool> WasPreemptedAsync(string vmName, string zone, CancellationToken cancellationToken)
+    public async Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(incarnation);
+        if (incarnation.InstanceId is null && incarnation.CreatedAt is null)
+        {
+            return false;
+        }
+
         var project = RequireProject();
         var targetSuffix = $"/zones/{zone}/instances/{vmName}";
         string? pageToken = null;
@@ -449,13 +457,13 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 token =>
                 {
                     var request = _service.ZoneOperations.List(project, zone);
-                    request.Filter = $"(operationType = \"{PreemptedOperationType}\") (targetLink = \"https://www.googleapis.com/compute/v1/projects/{project}{targetSuffix}\")";
+                    request.Filter = $"operationType = \"{PreemptedOperationType}\"";
                     request.PageToken = requestedToken;
                     return request.ExecuteAsync(token);
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            if (operations.Items?.Any(o => string.Equals(o.OperationType, PreemptedOperationType, StringComparison.Ordinal) && o.TargetLink?.EndsWith(targetSuffix, StringComparison.Ordinal) == true) == true)
+            if (operations.Items?.Any(o => IsPreemptionOfIncarnation(o, targetSuffix, incarnation)) == true)
             {
                 return true;
             }
@@ -468,6 +476,24 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         }
 
         return false;
+    }
+
+    private static bool IsPreemptionOfIncarnation(ComputeData.Operation operation, string targetSuffix, VmIncarnation incarnation)
+    {
+        if (!string.Equals(operation.OperationType, PreemptedOperationType, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (incarnation.InstanceId is { } id)
+        {
+            return operation.TargetId == id;
+        }
+
+        return operation.TargetLink?.EndsWith(targetSuffix, StringComparison.Ordinal) == true
+            && ParseTime(operation.InsertTime) is { } inserted
+            && incarnation.CreatedAt is { } created
+            && inserted >= created;
     }
 
     private const string PreemptedOperationType = "compute.instances.preempted";
@@ -707,7 +733,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             instance.Labels is null ? null : new Dictionary<string, string>(instance.Labels),
             ParseTime(instance.LastStopTimestamp),
             ZoneName(instance.MachineType),
-            ParseTime(instance.LastStartTimestamp));
+            ParseTime(instance.LastStartTimestamp),
+            InstanceId: instance.Id);
 
     /// <summary>The zone name from a zone URL (<c>.../zones/us-central1-a</c>) or an aggregated-list key (<c>zones/us-central1-a</c>).</summary>
     private static string? ZoneName(string? url)
