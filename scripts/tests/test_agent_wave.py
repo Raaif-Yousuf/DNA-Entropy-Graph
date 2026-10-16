@@ -30,7 +30,9 @@ pytestmark = pytest.mark.skipif(PWSH is None, reason="pwsh (PowerShell 7+) not f
 def _run(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT), *args],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -56,6 +58,7 @@ def _init_repo(root: Path) -> None:
 # ---------------------------------------------------------------------------
 # Self-test bridge and --help
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(
     os.name != "nt",
@@ -87,14 +90,18 @@ def test_no_command_given_is_a_usage_error():
 # -Start: spec validation, overlap refusal, dry run vs -Apply
 # ---------------------------------------------------------------------------
 
+
 def test_start_dry_run_on_disjoint_spec_succeeds_and_writes_nothing(tmp_path):
-    spec_path = _write_spec(tmp_path / "spec.json", {
-        "name": "pytest-wave-a",
-        "agents": [
-            {"name": "a", "issues": [1], "ownedPaths": ["scripts/**"]},
-            {"name": "b", "issues": [], "ownedPaths": ["docs/**"]},
-        ],
-    })
+    spec_path = _write_spec(
+        tmp_path / "spec.json",
+        {
+            "name": "pytest-wave-a",
+            "agents": [
+                {"name": "a", "issues": [1], "ownedPaths": ["scripts/**"]},
+                {"name": "b", "issues": [], "ownedPaths": ["docs/**"]},
+            ],
+        },
+    )
     out_dir = tmp_path / "out"
     proc = _run("-Start", "-SpecFile", str(spec_path), "-OutputDir", str(out_dir))
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -103,13 +110,16 @@ def test_start_dry_run_on_disjoint_spec_succeeds_and_writes_nothing(tmp_path):
 
 
 def test_start_refuses_an_overlapping_spec(tmp_path):
-    spec_path = _write_spec(tmp_path / "spec.json", {
-        "name": "pytest-wave-overlap",
-        "agents": [
-            {"name": "worker-a", "issues": [], "ownedPaths": ["worker/**"]},
-            {"name": "worker-b", "issues": [], "ownedPaths": ["worker/src/dna_entropy/worker/**"]},
-        ],
-    })
+    spec_path = _write_spec(
+        tmp_path / "spec.json",
+        {
+            "name": "pytest-wave-overlap",
+            "agents": [
+                {"name": "worker-a", "issues": [], "ownedPaths": ["worker/**"]},
+                {"name": "worker-b", "issues": [], "ownedPaths": ["worker/src/dna_entropy/worker/**"]},
+            ],
+        },
+    )
     proc = _run("-Start", "-SpecFile", str(spec_path), "-OutputDir", str(tmp_path / "out"))
     assert proc.returncode == 1
     assert "REFUSING" in proc.stdout
@@ -119,27 +129,32 @@ def test_start_refuses_an_overlapping_spec(tmp_path):
 def test_start_excluded_path_carve_out_is_not_a_false_overlap(tmp_path):
     """The real shape this repo hit: one agent owns a whole directory except
     a single file another agent owns for this round."""
-    spec_path = _write_spec(tmp_path / "spec.json", {
-        "name": "pytest-wave-carveout",
-        "agents": [
-            {"name": "scripts", "issues": [], "ownedPaths": ["scripts/**"],
-             "excludedPaths": ["scripts/gen_manifest_schema.py"]},
-            {"name": "worker", "issues": [], "ownedPaths": ["worker/**", "scripts/gen_manifest_schema.py"]},
-        ],
-    })
+    spec_path = _write_spec(
+        tmp_path / "spec.json",
+        {
+            "name": "pytest-wave-carveout",
+            "agents": [
+                {"name": "scripts", "issues": [], "ownedPaths": ["scripts/**"], "excludedPaths": ["scripts/gen_manifest_schema.py"]},
+                {"name": "worker", "issues": [], "ownedPaths": ["worker/**", "scripts/gen_manifest_schema.py"]},
+            ],
+        },
+    )
     proc = _run("-Start", "-SpecFile", str(spec_path), "-OutputDir", str(tmp_path / "out"))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "no path overlaps" in proc.stdout
 
 
 def test_start_apply_writes_briefs_and_reserves_basetemp_then_down_cleans_up(tmp_path):
-    spec_path = _write_spec(tmp_path / "spec.json", {
-        "name": "pytest-wave-apply",
-        "agents": [
-            {"name": "a", "issues": [7], "ownedPaths": ["scripts/**"], "notes": "do the thing"},
-            {"name": "b", "issues": [], "ownedPaths": ["docs/**"]},
-        ],
-    })
+    spec_path = _write_spec(
+        tmp_path / "spec.json",
+        {
+            "name": "pytest-wave-apply",
+            "agents": [
+                {"name": "a", "issues": [7], "ownedPaths": ["scripts/**"], "notes": "do the thing"},
+                {"name": "b", "issues": [], "ownedPaths": ["docs/**"]},
+            ],
+        },
+    )
     out_dir = tmp_path / "out"
 
     proc = _run("-Start", "-SpecFile", str(spec_path), "-OutputDir", str(out_dir), "-Apply")
@@ -171,10 +186,13 @@ def test_start_apply_writes_briefs_and_reserves_basetemp_then_down_cleans_up(tmp
 
 
 def test_start_whatif_overrides_apply(tmp_path):
-    spec_path = _write_spec(tmp_path / "spec.json", {
-        "name": "pytest-wave-whatif",
-        "agents": [{"name": "a", "issues": [], "ownedPaths": ["scripts/**"]}],
-    })
+    spec_path = _write_spec(
+        tmp_path / "spec.json",
+        {
+            "name": "pytest-wave-whatif",
+            "agents": [{"name": "a", "issues": [], "ownedPaths": ["scripts/**"]}],
+        },
+    )
     out_dir = tmp_path / "out"
     proc = _run("-Start", "-SpecFile", str(spec_path), "-OutputDir", str(out_dir), "-Apply", "-WhatIf")
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -197,6 +215,7 @@ def test_start_malformed_spec_errors(tmp_path):
 # -Status: the recovery report, against a throwaway repo (never this one)
 # ---------------------------------------------------------------------------
 
+
 def test_status_buckets_uncommitted_files_by_owner_and_flags_unclaimed(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -207,13 +226,16 @@ def test_status_buckets_uncommitted_files_by_owner_and_flags_unclaimed(tmp_path)
     (repo / "docs" / "notes.md").write_text("notes\n", encoding="utf-8")
     (repo / "random_top_level_file.txt").write_text("nobody owns this\n", encoding="utf-8")
 
-    spec_path = _write_spec(tmp_path / "spec.json", {
-        "name": "pytest-wave-status",
-        "agents": [
-            {"name": "scripts", "issues": [], "ownedPaths": ["scripts/**"]},
-            {"name": "docs", "issues": [], "ownedPaths": ["docs/**"]},
-        ],
-    })
+    spec_path = _write_spec(
+        tmp_path / "spec.json",
+        {
+            "name": "pytest-wave-status",
+            "agents": [
+                {"name": "scripts", "issues": [], "ownedPaths": ["scripts/**"]},
+                {"name": "docs", "issues": [], "ownedPaths": ["docs/**"]},
+            ],
+        },
+    )
 
     proc = _run("-Status", "-SpecFile", str(spec_path), "-RepoRoot", str(repo), "-Repo", "")
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -229,10 +251,13 @@ def test_status_reports_no_unclaimed_when_everything_is_owned(tmp_path):
     (repo / "scripts").mkdir()
     (repo / "scripts" / "a.py").write_text("# a\n", encoding="utf-8")
 
-    spec_path = _write_spec(tmp_path / "spec.json", {
-        "name": "pytest-wave-status-clean",
-        "agents": [{"name": "scripts", "issues": [], "ownedPaths": ["scripts/**"]}],
-    })
+    spec_path = _write_spec(
+        tmp_path / "spec.json",
+        {
+            "name": "pytest-wave-status-clean",
+            "agents": [{"name": "scripts", "issues": [], "ownedPaths": ["scripts/**"]}],
+        },
+    )
 
     proc = _run("-Status", "-SpecFile", str(spec_path), "-RepoRoot", str(repo), "-Repo", "")
     assert proc.returncode == 0, proc.stdout + proc.stderr

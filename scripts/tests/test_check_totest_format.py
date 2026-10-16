@@ -16,7 +16,9 @@ import check_totest_format as ctf  # noqa: E402
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_totest_format.py"), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -25,7 +27,9 @@ def test_self_test_passes():
 def test_help_exits_zero_and_documents_max_age():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_totest_format.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert "--max-age-days" in proc.stdout

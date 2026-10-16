@@ -44,6 +44,7 @@ def _memory_file(name: str, memory_type: str, body: str) -> tuple[str, str]:
 # find_secrets() / the pattern set itself
 # ---------------------------------------------------------------------------
 
+
 def test_self_test_passes():
     assert sm.self_test() is True
 
@@ -96,10 +97,7 @@ def test_find_secrets_flags_email_with_line_number():
 
 
 def test_find_secrets_does_not_flag_ordinary_prose():
-    text = (
-        "evo2 returns a nested tuple; unwrap it before indexing.\n"
-        "the fix landed in worker/src/dna_entropy/cli.py, see #123.\n"
-    )
+    text = "evo2 returns a nested tuple; unwrap it before indexing.\nthe fix landed in worker/src/dna_entropy/cli.py, see #123.\n"
     assert sm.find_secrets(text) == []
 
 
@@ -119,6 +117,7 @@ def test_find_secrets_does_not_flag_scrubbed_placeholder_paths():
 # find_live_dir() honours the override
 # ---------------------------------------------------------------------------
 
+
 def test_find_live_dir_honours_env_override(live_and_mirror):
     live, _mirror = live_and_mirror
     assert sm.find_live_dir() == live
@@ -132,6 +131,7 @@ def test_find_live_dir_none_when_override_missing(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # run("push", ...): the secret scan is the point of this whole script
 # ---------------------------------------------------------------------------
+
 
 def test_push_refuses_whole_batch_when_one_file_has_a_secret(live_and_mirror):
     live, mirror = live_and_mirror
@@ -150,9 +150,7 @@ def test_push_refuses_whole_batch_when_one_file_has_a_secret(live_and_mirror):
 def test_push_hand_planted_email_produces_refusal_not_silent_push(live_and_mirror):
     """The exact scenario issue #273 names as the observable proof."""
     live, mirror = live_and_mirror
-    name, content = _memory_file(
-        "note", "reference", "- lesson: reach out to owner@example.com if this recurs\n"
-    )
+    name, content = _memory_file("note", "reference", "- lesson: reach out to owner@example.com if this recurs\n")
     (live / name).write_text(content, encoding="utf-8")
 
     rc = sm.run("push", apply_changes=True)
@@ -208,6 +206,7 @@ def test_push_with_no_candidate_files_is_a_clean_noop(live_and_mirror):
 # ---------------------------------------------------------------------------
 # read_memory_type() / classify_memory_file(): the frontmatter reader itself
 # ---------------------------------------------------------------------------
+
 
 def _write(tmp_path: Path, text: str) -> Path:
     p = tmp_path / "m.md"
@@ -305,6 +304,7 @@ def test_classify_memory_file_unrecognised_type_is_personal(tmp_path):
 # run("push", ...): the personal-memory filter (issue #302)
 # ---------------------------------------------------------------------------
 
+
 def test_push_skips_feedback_type_by_default(live_and_mirror):
     live, mirror = live_and_mirror
     name, content = _memory_file("prefs", "feedback", "- notes about how the owner likes things run\n")
@@ -399,6 +399,7 @@ def test_push_dry_run_reports_personal_skip_without_writing(live_and_mirror, cap
 # MEMORY.md: never synced in either direction (issue #302)
 # ---------------------------------------------------------------------------
 
+
 def test_push_never_overwrites_mirror_memory_index(live_and_mirror, capsys):
     live, mirror = live_and_mirror
     (mirror / "MEMORY.md").write_text("- curated index of this repo's lesson files\n", encoding="utf-8")
@@ -442,13 +443,12 @@ def test_push_still_publishes_other_files_when_memory_index_present(live_and_mir
 # run("pull", ...): unscanned by design (see module docstring)
 # ---------------------------------------------------------------------------
 
+
 def test_pull_copies_mirror_to_live_without_scanning(live_and_mirror):
     live, mirror = live_and_mirror
     # Even a mirror file that WOULD be flagged on push is not blocked on
     # pull: it is already committed content, not a new exposure.
-    (mirror / "already-committed.md").write_text(
-        "contact a.researcher@university.example\n", encoding="utf-8"
-    )
+    (mirror / "already-committed.md").write_text("contact a.researcher@university.example\n", encoding="utf-8")
 
     rc = sm.run("pull", apply_changes=True)
 
@@ -477,6 +477,7 @@ def test_pull_missing_live_dir_is_not_an_error(tmp_path, monkeypatch):
 # compare()
 # ---------------------------------------------------------------------------
 
+
 def test_compare_reports_new_changed_and_dst_only(tmp_path):
     src = tmp_path / "src"
     dst = tmp_path / "dst"
@@ -497,10 +498,13 @@ def test_compare_reports_new_changed_and_dst_only(tmp_path):
 # CLI surface
 # ---------------------------------------------------------------------------
 
+
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "sync_memory.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert "--dry-run" in proc.stdout
@@ -510,7 +514,9 @@ def test_help_exits_zero():
 def test_cli_self_test_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "sync_memory.py"), "--self-test"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert "PASS" in proc.stdout
@@ -519,7 +525,9 @@ def test_cli_self_test_exits_zero():
 def test_cli_list_patterns_exits_zero_and_lists_every_pattern():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "sync_memory.py"), "--list-patterns"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     for spec in sm.SECRET_PATTERNS:
@@ -529,7 +537,9 @@ def test_cli_list_patterns_exits_zero_and_lists_every_pattern():
 def test_cli_requires_a_mode_flag():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "sync_memory.py")],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2
 
@@ -537,7 +547,9 @@ def test_cli_requires_a_mode_flag():
 def test_cli_allow_flagged_skip_without_push_errors():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "sync_memory.py"), "--pull", "--allow-flagged-skip"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2
 
@@ -548,12 +560,16 @@ def test_cli_push_end_to_end_refuses_on_planted_secret(live_and_mirror):
     (live / name).write_text(content, encoding="utf-8")
 
     import os
+
     full_env = dict(os.environ)
     full_env["DEG_MEMORY_DIR"] = str(live)
 
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "sync_memory.py"), "--push"],
-        capture_output=True, text=True, timeout=15, env=full_env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=full_env,
         cwd=str(SCRIPTS_DIR.parent),
     )
     # NOTE: the subprocess re-imports the module fresh, so MIRROR_DIR is the
