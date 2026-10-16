@@ -34,6 +34,9 @@ public static class NavigationRoutes
         // Issue #99: the first-run wizard (steps 1 to 8 as OK/Fix rows). Reached from the status pill in the title bar.
         navigationService.RegisterPage("Wizard", typeof(WizardPage));
 
+        // Issue #105: what this installation has in the project (computers, disks, results online) with Stop / Start / Delete. The nav item's Tag is "Cloud".
+        navigationService.RegisterPage("Cloud", typeof(CloudPage));
+
         // Issue #490: every destination without a page of its own lands on one
         // generic "not built yet" page rather than an empty frame.
         navigationService.RegisterFallbackPage(typeof(PlaceholderPage));

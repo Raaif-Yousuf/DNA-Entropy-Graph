@@ -883,6 +883,19 @@ def test_build_output_names_only_count_at_known_roots(world):
     assert any(k.path.name == "lane-data" and "ignored" in k.reason and "data/obj" in k.reason for k in report.kept)
 
 
+@pytest.mark.parametrize(
+    "rel",
+    ["app/tools/DnaEntropyGraph.CloudCli/obj/x.cs", ".hypothesis/examples/a", "worker/.hypothesis/constants/b"],
+)
+def test_tool_project_output_and_hypothesis_cache_count_as_build_output(world, rel):
+    wt = world.add_worktree("lane-tools")
+    world.exclude(wt, "obj/", ".hypothesis/")
+    (wt / rel).parent.mkdir(parents=True)
+    (wt / rel).write_bytes(b"generated\n")
+    _run(world, apply=True)
+    assert not wt.exists()
+
+
 def test_a_real_directory_at_worker_venv_is_not_waved_through(world):
     wt = world.add_worktree("lane-realvenv")
     (wt / "worker" / ".venv").mkdir()

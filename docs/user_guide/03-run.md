@@ -21,6 +21,13 @@ On the **New run** page, either:
 - Open **Paste a sequence**, type or paste letters, a FASTA record, or the path of a file, and
   click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
   letters are saved in the app's own folder, never next to your files.
+- Open **Fetch from NCBI**, type an accession such as `NC_045512.2` (and, if you want only part of the
+  record, the first and last base), and click **Fetch record**. The app asks NCBI, from your own PC,
+  whether that record exists and how long it is, so a mistyped accession, or a record too large for one
+  run, is refused on the spot and nothing is rented. The list then shows it as an NCBI record with its
+  base count, and the estimate uses that count. The record itself is downloaded by the rented computer
+  when the run starts. Its results go in a folder named after the accession, version and range
+  (for example `NC_045512_2_100-500`). The Runs page search finds the run by its accession.
 
 You can add more than one file at once. For now each press of **Run** runs the file you
 have selected in the list (running several files together as one batch is not built yet),
@@ -37,6 +44,16 @@ file extension, so a renamed file still works. An EMBL file (`.embl`) or a SnapG
 If a gene in a GenBank file has a position that cannot be read (for example `abc` or `1..?`), the file still counts as ready. The file's line says how many genes were left out, and the run uses the rest. Fix the position in the file (for example `1..42` or `complement(85..126)`) and add the file again to include them. A position that is broken in a way the worker cannot step over (for example `join()`) refuses the file before anything is created, with the same advice to re-export it.
 
 If you have a FASTA file and a GFF3 file that lists its genes, drop them together, or choose **Add GFF3** under the file list. The app pairs a GFF3 with the FASTA that has the same name (plasmid.fasta and plasmid.gff3), or with the only FASTA on the page. With several FASTA files and no matching name, select the FASTA file first and then choose **Add GFF3**. The file's line then shows how many genes the GFF3 has, and the run uses those genes instead of finding them itself. **Remove GFF3** takes it off again. A GFF3 whose sequence names do not match the FASTA, or whose genes all run past the end of the sequence, is refused before anything is created, with one thing to fix. Running again from the Runs page uses the same GFF3. This needs a worker version that reads GFF3 files; until then the button does not appear.
+
+If you have an NCBI accession (for example `NC_045512.2`) instead of a file, the worker can download the record for you and run it like a GenBank file: `dna-entropy run --accession NC_045512.2 --name my_run`. The accession and the download date are recorded in the run's `provenance.json`. An accession without a version (`NC_045512`) gets NCBI's current version, and the run records which version that was. If NCBI is busy the worker retries once, then tells you to wait and try again; a record larger than 64 MiB needs `--accession-range` to fetch just the part you want. In the app, use **Fetch from NCBI** on this page (above).
+
+If your genes come as a separate GFF3 file next to a FASTA file, the worker can use them instead of predicting genes: `dna-entropy run -i my.fasta --gff3 my.gff3 --name my_run`. The names in the GFF3's first column must match the names in the FASTA headers. If a sequence is circular, say so in the GFF3 (`Is_circular=true` on its `region` line) or run with `--topology circular`, so a gene that crosses the start of the sequence is kept instead of dropped. Pairing the two files in the app is not built yet.
+
+The worker also reads EMBL files (`.embl`) and SnapGene files (`.dna`) the same way as GenBank, using the genes the file already has. The app's own file picker does not offer these two yet, so for now export from SnapGene as GenBank when using the app.
+
+If a gene in a GenBank or EMBL file has a position the worker cannot read (for example `abc` or `1..?`), the run still finishes with the other genes and tells you, in its notices, how many genes were left out and what their positions said. Correct the position in the file (for example `1..42`) and run again to include them.
+
+If your sequence is circular (a plasmid) and a gene runs across the point where the sequence starts and ends, the .gb and genes.gff3 files the run writes show that gene in two pieces (for example join(120..126,1..10)) instead of as the whole plasmid, so SnapGene, Benchling and IGV draw it where it is. If a gene's own position cannot be read but its protein-coding (CDS) entry has the same gene name, the worker uses the CDS entry for that gene and says so in its notices.
 
 Two optional extra files need no model and no graphics card: a GC-content track (`--gc`, how G/C-rich each stretch is) and a codon-usage table per gene (`--codons`). They are off by default. The app does not offer them as checkboxes yet.
 
@@ -65,12 +82,19 @@ reasonable for most sequences.
 - **Model**: which version of the analysis model to use. The default, `evo2_7b`, is the
   right choice for almost everyone. Bigger models exist and cost more; the app will warn
   you and ask you to confirm before using one.
+- **Graphics card (GPU)**: under **Model and graphics card (GPU)** you can choose which rented graphics card the run uses. **Automatic** is the
+  cheapest one that can run the model and is the right choice for almost everyone. The list also offers an A100 with 40 GB or 80 GB, which costs more
+  and is only worth it for very long sequences; the **Estimate** line follows the card you pick. When more than one model is offered, the
+  model picker appears here too, and the two are linked: choosing a model that needs a bigger card switches the card for you (a line under the
+  pickers says so), and choosing a card switches the model if it cannot run the current one. A card that cannot run the chosen model shows a
+  lock and says why. **Lock model** and **Lock graphics card** keep one choice where it is; if that makes a pair that will not run, the
+  page warns you and **Run** waits until you tick **Run anyway**.
 - **Find genes**: on by default for pasted or FASTA sequences (this predicts gene
   locations for you); off automatically for GenBank input, since a GenBank file already
   has its own genes recorded, and those are used instead.
 - **Files you get back**: under the file list there is one tick box for each result file you can ask for (the
   list is the same for a GenBank file and for a FASTA or pasted sequence). Everything is ticked except the WIG
-  track and the two large tables of the model's probability for every base, which you tick only if you want them. Your choice is
+  track, the two large tables of the model's probability for every base, the GC percent track and the codon usage table, which you tick only if you want them. Your choice is
   remembered separately for GenBank files and for FASTA or pasted sequences, and the next time you add a file of
   that kind the same boxes are ticked. If you clear every box, the page asks you to tick at least one file before
   **Run** works. The entropy track comes in one format per run, so the IGV track and the WIG track are alternatives: ticking one clears the other. See
