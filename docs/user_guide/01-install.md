@@ -65,7 +65,7 @@ A copy of the app that did not come from the installer cannot update itself; dow
 
 ## Running from a USB stick (portable)
 
-To keep everything beside the program instead of in your user folder, create an empty file named `portable.flag` in the same folder as `DnaEntropyGraph.App.exe` and start the app. Your history, settings and saved input copies then live in a `data` folder next to it, and you can carry the whole folder to another PC. Your Google sign-in does not travel (Windows locks it to you on one PC), so on the new PC press Sign in again.
+To keep everything beside the program instead of in your user folder, create an empty file named `portable.flag` in the same folder as `DnaEntropyGraph.App.exe` and start the app. Your history, settings and saved input copies then live in a `data` folder next to it, your results go to an `outputs` folder there too, and you can carry the whole folder to another PC. If you installed with Setup.exe, put the file next to `Update.exe`, one level above the program folder, so updates keep it. Open with in Settings is not available in this mode. Your Google sign-in does not travel (Windows locks it to you on one PC), so on the new PC press Sign in again.
 
 ## Related
 

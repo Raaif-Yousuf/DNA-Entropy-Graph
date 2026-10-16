@@ -171,6 +171,27 @@ public sealed class DataFolderOverrideTests : IDisposable
         }
     }
     [Fact]
+    public async Task In_portable_mode_the_real_services_store_paths_relative_use_the_delete_journal()
+    {
+        // Issue #144: the DI graph is what wires the mapper, the journal choice and the default output folder to the portable root.
+        var program = Path.Combine(_scratch, "stick");
+        Directory.CreateDirectory(program);
+        File.WriteAllText(Path.Combine(program, AppDataRoot.PortableFlagFileName), string.Empty);
+        var root = AppDataRoot.Resolve([], _ => null, Path.GetTempPath(), programDirectory: program);
+        root.IsPortable.ShouldBeTrue();
+        await using var provider = Build(root);
+
+        var outputs = Path.Combine(program, "outputs", "run");
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(new RunRecord("j", JobPhase.Completed, DateTimeOffset.UtcNow) { OutputDir = outputs }, TestContext.Current.CancellationToken);
+
+        using var connection = provider.GetRequiredService<DnaEntropyGraph.Persistence.SqliteDatabase>().OpenConnection();
+        using var raw = connection.CreateCommand();
+        raw.CommandText = "SELECT OutputDir FROM Runs;";
+        ((string)raw.ExecuteScalar()!).ShouldBe(@"portable:outputs\run");
+        raw.CommandText = "PRAGMA journal_mode;";
+        ((string)raw.ExecuteScalar()!).ShouldBe("delete");
+    }
+    [Fact]
     public void Only_AppDataRoot_names_the_portable_flag()
     {
         var users = RepoPaths.AllCSharpFiles
