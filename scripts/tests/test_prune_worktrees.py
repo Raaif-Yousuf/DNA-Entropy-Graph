@@ -96,6 +96,23 @@ class World:
         _git(self.clone, "push", "-q", "origin", f"{sha}:refs/heads/main")
         _git(self.clone, "fetch", "-q", "origin")
 
+    def exclude(self, wt: Path, *patterns: str) -> None:
+        """Ignore patterns for every worktree of this repo (info/exclude lives in the common dir)."""
+        common = Path(_git(wt, "rev-parse", "--git-common-dir"))
+        common = common if common.is_absolute() else wt / common
+        (common / "info").mkdir(parents=True, exist_ok=True)
+        with (common / "info" / "exclude").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(patterns) + "\n")
+
+    def advance_main(self) -> None:
+        _git(self.clone, "switch", "-q", "--detach", "origin/main")
+        (self.clone / "adv.txt").write_bytes(b"adv\n")
+        _git(self.clone, "add", "--", "adv.txt")
+        _git(self.clone, "commit", "-q", "-m", "main moves")
+        _git(self.clone, "push", "-q", "origin", "HEAD:refs/heads/main")
+        _git(self.clone, "fetch", "-q", "origin")
+        _git(self.clone, "switch", "-q", "-")
+
     def registered(self) -> list[str]:
         return [ln[len("worktree ") :] for ln in _git(self.clone, "worktree", "list", "--porcelain").splitlines() if ln.startswith("worktree ")]
 
@@ -249,22 +266,38 @@ def test_detached_head_at_an_ancestor_is_removed_and_a_detached_unmerged_one_is_
 # --- gh ---------------------------------------------------------------------------------------------
 
 
-def test_use_gh_removes_merged_and_closed_pr_branches_keeps_open_ones_in_one_call(world):
+def _pr(wt: Path, state: str, name: str | None = None, oid: str | None = None) -> dict:
+    return {"headRefName": name or wt.name, "state": state, "headRefOid": oid or _git(wt, "rev-parse", "HEAD")}
+
+
+def test_use_gh_removes_merged_pr_branches_keeps_closed_and_open_ones_in_one_call(world):
     merged = world.add_worktree("pr-merged", commit=True)
     closed = world.add_worktree("pr-closed", commit=True)
     opened = world.add_worktree("pr-open", commit=True)
     plain = world.add_worktree("no-pr", commit=True)
-    prs = [
-        {"headRefName": "pr-merged", "state": "MERGED"},
-        {"headRefName": "pr-closed", "state": "CLOSED"},
-        {"headRefName": "pr-open", "state": "OPEN"},
-    ]
+    prs = [_pr(merged, "MERGED"), _pr(closed, "CLOSED"), _pr(opened, "OPEN")]
     report = pw.prune(world.ctx(apply=True, use_gh=True, gh=world.gh_stub(prs)))
-    assert not merged.exists() and not closed.exists()
-    assert opened.is_dir() and plain.is_dir()
+    assert not merged.exists()
+    assert closed.is_dir() and opened.is_dir() and plain.is_dir()  # a CLOSED PR proves nothing landed
     assert any(k.path.name == "pr-open" and "open PR" in k.reason for k in report.kept)
     assert len(world.gh_calls()) == 1  # batched, not one call per worktree
     assert "--state all" in world.gh_calls()[0]
+
+
+def test_a_merged_pr_whose_head_does_not_contain_the_worktree_head_is_not_enough(world):
+    wt = world.add_worktree("pr-stale", commit=True)
+    other = world.add_worktree("pr-other", commit=True)
+    stale_oid = _git(other, "rev-parse", "HEAD")  # a different commit: the lane moved on after the PR merged
+    report = pw.prune(world.ctx(apply=True, use_gh=True, gh=world.gh_stub([_pr(wt, "MERGED", oid=stale_oid)])))
+    assert wt.is_dir() and report.removed == []
+    assert any(k.path.name == "pr-stale" and "not merged" in k.reason for k in report.kept)
+
+
+def test_hitting_the_gh_list_limit_warns(world):
+    a = world.add_worktree("pr-a", commit=True)
+    b = world.add_worktree("pr-b", commit=True)
+    pw.prune(world.ctx(apply=False, use_gh=True, gh_limit=2, gh=world.gh_stub([_pr(a, "OPEN"), _pr(b, "OPEN")])))
+    assert "WARNING" in world.text() and "limit" in world.text()
 
 
 def test_without_use_gh_gh_is_never_run(world):
@@ -304,13 +337,8 @@ def test_venv_junction_does_not_make_a_worktree_dirty_and_is_unlinked_before_git
 @needs_windows
 def test_another_junction_deep_in_the_worktree_is_unlinked_first_too(world):
     wt = world.add_worktree("lane-j2")
-    _junction(wt / "deep" / "er" / "link", world.sentinel)
-    # an untracked junction is untracked content: git sees it, so it is kept as dirty unless ignored
-    (wt / ".git_info_exclude_probe").write_bytes(b"")
-    exclude = Path(_git(wt, "rev-parse", "--git-path", "info/exclude"))
-    exclude = exclude if exclude.is_absolute() else wt / exclude
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    exclude.write_text("deep/\n.git_info_exclude_probe\n", encoding="utf-8", newline="\n")
+    _junction(wt / "obj" / "er" / "link", world.sentinel)
+    world.exclude(wt, "obj/")  # ignored build output: allowed, so the junction inside it is what must be handled
     report = pw.prune(world.ctx(apply=True))
     assert [r.path.name for r in report.removed] == ["lane-j2"]
     assert (world.sentinel / "marker.txt").is_file()
@@ -330,10 +358,12 @@ def test_if_a_junction_cannot_be_unlinked_the_worktree_is_left_in_place(world, m
 # --- orphan landwt dirs --------------------------------------------------------------------------------
 
 
-def _orphan(world: World, name: str, with_junction: bool = True) -> Path:
+def _orphan(world: World, name: str, with_junction: bool = True, seed_commit: bool = False) -> Path:
+    """A directory git does not list but whose `.git` file still reads: a copy of a LOCKED registered worktree."""
+    seed = world.add_worktree(f"seed-{name[:12]}", commit=seed_commit)
+    _git(world.clone, "worktree", "lock", str(seed))
     d = world.tmp_root / name
-    (d / "scripts").mkdir(parents=True)
-    (d / "scripts" / "f.py").write_bytes(b"x\n")
+    shutil.copytree(seed, d)
     if with_junction:
         _junction(d / "worker" / ".venv", world.sentinel)
     return d
@@ -371,6 +401,32 @@ def test_orphan_with_a_live_lock_or_recent_touch_is_kept(world):
     assert live.is_dir() and fresh.is_dir() and report.orphans_removed == []
 
 
+def test_orphan_that_is_dirty_unmerged_misnamed_or_has_no_git_file_is_kept(world):
+    dirty = _orphan(world, "feat-6-x-20261001120000", with_junction=False)
+    (dirty / "mine.txt").write_bytes(b"unsaved\n")
+    unmerged = _orphan(world, "feat-7-x-20261001120000", with_junction=False, seed_commit=True)
+    misnamed = _orphan(world, "not-a-landing-dir", with_junction=False)
+    no_git = world.tmp_root / "feat-8-x-20261001120000"
+    (no_git / "f").mkdir(parents=True)
+    report = _run(world, apply=True)
+    for d in (dirty, unmerged, misnamed, no_git):
+        assert d.is_dir(), d
+    assert report.orphans_removed == []
+    reasons = {o.path.name: o.reason for o in report.orphans_kept}
+    assert "uncommitted" in reasons[dirty.name] and "not merged" in reasons[unmerged.name]
+    assert no_git.name in reasons and misnamed.name in reasons
+
+
+def test_a_tmp_root_not_named_landwt_is_refused_unless_overridden(world, tmp_path):
+    victim = tmp_path / "Documents"
+    keep = victim / "old-project-20200101000000"
+    keep.mkdir(parents=True)
+    assert pw.main(["--no-fetch", "--tmp-root", str(victim), "--apply", "--min-age-hours", "0"], repo=world.clone) == pw.EXIT_USAGE
+    assert keep.is_dir()
+    report = pw.prune(world.ctx(apply=True, tmp_root=victim))  # the library guard holds too
+    assert keep.is_dir() and report.orphans_removed == []
+
+
 def test_a_landwt_dir_that_git_still_lists_is_not_an_orphan(world):
     wt = world.tmp_root / "feat-5-x-20261001120000"
     wt.parent.mkdir(parents=True)
@@ -397,11 +453,15 @@ def test_apply_ends_with_git_worktree_prune_which_clears_a_dangling_registration
 def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world):
     _git(world.clone, "branch", "stale-merged", "origin/main")
     _git(world.clone, "branch", "checked-out-merged", "origin/main")
+    _git(world.clone, "branch", "develop", "origin/main")
+    _git(world.clone, "branch", "release/1.0", "origin/main")
     kept_wt = world.add_worktree("co", branch="checked-out-merged-wt", commit=True)  # unmerged, stays
     _git(kept_wt, "branch", "unmerged-extra")  # same commit as the unmerged worktree head: not an ancestor
     lane = world.add_worktree("lane-x")  # merged, removed: its branch becomes free
     dirty = world.add_worktree("lane-dirty")
     (dirty / "z.txt").write_bytes(b"z\n")  # dirty: stays, so its branch stays
+    world.advance_main()  # the branches above are now STRICT ancestors of origin/main
+    _git(world.clone, "branch", "fresh-lane", "origin/main")  # pre-created lane: points exactly at origin/main
     report = _run(world, apply=False, delete_merged_branches=True)
     assert "stale-merged" in world.branches()  # dry run
     assert sorted(b.branch for b in report.branches_deleted) == sorted(["stale-merged", "checked-out-merged", "lane-x"])
@@ -409,9 +469,27 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
     left = world.branches()
     for gone in ("stale-merged", "checked-out-merged", "lane-x"):
         assert gone not in left
-    for kept in (_git(world.clone, "branch", "--show-current"), "lane-dirty", "checked-out-merged-wt", "unmerged-extra"):
+    for kept in (
+        _git(world.clone, "branch", "--show-current"),
+        "lane-dirty",
+        "checked-out-merged-wt",
+        "unmerged-extra",
+        "fresh-lane",
+        "develop",
+        "release/1.0",
+    ):
         assert kept in left
     del lane
+
+
+def test_delete_merged_branches_also_takes_a_branch_whose_pr_merged_when_gh_is_used(world):
+    wt = world.add_worktree("sq", commit=True)
+    tip = _git(wt, "rev-parse", "HEAD")
+    wt2 = world.add_worktree("sq2")  # a second worktree so `sq` can be removed and freed
+    del wt2
+    pr = [{"headRefName": "sq", "state": "MERGED", "headRefOid": tip}]
+    report = pw.prune(world.ctx(apply=True, use_gh=True, delete_merged_branches=True, gh=world.gh_stub(pr)))
+    assert "sq" in [b.branch for b in report.branches_deleted] and "sq" not in world.branches()
 
 
 def test_without_the_flag_no_branch_is_deleted(world):
@@ -443,3 +521,142 @@ def test_missing_origin_main_refuses_without_changing_anything(world):
     _git(world.clone, "remote", "rename", "origin", "elsewhere")
     assert pw.main(["--no-fetch", "--apply", "--min-age-hours", "0"], repo=world.clone) == pw.EXIT_REFUSED
     assert wt.is_dir()
+
+
+# --- fix round: cold review findings ---------------------------------------------------------------------
+
+
+def test_a_worktree_that_contains_another_worktree_is_kept_so_the_inner_one_is_never_deleted_with_it(world):
+    outer = world.add_worktree("outer")
+    world.exclude(outer, ".claude/")
+    inner = outer / ".claude" / "worktrees" / "inner"
+    _git(outer, "worktree", "add", "-q", "-b", "inner", str(inner), "origin/main")
+    (inner / "work.txt").write_bytes(b"precious\n")  # the inner agent's uncommitted work
+    report = _run(world, apply=True)
+    assert outer.is_dir() and (inner / "work.txt").is_file()
+    assert any(k.path.name == "outer" and "contains" in k.reason for k in report.kept)
+
+
+def test_find_links_reports_a_nested_repository_and_does_not_descend_into_it(world, tmp_path):
+    root = tmp_path / "wt"
+    (root / "sub" / "nested").mkdir(parents=True)
+    (root / "sub" / "nested" / ".git").write_bytes(b"gitdir: elsewhere\n")
+    (root / "sub" / "nested" / "inner.txt").write_bytes(b"x\n")
+    links, problems = pw.scan_links(root)
+    assert links == [] and any("nested" in p for p in problems)
+
+
+def test_an_unscannable_directory_keeps_the_worktree_and_says_so(world, monkeypatch):
+    wt = world.add_worktree("lane-acl")
+    (wt / "obj" / "bad").mkdir(parents=True)
+    world.exclude(wt, "obj/")
+    real = os.scandir
+
+    def flaky(path="."):
+        if str(path).replace("\\", "/").endswith("obj/bad"):
+            raise PermissionError("denied")
+        return real(path)
+
+    monkeypatch.setattr(pw.os, "scandir", flaky)
+    report = _run(world, apply=True)
+    assert wt.is_dir() and report.removed == []
+    assert any(k.path.name == "lane-acl" and "could not scan" in k.reason for k in report.kept)
+
+
+def test_ignored_files_that_are_not_known_build_output_keep_the_worktree(world):
+    wt = world.add_worktree("lane-ign")
+    world.exclude(wt, "scratch.local", "obj/", "__pycache__/", "*.egg-info/")
+    (wt / "scratch.local").write_bytes(b"my notes\n")
+    report = _run(world, apply=True)
+    assert wt.is_dir()
+    assert any(k.path.name == "lane-ign" and "ignored" in k.reason and "scratch.local" in k.reason for k in report.kept)
+
+
+def test_known_build_output_alone_does_not_keep_a_worktree(world):
+    wt = world.add_worktree("lane-build")
+    world.exclude(wt, "obj/", "__pycache__/", "*.egg-info/")
+    (wt / "obj").mkdir()
+    (wt / "obj" / "x.dll").write_bytes(b"x")
+    (wt / "pkg.egg-info").mkdir()
+    (wt / "pkg.egg-info" / "PKG-INFO").write_bytes(b"x")
+    assert [r.path.name for r in _run(world, apply=True).removed] == ["lane-build"]
+
+
+def test_app_secrets_keep_the_worktree_even_when_git_would_not_notice(world):
+    wt = world.add_worktree("lane-sec")
+    (wt / "app" / "secrets").mkdir(parents=True)
+    (wt / "app" / "secrets" / "oauth_client.local.json").write_bytes(b"{}")
+    world.exclude(wt, "app/secrets/")
+    report = _run(world, apply=True)
+    assert wt.is_dir()
+    assert any(k.path.name == "lane-sec" and k.reason.startswith("app/secrets holds") for k in report.kept)
+
+
+def test_a_staged_rename_counts_once(world):
+    wt = world.add_worktree("lane-mv")
+    _git(wt, "mv", "a.txt", "b.txt")
+    report = _run(world, apply=True)
+    assert any(k.path.name == "lane-mv" and k.reason.endswith("(1)") for k in report.kept)
+
+
+def test_dry_run_rows_say_would_remove_and_apply_rows_say_removed(world):
+    world.add_worktree("lane-a")
+    _run(world, apply=False)
+    assert any(ln.strip().startswith("would remove") and "lane-a" in ln for ln in world.out)
+    assert not any(ln.strip().startswith("removed ") for ln in world.out)
+    world.out.clear()
+    _run(world, apply=True)
+    assert any(ln.strip().startswith("removed ") and "lane-a" in ln for ln in world.out)
+
+
+def test_status_runs_without_optional_locks_and_after_the_age_check(world):
+    world.add_worktree("lane-fresh")
+    pw.prune(world.ctx(apply=False, min_age_hours=6.0))
+    assert not any(c[:1] == ("status",) or "status" in c[:2] for c in world.git_calls)  # fresh: never inspected
+    world.git_calls.clear()
+    pw.prune(world.ctx(apply=False))
+    status = [c for c in world.git_calls if "status" in c[:2]]
+    assert status and all(c[0] == "--no-optional-locks" for c in status)
+
+
+def test_a_dry_run_does_not_fetch_but_apply_and_the_fetch_flag_do():
+    def fetch_of(argv):
+        return pw.ctx_from_args(pw.parse_args(argv), Path(".")).fetch
+
+    assert fetch_of([]) is False
+    assert fetch_of(["--apply"]) is True
+    assert fetch_of(["--apply", "--no-fetch"]) is False
+    assert fetch_of(["--fetch"]) is True
+
+
+@needs_windows
+def test_a_repo_path_given_through_a_junction_still_counts_as_this_checkout(world, tmp_path):
+    wt = world.add_worktree("lane-alias")
+    alias = tmp_path / "alias"
+    _junction(alias, wt)
+    report = pw.prune(world.ctx(apply=True, repo=alias))
+    assert wt.is_dir()
+    assert any(k.path.name == "lane-alias" and "this checkout" in k.reason for k in report.kept)
+    os.rmdir(alias)
+
+
+@needs_windows
+def test_the_junction_is_recreated_when_git_then_fails_to_remove_the_worktree(world):
+    wt = world.add_worktree("lane-fail")
+    _junction(wt / "worker" / ".venv", world.sentinel)
+
+    class Failed:
+        returncode = 1
+        stdout = b""
+        stderr = b"boom"
+
+    def spy(cwd: Path, *args: str, **kwargs):
+        if args[:2] == ("worktree", "remove"):
+            return Failed()
+        return pw.git(cwd, *args, **kwargs)
+
+    report = pw.prune(world.ctx(apply=True, git=spy))
+    assert wt.is_dir() and report.removed == []
+    assert os.path.isjunction(wt / "worker" / ".venv")
+    assert (wt / "worker" / ".venv" / "marker.txt").is_file()
+    assert any("remove failed" in k.reason for k in report.kept if k.path.name == "lane-fail")
