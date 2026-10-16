@@ -126,11 +126,11 @@ public static class GenBankLite
                 {
                     notices.Add(DroppedFeaturesNotice(recordIndex, sourceKey, lost.Select(f => f.DroppedText!).ToList()));
                     coded.Add(new InputNotice(InputNoticeCode.GenBankFeaturesDropped, lost.Count, recordIndex));
-                    if (sourceKey == "gene")
-                    {
-                        geneCount = Math.Max(0, geneCount - lost.Count);
-                    }
                 }
+                // Counted from the parsed feature table (a wrapped qualifier line that starts with "gene" is not a feature),
+                // without the features whose location the worker cannot read.
+                geneCount = tableFeatures.Count(f => f.Key == "gene" && f.DroppedText is null);
+                cdsCount = tableFeatures.Count(f => f.Key == "CDS" && f.DroppedText is null);
                 records.Add(new GenBankLiteRecord(locusName, recSeq, geneCount, cdsCount, recordIndex));
             }
             locusName = null;
@@ -238,15 +238,6 @@ public static class GenBankLite
             {
                 inOrigin = true;
                 continue;
-            }
-            var trimmed = rawLine.TrimStart();
-            if (trimmed.StartsWith("gene", StringComparison.Ordinal) && (trimmed.Length == 4 || char.IsWhiteSpace(trimmed[4])))
-            {
-                geneCount++;
-            }
-            else if (trimmed.StartsWith("CDS", StringComparison.Ordinal) && (trimmed.Length == 3 || char.IsWhiteSpace(trimmed[3])))
-            {
-                cdsCount++;
             }
         }
         if (locusName is not null)

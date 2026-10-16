@@ -34,7 +34,30 @@ internal static class GenBankFeatureTable
         var features = new List<GenBankTableFeature>();
         var count = lines.Count > 0 && lines[^1].Length == 0 ? lines.Count - 1 : lines.Count; // the "" after a final newline is end of file
         // Python counts code points; fold each surrogate pair to one placeholder char so every length and column below does too.
-        string? Raw(int i) => i < count ? FoldCodePoints(lines[i]) : null;
+        // Each distinct supplementary code point gets its own private-use character, so a location keeps its identity for the
+        // parser and the notice (Unfold puts the code point back).
+        var placeholders = new Dictionary<int, char>();
+        var originals = new Dictionary<char, int>();
+        string Fold(string s) => s.Any(char.IsSurrogate)
+            ? string.Concat(s.EnumerateRunes().Select(r =>
+            {
+                if (r.IsBmp)
+                {
+                    return r.ToString();
+                }
+
+                if (!placeholders.TryGetValue(r.Value, out var placeholder))
+                {
+                    placeholder = (char)Math.Min(0xE000 + placeholders.Count, 0xF8FF);
+                    placeholders[r.Value] = placeholder;
+                    originals[placeholder] = r.Value;
+                }
+
+                return placeholder.ToString();
+            }))
+            : s;
+        string Unfold(string s) => originals.Count == 0 ? s : string.Concat(s.Select(c => originals.TryGetValue(c, out var v) ? char.ConvertFromUtf32(v) : c.ToString()));
+        string? Raw(int i) => i < count ? Fold(lines[i]) : null;
 
         var index = start;
         while (Raw(index) is { } marker && IsStartMarker(marker))
@@ -95,7 +118,7 @@ internal static class GenBankFeatureTable
                 featureLines.Add(PythonText.Trim(next.Length > QualifierIndent ? next[QualifierIndent..] : string.Empty));
                 index++; // a blank line in the middle of a feature belongs to it
             }
-            features.Add(new GenBankTableFeature(key, ParseFeature(featureLines, recordNumber)));
+            features.Add(new GenBankTableFeature(Unfold(key), Unfold(ParseFeature(featureLines, recordNumber))));
         }
     }
 
@@ -165,9 +188,6 @@ internal static class GenBankFeatureTable
 
         return location;
     }
-
-    private static string FoldCodePoints(string s) =>
-        s.Any(char.IsSurrogate) ? string.Concat(s.EnumerateRunes().Select(r => r.IsBmp ? r.ToString() : "")) : s;
 
     private static int Count(string s, char c) => s.Count(x => x == c);
 

@@ -229,5 +229,11 @@ internal static class GenBankLocationMeasured
         one-of(5,8,)..9|circ|REFUSE|ValueError
         3..one-of(5,8)|lin|OK|
         3..one-of(5,8)|circ|OK|
+        replace(5)|lin|OK|
+        replace(5)|circ|OK|
+        abc_replace|lin|DROP|ac
+        abc_replace|circ|DROP|ac
+        replace|lin|DROP|
+        replace|circ|DROP|
         """;
 }

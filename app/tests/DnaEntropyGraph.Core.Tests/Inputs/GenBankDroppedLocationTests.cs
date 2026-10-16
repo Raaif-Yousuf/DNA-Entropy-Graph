@@ -197,6 +197,67 @@ public sealed class GenBankDroppedLocationTests
         Should.Throw<GenBankReadException>(() => GenBankLite.Read(text));
     }
 
+    // MEASURED 2026-10-16 (Biopython 1.88): a supplementary code point is one character to Python.
+    [Fact]
+    public void A_supplementary_character_after_a_range_refuses_the_file_as_the_worker_does()
+        => Should.Throw<GenBankReadException>(() => GenBankLite.Read(WithFirstGeneAt("1..5\U0001F600")));
+
+    [Theory]
+    [InlineData("\U0001F600..5", "\\U0001f600..5")]
+    [InlineData("x..5\U0001F600y", "x..5\\U0001f600y")]
+    public void A_supplementary_character_in_a_dropped_location_is_quoted_whole(string location, string expectedAscii)
+        => GenBankLite.Read(WithFirstGeneAt(location)).Notices
+            .ShouldContain(n => n.Contains($"(gene '{expectedAscii}')", StringComparison.Ordinal));
+
+    [Fact]
+    public void A_CDS_only_record_that_loses_a_CDS_no_longer_counts_it()
+    {
+        var text = Normalize(Sample)
+            .Replace(GeneLine, "     misc_feature    1..42\n", StringComparison.Ordinal)
+            .Replace("     gene            complement(85..126)\n", "     misc_feature    85..126\n", StringComparison.Ordinal)
+            .Replace("     CDS             1..42\n", "     CDS             abc\n", StringComparison.Ordinal);
+
+        var result = GenBankLite.Read(text + text);
+
+        result.Records.Select(r => r.CdsCount).ShouldBe([0, 0]);
+        result.Notices.ShouldContain(n => n.Contains("Read 2 record(s) with 0 gene/CDS feature(s)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_wrapped_qualifier_line_that_starts_with_gene_is_not_a_gene()
+    {
+        var text = Normalize(Sample).Replace(
+            "/locus_tag=\"TOY_0001\"\n",
+            "/note=\"first line\n                     gene cluster text\"\n",
+            StringComparison.Ordinal);
+
+        var record = GenBankLite.Read(text).Records.Single();
+
+        record.GeneCount.ShouldBe(2);
+        record.CdsCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_pathological_one_of_position_returns_quickly()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = Record.Exception(() => GenBankLite.Read(WithFirstGeneAt("one-of(" + new string('1', 20000) + "x..5")));
+
+        watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        (result is null or GenBankReadException).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_LOCUS_line_with_the_unit_glued_to_the_length_has_no_known_length_here_though_the_worker_refuses_it()
+    {
+        // MEASURED 2026-10-16: Biopython refuses "126bp" (and an upper-case "BP") with a ValueError out of the LOCUS parser,
+        // for every location. The local reader does not model LOCUS refusals (a false accept costs one VM); this pins that.
+        var text = Normalize(Sample).Replace("126 bp    DNA              UNK", "126bp    DNA              UNK", StringComparison.Ordinal);
+
+        Should.NotThrow(() => GenBankLite.Read(text));
+    }
+
     [Fact]
     public void The_topology_comes_from_the_LOCUS_line_in_the_space_separated_style_too()
     {
