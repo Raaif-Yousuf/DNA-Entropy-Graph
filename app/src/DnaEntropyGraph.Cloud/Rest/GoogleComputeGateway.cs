@@ -666,7 +666,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             instance.Labels is null ? null : new Dictionary<string, string>(instance.Labels),
             ParseTime(instance.LastStopTimestamp),
             ZoneName(instance.MachineType),
-            ParseTime(instance.LastStartTimestamp));
+            ParseTime(instance.LastStartTimestamp),
+            MaxRunDuration: instance.Scheduling?.MaxRunDuration?.Seconds is { } seconds and > 0 ? TimeSpan.FromSeconds(seconds) : null);
 
     /// <summary>The zone name from a zone URL (<c>.../zones/us-central1-a</c>) or an aggregated-list key (<c>zones/us-central1-a</c>).</summary>
     private static string? ZoneName(string? url)

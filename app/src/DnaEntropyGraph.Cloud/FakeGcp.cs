@@ -1256,6 +1256,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             .Where(v => v.Labels is not null
                 && v.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
                 && v.Labels.TryGetValue("installation-id", out var owner) && owner == installationId)
+            .Select(v => _maxRunByVm.TryGetValue((v.Name, v.Zone), out var limit) ? v with { MaxRunDuration = limit } : v)
             .ToList();
         return Task.FromResult(matches);
     }

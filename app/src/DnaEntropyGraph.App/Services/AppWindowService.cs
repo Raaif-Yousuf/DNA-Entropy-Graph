@@ -19,11 +19,60 @@ public sealed class AppWindowService : IAppWindow
     private static extern nint GetForegroundWindow();
 
     /// <summary>Called after the window is first activated; takes the real initial state (the Activated event only reports changes).</summary>
-    public void Attach(Window window)
+    public void Attach(Window window, Func<CancellationToken, Task<bool>>? confirmExit = null)
     {
         _window = window;
         _active = GetForegroundWindow() == WinRT.Interop.WindowNative.GetWindowHandle(window);
         window.Activated += (_, args) => _active = args.WindowActivationState != WindowActivationState.Deactivated;
+        if (confirmExit is not null)
+        {
+            window.AppWindow.Closing += (_, args) => OnClosing(args, confirmExit);
+        }
+    }
+
+    // Issue #113: the close is cancelled at once (the handler never blocks the UI thread) and the exit question runs asynchronously;
+    // when it allows the exit, the window closes again with the question skipped. A second close while it is open is ignored.
+    private bool _exitConfirmed;
+    private bool _asking;
+
+    private void OnClosing(AppWindowClosingEventArgs args, Func<CancellationToken, Task<bool>> confirmExit)
+    {
+        if (_exitConfirmed)
+        {
+            return;
+        }
+
+        args.Cancel = true;
+        if (_asking)
+        {
+            return;
+        }
+
+        _asking = true;
+        _ = AskThenCloseAsync(confirmExit);
+    }
+
+    private async Task AskThenCloseAsync(Func<CancellationToken, Task<bool>> confirmExit)
+    {
+        var allowed = true;
+        try
+        {
+            allowed = await confirmExit(CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // The question is a safety net; a failure in it never traps the user in the app.
+        }
+        finally
+        {
+            _asking = false;
+        }
+
+        if (allowed)
+        {
+            _exitConfirmed = true;
+            _window?.Close();
+        }
     }
 
     /// <summary>Always called on the UI thread (<c>ActivationRouter</c> goes through the dispatcher).</summary>

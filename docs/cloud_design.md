@@ -1394,6 +1394,21 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
+## 18. The nothing-left-running scan (issue #113)
+
+`LeftRunningScanner` (Core) lists this installation's computers and disks by label through the same gateway calls the Cloud page uses
+(`ListByInstallationAsync`, `ListDisksByInstallationAsync`; Hard Rules 9 and 10, so another installation's computers are never reported or touched).
+A running computer reports its remaining time (`VmDescriptor.MaxRunDuration`, read from `scheduling.maxRunDuration`, against the run clock start and the platform's
+own clock when the read carried one), its hourly rate from the price list, and whether a non-terminal run row carries its job id. A disk no running computer holds is a
+"stopped disk" with its monthly cost (size times the price list's per-GB-month rate).
+
+`LeftRunningGuard` (Presentation) runs it three ways: at launch (`AppStartup.BeginAsync`), every 5 minutes on a `TimeProvider` timer (a running computer with no live
+run gets one warning toast, again only if it ended and came back), and on close (`AppWindowService` cancels `AppWindow.Closing` at once, asks asynchronously, then closes
+again; the UI thread is never blocked). The exit modal offers Stop, Delete or Leave running; Leave running is never indefinite because every computer carries a
+`maxRunDuration` (Hard Rule 11). A scan that cannot read Google, or a dialog that cannot be shown, never keeps the window open; a Stop or Delete that fails for some computer
+does (it names the action, and the next close asks again).
+
+THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes back populated in an instances aggregatedList on a real project.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

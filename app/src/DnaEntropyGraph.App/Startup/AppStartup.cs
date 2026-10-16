@@ -18,6 +18,8 @@ public static class AppStartup
     /// </summary>
     public static async Task BeginAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
+        // Issue #113: the nothing-left-running scan starts first and is not awaited (it scans once now, then every 5 minutes); it never faults.
+        _ = services.GetRequiredService<Presentation.Services.LeftRunningGuard>().StartAsync(cancellationToken);
         try
         {
             // The pass runs here, not through ReconcileOnReconnect, so the reconnect probe is started by hand once the pass has judged every run:

@@ -2093,4 +2093,62 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
     <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
   </data>
+  <data name="LeftRunning_ExitTitle" xml:space="preserve">
+    <value>A rented computer is still running</value>
+  </data>
+  <data name="LeftRunning_ExitBody" xml:space="preserve">
+    <value>These rented computers (VMs) are still running and costing money:
+
+{0}
+
+A computer that keeps running ends itself at its time limit, but you pay until then. Press Stop to keep its disk and stop the cost of the computer, or Delete to remove it completely. {1}</value>
+  </data>
+  <data name="LeftRunning_VmLine" xml:space="preserve">
+    <value>{0} in {1}: ends itself in about {2} minutes. {3}</value>
+  </data>
+  <data name="LeftRunning_VmLineLive" xml:space="preserve">
+    <value>{0} in {1}: a run is still using it, and it ends itself in about {2} minutes. {3}</value>
+  </data>
+  <data name="LeftRunning_VmLineNoLimit" xml:space="preserve">
+    <value>{0} in {1}: it ends itself at its time limit. {2}</value>
+  </data>
+  <data name="LeftRunning_CostPerHour" xml:space="preserve">
+    <value>Up to about ${0} per hour.</value>
+  </data>
+  <data name="LeftRunning_CostUnknown" xml:space="preserve">
+    <value>The price list could not be read.</value>
+  </data>
+  <data name="LeftRunning_DiskNote" xml:space="preserve">
+    <value>{0} stopped disk(s) also cost about ${1} per month until you delete them on the Cloud page.</value>
+  </data>
+  <data name="LeftRunning_DiskNoteNoPrice" xml:space="preserve">
+    <value>{0} stopped disk(s) also keep costing money until you delete them on the Cloud page.</value>
+  </data>
+  <data name="LeftRunning_Stop" xml:space="preserve">
+    <value>Stop it</value>
+  </data>
+  <data name="LeftRunning_Delete" xml:space="preserve">
+    <value>Delete it</value>
+  </data>
+  <data name="LeftRunning_Leave" xml:space="preserve">
+    <value>Leave it running</value>
+  </data>
+  <data name="LeftRunning_StopFailedTitle" xml:space="preserve">
+    <value>A computer could not be stopped</value>
+  </data>
+  <data name="LeftRunning_StopFailedBody" xml:space="preserve">
+    <value>Could not stop {0}. Close the app again to retry, or open the Cloud page and press Stop on it.</value>
+  </data>
+  <data name="LeftRunning_DeleteFailedTitle" xml:space="preserve">
+    <value>A computer could not be deleted</value>
+  </data>
+  <data name="LeftRunning_DeleteFailedBody" xml:space="preserve">
+    <value>Could not delete {0}. Close the app again to retry, or open the Cloud page and press Delete on it.</value>
+  </data>
+  <data name="LeftRunning_ToastTitle" xml:space="preserve">
+    <value>A rented computer is running with no run attached</value>
+  </data>
+  <data name="LeftRunning_ToastBody" xml:space="preserve">
+    <value>{0} in {1} is running and costing money. Open the Cloud page and press Stop on it if you are not waiting for it.</value>
+  </data>
 </root>
