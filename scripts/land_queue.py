@@ -7,7 +7,8 @@
     worker\\.venv\\Scripts\\python.exe scripts\\land_queue.py stop              # creates runner.stop; the loop exits before the next item
 
 It replaces the orchestrator's scratchpad land_queue.sh + merge_green.sh. State lives in `--state` (default
-`%TEMP%\\deg-land-queue`): queue.txt, taken.log, done.log, flakes.log, runner.stop, runner.json, inflight.json, land-<slug>-<sha7>.log, body-<slug>-<sha7>.md.
+`%TEMP%\\deg-land-queue`): queue.txt, taken.log, done.log, flakes.log, runner.stop, runner.json, inflight.json,
+land-<slug>-<sha7>.log, body-<slug>-<sha7>.md.
 
 QUEUE LINE: `branch|sha|issue|full(0/1)|title` plus an optional sixth field `red=<check>[,<check>]` (checks ignored for
 this item only, KNOWN_RED). The title may contain `|`. Blank lines and `#` lines are skipped.
