@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Runs;
+using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -30,6 +31,8 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IStringResourceProvider _strings;
     private readonly IExternalViewerOpener _viewers;
+    private readonly IEntropyOverviewSource? _overviewSource;
+    private readonly IOverviewImageExporter? _imageExporter;
     private IReadOnlyList<RunOutputFile> _outputFiles = [];
     private string? _folder;
     private int _loadGeneration;
@@ -58,8 +61,12 @@ public sealed partial class ResultsViewModel : ObservableObject
         IShellLauncher launcher,
         INavigator navigator,
         IStringResourceProvider strings,
-        IExternalViewerOpener viewers)
+        IExternalViewerOpener viewers,
+        IEntropyOverviewSource? overviewSource = null,
+        IOverviewImageExporter? imageExporter = null)
     {
+        _overviewSource = overviewSource;
+        _imageExporter = imageExporter;
         _runRepository = runRepository;
         _outputReader = outputReader;
         _launcher = launcher;
@@ -67,6 +74,17 @@ public sealed partial class ResultsViewModel : ObservableObject
         _strings = strings;
         _viewers = viewers;
     }
+
+    /// <summary>The entropy overview strip (issue #118): the run's first contig, binned; null when the run has no entropy track.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasOverview))]
+    [NotifyPropertyChangedFor(nameof(OverviewTitle))]
+    [NotifyCanExecuteChangedFor(nameof(ExportOverviewPngCommand))]
+    private EntropyContig? _overview;
+
+    public bool HasOverview => Overview is not null;
+
+    public string OverviewTitle => Overview?.Name ?? string.Empty;
 
     public ObservableCollection<ResultsStatsGroup> Groups { get; } = [];
 
@@ -122,6 +140,16 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Show(folder!, snapshot);
+
+            // The strip fills in after the page: reading a big track is disk work and must not hold the stats back.
+            if (_overviewSource is not null)
+            {
+                var overview = await Task.Run(() => _overviewSource.Load(folder!), CancellationToken.None);
+                if (generation == Volatile.Read(ref _loadGeneration))
+                {
+                    Overview = overview?.Contigs.FirstOrDefault();
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -142,6 +170,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         _folder = null;
         _outputFiles = [];
         Title = string.Empty;
+        Overview = null;
         NoticeText = string.Empty;
         StatsNoticeText = string.Empty;
         ActionNoticeText = string.Empty;
@@ -287,6 +316,36 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         public static readonly ViewerKeys Igv = new(ResultsCopy.IgvNoFiles, ResultsCopy.IgvNotFound, ResultsCopy.IgvLaunchFailed);
         public static readonly ViewerKeys Geneious = new(ResultsCopy.GeneiousNoFiles, ResultsCopy.GeneiousNotFound, ResultsCopy.GeneiousLaunchFailed);
+    }
+
+    private bool CanExportOverviewPng() => Overview is not null && _folder is not null && _imageExporter is not null;
+
+    /// <summary>Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer.</summary>
+    [RelayCommand(CanExecute = nameof(CanExportOverviewPng))]
+    private async Task ExportOverviewPngAsync()
+    {
+        if (Overview is not { } contig || _folder is not { } folder || _imageExporter is not { } exporter)
+        {
+            return;
+        }
+
+        var path = Path.Combine(folder, SafeFileName(contig.Name) + ".entropy.overview.png");
+        var written = await Task.Run(() => exporter.Export(contig, path), CancellationToken.None);
+        if (written)
+        {
+            Report(_launcher.ShowInFolder(path), ResultsCopy.FileActionFailed);
+        }
+        else
+        {
+            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+        }
+    }
+
+    // A contig name comes from the user's own file: only its letters, digits and a few safe marks may reach a file name.
+    private static string SafeFileName(string contigName)
+    {
+        var safe = new string([.. contigName.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' ? c : '_')]).Trim('.');
+        return safe.Length == 0 ? "entropy" : safe.Replace("..", "_");
     }
 
     [RelayCommand]

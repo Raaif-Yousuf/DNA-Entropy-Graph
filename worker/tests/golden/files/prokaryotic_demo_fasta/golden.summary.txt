@@ -1,0 +1,23 @@
+DNA-Entropy summary
+name:               golden
+records:            1
+total length:       714 nt
+entropy mean (all): 1.5909 bits
+entropy min (all):  0.3213 bits
+entropy max (all):  1.9966 bits
+
+[golden]
+  length:           714 nt
+  coordinate start: 1
+  entropy mean:     1.5909 bits
+  entropy min:      0.3213 bits (position 450)
+  entropy max:      1.9966 bits (position 460)
+  surprisal mean:     2.4270 bits
+  log-likelihood:     -1732.9094 bits (714 defined position(s))
+  context length (K): 4096
+  window (W):         8192
+  stride (S):         4096
+  ceiling:            8192
+  direction:          both-combined
+  seam:               n/a
+  reduced-context positions: 714
