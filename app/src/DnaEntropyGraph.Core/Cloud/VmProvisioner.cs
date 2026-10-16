@@ -135,35 +135,35 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             OperationOutcome<VmDescriptor> outcome;
             try
             {
-            outcome = await OperationPoller.PollAsync<VmDescriptor>(
-                async _ =>
-                {
-                    try
+                outcome = await OperationPoller.PollAsync<VmDescriptor>(
+                    async _ =>
                     {
-                        // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
-                        // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
-                        // token (the same instant, so the poller's would win and hide the abandoned create).
-                        progress.VmStartMark = settings.StartClock();
-                        createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
-                        state.Create = createTask;
-                        var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
-                        return new OperationPoll<VmDescriptor>(true, vm, null);
-                    }
-                    catch (TimeoutException)
-                    {
-                        createTimedOut = true;
-                        thrownKind = CloudErrorKind.Network;
-                        return new OperationPoll<VmDescriptor>(true, null, new CloudError(OperationPoller.TimeoutCode, null, "Creating the VM timed out."));
-                    }
-                    catch (CloudOperationException ex)
-                    {
-                        thrownKind = ex.Kind;
-                        return new OperationPoll<VmDescriptor>(true, null, ex.Error);
-                    }
-                },
-                createTimeout,
-                cancellationToken,
-                time: settings.TimeProvider).ConfigureAwait(false);
+                        try
+                        {
+                            // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
+                            // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
+                            // token (the same instant, so the poller's would win and hide the abandoned create).
+                            progress.VmStartMark = settings.StartClock();
+                            createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
+                            state.Create = createTask;
+                            var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
+                            return new OperationPoll<VmDescriptor>(true, vm, null);
+                        }
+                        catch (TimeoutException)
+                        {
+                            createTimedOut = true;
+                            thrownKind = CloudErrorKind.Network;
+                            return new OperationPoll<VmDescriptor>(true, null, new CloudError(OperationPoller.TimeoutCode, null, "Creating the VM timed out."));
+                        }
+                        catch (CloudOperationException ex)
+                        {
+                            thrownKind = ex.Kind;
+                            return new OperationPoll<VmDescriptor>(true, null, ex.Error);
+                        }
+                    },
+                    createTimeout,
+                    cancellationToken,
+                    time: settings.TimeProvider).ConfigureAwait(false);
             }
             finally
             {

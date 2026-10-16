@@ -710,4 +710,5 @@ public class FlexStartProvisioningTests
         }
 
         runner.NoticeChainCount.ShouldBe(0);
-    }}
+    }
+}

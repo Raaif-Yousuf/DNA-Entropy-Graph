@@ -321,4 +321,5 @@ public class CloudErrorClassifierTests
     {
         CloudErrorClassifier.Classify(new CloudError("FLEX_START_INVALID", 400, "requestValidForDuration elapsed value is out of range.")).ShouldNotBe(CloudErrorKind.Stockout);
         CloudErrorClassifier.Classify(new CloudError("INVALID_FIELD_VALUE", 400, "requestValidForDuration expired")).ShouldNotBe(CloudErrorKind.Stockout);
-    }}
+    }
+}
