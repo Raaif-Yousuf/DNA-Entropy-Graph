@@ -226,6 +226,7 @@ class Ctx:
     sleep: Callable[[float], None] = time.sleep  # injectable: tests never wait on a real clock
     monotonic: Callable[[], float] = time.monotonic
     log: list[str] = field(default_factory=list)
+    checks_error: str = ""  # why the last `gh pr checks` could not be read ("" = it could, or gh simply had no checks yet)
 
     def say(self, message: str) -> None:
         print(message)
@@ -436,7 +437,12 @@ def _read_checks(ctx: Ctx, pr: str) -> list[dict[str, str]] | None:
     try:
         data = json.loads(_text(proc.stdout))
     except ValueError:
+        text = _text(proc.stderr) or _text(proc.stdout)
+        # gh's own "no checks reported" is normal right after a PR opens; anything else is gh failing (MEASURED 2026-10-16: PR #811
+        # was all green but gh failed with 0xC0000142 on every poll, and that was reported as "no checks were reported").
+        ctx.checks_error = "" if "no checks reported" in text else f"rc={proc.returncode}: {text[:200] or '(no output)'}"
         return None
+    ctx.checks_error = ""
     return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else None
 
 
@@ -495,8 +501,12 @@ def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float, rerun_fail
     needs a finished run) re-runs the failed runs a single time and waits again with a fresh deadline; a second red refuses."""
     deadline = ctx.monotonic() + timeout
     rerun_spent = False
+    gh_warned = False
     while True:
         checks = _read_checks(ctx, pr)
+        if checks is None and ctx.checks_error and not gh_warned:
+            gh_warned = True
+            ctx.say(f"WARNING: gh pr checks failed ({ctx.checks_error}); still polling")
         waiting: list[dict[str, str]] = []
         if checks:
             red = [c for c in checks if c.get("bucket") in RED_BUCKETS]
@@ -518,7 +528,12 @@ def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float, rerun_fail
             if not waiting and not red:
                 break
         if ctx.monotonic() >= deadline:
-            what = f"still pending: {_names(waiting)}" if waiting else "no checks were reported"
+            if waiting:
+                what = f"still pending: {_names(waiting)}"
+            elif ctx.checks_error:
+                what = f"gh could not read the checks ({ctx.checks_error})"
+            else:
+                what = "no checks were reported"
             ctx.say(
                 f"ERROR: not merging {pr}: {what} after {int(timeout)} s. Run `gh pr checks {pr} --watch`, then merge by hand; the PR stays open"
             )

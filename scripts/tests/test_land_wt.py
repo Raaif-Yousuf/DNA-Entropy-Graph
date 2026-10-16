@@ -32,6 +32,9 @@ if sys.argv[2:4] == ["pr", "checks"]:
     replies = json.loads(Path(str(log) + ".checks").read_text(encoding="utf-8"))
     seen = sum(1 for ln in log.read_text(encoding="utf-8").splitlines() if '"checks"' in ln) - 1
     reply = replies[min(seen, len(replies) - 1)]
+    if isinstance(reply, dict):  # {"exit": N, "stderr": "..."}: gh itself failed (no JSON on stdout)
+        sys.stderr.write(reply.get("stderr", ""))
+        sys.exit(reply["exit"])
     print(reply if isinstance(reply, str) else json.dumps(reply))
     sys.exit(1 if isinstance(reply, str) else 0)
 if sys.argv[2:4] == ["run", "rerun"]:
@@ -775,3 +778,44 @@ def test_the_run_lock_records_the_commit_so_a_killed_run_leftover_can_be_judged_
     body.write_text("body\n", encoding="utf-8", newline="\n")
     assert lw.land(ctx, "feat/794-x", sha, "feat: x", body) == lw.EXIT_OK
     assert seen[0]["sha"] == sha and seen[0]["pid"] == os.getpid()
+
+
+# MEASURED 2026-10-16: PR #811 had every check green, yet land_wt logged "no checks were reported after 1800 s". The same log's
+# worktree cleanup failed with 3221225794 (0xC0000142, a process that could not start), so gh itself was failing on every poll and
+# the failure was read as "no checks yet".
+GH_DLL_FAIL = {"exit": 66, "stderr": ""}  # the real code was 3221225794, which does not fit a portable exit status
+
+
+def test_gh_failing_on_every_poll_is_not_reported_as_no_checks(world, capsys):
+    rc, _ = _land_green(world, [GH_DLL_FAIL], timeout=30.0, poll=10.0)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_PENDING and _calls(world, "merge") == []
+    assert "gh could not read the checks" in out and "rc=66" in out
+    assert "no checks were reported" not in out
+
+
+def test_the_gh_error_text_is_shown(world, capsys):
+    _land_green(world, [{"exit": 1, "stderr": "HTTP 502: Bad Gateway"}], timeout=20.0, poll=10.0)
+    assert "HTTP 502" in capsys.readouterr().out
+
+
+def test_a_gh_failure_is_warned_about_once_not_every_poll(world, capsys):
+    _land_green(world, [GH_DLL_FAIL], timeout=50.0, poll=10.0)
+    assert capsys.readouterr().out.count("WARNING: gh pr checks failed") == 1
+
+
+def test_a_transient_gh_failure_still_merges_once_checks_are_green(world):
+    rc, _ = _land_green(world, [GH_DLL_FAIL, [_check("a", "pass"), _check("dependency review", "skipping")]])
+    assert rc == lw.EXIT_OK
+    assert len(_calls(world, "merge")) == 1
+
+
+def test_all_pass_plus_skipping_merges(world):
+    rc, _ = _land_green(world, [[_check("a", "pass"), _check("dependency review", "skipping")]])
+    assert rc == lw.EXIT_OK and len(_calls(world, "merge")) == 1
+
+
+def test_genuine_no_checks_reported_keeps_its_own_message(world, capsys):
+    _land_green(world, ["no checks reported on the 'feat/66-x' branch"], timeout=20.0, poll=10.0)
+    out = capsys.readouterr().out
+    assert "no checks were reported" in out and "gh could not read" not in out
