@@ -301,7 +301,7 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Runs: `RunListItem.Sparkline` (48 points, `TrackResampler`) is filled after the list shows, one finished run at a time, by
   `HistoryViewModel.LoadSparklinesAsync`; `Controls/EntropySparkline` is a plain `Polyline` (a ScottPlot control per card would
   own one GPU surface each). `EntropyOverviewSource` remembers the last 64 tracks by path, size and write time.
-- Not done: drag-select on the strip to jump the viewer (the Viewer page has no locus parameter yet), and a contig picker for a
+- Drag-select (#699): dragging a span on the strip opens the embedded viewer at that range (`OverviewSelection` clamps it and ignores a click; the Viewer page key takes a `ViewerRunTarget` with a locus, a plain folder string still works). Not done: a contig picker for a
   multi-contig run (the first contig is shown).
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).

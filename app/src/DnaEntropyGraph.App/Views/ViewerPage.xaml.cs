@@ -26,5 +26,5 @@ public sealed partial class ViewerPage : Page
         Unloaded += (_, _) => _host.Detach();
     }
 
-    protected override void OnNavigatedTo(NavigationEventArgs e) => ViewModel.OpenRun(e.Parameter as string);
+    protected override void OnNavigatedTo(NavigationEventArgs e) => ViewModel.OpenFromNavigation(e.Parameter);
 }

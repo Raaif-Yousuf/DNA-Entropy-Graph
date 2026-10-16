@@ -121,6 +121,7 @@ you ask for them.
 The app shows two views itself:
 
 - A fast overview chart, right on the Results page, with no setup needed.
+- Drag along that chart with the mouse to open the viewer at that part of the sequence. A plain click does nothing.
 - An embedded genome browser (the same open-source viewer, IGV, that many labs already
   use as a standalone program), which loads automatically and lets you scroll and zoom
   along your sequence with the entropy track and any genes shown together.
