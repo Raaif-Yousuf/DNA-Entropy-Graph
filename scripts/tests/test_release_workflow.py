@@ -213,7 +213,10 @@ def test_every_other_job_is_gated_on_verify(text):
 
 
 def test_no_job_is_allowed_to_fail_softly(text):
-    assert "continue-on-error: true" not in text
+    """The one carve-out is the code-scanning upload (#255): an outage there must not block a release."""
+    upload = _by_name(_steps(_jobs(text)["images"]), "upload the Trivy report to code scanning")
+    assert text.count("continue-on-error: true") == 1
+    assert "continue-on-error: true" in upload
 
 
 # ---------- secrets, environment, tokens ----------
@@ -280,17 +283,29 @@ def test_images_run_the_pin_checker_on_the_variants_dockerfile_before_building(t
 
 TRIVY_REPORT = "Trivy report (SARIF, fixable and unfixed HIGH and CRITICAL)"
 TRIVY_UPLOAD = "upload the Trivy report to code scanning"
-TRIVY_GATE = "Trivy gate (fails on a fixable CRITICAL finding)"
+TRIVY_GATE = "Trivy gate (fails on a fixable HIGH or CRITICAL finding)"
 TRIVY_ALLOWLIST = "the Trivy allowlist has no expired entry"
 
 
-def test_trivy_gate_fails_on_fixable_critical_only(text):
+def test_trivy_gate_fails_on_fixable_high_and_critical(text):
     gate = _by_name(_steps(_jobs(text)["images"]), TRIVY_GATE)
     assert "aquasecurity/trivy-action@" in gate
-    assert "exit-code: '1'" in gate
-    assert "severity: 'CRITICAL'" in gate and "HIGH" not in gate
+    assert "exit-code: '1'" in gate, "the Trivy gate must fail the job"
+    assert "severity: 'CRITICAL,HIGH'" in gate
     assert "ignore-unfixed: true" in gate
-    assert "trivyignores: .trivyignore.yaml" in gate
+    assert "continue-on-error" not in gate, "the gate itself must never be non-fatal"
+    assert "if:" not in gate, "the gate is never skipped by a condition"
+
+
+def test_trivy_steps_pass_exactly_one_yaml_allowlist(text):
+    """MEASURED 2026-10-16 (aquasecurity/trivy-action at ed142fd0673e97e23eac54620cfb913e5ce36c25, entrypoint.sh
+    lines 22-73, https://raw.githubusercontent.com/aquasecurity/trivy-action/ed142fd0673e97e23eac54620cfb913e5ce36c25/entrypoint.sh):
+    a single *.yaml value of `trivyignores` is NOT concatenated into a plain ignore file; the entrypoint exports
+    TRIVY_IGNOREFILE=<that yaml>. Only a plain-file list is concatenated (into ./trivyignores), and mixing is an error."""
+    steps = _steps(_jobs(text)["images"])
+    for name in (TRIVY_REPORT, TRIVY_GATE):
+        values = re.findall(r"(?m)^\s+trivyignores: (.+?)\s*$", _by_name(steps, name))
+        assert values == [".trivyignore.yaml"], f"{name}: trivyignores must be exactly one .yaml file, got {values}"
 
 
 def test_trivy_report_lists_high_without_failing_and_is_uploaded_as_sarif(text):
@@ -304,6 +319,8 @@ def test_trivy_report_lists_high_without_failing_and_is_uploaded_as_sarif(text):
     assert "github/codeql-action/upload-sarif@" in upload
     assert "category: trivy-${{ matrix.variant }}" in upload
     assert "sarif_file:" in upload
+    assert re.search(r"(?m)^        if: always\(\)\s*$", upload), "upload runs even if the report step failed"
+    assert re.search(r"(?m)^        continue-on-error: true\s*$", upload), "a code-scanning outage must never block a release"
 
 
 def test_trivy_report_is_uploaded_before_the_gate_can_stop_the_job(text):
@@ -317,8 +334,23 @@ def test_trivy_actions_are_pinned_by_commit_sha(text):
             assert re.search(r"@[0-9a-f]{40}$", use), f"{use} must be pinned by a full commit sha"
 
 
+def _permissions(job: str) -> dict[str, str]:
+    """The job-level `permissions:` mapping (4-space key, 6-space children), parsed line by line."""
+    lines = job.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln == "    permissions:")
+    out: dict[str, str] = {}
+    for ln in lines[start + 1 :]:
+        m = re.match(r"^      ([a-z-]+): (\w+)\s*$", ln)
+        if not m:
+            break
+        out[m.group(1)] = m.group(2)
+    return out
+
+
 def test_images_job_may_write_security_events(text):
-    assert "security-events: write" in _jobs(text)["images"]
+    perms = _permissions(_jobs(text)["images"])
+    assert perms.get("security-events") == "write"
+    assert perms.get("contents") == "read", "least privilege: the image job only reads the repo"
 
 
 def test_expired_allowlist_entries_fail_the_release_before_the_build(text):

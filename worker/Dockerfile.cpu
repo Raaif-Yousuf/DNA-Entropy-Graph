@@ -39,7 +39,7 @@ WORKDIR /opt/worker
 # the repo so an unrelated source change elsewhere in worker/ doesn't invalidate this
 # layer's pip-install cache. `uv.lock` is copied alongside `pyproject.toml` (not `src`)
 # for the same cache-locality reason.
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock build-requirements.txt ./
 
 # Reproducible install (issue #255): `pip install ".[genes]"` resolves against whatever
 # versions of numpy/biopython/typer/pyrodigal happen to be current on PyPI the day the
@@ -48,13 +48,14 @@ COPY pyproject.toml uv.lock ./
 # instead reads the exact versions already resolved and committed in `uv.lock`, and
 # FAILS the build outright if `uv.lock` disagrees with `pyproject.toml` (a stale lockfile
 # someone forgot to regenerate) rather than silently re-resolving, which would defeat the
-# whole point. `uv` itself is pinned by exact version (matching the version this repo's
-# own dev tooling uses) and removed again in the same layer so it never ships in the
-# final image. The export keeps uv.lock's sha256 hashes and `pip install --require-hashes`
+# whole point. `uv` and the project's build backend (setuptools, wheel) come from
+# build-requirements.txt, pinned by exact version AND sha256 and installed with
+# `--require-hashes` (hashes recorded there with their PyPI JSON URLs); uv is removed again
+# in the same layer so it never ships in the final image. The export keeps uv.lock's sha256 hashes and `pip install --require-hashes`
 # refuses any file whose hash is not listed, so a version re-uploaded or tampered with on
 # PyPI fails the build instead of shipping (#255). `--require-hashes` also forces every
 # requirement to be pinned, which is why `--no-deps` is the only mode that works here.
-RUN pip install "uv==0.12.13" \
+RUN pip install --require-hashes -r build-requirements.txt \
     && uv export --locked --no-emit-project --extra genes -o requirements.lock.txt \
     && pip uninstall -y uv \
     && pip install --require-hashes --no-deps -r requirements.lock.txt
@@ -67,8 +68,9 @@ COPY src ./src
 # `--no-deps`: every dependency was already installed, exactly per uv.lock, above; this
 # step only adds the local `dna_entropy` package itself, so pip has no reason to consult
 # PyPI again (and no opportunity to silently resolve a dependency version differently
-# than the lockfile said).
-RUN pip install --no-deps .
+# than the lockfile said). `--no-build-isolation` makes pip build with the hash-installed
+# setuptools/wheel above instead of fetching an unhashed build backend into a throwaway env.
+RUN pip install --no-deps --no-build-isolation .
 
 # Run as non-root (least privilege; this container never needs to write anywhere but its
 # own tmp/work directories, which docker run's -v /work:/work mount already covers on the

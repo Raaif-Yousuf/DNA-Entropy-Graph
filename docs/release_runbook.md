@@ -97,7 +97,7 @@ Pushing the tag triggers `release.yml` (`on: push: tags: v*`). Its jobs, in orde
 1. `verify` (needs your approval once, the `release` environment): asserts every secret in section 0 exists (names only, never values) and fails the run before anything is built
    if one is missing; runs `check_version_lockstep.py --tag`; checks the tagged commit is on `main`.
 2. `images` (cuda and cpu in parallel): checks the base is pinned by digest, builds and pushes
-   `ghcr.io/raaif-yousuf/dna-entropy-worker:vX.Y.Z-cuda` and `-cpu`, uploads a Trivy SARIF report (HIGH and CRITICAL) to the Security tab, runs the Trivy gate (a fixable CRITICAL fails the release; a HIGH is only reported), writes SBOMs and attestations. If the gate fails, read the Security tab category `trivy-cuda` or `trivy-cpu`, bump the base digest or the locked dependency, or add a dated entry to `.trivyignore.yaml` (at most 90 days out, with the issue that removes it).
+   `ghcr.io/raaif-yousuf/dna-entropy-worker:vX.Y.Z-cuda` and `-cpu`, uploads a Trivy SARIF report (HIGH and CRITICAL) to the Security tab, runs the Trivy gate (a fixable HIGH or CRITICAL fails the release; an unfixed one is only reported), writes SBOMs and attestations. If the gate fails, read the Security tab category `trivy-cuda` or `trivy-cpu`, bump the base digest or the locked dependency, or add a dated entry to `.trivyignore.yaml` (at most 90 days out, with the issue that removes it).
 3. `wheel`: builds the worker wheel.
 4. `app` (approval again; read token only): writes the image digests into `worker-images.json`, publishes, writes `oauth_client.local.json` from `OAUTH_CLIENT_JSON`,
    signs the app binaries, `vpk pack`, signs `Setup.exe`, verifies EVERY signed file (chain and signer subject), stages exactly this

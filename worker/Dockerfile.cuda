@@ -31,6 +31,8 @@
 # release_dockerfile_base_pinned.py refuses an unpinned FROM. A literal digest is required (an
 # `${ARG}` in the reference is not a pin). To move to another NGC release, resolve the new
 # digest, change BOTH the tag in this comment and the digest, and re-run the #37 spike.
+# UNVERIFIED digest: it could not be checked offline against a pull. The first release run
+# (docs/ToTest.md, issue #255 row) is what proves this exact digest pulls and builds.
 FROM nvcr.io/nvidia/pytorch:25.06-py3@sha256:025d9b102b5436d4af8af58f12c6a46b7e5d16f19543b1d2cc4446bf2650b4f1
 
 LABEL org.opencontainers.image.source="https://github.com/Raaif-Yousuf/DNA-Entropy-Graph"

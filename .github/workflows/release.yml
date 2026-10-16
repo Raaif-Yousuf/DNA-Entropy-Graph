@@ -157,7 +157,9 @@ jobs:
 
       # Report first, gate second, so a failing gate still leaves the findings in the Security tab. The report lists every
       # HIGH and CRITICAL finding (fixable or not) and never fails; the gate below is the one that stops the release.
-      # Accepted CVEs live in .trivyignore.yaml, each with an expiry (scripts/check_trivy_allowlist.py, run above).
+      # Accepted CVEs live in .trivyignore.yaml, each with an expiry (scripts/check_trivy_allowlist.py, run above). A single
+      # *.yaml `trivyignores` value is handed to Trivy as TRIVY_IGNOREFILE (parsed as YAML, expired_at honoured), not
+      # concatenated into a plain file: MEASURED 2026-10-16, trivy-action entrypoint.sh at the pinned sha, lines 22-73.
       - name: Trivy report (SARIF, fixable and unfixed HIGH and CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
@@ -172,22 +174,27 @@ jobs:
           output: trivy-${{ matrix.variant }}.sarif
           trivyignores: .trivyignore.yaml
 
+      # A code-scanning outage must never block a release, and the gate below must still run: always() so a failed report
+      # step does not skip it, continue-on-error so a failed upload does not fail the job. (The gate is the only blocker.)
       - name: upload the Trivy report to code scanning
+        if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
         with:
           sarif_file: trivy-${{ matrix.variant }}.sarif
           category: trivy-${{ matrix.variant }}
 
       # The gate. A failing scan stops the release (the publish job needs this one); the pushed tag is never written into
-      # worker-images.json, so no released app can run it. HIGH is reported above and does not block; a fixable CRITICAL does.
-      - name: Trivy gate (fails on a fixable CRITICAL finding)
+      # worker-images.json, so no released app can run it. A fixable HIGH or CRITICAL finding fails it; unfixed ones are
+      # only reported above.
+      - name: Trivy gate (fails on a fixable HIGH or CRITICAL finding)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ github.token }}
         with:
           image-ref: ${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}
-          severity: 'CRITICAL'
+          severity: 'CRITICAL,HIGH'
           exit-code: '1'
           ignore-unfixed: true
           format: table

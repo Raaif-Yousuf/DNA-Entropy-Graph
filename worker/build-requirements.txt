@@ -1,0 +1,19 @@
+# Hash-pinned build tooling for the worker images (issue #255). Installed with
+#   pip install --require-hashes -r build-requirements.txt
+# BEFORE the locked runtime dependencies: uv (to export uv.lock, removed again in the same layer) and the project's
+# build backend (setuptools and wheel, per pyproject.toml [build-system]), so the final `pip install --no-deps
+# --no-build-isolation .` never fetches an unhashed build requirement.
+#
+# Hashes MEASURED 2026-10-16 from PyPI's JSON API:
+#   https://pypi.org/pypi/uv/0.12.13/json            (Linux x86_64 and aarch64 manylinux wheels, glibc python:3.12-slim)
+#   https://pypi.org/pypi/setuptools/84.0.0/json     (py3-none-any wheel)
+#   https://pypi.org/pypi/wheel/0.48.0/json          (py3-none-any wheel)
+# To bump a pin: fetch the new version's wheel hashes from the same URLs and change version and hashes together.
+uv==0.12.13 \
+    --hash=sha256:5312891392eb5b72eaca9b880e85fe3e706a2b11342e59f7a5cf0304d14d5cc5 \
+    --hash=sha256:b9c703a4aaee1288f33e2ce8b39a0245f432b57bd5d769073756b68e9ca6bafe \
+    --hash=sha256:891aff3e186cd5844102750372304e9ca20edffc50cb39a14cd047ea3416de75
+setuptools==84.0.0 \
+    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
+wheel==0.48.0 \
+    --hash=sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab
