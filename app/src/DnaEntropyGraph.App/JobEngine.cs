@@ -52,12 +52,13 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         ActiveRuns activeRuns,
         IRunTargetResolver targets,
         LocalRunDriver local,
-        Func<string?>? downloadsFolder = null)
+        Func<string?>? downloadsFolder = null,
+        AppDataRoot? dataRoot = null)
     {
         _targets = targets;
         _local = local;
         _activeRuns = activeRuns;
-        _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
+        _downloadsFolder = downloadsFolder ?? (dataRoot ?? AppDataRoot.Default()).DefaultOutputSource(Services.KnownFolders.Downloads);
         _messenger = messenger;
         _runner = runner;
         _account = account;
