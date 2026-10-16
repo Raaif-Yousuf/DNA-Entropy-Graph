@@ -35,6 +35,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly BuildIdentity? _build;
     private readonly SessionRestorer? _session;
     private SessionTarget? _pendingRestore;
+    private bool _userNavigated;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
     // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
@@ -134,6 +135,7 @@ public sealed partial class ShellViewModel : ObservableObject
     [RelayCommand]
     private void NavigateTo(string pageKey)
     {
+        _userNavigated = true;
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
@@ -151,7 +153,13 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The navigation item the shell selects at startup: the remembered page's (issue #244), else New run. Valid after <see cref="PrepareSessionAsync"/>.</summary>
     public string StartupNavKey { get; private set; } = InitialPageKeyValue;
 
-    /// <summary>Reads where the user left off (issue #244) before the first navigation. Never throws; a failure means "start on New run".</summary>
+    /// <summary>How long startup waits for the remembered page to resolve before opening on New run (issue #244). Tests shorten it.</summary>
+    public TimeSpan SessionRestoreTimeout { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Reads where the user left off (issue #244) before the first navigation. Never throws and never waits longer than
+    /// <see cref="SessionRestoreTimeout"/>: a locked or hung history means "start on New run". A page the user already chose wins over the restore.
+    /// </summary>
     public async Task PrepareSessionAsync(CancellationToken cancellationToken)
     {
         if (_session is null)
@@ -159,7 +167,30 @@ public sealed partial class ShellViewModel : ObservableObject
             return;
         }
 
-        var target = await _session.ResolveAsync(cancellationToken);
+        SessionTarget? target = null;
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        try
+        {
+            // Task.Run so a settings read that blocks synchronously is bounded too, not only an awaited history read.
+            target = await Task.Run(() => _session.ResolveAsync(limit.Token), limit.Token).WaitAsync(SessionRestoreTimeout, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            limit.Cancel();
+            System.Diagnostics.Trace.TraceWarning("session restore timed out; opening on the default page");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            System.Diagnostics.Trace.TraceWarning($"session restore failed: {ex.GetType().Name}");
+        }
+
+        if (_userNavigated)
+        {
+            // The user clicked a page while this was resolving: that choice stands and nothing is restored on top of it.
+            StartupNavKey = _currentPageKey;
+            return;
+        }
+
         _pendingRestore = target;
         StartupNavKey = target?.NavKey ?? InitialPageKeyValue;
     }

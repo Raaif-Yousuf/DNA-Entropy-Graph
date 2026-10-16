@@ -252,6 +252,89 @@ public sealed class SessionRestoreTests
         _inner.DidNotReceive().NavigateTo("Results", "job-1");
     }
 
+    private ShellViewModel QuickShell(SessionRestorer restorer)
+    {
+        var shell = Shell(restorer);
+        shell.SessionRestoreTimeout = TimeSpan.FromMilliseconds(100);
+        return shell;
+    }
+
+    [Fact]
+    public async Task A_hung_history_database_falls_back_to_New_run_instead_of_blocking_startup()
+    {
+        var never = new TaskCompletionSource<IReadOnlyList<RunRecord>>();
+        _runs.GetAllAsync(Arg.Any<CancellationToken>()).Returns(never.Task);
+        Store().Save(new SessionState("Results", "job-1"));
+        var shell = QuickShell(new SessionRestorer(Store(), _runs));
+
+        await shell.PrepareSessionAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        shell.StartupNavKey.ShouldBe("NewRun");
+        shell.NavigateToCommand.Execute("NewRun");
+        _inner.DidNotReceive().NavigateTo("Results", "job-1");
+    }
+
+    [Fact]
+    public async Task A_settings_file_that_blocks_synchronously_also_falls_back()
+    {
+        using var release = new ManualResetEventSlim();
+        var blocking = new BlockingSettings(release);
+        var shell = QuickShell(new SessionRestorer(new SessionStore(blocking), _runs));
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await shell.PrepareSessionAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        release.Set();
+
+        shell.StartupNavKey.ShouldBe("NewRun");
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    private sealed class BlockingSettings(ManualResetEventSlim release) : ISettingsStore
+    {
+        public string? GetString(string key)
+        {
+            release.Wait(TimeSpan.FromSeconds(8));
+            return null;
+        }
+
+        public void SetString(string key, string value)
+        {
+        }
+    }
+
+    [Fact]
+    public async Task A_click_before_the_restore_resolves_is_not_overwritten()
+    {
+        HaveRuns(("job-1", JobPhase.Completed));
+        Store().Save(new SessionState("Results", "job-1"));
+        var shell = Shell(new SessionRestorer(Store(), _runs));
+
+        shell.NavigateToCommand.Execute("Cloud");
+        await shell.PrepareSessionAsync(CancellationToken.None);
+
+        shell.StartupNavKey.ShouldBe("Cloud");
+        shell.NavigateToCommand.Execute("Runs");
+        _inner.DidNotReceive().NavigateTo("Results", "job-1");
+    }
+
+    [Fact]
+    public async Task A_click_while_the_restore_is_still_resolving_is_not_overwritten()
+    {
+        var gate = new TaskCompletionSource<IReadOnlyList<RunRecord>>();
+        _runs.GetAllAsync(Arg.Any<CancellationToken>()).Returns(gate.Task);
+        Store().Save(new SessionState("Results", "job-1"));
+        var shell = Shell(new SessionRestorer(Store(), _runs));
+
+        var preparing = shell.PrepareSessionAsync(CancellationToken.None);
+        shell.NavigateToCommand.Execute("Settings");
+        gate.SetResult([new RunRecord("job-1", JobPhase.Completed, DateTimeOffset.UtcNow)]);
+        await preparing.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        shell.StartupNavKey.ShouldBe("Settings");
+        shell.NavigateToCommand.Execute("Runs");
+        _inner.DidNotReceive().NavigateTo("Results", "job-1");
+    }
+
     [Fact]
     public async Task A_shell_without_a_restorer_starts_on_New_run()
     {
