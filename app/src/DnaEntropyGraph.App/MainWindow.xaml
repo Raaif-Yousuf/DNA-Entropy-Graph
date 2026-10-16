@@ -18,6 +18,10 @@
         an issue; see this session's report.
     -->
     <Grid x:Name="RootGrid">
+        <!-- Issue #110: window-wide shortcuts (Appendix A section 6). Alt+Left goes back; Ctrl+N and Ctrl+, are on the nav items below. -->
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Left" Modifiers="Menu" Invoked="{x:Bind ViewModel.GoBack}" />
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />
@@ -59,11 +63,15 @@
                 The three caption buttons are 46 DIP wide each, so 154 clears
                 them with a 16 DIP gap, in DIPs so it holds at any scale.
             -->
-            <TextBlock
+            <!-- Issue #99: the pill is also the way back to the setup wizard (sign in, switch project, run the setup check again). -->
+            <HyperlinkButton
                 Grid.Column="1"
                 VerticalAlignment="Center"
                 Margin="0,0,154,0"
-                Text="{x:Bind ViewModel.StatusPillText, Mode=OneWay}" />
+                Content="{x:Bind ViewModel.StatusPillText, Mode=OneWay}"
+                Command="{x:Bind ViewModel.NavigateToCommand}"
+                CommandParameter="Wizard"
+                AutomationProperties.HelpText="{x:Bind ViewModel.StatusPillHelp}" />
         </Grid>
 
         <NavigationView
@@ -77,6 +85,9 @@
             Loaded="RootNavigationView_Loaded">
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Uid="NavNewRun" Tag="NewRun">
+                    <NavigationViewItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Key="N" Modifiers="Control" />
+                    </NavigationViewItem.KeyboardAccelerators>
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE710;" />
                     </NavigationViewItem.Icon>
@@ -96,7 +107,7 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem x:Uid="NavSettings" Tag="Settings">
+                <NavigationViewItem x:Name="SettingsNavItem" x:Uid="NavSettings" Tag="Settings">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE713;" />
                     </NavigationViewItem.Icon>

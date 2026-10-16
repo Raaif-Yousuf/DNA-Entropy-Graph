@@ -225,7 +225,11 @@ to buy. (`cold-diff-reviewer` under `.claude/agents/` is built for this.)
 Worktree lanes: land a committed branch with `scripts/land_wt.py --branch <b> --sha <tip> --title ... --body-file ...`
 (`--full` for a full premerge). It verifies that exact sha in a throwaway worktree (origin/main merged in, ToTest rows
 union-resolved, any other conflict refused, premerge red refused, venv junction always unlinked before the worktree is
-removed), pushes and opens the PR; you merge it. For a batch, queue the lines with `scripts/land_queue.py add` and run
+removed), pushes and opens the PR; you merge it, or pass `--merge-when-green` and it waits for every PR check and merges
+with a merge commit only if none failed (exit 5 a check failed, 6 still pending at `--checks-timeout`; the PR stays
+open). Prefer the flag to a hand-written `gh pr checks --watch; gh pr merge` chain: that chain exits 0 on a red check
+(MEASURED 2026-10-15, #666). A failed check is re-run once by default (`--no-rerun-failed-once` to disable) and logged to
+`<git-dir>/flaky-checks.log`; a second red refuses. For a batch, queue the lines with `scripts/land_queue.py add` and run
 `land_queue.py run` (items keyed `branch@sha`; merge when green with one rerun; a DIRTY PR is re-landed once; `status` shows
 the queue, the in-flight item and the last results; `stop` ends it). See `docs/branching_and_prs.md`. The steps below apply to every landing.
 
