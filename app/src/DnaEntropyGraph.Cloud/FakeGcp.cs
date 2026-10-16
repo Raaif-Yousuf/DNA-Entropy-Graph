@@ -317,6 +317,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     {
         var key = (vmName, zone);
         _vms[key] = new VmDescriptor(vmName, zone, status);
+        ResetVmDeleted(vmName);
         _alreadyExistingVmKeys.Add(key);
         return this;
     }
@@ -612,6 +613,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
+    /// <summary>A VM made under a name that an earlier delete already signalled is a new VM: its delete has not happened yet, so the old signal is dropped (a test waiting on the second delete must not be let through by the first).</summary>
+    private void ResetVmDeleted(string vmName)
+    {
+        lock (_deletedVms)
+        {
+            if (_deletedVms.TryGetValue(vmName, out var signal) && signal.Task.IsCompleted)
+            {
+                _deletedVms.Remove(vmName);
+            }
+        }
+    }
+
     private void SignalVmDeleted(string vmName)
     {
         lock (_deletedVms)
@@ -869,8 +882,32 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var landing = Task.Delay(_createDelay, _timeProvider);
         OnCallParked?.Invoke(ParkedCall.SlowCreate, _createDelay);
         await landing.ConfigureAwait(false);
-        return await CreateVmCore(spec, zone, CancellationToken.None).ConfigureAwait(false);
+        if (CreateLandingGate is { } gate)
+        {
+            await gate.ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await CreateVmCore(spec, zone, CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            _delayedCreateLanded.TrySetResult();
+        }
     }
+
+    private readonly TaskCompletionSource _delayedCreateLanded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// When set, a create made slow by <see cref="WithCreateDelay"/> answers only once this task completes, after its delay: a test holds
+    /// the landing until the caller has given up on the create, so "lands after the deadline" is a fact of ordering and not of a few
+    /// virtual milliseconds (#567).
+    /// </summary>
+    public Task? CreateLandingGate { get; set; }
+
+    /// <summary>Completes once a create made slow by <see cref="WithCreateDelay"/> has landed (or failed): the signal that a late landing has happened, so a test can look for what it left behind.</summary>
+    public Task WhenDelayedCreateLandedAsync() => _delayedCreateLanded.Task;
 
     private async Task<VmDescriptor> CreateAfterGateAsync(CreateGate gate, VmSpec spec, string zone, CancellationToken cancellationToken)
     {
@@ -958,6 +995,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
         RunSimulatedWorker(spec, zone);
         _vms[key] = vm;
+        ResetVmDeleted(spec.VmName);
         _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)

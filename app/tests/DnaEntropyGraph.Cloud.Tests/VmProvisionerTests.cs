@@ -52,18 +52,21 @@ public class VmProvisionerTests
     [Fact]
     public async Task A_create_slower_than_CreateTimeout_is_cut_off_at_CreateTimeout_and_the_late_VM_is_deleted()
     {
-        // Pins that CreateTimeout (not the poller's deadline, which is the same value) is what ends the wait: the call
-        // returns near 100 ms although the create would take 400 ms, and what the create then made is deleted. The fake and the
-        // provisioner share one virtual clock (#567); the create's own delay moves it once the provisioner is waiting.
+        // Pins that CreateTimeout (not the poller's deadline, which is the same value) is what ends the wait: the call is cut when the
+        // clock reads 100 ms although the create would take 400 ms, and what the create then made is deleted. The fake and the provisioner
+        // share one virtual clock (#567) that this test moves itself, 10 ms at a time, so the moment the provisioner gives up is the
+        // moment it is measured at: it must not have armed its settle window before the deadline, and must have by the deadline.
         var clocks = new RunnerClocks();
         var gcp = new FakeGcp(clocks.Run).WithCreateDelay(TimeSpan.FromMilliseconds(400));
-        clocks.ParkPump(gcp, TimeSpan.FromMilliseconds(100));
         var spec = Spec("job-p9");
         var request = TestInputs.Request("job-p9", spec, zones: ["us-central1-a"]);
+        var deadline = TimeSpan.FromMilliseconds(100);
+        var step = TimeSpan.FromMilliseconds(10);
+        var settleWindow = TimeSpan.FromSeconds(5);
         var settings = new CloudRunSettings
         {
-            CreateTimeout = TimeSpan.FromMilliseconds(100),
-            CreateSettleTimeout = TimeSpan.FromSeconds(5),
+            CreateTimeout = deadline,
+            CreateSettleTimeout = settleWindow,
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
             LifecycleTimeout = TimeSpan.FromMilliseconds(50),
             TimeProvider = clocks.Run,
@@ -71,14 +74,26 @@ public class VmProvisionerTests
         };
         var calls = new GatewayCalls(settings, gcp);
         var provisioner = new VmProvisioner(gcp, calls, settings, new VmTerminator(gcp, calls, settings));
-        var started = clocks.Run.GetTimestamp();
 
         var create = provisioner.ProvisionAsync(request, spec, new RunProgress(), CancellationToken.None);
+        await clocks.Run.WhenTimerCreatedAsync(0, deadline).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        var settleArmed = clocks.Run.WhenTimerCreatedAsync(0, settleWindow);
+        var started = clocks.Run.GetTimestamp();
+        while (clocks.Run.GetElapsedTime(started) < deadline)
+        {
+            settleArmed.IsCompleted.ShouldBeFalse("the provisioner gave up on the create before its deadline");
+            clocks.Run.Advance(step);
+        }
+
+        await settleArmed.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        var cutAt = clocks.Run.GetElapsedTime(started);
+        cutAt.ShouldBeGreaterThanOrEqualTo(deadline);
+        cutAt.ShouldBeLessThanOrEqualTo(deadline + step, "the wait ended at CreateTimeout, not at the create's own landing");
+        clocks.Run.Advance(TimeSpan.FromMilliseconds(400) - cutAt);
         var result = await create.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         result.Success.ShouldBeFalse();
         (await gcp.FindByJobIdAsync("job-p9", CancellationToken.None)).ShouldBeEmpty("the late create must be settled and deleted");
-        clocks.Run.GetElapsedTime(started).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(100), "the create was waited on for its deadline, on test time");
     }
 
     [Fact]

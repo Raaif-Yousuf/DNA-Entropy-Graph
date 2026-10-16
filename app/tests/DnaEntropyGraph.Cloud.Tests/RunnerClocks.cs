@@ -12,7 +12,7 @@ namespace DnaEntropyGraph.Cloud.Tests;
 internal sealed class RunnerClocks
 {
     /// <summary>Real-time ceiling on a pump waiting for a deadline to be armed; it only ends a stuck pump, it asserts nothing.</summary>
-    private static readonly TimeSpan PumpGiveUp = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan PumpGiveUp = TimeSpan.FromSeconds(10);
 
     public VirtualTimeProvider Run { get; } = new();
 
@@ -21,6 +21,11 @@ internal sealed class RunnerClocks
     public Task SleepAsync(TimeSpan span, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (PumpFault is { } fault)
+        {
+            throw new InvalidOperationException("A parked-call pump failed: " + fault.Message, fault);
+        }
+
         Run.Advance(span);
         Retry.Advance(span);
         return Task.CompletedTask;
@@ -31,10 +36,12 @@ internal sealed class RunnerClocks
     /// caller's deadline on <see cref="Run"/>. Why not "advance while any call is parked": that would also cut a healthy but slow
     /// call that runs after the abandoned parked one. This advances once per parked call the test scripted, by that call's own
     /// <paramref name="callLimit"/> (plus a millisecond) for a hang, or by the create's own delay, and only after the caller has
-    /// armed its deadline timer (the clock's created-timer count rises past what it was when the call parked; a count of live
-    /// timers is not used, a timer from the previous call may still be disposing), because a deadline armed after the clock moved
-    /// would never fire. A create that never lands gets one more move, by <paramref name="settleLimit"/> (plus a millisecond),
-    /// once the caller starts waiting out the settle window on the abandoned create: nothing else would ever end that wait.
+    /// armed THE deadline timer: the one whose due time is <paramref name="callLimit"/>, created after the call parked (any other
+    /// timer, such as a retry or a poll, is not what the call is waiting on), because a deadline armed after the clock moved would
+    /// never fire. A create that never lands gets one more move, by <paramref name="settleLimit"/> (plus a millisecond), once the
+    /// caller has armed the settle window (a timer of <paramref name="settleLimit"/>) on the abandoned create: nothing else would
+    /// ever end that wait. A pump whose timer never arrives records the fault (<see cref="PumpFault"/>) and the next
+    /// <see cref="SleepAsync"/> throws it, so a wrong limit fails the test with its cause instead of hanging it silently.
     /// </summary>
     public void ParkPump(FakeGcp gcp, TimeSpan callLimit, TimeSpan? settleLimit = null)
         => gcp.OnCallParked = (kind, span) =>
@@ -44,27 +51,39 @@ internal sealed class RunnerClocks
             var settle = kind == FakeGcp.ParkedCall.CreateThatNeverLands ? settleLimit : null;
             _ = Task.Run(async () =>
             {
-                await WaitForTimerAsync(createdBefore).ConfigureAwait(false);
-                var armed = Run.TimersCreated;
-                Run.Advance(step);
-                if (settle is { } window)
+                try
                 {
-                    await WaitForTimerAsync(armed).ConfigureAwait(false);
-                    Run.Advance(window + TimeSpan.FromMilliseconds(1));
+                    await WaitForTimerAsync(createdBefore, callLimit).ConfigureAwait(false);
+                    var armed = Run.TimersCreated;
+                    Run.Advance(step);
+                    if (settle is { } window)
+                    {
+                        await WaitForTimerAsync(armed, window).ConfigureAwait(false);
+                        Run.Advance(window + TimeSpan.FromMilliseconds(1));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Volatile.Write(ref _pumpFault, ex);
                 }
             });
         };
 
-    private async Task WaitForTimerAsync(int createdBefore)
+    private Exception? _pumpFault;
+
+    /// <summary>What stopped a pump (a deadline it waited for was never armed); null while every pump is healthy. <see cref="SleepAsync"/> throws it.</summary>
+    public Exception? PumpFault => Volatile.Read(ref _pumpFault);
+
+    private async Task WaitForTimerAsync(int createdBefore, TimeSpan due)
     {
-        // A signal, not a poll: the clock says when the caller has armed a deadline. The real-time bound only ends a stuck pump (the deadline was never armed); it asserts nothing.
+        // A signal, not a poll: the clock says when the caller has armed the deadline. The real-time bound only ends a stuck pump; it asserts nothing but is loud.
         try
         {
-            await Run.WhenTimerCreatedAsync(createdBefore).WaitAsync(PumpGiveUp).ConfigureAwait(false);
+            await Run.WhenTimerCreatedAsync(createdBefore, due).WaitAsync(PumpGiveUp).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            // No deadline was armed: move on, so the stuck test fails on its own watchdog instead of the pump faulting unobserved.
+            throw new InvalidOperationException($"The pump waited {PumpGiveUp.TotalSeconds:0} s for a timer of {due.TotalMilliseconds:0} ms on the runner clock and none was armed: the limit passed to ParkPump is not the deadline the caller uses.");
         }
     }
 }

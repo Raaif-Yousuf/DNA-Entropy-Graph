@@ -142,17 +142,22 @@ public class CloudJobRunnerResumeAndSettleTests
     [Fact]
     public async Task A_create_that_lands_after_its_deadline_is_deleted_before_the_run_is_recorded_Failed()
     {
-        // The fake shares the runner clock: the insert answers 5 virtual ms after the create deadline (50 ms), and the pump moves the
-        // clock past both together once the runner is waiting on it.
+        // The fake shares the runner clock: the pump moves it past the create deadline (50 ms) once the runner is waiting on it. The
+        // insert is then held on a gate, released only when the runner has armed its settle window on the abandoned create (or the
+        // run is over), so "lands after the deadline and after the runner gave up" is a fact of ordering, never of a few virtual ms.
         var clocks = new RunnerClocks();
+        var landing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var gcp = new FakeGcp(clocks.Run).WithCreateDelay(TimeSpan.FromMilliseconds(55));
+        gcp.CreateLandingGate = landing.Task;
         var repo = new InMemoryRunRepository();
 
-        var result = await WithinAsync(Runner(gcp, repo, clocks: clocks).RunAsync(TestInputs.Request("job-s1", Spec("job-s1")), CancellationToken.None), "hung");
+        var run = Runner(gcp, repo, clocks: clocks).RunAsync(TestInputs.Request("job-s1", Spec("job-s1")), CancellationToken.None);
+        _ = Task.WhenAny(run, clocks.Run.WhenTimerCreatedAsync(0, SettleLimit)).ContinueWith(_ => landing.TrySetResult(), TaskScheduler.Default);
+        var result = await WithinAsync(run, "hung");
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
-        // Real time is kept on purpose: this wait can only let a late landing show up, it never decides pass over fail by itself.
-        await Task.Delay(400, TestContext.Current.CancellationToken);
+        landing.TrySetResult();
+        await gcp.WhenDelayedCreateLandedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         (await gcp.FindByJobIdAsync("job-s1", CancellationToken.None)).ShouldBeEmpty("the late insert landed after the run ended: an orphan billing on a Failed run");
     }
 

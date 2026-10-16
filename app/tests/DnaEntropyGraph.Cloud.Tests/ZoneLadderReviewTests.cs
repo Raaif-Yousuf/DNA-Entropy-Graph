@@ -34,10 +34,12 @@ public class ZoneLadderReviewTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static VmProvisioner Provisioner(IComputeGateway compute, FakeGcp gcp, Func<RunProgress, string, CancellationToken, Task>? claimZone = null)
+    private static VmProvisioner Provisioner(IComputeGateway compute, FakeGcp gcp, Func<RunProgress, string, CancellationToken, Task>? claimZone = null, RunnerClocks? clocks = null)
     {
         var settings = new CloudRunSettings
         {
+            TimeProvider = clocks?.Run ?? TimeProvider.System,
+            PollDelay = clocks is null ? null : clocks.SleepAsync,
             CreateTimeout = TimeSpan.FromSeconds(5),
             CreateSettleTimeout = TimeSpan.FromSeconds(3),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
@@ -224,33 +226,41 @@ public class ZoneLadderReviewTests
     public async Task A_straggler_whose_create_lands_after_the_winner_is_deleted_before_the_ladder_returns()
     {
         var gcp = ThreeStockedOut();
-        // The straggler's create is held until the winner's create has landed, so "lands after the winner" is a fact of ordering, not of how long 400 ms took on this machine.
-        var winnerLanded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The straggler's create is held until the ladder has given up on it (it armed the 3 s settle window on the abandoned create) or has
+        // returned, so "lands after the ladder stopped waiting" is a fact of ordering, not of how long 400 ms took on this machine.
+        var clocks = new RunnerClocks();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var straggled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var stub = new Stub(gcp)
         {
             OnCreate = async (spec, zone, token) =>
             {
                 if (zone == "us-east1-b")
                 {
-                    await winnerLanded.Task.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken.None);
-                    return await gcp.CreateVmAsync(spec, zone, CancellationToken.None);
+                    await release.Task.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken.None);
+                    try
+                    {
+                        return await gcp.CreateVmAsync(spec, zone, CancellationToken.None);
+                    }
+                    finally
+                    {
+                        straggled.TrySetResult();
+                    }
                 }
 
-                var created = await gcp.CreateVmAsync(spec, zone, token);
-                if (zone == "us-central1-f")
-                {
-                    winnerLanded.TrySetResult();
-                }
-
-                return created;
+                return await gcp.CreateVmAsync(spec, zone, token);
             },
         };
         var spec = Spec("job-w2");
 
-        var result = await Provisioner(stub, gcp).ProvisionAsync(Request("job-w2", spec), spec, new RunProgress(), CancellationToken.None);
+        var provision = Provisioner(stub, gcp, clocks: clocks).ProvisionAsync(Request("job-w2", spec), spec, new RunProgress(), CancellationToken.None);
+        _ = Task.WhenAny(provision, clocks.Run.WhenTimerCreatedAsync(0, TimeSpan.FromSeconds(3))).ContinueWith(_ => release.TrySetResult(), TaskScheduler.Default);
+        var result = await provision.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
         result.Success.ShouldBeTrue(result.FailureMessage);
         result.Zone.ShouldBe("us-central1-f");
+        release.TrySetResult();
+        await straggled.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         (await LiveZonesAsync(gcp, "job-w2")).ShouldBe(["us-central1-f"], "an extra that landed late must not be left billing");
     }
 
