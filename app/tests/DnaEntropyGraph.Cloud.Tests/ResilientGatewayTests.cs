@@ -317,6 +317,11 @@ public class ResilientGatewayTests
             return Spec();
         }
 
+        if (type == typeof(VmIncarnation))
+        {
+            return new VmIncarnation(1, null);
+        }
+
         if (type == typeof(QuotaIncreaseRequest))
         {
             return new QuotaIncreaseRequest(QuotaMetrics.GpusAllRegions, null, 1, "deg-sample", "sample");

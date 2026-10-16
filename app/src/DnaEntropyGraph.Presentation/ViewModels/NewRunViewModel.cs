@@ -27,7 +27,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     // The tier and VM kind the page's Run uses (RunOptions defaults: the cheapest GPU, on-demand), so the estimate prices the
     // machine a run on this page really starts. When a tier or Spot picker lands it must feed both StartRunAsync and the estimate.
     private const GpuTier DefaultTier = GpuTier.CheapestAvailable;
-    private const bool DefaultSpot = false;
+    private static readonly bool DefaultSpot = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.SpotVm;
 
     // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
     private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
