@@ -202,8 +202,7 @@ def verdict(command: str) -> str | None:
             if not missing:
                 continue
             example = (
-                "gcloud compute instances create <name> --labels=app=dna-entropy-graph,"
-                "job-id=<id>,purpose=job --max-run-duration=14400s ..."
+                "gcloud compute instances create <name> --labels=app=dna-entropy-graph,job-id=<id>,purpose=job --max-run-duration=14400s ..."
             )
             return MESSAGE_TEMPLATE.format(missing=", ".join(missing), example=example)
     return None
@@ -224,8 +223,7 @@ _DENY_CASES = (
 )
 
 _ALLOW_CASES = (
-    "gcloud compute instances create deg-job-1 --labels=app=dna-entropy-graph,job-id=1 "
-    "--max-run-duration=14400s",
+    "gcloud compute instances create deg-job-1 --labels=app=dna-entropy-graph,job-id=1 --max-run-duration=14400s",
     "CloudCli vm create --labels app=x --max-run-duration 14400s",
     "gcloud compute instances list",
     "gcloud compute instances delete deg-job-1",
@@ -258,8 +256,7 @@ def self_test() -> int:
     )
     if proc.returncode != 0 or proc.stdout.strip() != "":
         failures += 1
-        print("self-test FAILED: malformed stdin must fail open (exit 0, silent stdout)",
-              file=sys.stderr)
+        print("self-test FAILED: malformed stdin must fail open (exit 0, silent stdout)", file=sys.stderr)
 
     total = len(_DENY_CASES) + len(_ALLOW_CASES) + 1
     if failures:

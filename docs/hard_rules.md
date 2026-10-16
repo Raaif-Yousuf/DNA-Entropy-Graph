@@ -253,6 +253,16 @@ user does not have.
 **Carve-out:** Comments, docstrings, and `docs/` are exempt from the em-dash
 ban; nothing user-facing is.
 
+**Carve-out (issue #264): the uninstall question's English fallback.** `App/Startup/UninstallDataStrings.cs` holds
+the title and body of the "Remove your data too?" box as embedded English constants. Reason: Velopack's
+before-uninstall hook runs in the uninstaller's process before `Application.Start`, where the resource loader may
+not resolve, and `ReswStringResourceProvider` then returns the raw key, which would put `UninstallRemoveData_Body`
+on screen. The loader is tried first; the constants are used only when it throws, returns nothing, or returns the
+key. `Guards.Tests/UninstallStringsMatchResourcesTests` fails if either constant differs from its
+`Resources.resw` value, so the resw stays the one source of truth. There is no allowlist entry to add: the C#
+string guard (`DialogStringLiteralScanner`) only matches a literal passed straight to `ConfirmAsync` or `ShowToast`,
+so these constants (passed to a Win32 message box) were never in its shape; the equality test is their guard.
+
 **Guard:** `ci-docs.yml`'s em-dash scan already covers `docs/user_guide/**`,
 `*.resw`, `.github/ISSUE_TEMPLATE/**`, and `README.md`. A guard scanning
 every string literal reachable from XAML for the same pattern, and for a

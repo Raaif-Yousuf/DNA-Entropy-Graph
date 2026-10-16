@@ -13,7 +13,7 @@ what it runs, and where CI runs the same thing.
 | Suite | Where | Command | Status |
 | --- | --- | --- | --- |
 | `worker/tests` (not gpu) | Laptop (`premerge.py`, full mode), `ci-worker.yml` | `worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q` | Live |
-| `worker/tests` (gpu) | A labelled GCP VM only, via `scripts/cloud_gpu_test.ps1` | `pytest -m gpu` (on the VM, never the laptop) | Dry-run only; `-Apply` waits on `CloudCli` (see `dev_commands.md`) |
+| `worker/tests` (gpu) | A labelled GCP VM only, via `scripts/cloud_gpu_test.ps1` | `pytest -m gpu` (on the VM, never the laptop) | Dry-run and `-SelfTest` today; `-Apply` creates, deletes and leak-scans one VM but does not run `pytest -m gpu` yet (#83, see `dev_commands.md`) |
 | `app/tests/*.Tests` (unit, five libraries) | Laptop (`premerge.py`, full mode; one gate per discovered project), `ci-app.yml` (per assembly, with `--hangdump`, TRX uploaded as the `test-results` artifact, and the step fails if fewer than five `.trx` files exist; #438). The App is built with Windows App SDK bootstrap option `None` in every configuration (no dialog, a missing runtime exits with its HRESULT) and the job installs then asserts Windows App Runtime 1.8, because the bootstrap cannot be disabled for these tests (`BootstrapNeverShowsUiGuardTests`) | `cd app; dotnet test tests/<Project>/<Project>.csproj` (cwd must be `app/`) | Live |
 | `app/tests/DnaEntropyGraph.Guards.Tests` | Laptop (`premerge.py --fast`), `ci-app.yml` | `cd app; dotnet test tests/DnaEntropyGraph.Guards.Tests/DnaEntropyGraph.Guards.Tests.csproj` | Live; seconds |
 | `app/tests/*.UiTests` | Not run by `premerge.py` or CI (WinUI-hosted; every test is a skip today) | Manual, or a `docs/ToTest.md` row (`Needs: app-dev`) | Exempt, named in `scripts/premerge.py` |
@@ -102,6 +102,22 @@ itself a RAM/time cost when several agents run concurrently. `hypothesis` is a `
 extra in `worker/pyproject.toml`; it is MPL-2.0, not MIT (see
 the test-367 entry in `docs/sprint_log.md` and the `DECISION` issue this
 recorded under Hard Rule 21).
+
+## Golden files (issue #161)
+
+`worker/tests/test_golden.py` runs the pipeline with the MockPredictor (seed 0, default
+settings) on `sample.gb`, `multi.gb` and `prokaryotic_demo.fasta` and compares EVERY output file
+byte for byte with `worker/tests/golden/files/<case>/`. Changing a writer's number formatting, a
+coordinate convention or the analysis fails it. The only normalization is removing
+`generated_at`, `wall_time_seconds` and `worker_version` from `provenance.json`, so a release
+bump is not a failure. The FASTA case turns the bonus `.gb` off because that file's genes come
+from Prodigal only when the optional `[genes]` extra is installed (machine-dependent).
+
+To change the golden files on purpose: `worker\.venv\Scripts\python.exe
+worker\tests\golden\regenerate.py --justification "why"` (refuses without one), read the diff
+(a formatting change should touch every numeric file, a coordinate change one writer's file), and
+commit the files with the code. The justification is appended to
+`worker/tests/golden/JUSTIFICATIONS.txt`.
 
 ## Reader parity fixture (issue #393)
 

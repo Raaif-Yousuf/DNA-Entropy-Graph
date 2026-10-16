@@ -216,14 +216,14 @@ jobs:
       # MEASURED 2026-10-03 (vpk 1.2.161, run locally against a real publish folder): the pack needs
       # --mainExe DnaEntropyGraph.App.exe (the exe is not named after the pack id) and refuses an app that
       # does not call VelopackApp.Build().Run() (#513, which Program.cs now does). With both, it exited 0
-      # in 6 s and wrote DnaEntropyGraph-win-Setup.exe (56.6 MB), a Portable.zip, the full .nupkg, RELEASES and
+      # in 6 s and wrote DnaEntropyGraph-win-Setup.exe (old packId) (56.6 MB), a Portable.zip, the full .nupkg, RELEASES and
       # releases.win.json. It runs unconditionally: a failure fails the job. vpk is pinned so a new major
       # cannot change the rules overnight.
       - name: vpk pack (unsigned)
         working-directory: app
         run: |
           dotnet tool install -g vpk --version 1.2.161
-          vpk pack --packId DnaEntropyGraph --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
+          vpk pack --packId DnaEntropyGraph.Desktop --packVersion 0.0.1-ci.${{ github.run_number }} --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: upload installer (unsigned, 7 days)

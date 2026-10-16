@@ -1,0 +1,4 @@
+contig	gene_id	begin	end	strand	length_nt	partial	wraps_origin	segments	mean_entropy_bits	min_entropy_bits	max_entropy_bits	mean_surprisal_bits	fraction_low_entropy
+golden_1	gA	1	30	+	30	false	false	1..30	1.6270	1.0847	1.9757	2.3297	0.0000
+golden_1	gB	34	57	-	24	false	false	34..57	1.5506	0.9970	1.9505	2.3375	0.0000
+golden_2	gC	10	45	+	36	false	false	10..45	1.5368	0.4222	1.9801	2.5979	0.0278

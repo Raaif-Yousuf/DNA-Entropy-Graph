@@ -1,0 +1,4 @@
+##gff-version 3
+##sequence-region golden 1 126
+golden	genbank	gene	1	42	.	+	.	ID=geneA;Name=geneA
+golden	genbank	gene	85	126	.	-	.	ID=geneB;Name=geneB

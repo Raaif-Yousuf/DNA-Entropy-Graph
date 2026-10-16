@@ -78,12 +78,7 @@ def _violation(call: ast.Call) -> str | None:
             return 'write_text() without newline="\\n"'
         return None
     is_name_open = isinstance(func, ast.Name) and func.id == "open"
-    is_io_open = (
-        isinstance(func, ast.Attribute)
-        and func.attr == "open"
-        and isinstance(func.value, ast.Name)
-        and func.value.id == "io"
-    )
+    is_io_open = isinstance(func, ast.Attribute) and func.attr == "open" and isinstance(func.value, ast.Name) and func.value.id == "io"
     is_path_open = isinstance(func, ast.Attribute) and func.attr == "open" and not is_io_open
     if is_name_open or is_io_open or is_path_open:
         # open(path, mode) / io.open(path, mode) take the mode second; Path.open(mode) first.
@@ -173,9 +168,7 @@ def self_test() -> bool:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "scripts").mkdir()
-        (root / "scripts" / "bad.py").write_text(
-            'def f(p):\n    p.write_text("x")\n', encoding="utf-8", newline="\n"
-        )
+        (root / "scripts" / "bad.py").write_text('def f(p):\n    p.write_text("x")\n', encoding="utf-8", newline="\n")
         found = check(root)
         if len(found) != 1 or found[0].line != 2 or found[0].path != "scripts/bad.py":
             print(f"FAIL: planted violation should be named with file and line, got {found}")
