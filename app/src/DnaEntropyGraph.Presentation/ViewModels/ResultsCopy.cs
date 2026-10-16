@@ -15,6 +15,9 @@ public static class ResultsCopy
     public const string OpenFolderFailed = "Results_OpenFolderFailed";
     public const string CopyFailed = "Results_CopyFailed";
 
+    // Issue #118: the entropy overview strip.
+    public const string ExportPngFailed = "Results_ExportPngFailed";
+
     // Issue #586: Open in IGV and Open in Geneious.
     public const string IgvNoFiles = "Results_IgvNoFiles";
     public const string IgvNotFound = "Results_IgvNotFound";
@@ -64,7 +67,7 @@ public static class ResultsCopy
     /// <summary>Every key above, for the guard that proves each one exists in the .resw.</summary>
     public static IReadOnlyList<string> AllKeys { get; } =
     [
-        NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed,
+        NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed,
         IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, IgvNoAnswer, ViewerUnsafePath, IgvPathUnsendable, IgvNoGenome, IgvFirstInputOnly,
         GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
