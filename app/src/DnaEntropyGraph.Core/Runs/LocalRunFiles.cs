@@ -37,6 +37,9 @@ public interface ILocalRunFiles
 
     /// <summary>The input a re-run should use: the app's own copy, else the original file, else null.</summary>
     string? FindRerunInput(RunRecord run, RunOptions options);
+
+    /// <summary>The GFF3 a re-run of a paired run (issue #686) should use: the app's own copy, else the original, else null. Null too when the run had no GFF3.</summary>
+    string? FindRerunAnnotation(RunRecord run, RunOptions options);
 }
 
 public sealed class LocalRunFiles : ILocalRunFiles
@@ -247,5 +250,22 @@ public sealed class LocalRunFiles : ILocalRunFiles
         }
 
         return !string.IsNullOrWhiteSpace(options.InputPath) && File.Exists(options.InputPath) ? options.InputPath : null;
+    }
+
+    public string? FindRerunAnnotation(RunRecord run, RunOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.AnnotationPath))
+        {
+            return null;
+        }
+
+        // The store answers from the disk without waiting on anything; callers run this off the UI thread.
+        var staged = _inputs.FindAnnotationAsync(run.JobId, CancellationToken.None).GetAwaiter().GetResult()?.LocalPath;
+        if (!string.IsNullOrWhiteSpace(staged) && File.Exists(staged))
+        {
+            return staged;
+        }
+
+        return File.Exists(options.AnnotationPath) ? options.AnnotationPath : null;
     }
 }
