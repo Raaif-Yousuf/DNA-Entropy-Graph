@@ -131,6 +131,12 @@ It works with no internet connection, because everything it needs ships inside t
 reads your results from the folder on your computer. It follows the app's light or dark
 theme.
 
+If your file holds more than one sequence record, a **Sequence record** list appears above
+the viewer. Choose a record and the viewer jumps straight to it; if you have scrolled away, press **Go to record** to jump back to the one that is chosen. For a run that read both
+directions and combined them, the viewer also marks the seam (see above) with a thin red
+band at that base on each record; point at it to read what it means. A run that has no
+seam shows no marker.
+
 Open it from a finished run with the **Open viewer** button on the run page. If the viewer
 says it could not draw the run, choose **Try again**. Sequences larger than 50 MB are too
 big for the built-in viewer; open the sequence file and the entropy track in IGV on your
@@ -139,7 +145,7 @@ computer instead.
 **If the viewer says it needs a Microsoft component:** the viewer uses Microsoft's WebView2
 Runtime, which comes with Windows 11 and most up-to-date Windows 10 computers. If yours
 does not have it, the viewer page offers an **Install the WebView2 Runtime** link; install
-it, then open the run again. **If it says the results are not on this computer**, the
+it, then open the run again. Until then the page still draws the entropy track of the run as a plain chart (no zoom, no sequence), so you are never left with a blank page. **If it says the results are not on this computer**, the
 results folder was moved or deleted; download the results again from the run.
 
 You can also open your results in other tools you may already have:

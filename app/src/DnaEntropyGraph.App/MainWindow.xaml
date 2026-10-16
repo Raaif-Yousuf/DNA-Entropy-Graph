@@ -45,6 +45,15 @@
                     Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}">
                     <TextBlock Text="{x:Bind ViewModel.SimulatedCloudBannerText}" TextTrimming="CharacterEllipsis" />
                 </Border>
+                <!-- Issue #263: an unsigned exe (a dev build or a CI artifact) is named here with its version and short sha, so it never passes for a release. -->
+                <Border
+                    Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasDevBuildBanner)}"
+                    Margin="12,0,0,0"
+                    Padding="8,2"
+                    CornerRadius="4"
+                    Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                    <TextBlock Text="{x:Bind ViewModel.DevBuildBannerText}" TextTrimming="CharacterEllipsis" />
+                </Border>
                 <Border
                     Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasProfileOverride)}"
                     Margin="12,0,0,0"
@@ -122,17 +131,27 @@
             page at the bottom; info and success close themselves, errors stay until the user closes the bar.
             IsOpen is TwoWay so the close button clears the ViewModel state too.
         -->
+        <!-- Issue #179 review: the update bar and the message bar share one bottom-aligned stack, so neither covers the other. -->
+        <StackPanel Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Center" MaxWidth="640" Margin="16" Spacing="8">
+        <!-- Issue #179: a newer release was found. Non-blocking: the app keeps working until the user presses Restart to update, which refuses while a run is active. -->
+        <InfoBar
+            x:Name="UpdateBar"
+            IsClosable="True"
+            Severity="Informational"
+            Title="{x:Bind ViewModel.Updates.BannerTitle, Mode=OneWay}"
+            IsOpen="{x:Bind ViewModel.Updates.IsBannerOpen, Mode=TwoWay}">
+            <InfoBar.ActionButton>
+                <Button x:Uid="UpdateBarRestartButton" Command="{x:Bind ViewModel.Updates.RestartToUpdateCommand}" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
         <InfoBar
             x:Name="MessageBar"
-            Grid.Row="1"
-            VerticalAlignment="Bottom"
-            HorizontalAlignment="Center"
-            MaxWidth="640"
-            Margin="16"
             IsClosable="True"
             Title="{x:Bind ViewModel.Messages.Title, Mode=OneWay}"
             Message="{x:Bind ViewModel.Messages.Message, Mode=OneWay}"
             Severity="{x:Bind converters:InfoBarSeverityHelper.From(ViewModel.Messages.Severity), Mode=OneWay}"
             IsOpen="{x:Bind ViewModel.Messages.IsOpen, Mode=TwoWay}" />
+        </StackPanel>
     </Grid>
 </Window>

@@ -132,11 +132,22 @@ def self_test() -> int:
             git(repo, "add", "-A")
             git(repo, "commit", "-q", "-m", "one")
 
-            for command in ("gh pr create --title x", "gh pr merge 5 --merge", "cd x && gh pr create",
-                            "GH_TOKEN=a gh pr create", "gh --repo a/b pr create"):
+            for command in (
+                "gh pr create --title x",
+                "gh pr merge 5 --merge",
+                "cd x && gh pr create",
+                "GH_TOKEN=a gh pr create",
+                "gh --repo a/b pr create",
+            ):
                 expect(f"no stamp denies {command!r}", verdict(command, repo), True)
-            for command in ("gh pr view 5", "gh pr checks", "gh issue create", "echo 'run gh pr create later'" ,
-                            "grep 'gh pr merge' README.md", ""):
+            for command in (
+                "gh pr view 5",
+                "gh pr checks",
+                "gh issue create",
+                "echo 'run gh pr create later'",
+                "grep 'gh pr merge' README.md",
+                "",
+            ):
                 expect(f"no stamp still allows {command!r}", verdict(command, repo), False)
             heredoc = "git commit -m \"$(cat <<'EOF'\nsay gh pr create here\nEOF\n)\""
             expect("a cat heredoc body is not a command", verdict(heredoc, repo), False)
@@ -158,8 +169,7 @@ def self_test() -> int:
         if saved is not None:
             os.environ[BYPASS_VAR] = saved
 
-    proc = subprocess.run([sys.executable, __file__], input="not json at all", capture_output=True,
-                          text=True, timeout=15, check=False)
+    proc = subprocess.run([sys.executable, __file__], input="not json at all", capture_output=True, text=True, timeout=15, check=False)
     if proc.returncode != 0 or proc.stdout.strip():
         failures += 1
         print("self-test FAILED: malformed stdin must fail open", file=sys.stderr)
