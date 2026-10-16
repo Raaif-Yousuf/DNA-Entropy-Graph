@@ -18,9 +18,10 @@ A worktree is REMOVED only when ALL of these hold:
 - it has landed: its HEAD is an ancestor of origin/main (this also covers a detached HEAD), OR with --use-gh the branch
   has a MERGED pull request INTO main whose head commit contains the worktree HEAD, and no OPEN one (ONE batched
   `gh pr list`). A CLOSED PR, or a PR merged into another branch (a stacked PR), is not evidence of anything landing;
-- it has a commit of its own: a HEAD that sits ON origin/main's first-parent history (a lane created from main that has
-  not committed yet) is KEPT, because nothing distinguishes it from a lane that was just started. Real feature branches
-  merge in by a merge commit, so their tips are off that line;
+- it has a commit of its own, or is no longer fresh: a HEAD that sits ON origin/main's first-parent history (a lane
+  created from main that has not committed yet) is KEPT while it was touched within --fresh-lane-hours (default 48),
+  because nothing distinguishes it from a lane that was just started; older than that it is a stale checkout and every
+  other rule still applies. Real feature branches merge in by a merge commit, so their tips are off that line;
 - no rebase, merge, cherry-pick, revert or bisect is in progress;
 - nothing in it was modified within --min-age-hours (default 6): the directory, its entries and THEIR entries (two
   levels), and git's HEAD/index/ORIG_HEAD/logs for it. A timestamp that cannot be read means "age unknown" = kept.
@@ -136,6 +137,7 @@ class Ctx:
     tmp_root: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / TMP_ROOT_NAME)
     allow_any_tmp_root: bool = False
     min_age_hours: float = 6.0
+    fresh_lane_hours: float = 48.0
     apply: bool = False
     use_gh: bool = False
     gh: list[str] = field(default_factory=lambda: ["gh"])
@@ -476,11 +478,14 @@ def decide(ctx: Ctx, wt: Worktree, primary: Worktree, all_paths: list[Path], sta
         return "open PR"
     if not (is_ancestor(ctx, wt.head, REMOTE_BASE) or pr_merged_containing(ctx, states, wt.branch, wt.head)):
         return "not merged (detached, commit not in origin/main)" if wt.branch is None else "not merged into origin/main"
+    newest = newest_touch(ctx, wt.path)
     if wt.head in main_line(ctx):
-        return "no commit of its own (HEAD is on origin/main's own history: a lane just started or created from main)"
-    return (
-        in_progress_reason(ctx, wt.path) or recent_reason(ctx, newest_touch(ctx, wt.path)) or dirt_reason(ctx, wt.path) or scan_problem(wt.path)
-    )
+        # a lane created from main that has not committed: fresh only for a while, then it is just a stale checkout
+        if newest is None:
+            return recent_reason(ctx, None)
+        if (ctx.now() - newest) / 3600.0 < ctx.fresh_lane_hours:
+            return f"no commit of its own and touched within {ctx.fresh_lane_hours:g} h (a lane just started from main)"
+    return in_progress_reason(ctx, wt.path) or recent_reason(ctx, newest) or dirt_reason(ctx, wt.path) or scan_problem(wt.path)
 
 
 def _lock_record(ctx: Ctx, name: str) -> dict[str, object]:
@@ -657,6 +662,12 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Remove worktrees whose branch already landed (dry run unless --apply).")
     ap.add_argument("--apply", action="store_true", help="act (default is a dry run)")
     ap.add_argument("--min-age-hours", type=float, default=6.0, help="keep anything touched more recently than this (default 6)")
+    ap.add_argument(
+        "--fresh-lane-hours",
+        type=float,
+        default=48.0,
+        help="keep a worktree with no commit of its own (HEAD on origin/main's history) only while touched within this many hours (default 48)",
+    )
     ap.add_argument("--use-gh", action="store_true", help="also treat a branch with a MERGED PR (head contains the worktree HEAD) as landed")
     ap.add_argument("--delete-merged-branches", action="store_true", help="also delete local branches landed in origin/main and not checked out")
     ap.add_argument("--fetch", dest="fetch_flag", action="store_true", help="`git fetch origin` first (implied by --apply)")
@@ -671,6 +682,7 @@ def ctx_from_args(args: argparse.Namespace, repo: Path) -> Ctx:
     ctx = Ctx(
         repo=repo,
         min_age_hours=args.min_age_hours,
+        fresh_lane_hours=args.fresh_lane_hours,
         apply=args.apply,
         use_gh=args.use_gh,
         gh=[args.gh],

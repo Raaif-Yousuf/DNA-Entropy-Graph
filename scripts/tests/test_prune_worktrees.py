@@ -742,6 +742,27 @@ def test_a_fresh_lane_exactly_at_origin_main_is_kept(world):
     assert any(k.path.name == "fresh" and "no commit of its own" in k.reason for k in report.kept)
 
 
+def test_a_fresh_lane_is_only_fresh_for_fresh_lane_hours_then_it_is_a_stale_checkout(world):
+    wt = world.add_worktree("stale-fresh", fresh=True)
+    base = time.time()
+    young = pw.prune(world.ctx(apply=False, now=lambda: base + 47 * 3600))
+    assert wt.is_dir() and any(k.path.name == "stale-fresh" and "no commit of its own" in k.reason for k in young.kept)
+    old = pw.prune(world.ctx(apply=False, now=lambda: base + 49 * 3600))
+    assert [r.path.name for r in old.removed] == ["stale-fresh"]
+    custom = pw.prune(world.ctx(apply=False, fresh_lane_hours=1.0, now=lambda: base + 2 * 3600))
+    assert [r.path.name for r in custom.removed] == ["stale-fresh"]
+
+
+def test_a_stale_fresh_lane_is_still_kept_when_dirty_or_mid_operation(world):
+    dirty = world.add_worktree("stale-dirty", fresh=True)
+    (dirty / "mine.txt").write_bytes(b"unsaved\n")
+    busy = world.add_worktree("stale-busy", fresh=True)
+    gitdir = Path(_git(busy, "rev-parse", "--absolute-git-dir"))
+    (gitdir / "MERGE_HEAD").write_text(_git(busy, "rev-parse", "HEAD") + "\n", encoding="utf-8", newline="\n")
+    report = pw.prune(world.ctx(apply=True, now=lambda: time.time() + 100 * 3600))
+    assert dirty.is_dir() and busy.is_dir() and report.removed == []
+
+
 def test_a_lane_created_from_an_older_main_with_no_commits_is_kept_after_main_moves(world):
     wt = world.add_worktree("old-fresh", fresh=True)
     world.advance_main()
