@@ -6,6 +6,8 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
 using Shouldly;
@@ -112,6 +114,17 @@ public class JobEngineSpendCapTests
         }
     }
 
+    private sealed class NoLocalReadiness : ILocalReadinessSource
+    {
+        public Task<LocalReadiness> CheckAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new LocalReadiness(new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 0), LocalEngineHealth.NotInstalled()));
+    }
+
+    private sealed class NoProcessLauncher : IProcessLauncher
+    {
+        public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null) => throw new ProcessStartFailedException(spec.FileName);
+    }
+
     private sealed class Harness
     {
         public Harness(FakeGcp gcp, string? pricingJson = null)
@@ -136,10 +149,21 @@ public class JobEngineSpendCapTests
                 ResultPollInterval = TimeSpan.FromMilliseconds(1),
                 ResultTimeout = TimeSpan.FromSeconds(5),
             };
+            var appData = Path.Combine(TempRoot, "appdata-" + Guid.NewGuid().ToString("N"));
+            var inputs = new LocalRunInputStore(appData);
+            var activeRuns = new ActiveRuns();
+            var ready = new NoLocalReadiness();
+            var localRunner = new LocalJobRunner(
+                new NoProcessLauncher(),
+                Runs,
+                new LocalEngineLayout(Path.Combine(appData, "engine")),
+                Path.Combine(appData, "runs"),
+                (id, phase) => messenger.Send(new RunPhaseChangedMessage(id, phase)));
+            var local = new LocalRunDriver(messenger, localRunner, ready, Settings, Runs, inputs, activeRuns);
             Engine = new JobEngine(
-                messenger, runner, gcp, Settings, Runs, new MemoryProjects(),
-                new LocalRunInputStore(Path.Combine(TempRoot, "appdata-" + Guid.NewGuid().ToString("N"))),
-                new Image(), new ScriptedAccessionLookup(), new ActiveRuns(), estimates: new CostEstimateService(pricing, Inner, Gate));
+                messenger, runner, gcp, Settings, Runs, new MemoryProjects(), inputs,
+                new Image(), new ScriptedAccessionLookup(), activeRuns, new RunTargetResolver(ready), local,
+                estimates: new CostEstimateService(pricing, Inner, Gate));
         }
 
         public FakeGcp Gcp { get; }
