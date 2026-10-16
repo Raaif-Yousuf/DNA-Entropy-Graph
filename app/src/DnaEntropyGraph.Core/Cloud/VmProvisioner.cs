@@ -158,7 +158,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 var sweepNote = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
                 if (sweepNote is not null)
                 {
-                    return ProvisionResult.Failed(kind, outcome.Error!.Message, sweepNote);
+                    return ProvisionResult.Failed(kind, outcome.Error!.Message, sweepNote, RunErrorCodes.For(outcome.Error, kind));
                 }
             }
 
@@ -167,7 +167,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 // docs/cloud_design.md section 5: billing/API/permission/org
                 // policy abort the WHOLE ladder immediately - retrying a
                 // different zone cannot fix a project-wide problem.
-                return ProvisionResult.Failed(kind, outcome.Error!.Message);
+                return ProvisionResult.Failed(kind, outcome.Error!.Message, code: RunErrorCodes.For(outcome.Error, kind));
             }
 
             // Quota / stockout / other: per-zone or per-region, worth trying
@@ -240,8 +240,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
 internal readonly struct ProvisionResult
 {
-    private ProvisionResult(bool success, string? zone, CloudErrorKind? failureKind, string? failureMessage, string? vmEndNote)
+    private ProvisionResult(bool success, string? zone, CloudErrorKind? failureKind, string? failureMessage, string? vmEndNote, string? failureCode)
     {
+        FailureCode = failureCode;
         Success = success;
         Zone = zone;
         FailureKind = failureKind;
@@ -260,7 +261,10 @@ internal readonly struct ProvisionResult
 
     public string? FailureMessage { get; }
 
-    public static ProvisionResult Ok(string zone) => new(true, zone, null, null, null);
+    /// <summary>The code the run row records (issue #604): the error's own specific code (PERMISSION_ACTAS) when it has one, else the code of <see cref="FailureKind"/>.</summary>
+    public string? FailureCode { get; }
 
-    public static ProvisionResult Failed(CloudErrorKind kind, string message, string? vmEndNote = null) => new(false, null, kind, message, vmEndNote);
+    public static ProvisionResult Ok(string zone) => new(true, zone, null, null, null, null);
+
+    public static ProvisionResult Failed(CloudErrorKind kind, string message, string? vmEndNote = null, string? code = null) => new(false, null, kind, message, vmEndNote, code ?? RunErrorCodes.For(kind));
 }

@@ -49,6 +49,15 @@ public static class RunErrorCodes
     /// <summary>A note, not a failure (#606): the run went ahead as the project's default Compute Engine account because an organization policy refused the app's own worker identity. Recorded on the row of a run that still completes.</summary>
     public const string WorkerDefaultAccount = "worker_default_account";
 
+    /// <summary>The signed-in account may not run a VM as the worker account (issue #604, <c>PERMISSION_ACTAS</c>): its one action is to copy a request for the project owner to grant the Service Account User role on that account.</summary>
+    public const string PermissionActAs = "permission_actas";
+
+    /// <summary>An organization policy refused the worker account and the project's default Compute Engine account is missing or off (issue #604, <c>WORKER_DEFAULT_ACCOUNT_MISSING</c>).</summary>
+    public const string WorkerDefaultAccountMissing = "worker_default_account_missing";
+
+    /// <summary>The worker account's access did not read back as the app asked (issue #604, <c>WORKER_IDENTITY_NOT_APPLIED</c>); running again repairs it.</summary>
+    public const string WorkerIdentityNotApplied = "worker_identity_not_applied";
+
     /// <summary>The <c>CloudError.Code</c> a gateway with no real cloud behind it throws; the runner records it as <see cref="CloudNotConnected"/>.</summary>
     public const string NotConnectedGatewayCode = "CLOUD_NOT_CONNECTED";
     public const string Other = "other";
@@ -60,11 +69,20 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
     /// <summary>The <c>CloudErrorKind</c> wire names from docs/cloud_design.md section 5.</summary>
+    /// <summary>
+    /// True for a run the user can fix by asking the project owner for the actAs role (issue #604): recorded as <see cref="PermissionActAs"/>, or as
+    /// <see cref="VmEndUnconfirmed"/> when the VM sweep after the refusal also failed (issue #665: the billing warning is the headline, but the
+    /// owner request is still the user's one action for the next run, and the original code is carried in the detail).
+    /// </summary>
+    public static bool IsActAsRefusal(string? code, string? detail)
+        => code == PermissionActAs
+            || (code == VmEndUnconfirmed && detail is not null && detail.Contains("Original code: " + PermissionActAs + ".", StringComparison.Ordinal));
+
     public static string For(CloudErrorKind kind) => kind switch
     {
         CloudErrorKind.Billing => "billing",
@@ -77,6 +95,30 @@ public static class RunErrorCodes
         CloudErrorKind.Network => "network",
         _ => Other,
     };
+
+    /// <summary>
+    /// The code a failed cloud call is recorded under (issue #604). A setup code the gateway put on the error
+    /// (<see cref="SetupErrorCodes.PermissionActAs"/>, <see cref="SetupErrorCodes.WorkerDefaultAccountMissing"/>,
+    /// <see cref="SetupErrorCodes.WorkerIdentityNotApplied"/>) keeps its own code and so its own message and action; a
+    /// 403 whose text names the actAs permission is one too even when the gateway did not label it (a polled operation
+    /// error reaches here as Compute worded it). Everything else is the code of its <paramref name="kind"/>.
+    /// </summary>
+    public static string For(CloudError? error, CloudErrorKind kind)
+    {
+        if (error is null)
+        {
+            return For(kind);
+        }
+
+        return error.Code switch
+        {
+            SetupErrorCodes.PermissionActAs => PermissionActAs,
+            SetupErrorCodes.WorkerDefaultAccountMissing => WorkerDefaultAccountMissing,
+            SetupErrorCodes.WorkerIdentityNotApplied => WorkerIdentityNotApplied,
+            _ when kind == CloudErrorKind.Permission && CloudErrorClassifier.IsActAsDenial(error) => PermissionActAs,
+            _ => For(kind),
+        };
+    }
 
     /// <summary>
     /// The code for an <c>error.code</c> the VM's startup script or the worker wrote, in <c>status.json</c> when no
@@ -141,6 +183,9 @@ public static class RunErrorCodes
         InputTooLong => "RunError_input_too_long",
         InstallationIdUnusable => "RunError_installation_id_unusable",
         WorkerDefaultAccount => "RunError_worker_default_account",
+        PermissionActAs => "RunError_permission_actas",
+        WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
+        WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",
         "quota" => "RunError_quota",

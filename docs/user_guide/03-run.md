@@ -7,6 +7,7 @@ On the **New run** page, either:
 - Drag files, or a folder of them, onto the drop area (GenBank, FASTA, or plain text; from a
   folder the app takes the sequence files directly inside it, not those in sub-folders; a `.txt` file in a folder is taken only when its first line starts with `>` or `LOCUS`, so notes and logs are left alone. To add a plain-letters `.txt` file, use **Add files**), or
 - Click **Add files** (or press Ctrl+O), or
+- In File Explorer, right-click a `.gb`, `.gbk`, `.fasta`, `.fa` or `.fna` file, choose **Open with**, then **DNA Entropy Graph**. The file is added to **New run** in the window that is already open (or the app starts with it). The entry is listed only if you turned on "Show DNA Entropy Graph in Open with" in Settings (Files); it never becomes the program a file opens in when you double-click it. If New run is open, the file is added below what you already entered. Files on a network address (for example `\\server\share`) are not opened this way; copy them to this PC or a mapped drive first. Or,
 - Open **Paste a sequence**, type or paste letters, a FASTA record, or the path of a file, and
   click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
   letters are saved in the app's own folder, never next to your files.
@@ -22,6 +23,8 @@ numbers against the limit and lets you either split the batch or raise the limit
 see [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for why the ceiling is set where it
 is. GenBank and FASTA files are detected automatically by their contents, not just their
 file extension, so a renamed file still works.
+
+Two optional extra files need no model and no graphics card: a GC-content track (`--gc`, how G/C-rich each stretch is) and a codon-usage table per gene (`--codons`). They are off by default. The app does not offer them as checkboxes yet.
 
 Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
 

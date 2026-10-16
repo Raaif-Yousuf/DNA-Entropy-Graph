@@ -43,6 +43,8 @@ public static class StartupDataRoot
         return string.Format(System.Globalization.CultureInfo.CurrentCulture, template, ex.Path);
     }
 
+    internal static void ShowMessage(string message) => Show(message);
+
     private static void Show(string message)
     {
         Console.Error.WriteLine(message);

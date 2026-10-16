@@ -45,7 +45,8 @@ public sealed class RunListItem
         IAsyncRelayCommand redownloadCommand,
         IAsyncRelayCommand deleteCloudCommand,
         IAsyncRelayCommand deleteLocalCommand,
-        IAsyncRelayCommand removeCommand)
+        IAsyncRelayCommand removeCommand,
+        IRelayCommand? copyOwnerRequestCommand = null)
     {
         Run = run;
         Title = title;
@@ -65,6 +66,7 @@ public sealed class RunListItem
         DeleteCloudCommand = deleteCloudCommand;
         DeleteLocalCommand = deleteLocalCommand;
         RemoveCommand = removeCommand;
+        CopyOwnerRequestCommand = copyOwnerRequestCommand;
     }
 
     public RunRecord Run { get; }
@@ -110,4 +112,12 @@ public sealed class RunListItem
     public IAsyncRelayCommand DeleteLocalCommand { get; }
 
     public IAsyncRelayCommand RemoveCommand { get; }
+
+    /// <summary>
+    /// Issue #604: copies the request that asks the project owner to grant the Service Account User role on the worker
+    /// account. Null (and <see cref="HasOwnerRequest"/> false) unless the run failed for exactly that reason.
+    /// </summary>
+    public IRelayCommand? CopyOwnerRequestCommand { get; }
+
+    public bool HasOwnerRequest => CopyOwnerRequestCommand is not null;
 }

@@ -7,7 +7,7 @@ reference - `CloudJobRunner` is this table's first production caller: it runs th
 continue rule in section 5 for real, over `FakeGcp`. Still not built: the escalating-
 parallelism zone ladder (`GpuPlanner`, issue #86 - `CloudJobRunner`'s own zone list is a
 plain sequential walk, not that ladder), the setup health checks (issue #204), and a real
-(non-fake) gateway implementation (`Google.Apis.Compute.v1`, section 16; `FakeGcp` is still what production resolves until #609). Authoritative detail lives in
+(non-fake) gateway implementation (`Google.Apis.Compute.v1`, section 16; production resolves these real gateways since #609; `FakeGcp` is tests and developer mode only). Authoritative detail lives in
 [Appendix B](superpowers/specs/2026-09-18-appendix-b-cloud-design.md); this doc is the
 "what a developer needs while implementing" summary with the tables filled in, not a
 shorter copy of the whole appendix.
@@ -236,6 +236,55 @@ Two distinct quota reads matter, and conflating them is a real bug shape:
  the C# port must preserve it (see the comment on issue #86 filed as part of #287's
  survey).
 
+### 6.1 The real read (issue #88, item 1)
+
+`GoogleQuotaGateway` (`app/src/DnaEntropyGraph.Cloud/Rest/`, `GoogleCloudGateways.Create(...).Quota`, not wrapped in
+`ResilientQuotaGateway`) implements `IQuotaGateway` over two Compute v1 calls, each a single small HTTP request through
+`CloudCallPipeline` with `singleRequest: true`:
+
+- `regions.list` (`compute.regions.list`, paged by `pageToken`; a repeated token fails the read instead of returning a partial
+  table): every region's `quotas[]` (`metric`, `limit`, `usage`), kept whole, so `NVIDIA_L4_GPUS` and the other GPU metrics, `CPUS`
+  and `SSD_TOTAL_GB` are all in the table.
+- `projects.get` (`compute.projects.get`): the project-wide `GPUS_ALL_REGIONS` line.
+
+`ReadQuotaAsync(projectId)` returns a `QuotaReadResult` (Core, `QuotaReadResult.cs`): the region table, the global line, and a
+`Failures` list. The two reads fail independently and **a failed read is a value, never a zero**. `GpuState(region, metric)` is the
+three-way answer:
+
+| Situation | State |
+| --- | --- |
+| Smaller of (regional limit minus usage, global limit minus usage) is at least 1 | `Available` |
+| Either known remainder is below 1 (a global 0 overrides a regional 1; a regional 0 binds without the cap) | `None` |
+| The region is listed but has no such metric | `None` (that region offers none of it) |
+| `regions.list` failed, the region is not in the reply, the `projects.get` read failed or lacks `GPUS_ALL_REGIONS`, and no known value is below 1 | `Unknown` |
+
+`GetGpuQuotaAsync` keeps its `int` answer (the smaller remainder) and **throws the classified `CloudOperationException`** when the state is
+`Unknown`, so a preflight can never read an unreadable quota as "no quota". The accelerator type maps to its regional metric in
+`QuotaMetrics.ForAccelerator` (`gpu` and `nvidia-l4` are `NVIDIA_L4_GPUS`); an unmapped type throws rather than guessing.
+A metric line the reply carries without a `limit` is `Unknown` for that metric (`QuotaMetric.Limit` and `Remaining` are null), never zero and never dropped
+from the table; only a definite zero elsewhere (a global cap of 0) still wins. `FakeGcp` answers both `ReadQuotaAsync` and `GetGpuQuotaAsync` from ONE table
+built from `WithGpuQuota`, `WithAllRegionsGpuCap` and `WithQuotaReadFailing(kind)`, so they agree: a scripted read failure makes `GetGpuQuotaAsync` throw the
+classified `CloudOperationException` (code `QUOTA_READ_FAILED`) as the real gateway does, and a region or accelerator nobody scripted is the always-succeeds
+default of 1 through either.
+THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGIONS` for a project that never raised it (when absent it is a
+failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Switched on in production by #609. The request flow
+(`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
+
+### 6.2 What preflight does with a quota it cannot read (issue #88)
+
+DECISION (agent-made, reversible): an unreadable quota is UNKNOWN, and unknown is not "none". `PreflightChecks` calls `GetGpuQuotaAsync` and:
+
+| The read | The run |
+| --- | --- |
+| Returns a number of 0 or less | Fails with `quota`, as before. |
+| Fails with a project-wide kind (`permission`, `billing`, `api_disabled`, `org_policy`) | Fails at once with that classified error (its own run error code), before any bucket, upload or VM: the create would fail the same way. |
+| Fails any other way (`network`, a 5xx, the read's own budget running out, `other`) | UNKNOWN: preflight passes and provisioning goes on. The prototype tried every zone when quota was unknown; quota is pre-filterable, not a stop sign, and a real shortage still surfaces as a classified `quota` error on the create, which the zone ladder handles. |
+
+The whole read has its own budget, `CloudRunSettings.QuotaReadTimeout` (5 minutes; `CloudJobRunner.QuotaReadTimeout`), because it is several sequential
+requests (`regions.list` pages, `projects.get`) in one gateway method and the 60 s `CallTimeout` is sized for one. THEORY (unverified, sized from the
+pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
+`FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
+
 ## 7. Least-privilege IAM for the worker service account
 
 The VM runs as the service account `dna-entropy-worker@<project>.iam.gserviceaccount.com`
@@ -277,9 +326,21 @@ is the `PERMISSION_ACTAS` error: `CloudErrorClassifier.IsActAsDenial` recognises
 `iam.serviceAccounts.actAs` or `roles/iam.serviceAccountUser`, `GoogleApiErrors.ToException`
 (used for an HTTP error body and for the `error` of a polled operation alike, which `FromOperationError` converts first)
 gives it the code `PERMISSION_ACTAS` (still the `permission` bucket, so it still aborts), and the
-one action is Copy request for the project owner. **Reachable only once #604 lands:** there is no Compute insert path yet, so today only tests produce
-this code, and the Copy request action does not yet name `roles/iam.serviceAccountUser` on the worker account's email (it would
-copy the generic request); both are #604's Done when.
+one action is Copy request for the project owner. **Run row (#604):** the specific code travels on `CloudError.Code`
+(`CloudOperationException.Error`), not in a new field. `RunErrorCodes.For(CloudError, kind)` maps `PERMISSION_ACTAS`,
+`WORKER_DEFAULT_ACCOUNT_MISSING` and `WORKER_IDENTITY_NOT_APPLIED` to the run codes `permission_actas`,
+`worker_default_account_missing` and `worker_identity_not_applied` (each with its own `RunError_*` text), and treats a 403
+whose text names actAs as `permission_actas` even when the gateway did not label it. Both ways a run can meet one of these use
+it: `VmProvisioner` puts the code on `ProvisionResult.FailureCode` for a refused create, and `CloudJobRunner`'s catch maps an
+exception from the worker-identity step. The Runs page shows the message and a **Copy request for the project owner** button
+(`RunListItem.CopyOwnerRequestCommand`, only for `permission_actas` with a known project) that copies
+`Runs_OwnerRequest_ActAs`, which names `roles/iam.serviceAccountUser` (`WorkerIdentityNames.ActAsRole`) on
+`WorkerIdentityNames.ServiceAccountEmail(project)`, or, when an organization policy made the VM run as the project's default
+Compute Engine account (`<number>-compute@developer.gserviceaccount.com`), that account: the runner records the account the VM was
+asked to run as on the failed row as a trailing `[vm-account=...]` mark in `ErrorDetail` (`WorkerAccountDetail`, no new column) and the
+request reads it back. The request also names the signed-in Google account as the grantee (`Runs_OwnerRequest_Grantee`, clipboard only,
+never logged) and leaves that clause out when nobody is signed in. THEORY (unverified, no live project): Compute's exact wording for an actAs
+refusal; docs/ToTest.md carries the row for the real insert.
 
 ## 8. Termination semantics - the pitfall this project has already been burned by once
 
@@ -1019,8 +1080,8 @@ creates the project's default network).
   already retry per HTTP call, and a second layer would replay the enable POST when a poll read fails; billing arrives
   already wrapped). `GoogleCloudGateways.Create(...)` returns it as
   `ProjectSetup`, so every call a run's preflight makes (`GetProjectStateAsync`, `IsBillingEnabledAsync`,
-  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; `IQuotaGateway`, the compute gateway
-  and the token refresher do not (the storage gateway does since #53), so production still resolves everything to `FakeGcp` (#56, #520).
+  `IsComputeApiEnabledAsync`, `EnableComputeApiAsync`) now has a real implementation; the quota read does since #88 (section 6.1), the storage gateway since #53,
+  and the token refresher does not, so production still resolves everything to `FakeGcp` (#56, #520).
 - **Not here yet:** the wizard page, and the health row "Compute Engine" turning green by itself (#99).
 - **Proven only by a real project:** `docs/ToTest.md`.
 
@@ -1206,6 +1267,10 @@ account and a role and edits two policies, and a whole-method retry would replay
   with scripted failures (`WithServiceAccountCreationBlockedByOrgPolicy`, `WithWorkerIdentityPermissionDenied`,
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.
+
+## 17. Overrides in Settings (issue #644)
+
+Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
 ## Related
 

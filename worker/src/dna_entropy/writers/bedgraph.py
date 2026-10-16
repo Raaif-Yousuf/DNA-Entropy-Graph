@@ -21,6 +21,7 @@ from .base import write_text_lf
 _DESCRIPTIONS: dict[str, str] = {
     "entropy": "Shannon entropy (bits)",
     "surprisal": "Surprisal: -log2 P(actual base) (bits)",
+    "gc": "GC content (percent)",  # issue #191
 }
 
 
