@@ -141,7 +141,8 @@ people will not see this step at all.
 You never have to redo this setup. Once it is done, you can re-run the health check any
 time from **Settings > Account > Run setup check again**, which walks through the same
 checks (project reachable, billing on, services on, quota available) without recreating
-anything that already exists.
+anything that already exists. (This **Account** group is not in the app yet; until it is, the
+Google Cloud console shows the same four things.)
 
 ## Related
 

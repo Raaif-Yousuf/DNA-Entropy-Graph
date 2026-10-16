@@ -213,7 +213,7 @@ skill has the per-shape table.
 - `gh issue list` truncates silently (default 30); query `--milestone`/`--label` with `--limit 500`.
 - After a PR merges: `git checkout -B main origin/main` keeps other lanes' uncommitted edits; `git switch main` refuses.
 - Two issues in one file: stage hunks via `git apply --cached` fed **bytes**; Python `text=True` on Windows corrupts the patch (cp1252 + CRLF).
-- `dotnet format --verify-no-changes` fails ENDOFLINE on every file in this autocrlf checkout (#462); premerge reports it as KNOWN.
+- `dotnet format` ENDOFLINE errors mean a stale CRLF tree, not a real format failure (MEASURED, #462): run `python scripts/fix_eol.py`. In an LF tree premerge treats ENDOFLINE as a real FAIL.
 - A test that plants a forbidden literal (a user-home path) must build it at runtime, or the real guard flags the test file.
 - Cold-review (`cold-diff-reviewer`, patch only) every cloud-path diff before landing; it found 8 real defects in a green, mutation-checked one.
 

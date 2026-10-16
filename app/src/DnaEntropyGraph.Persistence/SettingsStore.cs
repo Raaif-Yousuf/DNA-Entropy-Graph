@@ -61,7 +61,14 @@ namespace DnaEntropyGraph.Persistence;
 ///    keys. Reads take no mutex: they only ever see a complete file.
 /// 7. The callers are on the UI thread, so one public call spends at most
 ///    <see cref="WaitBudget"/> (about 300 ms) across the lock wait and the retries
-///    (5 attempts, 40 ms apart), then gives up with the typed exception.
+///    (5 attempts, 40 ms apart), then gives up with the typed exception. The budget bounds the
+///    WAIT, not the write: the mutex is uncontended with one window open, so the budget cannot
+///    produce "busy in another window" for a single-window user (#673). It is kept at 300 ms because
+///    it is a UI-thread freeze bound. MEASURED 2026-10-15 on the dev laptop's SSD, two writers
+///    hammering one file, 200 saves each: a save (wait plus fsync) p50 16 ms, p99 30 ms, max 37 ms;
+///    eight writers p99 459 ms, which is more windows than anyone runs. THEORY (unverified): the CI
+///    failures of #671/#664 were a loaded runner whose contended fsync exceeded 300 ms. The race
+///    tests therefore inject a long <see cref="WaitBudget"/> and a slow-disk test pins the budget.
 ///
 /// No logger in Persistence: the event is the flag, the kept files and the
 /// typed exceptions, never file content.

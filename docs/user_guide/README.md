@@ -12,6 +12,21 @@ number (a price, a wait time) is not yet confirmed by a real run, the page says 
 instead of guessing. If something in the app does not match what this guide says, that is
 worth reporting; see [07-when-something-goes-wrong.md](07-when-something-goes-wrong.md).
 
+## What the app has today
+
+Last checked against the app on 2026-10-15. Pages that describe something the app cannot do
+yet say so in a note at that spot; this table is the summary.
+
+| Part of the guide | In the app today? |
+| --- | --- |
+| New run (add files, paste, options, Run), progress, Runs list, Results, the genome viewer | Yes |
+| On the New run page: naming a run, **Save to**, **Where to run** and the **Advanced** section (page 03) | Not yet on the screen; a run uses the defaults. The file list, pasting, the estimate line and the files-you-get-back boxes are there |
+| Open in IGV and Open in Geneious | Yes, with the program paths in Settings |
+| Settings: appearance, run defaults, files, notifications, diagnostics, advanced, external viewers | Yes |
+| The Google Cloud setup wizard (page 02) | Not yet shown as a screen. The steps on page 02 are the design |
+| The Cloud page, Settings > Account, Settings > Budget (pages 02 and 06) | Not yet. The Cloud page shows a "not built yet" message |
+| Check for app updates, run presets, a first-launch tour | Not yet |
+
 ## Who this is for
 
 You work with DNA sequences and you want a per-base entropy track (a measure of how
