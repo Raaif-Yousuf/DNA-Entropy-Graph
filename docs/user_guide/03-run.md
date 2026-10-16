@@ -24,6 +24,8 @@ see [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for why the ceiling is se
 is. GenBank, EMBL, SnapGene and FASTA files are detected automatically by their contents, not just their
 file extension, so a renamed file still works. An EMBL file (`.embl`) or a SnapGene file (`.dna`) is read like a GenBank file: the genes it already carries are used as they are. If a SnapGene file is damaged, the app says so before anything is created; export it from SnapGene as GenBank and add that file instead.
 
+Two optional extra files need no model and no graphics card: a GC-content track (`--gc`, how G/C-rich each stretch is) and a codon-usage table per gene (`--codons`). They are off by default. The app does not offer them as checkboxes yet.
+
 Adding, removing and checking files never freezes the window, even for a big folder. **Remove** takes the file off the list; a pasted sequence's saved copy goes with it, and your own files are never touched. A notice that counts something says "1 letter" or "2 letters" as it should.
 
 Each file you add gets its own small summary: how many records it contains, how many

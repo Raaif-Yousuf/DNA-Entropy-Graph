@@ -143,8 +143,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             // The user cancelled: nothing to report.
         }
-        catch (DiagnosticsLeakException)
+        catch (DiagnosticsLeakException ex)
         {
+            // The check's name only (a fixed word): enough to diagnose a refusal without the text that caused it.
+            System.Diagnostics.Trace.TraceError($"Save diagnostics refused by the {ex.Rule} check");
             Report("DiagnosticsSaveFailed_Title", _strings.GetString("DiagnosticsSaveFailed_Refused"), ToastSeverity.Error);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
