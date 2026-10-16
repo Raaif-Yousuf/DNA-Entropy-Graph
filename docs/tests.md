@@ -103,6 +103,22 @@ extra in `worker/pyproject.toml`; it is MPL-2.0, not MIT (see
 the test-367 entry in `docs/sprint_log.md` and the `DECISION` issue this
 recorded under Hard Rule 21).
 
+## Golden files (issue #161)
+
+`worker/tests/test_golden.py` runs the pipeline with the MockPredictor (seed 0, default
+settings) on `sample.gb`, `multi.gb` and `prokaryotic_demo.fasta` and compares EVERY output file
+byte for byte with `worker/tests/golden/files/<case>/`. Changing a writer's number formatting, a
+coordinate convention or the analysis fails it. The only normalization is removing
+`generated_at`, `wall_time_seconds` and `worker_version` from `provenance.json`, so a release
+bump is not a failure. The FASTA case turns the bonus `.gb` off because that file's genes come
+from Prodigal only when the optional `[genes]` extra is installed (machine-dependent).
+
+To change the golden files on purpose: `worker\.venv\Scripts\python.exe
+worker\tests\golden\regenerate.py --justification "why"` (refuses without one), read the diff
+(a formatting change should touch every numeric file, a coordinate change one writer's file), and
+commit the files with the code. The justification is appended to
+`worker/tests/golden/JUSTIFICATIONS.txt`.
+
 ## Reader parity fixture (issue #393)
 
 `tests/contract-fixtures/readers_parity.json` pins what `read_fasta` and `read_genbank` produce

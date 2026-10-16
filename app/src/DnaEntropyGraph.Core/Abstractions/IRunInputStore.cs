@@ -18,4 +18,10 @@ public interface IRunInputStore
 
     /// <summary>Where the app's copy of this run's input lives, or null when there is none (issue #101: a re-run reuses it).</summary>
     string? TryFindStagedInput(string jobId);
+
+    /// <summary>Copies a GFF3 paired with the run's FASTA (issue #686) into the run's own folder, apart from the input, and returns it flagged <see cref="StagedInput.IsAnnotation"/>. Same exceptions as <see cref="StageAsync"/>.</summary>
+    Task<StagedInput> StageAnnotationAsync(string jobId, string sourcePath, CancellationToken cancellationToken);
+
+    /// <summary>The copy <see cref="StageAnnotationAsync"/> kept for <paramref name="jobId"/>, or null when the run has no paired annotation.</summary>
+    Task<StagedInput?> FindAnnotationAsync(string jobId, CancellationToken cancellationToken);
 }

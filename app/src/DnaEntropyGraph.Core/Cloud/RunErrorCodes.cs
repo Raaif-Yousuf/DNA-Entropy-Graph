@@ -23,6 +23,8 @@ public static class RunErrorCodes
     public const string RunTimeLimit = "run_time_limit";
     /// <summary>The worker stayed in one stage past that stage's deadline while its heartbeat may still tick (#90).</summary>
     public const string WorkerStageStuck = "worker_stage_stuck";
+    /// <summary>The worker's heartbeat ticks in the running stage but <c>windowsDone</c> and <c>lastProgressAt</c> have not moved for the progress bound: a wedged compute thread (#723, the app half of #522).</summary>
+    public const string WorkerProgressStalled = "worker_progress_stalled";
     public const string WorkerNoHeartbeat = "worker_no_heartbeat";
     public const string WorkerHeartbeatStale = "worker_heartbeat_stale";
     public const string WorkerFailed = "worker_failed";
@@ -72,7 +74,7 @@ public static class RunErrorCodes
     public static IReadOnlyList<string> All { get; } =
     [
         NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
-        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
+        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
         InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup,
@@ -167,6 +169,7 @@ public static class RunErrorCodes
         ResultTimeout => "RunError_result_timeout",
         RunTimeLimit => "RunError_run_time_limit",
         WorkerStageStuck => "RunError_worker_stage_stuck",
+        WorkerProgressStalled => "RunError_worker_progress_stalled",
         WorkerNoHeartbeat => "RunError_worker_no_heartbeat",
         WorkerHeartbeatStale => "RunError_worker_heartbeat_stale",
         WorkerFailed => "RunError_worker_failed",

@@ -108,6 +108,29 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             return jobId;
         }
 
+        // Issue #686 / Hard Rule 2: a paired GFF3 is copied under the run's own folder too, and checked against the staged FASTA
+        // with this run's topology before anything exists in the cloud. The FASTA stays first in the list (the output folder is named from it).
+        var uploads = new List<StagedInput> { staged };
+        if (!string.IsNullOrWhiteSpace(options.AnnotationPath))
+        {
+            var annotation = await StageAnnotationAsync(jobId, options.AnnotationPath, cancellationToken).ConfigureAwait(false);
+            if (annotation is null)
+            {
+                await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputMissing, cancellationToken).ConfigureAwait(false);
+                return jobId;
+            }
+
+            var pair = AnnotationPairValidator.Check(staged.LocalPath, annotation.LocalPath, options.Topology);
+            if (pair.Problem is { } annotationProblem)
+            {
+                // The code only: the problem's own text can hold a sequence name from the user's file.
+                await FailBeforeStartAsync(jobId, options, RunErrorCodes.InputInvalid, cancellationToken, "Annotation " + annotationProblem.Code).ConfigureAwait(false);
+                return jobId;
+            }
+
+            uploads.Add(annotation);
+        }
+
         // #558: the id lives in its own write-once file. If it cannot be read or is unusable we
         // fail the run here, before any cloud resource exists, rather than mint a new id (that
         // would orphan every labelled resource, Hard Rules 9 and 10) or crash the UI thread.
@@ -135,7 +158,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             installationId,
             AppVersion(),
             image.Reference,
-            [staged],
+            uploads,
             string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder);
 
         // Write-ahead (docs/architecture.md section 6): the row exists
@@ -190,6 +213,19 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         try
         {
             return await _inputs.StageAsync(jobId, options.InputPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The staged copy of the paired GFF3, or null when it cannot be read (the caller records <see cref="RunErrorCodes.InputMissing"/>).</summary>
+    private async Task<StagedInput?> StageAnnotationAsync(string jobId, string annotationPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _inputs.StageAnnotationAsync(jobId, annotationPath, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

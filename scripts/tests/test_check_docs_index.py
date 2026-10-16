@@ -15,7 +15,9 @@ import check_docs_index as cdi  # noqa: E402
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_docs_index.py"), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -24,7 +26,9 @@ def test_self_test_passes():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_docs_index.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert "--root" in proc.stdout

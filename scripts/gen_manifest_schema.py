@@ -118,14 +118,13 @@ def _validate_sample_manifests(manifest_schema: dict) -> tuple[bool, list[str]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--check", action="store_true",
+        "--check",
+        action="store_true",
         help="Fail (exit 1) if the checked-in schema files would differ, instead of writing them.",
     )
     args = parser.parse_args(argv)
 
-    rendered: dict[str, str] = {
-        filename: render(cls, filename, title) for filename, (cls, title) in SCHEMAS.items()
-    }
+    rendered: dict[str, str] = {filename: render(cls, filename, title) for filename, (cls, title) in SCHEMAS.items()}
     rendered["error-codes.json"] = render_error_codes()
 
     if args.check:
@@ -136,15 +135,12 @@ def main(argv: list[str] | None = None) -> int:
             if current != text:
                 drifted.append(filename)
 
-        samples_ran, sample_failures = _validate_sample_manifests(
-            json.loads(rendered["manifest.schema.json"])
-        )
+        samples_ran, sample_failures = _validate_sample_manifests(json.loads(rendered["manifest.schema.json"]))
 
         if drifted or sample_failures:
             if drifted:
                 print(
-                    "Schema drift detected — these files do not match the worker's "
-                    f"current dataclasses: {', '.join(drifted)}",
+                    f"Schema drift detected — these files do not match the worker's current dataclasses: {', '.join(drifted)}",
                     file=sys.stderr,
                 )
                 print("Run `python scripts/gen_manifest_schema.py` to regenerate.", file=sys.stderr)

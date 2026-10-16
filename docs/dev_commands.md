@@ -52,7 +52,8 @@ package itself needs):
 ```powershell
 uvx ruff check worker
 uvx ruff format --check worker
-uvx ruff check scripts                      # lint only for scripts/ (#430): see the scripts/tests section
+uvx ruff check scripts                      # lint for scripts/ (#430): see the scripts/tests section
+uvx ruff format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -202,7 +203,21 @@ worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <ti
 
 `--merge-when-green` waits for the PR checks and merges only if none failed (exit 5 failed, 6 pending at the timeout).
 
-Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh).
+Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh), `scripts/tests/test_land_wt_resw.py` (the Resources.resw merge below).
+
+### Resources.resw merge driver: `scripts/resw_merge.py`
+
+Nearly every branch appends keys to the end of `Resources.resw`, so a plain text merge conflicts there every time (and `git merge-file --union` is banned for it: overlapping hunks break the XML). `scripts/resw_merge.py %O %A %B` is a git merge driver that merges per `<data name=...>` block: a key added on one side (or on both with identical content) is kept, theirs' new keys go after ours' last block, a key deleted on one side and untouched on the other is deleted, and the same key changed differently on both sides (or deleted vs changed) is a real conflict with markers around only that block. The result must parse as XML with no duplicate names. Every failure exit (real conflict, invalid XML, duplicate name, unterminated block, undecodable bytes) leaves conflict markers in the file (whole-file when it is not one block), so a later `git add` cannot silently drop theirs. Line endings follow ours' first line ending. Reordering of existing keys on theirs is ignored (key set and content only).
+
+`.gitattributes` routes the file to the driver (`merge=resw`), but git only runs a driver that is defined in config. One-time setup per clone, from the primary checkout (every worktree shares that `.git/config`, so once is enough). The script passes the value to git as an argument list, so it behaves the same in Windows PowerShell 5.1, PowerShell 7 and bash (a hand-typed `git config` with nested quotes loses its inner quotes in 5.1):
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\setup_git_drivers.py
+```
+
+Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/DnaEntropyGraph.App/Strings/en-US/Resources.resw` (must print `merge: resw`). Without the config git silently falls back to the text merge. Re-run it if the checkout or the venv moves.
+
+`land_wt.py` does not depend on that setup: for its merge of origin/main it passes the driver (this checkout's script, the running venv python) as `-c merge.resw.driver=...` and the attribute through a unique temp `core.attributesFile` (the user's own global attributes text plus the resw line, deleted after the merge), so a lane branch that predates the `.gitattributes` line still merges and nothing leaks into the shared repo config. It is not written to `info/attributes`: MEASURED 2026-10-16, git reads that only from the common dir (a linked worktree's own copy is ignored), so it would leak into the shared repo. A real conflict still refuses and names the file.
 
 ## Landing a PR from the shared checkout: `scripts/land_pr.py`
 
@@ -378,9 +393,10 @@ uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
-There is deliberately **no `ruff format --check scripts` gate yet**: MEASURED 2026-10-02, `uvx ruff format --check
-scripts` would rewrite 42 of 44 files (about 1,700 changed lines at the 145 limit). A mass reformat is its own
-mechanical commit and is not wired until someone lands it; the preview is `uvx ruff format --diff scripts`.
+**Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
+(`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
+`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the
+preview is `uvx ruff format --diff scripts`.
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 
