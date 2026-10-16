@@ -64,7 +64,10 @@ public static class CloudJobRequestFactory
             Lifecycle: LifecycleLabel(options.AfterTask),
             MachineType: MachineTypeFor(options.GpuTier),
             MaxRunDuration: TimeSpan.FromMinutes(options.MaxRunDurationMinutes) + VmGrace,
-            TerminationAction: "DELETE");
+            TerminationAction: "DELETE")
+        {
+            Spot = options.SpotVm,
+        };
 
         return new CloudJobRequest(
             JobId: jobId,

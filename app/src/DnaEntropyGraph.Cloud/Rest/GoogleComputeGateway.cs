@@ -716,6 +716,9 @@ internal static class ComputeVmShape
         InstanceTerminationAction = spec.TerminationAction,
         OnHostMaintenance = "TERMINATE",
         AutomaticRestart = false,
+        // Issue #91. Null for an on-demand VM (Compute's default, STANDARD). THEORY (unverified, no live project): SPOT is accepted together with
+        // maxRunDuration and instanceTerminationAction=DELETE on a GPU VM with onHostMaintenance=TERMINATE; docs/ToTest.md carries the row.
+        ProvisioningModel = spec.Spot ? "SPOT" : null,
     };
 
     public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)

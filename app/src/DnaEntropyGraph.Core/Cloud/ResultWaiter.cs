@@ -417,20 +417,33 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, VmClockBasis? clock = null)
     {
         var workerCode = await TryReadWorkerErrorCodeAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json", cancellationToken).ConfigureAwait(false);
-        var note = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
         var mapped = RunErrorCodes.ForWorkerStatusCode(workerCode);
 
         // #89: a VM that was seen created, is gone, and whose maxRunDuration has now passed was deleted by Compute Engine at its limit
         // (Hard Rule 10's backstop), not lost. Issue #691: "now passed" is judged on the platform's clock (the last server time read plus the monotonic time since), because the laptop's clock may be an hour out; the platform's time is aged with a MONOTONIC interval so a wall-clock step cannot move it; with no plausible server time the laptop's clock is used. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
         var pastLimit = clock is { } basis && PlatformNow(basis.Reading) >= basis.RunClockStart + request.Spec.MaxRunDuration;
+
+        // Issue #91: a Spot VM that is gone or reads terminated before its limit, with no worker error and no result.json, was taken back by Google. THEORY (unverified,
+        // no live project): with instanceTerminationAction=DELETE a preempted instance disappears (the look finds none), which is why a missing VM counts, and a preempted
+        // one that stays reads TERMINATED with a status message naming the preemption. A VM the person deleted by hand from the Cloud page reads the same way and is retried
+        // once on-demand too; that is the price of not being able to tell them apart without the audit log. A preempted VM is deleted whatever the user chose for after a run.
+        var preempted = request.Spec.Spot && mapped is null && !pastLimit && IsPreemptionReason(reason);
+        var note = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: preempted).ConfigureAwait(false);
         return VmEndNotes.Apply(
-            mapped is not null
+            preempted
+                ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, reason ?? "The Spot VM was taken back by Google.") { SpotPreempted = true }
+                : mapped is not null
                 ? new RunFailureException(CloudErrorKind.Other, mapped, $"The worker reported {workerCode} in status.json and no result.json followed. {reason}")
                 : pastLimit
                     ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.RunTimeLimit, $"The VM was gone after its maxRunDuration of {request.Spec.MaxRunDuration.TotalMinutes.ToString("0.#", CultureInfo.InvariantCulture)} minutes and no result.json followed. {reason}")
                     : new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, (reason ?? "The VM is no longer running.") + (workerCode is null ? string.Empty : $" status.json reported {workerCode}.")),
             note);
     }
+
+    private static bool IsPreemptionReason(string? reason)
+        => reason is null
+            || reason.Contains("preempt", StringComparison.OrdinalIgnoreCase)
+            || reason.Contains("could not be found", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The <c>error.code</c> in <c>status.json</c>, or null when it is absent, unreadable or the look itself failed (a diagnostic, never worth failing the run over).</summary>
     private async Task<string?> TryReadWorkerErrorCodeAsync(string bucket, string key, CancellationToken cancellationToken)

@@ -747,6 +747,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    private int _spotPreemptionsLeft;
+
+    /// <summary>
+    /// Issue #91: the next <paramref name="count"/> Spot VMs created are taken back by Google before their worker writes anything: each reads
+    /// <c>TERMINATED</c> (<c>preempted</c>) at its first look and its worker never answers. An on-demand VM is never preempted by this.
+    /// </summary>
+    public FakeGcp WithSpotPreemptions(int count)
+    {
+        _spotPreemptionsLeft = count;
+        return this;
+    }
+
     /// <summary>Explicitly the fresh-profile default (issue #424): signed out, with no selected project. Kept as an explicit setter, not just the implicit default, so a test can restate the state it depends on.</summary>
     public FakeGcp WithSignedOut()
     {
@@ -872,6 +884,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         if (_bootPolls > 0)
         {
             _bootPollsLeft[key] = _bootPolls;
+        }
+
+        if (spec.Spot && _spotPreemptionsLeft > 0)
+        {
+            _spotPreemptionsLeft--;
+            _preemptAt[key] = _timeProvider.GetUtcNow();
+            return Task.FromResult(vm);
         }
 
         RunSimulatedWorker(spec, zone);
@@ -1102,6 +1121,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         {
             vm = vm with { Status = "TERMINATED", StatusReason = "preempted" };
             _vms[key] = vm;
+            _preemptAt.Remove(key);
         }
 
         return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });

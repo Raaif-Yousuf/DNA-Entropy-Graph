@@ -42,6 +42,13 @@ public sealed record VmSpec(
     /// </summary>
     public string? ServiceAccountEmail { get; init; }
 
+    /// <summary>
+    /// Issue #91: ask Compute Engine for a Spot VM (<c>scheduling.provisioningModel=SPOT</c>), a cheaper computer Google can take back.
+    /// It changes nothing about Hard Rule 10: a Spot VM still carries the six labels, a <c>maxRunDuration</c> and
+    /// <c>instanceTerminationAction=DELETE</c>. False (the default) is an on-demand VM; the runner's one automatic retry after a preemption is a spec with this off.
+    /// </summary>
+    public bool Spot { get; init; }
+
     /// <summary>The <c>app</c> label's fixed value - every DNA Entropy Graph resource carries the same one.</summary>
     public const string AppLabelValue = "dna-entropy-graph";
 

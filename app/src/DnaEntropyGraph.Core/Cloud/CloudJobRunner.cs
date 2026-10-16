@@ -427,18 +427,35 @@ public sealed class CloudJobRunner
             }
         }
 
-        await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
-        var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
-        if (!provisioned.Success)
+        // Issue #91: a Spot VM Google takes back is answered with exactly one automatic retry on an on-demand VM; the second attempt is never Spot, so it cannot loop.
+        var attempt = request;
+        while (true)
         {
-            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
-        }
+            await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
+            var provisioned = await _provisioner.ProvisionAsync(attempt, token => CompleteSpecAsync(attempt, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
+            if (!provisioned.Success)
+            {
+                return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
+            }
 
-        progress.Zone = provisioned.Zone!;
-        progress.VmName = provisioned.VmName ?? progress.VmName;
-        // No name from the provisioner or the progress means the run created the VM itself, under the planned name.
-        await RecordVmNameAsync(request.JobId, progress.VmName ?? request.Spec.VmName, cancellationToken).ConfigureAwait(false);
-        return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
+            progress.Zone = provisioned.Zone!;
+            progress.VmName = provisioned.VmName ?? progress.VmName;
+            // No name from the provisioner or the progress means the run created the VM itself, under the planned name.
+            await RecordVmNameAsync(request.JobId, progress.VmName ?? attempt.Spec.VmName, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await RunOnVmAsync(progress.Resolve(attempt), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
+            }
+            catch (RunFailureException preempted) when (preempted.SpotPreempted && attempt.Spec.Spot)
+            {
+                // The lost VM was already deleted (and the delete confirmed: an unconfirmed end is never marked a preemption), so nothing bills and nothing is adopted below.
+                await _rows.UpdateRowAsync(request.JobId, row => row with { PreemptionCount = row.PreemptionCount + 1 }, cancellationToken).ConfigureAwait(false);
+                attempt = attempt with { Spec = attempt.Spec with { Spot = false, ExistingVmName = null } };
+                progress.VmName = null;
+                progress.Zone = null;
+                progress.VmStartMark = null;
+            }
+        }
     }
 
     /// <summary>

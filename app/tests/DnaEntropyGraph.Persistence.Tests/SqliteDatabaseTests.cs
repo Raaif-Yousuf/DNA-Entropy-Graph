@@ -39,7 +39,7 @@ public class SqliteDatabaseTests
 
         using var connection = database.OpenConnection();
 
-        GetUserVersion(connection).ShouldBe(1L);
+        GetUserVersion(connection).ShouldBe(Latest);
         TableExists(connection, "Runs").ShouldBeTrue();
         TableExists(connection, "CloudResources").ShouldBeTrue();
         TableExists(connection, "Projects").ShouldBeTrue();
@@ -58,7 +58,7 @@ public class SqliteDatabaseTests
         var secondLaunch = new SqliteDatabase(paths.DatabasePath);
         using var connection = secondLaunch.OpenConnection();
 
-        GetUserVersion(connection).ShouldBe(1L);
+        GetUserVersion(connection).ShouldBe(Latest);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM Runs WHERE Id = 'job-x';";
         Convert.ToInt64(command.ExecuteScalar()).ShouldBe(1L);
@@ -86,13 +86,13 @@ public class SqliteDatabaseTests
 
         var syntheticMigrations = new[]
         {
-            (Version: 1L, Sql: "SELECT 1;"), // already applied, must be skipped, not re-run
-            (Version: 2L, Sql: "ALTER TABLE Runs ADD COLUMN TestColumn TEXT;"),
+            (Version: Latest, Sql: "SELECT 1;"), // already applied, must be skipped, not re-run
+            (Version: Latest + 1, Sql: "ALTER TABLE Runs ADD COLUMN TestColumn TEXT;"),
         };
 
         SqliteMigrations.Apply(connection, syntheticMigrations);
 
-        GetUserVersion(connection).ShouldBe(2L);
+        GetUserVersion(connection).ShouldBe(Latest + 1);
         using (var check = connection.CreateCommand())
         {
             check.CommandText = "SELECT TestColumn FROM Runs WHERE Id = 'job-y';";
@@ -114,7 +114,7 @@ public class SqliteDatabaseTests
 
         using var connection = database.OpenConnection();
 
-        GetUserVersion(connection).ShouldBe(1L);
+        GetUserVersion(connection).ShouldBe(Latest);
         TableExists(connection, "Runs").ShouldBeTrue();
         database.RecoveredFromCorruptFileAt.ShouldNotBeNull();
         File.Exists(database.RecoveredFromCorruptFileAt!).ShouldBeTrue();
@@ -130,6 +130,9 @@ public class SqliteDatabaseTests
         migrations[0].Version.ShouldBe(1L);
         migrations[0].Sql.ShouldContain("CREATE TABLE Runs");
     }
+
+    /// <summary>The newest embedded migration: the schema version a freshly opened file is at (asserting a literal here went stale the day 0002 landed).</summary>
+    private static long Latest => SqliteMigrations.LoadEmbedded().Max(m => m.Version);
 
     private static long GetUserVersion(SqliteConnection connection)
     {

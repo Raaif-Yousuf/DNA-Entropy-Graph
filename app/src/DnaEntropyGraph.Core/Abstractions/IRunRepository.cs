@@ -77,4 +77,5 @@ public sealed record RunRecord(
     string? InstallationId = null,
     bool Imported = false,
     string? Notes = null,
-    string? TagsJson = null);
+    string? TagsJson = null,
+    int PreemptionCount = 0);
