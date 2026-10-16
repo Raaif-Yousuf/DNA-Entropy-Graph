@@ -145,7 +145,7 @@ computer instead.
 **If the viewer says it needs a Microsoft component:** the viewer uses Microsoft's WebView2
 Runtime, which comes with Windows 11 and most up-to-date Windows 10 computers. If yours
 does not have it, the viewer page offers an **Install the WebView2 Runtime** link; install
-it, then open the run again. **If it says the results are not on this computer**, the
+it, then open the run again. Until then the page still draws the entropy track of the run as a plain chart (no zoom, no sequence), so you are never left with a blank page. **If it says the results are not on this computer**, the
 results folder was moved or deleted; download the results again from the run.
 
 You can also open your results in other tools you may already have:

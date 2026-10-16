@@ -292,6 +292,12 @@
   <data name="ViewerRuntimeMissing_Action" xml:space="preserve">
     <value>Install the WebView2 Runtime</value>
   </data>
+  <data name="ViewerFallbackNote.Text" xml:space="preserve">
+    <value>Until the genome viewer works, here is the entropy track of this run. It is a simple picture: you cannot zoom or see the sequence.</value>
+  </data>
+  <data name="ViewerFallbackChart.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along the sequence</value>
+  </data>
   <data name="ViewerNoRun_Title" xml:space="preserve">
     <value>No run selected</value>
   </data>

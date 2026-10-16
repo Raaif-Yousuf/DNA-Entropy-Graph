@@ -92,6 +92,24 @@ public sealed partial class ViewerViewModel : ObservableObject
     /// <summary>Completes when the contig list of the last <see cref="OpenRun"/> is filled (or known to be unavailable).</summary>
     public Task ContigsReady { get; private set; } = Task.CompletedTask;
 
+    /// <summary>
+    /// Issue #117: when the WebView2 viewer cannot start, the first record of the run's entropy track, so the viewer area still shows
+    /// the track (drawn natively by the same chart as the Results page) beside the one action. Null otherwise.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasFallbackChart))]
+    [NotifyPropertyChangedFor(nameof(FallbackTitle))]
+    private EntropyContig? _fallbackContig;
+
+    public bool HasFallbackChart => FallbackContig is not null;
+
+    public string FallbackTitle => FallbackContig?.Name ?? string.Empty;
+
+    /// <summary>Completes when the fallback chart of the last failed <see cref="OpenRun"/> is filled (or known to be unavailable).</summary>
+    public Task FallbackReady { get; private set; } = Task.CompletedTask;
+
+    private string? _lastRunFolder;
+
     public ViewerViewModel(
         IWebViewRuntimeProbe probe,
         IStringResourceProvider strings,
@@ -179,6 +197,7 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     public void OpenRun(string? runFolder)
     {
+        _lastRunFolder = runFolder;
         if (string.IsNullOrWhiteSpace(runFolder))
         {
             Fail(ViewerStatus.NoRun, ViewerFailure.NoRun);
@@ -188,6 +207,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         if (!WebViewRuntimeDecision.IsAvailable(_probe.GetVersion))
         {
             Fail(ViewerStatus.RuntimeMissing, ViewerFailure.RuntimeMissing, ViewerUrls.RuntimeDownloadUrl);
+            FallbackReady = LoadFallbackAsync(runFolder);
             return;
         }
 
@@ -211,12 +231,33 @@ public sealed partial class ViewerViewModel : ObservableObject
                 return;
         }
 
+        FallbackContig = null;
         _loadJson = plan.LoadMessageJson;
         // Map first: the host remaps run.deg on this change, before the load command goes out.
         MapRunFolder = plan.RunFolder;
         ShowLoading();
         SendLoadIfReady();
         ContigsReady = LoadContigsAsync(plan.RunFolder!);
+    }
+
+    // Off the UI thread, read once; a missing or malformed track just means no chart (the action card still shows).
+    private async Task LoadFallbackAsync(string folder)
+    {
+        var generation = ++_contigGeneration;
+        EntropyContig? first;
+        try
+        {
+            first = (await Task.Run(() => _overviewSource.Load(folder)))?.Contigs.FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            first = null;
+        }
+
+        if (generation == _contigGeneration)
+        {
+            FallbackContig = first;
+        }
     }
 
     // The record list and seams come from the run's own entropy track and provenance (off the UI thread, read once).
@@ -349,7 +390,14 @@ public sealed partial class ViewerViewModel : ObservableObject
     }
 
     /// <summary>The WebView2 control could not start (corrupt runtime, unwritable profile folder).</summary>
-    public void OnViewerInitFailed() => Fail(ViewerStatus.ViewerError, ViewerFailure.InitFailed);
+    public void OnViewerInitFailed()
+    {
+        Fail(ViewerStatus.ViewerError, ViewerFailure.InitFailed);
+        if (!string.IsNullOrWhiteSpace(_lastRunFolder))
+        {
+            FallbackReady = LoadFallbackAsync(_lastRunFolder);
+        }
+    }
 
     public void SetDarkMode(bool dark)
     {
@@ -396,6 +444,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         MapRunFolder = null;
         _contigGeneration++;
         ClearContigs();
+        FallbackContig = null;
         ShowError(status, failure, actionUrl);
     }
 
