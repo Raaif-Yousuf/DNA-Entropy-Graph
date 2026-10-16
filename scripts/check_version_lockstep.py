@@ -95,25 +95,36 @@ def check(root: Path, tag: str | None = None) -> tuple[list[str], list[str]]:
         return ([f"{WORKER_PYPROJECT_RELATIVE} has no readable [project].version"], [])
 
     if not app_path.is_file():
-        return ([f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} does not exist, so there is nothing to compare "
-                 f"{WORKER_PYPROJECT_RELATIVE}'s version {worker_version!r} against "
-                 "(a guard that skips a missing file can never fail)"], [])
+        return (
+            [
+                f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} does not exist, so there is nothing to compare "
+                f"{WORKER_PYPROJECT_RELATIVE}'s version {worker_version!r} against "
+                "(a guard that skips a missing file can never fail)"
+            ],
+            [],
+        )
 
     app_version = read_app_version(app_path)
     if app_version is None:
         return ([f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} exists but has no readable <Version>"], [])
 
     if worker_version != app_version:
-        return ([
-            f"version mismatch: {WORKER_PYPROJECT_RELATIVE} says {worker_version!r}, "
-            f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} says {app_version!r}"
-        ], [])
+        return (
+            [
+                f"version mismatch: {WORKER_PYPROJECT_RELATIVE} says {worker_version!r}, "
+                f"{APP_DIRECTORY_BUILD_PROPS_RELATIVE} says {app_version!r}"
+            ],
+            [],
+        )
 
     if tag_version is not None and tag_version != worker_version:
-        return ([
-            f"tag {tag!r} says {tag_version!r} but {WORKER_PYPROJECT_RELATIVE} says {worker_version!r} "
-            f"({APP_DIRECTORY_BUILD_PROPS_RELATIVE} says {app_version!r})"
-        ], [])
+        return (
+            [
+                f"tag {tag!r} says {tag_version!r} but {WORKER_PYPROJECT_RELATIVE} says {worker_version!r} "
+                f"({APP_DIRECTORY_BUILD_PROPS_RELATIVE} says {app_version!r})"
+            ],
+            [],
+        )
 
     return ([], [])
 
@@ -121,6 +132,7 @@ def check(root: Path, tag: str | None = None) -> tuple[list[str], list[str]]:
 # ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
+
 
 def self_test() -> bool:
     import tempfile
@@ -137,7 +149,7 @@ def self_test() -> bool:
     def make_app_props(root: Path, version: str) -> None:
         (root / "app").mkdir(parents=True, exist_ok=True)
         (root / "app" / "Directory.Build.props").write_text(
-            f'<Project><PropertyGroup><Version>{version}</Version></PropertyGroup></Project>\n',
+            f"<Project><PropertyGroup><Version>{version}</Version></PropertyGroup></Project>\n",
             encoding="utf-8",
         )
 
@@ -196,8 +208,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Check that worker/pyproject.toml and app/Directory.Build.props agree on version.",
     )
     ap.add_argument("--root", type=Path, default=REPO_ROOT, help="repo root (default: the repo this script lives in)")
-    ap.add_argument("--tag", default=None, metavar="vX.Y.Z",
-                    help="release mode: the git tag must also equal both versions (what release.yml runs)")
+    ap.add_argument(
+        "--tag", default=None, metavar="vX.Y.Z", help="release mode: the git tag must also equal both versions (what release.yml runs)"
+    )
     ap.add_argument("--self-test", action="store_true", help="run against synthetic fixtures and exit")
     args = ap.parse_args(argv)
 
