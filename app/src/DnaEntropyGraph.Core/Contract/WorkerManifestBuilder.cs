@@ -57,6 +57,9 @@ public static class WorkerManifestBuilder
     /// </summary>
     private static readonly HashSet<string> Fp8Models = new(StringComparer.Ordinal) { "evo2_1b_base", "evo2_20b", "evo2_40b" };
 
+    /// <summary>True for a model whose worker-side requirement is fp8 (Hopper only), so no PC with an ordinary GPU can run it (issue #173).</summary>
+    public static bool NeedsFp8(string modelId) => Fp8Models.Contains(modelId);
+
     /// <summary>The manifest as compact JSON. Throws <see cref="ArgumentException"/> for a request the worker would misread (no inputs, an empty output selection, a file name that could leave the job prefix).</summary>
     public static string Build(
         RunOptions options,
@@ -66,7 +69,8 @@ public static class WorkerManifestBuilder
         string? workerImage,
         string bucket,
         IReadOnlyList<StagedInput> inputs,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        string? localRoot = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(inputs);
@@ -179,12 +183,19 @@ public static class WorkerManifestBuilder
                 ["keepAliveMinutes"] = options.KeepAliveMinutes,
                 ["afterKeepAlive"] = options.AfterKeepAlive == AfterKeepAliveAction.Delete ? "delete" : "stop",
             },
-            ["store"] = new JsonObject
-            {
-                ["kind"] = "gcs",
-                ["bucket"] = bucket,
-                ["prefix"] = JobPrefix(jobId),
-            },
+            // A This PC run (issue #174) is the same manifest with the store a folder: docs/job_contract.md section 3.
+            ["store"] = localRoot is null
+                ? new JsonObject
+                {
+                    ["kind"] = "gcs",
+                    ["bucket"] = bucket,
+                    ["prefix"] = JobPrefix(jobId),
+                }
+                : new JsonObject
+                {
+                    ["kind"] = "localdir",
+                    ["root"] = localRoot,
+                },
         };
 
         if (options.Topology != Topology.Auto)
