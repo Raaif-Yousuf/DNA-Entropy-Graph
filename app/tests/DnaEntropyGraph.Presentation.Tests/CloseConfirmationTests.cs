@@ -92,6 +92,7 @@ public class CloseConfirmationTests
     private sealed class PumpContext : SynchronizationContext
     {
         private readonly Queue<(SendOrPostCallback, object?)> _queue = new();
+        private readonly ManualResetEventSlim _posted = new(false);
 
         public override void Post(SendOrPostCallback d, object? state)
         {
@@ -99,7 +100,12 @@ public class CloseConfirmationTests
             {
                 _queue.Enqueue((d, state));
             }
+
+            _posted.Set();
         }
+
+        /// <summary>Blocks until something has been posted to this context (an event, not a sleep): false when nothing was posted within <paramref name="timeout"/>.</summary>
+        public bool WaitForPost(TimeSpan timeout) => _posted.Wait(timeout);
 
         public bool RunOne()
         {
@@ -138,9 +144,11 @@ public class CloseConfirmationTests
                 closedOn = Environment.CurrentManagedThreadId;
             }).ShouldBeTrue();
             answer.SetResult(true);
-            Thread.Sleep(100);
 
-            closed.ShouldBe(0); // nothing closes the window from a pool thread: the context has not run yet
+            // The answer's continuation must come back through the UI context: a post arrives (a ManualResetEvent, not a sleep). Had it run on a pool thread it
+            // would never post and this fails at the wait; had it closed the window inline, closed would already be 1 here.
+            ui.WaitForPost(TimeSpan.FromSeconds(10)).ShouldBeTrue("the exit answer never came back through the UI context");
+            closed.ShouldBe(0); // nothing closes the window until the context runs
             while (ui.RunOne())
             {
             }

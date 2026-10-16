@@ -79,24 +79,30 @@ public sealed class LeftRunningGuard : IDisposable
         }
     }
 
-    private Task<LeftRunningReport> BoundedScanAsync(CancellationToken cancellationToken)
-        => Observed(_scanner.ScanAsync(cancellationToken), "left-running-scan").WaitAsync(ScanTimeout, _clock, cancellationToken);
-
-    /// <summary>Gives a task that a timeout may abandon an observer, so a late failure is logged by class and never goes unobserved.</summary>
-    private Task<T> Observed<T>(Task<T> task, string source) => ObservedCore(task, source);
-
-    private Task Observed(Task task, string source) => ObservedCore(task, source);
-
-    private TTask ObservedCore<TTask>(TTask task, string source)
-        where TTask : Task
+    private async Task<LeftRunningReport> BoundedScanAsync(CancellationToken cancellationToken)
     {
-        _ = task.ContinueWith(
-            t => _log.Warning(source, null, t.Exception?.GetBaseException().GetType().Name ?? nameof(Exception)),
+        var scan = _scanner.ScanAsync(cancellationToken);
+        try
+        {
+            return await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            ObserveLate(scan, "left-running-scan", null);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// A call the timeout abandoned may still fail later: its fault is observed and logged by class (once, with the job id when there is one) so it never goes unobserved.
+    /// Only the abandoned call is observed here: a fault the caller awaits is logged by the caller, so one fault is one log line.
+    /// </summary>
+    private void ObserveLate(Task task, string source, string? jobId)
+        => _ = task.ContinueWith(
+            t => _log.Warning(source, jobId, t.Exception?.GetBaseException().GetType().Name ?? nameof(Exception)),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
-        return task;
-    }
 
     private async Task ScanAndWarnAsync(CancellationToken cancellationToken)
     {
@@ -211,9 +217,10 @@ public sealed class LeftRunningGuard : IDisposable
         var results = await Task.WhenAll(vms.Select(async vm =>
         {
             var accepted = false;
+            Task<VmEndResult>? work = null;
             try
             {
-                var work = Observed(_cleanup.EndVmAsync(installation, vm.Descriptor, delete, () => Volatile.Write(ref accepted, true), cancellationToken), "left-running-exit");
+                work = _cleanup.EndVmAsync(installation, vm.Descriptor, delete, () => Volatile.Write(ref accepted, true), cancellationToken);
                 var result = await work.WaitAsync(EndTimeout, _clock, cancellationToken).ConfigureAwait(false);
                 return (vm, result switch
                 {
@@ -224,6 +231,11 @@ public sealed class LeftRunningGuard : IDisposable
             }
             catch (TimeoutException)
             {
+                if (work is not null)
+                {
+                    ObserveLate(work, "left-running-exit", vm.JobId);
+                }
+
                 return (vm, Volatile.Read(ref accepted) ? EndResult.StillEnding : EndResult.Failed);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

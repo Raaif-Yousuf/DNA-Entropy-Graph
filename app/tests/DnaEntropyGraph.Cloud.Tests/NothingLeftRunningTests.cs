@@ -244,6 +244,7 @@ public class NothingLeftRunningTests
         report.IsClean.ShouldBeTrue();
         await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
         await stub.DidNotReceive().StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>());
         await stub.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
@@ -338,7 +339,7 @@ public class NothingLeftRunningTests
         var failing = Substitute.For<IComputeGateway>();
         failing.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.Arg<string>(), CancellationToken.None));
         failing.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.Arg<string>(), CancellationToken.None));
-        failing.StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new IOException("boom"));
+        failing.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new IOException("boom"));
         var guard = rig.NewGuard(new LeftRunningScanner(failing, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(failing, rig.Gcp, rig.Runs));
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeFalse();
@@ -355,6 +356,21 @@ public class NothingLeftRunningTests
         var guard = rig.NewGuard(new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(broken, rig.Gcp, rig.Runs));
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task One_failed_scan_is_one_log_line_by_class()
+    {
+        var rig = new Rig();
+        var log = Substitute.For<IDiagnosticsLog>();
+        var broken = Substitute.For<IComputeGateway>();
+        broken.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new IOException("offline"));
+        var guard = new LeftRunningGuard(new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(broken, rig.Gcp, rig.Runs), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock);
+
+        (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+        await Task.Yield();
+
+        log.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IDiagnosticsLog.Warning)).ShouldBe(1);
     }
 
     [Fact]
@@ -380,7 +396,7 @@ public class NothingLeftRunningTests
         await rig.CreateVmAsync(rig.Installation, "job-1", TimeSpan.FromMinutes(90));
         rig.Choice = 0;
         var hung = Forwarding(rig);
-        hung.StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
+        hung.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
         var guard = rig.NewGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs, clock: rig.Clock));
 
         var closing = guard.ConfirmExitAsync(CancellationToken.None);
@@ -395,8 +411,7 @@ public class NothingLeftRunningTests
         var stub = Substitute.For<IComputeGateway>();
         stub.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.Arg<string>(), CancellationToken.None));
         stub.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.Arg<string>(), CancellationToken.None));
-        stub.StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.StopVmAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), CancellationToken.None));
-        stub.DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.DeleteVmAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), CancellationToken.None));
+        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.EndVmAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<bool>(2), call.ArgAt<Action?>(3), call.ArgAt<CancellationToken>(4)));
         return stub;
     }
 
@@ -416,30 +431,52 @@ public class NothingLeftRunningTests
         await rig.Clock.FireNextTimeoutAsync(InstallationCleanup.DriverStopWait);
 
         (await closing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
-        await stub.Received(1).StopVmAsync(vm.Name, Zone, Arg.Any<CancellationToken>());
+        await stub.Received(1).EndVmAsync(vm.Name, Zone, false, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
         rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
         rig.LatestErrorCode("job-live").ShouldBe(RunErrorCodes.StoppedByCleanup);
     }
 
     [Fact]
-    public async Task A_second_end_for_the_same_job_while_the_first_is_in_flight_is_already_ending_not_a_failure()
+    public async Task A_second_end_for_the_same_job_while_the_first_is_in_flight_is_done_not_a_failure_and_sends_nothing()
     {
         var rig = new Rig();
         var vm = await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
         await rig.AddRunAsync("job-live", JobPhase.Running);
         var active = new ActiveRuns();
         _ = active.TryStart("job-live", _ => new TaskCompletionSource().Task)!;
-        var cleanup = new InstallationCleanup(rig.Gcp, rig.Gcp, rig.Runs, active, clock: rig.Clock);
+        var stub = Forwarding(rig);
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, active, clock: rig.Clock);
         var descriptor = (await rig.Gcp.ListByInstallationAsync(rig.Installation, CancellationToken.None)).Single();
 
         var first = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
         await rig.Clock.WaitForTimerAsync(InstallationCleanup.DriverStopWait); // the first is now waiting on its driver, holding the job
-        var second = await cleanup.EndVmAsync(rig.Installation, descriptor, true, null, CancellationToken.None);
+        var second = await cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
 
-        second.ShouldBe(VmEndResult.AlreadyEnding);
-        (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None)).ShouldNotBeNull(); // the second sent nothing
+        second.ShouldBe(VmEndResult.Done);
+        EndVmCalls(stub).ShouldBe(1); // the second sent nothing
+        (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None)).ShouldNotBeNull();
         await rig.Clock.FireNextTimeoutAsync(InstallationCleanup.DriverStopWait);
         (await first.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Done);
+    }
+
+    [Fact]
+    public async Task A_cancel_some_other_code_owns_is_reported_as_already_ending_and_nothing_is_sent()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var active = new ActiveRuns();
+        var ownerDone = new TaskCompletionSource();
+        var owner = active.CancelAsync("job-live", () => ownerDone.Task); // the runner's own cancel, or "Delete everything"
+        var stub = Forwarding(rig);
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, active, clock: rig.Clock);
+
+        var result = await cleanup.EndVmAsync(rig.Installation, (await rig.Gcp.ListByInstallationAsync(rig.Installation, CancellationToken.None)).Single(), false, null, CancellationToken.None);
+
+        result.ShouldBe(VmEndResult.AlreadyEnding);
+        EndVmCalls(stub).ShouldBe(0);
+        ownerDone.SetResult();
+        await owner;
     }
 
     [Fact]
@@ -455,6 +492,7 @@ public class NothingLeftRunningTests
 
         await stub.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await stub.DidNotReceive().StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -600,5 +638,233 @@ public class NothingLeftRunningTests
         rig.Guard.Dispose();
 
         rig.Clock.Timers.Single(t => t.Period == LeftRunningGuard.Period).Disposed.ShouldBeTrue();
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (var i = 0; i < 500 && !condition(); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        condition().ShouldBeTrue("the condition never became true");
+    }
+
+    private static int EndVmCalls(IComputeGateway stub) => stub.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IComputeGateway.EndVmAsync));
+
+    private static async Task<VmDescriptor> OnlyVmAsync(Rig rig) => (await rig.Gcp.ListByInstallationAsync(rig.Installation, CancellationToken.None)).Single();
+
+    private static CloudOperationException Forbidden() => new(new CloudError("IAM_PERMISSION_DENIED", 403, "denied"), CloudErrorKind.Permission);
+
+    [Fact]
+    public async Task A_stop_google_accepted_but_has_not_finished_within_the_bound_reads_as_accepted_and_the_row_is_already_ended()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        rig.Gcp.HoldEndVmCompletion();
+        rig.Choice = 0;
+
+        var closing = rig.Guard.ConfirmExitAsync(CancellationToken.None);
+        await WaitUntilAsync(() => rig.LatestPhase("job-live") == JobPhase.Cancelled); // written at acceptance, while the operation is still running
+        await rig.Clock.FireNextTimeoutAsync(LeftRunningGuard.EndTimeout);
+
+        (await closing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
+        rig.LatestErrorCode("job-live").ShouldBe(RunErrorCodes.StoppedByCleanup);
+        rig.Toasts.Received().ShowToast(Arg.Is<string>(t => t.StartsWith("LeftRunning_StillEndingTitle")), Arg.Any<string>(), ToastSeverity.Info);
+        rig.Toasts.DidNotReceive().ShowToast(Arg.Is<string>(t => t.StartsWith("LeftRunning_StopFailedTitle")), Arg.Any<string>(), ToastSeverity.Error);
+        rig.Gcp.ReleaseEndVmCompletion();
+    }
+
+    [Fact]
+    public async Task The_fake_reports_acceptance_while_the_vm_is_still_running_and_applies_the_stop_when_released()
+    {
+        var rig = new Rig();
+        var vm = await rig.CreateVmAsync(rig.Installation, "job-1", TimeSpan.FromMinutes(90));
+        rig.Gcp.HoldEndVmCompletion();
+        var accepted = false;
+
+        var ending = rig.Gcp.EndVmAsync(vm.Name, Zone, false, () => accepted = true, CancellationToken.None);
+
+        accepted.ShouldBeTrue();
+        ending.IsCompleted.ShouldBeFalse();
+        (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None))!.Status.ShouldBe("RUNNING");
+        rig.Gcp.ReleaseEndVmCompletion();
+        await ending.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None))!.Status.ShouldNotBe("RUNNING");
+    }
+
+    [Fact]
+    public async Task A_refused_request_does_not_cancel_the_driver_and_leaves_the_row_running()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var active = new ActiveRuns();
+        var driverCancelled = false;
+        var driverStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = active.TryStart("job-live", async ct =>
+        {
+            ct.Register(() => driverCancelled = true);
+            driverStarted.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        })!;
+        await driverStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken); // its cancel callback is registered: a cancel is seen at once
+        var refusing = Substitute.For<IComputeGateway>();
+        refusing.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw Forbidden());
+        var cleanup = new InstallationCleanup(refusing, rig.Gcp, rig.Runs, active, clock: rig.Clock);
+
+        var result = await cleanup.EndVmAsync(rig.Installation, await OnlyVmAsync(rig), false, null, CancellationToken.None);
+
+        result.ShouldBe(VmEndResult.Failed);
+        driverCancelled.ShouldBeFalse();
+        active.IsActive("job-live").ShouldBeTrue();
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Running);
+    }
+
+    [Fact]
+    public async Task The_driver_is_cancelled_only_once_google_has_accepted_the_request()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var active = new ActiveRuns();
+        var driverCancelled = false;
+        var driverStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = active.TryStart("job-live", async ct =>
+        {
+            ct.Register(() => driverCancelled = true);
+            driverStarted.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        })!;
+        await driverStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken); // its cancel callback is registered: a cancel is seen at once
+        Action? accept = null;
+        var operation = new TaskCompletionSource();
+        var stub = Substitute.For<IComputeGateway>();
+        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            accept = call.ArgAt<Action?>(3);
+            return operation.Task;
+        });
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, active, clock: rig.Clock);
+
+        var ending = cleanup.EndVmAsync(rig.Installation, await OnlyVmAsync(rig), false, null, CancellationToken.None);
+        await WaitUntilAsync(() => accept is not null);
+        driverCancelled.ShouldBeFalse(); // the request is sent and not yet accepted
+
+        accept!();
+        await WaitUntilAsync(() => driverCancelled);
+        operation.SetResult();
+        (await ending.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Done);
+    }
+
+    [Fact]
+    public async Task A_caller_that_cancels_after_acceptance_still_gets_the_run_row_ended()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var active = new ActiveRuns();
+        _ = active.TryStart("job-live", _ => new TaskCompletionSource().Task)!; // a driver that ignores its cancel
+        rig.Gcp.HoldEndVmCompletion();
+        var cleanup = new InstallationCleanup(rig.Gcp, rig.Gcp, rig.Runs, active, clock: rig.Clock);
+        using var cts = new CancellationTokenSource();
+
+        var ending = cleanup.EndVmAsync(rig.Installation, await OnlyVmAsync(rig), false, null, cts.Token);
+        await rig.Clock.WaitForTimerAsync(InstallationCleanup.DriverStopWait); // accepted, waiting for the driver
+        await cts.CancelAsync();
+        await rig.Clock.FireNextTimeoutAsync(InstallationCleanup.DriverStopWait);
+
+        (await ending.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Done);
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
+        rig.LatestErrorCode("job-live").ShouldBe(RunErrorCodes.StoppedByCleanup);
+    }
+
+    [Fact]
+    public async Task A_second_stop_while_the_first_is_accepted_and_finishing_is_done_and_sends_nothing_more()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        rig.Gcp.HoldEndVmCompletion();
+        var stub = Forwarding(rig);
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+        var descriptor = await OnlyVmAsync(rig);
+
+        var first = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+        await WaitUntilAsync(() => rig.LatestPhase("job-live") == JobPhase.Cancelled); // the first was accepted and is finishing on Google's side
+        var second = await cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+
+        second.ShouldBe(VmEndResult.Done);
+        EndVmCalls(stub).ShouldBe(1);
+        rig.Gcp.ReleaseEndVmCompletion();
+        (await first.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Done);
+    }
+
+    [Fact]
+    public async Task A_delete_asked_while_a_stop_is_in_flight_is_sent_and_the_row_names_the_delete()
+    {
+        var rig = new Rig();
+        var vm = await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        rig.Gcp.HoldEndVmCompletion();
+        var stub = Forwarding(rig);
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+        var descriptor = await OnlyVmAsync(rig);
+
+        var stop = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+        await WaitUntilAsync(() => rig.LatestPhase("job-live") == JobPhase.Cancelled);
+        var delete = cleanup.EndVmAsync(rig.Installation, descriptor, true, null, CancellationToken.None);
+        await WaitUntilAsync(() => rig.LatestErrorCode("job-live") == RunErrorCodes.DeletedByCleanup);
+
+        await stub.Received(1).EndVmAsync(vm.Name, Zone, true, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
+        rig.Gcp.ReleaseEndVmCompletion();
+        var results = await Task.WhenAll(stop, delete).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        results.ShouldAllBe(r => r == VmEndResult.Done);
+        (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None)).ShouldBeNull();
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task A_second_end_behind_a_first_that_is_never_accepted_fails_instead_of_claiming_it_is_finishing()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var stub = Substitute.For<IComputeGateway>();
+        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+        var descriptor = await OnlyVmAsync(rig);
+
+        _ = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+        await WaitUntilAsync(() => EndVmCalls(stub) == 1);
+        var second = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+        await rig.Clock.FireNextTimeoutAsync(InstallationCleanup.InFlightWait);
+
+        (await second.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Failed);
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Running);
+    }
+
+    [Fact]
+    public async Task A_second_end_behind_a_first_that_fails_makes_its_own_attempt()
+    {
+        var rig = new Rig();
+        await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
+        await rig.AddRunAsync("job-live", JobPhase.Running);
+        var firstAttempt = new TaskCompletionSource();
+        var stub = Substitute.For<IComputeGateway>();
+        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(firstAttempt.Task, Task.CompletedTask);
+        var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
+        var descriptor = await OnlyVmAsync(rig);
+
+        var first = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+        await WaitUntilAsync(() => EndVmCalls(stub) == 1);
+        var second = cleanup.EndVmAsync(rig.Installation, descriptor, false, null, CancellationToken.None);
+        firstAttempt.SetException(Forbidden());
+
+        (await first.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Failed);
+        (await second.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(VmEndResult.Done);
+        EndVmCalls(stub).ShouldBe(2);
+        rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
     }
 }
