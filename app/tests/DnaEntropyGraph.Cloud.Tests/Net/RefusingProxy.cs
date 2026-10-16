@@ -67,7 +67,7 @@ internal sealed class RefusingProxy : IDisposable
                     Requests.Add(head.ToString());
                 }
 
-                var reason = Status == 407 ? "Proxy Authentication Required" : "Forbidden";
+                var reason = Status switch { 407 => "Proxy Authentication Required", 403 => "Forbidden", 503 => "Service Unavailable", 502 => "Bad Gateway", _ => "Error" };
                 var challenge = Status == 407 ? "Proxy-Authenticate: Basic realm=\"lab\"\r\n" : string.Empty;
                 var response = Encoding.ASCII.GetBytes($"HTTP/1.1 {Status} {reason}\r\n{challenge}Content-Length: 0\r\nConnection: close\r\n\r\n");
                 await stream.WriteAsync(response, _stop.Token).ConfigureAwait(false);

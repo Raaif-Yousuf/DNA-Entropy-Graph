@@ -47,7 +47,7 @@ then **Network proxy**. The default, **Use the Windows settings**, works for mos
 ones that use an automatic proxy script and your Windows sign-in. If your IT help desk gave you a proxy
 address, choose **Use a proxy I type**, enter it as `host:port` (for example `proxy.example.edu:8080`),
 add the user name and password only if they say the proxy needs one, and click **Apply**. Then click
-**Try again**. *(`SIGNIN_PROXY`; a run says the same thing under `proxy_blocked`)*
+**Try again**. Some proxies accept the password without encrypting it on your local network, so type only the proxy your institution gave you. *(`SIGNIN_PROXY`; a run says the same thing under `proxy_blocked`)*
 
 **"A program on your network is replacing Google's security certificate"**, some networks inspect
 encrypted traffic and use their own certificate, which this computer does not trust yet. Ask your

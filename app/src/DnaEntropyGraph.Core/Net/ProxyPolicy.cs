@@ -88,8 +88,26 @@ public sealed class ProxyPolicy : IProxyPolicy
     /// </summary>
     public void Apply(ProxySettings settings, NetworkCredential? manualCredential)
     {
+        var previous = Current;
         var credential = settings.Mode == ProxyMode.Manual ? manualCredential : null;
-        _store.Save(settings);
+
+        // The sign-in first, then settings.json, and the sign-in goes back if the second step fails: either both changed or neither did.
+        WriteCredential(credential);
+        try
+        {
+            _store.Save(settings);
+        }
+        catch
+        {
+            TryRestore(previous);
+            throw;
+        }
+
+        Current = new Snapshot(settings, credential);
+    }
+
+    private void WriteCredential(NetworkCredential? credential)
+    {
         if (credential is null)
         {
             _credentials.Clear();
@@ -98,10 +116,28 @@ public sealed class ProxyPolicy : IProxyPolicy
         {
             _credentials.Save(credential);
         }
-
-        Current = new Snapshot(settings, credential);
     }
 
+    private void TryRestore(Snapshot previous)
+    {
+        try
+        {
+            WriteCredential(previous.Credential);
+        }
+        catch (ProxyCredentialUnreadableException)
+        {
+            // The original failure is the one to report; an unwritable credential file stays as the policy in memory says.
+        }
+
+        try
+        {
+            _store.Save(previous.Settings);
+        }
+        catch (SettingsUnavailableException)
+        {
+            // Same: the file is locked, so it still holds whatever it held before the failed write.
+        }
+    }
     private Snapshot Read()
     {
         NetworkCredential? credential = null;
@@ -127,10 +163,22 @@ public sealed class PolicyWebProxy(IProxyPolicy policy, IWebProxy? system = null
 {
     private readonly IWebProxy _system = system ?? System.Net.Http.HttpClient.DefaultProxy;
 
-    /// <summary>A setter is accepted and ignored: the policy is the only source of credentials.</summary>
+    /// <summary>
+    /// A live view of the policy, not a copy of one answer: the HTTP handler reads this property once and keeps the object (MEASURED 2026-10-16: a
+    /// <see cref="NetworkCredential"/> returned here was reused after the password changed, so the proxy kept getting the old one). A setter is
+    /// accepted and ignored: the policy is the only source of credentials.
+    /// </summary>
     public ICredentials? Credentials
     {
-        get
+        get => _credentials;
+        set { }
+    }
+
+    private readonly ICredentials _credentials = new PolicyCredentials(policy);
+
+    private sealed class PolicyCredentials(IProxyPolicy policy) : ICredentials
+    {
+        public NetworkCredential? GetCredential(Uri uri, string authType)
         {
             var settings = policy.Settings;
             if (settings.Mode == ProxyMode.None)
@@ -138,13 +186,11 @@ public sealed class PolicyWebProxy(IProxyPolicy policy, IWebProxy? system = null
                 return null;
             }
 
-            return settings.Mode == ProxyMode.Manual && TryManual(out _) && policy.ManualCredential is { } saved
+            return settings.Mode == ProxyMode.Manual && ProxyAddress.TryParse(settings.ManualAddress, out _) && policy.ManualCredential is { } saved
                 ? saved
                 : CredentialCache.DefaultNetworkCredentials;
         }
-        set { }
     }
-
     public Uri? GetProxy(Uri destination)
     {
         ArgumentNullException.ThrowIfNull(destination);

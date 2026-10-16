@@ -36,9 +36,40 @@ public class ProxyFailureRunCodeTests
         failure.Kind.ShouldBe(CloudErrorKind.Network);
         failure.Error.Code.ShouldBe(ProxyFailure.RefusedCode);
         RunErrorCodes.For(failure.Error, failure.Kind).ShouldBe(RunErrorCodes.ProxyBlocked);
-        pipeline.IsOffline.ShouldBeFalse();
     }
 
+    private static CloudCallPipeline NewBreakerPipeline() => new(
+        new CloudRetryOptions { MaxRetryAttempts = 0, BreakerMinimumThroughput = 2, BreakerFailureRatio = 0.5 },
+        new StubTokenSource(),
+        new CloudRetryLog());
+
+    private static async Task FailManyTimesAsync(CloudCallPipeline pipeline, HttpRequestException failure)
+    {
+        for (var i = 0; i < 12; i++)
+        {
+            await Should.ThrowAsync<CloudOperationException>(() => pipeline.ExecuteAsync<int>("test.call", _ => throw failure, CancellationToken.None));
+        }
+    }
+
+    [Fact]
+    public async Task Ordinary_connection_failures_open_the_breaker_so_the_offline_banner_can_show()
+    {
+        var pipeline = NewBreakerPipeline();
+
+        await FailManyTimesAsync(pipeline, new HttpRequestException(HttpRequestError.ConnectionError, "refused"));
+
+        pipeline.IsOffline.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_proxy_that_keeps_refusing_never_opens_the_breaker_because_it_is_not_an_offline_network()
+    {
+        var pipeline = NewBreakerPipeline();
+
+        await FailManyTimesAsync(pipeline, new HttpRequestException(HttpRequestError.ProxyTunnelError, "tunnel", null, HttpStatusCode.ProxyAuthenticationRequired));
+
+        pipeline.IsOffline.ShouldBeFalse();
+    }
     [Fact]
     public async Task An_untrusted_certificate_is_tried_once_and_recorded_as_the_certificate_code()
     {
@@ -49,7 +80,9 @@ public class ProxyFailureRunCodeTests
             _ =>
             {
                 attempts++;
-                throw new HttpRequestException(HttpRequestError.SecureConnectionError, "tls", new AuthenticationException("UntrustedRoot"));
+                var tls = new HttpRequestException(HttpRequestError.SecureConnectionError, "tls", new AuthenticationException("UntrustedRoot"));
+                tls.Data[ProxyFailure.UntrustedChainKey] = true;
+                throw tls;
             },
             CancellationToken.None));
 

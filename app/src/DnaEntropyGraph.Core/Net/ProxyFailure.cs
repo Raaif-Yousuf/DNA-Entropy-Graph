@@ -1,5 +1,4 @@
 using System.Net;
-using System.Security.Authentication;
 
 namespace DnaEntropyGraph.Core.Net;
 
@@ -22,37 +21,38 @@ public static class ProxyFailure
     /// <summary>The <c>CloudError.Code</c> an untrusted-certificate failure is recorded under.</summary>
     public const string CertificateCode = "NETWORK_CERTIFICATE";
 
+    /// <summary>
+    /// The <see cref="Exception.Data"/> key the app's own HTTP handler sets on a failed request when the TLS handshake did reach a certificate and
+    /// the chain was proven untrusted (an unknown root or a partial chain). Without it a handshake failure is NOT called a certificate problem:
+    /// an end-of-stream or reset during the handshake, a captive portal and a wrong clock raise the same exception types.
+    /// </summary>
+    public const string UntrustedChainKey = "deg.untrusted_chain";
+
     public static ProxyFailureKind? Detect(Exception? exception)
     {
         for (var e = exception; e is not null; e = e.InnerException)
         {
-            if (e is AuthenticationException)
+            if (e.Data.Contains(UntrustedChainKey))
             {
                 return ProxyFailureKind.CertificateUntrusted;
             }
 
-            if (e is HttpRequestException http)
+            if (e is not HttpRequestException http)
             {
-                if (http.HttpRequestError == HttpRequestError.ProxyTunnelError)
-                {
-                    return ProxyFailureKind.ProxyRefused;
-                }
+                continue;
+            }
 
-                if (http.HttpRequestError == HttpRequestError.SecureConnectionError)
-                {
-                    return ProxyFailureKind.CertificateUntrusted;
-                }
-
-                if (http.StatusCode == HttpStatusCode.ProxyAuthenticationRequired)
-                {
-                    return ProxyFailureKind.ProxyRefused;
-                }
+            // Only a sign-in demand (407) or a ban (403) from the proxy is a refusal the user can act on. A 502, 503, 504 or a dropped tunnel is a
+            // proxy that is unwell right now: a transient network failure that is retried like any other.
+            if (http.StatusCode == HttpStatusCode.ProxyAuthenticationRequired
+                || (http.HttpRequestError == HttpRequestError.ProxyTunnelError && http.StatusCode == HttpStatusCode.Forbidden))
+            {
+                return ProxyFailureKind.ProxyRefused;
             }
         }
 
         return null;
     }
-
     /// <summary>407 on an API answer: a proxy asking for a sign-in, not Google refusing the caller.</summary>
     public static bool IsProxyAuthStatus(int? status) => status == 407;
 

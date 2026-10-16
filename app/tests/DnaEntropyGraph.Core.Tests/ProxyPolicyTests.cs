@@ -14,9 +14,19 @@ public class ProxyPolicyTests
     {
         public Dictionary<string, string> Values { get; } = new();
 
+        public bool FailWrites { get; set; }
+
         public string? GetString(string key) => Values.TryGetValue(key, out var v) ? v : null;
 
-        public void SetString(string key, string value) => Values[key] = value;
+        public void SetString(string key, string value)
+        {
+            if (FailWrites)
+            {
+                throw new SettingsUnavailableException("locked");
+            }
+
+            Values[key] = value;
+        }
     }
 
     private sealed class MemoryCredentials : IProxyCredentialStore
@@ -40,6 +50,8 @@ public class ProxyPolicyTests
     }
 
     private static readonly Uri Google = new("https://storage.googleapis.com/");
+
+    private static NetworkCredential? Offered(PolicyWebProxy proxy) => proxy.Credentials!.GetCredential(new Uri("http://proxy.uni.edu:8080"), "Basic");
 
     [Theory]
     [InlineData("proxy.uni.edu:8080", "http://proxy.uni.edu:8080/")]
@@ -103,7 +115,7 @@ public class ProxyPolicyTests
 
         proxy.GetProxy(Google).ShouldBe(new Uri("http://pac-chose.uni.edu:8080"));
         proxy.IsBypassed(Google).ShouldBeFalse();
-        proxy.Credentials.ShouldBeSameAs(CredentialCache.DefaultNetworkCredentials);
+        Offered(proxy).ShouldBeSameAs(CredentialCache.DefaultNetworkCredentials);
     }
 
     [Fact]
@@ -125,7 +137,7 @@ public class ProxyPolicyTests
         proxy.GetProxy(Google).ShouldBe(new Uri("http://proxy.uni.edu:8080"));
         proxy.GetProxy(new Uri("http://localhost:12345/")).ShouldBeNull();
         proxy.GetProxy(new Uri("http://127.0.0.1:12345/")).ShouldBeNull();
-        var credential = proxy.Credentials.ShouldBeOfType<NetworkCredential>();
+        var credential = Offered(proxy).ShouldBeOfType<NetworkCredential>();
         credential.UserName.ShouldBe("alice");
         credential.Password.ShouldBe("hunter2");
     }
@@ -136,7 +148,7 @@ public class ProxyPolicyTests
         var policy = new ProxyPolicy(new MemorySettings(), new MemoryCredentials());
         policy.Apply(new ProxySettings(ProxyMode.Manual, "proxy.uni.edu:8080"), null);
 
-        new PolicyWebProxy(policy, new FixedProxy(null)).Credentials.ShouldBeSameAs(CredentialCache.DefaultNetworkCredentials);
+        Offered(new PolicyWebProxy(policy, new FixedProxy(null))).ShouldBeSameAs(CredentialCache.DefaultNetworkCredentials);
     }
 
     [Fact]
@@ -214,14 +226,101 @@ public class ProxyPolicyTests
     }
 
     [Fact]
-    public void An_untrusted_certificate_in_the_chain_is_the_interception_case()
+    public void The_credentials_object_a_handler_keeps_follows_the_policy_after_it_was_taken()
     {
-        var auth = new AuthenticationException("The remote certificate is invalid because of errors in the certificate chain: UntrustedRoot");
-        var failure = new HttpRequestException(HttpRequestError.SecureConnectionError, "ssl", auth);
+        var policy = new ProxyPolicy(new MemorySettings(), new MemoryCredentials());
+        policy.Apply(new ProxySettings(ProxyMode.Manual, "proxy.uni.edu:8080"), new NetworkCredential("alice", "first"));
+        var proxy = new PolicyWebProxy(policy, new FixedProxy(null));
+        var kept = proxy.Credentials!;
 
-        ProxyFailure.Detect(failure).ShouldBe(ProxyFailureKind.CertificateUntrusted);
+        policy.Apply(new ProxySettings(ProxyMode.Manual, "proxy.uni.edu:8080"), new NetworkCredential("alice", "second"));
+
+        kept.GetCredential(new Uri("http://proxy.uni.edu:8080"), "Basic")!.Password.ShouldBe("second");
+        policy.Apply(new ProxySettings(ProxyMode.None, string.Empty), null);
+        kept.GetCredential(new Uri("http://proxy.uni.edu:8080"), "Basic").ShouldBeNull();
     }
 
+    [Fact]
+    public void A_proxy_failure_is_never_a_proxy_refusal_just_because_a_message_says_so()
+        => ProxyFailure.Detect(new HttpRequestException("407 proxy authentication required")).ShouldBeNull();
+    [Fact]
+    public void Only_a_marked_untrusted_chain_is_the_interception_case()
+    {
+        var failure = new HttpRequestException(HttpRequestError.SecureConnectionError, "ssl", new AuthenticationException("handshake"));
+        failure.Data[ProxyFailure.UntrustedChainKey] = true;
+
+        ProxyFailure.Detect(failure).ShouldBe(ProxyFailureKind.CertificateUntrusted);
+        ProxyFailure.Detect(new InvalidOperationException("outer", failure)).ShouldBe(ProxyFailureKind.CertificateUntrusted);
+    }
+
+    [Fact]
+    public void A_handshake_that_failed_without_proof_of_an_untrusted_chain_stays_a_plain_network_failure()
+    {
+        // An EOF or reset during the handshake, a captive portal and a wrong clock raise these same types.
+        ProxyFailure.Detect(new HttpRequestException(HttpRequestError.SecureConnectionError, "eof", new AuthenticationException("The decryption operation failed"))).ShouldBeNull();
+        ProxyFailure.Detect(new AuthenticationException("anything")).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ProxyAuthenticationRequired, ProxyFailureKind.ProxyRefused)]
+    [InlineData(HttpStatusCode.Forbidden, ProxyFailureKind.ProxyRefused)]
+    public void A_proxy_that_refuses_the_tunnel_with_a_sign_in_or_a_ban_is_a_proxy_failure(HttpStatusCode status, ProxyFailureKind expected)
+        => ProxyFailure.Detect(new HttpRequestException(HttpRequestError.ProxyTunnelError, "x", null, status)).ShouldBe(expected);
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadGateway)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.GatewayTimeout)]
+    [InlineData(null)]
+    public void A_proxy_that_is_merely_unwell_is_a_transient_network_failure(HttpStatusCode? status)
+        => ProxyFailure.Detect(new HttpRequestException(HttpRequestError.ProxyTunnelError, "x", null, status)).ShouldBeNull();
+
+    [Fact]
+    public void A_credential_failure_after_nothing_changed_leaves_settings_and_policy_alone()
+    {
+        var settings = new MemorySettings();
+        var policy = new ProxyPolicy(settings, new ThrowingCredentials());
+
+        Should.Throw<ProxyCredentialUnreadableException>(() => policy.Apply(new ProxySettings(ProxyMode.Manual, "proxy.uni.edu:8080"), new NetworkCredential("a", "b")));
+
+        settings.Values.ShouldBeEmpty();
+        policy.Settings.Mode.ShouldBe(ProxyMode.System);
+    }
+
+    [Fact]
+    public void A_settings_failure_after_the_sign_in_was_saved_puts_the_old_sign_in_back()
+    {
+        var settings = new MemorySettings();
+        var credentials = new MemoryCredentials { Saved = new NetworkCredential("old", "oldpw") };
+        settings.Values[ProxySettingKeys.Mode] = "manual";
+        settings.Values[ProxySettingKeys.Address] = "old.uni.edu:8080";
+        var policy = new ProxyPolicy(settings, credentials);
+        policy.Settings.ManualAddress.ShouldBe("old.uni.edu:8080");
+        settings.FailWrites = true;
+
+        Should.Throw<SettingsUnavailableException>(() => policy.Apply(new ProxySettings(ProxyMode.Manual, "new.uni.edu:8080"), new NetworkCredential("new", "newpw")));
+
+        credentials.Saved!.UserName.ShouldBe("old");
+        policy.ManualCredential!.UserName.ShouldBe("old");
+        policy.Settings.ManualAddress.ShouldBe("old.uni.edu:8080");
+        settings.Values[ProxySettingKeys.Address].ShouldBe("old.uni.edu:8080");
+    }
+
+    [Fact]
+    public void A_settings_failure_when_the_new_choice_has_no_sign_in_restores_the_old_one_too()
+    {
+        var settings = new MemorySettings();
+        var credentials = new MemoryCredentials { Saved = new NetworkCredential("old", "oldpw") };
+        settings.Values[ProxySettingKeys.Mode] = "manual";
+        settings.Values[ProxySettingKeys.Address] = "old.uni.edu:8080";
+        var policy = new ProxyPolicy(settings, credentials);
+        policy.ManualCredential.ShouldNotBeNull();
+        settings.FailWrites = true;
+
+        Should.Throw<SettingsUnavailableException>(() => policy.Apply(new ProxySettings(ProxyMode.None, string.Empty), null));
+
+        credentials.Saved!.UserName.ShouldBe("old");
+    }
     [Fact]
     public void Ordinary_failures_are_not_proxy_failures()
     {
