@@ -1,0 +1,43 @@
+{
+  "contigs": [
+    {
+      "ceiling": 8192,
+      "context_length": 4096,
+      "direction": "both-combined",
+      "k_used": 4096,
+      "length": 126,
+      "name": "golden",
+      "reduced_context_count": 126,
+      "reduced_context_range": [
+        0,
+        126
+      ],
+      "seam": null,
+      "stride": 4096,
+      "topology": "linear",
+      "window": 8192
+    }
+  ],
+  "gpu": null,
+  "image_digest": null,
+  "input_sha256": null,
+  "predictor": {
+    "device": "cuda",
+    "kind": "mock",
+    "model": "evo2_7b",
+    "seed": 0
+  },
+  "run": {
+    "ambiguity_policy": "keep",
+    "direction": "both-combined",
+    "name": "golden",
+    "rna": false,
+    "topology": "auto"
+  },
+  "schema": 1,
+  "versions": {
+    "evo2": null,
+    "flash_attn": null,
+    "torch": null
+  }
+}

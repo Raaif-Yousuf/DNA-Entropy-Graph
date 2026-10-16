@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use DNA Entropy Graph in your work, please cite it as below, and please also cite Evo 2 (see references)."
+title: "DNA Entropy Graph"
+type: software
+authors:
+  - family-names: "Yousuf"
+    given-names: "Raaif"
+repository-code: "https://github.com/Raaif-Yousuf/DNA-Entropy-Graph"
+url: "https://github.com/Raaif-Yousuf/DNA-Entropy-Graph"
+abstract: "A Windows app that computes a per-base Shannon entropy track for a DNA sequence with the Evo 2 genomic language model on a GPU in the user's own Google Cloud project, and exports it for IGV, Geneious, SnapGene and Benchling."
+license: MIT
+keywords:
+  - entropy
+  - Evo 2
+  - genomics
+  - genome browser
+# OWNER STEP (#168): after the first tagged release, enable the Zenodo GitHub integration for this
+# repository, then add the concept DOI below as `doi: 10.5281/zenodo.<id>` and set `version` and
+# `date-released` from the release. Do not invent a DOI; leave this comment until the real one exists.
+references:
+  - type: article
+    title: "Genome modeling and design across all domains of life with Evo 2"
+    authors:
+      - family-names: "Brixi"
+        given-names: "Garyk"
+      # First author only; the full author list is on the paper's page at the DOI.
+    year: 2025
+    journal: "bioRxiv"
+    doi: "10.1101/2025.02.18.638918"

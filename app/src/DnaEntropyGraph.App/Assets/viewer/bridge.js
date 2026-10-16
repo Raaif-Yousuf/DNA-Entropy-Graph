@@ -1,6 +1,6 @@
 // Bridge between the WinUI host (IgvViewerHost) and igv.js (issues #72, #73).
 // Commands in (window.chrome.webview 'message'): {cmd:"load", config}, {cmd:"goto", locus},
-//   {cmd:"theme", dark:bool}, {cmd:"snapshot"}.
+//   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}.
 // Events out (postMessage): {evt:"ready"}, {evt:"loaded"}, {evt:"warning", message},
 //   {evt:"error", message} (fatal: the run could not be drawn), {evt:"locusChanged", locus},
 //   {evt:"snapshot", svg}.
@@ -46,6 +46,17 @@
     post({ evt: 'loaded' });
   }
 
+  // Seam markers (issue #116): one thin region of interest per contig at the 0-based base where the
+  // reverse pass hands over to the forward pass. igv.js draws a region of interest as a vertical band
+  // across every track; one base wide it reads as a line once zoomed in. Replaces any earlier set.
+  async function markSeams(seams, label) {
+    browser.clearROIs();
+    var regions = (seams || []).map(function (s) {
+      return { chr: s.chr, start: s.pos, end: s.pos + 1, name: label || '', color: 'rgba(220, 60, 60, 0.6)' };
+    });
+    if (regions.length > 0) { await browser.loadROI(regions); }
+  }
+
   async function handle(cmd) {
     switch (cmd && cmd.cmd) {
       case 'load':
@@ -56,6 +67,7 @@
         }
         break;
       case 'goto': if (browser) { await browser.search(cmd.locus); } break;
+      case 'seams': if (browser) { await markSeams(cmd.seams, cmd.label); } break;
       case 'theme': document.body.classList.toggle('dark', !!cmd.dark); break;
       case 'snapshot': if (browser) { post({ evt: 'snapshot', svg: browser.toSVG() }); } break;
     }

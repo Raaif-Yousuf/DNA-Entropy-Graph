@@ -282,6 +282,38 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void The_real_google_composition_hands_the_gateway_the_saved_results_retention_at_each_use()
+    {
+        // Issue #114's wired-to-nothing observable: the options the real storage gateway is built from read the retention setting.
+        // Before the fix nothing set ResultsRetentionDays, so the bucket rule stayed at 90 whatever the setting said.
+        var root = Path.Combine(Path.GetTempPath(), "deg-114-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var services = new ServiceCollection();
+            services.AddDnaEntropyGraph(appDataRoot: root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Google);
+            using var provider = services.BuildServiceProvider();
+            var options = provider.GetRequiredService<DnaEntropyGraph.Cloud.Rest.GoogleCloudOptions>();
+            var settings = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.ISettingsStore>();
+
+            options.ResultsRetentionDays.ShouldBe(90);
+            settings.SetString(DnaEntropyGraph.Core.Cloud.ResultsRetentionSetting.Key, "30");
+            options.ResultsRetentionDays.ShouldBe(30);
+
+            // The Settings control itself: choosing a length in the real ViewModel changes what the gateway's options read.
+            var vm = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.CloudResultsSettingsViewModel>();
+            vm.SelectedChoice = vm.Choices.Single(c => c.Days == 180);
+            options.ResultsRetentionDays.ShouldBe(180);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task The_run_completion_path_reaches_the_registered_desktop_notifier_and_a_click_is_routed()
     {
         // Issue #107, wired-to-nothing: the Windows notifier and the activation router are the real App types, and the completion

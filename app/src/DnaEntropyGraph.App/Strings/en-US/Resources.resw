@@ -523,6 +523,12 @@
   <data name="ViewerRuntimeMissing_Action" xml:space="preserve">
     <value>Install the WebView2 Runtime</value>
   </data>
+  <data name="ViewerFallbackNote.Text" xml:space="preserve">
+    <value>Until the genome viewer works, here is the entropy track of this run. It is a simple picture: you cannot zoom or see the sequence.</value>
+  </data>
+  <data name="ViewerFallbackChart.AutomationProperties.Name" xml:space="preserve">
+    <value>Entropy along the sequence</value>
+  </data>
   <data name="ViewerNoRun_Title" xml:space="preserve">
     <value>No run selected</value>
   </data>
@@ -582,6 +588,18 @@
   </data>
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>
+  </data>
+  <data name="ViewerContigSelector.Header" xml:space="preserve">
+    <value>Sequence record</value>
+  </data>
+  <data name="ViewerContigSelector.PlaceholderText" xml:space="preserve">
+    <value>Choose a record to jump to</value>
+  </data>
+  <data name="ViewerContigGo.Content" xml:space="preserve">
+    <value>Go to record</value>
+  </data>
+  <data name="ViewerSeamLabel" xml:space="preserve">
+    <value>Where the reverse read hands over to the forward read</value>
   </data>
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
@@ -2227,5 +2245,101 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="Results_CostShortNoCloud" xml:space="preserve">
     <value>No cloud cost</value>
+  </data>
+  <data name="AboutVersion_Text" xml:space="preserve">
+    <value>Version {0}</value>
+  </data>
+  <data name="UpdateCheckNowButton.Content" xml:space="preserve">
+    <value>Check now</value>
+  </data>
+  <data name="UpdateRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateBarRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateChannelChoices.Header" xml:space="preserve">
+    <value>Which updates to offer</value>
+  </data>
+  <data name="UpdateChannelStable.Content" xml:space="preserve">
+    <value>Stable (recommended)</value>
+  </data>
+  <data name="UpdateChannelBeta.Content" xml:space="preserve">
+    <value>Beta (early versions, may have rough edges)</value>
+  </data>
+  <data name="UpdateCheckOnLaunchBox.Content" xml:space="preserve">
+    <value>Check for updates when the app starts</value>
+  </data>
+  <data name="UpdateNotesHeader.Text" xml:space="preserve">
+    <value>What changes in this version</value>
+  </data>
+  <data name="UpdateChecking" xml:space="preserve">
+    <value>Checking for updates...</value>
+  </data>
+  <data name="UpdateUpToDate" xml:space="preserve">
+    <value>You have the latest version.</value>
+  </data>
+  <data name="UpdateNotInstalled" xml:space="preserve">
+    <value>This copy was not installed with the installer, so it cannot update itself. Download the latest installer from the releases page to update.</value>
+  </data>
+  <data name="UpdateCheckFailed" xml:space="preserve">
+    <value>Could not check for updates. Check your internet connection, then press Check now.</value>
+  </data>
+  <data name="UpdateAvailable_Title" xml:space="preserve">
+    <value>Update available: {0}</value>
+  </data>
+  <data name="UpdateAvailable_Status" xml:space="preserve">
+    <value>Version {0} is ready to download. Press Restart to update when you are between runs.</value>
+  </data>
+  <data name="UpdateWaitForRun" xml:space="preserve">
+    <value>A run is in progress, so the app will not restart now. Press Restart to update again when the run has finished.</value>
+  </data>
+  <data name="UpdateDownloading" xml:space="preserve">
+    <value>Downloading the update...</value>
+  </data>
+  <data name="UpdateDownloadingPercent" xml:space="preserve">
+    <value>Downloading the update... {0}%</value>
+  </data>
+  <data name="UpdateRestarting" xml:space="preserve">
+    <value>Restarting to finish the update...</value>
+  </data>
+  <data name="UpdateDownloadFailed" xml:space="preserve">
+    <value>The update could not be downloaded. Check your internet connection, then press Restart to update again.</value>
+  </data>
+  <data name="UpdateSettingNotSaved" xml:space="preserve">
+    <value>That choice could not be saved because the settings file is locked. Close other programs using it, then change it again.</value>
+  </data>
+  <data name="DevBuild_Banner" xml:space="preserve">
+    <value>Development build {0}: not a release</value>
+  </data>
+  <data name="AboutBuild_Text" xml:space="preserve">
+    <value>Build {0}</value>
+  </data>
+  <data name="UninstallRemoveData_Title" xml:space="preserve">
+    <value>Remove your data too?</value>
+  </data>
+  <data name="UninstallRemoveData_Body" xml:space="preserve">
+    <value>DNA Entropy Graph is being removed. Also delete your run history, settings and saved copies of your input files from this computer? Choose No to keep them for a later reinstall. Your result files in your output folder are never deleted.</value>
+  </data>
+  <data name="SettingsCloudResultsHeader.Text" xml:space="preserve">
+    <value>Cloud results</value>
+  </data>
+  <data name="SettingsCloudResultsExplainer.Text" xml:space="preserve">
+    <value>Each run's results are also stored in a storage area in your own Google Cloud project (a bucket), so you can download them again. Google deletes them automatically after the number of days you choose here.</value>
+  </data>
+  <data name="CloudRetentionBox.Header" xml:space="preserve">
+    <value>Keep stored results for</value>
+  </data>
+  <data name="CloudRetentionChoiceFormat" xml:space="preserve">
+    <value>{0} days</value>
+  </data>
+  <data name="SettingsCloudResultsNote.Text" xml:space="preserve">
+    <value>A change applies when your next run starts. Choosing fewer days than the bucket already keeps does not shrink it, because other copies of this app may share the same bucket and we never delete results early. To go back to a longer time, choose it here.</value>
+  </data>
+  <data name="CloudRetentionSaved" xml:space="preserve">
+    <value>Saved. It applies when your next run starts. A time shorter than the one already set on the storage for your results (the bucket) never shortens it, so older results may stay. To remove them sooner, delete them in the Cloud Storage page of your Google Cloud project.</value>
+  </data>
+  <data name="SettingsAboutHeader.Text" xml:space="preserve">
+    <value>About and updates</value>
   </data>
 </root>
