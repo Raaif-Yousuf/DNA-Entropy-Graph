@@ -169,6 +169,8 @@ public class NothingLeftRunningTests
         public Task AddRunAsync(string job, JobPhase phase) => Runs.UpsertAsync(new RunRecord(job, phase, Start), CancellationToken.None);
 
         public JobPhase LatestPhase(string job) => Runs.AllRecordedInOrder.Last(r => r.JobId == job).Phase;
+
+        public string? LatestErrorCode(string job) => Runs.AllRecordedInOrder.Last(r => r.JobId == job).ErrorCode;
     }
 
     [Fact]
@@ -261,6 +263,7 @@ public class NothingLeftRunningTests
         rig.Body!.ShouldContain("LeftRunning_VmLineLive");
         (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None)).ShouldBeNull();
         rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
+        rig.LatestErrorCode("job-live").ShouldBe(RunErrorCodes.DeletedByCleanup);
     }
 
     [Fact]
@@ -275,6 +278,10 @@ public class NothingLeftRunningTests
 
         (await rig.Gcp.GetVmAsync(vm.Name, Zone, CancellationToken.None))!.Status.ShouldNotBe("RUNNING");
         rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
+        rig.LatestErrorCode("job-live").ShouldBe(RunErrorCodes.StoppedByCleanup);
+        RunErrorCodes.All.ShouldContain(RunErrorCodes.StoppedByCleanup);
+        RunErrorCodes.ResourceKey(RunErrorCodes.StoppedByCleanup).ShouldBe("RunError_cleanup_stopped");
+        RunErrorCodes.ResourceKey(RunErrorCodes.StoppedByCleanup).ShouldNotBe(RunErrorCodes.ResourceKey(RunErrorCodes.DeletedByCleanup));
     }
 
     [Fact]

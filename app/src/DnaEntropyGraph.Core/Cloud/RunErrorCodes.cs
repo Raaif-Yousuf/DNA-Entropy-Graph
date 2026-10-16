@@ -80,6 +80,9 @@ public static class RunErrorCodes
     public const string NotConnectedGatewayCode = "CLOUD_NOT_CONNECTED";
     /// <summary>The run was ended because the user deleted everything this installation made in the project (issue #105): its VM is gone, so the row is Cancelled, never left Running.</summary>
     public const string DeletedByCleanup = "cleanup_deleted";
+
+    /// <summary>The run was ended because its computer was stopped from the exit window (issue #113) while the run was still live: the row is Cancelled, never left Running.</summary>
+    public const string StoppedByCleanup = "cleanup_stopped";
     public const string Other = "other";
 
     /// <summary>Every code a run can be recorded under.</summary>
@@ -89,7 +92,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -215,6 +218,7 @@ public static class RunErrorCodes
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
         WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",
         DeletedByCleanup => "RunError_cleanup_deleted",
+        StoppedByCleanup => "RunError_cleanup_stopped",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",
         "quota" => "RunError_quota",

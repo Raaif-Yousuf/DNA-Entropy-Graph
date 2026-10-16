@@ -304,7 +304,7 @@ public sealed class InstallationCleanup
     /// <summary>
     /// Issue #113: stops or deletes ONE computer of this installation (the exit window's Stop / Delete) through the same run-ending path as "Delete everything": a VM that
     /// carries a <c>job-id</c> is ended under <see cref="ActiveRuns.CancelAsync"/>, so its driver is stopped first and a run that was still live is ended as Cancelled
-    /// (<see cref="RunErrorCodes.DeletedByCleanup"/>) instead of being left Running (Hard Rule 11). Refuses a VM not labelled for <paramref name="installationId"/> (false, nothing touched).
+    /// (<see cref="RunErrorCodes.DeletedByCleanup"/> for a delete, <see cref="RunErrorCodes.StoppedByCleanup"/> for a stop) instead of being left Running (Hard Rule 11). Refuses a VM not labelled for <paramref name="installationId"/> (false, nothing touched).
     /// True when the stop or delete was accepted (a delete also read back as gone); never throws for a cloud failure, so the caller can name the computer and the action.
     /// </summary>
     public async Task<bool> EndVmAsync(string installationId, VmDescriptor vm, bool delete, CancellationToken cancellationToken)
@@ -339,7 +339,7 @@ public sealed class InstallationCleanup
 
             if (jobId is not null)
             {
-                await EndRunRowAsync(jobId).ConfigureAwait(false);
+                await EndRunRowAsync(jobId, RunErrorCodes.StoppedByCleanup).ConfigureAwait(false);
             }
         }
 
@@ -405,7 +405,7 @@ public sealed class InstallationCleanup
     }
 
     /// <summary>Ends a non-terminal run row as Cancelled under <see cref="RunErrorCodes.DeletedByCleanup"/>. A row already terminal, or none, is left alone; a failed write is not the cleanup's failure (the VM is gone and the reconciler looks again).</summary>
-    private async Task EndRunRowAsync(string jobId)
+    private async Task EndRunRowAsync(string jobId, string errorCode = RunErrorCodes.DeletedByCleanup)
     {
         if (_rows is null)
         {
@@ -425,7 +425,7 @@ public sealed class InstallationCleanup
                 await _rows.SetPhaseAsync(jobId, JobPhase.Cancelling, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await _rows.SetPhaseAsync(jobId, JobPhase.Cancelled, CancellationToken.None, RunErrorCodes.DeletedByCleanup).ConfigureAwait(false);
+            await _rows.SetPhaseAsync(jobId, JobPhase.Cancelled, CancellationToken.None, errorCode).ConfigureAwait(false);
         }
         catch (Exception)
         {
