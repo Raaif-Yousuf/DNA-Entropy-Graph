@@ -170,6 +170,7 @@ public static class ServiceRegistration
         services.AddSingleton<IResettableSettings>(sp => sp.GetRequiredService<SettingsStore>());
         services.AddSingleton<ICloudModeInfo>(_ => new DnaEntropyGraph.App.Services.FakeCloudModeInfo(cloud));
         services.AddSingleton<OutputSelectionStore>();
+        services.AddSingleton<DnaEntropyGraph.Core.Presets.PresetStore>();
 
         // Issue #460: the app's own copy of every run's input, under the same app data folder as the
         // database and settings (Hard Rule 14).
@@ -201,6 +202,8 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IExternalViewerOpener, DnaEntropyGraph.Presentation.Services.ExternalViewerOpener>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IShellLauncher, Services.ShellLauncher>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IClipboardTextReader, Services.ClipboardTextReader>();
+        services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
+        services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),
@@ -298,6 +301,7 @@ public static class ServiceRegistration
         services.AddSingleton<ISetupCheckService, SetupCheckService>();
         services.AddTransient<SetupStepsViewModel>();
         services.AddTransient<WizardViewModel>();
+        services.AddTransient<PresetPickerViewModel>();
         services.AddTransient<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
@@ -313,6 +317,13 @@ public static class ServiceRegistration
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
+        // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.
+        services.AddSingleton<IAppUpdateSource, Services.VelopackUpdateSource>();
+        services.AddSingleton<IActiveRunProbe, Services.ActiveRunProbe>();
+        services.AddSingleton<UpdateSettings>();
+        // Issue #263: one read of the running exe's version, sha and signature for the title-bar banner and About.
+        services.AddSingleton(_ => Services.BuildIdentityFactory.Create());
+        services.AddSingleton<UpdateViewModel>();
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();

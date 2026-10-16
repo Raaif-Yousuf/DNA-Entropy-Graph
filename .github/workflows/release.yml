@@ -1,0 +1,598 @@
+name: release
+
+# Cuts a release when a version tag is pushed (docs/release_runbook.md has the steps and the clean-VM verification):
+#
+#     git tag vX.Y.Z && git push origin vX.Y.Z
+#
+# Shape (docs/packaging_design.md sections 3, 4, 6, 7 explain why):
+#   verify   asserts every secret exists, then the version lockstep with the tag and that the tag is on main. Every other
+#            job needs it, so a missing secret stops the run BEFORE anything is built, signed or pushed. The Azure signing
+#            action silently no-ops when its inputs are empty and would leave an unsigned installer that looks like any
+#            other (#178).
+#   images   builds, pushes, scans (Trivy gate) and attests the -cuda and -cpu worker images (#255, #165).
+#   wheel    builds the worker wheel.
+#   app      pins the image digests into the app, publishes, injects the OAuth client from a secret (#518), signs, packs
+#            with Velopack, verifies every signature AND the signer, stages exactly this release's files, attests them.
+#            It holds the signing secrets and only a READ token.
+#   upload   the only job besides publish with a write token. Uploads the staged files as a DRAFT release (vpk).
+#   publish  attaches the checksums, wheel, SBOMs and image digests, checks every expected asset is there (exact names), and
+#            only then makes the release public. The in-app updater reads the Releases API, so a release that is public
+#            before all its assets exist would be offered to users half-uploaded (#179).
+#   verify-reminder  opens one "Verify <tag> on a clean VM" issue (#181).
+#
+# The jobs that hold secrets (verify, app) run under the `release` environment: tag restriction v*, required reviewers and
+# environment-scoped secrets (docs/release_runbook.md section 0). Nothing here prints a secret value: the assert step prints
+# names only and the OAuth values are masked before anything else is written.
+#
+# Every action is pinned by commit SHA (scripts/check_actions_pinned.py); Dependabot moves the SHA and its `# vX.Y.Z` comment.
+# Steps carry exact names on purpose: scripts/tests/test_release_workflow.py pins their order by name.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPO: ghcr.io/raaif-yousuf/dna-entropy-worker
+
+jobs:
+  verify:
+    name: verify secrets and version lockstep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Names only. A value is never printed (the env block hands each secret to the shell, nothing echoes it).
+      - name: assert every release secret exists
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          TRUSTED_SIGNING_ENDPOINT: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          OAUTH_CLIENT_JSON: ${{ secrets.OAUTH_CLIENT_JSON }}
+          RELEASE_SIGNER_SUBJECT: ${{ vars.RELEASE_SIGNER_SUBJECT }}
+        run: |
+          missing=""
+          for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET TRUSTED_SIGNING_ENDPOINT TRUSTED_SIGNING_ACCOUNT TRUSTED_SIGNING_PROFILE OAUTH_CLIENT_JSON RELEASE_SIGNER_SUBJECT; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=Release secrets missing::Set these in the release environment (RELEASE_SIGNER_SUBJECT is an environment variable), then re-run (see docs/release_runbook.md section 0):$missing"
+            exit 1
+          fi
+          echo "OK: all release secrets are set"
+
+      - name: set up python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: the tag, worker/pyproject.toml and app/Directory.Build.props carry one version
+        run: python scripts/check_version_lockstep.py --tag "${GITHUB_REF_NAME}"
+
+      # A release is cut from main. A tag on a side branch would ship code that never went through review.
+      - name: the tagged commit is on main
+        run: |
+          if ! git branch -r --contains "$GITHUB_SHA" | grep -q 'origin/main$'; then
+            echo "::error title=Tag is not on main::Commit $GITHUB_SHA is not reachable from origin/main. Delete the tag, merge the change, and tag main."
+            exit 1
+          fi
+
+  images:
+    name: image ${{ matrix.variant }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: true
+      matrix:
+        variant: [cuda, cpu]
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # #255: a base that is not pinned by digest is not reproducible, and the release refuses to publish one. EVERY FROM
+      # must be pinned (a multi-stage file with one pinned stage fails). The logic is a script with its own tests.
+      - name: the base image is pinned by digest
+        run: python3 scripts/release_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"
+
+      # The NGC PyTorch base is large; an ubuntu runner has about 14 GB free until these are removed.
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: set up buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: source date for a repeatable build
+        id: epoch
+        run: echo "value=$(git log -1 --pretty=%ct)" >> "$GITHUB_OUTPUT"
+
+      - name: build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: worker
+          file: worker/Dockerfile.${{ matrix.variant }}
+          tags: ${{ env.IMAGE_REPO }}:${{ github.ref_name }}-${{ matrix.variant }}
+          build-args: |
+            SOURCE_DATE_EPOCH=${{ steps.epoch.outputs.value }}
+          outputs: type=image,push=true,rewrite-timestamp=true
+          provenance: mode=max
+          sbom: true
+
+      # The gate. A failing scan stops the release (the publish job needs this one); the pushed tag is never written into
+      # worker-images.json, so no released app can run it.
+      - name: Trivy scan (fails on a fixable HIGH or CRITICAL finding)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ github.token }}
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-image-${{ matrix.variant }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: provenance attestation (pushed to GHCR)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPO }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: SBOM attestation (pushed to GHCR)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPO }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom-image-${{ matrix.variant }}.cdx.json
+          push-to-registry: true
+
+      - name: record the digest
+        run: |
+          mkdir -p out
+          printf '%s' "${{ steps.build.outputs.digest }}" > "out/digest-${{ matrix.variant }}.txt"
+          cp "sbom-image-${{ matrix.variant }}.cdx.json" out/
+
+      - name: upload digest and SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.variant }}
+          path: out/*
+          retention-days: 7
+          if-no-files-found: error
+
+  wheel:
+    name: worker wheel
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: build the wheel
+        run: uv build --wheel --out-dir dist worker
+      - name: keep the wheel for the release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: worker-wheel
+          path: dist/*.whl
+          retention-days: 7
+          if-no-files-found: error
+
+  app:
+    name: signed installer
+    needs: [verify, images]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: release
+    # READ only. The OAuth client file and the signing secrets live here, next to code that builds the repo; the write
+    # token lives in the upload job, which never sees a secret.
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: set up python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: set up dotnet
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: app/global.json
+
+      - name: download the image digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: image-*
+          path: images
+
+      # #458: the app refuses a worker image that is not listed for its own version, so the entry has to be in the
+      # embedded worker-images.json BEFORE the app is built, or every run in the released build ends no_worker_image.
+      - name: pin the worker image digests into the app
+        shell: pwsh
+        run: |
+          $cuda = (Get-Content images/image-cuda/digest-cuda.txt -Raw).Trim()
+          $cpu = (Get-Content images/image-cpu/digest-cpu.txt -Raw).Trim()
+          python scripts/write_worker_images.py --version "$env:GITHUB_REF_NAME" --cuda-digest $cuda --cpu-digest $cpu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: restore
+        working-directory: app
+        run: dotnet restore
+
+      - name: publish self-contained
+        working-directory: app
+        run: >
+          dotnet publish src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj
+          -c Release -p:Platform=x64 -r win-x64 --self-contained true
+          -p:WindowsPackageType=None
+          -o publish
+
+      - name: publish carries the Windows App SDK runtime and the price list
+        working-directory: app
+        shell: pwsh
+        run: |
+          foreach ($f in 'publish/Microsoft.ui.xaml.dll', 'publish/Assets/pricing.json', 'publish/DnaEntropyGraph.App.exe') {
+            if (-not (Test-Path $f)) { Write-Host "::error title=Publish incomplete::$f is missing from the publish folder."; exit 1 }
+          }
+
+      # Before the OAuth file exists, so the SBOM describes the shipped packages and never touches the client file.
+      - name: SBOM (CycloneDX) for the app publish
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: app/publish
+          format: cyclonedx-json
+          output-file: sbom-app.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      # #518. The Desktop-app client file is written next to the exe (the first place OAuthClientLoader.DefaultCandidates
+      # looks) so vpk packs it into the payload. The script keeps ONLY installed.client_id and installed.client_secret,
+      # validates them and masks both before it prints or writes anything. It is never in git and never in an Actions artifact.
+      - name: write oauth_client.local.json from the secret
+        shell: pwsh
+        env:
+          OAUTH_CLIENT_JSON: ${{ secrets.OAUTH_CLIENT_JSON }}
+        run: |
+          python scripts/write_oauth_client.py --out app/publish/oauth_client.local.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Only this project's own binaries are signed. Microsoft's files in the publish folder keep Microsoft's signature.
+      - name: list the binaries to sign
+        id: own
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem app/publish -File | Where-Object { $_.Name -like 'DnaEntropyGraph.*.dll' -or $_.Name -eq 'DnaEntropyGraph.App.exe' } | ForEach-Object { $_.FullName })
+          if ($files.Count -lt 2) { Write-Host "::error title=Nothing to sign::found $($files.Count) own binaries in the publish folder."; exit 1 }
+          "files=$($files -join ',')" >> $env:GITHUB_OUTPUT
+
+      - name: sign the app binaries
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          files: ${{ steps.own.outputs.files }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: install vpk
+        run: dotnet tool install -g vpk --version 1.2.161
+
+      # MEASURED 2026-10-15 from velopack 1.2.161 source: `vpk download github` fetches only the latest full nupkg (it
+      # gives pack the base for a delta). Whatever it leaves in app/releases is NOT part of this release: pack names this
+      # release's files in assets.win.json and the stage step below reads only that.
+      - name: download the previous release (for delta updates)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $prior = gh release list --repo $env:GITHUB_REPOSITORY --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($prior) {
+            Write-Host "previous release: $prior"
+            vpk download github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN --outputDir app/releases
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Host "no previous release: this one ships full packages only"
+          }
+
+      - name: vpk pack
+        working-directory: app
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          vpk pack --packId DnaEntropyGraph.Desktop --packVersion $version --packDir publish --mainExe DnaEntropyGraph.App.exe --outputDir releases
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: sign Setup.exe
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\app\releases\DnaEntropyGraph.Desktop-win-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # The proof that signing happened. A green signing step alone is not: the action can no-op on a bad configuration.
+      # EVERY signed file is checked (the exe, every DnaEntropyGraph.*.dll, Setup.exe): the chain is valid (signtool /pa)
+      # and the signer is OUR identity (the subject must contain the owner's validated name), so a file signed by someone
+      # else, or with a different certificate profile, fails too.
+      - name: verify the signatures
+        shell: pwsh
+        env:
+          OWN_FILES: ${{ steps.own.outputs.files }}
+          EXPECTED_SIGNER_SUBJECT: ${{ vars.RELEASE_SIGNER_SUBJECT }}
+        run: |
+          $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          if (-not $tool) { Write-Host "::error title=No signing tool::the Windows SDK signing tool was not found on the runner."; exit 1 }
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_SIGNER_SUBJECT)) { Write-Host "::error title=No expected signer::RELEASE_SIGNER_SUBJECT is empty. Set it in the release environment, then re-run."; exit 1 }
+          $files = @($env:OWN_FILES -split ',' | Where-Object { $_ }) + "$env:GITHUB_WORKSPACE\app\releases\DnaEntropyGraph.Desktop-win-Setup.exe"
+          if ($files.Count -lt 3) { Write-Host "::error title=Nothing to verify::only $($files.Count) signed files were listed."; exit 1 }
+          foreach ($f in $files) {
+            & $tool.FullName verify /pa $f
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error title=Not signed::$f failed signature verification."; exit 1 }
+            $sig = Get-AuthenticodeSignature -FilePath $f
+            if ($sig.Status -ne 'Valid') { Write-Host "::error title=Not signed::$f has signature status $($sig.Status)."; exit 1 }
+            if ($sig.SignerCertificate.Subject -notlike "*$($env:EXPECTED_SIGNER_SUBJECT)*") { Write-Host "::error title=Wrong signer::$f is signed by $($sig.SignerCertificate.Subject), not the expected identity."; exit 1 }
+          }
+          Write-Host "OK: $($files.Count) files carry a valid signature from the expected signer"
+
+      # Only the files vpk pack listed for THIS version (and never a prior release's package that vpk download left
+      # behind) are staged. The step writes the attestation subjects; the upload job gets the staged folder.
+      - name: stage this release's files
+        id: assets
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          python scripts/release_assets.py stage --dir app/releases --stage stage --version $version --github-output $env:GITHUB_OUTPUT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: provenance attestation for the installer
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.assets.outputs.subjects }}
+
+      - name: SBOM attestation for the installer
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: stage/DnaEntropyGraph.Desktop-win-Setup.exe
+          sbom-path: sbom-app.cdx.json
+
+      - name: keep the app SBOM for the release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-app
+          path: sbom-app.cdx.json
+          retention-days: 7
+          if-no-files-found: error
+
+      # The one deliberate package hand-off between jobs (a job cannot read another job's disk). It is the SAME signed
+      # installer the public release will carry, one day of retention, and the folder holds only what stage copied.
+      - name: hand the staged files to the upload job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
+          path: stage/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # A DRAFT: vpk creates the release as a draft unless --publish is given. The publish job flips it. This job holds the
+  # write token and no secret; the app job holds the secrets and no write token.
+  upload:
+    name: upload the draft release
+    needs: [verify, app]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: set up dotnet
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: app/global.json
+
+      - name: download the staged files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: app/releases
+
+      - name: install vpk
+        run: dotnet tool install -g vpk --version 1.2.161
+
+      # MEASURED 2026-10-15 (velopack 1.2.161): upload sends exactly the files assets.win.json names, then releases.win.json
+      # and the legacy RELEASES. Without --merge it fails if the tag already has a release, so a re-run never mixes files.
+      - name: vpk upload github (draft)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pre = @()
+          if ($env:GITHUB_REF_NAME -like '*-*') { $pre = @('--pre') }
+          vpk upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN --tag $env:GITHUB_REF_NAME --releaseName "DNA Entropy Graph $env:GITHUB_REF_NAME" --targetCommitish $env:GITHUB_SHA --outputDir app/releases @pre
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  publish:
+    name: publish the release
+    needs: [verify, images, wheel, app, upload]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: download the images, wheel and SBOM artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: extras
+
+      - name: the draft release holds the installer
+        run: |
+          mkdir -p assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir assets
+          ls -l assets
+
+      - name: image digests file and notes
+        run: |
+          cuda=$(cat extras/image-cuda/digest-cuda.txt)
+          cpu=$(cat extras/image-cpu/digest-cpu.txt)
+          {
+            echo "Worker image digests (the app pins these by digest, docs/packaging_design.md section 6):"
+            echo "${IMAGE_REPO}:${GITHUB_REF_NAME}-cuda@${cuda}"
+            echo "${IMAGE_REPO}:${GITHUB_REF_NAME}-cpu@${cpu}"
+          } > assets/image-digests.txt
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${GITHUB_REF_NAME}" --jq .body > changes.md
+          {
+            cat changes.md
+            echo
+            echo '## Worker images'
+            echo
+            echo '```'
+            cat assets/image-digests.txt
+            echo '```'
+            echo
+            echo 'Verify any asset with `gh attestation verify <file> --repo '"${GITHUB_REPOSITORY}"'`; SHA256SUMS lists every file.'
+          } > notes.md
+
+      - name: collect the wheel and the SBOMs
+        run: |
+          cp extras/worker-wheel/*.whl assets/
+          cp extras/sbom-app/sbom-app.cdx.json assets/
+          cp extras/image-cuda/sbom-image-cuda.cdx.json assets/
+          cp extras/image-cpu/sbom-image-cpu.cdx.json assets/
+
+      - name: SHA256SUMS over every asset
+        run: |
+          cd assets
+          rm -f SHA256SUMS
+          sha256sum -- * > ../SHA256SUMS
+          mv ../SHA256SUMS SHA256SUMS
+          cat SHA256SUMS
+
+      - name: attach the extra assets to the draft
+        run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber assets/*.whl assets/*.cdx.json assets/image-digests.txt assets/SHA256SUMS
+
+      # Every asset the installer, the updater and a reviewer need must exist before the release can be seen. Exact,
+      # anchored names (MEASURED from velopack 1.2.161 source: releases.win.json plus the legacy RELEASES), and the FULL
+      # nupkg of THIS version: a delta alone cannot install.
+      - name: every expected asset is attached
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tee names.txt
+          python3 scripts/release_assets.py check --version "${GITHUB_REF_NAME#v}" < names.txt
+
+      - name: make the release public
+        run: |
+          flags="--latest"
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md --draft=false $flags
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '"draft: \(.isDraft)"'
+
+  verify-reminder:
+    name: open the clean-VM verification issue
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # Re-running the workflow must not open a second one: look for the title first. The title goes to jq as an argument.
+      - name: open the issue if there is not one already
+        run: |
+          title="Verify ${GITHUB_REF_NAME} on a clean VM"
+          existing=$(gh issue list --state all --search "\"$title\" in:title" --json title | jq --arg t "$title" '[.[] | select(.title == $t)] | length')
+          if [ "$existing" != "0" ]; then
+            echo "OK: an issue titled '$title' already exists"
+            exit 0
+          fi
+          cat > body.md <<EOF
+          The release ${GITHUB_REF_NAME} is public. The workflow going green does not prove the installer works on a machine that has never seen this app. Follow docs/release_runbook.md section 5 on a clean Windows 11 VM and tick each box here.
+
+          - [ ] Download Setup.exe from the release page; \`signtool verify /pa Setup.exe\` accepts it
+          - [ ] Install it (no admin prompt) and confirm WebView2 is handled
+          - [ ] Sign in with a real Google account, and the sign-in page opens (proves the OAuth client file shipped)
+          - [ ] Run sample.gb with the mock predictor on e2-small; sample.entropy.bedgraph appears on disk and in the viewer
+          - [ ] Check for updates reports up to date
+          - [ ] Update from the previous version in place (skip for the first release)
+          - [ ] The Cloud page shows the VM Stopped or Deleted after the run (a RUNNING VM is a release-blocking finding)
+          - [ ] Uninstall; choose keep and remove data once each and check %LOCALAPPDATA%\\DNAEntropyGraph
+          - [ ] \`gh attestation verify\` succeeds for Setup.exe
+          - [ ] Drain the docs/ToTest.md rows whose Needs column says installer, and add a dated note to release_runbook.md section 7
+          EOF
+          gh issue create --title "$title" --label "area:packaging" --label "P1" --body-file body.md

@@ -2,6 +2,7 @@
     x:Class="DnaEntropyGraph.App.Views.ViewerPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:DnaEntropyGraph.App.Controls"
     xmlns:converters="using:DnaEntropyGraph.App.Converters"
     xmlns:wv2="using:Microsoft.UI.Xaml.Controls">
 
@@ -29,11 +30,45 @@
                 Content="{x:Bind ViewModel.ActionLabel, Mode=OneWay}"
                 Command="{x:Bind ViewModel.RetryCommand}"
                 Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasRetryAction), Mode=OneWay}" />
+
+            <!-- Issue #117: the viewer cannot start, so the entropy track is drawn natively (same chart as Results). -->
+            <StackPanel x:Name="FallbackPanel" Spacing="4" x:Load="{x:Bind ViewModel.HasFallbackChart, Mode=OneWay}">
+                <TextBlock x:Uid="ViewerFallbackNote" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.7" />
+                <TextBlock Text="{x:Bind ViewModel.FallbackTitle, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <controls:EntropyOverviewChart
+                    x:Uid="ViewerFallbackChart"
+                    Height="220"
+                    Contig="{x:Bind ViewModel.FallbackContig, Mode=OneWay}" />
+            </StackPanel>
         </StackPanel>
 
-        <wv2:WebView2
-            x:Name="Viewer"
-            Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.IsViewerVisible), Mode=OneWay}" />
+        <Grid
+            RowSpacing="8"
+            Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.IsViewerVisible), Mode=OneWay}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <StackPanel
+                Orientation="Horizontal"
+                Spacing="8"
+                Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasContigs), Mode=OneWay}">
+                <ComboBox
+                    x:Name="ContigSelector"
+                    x:Uid="ViewerContigSelector"
+                    MinWidth="240"
+                    ItemsSource="{x:Bind ViewModel.Contigs}"
+                    SelectedItem="{x:Bind ViewModel.SelectedContig, Mode=TwoWay}"
+                    DisplayMemberPath="Name" />
+                <Button
+                    x:Uid="ViewerContigGo"
+                    VerticalAlignment="Bottom"
+                    Command="{x:Bind ViewModel.GoToContigCommand}" />
+            </StackPanel>
+            <wv2:WebView2
+                x:Name="Viewer"
+                Grid.Row="1" />
+        </Grid>
 
         <StackPanel
             HorizontalAlignment="Center"

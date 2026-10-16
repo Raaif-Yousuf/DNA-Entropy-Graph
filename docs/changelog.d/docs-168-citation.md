@@ -1,0 +1,1 @@
+- Added CITATION.cff, a Citing page in the user guide and a CI check that CITATION.cff has the keys GitHub needs (#168). The Zenodo DOI is an owner step.

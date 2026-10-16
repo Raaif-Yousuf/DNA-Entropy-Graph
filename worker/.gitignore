@@ -32,3 +32,6 @@ runs/
 
 # local planning scratch
 temp.md
+
+# Golden files (#161) are committed on purpose, whatever their extension.
+!tests/golden/files/**

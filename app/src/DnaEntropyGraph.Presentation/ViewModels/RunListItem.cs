@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
@@ -27,8 +28,18 @@ public sealed record RunDayGroup(string Header, IReadOnlyList<RunListItem> Items
 /// One row of the Runs page. Its commands are built by <see cref="HistoryViewModel"/> and close over this
 /// run, so a DataTemplate can bind them without reaching back to the page's ViewModel.
 /// </summary>
-public sealed class RunListItem
+public sealed partial class RunListItem : ObservableObject
 {
+    /// <summary>How many points the card's sparkline is drawn from (issue #118); a longer track is averaged down to this.</summary>
+    public const int SparklinePoints = 48;
+
+    /// <summary>The run's entropy along its first contig, small enough to draw on a card; null until it is read, and for a run with no track.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSparkline))]
+    private float[]? _sparkline;
+
+    public bool HasSparkline => Sparkline is { Length: > 1 };
+
     public RunListItem(
         RunRecord run,
         string title,
@@ -100,6 +111,11 @@ public sealed class RunListItem
     public string? ReasonText { get; }
 
     public bool HasReason => ReasonText is not null;
+
+    /// <summary>"Preset: Plasmid QC" for a run started from an option preset (issue #136); null for a run set by hand.</summary>
+    public string? PresetText { get; init; }
+
+    public bool HasPreset => PresetText is not null;
 
     public IAsyncRelayCommand OpenCommand { get; }
 
