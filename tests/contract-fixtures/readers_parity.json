@@ -1,6 +1,6 @@
 {
   "$schema_note": "Not a real JSON Schema; documents the contract for humans/xUnit/pytest.",
-  "description": "Reader parity vectors (issue #393): the exact records, notices and error text the worker's readers/fasta.py (read_fasta) and readers/genbank.py (read_genbank) produce for a fixed set of inputs. worker/tests/test_readers_parity.py replays every case against the Python readers; the C# FastaLiteTests/GenBankLiteTests replay the same file against FastaLite/GenBankLite. A wording change in either reader fails the test on its side until the fixture and both ports agree. GenBankLite is deliberately partial (LOCUS/ORIGIN/gene-CDS counts only), so a case compares records' sequences and gene counts, notices and error text; where the port's text deliberately differs, the case carries `csharp_divergence` (the port's own expected value, with the reason).",
+  "description": "Reader parity vectors (issue #393): the exact records, notices and error text the worker's readers/fasta.py (read_fasta), readers/genbank.py (read_genbank) and readers/embl.py (read_embl) produce for a fixed set of inputs. worker/tests/test_readers_parity.py replays every case against the Python readers; the C# FastaLiteTests/GenBankLiteTests replay the same file against FastaLite/GenBankLite. A wording change in either reader fails the test on its side until the fixture and both ports agree. GenBankLite is deliberately partial (LOCUS/ORIGIN/gene-CDS counts only), so a case compares records' sequences and gene counts, notices and error text; where the port's text deliberately differs, the case carries `csharp_divergence` (the port's own expected value, with the reason).",
   "source": {
     "generated_by": "A one-off script run against the worker at fixture-build time (Python readers called on a temp file per case, then deleted, not committed); the Python test re-derives every value."
   },
@@ -196,6 +196,127 @@
       "text": "LOCUS       nosource    5 bp    DNA\nDEFINITION  no origin block.\nFEATURES             Location/Qualifiers\n     gene            1..5\n                     /gene=\"x\"\n//\n",
       "python": {
         "error": "Could not parse the GenBank file (record 1): Premature end of features table, marker '//' found. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
+      }
+    }
+  ],
+  "embl_cases": [
+    {
+      "id": "embl_gene_and_cds_counts_genes_only",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nFT   CDS             5..8\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_unreadable_gene_location_is_dropped_with_a_notice",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            abc\nFT                   /gene=\"x\"\nFT   gene            5..8\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "EMBL record 1: 1 gene feature(s) were dropped because their location text could not be read (gene 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_cds_only_record_drops_an_unreadable_cds",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   CDS             abc\nFT                   /gene=\"x\"\nFT   CDS             1..4\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "EMBL record 1: 1 CDS feature(s) were dropped because their location text could not be read (CDS 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_origin_wrap_on_a_linear_record_is_dropped",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            6..2\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "EMBL record 1: 1 gene feature(s) were dropped because their location text could not be read (gene '6..2'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "Read 1 record(s) with 0 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_second_record_names_its_own_number",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\nID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            abc\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          },
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "EMBL record 2: 1 gene feature(s) were dropped because their location text could not be read (gene 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "Read 2 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_features_without_a_feature_header_are_not_read",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFT   gene            abc\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Read 1 record(s) with 0 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_empty_join_location_refuses_the_file",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            join()\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "error": "Could not parse the EMBL file (record 1): CompoundLocation should have at least 2 parts, not []. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      }
+    },
+    {
+      "id": "embl_bad_misc_feature_location_refuses_the_file",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   misc_feature    1..5,9..12\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "error": "Could not parse the EMBL file (record 1): AssertionError. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      }
+    },
+    {
+      "id": "embl_stray_close_paren_line_refuses_the_file",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   )\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "error": "Could not parse the EMBL file (record 1): AssertionError. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
       }
     }
   ]

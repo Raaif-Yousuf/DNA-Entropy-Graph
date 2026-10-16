@@ -60,14 +60,35 @@ public static class GenBankLite
     }
 
     /// <summary>The worker's <c>_dropped_location_notice</c> text, word for word (a log and parity detail; the UI shows Resources.resw copy).</summary>
-    private static string DroppedFeaturesNotice(int record, string key, IReadOnlyList<string> locationTexts)
+    private static string DroppedFeaturesNotice(string label, int record, string key, IReadOnlyList<string> locationTexts)
     {
         var named = locationTexts.Select(t => $"{key} {PythonText.Ascii(CutLocationText(t))}").ToList();
         var shown = string.Join(", ", named.Take(DroppedShown));
         var more = named.Count > DroppedShown ? $", and {named.Count - DroppedShown} more" : string.Empty;
-        return $"GenBank record {record}: {named.Count} {key} feature(s) were dropped because their location text could not be read ({shown}{more}). "
+        return $"{label} record {record}: {named.Count} {key} feature(s) were dropped because their location text could not be read ({shown}{more}). "
             + "A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file "
             + "(for example 1..42 or complement(85..126)) and run again.";
+    }
+
+    /// <summary>
+    /// What the worker's <c>records_from_parsed</c> / <c>_features_of</c> make of one record's feature table, for GenBank and EMBL alike: it drops a gene
+    /// (or, in a record with no gene features, a CDS) whose location cannot be read, with one counted notice per record (#543, #788, #796), and counts
+    /// the rest. Returns the gene and CDS counts that survive.
+    /// </summary>
+    internal static (int Genes, int Cds) ReadTableFeatures(
+        string label, int recordIndex, IReadOnlyList<(string Key, string? DroppedText)> tableFeatures, List<string> notices, List<InputNotice> coded)
+    {
+        var sourceKey = tableFeatures.Any(f => f.Key == "gene") ? "gene" : "CDS";
+        var lost = tableFeatures.Where(f => f.Key == sourceKey && f.DroppedText is not null).ToList();
+        if (lost.Count > 0)
+        {
+            notices.Add(DroppedFeaturesNotice(label, recordIndex, sourceKey, lost.Select(f => f.DroppedText!).ToList()));
+            coded.Add(new InputNotice(InputNoticeCode.GenBankFeaturesDropped, lost.Count, recordIndex));
+        }
+
+        // Counted from the parsed feature table (a wrapped qualifier line that starts with "gene" is not a feature),
+        // without the features whose location the worker cannot read.
+        return (tableFeatures.Count(f => f.Key == "gene" && f.DroppedText is null), tableFeatures.Count(f => f.Key == "CDS" && f.DroppedText is null));
     }
 
     // Python counts code points: cut at 40, to 37 plus "...".
@@ -120,17 +141,7 @@ public static class GenBankLite
             {
                 // Issue #543/#788: the worker drops a gene (or, in a record with no gene features, a CDS) whose location cannot
                 // be read, with one counted notice per record; so does the pill's gene count.
-                var sourceKey = tableFeatures.Any(f => f.Key == "gene") ? "gene" : "CDS";
-                var lost = tableFeatures.Where(f => f.Key == sourceKey && f.DroppedText is not null).ToList();
-                if (lost.Count > 0)
-                {
-                    notices.Add(DroppedFeaturesNotice(recordIndex, sourceKey, lost.Select(f => f.DroppedText!).ToList()));
-                    coded.Add(new InputNotice(InputNoticeCode.GenBankFeaturesDropped, lost.Count, recordIndex));
-                }
-                // Counted from the parsed feature table (a wrapped qualifier line that starts with "gene" is not a feature),
-                // without the features whose location the worker cannot read.
-                geneCount = tableFeatures.Count(f => f.Key == "gene" && f.DroppedText is null);
-                cdsCount = tableFeatures.Count(f => f.Key == "CDS" && f.DroppedText is null);
+                (geneCount, cdsCount) = ReadTableFeatures("GenBank", recordIndex, tableFeatures, notices, coded);
                 records.Add(new GenBankLiteRecord(locusName, recSeq, geneCount, cdsCount, recordIndex));
             }
             locusName = null;
