@@ -13,9 +13,19 @@ union merge is banned for this file (overlapping hunks break the XML), so the me
 - a key deleted on one side and unchanged on the other is deleted; deleted vs modified is a conflict;
 - keys new in theirs are inserted after ours' last block, in theirs' order (deterministic).
 
-Blocks are handled textually so untouched bytes survive. A single-line `<!-- ... -->` comment right
-before a `<data>` travels with that block. Line endings follow ours (all three sides are compared
-with LF and rendered back in ours' style). No imports beyond the standard library.
+Blocks are handled textually so untouched bytes survive. A comment (single or multi-line) right before
+a `<data>` travels with that block; comments are never searched for tags. Line endings follow ours
+(all three sides are compared with LF and rendered back in ours' style, taken from ours' first line
+ending). No imports beyond the standard library.
+
+Known limit: only the key set and the content are merged, not the order. If theirs reorders existing
+keys, that reorder is ignored and ours' order stays (new keys from theirs still land after ours' last
+block).
+
+Every failure exit (real conflict, invalid XML, duplicate name, unterminated block, undecodable bytes)
+leaves conflict markers in %A: around the one block for a real conflict, around the whole file when
+the problem is not one block. Git then sees the markers, so a later `git add` cannot silently drop
+theirs.
 """
 
 from __future__ import annotations
@@ -25,8 +35,8 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-NAME_RE = re.compile(r'<data\s[^>]*?\bname="([^"]*)"')
-COMMENT_RE = re.compile(r"^\s*<!--.*-->\s*$")
+NAME_RE = re.compile(r"""<data\s[^>]*?\bname=(["'])(.*?)\1""")
+COMMENT_RE = re.compile(r"<!--.*?-->")
 
 
 class Parsed:
@@ -36,41 +46,58 @@ class Parsed:
         self.footer = footer
 
 
+def _scan(line: str, in_comment: bool) -> tuple[str, bool, bool]:
+    """(the line with comment text removed, still inside a comment afterwards, the line touched a comment)."""
+    touched = in_comment
+    if in_comment:
+        end = line.find("-->")
+        if end < 0:
+            return "", True, True
+        line = line[end + 3 :]
+    stripped = COMMENT_RE.sub("", line)
+    if "<!--" in stripped:
+        return stripped[: stripped.index("<!--")], True, True
+    return stripped, False, touched or stripped != line
+
+
 def parse(text: str) -> Parsed:
-    """Split LF-normalised text into header, keyed `<data>` blocks and footer."""
+    """Split LF-normalised text into header, keyed `<data>` blocks and footer.
+
+    A comment that sits before a `<data>` becomes the leading part of that block, so it moves, stays and
+    is deleted with it. A comment before `</root>` stays in the footer.
+    """
     lines = text.splitlines(keepends=True)
     header: list[str] = []
     blocks: list[tuple[str, list[str]]] = []
     pending: list[str] = []  # comment lines waiting for the block they precede
+    in_comment = False
     i = 0
     while i < len(lines):
         line = lines[i]
-        if "<data" in line and NAME_RE.search(line):
-            name = NAME_RE.search(line).group(1)  # type: ignore[union-attr]
+        stripped, in_comment, touched = _scan(line, in_comment)
+        match = NAME_RE.search(stripped)
+        if match:
+            name = match.group(2)
             chunk = [*pending, line]
             pending = []
-            while "</data>" not in lines[i]:
+            while "</data>" not in stripped:
                 i += 1
                 if i >= len(lines):
                     raise ValueError(f"unterminated <data name={name!r}>")
+                stripped, in_comment, _ = _scan(lines[i], in_comment)
                 chunk.append(lines[i])
             blocks.append((name, chunk))
-        elif COMMENT_RE.match(line):
+        elif "</root>" in stripped:
+            tail = "".join([*pending, *lines[i:]])
+            return Parsed("".join(header), [(n, "".join(c)) for n, c in blocks], tail)
+        elif touched and not stripped.strip():
             pending.append(line)
         else:
             (blocks[-1][1] if blocks else header).extend([*pending, line])
             pending = []
         i += 1
-    footer: list[str] = list(pending)
-    # `</root>` and anything after the last block belongs to the footer, not to that block.
-    if blocks:
-        tail = blocks[-1][1]
-        end = next(k for k, ln in enumerate(tail) if "</data>" in ln) + 1
-        footer = tail[end:] + footer
-        del tail[end:]
-    else:
-        footer = header[:0] + footer
-    return Parsed("".join(header), [(n, "".join(c)) for n, c in blocks], "".join(footer))
+    (blocks[-1][1] if blocks else header).extend(pending)
+    return Parsed("".join(header), [(n, "".join(c)) for n, c in blocks], "")
 
 
 def _conflict(ours: str, theirs: str) -> str:
@@ -87,7 +114,8 @@ def _scalar(base: str, ours: str, theirs: str) -> tuple[str, bool]:
 
 def merge_text(base: str, ours: str, theirs: str) -> tuple[str, int]:
     """(merged text in ours' line-ending style, number of conflicts)."""
-    eol = "\r\n" if "\r\n" in ours else "\n"
+    first_nl = ours.find("\n")
+    eol = "\r\n" if first_nl > 0 and ours[first_nl - 1] == "\r" else "\n"
     b, o, t = (parse(s.replace("\r\n", "\n")) for s in (base, ours, theirs))
     bm, om, tm = dict(b.blocks), dict(o.blocks), dict(t.blocks)
     conflicts = 0
@@ -137,22 +165,34 @@ def validate(text: str) -> str | None:
     return None
 
 
+def _marked(ours: bytes, theirs: bytes) -> bytes:
+    """Whole-file conflict wrapper: git must see markers so a later `git add` cannot silently drop theirs."""
+    ours_nl = b"" if ours.endswith(b"\n") else b"\n"
+    theirs_nl = b"" if theirs.endswith(b"\n") else b"\n"
+    return b"<<<<<<< ours\n" + ours + ours_nl + b"=======\n" + theirs + theirs_nl + b">>>>>>> theirs\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if len(args) < 3:
         print("usage: resw_merge.py BASE OURS THEIRS", file=sys.stderr)
         return 2
     base_p, ours_p, theirs_p = (Path(a) for a in args[:3])
-    try:
-        merged, conflicts = merge_text(*(p.read_bytes().decode("utf-8") for p in (base_p, ours_p, theirs_p)))
-    except (ValueError, UnicodeDecodeError) as err:
-        print(f"ERROR: resw_merge: {err}", file=sys.stderr)
+    base_b, ours_b, theirs_b = (p.read_bytes() for p in (base_p, ours_p, theirs_p))
+
+    def fail(reason: str) -> int:
+        ours_p.write_bytes(_marked(ours_b, theirs_b))
+        print(f"ERROR: resw_merge: {reason}; resolve the markers in Resources.resw by hand", file=sys.stderr)
         return 1
+
+    try:
+        merged, conflicts = merge_text(*(b.decode("utf-8") for b in (base_b, ours_b, theirs_b)))
+    except (ValueError, UnicodeDecodeError) as err:
+        return fail(str(err))
     if conflicts == 0:
         problem = validate(merged)
         if problem:
-            print(f"ERROR: resw_merge: {problem}", file=sys.stderr)
-            return 1
+            return fail(problem)
     ours_p.write_bytes(merged.encode("utf-8"))
     if conflicts:
         print(f"ERROR: resw_merge: {conflicts} conflicting resource block(s); resolve the markers by hand", file=sys.stderr)

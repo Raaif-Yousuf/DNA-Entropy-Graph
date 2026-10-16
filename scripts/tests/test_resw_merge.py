@@ -165,6 +165,82 @@ def test_garbage_input_exits_nonzero_not_a_traceback(tmp_path, bad):
     assert rm.main(_write3(tmp_path, bad, bad, bad)) == 1
 
 
+def _assert_marked_whole_file(args: list[str], ours: bytes, theirs: bytes) -> None:
+    result = Path(args[1]).read_bytes()
+    assert result.startswith(b"<<<<<<< ours\n") and result.endswith(b">>>>>>> theirs\n")
+    assert ours in result and theirs in result and b"=======\n" in result
+
+
+@pytest.mark.parametrize(
+    "ours",
+    [
+        BASE.replace("</root>", ""),  # not XML after the merge
+        doc(blk("A", "a"), blk("A", "again")),  # duplicate name
+        BASE.replace("  </data>\n</root>", "</root>"),  # unterminated <data>
+    ],
+    ids=["invalid-xml", "duplicate-name", "unterminated-data"],
+)
+def test_every_failure_exit_leaves_conflict_markers_so_git_add_cannot_drop_theirs(tmp_path, ours):
+    theirs = doc(blk("A", "a"), blk("B", "b"), blk("Y", "y"))
+    args = _write3(tmp_path, BASE, ours, theirs)
+    assert rm.main(args) == 1
+    _assert_marked_whole_file(args, ours.encode(), theirs.encode())
+
+
+def test_undecodable_input_leaves_markers_around_the_raw_bytes(tmp_path):
+    args = _write3(tmp_path, BASE, BASE, BASE)
+    Path(args[1]).write_bytes(b"\xff\xfe broken")
+    assert rm.main(args) == 1
+    _assert_marked_whole_file(args, b"\xff\xfe broken", BASE.encode())
+
+
+def test_line_ending_follows_the_first_line_ending_of_ours_not_any_crlf_inside_it():
+    lf_with_crlf_value = doc(blk("A", "a\r\nsecond line"), blk("B", "b"), blk("X", "x"))
+    theirs = doc(blk("A", "a\r\nsecond line"), blk("B", "b"), blk("Y", "y"))
+    base = doc(blk("A", "a\r\nsecond line"), blk("B", "b"))
+    text, conflicts = rm.merge_text(base, lf_with_crlf_value, theirs)
+    # structural line endings stay LF (a CRLF inside one value used to flip the whole file to CRLF)
+    assert conflicts == 0 and text.count("</data>\n") == 4 and "</data>\r\n" not in text and "</root>\n" in text
+
+
+def test_a_data_tag_inside_a_comment_is_not_a_block():
+    commented = '  <!-- <data name="Ghost">\n    <value>g</value>\n  </data> -->\n'
+    base = doc(commented, blk("A", "a"))
+    ours = doc(commented, blk("A", "a"), blk("X", "x"))
+    theirs = doc(commented, blk("A", "a"), blk("Y", "y"))
+    text, conflicts = rm.merge_text(base, ours, theirs)
+    assert conflicts == 0 and names(text) == ["A", "X", "Y"] and text.count("Ghost") == 1
+    assert [n for n, _ in rm.parse(base).blocks] == ["A"]  # the commented-out block is not a key
+
+
+def test_single_quoted_names_are_keys_too():
+    sq = "  <data name='S' xml:space=\"preserve\">\n    <value>s</value>\n  </data>\n"
+    base = doc(sq)
+    text, conflicts = rm.merge_text(base, doc(sq.replace(">s<", ">o<")), doc(sq.replace(">s<", ">t<")))
+    assert conflicts == 1  # same key changed on both sides: seen as a keyed block, not text noise
+    assert [n for n, _ in rm.parse(base).blocks] == ["S"]
+
+
+def test_a_multiline_comment_attaches_to_the_following_block_not_the_previous_one():
+    note = "  <!-- first line\n       second line -->\n"
+    ours = doc(blk("A", "a"), blk("B", "b"), note + blk("X", "x"))
+    theirs = doc(blk("A", "a"), blk("B", "b"), blk("Y", "y"))
+    text, conflicts = rm.merge_text(BASE, ours, theirs)
+    assert conflicts == 0
+    assert text == doc(blk("A", "a"), blk("B", "b"), note + blk("X", "x"), blk("Y", "y"))
+    # deleting B on theirs must not delete the comment that belongs to X
+    gone = doc(blk("A", "a"))
+    text, conflicts = rm.merge_text(doc(blk("A", "a"), blk("B", "b")), ours, gone)
+    assert conflicts == 0 and "second line" in text and 'name="B"' not in text
+
+
+def test_a_trailing_comment_before_root_end_stays_in_the_footer():
+    tail = "  <!-- end note -->\n"
+    base = doc(blk("A", "a"), footer=tail + FOOTER)
+    text, conflicts = rm.merge_text(base, doc(blk("A", "a"), blk("X", "x"), footer=tail + FOOTER), base)
+    assert conflicts == 0 and text == doc(blk("A", "a"), blk("X", "x"), footer=tail + FOOTER)
+
+
 # --- real git ---------------------------------------------------------------------------------------
 
 

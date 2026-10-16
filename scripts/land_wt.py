@@ -334,28 +334,51 @@ def _ident(ctx: Ctx) -> list[str]:
 RESW_PATH = "app/src/DnaEntropyGraph.App/Strings/en-US/Resources.resw"
 
 
-def resw_driver_flags() -> list[str]:
-    """`-c` flags that route Resources.resw through scripts/resw_merge.py for ONE git command.
+def _users_global_attributes(repo: Path) -> str:
+    """The text of the user's global git attributes file (core.attributesFile, else the XDG default), or ''."""
+    configured = _text(git(repo, "config", "--path", "--get", "core.attributesFile", check=False).stdout).strip()
+    if configured:
+        path = Path(configured)
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        path = (Path(xdg) if xdg else Path.home() / ".config") / "git" / "attributes"
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
 
-    Passed per command instead of persisted in the repo config: worktrees share .git/config, so a
-    persistent setting would leak out of the throwaway worktree. The attributes line comes from
-    core.attributesFile because the lane branch may predate the repo's own .gitattributes entry. The
-    script is the one beside this file (the lane branch may not have it) and the interpreter is the one
-    running land_wt (the venv's).
+
+def resw_driver_flags(repo: Path) -> tuple[list[str], Path]:
+    """(`-c` flags that route Resources.resw through scripts/resw_merge.py for ONE git command, the temp
+    attributes file they name). The caller deletes the file when the command is done.
+
+    Passed per command instead of persisted: worktrees share .git/config, and git reads info/attributes
+    from the COMMON dir only (MEASURED 2026-10-16: a linked worktree's own info/attributes is ignored), so
+    neither would stay scoped to the throwaway worktree. The attribute line goes in a unique temp file used
+    as core.attributesFile; that setting replaces the user's global attributes, so the file is the user's
+    own global attributes text plus the resw line. The script is the one beside this file (the lane
+    branch may not have it) and the interpreter is the one running land_wt (the venv's).
     """
     script = (Path(__file__).resolve().parent / "resw_merge.py").as_posix()
-    attrs = Path(tempfile.gettempdir()) / "landwt" / "resw.gitattributes"
-    attrs.parent.mkdir(parents=True, exist_ok=True)
-    attrs.write_text(f"{RESW_PATH} merge=resw\n", encoding="utf-8", newline="\n")
+    mine = _users_global_attributes(repo)
+    handle, name = tempfile.mkstemp(prefix="landwt-resw-", suffix=".gitattributes")
+    attrs = Path(name)
+    with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(mine if mine.endswith("\n") or not mine else mine + "\n")
+        fh.write(f"{RESW_PATH} merge=resw\n")
     driver = f'"{Path(sys.executable).as_posix()}" "{script}" %O %A %B'
-    return ["-c", f"merge.resw.driver={driver}", "-c", f"core.attributesFile={attrs.as_posix()}"]
+    return ["-c", f"merge.resw.driver={driver}", "-c", f"core.attributesFile={attrs.as_posix()}"], attrs
 
 
 def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
     if git(wt, "merge-base", "--is-ancestor", f"{REMOTE}/{BASE}", "HEAD", check=False).returncode == 0:
         return
     ident = _ident(ctx)
-    merged = git(wt, *ident, *resw_driver_flags(), "merge", "--no-edit", f"{REMOTE}/{BASE}", check=False)
+    flags, attrs = resw_driver_flags(ctx.repo)
+    try:
+        merged = git(wt, *ident, *flags, "merge", "--no-edit", f"{REMOTE}/{BASE}", check=False)
+    finally:
+        attrs.unlink(missing_ok=True)
     if merged.returncode == 0:
         ctx.say(f"- merged {REMOTE}/{BASE} into the branch")
         return
