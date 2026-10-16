@@ -224,6 +224,47 @@ public sealed class BudgetSettingsTests
         vm.ConsoleLink!.ToString().ShouldBe("https://console.cloud.google.com/apis/library/billingbudgets.googleapis.com?project=my-lab");
     }
 
+    [Fact]
+    public async Task The_amount_box_cannot_be_edited_while_a_save_runs()
+    {
+        var gate = new TaskCompletionSource<BudgetInfo>();
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Open();
+        vm.CanEdit.ShouldBeTrue();
+
+        var save = vm.SaveCommand.ExecuteAsync(null);
+        vm.CanEdit.ShouldBeFalse();
+        gate.SetResult(Existing(50m));
+        await save;
+
+        vm.CanEdit.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_linked_account_that_is_switched_off_has_its_own_message_and_link()
+    {
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Billing, BudgetErrorCodes.BillingDisabled));
+        var vm = Open();
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetError_BillingDisabled");
+        vm.ShowConsoleLink.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_copied_request_for_an_organization_policy_refusal_is_addressed_to_the_organizations_administrator()
+    {
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.OrgPolicy));
+        _shell.CopyText(Arg.Any<string>()).Returns(true);
+        var vm = Open();
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.CopyRequestCommand.Execute(null);
+
+        _shell.Received(1).CopyText("BudgetRequestText_OrgPolicy");
+    }
+
     [Theory]
     [InlineData("de-DE", "12,5", 12.5)]
     [InlineData("en-US", "12.5", 12.5)]

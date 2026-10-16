@@ -15,38 +15,6 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// never Google's own text. The eventual standing-costs card (#219) binds the same <see cref="SaveCommand"/>, <see cref="HasBudget"/>,
 /// <see cref="StatusText"/> and <see cref="ErrorText"/>, or hosts this group's view model as it is.
 /// </summary>
-/// <summary>
-/// Reads the amount box the way the user typed it. The user's own number format decides ("12,5" is 12.5 in Germany and France), a
-/// thousands separator is refused, and so is any text that could mean two things ("1.000" in Germany): the money is never guessed.
-/// </summary>
-public static class BudgetAmountParser
-{
-    public static bool TryParse(string? text, CultureInfo culture, out decimal amount)
-    {
-        amount = 0;
-        var trimmed = (text ?? string.Empty).Trim().TrimStart('$').Trim();
-        if (trimmed.Length == 0)
-        {
-            return false;
-        }
-
-        if (decimal.TryParse(trimmed, NumberStyles.AllowDecimalPoint, culture, out amount))
-        {
-            return true;
-        }
-
-        // A plain "12.5" in a comma-decimal culture is fine only when the text holds nothing that this culture reads as a group separator.
-        var group = culture.NumberFormat.NumberGroupSeparator;
-        if (group.Length > 0 && trimmed.Contains(group, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return decimal.TryParse(trimmed, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out amount)
-            && !trimmed.Contains(',', StringComparison.Ordinal);
-    }
-}
-
 public sealed partial class BudgetSettingsViewModel : ObservableObject
 {
     private readonly IBudgetService _budgets;
@@ -82,7 +50,11 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SaveCommand))]
     [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
+    [NotifyPropertyChangedFor(nameof(CanEdit))]
     private bool _isBusy;
+
+    // Which request text the Copy button puts on the clipboard: a billing administrator's, or the organization's administrator's.
+    private string _requestKey = "BudgetRequestText";
 
     /// <summary>The console page the error's link action opens (the account's budgets page, or the billing home). Null when no error offers one.</summary>
     [ObservableProperty]
@@ -103,6 +75,9 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     }
 
     public bool ShowConsoleLink => ConsoleLink is not null;
+
+    /// <summary>False while a save, remove or look runs: text typed during it would be replaced by its result.</summary>
+    public bool CanEdit => !IsBusy;
 
     partial void OnAmountTextChanged(string value)
     {
@@ -207,7 +182,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     [RelayCommand]
     private void CopyRequest()
     {
-        var text = string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetRequestText"), ProjectId() ?? string.Empty, AmountText.Trim());
+        var text = string.Format(CultureInfo.CurrentCulture, _strings.GetString(_requestKey), ProjectId() ?? string.Empty, AmountText.Trim());
         StatusText = _strings.GetString(_shell.CopyText(text) ? "BudgetRequestCopied" : "BudgetRequestCopyFailed");
     }
 
@@ -252,15 +227,17 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         {
             case CloudErrorKind.Permission:
                 ErrorText = _strings.GetString("BudgetError_Permission");
+                _requestKey = "BudgetRequestText";
                 ShowCopyRequest = true;
                 await OfferConsoleAsync(project, cancellationToken);
                 break;
             case CloudErrorKind.Billing:
-                ErrorText = _strings.GetString("BudgetError_NoBilling");
+                ErrorText = _strings.GetString(ex.Error.Code == BudgetErrorCodes.BillingDisabled ? "BudgetError_BillingDisabled" : "BudgetError_NoBilling");
                 await OfferConsoleAsync(project, cancellationToken);
                 break;
             case CloudErrorKind.OrgPolicy:
                 ErrorText = _strings.GetString("BudgetError_OrgPolicy");
+                _requestKey = "BudgetRequestText_OrgPolicy";
                 ShowCopyRequest = true;
                 break;
             case CloudErrorKind.ApiDisabled:

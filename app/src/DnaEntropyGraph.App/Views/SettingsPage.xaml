@@ -265,7 +265,7 @@
                         <TextBlock x:Uid="SettingsBudgetExplainer" TextWrapping="Wrap" />
                         <!-- Nothing to edit until a project is chosen; the status line then says so. Remove is offered only while a budget exists. -->
                         <StackPanel Spacing="8" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Budget.HasProject), Mode=OneWay}">
-                            <TextBox x:Uid="BudgetAmountBox" Width="160" HorizontalAlignment="Left" Text="{x:Bind Budget.AmountText, Mode=TwoWay}" />
+                            <TextBox x:Uid="BudgetAmountBox" Width="160" HorizontalAlignment="Left" Text="{x:Bind Budget.AmountText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{x:Bind Budget.CanEdit, Mode=OneWay}" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Button x:Uid="BudgetSaveButton" Command="{x:Bind Budget.SaveCommand}" />
                                 <Button x:Uid="BudgetRemoveButton" Command="{x:Bind Budget.RemoveCommand}" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Budget.HasBudget), Mode=OneWay}" />

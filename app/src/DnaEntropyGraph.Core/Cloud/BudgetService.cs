@@ -53,8 +53,19 @@ public sealed class BudgetService : IBudgetService
             throw new CloudOperationException(new CloudError(BudgetErrorCodes.InvalidAmount, null, "The budget amount is not a usable number."), CloudErrorKind.Other);
         }
 
-        var account = await LinkedAccountAsync(projectId, cancellationToken).ConfigureAwait(false)
-            ?? throw new CloudOperationException(new CloudError(BudgetErrorCodes.NoBilling, null, "The project has no billing account to put a budget on."), CloudErrorKind.Billing);
+        var status = await _billing.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(status.AccountId))
+        {
+            throw new CloudOperationException(new CloudError(BudgetErrorCodes.NoBilling, null, "The project has no billing account to put a budget on."), CloudErrorKind.Billing);
+        }
+
+        // A different problem with a different action: the account exists but is switched off or suspended.
+        if (!status.Enabled)
+        {
+            throw new CloudOperationException(new CloudError(BudgetErrorCodes.BillingDisabled, null, "Billing is switched off for the project."), CloudErrorKind.Billing);
+        }
+
+        var account = status.AccountId;
 
         if (!await _services.IsServiceEnabledAsync(projectId, RequiredServices.BillingBudgets, cancellationToken).ConfigureAwait(false))
         {

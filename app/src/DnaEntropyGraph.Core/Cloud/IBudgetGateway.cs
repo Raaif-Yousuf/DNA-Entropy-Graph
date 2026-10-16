@@ -90,6 +90,9 @@ public static class BudgetErrorCodes
     /// <summary>The project has no billing account (or billing is off), so there is nothing to put a budget on. Action: open Google's billing page.</summary>
     public const string NoBilling = "BUDGET_NO_BILLING";
 
+    /// <summary>The project's billing account is linked but switched off or suspended. Action: open Google's billing page and turn it back on.</summary>
+    public const string BillingDisabled = "BUDGET_BILLING_DISABLED";
+
     /// <summary>The amount is not a usable number. Action: type an amount.</summary>
     public const string InvalidAmount = "BUDGET_INVALID_AMOUNT";
 }

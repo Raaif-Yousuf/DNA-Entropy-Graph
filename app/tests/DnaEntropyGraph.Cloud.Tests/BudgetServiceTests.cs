@@ -156,7 +156,8 @@ public class BudgetServiceTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp, delays: delays).SaveAsync(Project, 50m, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
-        gcp.BudgetUpsertCalls.ShouldBeLessThanOrEqualTo(5);
+        gcp.BudgetUpsertCalls.ShouldBe(5);
+        delays.ShouldBe([TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(16)]);
         gcp.Budgets.ShouldBeEmpty();
     }
 
@@ -192,7 +193,7 @@ public class BudgetServiceTests
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
 
-        ex.Error.Code.ShouldBe(BudgetErrorCodes.NoBilling);
+        ex.Error.Code.ShouldBe(BudgetErrorCodes.BillingDisabled);
         (await Service(gcp).GetAsync(Project, CancellationToken.None)).ShouldBeNull();
         gcp.BudgetUpsertCalls.ShouldBe(0);
     }

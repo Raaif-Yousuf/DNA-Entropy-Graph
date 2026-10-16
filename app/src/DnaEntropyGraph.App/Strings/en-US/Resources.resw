@@ -2136,7 +2136,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Your Google account is not allowed to create budgets on this billing account. Press Copy a request for my administrator and send it to your billing administrator.</value>
   </data>
   <data name="BudgetError_NoBilling" xml:space="preserve">
-    <value>This project has no billing account yet, so there is nothing to put a budget on. Open Google's billing page and link a billing account to the project.</value>
+    <value>This project has no billing account yet, so there is nothing to put a budget on. Open the matching Google page and link a billing account to the project.</value>
   </data>
   <data name="BudgetError_Network" xml:space="preserve">
     <value>Google could not be reached. Check your internet connection and press the button again.</value>
@@ -2163,6 +2163,12 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>A rule set by your organization blocked this budget. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
   </data>
   <data name="BudgetError_ApiDisabled" xml:space="preserve">
-    <value>Google is still switching on the budget service for this project. Wait a minute, then press Create or update the alert again, or open the matching Google page to switch it on yourself.</value>
+    <value>Google is still switching on the budget service for this project. Wait a minute, then press Create or update the alert again.</value>
+  </data>
+  <data name="BudgetError_BillingDisabled" xml:space="preserve">
+    <value>Billing is switched off for this project, so a budget cannot be made. Open the matching Google page to turn it back on.</value>
+  </data>
+  <data name="BudgetRequestText_OrgPolicy" xml:space="preserve">
+    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. An organization policy blocks the Cloud Billing Budget API (billingbudgets.googleapis.com) or the creation of budgets on our billing account. Please allow it, or create a monthly budget of {1} with email alerts at 50%, 90% and 100% for me. Thank you.</value>
   </data>
 </root>
