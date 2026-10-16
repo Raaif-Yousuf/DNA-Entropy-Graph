@@ -235,7 +235,7 @@ public class JobEngineSpendCapTests
         var run = (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
         var strings = new EchoStrings();
 
-        var header = RunCostText.Header(run, strings); 
+        var header = RunCostText.Header(run, strings);
         var row = RunCostText.Short(run, strings);
 
         header.ShouldNotBeNull().ShouldContain(amount);
