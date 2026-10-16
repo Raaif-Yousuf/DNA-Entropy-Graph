@@ -492,8 +492,6 @@ def test_validate_matches_the_recorded_ambiguity_cases() -> None:
 
 
 def test_topology_flag_reaches_the_pipeline_and_provenance(tmp_path) -> None:
-    import json
-
     out_dir = tmp_path / "out"
     seq = "ACGTTGCAAGCT" * 30
     for flag, expected in (("circular", "circular"), ("linear", "linear"), ("auto", "linear")):
