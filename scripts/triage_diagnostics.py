@@ -172,6 +172,8 @@ SCHEMA_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "started_at": ("status", ("startedAt",)),
     "updated_at": ("status", ("updatedAt",)),
     "heartbeat_seq": ("status", ("heartbeatSeq",)),
+    "stage_started_at": ("status", ("stageStartedAt",)),
+    "cancel_seen": ("status", ("cancelSeen",)),
     "status_worker_version": ("status", ("worker", "version")),
     "status_worker_image": ("status", ("worker", "image")),
     "vm_name": ("status", ("vm", "name")),

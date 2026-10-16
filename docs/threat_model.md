@@ -1,7 +1,10 @@
 # Threat model: assets, trust boundaries, and what each level of access buys an attacker
 
-**Status: specification, not yet implemented.** No OAuth client, no `app/`, no published
-container exists yet. This doc is honest about a real tradeoff this project has made and
+**Status (2026-10-15): mostly design, two parts built.** The app exists; the sign-in code
+(section 5a) and the diagnostics bundle's leak scrubber (section 5b) are built and tested. Not
+yet: no real OAuth client (owner step, issue #21), so sign-in has never run against Google; no published container image; no signed
+installer. Every control described below that touches Google Cloud has been exercised against
+the in-memory fake only, never a real project. This doc is honest about a real tradeoff this project has made and
 will keep having to defend: the app asks a lab biologist, someone with no reason to know
 what an OAuth scope is, to grant a **broad** permission (`cloud-platform`) over their own
 Google Cloud project. That is a large ask, and this document does not soften it.

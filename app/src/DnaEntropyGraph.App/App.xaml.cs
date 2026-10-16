@@ -33,14 +33,18 @@ public partial class App : Application
             Services.GetRequiredService<Presentation.ViewModels.ShellViewModel>(),
             Services.GetRequiredService<Core.Abstractions.ISettingsStore>(),
             Services.GetRequiredService<Services.WindowPlacementService>(),
-            Services.GetRequiredService<Services.WindowThemeApplier>());
+            Services.GetRequiredService<Services.WindowThemeApplier>(),
+            Services.GetRequiredService<Presentation.Services.ShellReadiness>());
         var navigationService = Services.GetRequiredService<NavigationService>();
         navigationService.Initialize(window.RootFrame);
         Startup.NavigationRoutes.RegisterAll(navigationService);
         Services.GetRequiredService<Services.WindowHandleProvider>().Hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         Services.GetRequiredService<DialogService>().Attach(window);
         window.Activate();
+        Services.GetRequiredService<Services.AppWindowService>().Attach(window);
         _window = window;
+        window.Closed += (_, _) => Startup.DesktopActivation.Unregister();
+        Startup.DesktopActivation.Register(Services);
 
         // Issue #59: reattach runs a killed app left behind. Not awaited: launch never waits on a run.
         _ = Startup.AppStartup.BeginAsync(Services);
