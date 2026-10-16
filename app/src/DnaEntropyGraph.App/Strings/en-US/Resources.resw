@@ -2081,4 +2081,10 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="CloudRetentionSaved" xml:space="preserve">
     <value>Saved. It applies when your next run starts. A time shorter than the one already set on the storage for your results (the bucket) never shortens it, so older results may stay. To remove them sooner, delete them in the Cloud Storage page of your Google Cloud project.</value>
   </data>
+  <data name="NewRunNotice_GenBankFeaturesDropped" xml:space="preserve">
+    <value>{0} genes in record {1} were left out because their positions could not be read. Fix the positions in the file (for example 1..42 or complement(85..126)) and add the file again to include them.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
+  </data>
 </root>
