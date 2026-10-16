@@ -37,9 +37,7 @@ class NotAGitRepo(Exception):
 
 
 def tracked_under(root: Path, prefix: str) -> list[str]:
-    proc = subprocess.run(
-        ["git", "ls-files", "-z", "--", prefix], cwd=root, capture_output=True, check=False
-    )
+    proc = subprocess.run(["git", "ls-files", "-z", "--", prefix], cwd=root, capture_output=True, check=False)
     if proc.returncode != 0:
         raise NotAGitRepo(proc.stderr.decode("utf-8", errors="replace").strip() or "git ls-files failed")
     return [n for n in proc.stdout.decode("utf-8", errors="replace").split("\0") if n]
@@ -61,8 +59,7 @@ def check(root: Path) -> list[str]:
         lines = len(agents.read_text(encoding="utf-8").splitlines())
         if lines >= MAX_AGENTS_LINES:
             problems.append(
-                f"{AGENTS_FILE} is {lines} lines. It is a pointer to CLAUDE.md, not a second rulebook: "
-                f"keep it under {MAX_AGENTS_LINES}"
+                f"{AGENTS_FILE} is {lines} lines. It is a pointer to CLAUDE.md, not a second rulebook: keep it under {MAX_AGENTS_LINES}"
             )
     return problems
 

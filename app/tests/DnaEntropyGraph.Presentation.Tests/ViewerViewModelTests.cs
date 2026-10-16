@@ -36,7 +36,7 @@ public sealed class ViewerViewModelTests : IDisposable
 
     private ViewerViewModel Make()
     {
-        var vm = new ViewerViewModel(_probe, _strings);
+        var vm = new ViewerViewModel(_probe, _strings, Substitute.For<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource>());
         vm.MessageToViewer += _sent.Add;
         return vm;
     }
@@ -138,7 +138,7 @@ public sealed class ViewerViewModelTests : IDisposable
                 break;
         }
 
-        var vm = new ViewerViewModel(_probe, _strings, failure == IgvPlanFailure.SequenceTooLarge ? 3 : ViewerLimits.MaxFastaBytes);
+        var vm = new ViewerViewModel(_probe, _strings, Substitute.For<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource>(), failure == IgvPlanFailure.SequenceTooLarge ? 3 : ViewerLimits.MaxFastaBytes);
         vm.OpenRun(_dir);
 
         vm.Status.ShouldBe(status);

@@ -56,7 +56,9 @@ def _allowlist(tmp_path: Path, name: str, allowed: dict) -> Path:
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--self-test"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "self-test passed" in proc.stdout
@@ -65,7 +67,9 @@ def test_self_test_passes():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
 
@@ -128,9 +132,7 @@ def test_a_read_in_an_extra_root_clears_the_finding(tmp_path):
         "def render(job):" + chr(10) + "    return job.never_read" + chr(10),
         encoding="utf-8",
     )
-    findings, _ = cuf.check(
-        root, _allowlist(tmp_path, "none.json", {}), extra_read_roots=(gen,)
-    )
+    findings, _ = cuf.check(root, _allowlist(tmp_path, "none.json", {}), extra_read_roots=(gen,))
     assert "Job.never_read" not in {f.key for f in findings}
 
 
@@ -141,16 +143,18 @@ def test_an_extra_root_contributes_no_fields_of_its_own(tmp_path):
     gen = tmp_path / "gen"
     gen.mkdir()
     (gen / "helper.py").write_text(
-        "from dataclasses import dataclass" + chr(10)
+        "from dataclasses import dataclass"
         + chr(10)
-        + "@dataclass" + chr(10)
-        + "class Helper:" + chr(10)
-        + "    unused_here: int = 0" + chr(10),
+        + chr(10)
+        + "@dataclass"
+        + chr(10)
+        + "class Helper:"
+        + chr(10)
+        + "    unused_here: int = 0"
+        + chr(10),
         encoding="utf-8",
     )
-    findings, _ = cuf.check(
-        root, _allowlist(tmp_path, "none.json", {}), extra_read_roots=(gen,)
-    )
+    findings, _ = cuf.check(root, _allowlist(tmp_path, "none.json", {}), extra_read_roots=(gen,))
     assert "Helper.unused_here" not in {f.key for f in findings}
 
 
@@ -159,9 +163,7 @@ def test_an_unparseable_file_in_an_extra_root_does_not_fail_the_guard(tmp_path):
     gen = tmp_path / "gen"
     gen.mkdir()
     (gen / "broken.py").write_text("def (:::", encoding="utf-8")
-    findings, _ = cuf.check(
-        root, _allowlist(tmp_path, "none.json", {}), extra_read_roots=(gen,)
-    )
+    findings, _ = cuf.check(root, _allowlist(tmp_path, "none.json", {}), extra_read_roots=(gen,))
     assert {f.key for f in findings} == {"Job.never_read", "Job.only_serialized"}
 
 

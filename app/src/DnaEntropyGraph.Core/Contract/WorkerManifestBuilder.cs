@@ -10,7 +10,8 @@ namespace DnaEntropyGraph.Core.Contract;
 /// (<see cref="LocalPath"/>, under app data, Hard Rule 14) and the plain file
 /// name it is uploaded under (<c>jobs/&lt;jobId&gt;/input/&lt;FileName&gt;</c>).
 /// </summary>
-public sealed record StagedInput(string LocalPath, string FileName)
+/// <param name="IsAnnotation">True for a GFF3 paired with the input listed before it (issue #686): it is uploaded like any input but is not an input of its own; the manifest names it in that input's <c>annotation</c>.</param>
+public sealed record StagedInput(string LocalPath, string FileName, bool IsAnnotation = false)
 {
     /// <summary>The path inside the job prefix, as <c>manifest.json</c> names it.</summary>
     public string ObjectName => "input/" + FileName;
@@ -59,12 +60,25 @@ public static class WorkerManifestBuilder
         }
 
         var inputEntries = new JsonArray();
+        JsonObject? last = null;
         for (var i = 0; i < inputs.Count; i++)
         {
             RequireSafeFileName(inputs[i].FileName);
-            inputEntries.Add(new JsonObject
+            if (inputs[i].IsAnnotation)
             {
-                ["id"] = "in" + (i + 1).ToString(CultureInfo.InvariantCulture),
+                // Issue #686: a GFF3 rides on the input before it (worker manifest.py: inputs[].annotation, an object name like path).
+                if (last is null || last.ContainsKey("annotation"))
+                {
+                    throw new ArgumentException("A GFF3 annotation needs exactly one input before it to pair with.", nameof(inputs));
+                }
+
+                last["annotation"] = inputs[i].ObjectName;
+                continue;
+            }
+
+            last = new JsonObject
+            {
+                ["id"] = "in" + (inputEntries.Count + 1).ToString(CultureInfo.InvariantCulture),
                 ["path"] = inputs[i].ObjectName,
                 ["name"] = Path.GetFileNameWithoutExtension(inputs[i].FileName),
                 ["informat"] = InFormat(options.Format),
@@ -73,7 +87,13 @@ public static class WorkerManifestBuilder
                 ["genes"] = options.FindGenes,
                 ["ambiguityPolicy"] = options.AmbiguityPolicy.ToWireValue(),
                 ["fastaRecords"] = options.FastaRecords == FastaRecordsSelection.FirstOnly ? "first" : "all",
-            });
+            };
+            inputEntries.Add(last);
+        }
+
+        if (inputEntries.Count == 0)
+        {
+            throw new ArgumentException("A manifest needs at least one input besides an annotation.", nameof(inputs));
         }
 
         var (window, stride) = WindowAndStride(options);
@@ -138,6 +158,12 @@ public static class WorkerManifestBuilder
             },
         };
 
+        if (options.Topology != Topology.Auto)
+        {
+            // Optional on the wire (job_contract.md section 3): an older manifest without it means "auto", so auto is never sent.
+            root["analysis"]!["topology"] = options.Topology == Topology.Circular ? "circular" : "linear";
+        }
+
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
     }
 
@@ -173,6 +199,8 @@ public static class WorkerManifestBuilder
         InputFormat.GenBank => "genbank",
         InputFormat.Fasta => "fasta",
         InputFormat.Plain => "paste",
+        InputFormat.Embl => "embl",
+        InputFormat.SnapGene => "snapgene",
         _ => "auto",
     };
 

@@ -300,14 +300,8 @@ def explain(cwd: str) -> str:
         )
     git_dir, git_common_dir = paths  # cannot be None when result != "unknown"
     if result == "primary":
-        return (
-            f"PRIMARY CHECKOUT for cwd={cwd!r}: --git-dir == --git-common-dir "
-            f"== {git_common_dir!r}. Agent dispatch ALLOWED."
-        )
-    return (
-        f"LINKED WORKTREE for cwd={cwd!r}: --git-dir={git_dir!r} != "
-        f"--git-common-dir={git_common_dir!r}. Agent dispatch DENIED."
-    )
+        return f"PRIMARY CHECKOUT for cwd={cwd!r}: --git-dir == --git-common-dir == {git_common_dir!r}. Agent dispatch ALLOWED."
+    return f"LINKED WORKTREE for cwd={cwd!r}: --git-dir={git_dir!r} != --git-common-dir={git_common_dir!r}. Agent dispatch DENIED."
 
 
 def caller_agent_id(payload: dict) -> str | None:
@@ -455,47 +449,42 @@ def self_test() -> int:
         with tempfile.TemporaryDirectory() as tmp:
             primary, worktree = _make_git_repo_with_worktree(tmp)
 
-            check("primary checkout classifies as primary and is allowed",
-                  classify(str(primary)) == "primary" and verdict(str(primary)) is None)
-            check("linked worktree classifies as linked_worktree and is denied",
-                  classify(str(worktree)) == "linked_worktree" and verdict(str(worktree)) is not None)
-            check("--explain names PRIMARY CHECKOUT for the primary checkout",
-                  "PRIMARY CHECKOUT" in explain(str(primary)))
-            check("--explain names LINKED WORKTREE for the linked worktree",
-                  "LINKED WORKTREE" in explain(str(worktree)))
+            check("primary checkout classifies as primary and is allowed", classify(str(primary)) == "primary" and verdict(str(primary)) is None)
+            check(
+                "linked worktree classifies as linked_worktree and is denied",
+                classify(str(worktree)) == "linked_worktree" and verdict(str(worktree)) is not None,
+            )
+            check("--explain names PRIMARY CHECKOUT for the primary checkout", "PRIMARY CHECKOUT" in explain(str(primary)))
+            check("--explain names LINKED WORKTREE for the linked worktree", "LINKED WORKTREE" in explain(str(worktree)))
 
             not_a_repo = pathlib.Path(tmp) / "not-a-repo"
             not_a_repo.mkdir()
-            check("an unresolvable cwd classifies as unknown and fails open (allowed)",
-                  classify(str(not_a_repo)) == "unknown" and verdict(str(not_a_repo)) is None)
-            check("--explain names UNKNOWN for an unresolvable cwd",
-                  "UNKNOWN" in explain(str(not_a_repo)))
+            check(
+                "an unresolvable cwd classifies as unknown and fails open (allowed)",
+                classify(str(not_a_repo)) == "unknown" and verdict(str(not_a_repo)) is None,
+            )
+            check("--explain names UNKNOWN for an unresolvable cwd", "UNKNOWN" in explain(str(not_a_repo)))
 
             code, decision = _run_end_to_end({"tool_name": "Agent", "tool_input": {}, "cwd": str(worktree)})
-            check("end-to-end: a real Agent-call payload from the worktree denies",
-                  code == 0 and _is_deny(decision))
+            check("end-to-end: a real Agent-call payload from the worktree denies", code == 0 and _is_deny(decision))
 
             code, decision = _run_end_to_end({"tool_name": "Agent", "tool_input": {}, "cwd": str(primary)})
-            check("end-to-end: the same payload from the primary checkout is silent (allowed)",
-                  code == 0 and decision is None)
+            check("end-to-end: the same payload from the primary checkout is silent (allowed)", code == 0 and decision is None)
 
             # Issue #618: identity decides inside an `agent-<id>` worktree.
             agent_wt = pathlib.Path(tmp) / "primary-wt" / "agent-aaa111"
-            subprocess.run(["git", "worktree", "add", "-q", "-b", "agent-b", str(agent_wt)],
-                           cwd=primary, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "worktree", "add", "-q", "-b", "agent-b", str(agent_wt)], cwd=primary, check=True, capture_output=True, text=True
+            )
             base = {"tool_name": "Agent", "tool_input": {}, "cwd": str(agent_wt)}
             code, decision = _run_end_to_end({**base, "agent_id": "bbb222"})
-            check("#618: an orchestrator moved into another agent's worktree is allowed",
-                  code == 0 and decision is None)
+            check("#618: an orchestrator moved into another agent's worktree is allowed", code == 0 and decision is None)
             code, decision = _run_end_to_end({**base, "agent_id": "aaa111"})
-            check("#618: the agent running in its own worktree is denied",
-                  code == 0 and _is_deny(decision))
+            check("#618: the agent running in its own worktree is denied", code == 0 and _is_deny(decision))
             code, decision = _run_end_to_end(base)
-            check("#618: unknown identity in a linked worktree is denied",
-                  code == 0 and _is_deny(decision))
+            check("#618: unknown identity in a linked worktree is denied", code == 0 and _is_deny(decision))
             code, decision = _run_end_to_end({**base, "transcript_path": "/s/subagents/agent-bbb222.jsonl"})
-            check("#618: identity from the transcript_path basename is honoured",
-                  code == 0 and decision is None)
+            check("#618: identity from the transcript_path basename is honoured", code == 0 and decision is None)
     except Exception as exc:
         check(f"building the throwaway git repo/worktree did not raise ({exc!r})", False)
 
@@ -506,8 +495,7 @@ def self_test() -> int:
         text=True,
         timeout=15,
     )
-    check("malformed stdin fails open (exit 0, silent stdout)",
-          proc.returncode == 0 and proc.stdout.strip() == "")
+    check("malformed stdin fails open (exit 0, silent stdout)", proc.returncode == 0 and proc.stdout.strip() == "")
 
     if failures:
         print(f"\nFAIL: block_agent_dispatch_in_worktree self-test ({failures} failure(s))", file=sys.stderr)
