@@ -59,7 +59,10 @@ def decide(workflow: str, paths: list[str]) -> bool:
 def changed_paths(root: Path, base: str) -> list[str]:
     proc = subprocess.run(
         ["git", "diff", "--name-only", "--no-renames", base, "HEAD"],
-        cwd=root, capture_output=True, text=True, check=False,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"git diff exited {proc.returncode}: {proc.stderr.strip()[:200]}")

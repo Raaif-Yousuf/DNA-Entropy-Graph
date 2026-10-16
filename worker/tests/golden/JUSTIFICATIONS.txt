@@ -1,0 +1,2 @@
+2026-10-15: initial golden files for the MockPredictor path (issue 161)
+2026-10-15: Commit the bedGraph and GFF3 golden files that worker/.gitignore hid (#161 CI failure)

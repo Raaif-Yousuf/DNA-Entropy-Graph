@@ -175,9 +175,7 @@ class _Collector(ast.NodeVisitor):
                     annotation = ast.unparse(stmt.annotation)
                     if annotation.startswith(("ClassVar", "typing.ClassVar", "t.ClassVar")):
                         continue
-                    self.scan.fields.append(
-                        FieldDef(node.name, stmt.target.id, self.rel_path, stmt.lineno)
-                    )
+                    self.scan.fields.append(FieldDef(node.name, stmt.target.id, self.rel_path, stmt.lineno))
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -245,14 +243,11 @@ def find_findings(scan: Scan) -> list[Finding]:
                     "SERIALIZED-ONLY",
                     fd.path,
                     fd.line,
-                    "read only inside a serialization method, so it travels out to "
-                    "JSON and back without ever changing what the worker does",
+                    "read only inside a serialization method, so it travels out to JSON and back without ever changing what the worker does",
                 )
             )
             continue
-        findings.append(
-            Finding(fd.key, "UNREAD", fd.path, fd.line, "never read anywhere in the package")
-        )
+        findings.append(Finding(fd.key, "UNREAD", fd.path, fd.line, "never read anywhere in the package"))
     return findings
 
 
@@ -422,9 +417,7 @@ def self_test() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--self-test", action="store_true", help="prove the guard can fail")
     parser.add_argument("--json", action="store_true", help="print findings as JSON")
     parser.add_argument("--root", default=str(PACKAGE_ROOT), help="package root to scan")
@@ -449,10 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         _print_report(findings, stale)
 
     if findings or stale:
-        print(
-            f"check_unused_fields: {len(findings)} field(s) set but never read, "
-            f"{len(stale)} stale allowlist entry/entries."
-        )
+        print(f"check_unused_fields: {len(findings)} field(s) set but never read, {len(stale)} stale allowlist entry/entries.")
         print(
             "Either make the field do something, delete it, or add it to "
             f"{ALLOWLIST_PATH.relative_to(REPO_ROOT).as_posix()} with a reason a human wrote."

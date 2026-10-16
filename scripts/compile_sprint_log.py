@@ -70,7 +70,10 @@ def _bulk_commit_times(root: Path, fragments_dir: Path) -> dict[str, float]:
     try:
         out = subprocess.run(
             ["git", "log", "--format=\x01%ct", "--name-only", "--", str(fragments_dir)],
-            cwd=root, capture_output=True, text=True, timeout=30,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
@@ -107,7 +110,10 @@ def _sort_key(path: Path, root: Path, bulk_times: dict[str, float] | None = None
     try:
         out = subprocess.run(
             ["git", "log", "-1", "--format=%ct", "--", str(path)],
-            cwd=root, capture_output=True, text=True, timeout=10,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=10,
         ).stdout.strip()
         if out:
             return float(out)
@@ -156,13 +162,13 @@ def _tracked_and_untracked_paths(root: Path) -> list[str]:
     """
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-        cwd=root, capture_output=True, text=True, timeout=30,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"git ls-files failed under {root} (rc={result.returncode}): "
-            f"{result.stderr.strip()}"
-        )
+        raise RuntimeError(f"git ls-files failed under {root} (rc={result.returncode}): {result.stderr.strip()}")
     return [line for line in result.stdout.splitlines() if line]
 
 
@@ -243,8 +249,7 @@ def compile_fragments(root: Path, dry_run: bool = False) -> int:
     sprint_log.write_text("\n".join(log_lines) + "\n", encoding="utf-8", newline="\n")
     for path, _ in fragments:
         path.unlink()
-    print(f"Prepended {len(fragments)} fragment(s) to {sprint_log.name}; "
-          "commit the result (fragments deleted).")
+    print(f"Prepended {len(fragments)} fragment(s) to {sprint_log.name}; commit the result (fragments deleted).")
     return 0
 
 
@@ -283,14 +288,14 @@ def check_fragments(root: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--root", type=Path, default=_repo_root(),
-                        help="repo root (default: this script's parent repo)")
+    parser.add_argument("--root", type=Path, default=_repo_root(), help="repo root (default: this script's parent repo)")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true",
-                       help="report what folding would do without writing")
-    mode.add_argument("--check", action="store_true",
-                       help="validate every fragment's shape only; never folds, never touches "
-                            "sprint_log.md (what CI runs on every PR)")
+    mode.add_argument("--dry-run", action="store_true", help="report what folding would do without writing")
+    mode.add_argument(
+        "--check",
+        action="store_true",
+        help="validate every fragment's shape only; never folds, never touches sprint_log.md (what CI runs on every PR)",
+    )
     args = parser.parse_args()
     root = args.root.resolve()
     if args.check:

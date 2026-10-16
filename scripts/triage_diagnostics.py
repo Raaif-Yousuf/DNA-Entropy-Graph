@@ -234,9 +234,14 @@ SCHEMA_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
 #     the schema cannot say so -- a real gap, worth a typed ResultError
 #     dataclass someday, flagged here rather than silently worked around.
 # ---------------------------------------------------------------------------
-_SCHEMA_FIELDS_KNOWN_GAPS: frozenset[str] = frozenset({
-    "created_at", "app_version", "installation_id", "result_error_code",
-})
+_SCHEMA_FIELDS_KNOWN_GAPS: frozenset[str] = frozenset(
+    {
+        "created_at",
+        "app_version",
+        "installation_id",
+        "result_error_code",
+    }
+)
 
 # progress.jsonl -- one JSON object per line: {seq, ts, stage, level,
 # percent, message, data}. Appendix B section 3.4.
@@ -247,9 +252,19 @@ PROGRESS_LINE_KEYS = ("seq", "ts", "stage", "level", "percent", "message", "data
 # refuses to show a stage this tuple does not know about (a documented list
 # going stale must never make the tool blind to a real, newer stage).
 JOB_STAGES: tuple[str, ...] = (
-    "queued", "provisioning", "booting", "installing", "restoring-cache",
-    "model-loading", "running", "uploading", "done", "failed", "cancelled",
-    "idle", "finalizing",
+    "queued",
+    "provisioning",
+    "booting",
+    "installing",
+    "restoring-cache",
+    "model-loading",
+    "running",
+    "uploading",
+    "done",
+    "failed",
+    "cancelled",
+    "idle",
+    "finalizing",
 )
 
 # The `CloudError` taxonomy -- Appendix B section 7. Used only to flag a
@@ -257,22 +272,67 @@ JOB_STAGES: tuple[str, ...] = (
 # error class that needs a section 7 row, or a typo in the worker's own
 # error-raising code); never used to filter or hide a code that IS
 # recognised but looks unfamiliar to a human skimming the table.
-KNOWN_CLOUD_ERROR_CODES: frozenset[str] = frozenset((
-    "SIGNIN_EXPIRED", "CONSENT_INCOMPLETE", "NOT_PROJECT_OWNER", "PROJECT_QUOTA",
-    "ORG_POLICY_BLOCK", "NO_BILLING", "BILLING_NO_PERMISSION", "BILLING_STILL_OFF", "BILLING_ACCOUNT_OFF", "FREE_TRIAL_NO_GPU",
-    "BUCKET_CONFIG_NOT_APPLIED", "BUCKET_NAME_TAKEN", "WORKER_DEFAULT_ACCOUNT", "WORKER_DEFAULT_ACCOUNT_MISSING", "WORKER_IDENTITY_NOT_APPLIED",
-    "API_DISABLED", "PERMISSION", "PERMISSION_ACTAS", "NO_GPU_QUOTA",
-    "QUOTA_NOT_ELIGIBLE", "QUOTA_DENIED", "QUOTA_OTHER", "GPU_STOCKOUT",
-    "NO_EXTERNAL_IP", "VM_BOOT_TIMEOUT", "GPU_NOT_VISIBLE", "IMAGE_PULL_FAILED",
-    "MODEL_DOWNLOAD_FAILED", "MODEL_NEEDS_HOPPER", "MODEL_OOM", "INPUT_INVALID",
-    "HEARTBEAT_LOST", "VM_DIED", "SPOT_PREEMPTED", "WORKER_CRASH",
-    "RUN_TIME_LIMIT", "CANCELLED", "RETENTION_EXPIRED", "BUCKET_MISSING",
-    "DOWNLOAD_FAILED", "NETWORK", "SPEND_CAP",
-    "SIGNIN_CANCELLED", "SIGNIN_TIMEOUT", "SIGNIN_FAILED", "SIGNIN_NETWORK", "SIGNIN_BROWSER",
-    "SIGNIN_LOOPBACK", "SIGNIN_STORAGE", "OAUTH_CLIENT_MISSING", "OAUTH_CLIENT_INVALID",
-    "ACCOUNT_NOT_FOUND", "PROJECT_INVALID", "PROJECT_SAVE_FAILED",
-    "ACCOUNTS_FILE_UNREADABLE", "ACCOUNTS_FILE_LOCKED",
-))
+KNOWN_CLOUD_ERROR_CODES: frozenset[str] = frozenset(
+    (
+        "SIGNIN_EXPIRED",
+        "CONSENT_INCOMPLETE",
+        "NOT_PROJECT_OWNER",
+        "PROJECT_QUOTA",
+        "ORG_POLICY_BLOCK",
+        "NO_BILLING",
+        "BILLING_NO_PERMISSION",
+        "BILLING_STILL_OFF",
+        "BILLING_ACCOUNT_OFF",
+        "FREE_TRIAL_NO_GPU",
+        "BUCKET_CONFIG_NOT_APPLIED",
+        "BUCKET_NAME_TAKEN",
+        "WORKER_DEFAULT_ACCOUNT",
+        "WORKER_DEFAULT_ACCOUNT_MISSING",
+        "WORKER_IDENTITY_NOT_APPLIED",
+        "API_DISABLED",
+        "PERMISSION",
+        "PERMISSION_ACTAS",
+        "NO_GPU_QUOTA",
+        "QUOTA_NOT_ELIGIBLE",
+        "QUOTA_DENIED",
+        "QUOTA_OTHER",
+        "GPU_STOCKOUT",
+        "NO_EXTERNAL_IP",
+        "VM_BOOT_TIMEOUT",
+        "GPU_NOT_VISIBLE",
+        "IMAGE_PULL_FAILED",
+        "MODEL_DOWNLOAD_FAILED",
+        "MODEL_NEEDS_HOPPER",
+        "MODEL_OOM",
+        "INPUT_INVALID",
+        "HEARTBEAT_LOST",
+        "VM_DIED",
+        "SPOT_PREEMPTED",
+        "WORKER_CRASH",
+        "RUN_TIME_LIMIT",
+        "CANCELLED",
+        "RETENTION_EXPIRED",
+        "BUCKET_MISSING",
+        "DOWNLOAD_FAILED",
+        "NETWORK",
+        "SPEND_CAP",
+        "SIGNIN_CANCELLED",
+        "SIGNIN_TIMEOUT",
+        "SIGNIN_FAILED",
+        "SIGNIN_NETWORK",
+        "SIGNIN_BROWSER",
+        "SIGNIN_LOOPBACK",
+        "SIGNIN_STORAGE",
+        "OAUTH_CLIENT_MISSING",
+        "OAUTH_CLIENT_INVALID",
+        "ACCOUNT_NOT_FOUND",
+        "PROJECT_INVALID",
+        "PROJECT_SAVE_FAILED",
+        "ACCOUNTS_FILE_UNREADABLE",
+        "ACCOUNTS_FILE_LOCKED",
+    )
+)
+
 
 # `--data-dir`'s target: the local run-history directory (Appendix B section
 # 3.3's `store: {"kind": "localdir", "root": "...\\runs\\<jobId>"}`), not
@@ -303,6 +363,7 @@ DEFAULT_TAIL = 50
 # scripts/tests/test_triage_diagnostics.py so a drift is caught by CI, not
 # only by someone remembering to run this by hand.
 # ---------------------------------------------------------------------------
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -403,8 +464,7 @@ def validate_schema_fields(schemas_dir: Path | None = None) -> list[str]:
             continue
         if not _path_exists_in_schema(schema, path):
             problems.append(
-                f"{name}: {doc_name}.{'.'.join(path)} is not in the generated schema "
-                f"(docs/contract/{_SCHEMA_DOC_FILENAMES[doc_name]})"
+                f"{name}: {doc_name}.{'.'.join(path)} is not in the generated schema (docs/contract/{_SCHEMA_DOC_FILENAMES[doc_name]})"
             )
     return problems
 
@@ -463,6 +523,7 @@ def find_uncovered_schema_fields(schemas_dir: Path | None = None) -> list[str]:
 # (issue #249, replacing the never-actually-consulted allowAmbiguity) had no
 # reader here at all before.
 # ---------------------------------------------------------------------------
+
 
 def manifest_input_ambiguity_policies(bundle: dict[str, Any]) -> dict[str, str]:
     """{input id: ambiguityPolicy} for every manifest.json inputs[] entry,
@@ -544,6 +605,7 @@ def first(bundle: dict[str, Any], *names: str) -> Any:
 # directly, or one subdirectory per job (matching the cloud bucket layout
 # `jobs/<jobId>/...` or the local layout `runs/<jobId>/...`).
 # ---------------------------------------------------------------------------
+
 
 def _read_json(read_bytes) -> dict[str, Any]:
     try:
@@ -640,6 +702,7 @@ def load_bundle(path: Path) -> list[tuple[str, dict[str, Any], list[str]]]:
 # Derived findings
 # ---------------------------------------------------------------------------
 
+
 def job_phase_history(bundle: dict[str, Any], progress_lines: list[str]) -> list[str]:
     """The distinct, in-order sequence of `stage` values this job passed
     through -- consecutive repeats collapsed (a `running` stage logs many
@@ -716,8 +779,8 @@ def _fmt_progress_line(raw: str) -> str:
 # Reporting
 # ---------------------------------------------------------------------------
 
-def _report_job(target_label: str, job_label: str, bundle: dict[str, Any],
-                 progress_lines: list[str], tail: int, full: bool) -> dict[str, Any]:
+
+def _report_job(target_label: str, job_label: str, bundle: dict[str, Any], progress_lines: list[str], tail: int, full: bool) -> dict[str, Any]:
     header = f"{target_label}" + (f"  job={job_label}" if job_label and job_label != target_label else "")
     print("=" * 78)
     print(header)
@@ -749,8 +812,9 @@ def _report_job(target_label: str, job_label: str, bundle: dict[str, Any],
 
     vm_name = field(bundle, "vm_name")
     if vm_name:
-        print(f"  vm             : {vm_name}  zone={field(bundle, 'vm_zone')}  "
-              f"gpu={field(bundle, 'vm_gpu')}  driver={field(bundle, 'vm_driver')}")
+        print(
+            f"  vm             : {vm_name}  zone={field(bundle, 'vm_zone')}  gpu={field(bundle, 'vm_gpu')}  driver={field(bundle, 'vm_driver')}"
+        )
 
     phases = job_phase_history(bundle, progress_lines)
     if phases:
@@ -811,13 +875,16 @@ def _report_job(target_label: str, job_label: str, bundle: dict[str, Any],
         timing = field(bundle, "result_timing")
         gpu = field(bundle, "result_gpu")
         print("\n-- result.json " + "-" * 62)
-        print(f"  status: {result_status}" + (f"  timing={timing}" if timing else "")
-              + (f"  gpu={gpu}" if gpu else ""))
+        print(f"  status: {result_status}" + (f"  timing={timing}" if timing else "") + (f"  gpu={gpu}" if gpu else ""))
 
     return {
-        "app_version": app_version, "worker_version": worker_version,
-        "worker_image": worker_image, "stage": stage, "updated_at": updated_at,
-        "errors": errors, "phases": phases,
+        "app_version": app_version,
+        "worker_version": worker_version,
+        "worker_image": worker_image,
+        "stage": stage,
+        "updated_at": updated_at,
+        "errors": errors,
+        "phases": phases,
     }
 
 
@@ -825,17 +892,17 @@ def _delta(reports: list[tuple[str, dict[str, Any]]]) -> None:
     print("\n" + "=" * 78)
     print("DELTA across bundles (oldest first)")
     print("=" * 78)
-    print("Multiple bundles for the same job are usually sent because something\n"
-          "moved -- the stage advanced, stalled, or an error appeared.\n")
+    print("Multiple bundles for the same job are usually sent because something\nmoved -- the stage advanced, stalled, or an error appeared.\n")
     for name, rep in reports:
         print(f"  {name}")
-        print(f"    stage={rep.get('stage','?')}  updated={rep.get('updated_at','?')}  "
-              f"errors={rep.get('errors') or '[]'}")
+        print(f"    stage={rep.get('stage', '?')}  updated={rep.get('updated_at', '?')}  errors={rep.get('errors') or '[]'}")
 
     first_rep, last_rep = reports[0][1], reports[-1][1]
     if first_rep.get("stage") == last_rep.get("stage") and first_rep.get("stage") not in (None, "?"):
-        print(f"\n  STAGE DID NOT ADVANCE: still {last_rep.get('stage')!r} across every bundle. "
-              "See section 3.5's per-stage deadlines -- this may be a hung worker.")
+        print(
+            f"\n  STAGE DID NOT ADVANCE: still {last_rep.get('stage')!r} across every bundle. "
+            "See section 3.5's per-stage deadlines -- this may be a hung worker."
+        )
     if not first_rep.get("errors") and last_rep.get("errors"):
         print(f"\n  NEW ERROR appeared: {last_rep.get('errors')}")
 
@@ -850,15 +917,16 @@ def check_schema(schemas_dir: Path | None = None) -> int:
     forward = validate_schema_fields(schemas_dir)
     reverse = find_uncovered_schema_fields(schemas_dir)
     if not forward and not reverse:
-        print("check_schema: SCHEMA_FIELDS agrees with the generated schema "
-              f"({len(SCHEMA_FIELDS)} field(s), {len(_SCHEMA_FIELDS_KNOWN_GAPS)} documented gap(s)).")
+        print(
+            "check_schema: SCHEMA_FIELDS agrees with the generated schema "
+            f"({len(SCHEMA_FIELDS)} field(s), {len(_SCHEMA_FIELDS_KNOWN_GAPS)} documented gap(s))."
+        )
         return 0
     for p in forward:
         print(f"ERROR: SCHEMA_FIELDS names a field the generated schema does not have: {p}", file=sys.stderr)
     for p in reverse:
         print(f"ERROR: the generated schema has a field SCHEMA_FIELDS does not read: {p}", file=sys.stderr)
-    print(f"{len(forward) + len(reverse)} disagreement(s) between SCHEMA_FIELDS and "
-          "the generated schema.", file=sys.stderr)
+    print(f"{len(forward) + len(reverse)} disagreement(s) between SCHEMA_FIELDS and the generated schema.", file=sys.stderr)
     return 1
 
 
@@ -866,19 +934,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Read a DNA-Entropy-Graph job diagnostics bundle (zip or directory) in seconds.",
     )
-    ap.add_argument("bundles", nargs="*", type=Path,
-                     help="diagnostics zip(s), or an unpacked bundle directory")
-    ap.add_argument("--data-dir", action="store_true",
-                     help="also triage every local run under %%LOCALAPPDATA%%\\DNAEntropyGraph\\runs\\")
-    ap.add_argument("--data-dir-path", type=Path, default=None,
-                     help="override the local data directory (default: %%LOCALAPPDATA%%\\DNAEntropyGraph)")
-    ap.add_argument("--full", action="store_true",
-                     help="print every progress.jsonl line instead of a capped tail")
-    ap.add_argument("--tail", type=int, default=DEFAULT_TAIL,
-                     help=f"how many trailing progress.jsonl lines to show (default {DEFAULT_TAIL})")
-    ap.add_argument("--check-schema", action="store_true",
-                     help="verify SCHEMA_FIELDS against the real generated schema (docs/contract/*.schema.json) "
-                          "and exit -- unlike every other mode here, this one IS a gate")
+    ap.add_argument("bundles", nargs="*", type=Path, help="diagnostics zip(s), or an unpacked bundle directory")
+    ap.add_argument("--data-dir", action="store_true", help="also triage every local run under %%LOCALAPPDATA%%\\DNAEntropyGraph\\runs\\")
+    ap.add_argument(
+        "--data-dir-path", type=Path, default=None, help="override the local data directory (default: %%LOCALAPPDATA%%\\DNAEntropyGraph)"
+    )
+    ap.add_argument("--full", action="store_true", help="print every progress.jsonl line instead of a capped tail")
+    ap.add_argument("--tail", type=int, default=DEFAULT_TAIL, help=f"how many trailing progress.jsonl lines to show (default {DEFAULT_TAIL})")
+    ap.add_argument(
+        "--check-schema",
+        action="store_true",
+        help="verify SCHEMA_FIELDS against the real generated schema (docs/contract/*.schema.json) "
+        "and exit -- unlike every other mode here, this one IS a gate",
+    )
     args = ap.parse_args()
 
     if args.check_schema:
@@ -924,8 +992,7 @@ def main() -> int:
     if len(all_reports) > 1:
         _delta(all_reports)
 
-    print("\nThis is a REPORT, not a gate. It never fails a build: a false alarm here "
-          "costs a real investigation.")
+    print("\nThis is a REPORT, not a gate. It never fails a build: a false alarm here costs a real investigation.")
     return 0
 
 

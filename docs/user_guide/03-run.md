@@ -1,5 +1,15 @@
 # 3. Run a sequence
 
+## Not sure what to try first? Use the example
+
+If you would rather not use your own data for a first run, use the example: a small virus
+genome called phiX174 (5,386 letters), which costs a few cents to run. Download
+[`phix174.gb`](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/blob/main/examples/phix174.gb)
+(click **Download raw file**), save it anywhere, and follow the steps below with that file. The
+[examples folder](https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/blob/main/examples/README.md)
+says where the sequence came from and that it is free to use. A "Try an example" button inside
+the app is planned.
+
 ## Add your sequence
 
 On the **New run** page, either:

@@ -1,0 +1,1 @@
+- Viewer: when the WebView2 Runtime is missing (or the viewer control fails to start), the viewer page now also draws the run's entropy track with the native chart next to the one Install the WebView2 Runtime action, instead of only an error card (#117). User guide 04 and 07 updated.
