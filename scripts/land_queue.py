@@ -46,7 +46,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from land_wt import pid_alive
+from land_wt import CHECKS_TIMEOUT_SECONDS, pid_alive
 
 Runner = Callable[[list[str], "Path | None"], "tuple[int, str]"]
 
@@ -64,6 +64,8 @@ def run_command(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
         proc = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     except OSError as err:
         return 127, f"cannot run {argv[0]}: {err}"
+    if proc.returncode == 0:  # stdout only: stderr noise must never reach a json.loads
+        return 0, proc.stdout.decode("utf-8", errors="replace").strip()
     return proc.returncode, (proc.stdout + b"\n" + proc.stderr).decode("utf-8", errors="replace").strip()
 
 
@@ -120,6 +122,10 @@ def pending_items(queue_text: str, taken: set[str]) -> list[Item]:
         seen.add(it.key)
         out.append(it)
     return out
+
+
+class AlreadyRunning(RuntimeError):
+    """Another runner for this state directory is alive."""
 
 
 class State:
@@ -196,7 +202,27 @@ class State:
         self._p("runner.stop").unlink(missing_ok=True)
 
     def write_runner(self, pid: int, ts: float) -> None:
-        self._p("runner.json").write_text(json.dumps({"pid": pid, "ts": ts}), encoding="utf-8", newline="\n")
+        """Heartbeat: replace our own runner.json atomically."""
+        tmp = self._p(f"runner.json.{pid}.tmp")
+        tmp.write_text(json.dumps({"pid": pid, "ts": ts}), encoding="utf-8", newline="\n")
+        os.replace(tmp, self._p("runner.json"))
+
+    def claim_runner(self, pid: int, ts: float, alive: Callable[[int], bool]) -> None:
+        """Create runner.json with O_EXCL so two starters cannot both win; a file whose pid is dead is stale and replaced."""
+        path = self._p("runner.json")
+        for _ in range(2):
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                cur = self.runner()
+                if cur is not None and int(cur["pid"]) != pid and alive(int(cur["pid"])):
+                    raise AlreadyRunning(f"a runner is already alive (pid {int(cur['pid'])}). Check `status`; `stop` ends it") from None
+                path.unlink(missing_ok=True)
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(json.dumps({"pid": pid, "ts": ts}))
+            return
+        raise AlreadyRunning("another runner claimed this state directory at the same moment. Check `status`")
 
     def runner(self) -> dict[str, float] | None:
         try:
@@ -237,6 +263,8 @@ class Env:
     clock: Callable[[], float] = time.time
     pid: int = field(default_factory=os.getpid)
     alive: Callable[[int], bool] = pid_alive
+    ff_main: bool = False
+    checks_timeout: float = CHECKS_TIMEOUT_SECONDS
     known_red: tuple[str, ...] = field(default_factory=lambda: tuple(n.strip() for n in os.environ.get("KNOWN_RED", "").split(",") if n.strip()))
 
     def run(self, *argv: str) -> tuple[int, str]:
@@ -256,20 +284,21 @@ def _checks(env: Env, pr: str) -> list[dict[str, str]]:
     try:
         data = json.loads(out)
     except ValueError:
+        State(env.state).append_flake(f"{env.now()} PARSE-FAIL gh pr checks {pr}: {out[:120]!r}")
         return []
     return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else []
 
 
-def _settle(env: Env, pr: str) -> list[dict[str, str]]:
-    """Wait for every check to finish. `--watch` can return early (or before any check exists), so look again a few times."""
-    checks: list[dict[str, str]] = []
-    for _ in range(3):
-        env.run("gh", "pr", "checks", pr, "--watch", "--interval", "30")
+def _settle(env: Env, pr: str) -> tuple[list[dict[str, str]], bool]:
+    """Poll until no check is pending or `env.checks_timeout` passes. (checks, timed_out). No unbounded `--watch`."""
+    deadline = env.clock() + env.checks_timeout
+    while True:
         checks = _checks(env, pr)
         if checks and not any(c.get("bucket") in _PENDING for c in checks):
-            break
+            return checks, False
+        if env.clock() >= deadline:
+            return checks, True
         env.sleep(20)
-    return checks
 
 
 def _failing(checks: Sequence[dict[str, str]], ignore: set[str]) -> list[dict[str, str]]:
@@ -288,6 +317,7 @@ def _mergeability(env: Env, pr: str) -> str:
         try:
             data = json.loads(out)
         except ValueError:
+            State(env.state).append_flake(f"{env.now()} PARSE-FAIL gh pr view {pr}: {out[:120]!r}")
             data = {}
         status, mergeable = str(data.get("mergeStateStatus", "UNKNOWN")), str(data.get("mergeable", "UNKNOWN"))
         if status == "DIRTY" or mergeable == "CONFLICTING":
@@ -300,21 +330,24 @@ def _mergeability(env: Env, pr: str) -> str:
 
 
 def merge_green(env: Env, pr: str, known_red: Sequence[str] = ()) -> tuple[str, str]:
-    """(`MERGED` | `DIRTY` | `REFUSED`, detail). One rerun of the failed runs, logged to flakes.log."""
+    """(`MERGED` | `DIRTY` | `PENDING` | `REFUSED`, detail). One rerun of the failed runs (flakes.log). Never merges with a check pending."""
     ignore = set(env.known_red) | set(known_red)
     env.sleep(20)
-    checks = _settle(env, pr)
+    checks, timed_out = _settle(env, pr)
     bad = _failing(checks, ignore)
-    if bad:
+    if bad and not timed_out:
         runs = sorted({m.group(1) for c in bad if (m := _RUN_ID.search(str(c.get("link", ""))))})
         for run in runs:
             State(env.state).append_flake(f"{env.now()} PR#{pr} run {run} rerun after: {_names(bad)}")
             env.run("gh", "run", "rerun", run, "--failed")
         env.sleep(RERUN_SETTLE_SECONDS)
-        checks = _settle(env, pr)
+        checks, timed_out = _settle(env, pr)
         bad = _failing(checks, ignore)
     if bad:
         return "REFUSED", f"failing: {_names(bad)}"
+    if timed_out:
+        waiting = [c for c in checks if c.get("bucket") in _PENDING]
+        return "PENDING", f"still pending after {int(env.checks_timeout)} s: {_names(waiting) or 'no checks were reported'}"
     if not checks:
         return "REFUSED", "no checks were reported"
     if _mergeability(env, pr) == "DIRTY":
@@ -359,9 +392,11 @@ def process_item(env: Env, it: Item) -> str:
     st = State(env.state)
     st.set_inflight(it, "landing")
     land_branch: str | None = None
-    _, remote = env.run("git", "ls-remote", "--heads", "origin", it.branch)
-    if remote.strip():  # (b) a closed PR's branch is still there: never push over it
-        land_branch = f"{it.branch}-{it.sha[:7]}"
+    rc, remote = env.run("git", "ls-remote", "--heads", "origin", f"refs/heads/{it.branch}")
+    if rc != 0:
+        return f"FAILED ls-remote rc={rc} (nothing was landed; check the network, then `retry`) {it.branch} @ {it.sha}"
+    if any(ln.split("\t")[-1].strip() == f"refs/heads/{it.branch}" for ln in remote.splitlines()):
+        land_branch = f"{it.branch}-{it.sha[:7]}"  # (b) a closed PR's branch is still there: never push over it
     delegate = not (set(env.known_red) | set(it.known_red))
     attempt = 1
     while True:
@@ -381,20 +416,22 @@ def process_item(env: Env, it: Item) -> str:
             if verdict == "MERGED":
                 return f"MERGED #{pr} {it.branch} @ {it.sha}"
         if verdict == "DIRTY" and attempt == 1 and pr:  # (c) re-land the same sha on top of the new main
-            env.run(
-                "gh", "pr", "close", pr, "--delete-branch", "--comment", "Conflicts with main after another merge; re-landing the same commit."
-            )
+            close = ["gh", "pr", "close", pr, "--comment", "Conflicts with main after another merge; re-landing the same commit."]
+            if land_branch:  # only a branch this queue created; with none, the PR head is the lane's own branch
+                close.append("--delete-branch")
+            close_rc, close_out = env.run(*close)
+            if close_rc != 0:
+                last = close_out.splitlines()[-1] if close_out else "no output"
+                return f"REFUSED #{pr} could not close the conflicting PR ({last}); close it by hand {it.branch} @ {it.sha}"
             attempt = 2
             land_branch = f"{it.branch}-{it.sha[:7]}-r2"
             st.set_inflight(it, f"re-landing after #{pr} went DIRTY")
             continue
         if verdict == "DIRTY":
             return f"REFUSED #{pr} merge conflict with main persists after one re-land; resolve by hand {it.branch} @ {it.sha}"
+        if verdict == "PENDING":
+            return f"FAILED rc=6 (PR #{pr} stays open) {detail} {it.branch} @ {it.sha}"
         return f"REFUSED #{pr} {detail} {it.branch} @ {it.sha}"
-
-
-class AlreadyRunning(RuntimeError):
-    """Another runner for this state directory is alive."""
 
 
 def _heartbeat(env: Env) -> None:
@@ -404,6 +441,8 @@ def _heartbeat(env: Env) -> None:
 def _stacked_on(env: Env, failed: set[str], it: Item) -> str | None:
     """The failed key whose sha is an ancestor of this item's sha (a stack on top of a failure), else None."""
     for key in sorted(failed):
+        if key.rpartition("@")[0] == it.branch:  # a fix-forward of the same branch is not a stack on its own failure
+            continue
         base = key.rpartition("@")[2]
         if base == it.sha or env.run("git", "merge-base", "--is-ancestor", base, it.sha)[0] == 0:
             return key
@@ -411,19 +450,45 @@ def _stacked_on(env: Env, failed: set[str], it: Item) -> str | None:
 
 
 def _fast_forward_main(env: Env) -> None:
-    """After a merge: bring the main checkout up to date, but only when it is ON main (the shell runner did this)."""
+    """Opt-in (`run --ff-main`): bring the main checkout up to date, only when it is ON main, clean and not mid-git. Outcome is logged."""
+    st = State(env.state)
     env.run("git", "fetch", "-q", "origin")
     rc, branch = env.run("git", "rev-parse", "--abbrev-ref", "HEAD")
-    if rc == 0 and branch.strip() == "main":
-        env.run("git", "merge", "-q", "--ff-only", "origin/main")
+    if rc != 0 or branch.strip() != "main":
+        st.append_done(f"FF-MAIN skipped: checkout is not on main ({branch.strip() or 'unknown'})")
+        return
+    _, gitdir = env.run("git", "rev-parse", "--absolute-git-dir")
+    if gitdir.strip() and (Path(gitdir.strip()) / "index.lock").exists():
+        st.append_done("FF-MAIN skipped: index.lock exists (another git command is running)")
+        return
+    rc, dirty = env.run("git", "status", "--porcelain")
+    if rc != 0 or dirty.strip():
+        st.append_done("FF-MAIN skipped: working tree is dirty")
+        return
+    rc, out = env.run("git", "merge", "-q", "--ff-only", "origin/main")
+    st.append_done("FF-MAIN ok" if rc == 0 else f"FF-MAIN failed rc={rc}: {out.splitlines()[-1] if out else 'no output'}")
+
+
+def _recover_interrupted(st: State) -> None:
+    """An inflight.json with no verdict means the previous runner died mid-item: record it so `retry` applies."""
+    fly = st.inflight()
+    if not fly or "key" not in fly:
+        return
+    branch, _, sha = str(fly["key"]).rpartition("@")
+    tail = f"{branch} @ {sha}"
+    has_verdict = False
+    for raw in st._read("done.log").splitlines():
+        if raw.rstrip().endswith(tail):
+            has_verdict = not raw.startswith("RETRY")
+    if not has_verdict:
+        st.append_done(f"FAILED interrupted {tail}")
+    st.clear_inflight()
 
 
 def drain(env: Env, *, forever: bool = False) -> None:
     st = State(env.state)
-    cur = st.runner()
-    if cur is not None and int(cur["pid"]) != env.pid and env.alive(int(cur["pid"])):
-        raise AlreadyRunning(f"a runner is already alive (pid {int(cur['pid'])}). Check `status`; `stop` ends it")
-    _heartbeat(env)
+    st.claim_runner(env.pid, env.clock(), env.alive)
+    _recover_interrupted(st)
     try:
         while True:
             _heartbeat(env)
@@ -449,7 +514,10 @@ def drain(env: Env, *, forever: bool = False) -> None:
                 result = f"FAILED unexpected {type(err).__name__}: {err} {it.branch} @ {it.sha}"
             st.append_done(result)
             st.clear_inflight()
-            _fast_forward_main(env) if result.startswith("MERGED") else env.run("git", "fetch", "-q", "origin")
+            if result.startswith("MERGED") and env.ff_main:
+                _fast_forward_main(env)
+            else:
+                env.run("git", "fetch", "-q", "origin")
     finally:
         st.clear_runner(env.pid)
 
@@ -484,6 +552,16 @@ def status(env: Env) -> str:
     return "\n".join(lines)
 
 
+def _invalid_add(branch: str, sha: str, title: str) -> str:
+    if not branch or re.search(r"[|\s]", branch):
+        return f"branch {branch!r} must not be empty or contain `|` or whitespace. Pass the lane branch name"
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+        return f"sha {sha!r} is not 7 to 40 hex characters. Pass the commit id of the branch tip"
+    if "|red=" in title or "\n" in title or "\r" in title:
+        return "title must be one line and not contain `|red=`. Use --red for known-red checks"
+    return ""
+
+
 def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pid_alive) -> int:
     ap = argparse.ArgumentParser(description="Land queued lane branches and merge each when green.")
     ap.add_argument("--state", type=Path, default=Path(tempfile.gettempdir()) / "deg-land-queue")
@@ -498,14 +576,21 @@ def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pi
     add.add_argument("--red", default="", help="comma separated check names to ignore for this item")
     run = sub.add_parser("run")
     run.add_argument("--once", action="store_true")
+    run.add_argument(
+        "--ff-main", action="store_true", help="after a merge, fast-forward the main checkout (only if on main, clean, no index.lock)"
+    )
     sub.add_parser("status").add_argument("--check", action="store_true", help="exit 1 when the runner is not alive")
     sub.add_parser("stop")
     retry = sub.add_parser("retry")
     retry.add_argument("key", help="branch@sha")
     args = ap.parse_args(argv)
-    env = Env(repo=args.repo, state=args.state, python=sys.executable, alive=alive)
+    env = Env(repo=args.repo, state=args.state, python=sys.executable, alive=alive, ff_main=getattr(args, "ff_main", False))
     st = State(args.state)
     if args.cmd == "add":
+        problem = _invalid_add(args.branch, args.sha, args.title)
+        if problem:
+            print(f"ERROR: {problem}")
+            return 1
         red = tuple(n.strip() for n in args.red.split(",") if n.strip())
         st.append_queue(Item(args.branch, args.sha, args.issue, args.full, args.title, red).line())
         print(f"OK: queued {args.branch} @ {args.sha}")
@@ -520,6 +605,9 @@ def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pi
         if args.check and not runner_line(env)[1]:
             return 1
     elif args.cmd == "stop":
+        if not runner_line(env)[1]:
+            print("ERROR: no live runner, so no stop file was written (it would stop the next `run` at once). Check `status`")
+            return 1
         (args.state / "runner.stop").write_text("", encoding="utf-8", newline="\n")
         print("OK: runner.stop created")
     elif args.cmd == "retry":

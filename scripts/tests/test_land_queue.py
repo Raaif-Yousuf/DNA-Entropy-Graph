@@ -460,6 +460,7 @@ def test_main_status_exit_code_is_one_when_the_runner_is_dead(tmp_path: Path, ca
 
 
 def test_main_checkout_is_fast_forwarded_only_when_on_main(env: lq.Env) -> None:
+    env.ff_main = True
     r = runner_of(env)
     r.on("git", "rev-parse", "--abbrev-ref", "HEAD", answer=(0, "main"))
     st = lq.State(env.state)
@@ -469,9 +470,231 @@ def test_main_checkout_is_fast_forwarded_only_when_on_main(env: lq.Env) -> None:
 
 
 def test_a_feature_branch_checkout_is_left_alone(env: lq.Env) -> None:
+    env.ff_main = True
     r = runner_of(env)
     r.on("git", "rev-parse", "--abbrev-ref", "HEAD", answer=(0, "feat/other"))
     st = lq.State(env.state)
     st.append_queue("feat/1-x|aaa|1|0|t (#1)")
     lq.drain(env)
     assert not r.matching("git", "merge")
+
+
+# ---- cold-review fixes (round 2) ----
+
+
+def _close_calls(env: lq.Env) -> list[list[str]]:
+    return runner_of(env).matching("gh", "pr", "close")
+
+
+def test_dirty_reland_never_deletes_the_lanes_own_branch(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "view", answer=view("DIRTY", "CONFLICTING"))
+    r.first("py", answer=[(4, "opened https://github.com/o/r/pull/7\n"), (0, "opened https://github.com/o/r/pull/8\n")])
+    lq.process_item(env, item())  # no remote branch yet: the PR head IS the lane's branch
+    assert "--delete-branch" not in _close_calls(env)[0]
+
+
+def test_dirty_reland_deletes_only_a_land_branch_it_created(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("git", "ls-remote", answer=(0, "deadbeef\trefs/heads/feat/1-x\n"))
+    r.first("gh", "pr", "view", answer=view("DIRTY", "CONFLICTING"))
+    r.first("py", answer=[(4, "opened https://github.com/o/r/pull/7\n"), (0, "opened https://github.com/o/r/pull/8\n")])
+    lq.process_item(env, item())
+    assert "--delete-branch" in _close_calls(env)[0]
+
+
+def test_a_failed_close_stops_the_reland(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "close", answer=(1, "boom"))
+    r.first("gh", "pr", "view", answer=view("DIRTY", "CONFLICTING"))
+    r.first("py", answer=(4, "opened https://github.com/o/r/pull/7\n"))
+    res = lq.process_item(env, item())
+    assert res.startswith("REFUSED #7") and "could not close" in res
+    assert len(r.matching("py")) == 1
+
+
+def test_a_new_sha_of_the_same_branch_is_not_stacked_on_its_own_failure(env: lq.Env) -> None:
+    st = lq.State(env.state)
+    st.append_done("FAILED land_wt rc=3 feat/1-x @ aaa")
+    st.append_queue("feat/1-x|bbb|1|0|t (#1)")
+    runner_of(env).first("git", "merge-base", "--is-ancestor", answer=(0, ""))
+    lq.drain(env)
+    assert (env.state / "done.log").read_text(encoding="utf-8").splitlines()[-1].startswith("MERGED")
+
+
+def _ticking(env: lq.Env) -> None:
+    t = [0.0]
+    env.clock = lambda: t[0]
+
+    def sleep(s: float) -> None:
+        t[0] += max(s, 1.0)
+
+    env.sleep = sleep
+
+
+def test_known_red_path_never_merges_with_checks_pending(env: lq.Env) -> None:
+    _ticking(env)
+    env.checks_timeout = 100.0
+    r = runner_of(env)
+    r.first("gh", "pr", "checks", "7", "--json", answer=checks(("build and test", "pending")))
+    res = lq.process_item(env, item(red="lint"))
+    assert res.startswith("FAILED rc=6 (PR #7 stays open)") and "build and test" in res
+    assert not r.matching("gh", "pr", "merge")
+
+
+def test_ff_main_is_off_by_default(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.on("git", "rev-parse", "--abbrev-ref", "HEAD", answer=(0, "main"))
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    lq.drain(env)
+    assert not r.matching("git", "merge")
+
+
+def test_ff_main_skips_a_dirty_tree_and_logs_it(env: lq.Env) -> None:
+    env.ff_main = True
+    r = runner_of(env)
+    r.on("git", "rev-parse", "--abbrev-ref", "HEAD", answer=(0, "main"))
+    r.on("git", "status", "--porcelain", answer=(0, " M x.py"))
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    lq.drain(env)
+    assert not r.matching("git", "merge")
+    assert "FF-MAIN skipped: working tree is dirty" in (env.state / "done.log").read_text(encoding="utf-8")
+
+
+def test_ff_main_skips_when_index_lock_exists(env: lq.Env, tmp_path: Path) -> None:
+    env.ff_main = True
+    gitdir = tmp_path / "gd"
+    gitdir.mkdir()
+    (gitdir / "index.lock").write_text("", encoding="utf-8")
+    r = runner_of(env)
+    r.on("git", "rev-parse", "--abbrev-ref", "HEAD", answer=(0, "main"))
+    r.on("git", "rev-parse", "--absolute-git-dir", answer=(0, str(gitdir)))
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    lq.drain(env)
+    assert not r.matching("git", "merge")
+    assert "FF-MAIN skipped: index.lock" in (env.state / "done.log").read_text(encoding="utf-8")
+
+
+def test_ff_main_failure_is_logged(env: lq.Env) -> None:
+    env.ff_main = True
+    r = runner_of(env)
+    r.on("git", "rev-parse", "--abbrev-ref", "HEAD", answer=(0, "main"))
+    r.on("git", "merge", answer=(1, "not possible to fast-forward"))
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    lq.drain(env)
+    assert "FF-MAIN failed" in (env.state / "done.log").read_text(encoding="utf-8")
+
+
+def test_an_interrupted_item_is_recorded_failed_on_the_next_start(env: lq.Env) -> None:
+    st = lq.State(env.state)
+    st.append_queue("feat/1-x|aaa|1|0|t (#1)")
+    it = parsed("feat/1-x|aaa|1|0|t (#1)")
+    st.mark_taken(it)
+    st.set_inflight(it, "waiting for checks on #7")
+    lq.drain(env)
+    assert "FAILED interrupted feat/1-x @ aaa" in (env.state / "done.log").read_text(encoding="utf-8")
+    assert st.inflight() is None
+    assert st.retry("feat/1-x@aaa") is True
+
+
+def test_an_inflight_item_that_already_has_a_verdict_is_not_failed_again(env: lq.Env) -> None:
+    st = lq.State(env.state)
+    it = parsed("feat/1-x|aaa|1|0|t (#1)")
+    st.append_done("MERGED #7 feat/1-x @ aaa")
+    st.set_inflight(it, "x")
+    lq.drain(env)
+    assert "interrupted" not in (env.state / "done.log").read_text(encoding="utf-8")
+
+
+def test_ls_remote_matches_the_exact_ref_and_checks_rc(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("git", "ls-remote", answer=(0, "deadbeef\trefs/heads/feat/1-x-extra\n"))
+    lq.process_item(env, item())
+    assert "--land-branch" not in r.matching("py")[0]  # a longer branch name is not this branch
+    r.first("git", "ls-remote", answer=(128, "fatal: unable to access"))
+    res = lq.process_item(env, item(sha=SHA_B))
+    assert res.startswith("FAILED ls-remote rc=128") and len(r.matching("py")) == 1
+
+
+def test_json_is_parsed_from_stdout_only_and_a_parse_failure_is_logged(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "checks", "7", "--json", answer=(0, "warning: not json"))
+    assert lq._checks(env, "7") == []
+    assert "PARSE-FAIL gh pr checks 7" in (env.state / "flakes.log").read_text(encoding="utf-8")
+
+
+def test_run_command_keeps_stderr_out_of_a_successful_stdout(tmp_path: Path) -> None:
+    import sys
+
+    rc, out = lq.run_command([sys.executable, "-c", "import sys; print('[1]'); print('warn', file=sys.stderr)"], tmp_path)
+    assert rc == 0 and out == "[1]"
+    rc, out = lq.run_command([sys.executable, "-c", "import sys; print('o'); print('e', file=sys.stderr); sys.exit(2)"], tmp_path)
+    assert rc == 2 and "o" in out and "e" in out
+
+
+def test_stop_with_no_live_runner_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    state = tmp_path / "s"
+    assert lq.main(["--state", str(state), "stop"], alive=lambda pid: False) == 1
+    assert not (state / "runner.stop").exists()
+    assert "no live runner" in capsys.readouterr().out
+    (state / "runner.json").write_text(json.dumps({"pid": 5, "ts": 1.0}), encoding="utf-8")
+    assert lq.main(["--state", str(state), "stop"], alive=lambda pid: True) == 0
+    assert (state / "runner.stop").exists()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["feat/x", "zzzz", "1", "t"],
+        ["feat/x", "abc", "1", "t"],
+        ["feat/x|y", "abc1234", "1", "t"],
+        ["feat/x\ny", "abc1234", "1", "t"],
+        ["feat/x", "abc1234", "1", "a|red=lint"],
+    ],
+)
+def test_add_rejects_malformed_input(tmp_path: Path, args: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    state = tmp_path / "s"
+    assert lq.main(["--state", str(state), "add", *args]) == 1
+    assert not (state / "queue.txt").exists()
+    assert capsys.readouterr().out.startswith("ERROR:")
+
+
+def test_add_accepts_a_good_line(tmp_path: Path) -> None:
+    state = tmp_path / "s"
+    assert lq.main(["--state", str(state), "add", "feat/x", "abc1234", "1", "t (#1)"]) == 0
+    assert (state / "queue.txt").read_text(encoding="utf-8") == "feat/x|abc1234|1|0|t (#1)\n"
+
+
+def test_runner_file_is_created_exclusively(env: lq.Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    flags: list[int] = []
+    real = os.open
+
+    def spy(path: object, fl: int, *a: object, **k: object) -> int:
+        flags.append(fl)
+        return real(path, fl, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", spy)
+    lq.drain(env)
+    assert any(f & os.O_EXCL for f in flags)
+
+
+def test_a_stale_runner_file_is_replaced_by_the_new_pid(env: lq.Env) -> None:
+    env.alive = lambda pid: False
+    env.pid = 77
+    (env.state).mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    seen: list[int] = []
+    st = lq.State(env.state)
+    st.append_queue("feat/1-x|aaa|1|0|t (#1)")
+    original = runner_of(env).__call__
+
+    def spy(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
+        if argv[:1] == ["py"]:
+            seen.append(int(json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["pid"]))
+        return original(argv, cwd)
+
+    env.runner = spy
+    lq.drain(env)
+    assert seen == [77]
