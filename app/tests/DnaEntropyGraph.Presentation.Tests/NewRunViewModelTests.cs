@@ -135,6 +135,72 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task After_a_run_starts_the_page_is_empty_for_the_next_one()
+    {
+        // Issue #527: the ViewModel outlives the page, so a started run must leave a clean New run page behind.
+        var path = Write("started.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _viewModel.PasteText = "half typed";
+        _viewModel.IsTreatingAsRna = true;
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        _viewModel.SelectedItem.ShouldBeNull();
+        _viewModel.PasteText.ShouldBe(string.Empty);
+        _viewModel.IsTreatingAsRna.ShouldBeFalse();
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeFalse();
+        File.Exists(path).ShouldBeTrue("the user's own file is never touched (Hard Rule 14)");
+    }
+
+    [Fact]
+    public async Task A_start_that_fails_keeps_the_files_so_the_user_can_try_again()
+    {
+        var path = Write("again.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns<Task<string>>(_ => throw new InvalidOperationException("no"));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.Select(i => i.Path).ShouldBe([path]);
+        _viewModel.SelectedItem.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task Leaving_and_coming_back_keeps_the_files_and_the_selection()
+    {
+        var a = Write("a.fasta", ">a\n" + Dna + "\n");
+        var b = Write("b.fasta", ">b\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(a, b));
+        _viewModel.SelectedItem = _viewModel.Items[1];
+
+        _viewModel.DetachFromIntake();
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(null);
+
+        _viewModel.Items.Select(i => i.Path).ShouldBe([a, b]);
+        _viewModel.SelectedItem.ShouldBeSameAs(_viewModel.Items[1]);
+    }
+
+    [Fact]
+    public async Task After_a_run_starts_the_other_pasted_copies_are_deleted_but_the_started_ones_stays_for_its_run()
+    {
+        // The started run's input is staged before StartRunAsync returns, but a retry restages from the recorded path, so that copy stays.
+        _viewModel.PasteText = Dna;
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        var started = _viewModel.Items.Single();
+        _viewModel.PasteText = Dna + "ACGT";
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        var other = _viewModel.Items.Last();
+        _viewModel.SelectedItem = started;
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        File.Exists(started.Path).ShouldBeTrue();
+        File.Exists(other.Path).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task A_file_with_a_problem_cannot_be_run()
     {
         await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));

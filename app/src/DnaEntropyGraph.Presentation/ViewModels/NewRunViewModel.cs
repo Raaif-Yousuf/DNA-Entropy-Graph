@@ -749,6 +749,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     {
         var group = _shownOutputGroup!.Value;
         var outputs = _outputSelections[group];
+        var startedItem = SelectedItem!;
         var options = new RunOptions
         {
             ModelId = DefaultModelId,
@@ -791,6 +792,28 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             // Also when the navigation throws: the run is paid for, so its choice is still remembered.
             RememberOutputs(group, outputs);
+
+            // Issue #527: this ViewModel outlives the page, so a started run leaves a clean page for the next one.
+            await ResetForNextRunAsync(startedItem);
+        }
+    }
+
+    /// <summary>
+    /// Empties the page once a run has started (issue #527): the files, the paste box and the RNA choice. Pasted copies of the files
+    /// that were not run are deleted like a Remove would; the copy behind the run that started stays, because a retry restages from
+    /// its recorded path. The user's own files are never touched (Hard Rule 14).
+    /// </summary>
+    private async Task ResetForNextRunAsync(InputPillItem startedItem)
+    {
+        var dropped = Items.ToList();
+        Items.Clear();
+        SelectedItem = null;
+        PasteText = string.Empty;
+        IsTreatingAsRna = false;
+        OnPropertyChanged(nameof(OfferTreatAsRna));
+        foreach (var item in dropped.Where(item => !ReferenceEquals(item, startedItem)))
+        {
+            await DeleteSavedPasteAsync(item);
         }
     }
 

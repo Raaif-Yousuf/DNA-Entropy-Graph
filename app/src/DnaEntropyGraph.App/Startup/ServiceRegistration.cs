@@ -340,7 +340,8 @@ public static class ServiceRegistration
         services.AddTransient<SetupStepsViewModel>();
         services.AddTransient<WizardViewModel>();
         services.AddTransient<PresetPickerViewModel>();
-        services.AddTransient<NewRunViewModel>();
+        // Issue #527: one instance for the app, so the files on the New run page survive a trip to another page and back; it empties itself when a run starts.
+        services.AddSingleton<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
         // Issues #72/#73: the igv.js viewer page's state and its WebView2 host.

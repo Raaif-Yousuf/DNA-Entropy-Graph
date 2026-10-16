@@ -222,6 +222,13 @@ left as unnecessary caution.
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
+`NewRunViewModel` is a singleton (issue #527): a new page instance resolves the same ViewModel, so the files,
+the selection, the paste box and the RNA choice survive a trip to Runs and back (MEASURED 2026-10-03: it was
+transient and the list was empty after returning). It empties itself only when a run starts successfully
+(`StartRunAsync`): Items, selection, PasteText and IsTreatingAsRna. Pasted copies of the files that were NOT run
+are deleted as a Remove would; the copy behind the run that started stays (a retry restages from its recorded
+path). A start that fails keeps everything. Not persisted across app restarts.
+
 - **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
   The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
   `WindowHandleProvider` singleton. The picker and a dropped folder share one extension list,

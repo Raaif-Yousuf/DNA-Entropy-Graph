@@ -72,15 +72,17 @@ public sealed class PresetPickerTests : IDisposable
         await AddFasta();
 
         Picker.SelectedItem = Item("plasmid_qc");
+        // Read before Run: a started run empties the page (issue #527), and the summary describes the run about to start.
+        var summary = Picker.SummaryText;
         await _viewModel.StartRunCommand.ExecuteAsync(null);
 
         await _jobEngine.Received(1).StartRunAsync(
             Arg.Is<RunOptions>(o => o.Topology == Topology.Circular && o.Direction == Direction.BothCombined
                 && o.OutputFiles.HasFlag(OutputFileKinds.Regions) && o.PresetId == "plasmid_qc" && o.PresetName == "Plasmid QC"),
             Arg.Any<CancellationToken>());
-        Picker.SummaryText.ShouldContain("both strands combined");
-        Picker.SummaryText.ShouldContain("a circle");
-        Picker.SummaryText.ShouldContain("Regions");
+        summary.ShouldContain("both strands combined");
+        summary.ShouldContain("a circle");
+        summary.ShouldContain("Regions");
     }
 
     [Fact]

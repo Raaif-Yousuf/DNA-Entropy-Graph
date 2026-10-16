@@ -22,6 +22,8 @@ On the **New run** page, either:
   click **Add sequence**. A counter under the box shows how many bases you pasted. Pasted
   letters are saved in the app's own folder, never next to your files.
 
+The files you add stay on **New run** if you visit another page and come back. Once you press **Run**, the page is cleared, ready for the next run.
+
 You can add more than one file at once. For now each press of **Run** runs the file you
 have selected in the list (running several files together as one batch is not built yet),
 and the batch limits below describe where that work is heading. When it arrives it gives you
