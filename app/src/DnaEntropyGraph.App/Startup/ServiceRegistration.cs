@@ -71,6 +71,9 @@ public static class ServiceRegistration
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
         services.AddSingleton<InAppMessageCenter>();
         services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());
+        // Issue #701: the high contrast state behind the window theme, and the listener that re-applies it when it changes at runtime.
+        services.AddSingleton<IHighContrastSource, AccessibilityHighContrastSource>();
+        services.AddSingleton<HighContrastThemeReapplier>();
         services.AddSingleton<WindowThemeApplier>();
         services.AddSingleton<IThemeApplier>(sp => sp.GetRequiredService<WindowThemeApplier>());
         services.AddSingleton<WindowHandleProvider>();
