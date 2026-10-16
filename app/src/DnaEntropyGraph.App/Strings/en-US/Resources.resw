@@ -1012,6 +1012,33 @@
   <data name="RunsRefreshButton.Content" xml:space="preserve">
     <value>Refresh</value>
   </data>
+  <data name="RunsImportButton.Content" xml:space="preserve">
+    <value>Find runs from other computers</value>
+  </data>
+  <data name="Runs_Import_Running" xml:space="preserve">
+    <value>Looking in your cloud results for runs from other computers...</value>
+  </data>
+  <data name="Runs_Import_None" xml:space="preserve">
+    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
+  </data>
+  <data name="Runs_Import_Done_One" xml:space="preserve">
+    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
+  </data>
+  <data name="Runs_Import_Done_Many" xml:space="preserve">
+    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
+  </data>
+  <data name="Runs_Import_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed" xml:space="preserve">
+    <value>Could not look for runs from other computers. Check your internet connection, then choose Find runs from other computers again.</value>
+  </data>
+  <data name="Runs_Imported_Badge" xml:space="preserve">
+    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
+    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+  </data>
   <data name="RunsOpenButton.Content" xml:space="preserve">
     <value>Open</value>
   </data>

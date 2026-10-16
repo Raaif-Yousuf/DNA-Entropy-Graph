@@ -33,6 +33,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly IGcpAccount _account;
     private readonly TimeProvider _time;
     private readonly IEntropyOverviewSource? _overview;
+    private readonly IRunImporter? _importer;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
 
@@ -62,9 +63,11 @@ public sealed partial class HistoryViewModel : ObservableObject
         IShellLauncher launcher,
         IGcpAccount account,
         TimeProvider time,
-        IEntropyOverviewSource? overview = null)
+        IEntropyOverviewSource? overview = null,
+        IRunImporter? importer = null)
     {
         _overview = overview;
+        _importer = importer;
         _runRepository = runRepository;
         _remover = remover;
         _navigator = navigator;
@@ -86,6 +89,57 @@ public sealed partial class HistoryViewModel : ObservableObject
             new(RunStatusFilter.Cancelled, _strings.GetString("Runs_Filter_Cancelled")),
         ];
         _selectedStatusFilter = StatusFilters[0];
+    }
+
+    [ObservableProperty]
+    private bool _isImporting;
+
+    [ObservableProperty]
+    private string _importStatusText = string.Empty;
+
+    public bool CanImport => _importer is not null;
+
+    /// <summary>
+    /// Issue #111: finds finished runs other computers left in this project's results bucket and adds them as read-only rows.
+    /// The result is a status line on the page (what was found, or the one thing to do), never an escaped exception.
+    /// </summary>
+    [RelayCommand(AllowConcurrentExecutions = false)]
+    private async Task ImportRunsAsync(CancellationToken cancellationToken)
+    {
+        if (_importer is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_account.SelectedProjectId))
+        {
+            ImportStatusText = _strings.GetString(RunsCopy.ImportNoProject);
+            return;
+        }
+
+        IsImporting = true;
+        ImportStatusText = _strings.GetString(RunsCopy.ImportRunning);
+        try
+        {
+            var result = await _importer.ImportAsync(_account.SelectedProjectId, cancellationToken);
+            ImportStatusText = _strings.GetString(result.Imported switch { 0 => RunsCopy.ImportNone, 1 => RunsCopy.ImportDoneOne, _ => RunsCopy.ImportDoneMany });
+            if (result.Imported > 0)
+            {
+                await RefreshAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ImportStatusText = string.Empty;
+        }
+        catch (Exception)
+        {
+            ImportStatusText = _strings.GetString(RunsCopy.ImportFailed);
+        }
+        finally
+        {
+            IsImporting = false;
+        }
     }
 
     public IReadOnlyList<RunStatusFilterOption> StatusFilters { get; }
@@ -233,7 +287,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             DeleteCloudHint(run),
             ReasonFor(run),
             new AsyncRelayCommand(() => OpenAsync(run)),
-            new AsyncRelayCommand(() => RerunAsync(run), () => IsFinished(run.Phase)),
+            new AsyncRelayCommand(() => RerunAsync(run), () => IsFinished(run.Phase) && !run.Imported),
             new AsyncRelayCommand(() => RedownloadAsync(run)),
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
@@ -241,11 +295,15 @@ public sealed partial class HistoryViewModel : ObservableObject
             OwnerRequestFor(run))
         {
             PresetText = PresetLine(run),
+            IsImported = run.Imported,
+            ImportedText = run.Imported ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
         };
     }
 
     /// <summary>The "Preset: name" line of a run started from an option preset (issue #136), read from the options the run recorded.</summary>
+    private static string ShortInstallation(string? id) => string.IsNullOrWhiteSpace(id) ? "?" : id.Length > 8 ? id[..8] : id;
+
     private string? PresetLine(RunRecord run)
         => RunOptionsJson.TryDeserialize(run.OptionsJson)?.PresetName is { Length: > 0 } name
             ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.PresetLine), name)
@@ -300,7 +358,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             return null;
         }
 
-        var key = !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
+        var key = run.Imported ? RunsCopy.DeleteCloudHintImported
+            : !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
             : !_cloud.IsAvailable(run) ? RunsCopy.DeleteCloudHintNoCopy
             : RunsCopy.DeleteCloudHintNotConnected;
         return _strings.GetString(key);

@@ -37,6 +37,14 @@ public static class RunsCopy
     /// <summary>The clause naming who is to receive the role (<c>{0}</c> the signed-in email), the request text's <c>{3}</c>; left out when nobody is signed in.</summary>
     public const string OwnerRequestGrantee = "Runs_OwnerRequest_Grantee";
     public const string PresetLine = "Runs_PresetLine";
+    public const string DeleteCloudHintImported = "Runs_DeleteCloud_Hint_Imported";
+    public const string ImportedBadge = "Runs_Imported_Badge";
+    public const string ImportRunning = "Runs_Import_Running";
+    public const string ImportNone = "Runs_Import_None";
+    public const string ImportDoneOne = "Runs_Import_Done_One";
+    public const string ImportDoneMany = "Runs_Import_Done_Many";
+    public const string ImportNoProject = "Runs_Import_NoProject";
+    public const string ImportFailed = "Runs_Import_Failed";
 
     public static readonly RunsMessage OwnerRequestCopied = Pair("Runs_OwnerRequest_Copied_Title", "Runs_OwnerRequest_Copied_Body", ToastSeverity.Success);
     public static readonly RunsMessage OwnerRequestCopyFailed = Pair("Runs_OwnerRequest_CopyFailed_Title", "Runs_OwnerRequest_CopyFailed_Body", ToastSeverity.Error);
@@ -95,6 +103,7 @@ public static class RunsCopy
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
+        DeleteCloudHintImported, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed,
         RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),

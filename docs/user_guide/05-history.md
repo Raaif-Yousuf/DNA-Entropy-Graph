@@ -49,8 +49,15 @@ When something you did finishes or cannot finish (a delete, a download, a new th
 Two computers signed into the same Google account do not automatically see each other's
 run history, since each computer only remembers its own runs. If you need to see runs
 made from another computer, use **Find runs from other computers** on the Runs page: it
-looks through your cloud storage for any runs it can find and adds them to your list as
-read-only entries.
+looks through the results storage of the Google Cloud project you chose for finished runs this
+computer does not know, and adds them to your list. A line under the progress text says how many
+it added, or what to do if it could not look.
+
+An added run says on its row which computer made it. It is read-only here: you can open it
+after **Download again** has fetched its files, and you can **Remove from list**, but you cannot
+run it again or delete its cloud copy from this computer (do that from the computer that made
+it). A run already in your list is never added twice, and a run that is still going, or whose
+files were already deleted from the cloud, is not listed.
 
 ## Related
 
