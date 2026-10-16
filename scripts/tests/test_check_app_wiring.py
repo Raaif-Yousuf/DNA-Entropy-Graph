@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -1117,3 +1119,52 @@ def test_a_cast_bodied_factory_registers_what_it_returns_not_the_implementation(
         },
     )
     assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Foo"]
+
+
+# --- #601 follow-up: the generic-argument scanners are bounded (a premerge guard must never stall a landing) -----
+
+_PATHOLOGICAL = {
+    "unbalanced_adds": "s.AddSingleton<" * 1500,
+    "unbalanced_resolves": "sp.GetRequiredService<" * 1500,
+    "deep_nesting": "sp.GetRequiredService<" + "A<" * 3000 + "B" + ">" * 3000 + ">()",
+    "ten_k_line_no_close": "sp.GetRequiredService<" + "IFoo, " * 2000,
+    "comparisons": "if (a < b && c < d) " * 600,
+    "long_property_line": "public " + "Dictionary<string, " * 600 + "int" + ">" * 600 + " Name",
+}
+
+_CHILD = r"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import check_app_wiring as caw
+root = Path(sys.argv[2])
+start = time.perf_counter()
+caw.collect_findings(root)
+print(f"{time.perf_counter() - start:.3f}")
+"""
+
+
+def _pathological_tree(root: Path, body: str) -> Path:
+    registration = "public static class ServiceRegistration {\n  void A(IServiceCollection s, IServiceProvider sp) {\n" + body + "\n  }\n}\n"
+    return _tree(
+        root,
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": registration,
+            "src/Demo.Presentation/ThingViewModel.cs": "public sealed class ThingViewModel {\n" + body + " { get; set; }\n}\n",
+            "src/Demo.App/Views/ThingPage.xaml": '<Page><TextBlock Text="{x:Bind Name}" /></Page>',
+        },
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_PATHOLOGICAL))
+def test_pathological_generic_input_is_scanned_in_linear_time(tmp_path, name):
+    root = _pathological_tree(tmp_path / "w", _PATHOLOGICAL[name])
+    result = subprocess.run(
+        [sys.executable, "-c", _CHILD, str(SCRIPTS_DIR), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=30,  # a hang fails here instead of stalling the suite
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert float(result.stdout.strip()) < 2.0, f"{name} took {result.stdout.strip()}s"

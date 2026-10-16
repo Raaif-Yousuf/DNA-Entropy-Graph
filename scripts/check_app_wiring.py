@@ -240,6 +240,8 @@ _GET_SERVICE = re.compile(r"\.Get(?:Required)?Service\s*<\s*([\w\.]+)\s*>")
 # is cut by balanced scanning (#601: `GetRequiredService<IOptions<X>>()` is one generic type, not a skipped match).
 _GET_REQUIRED_SERVICE_OPEN = re.compile(r"\.GetRequiredService\s*<")
 # A generic type parameter (`GetRequiredService<T>()` in a helper) names no concrete registration.
+# A generic argument list longer than this is not a type this guard reads (and bounds every scan, #601).
+_GENERIC_ARGUMENT_LIMIT = 400
 _TYPE_PARAMETER = re.compile(r"^T(?:[A-Z]?|Service|Impl\w*)$")
 
 
@@ -562,14 +564,20 @@ def _cut_default(token: str) -> tuple[str, bool]:
     return token, False
 
 
-def _balanced_end(text: str, start: int, open_char: str, close_char: str) -> int | None:
+def _balanced_end(text: str, start: int, open_char: str, close_char: str, limit: int | None = None) -> int | None:
     """Index of the bracket that closes the one at `text[start]`, skipping string and char literals; None when it
-    never closes (#478: a regex `([^)]*)` stops at the first `)` of a default such as `= default(T)`)."""
+    never closes (#478: a regex `([^)]*)` stops at the first `)` of a default such as `= default(T)`).
+
+    `limit` caps how far past `start` the scan may go (linear per call, so a file full of unclosed `<` stays linear
+    overall, #601). A generic argument list never holds `;`, `{` or `}`, so for `<` the scan also ends at those."""
     depth = 0
     quote = ""
     index = start
-    while index < len(text):
+    end = len(text) if limit is None else min(len(text), start + limit)
+    while index < end:
         char = text[index]
+        if open_char == "<" and not quote and char in ";{}":
+            return None
         if quote:
             if char == "\\":
                 index += 1
@@ -602,7 +610,7 @@ def _add_service_calls(text: str) -> list[tuple[str, int]]:
     calls: list[tuple[str, int]] = []
     for match in _ADD_SERVICE_OPEN.finditer(text):
         open_at = match.end() - 1
-        close_at = _balanced_end(text, open_at, "<", ">")
+        close_at = _balanced_end(text, open_at, "<", ">", _GENERIC_ARGUMENT_LIMIT)
         if close_at is None:
             continue
         arguments = text[open_at + 1 : close_at]
@@ -616,7 +624,7 @@ def _required_resolves(text: str) -> list[tuple[str, int]]:
     `IOptions<X>` is one type; `IServiceProvider` itself is not a registration."""
     resolves: list[tuple[str, int]] = []
     for match in _GET_REQUIRED_SERVICE_OPEN.finditer(text):
-        close_at = _balanced_end(text, match.end() - 1, "<", ">")
+        close_at = _balanced_end(text, match.end() - 1, "<", ">", _GENERIC_ARGUMENT_LIMIT)
         if close_at is None:
             continue
         resolved = _normalise_type(text[match.end() : close_at])
