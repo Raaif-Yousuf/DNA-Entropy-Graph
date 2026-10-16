@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>DnaEntropyGraph.LocalEngine.Tests</AssemblyName>
+    <RootNamespace>DnaEntropyGraph.LocalEngine.Tests</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.Testing.Extensions.HangDump" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NSubstitute" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- One virtual clock for the repo's tests (#525); compiled into this assembly, not referenced. -->
+    <Compile Include="..\DnaEntropyGraph.Cloud.Tests\VirtualTimeProvider.cs" Link="VirtualTimeProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.LocalEngine\DnaEntropyGraph.LocalEngine.csproj" />
+  </ItemGroup>
+
+</Project>
