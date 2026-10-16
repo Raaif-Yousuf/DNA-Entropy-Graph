@@ -34,6 +34,7 @@ public sealed class NewRunAccessionTests
             _estimates,
             new OutputSelectionStore(Substitute.For<ISettingsStore>()),
             Substitute.For<IDiagnosticsLog>(),
+            TestGpu.Plan(),
             offerAccession: offer,
             accessionLookup: noLookup ? null : lookup ?? _lookup);
 

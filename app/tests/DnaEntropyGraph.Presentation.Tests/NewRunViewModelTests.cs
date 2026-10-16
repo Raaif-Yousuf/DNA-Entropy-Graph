@@ -59,6 +59,7 @@ public sealed class NewRunViewModelTests : IDisposable
         _estimates,
         new OutputSelectionStore(Substitute.For<ISettingsStore>()),
         _log,
+        TestGpu.Plan(),
         validate,
         files);
 
@@ -1003,19 +1004,19 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task The_estimate_and_the_card_price_the_same_options_the_run_starts_with_including_Spot_and_the_tier()
+    public async Task Choosing_the_A100_in_the_planner_makes_the_estimate_and_the_card_price_a2_highgpu_1g_and_Run_start_the_same_machine()
     {
         EstimateReturns(Point(9, 0.13));
-        _viewModel.SpotVm = true;
-        _viewModel.GpuTier = GpuTier.A100_40;
+        _viewModel.Gpu.SelectedGpu = _viewModel.Gpu.Gpus.Single(g => g.Tier == GpuTier.A100_40);
+        var spot = _viewModel.Gpu.RequiresSpot;
 
         await AddOne(Write("spot.fasta", ">a\n" + Dna + "\n"));
         await EstimateTextWhen(t => t.Length > 0);
 
-        await _estimates.Received().EstimateAsync("a2-highgpu-1g", true, Dna.Length, 150, Arg.Any<CancellationToken>());
+        await _estimates.Received().EstimateAsync("a2-highgpu-1g", spot, Dna.Length, 150, Arg.Any<CancellationToken>());
         await _viewModel.StartRunCommand.ExecuteAsync(null);
         await _jobEngine.Received().StartRunAsync(
-            Arg.Is<RunOptions>(o => o.SpotVm && o.GpuTier == GpuTier.A100_40),
+            Arg.Is<RunOptions>(o => o.SpotVm == spot && o.GpuTier == GpuTier.A100_40),
             Arg.Any<CancellationToken>());
     }
 
@@ -1257,7 +1258,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         _viewModel = new NewRunViewModel(
             _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
-            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog(), TestGpu.Plan());
         await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
         _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<string>(new InvalidOperationException("boom")));
@@ -1272,7 +1273,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         _viewModel = new NewRunViewModel(
             _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
-            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog(), TestGpu.Plan());
         _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("COM")));
 

@@ -342,6 +342,9 @@ public static class ServiceRegistration
         services.AddTransient<SetupStepsViewModel>();
         services.AddTransient<WizardViewModel>();
         services.AddTransient<PresetPickerViewModel>();
+        // Issue #87: the New run page's linked model and graphics card pickers, over the one shipped catalog.
+        services.AddSingleton<GpuCatalog>(_ => GpuCatalog.Shipped);
+        services.AddTransient<GpuPlanViewModel>();
         services.AddTransient<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();

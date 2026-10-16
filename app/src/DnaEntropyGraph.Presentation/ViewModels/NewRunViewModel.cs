@@ -20,18 +20,11 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// </summary>
 public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 {
-    // The model the New run page runs. There is no model picker on the page yet (a bigger model needs a confirmation
-    // and a cost estimate first), so this is the one model the app offers, not a property nothing binds.
+    // The model the page starts with, used where a default RunOptions is wanted (the boot disk and context length defaults). The model a run
+    // really uses comes from the linked pickers (Gpu, issue #87), which start on the first model the catalog offers: this one.
     private const string DefaultModelId = "evo2_7b";
 
-    /// <summary>
-    /// Whether the next run asks for a Spot VM. The one setting a Spot picker (issue #91's UI) writes: <see cref="BuildRunOptions"/> reads it, and that
-    /// one builder feeds both the start and the cost estimate and cap card, so what is priced is what is started. False (on-demand) until a picker sets it.
-    /// </summary>
-    public bool SpotVm { get; set; }
-
-    /// <summary>The GPU tier of the next run; written by a tier picker (issue #87) and read through <see cref="BuildRunOptions"/> like <see cref="SpotVm"/>.</summary>
-    public GpuTier GpuTier { get; set; } = GpuTier.CheapestAvailable;
+    // The tier and the VM kind (on-demand, or Spot where the tier is Spot-only) come from the Gpu pickers and feed both StartRunAsync and the estimate.
 
     // A count of this many characters or fewer is worked out on the spot; a bigger paste is counted off the UI thread.
     private const int InlineCountLimit = 20_000;
@@ -103,6 +96,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         ICostEstimateService estimates,
         OutputSelectionStore outputStore,
         IDiagnosticsLog log,
+        GpuPlanViewModel gpu,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null,
         NewRunIntake? intake = null,
@@ -113,6 +107,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         bool? offerAccession = null,
         IAccessionLookup? accessionLookup = null)
     {
+        // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
+        Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
+        Gpu.Changed += OnGpuPlanChanged;
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _accessionLookup = accessionLookup;
         _clipboard = clipboard;
@@ -207,6 +204,15 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     partial void OnAccessionStartTextChanged(string value) => AccessionMessage = string.Empty;
 
     partial void OnAccessionEndTextChanged(string value) => AccessionMessage = string.Empty;
+
+    /// <summary>The linked model and graphics card pickers (issue #87): what a run uses, what it costs, and whether Run waits for a confirmation.</summary>
+    public GpuPlanViewModel Gpu { get; }
+
+    private void OnGpuPlanChanged()
+    {
+        StartRunCommand.NotifyCanExecuteChanged();
+        _ = RefreshEstimateAsync();
+    }
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -926,7 +932,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// </summary>
     private RunOptions BuildRunOptions(InputPillItem item, OutputFileKinds outputs) => new()
     {
-        ModelId = DefaultModelId,
+        ModelId = Gpu.ModelId,
         RunTarget = "Cloud",
         InputPath = item.IsAccession ? null : item.Path,
         AnnotationPath = item.AnnotationPath,
@@ -938,8 +944,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Topology = Presets?.Topology ?? Topology.Auto,
         PresetId = Presets?.PresetId,
         PresetName = Presets?.PresetName,
-        GpuTier = GpuTier,
-        SpotVm = SpotVm,
+        GpuTier = Gpu.Tier,
+        SpotVm = Gpu.RequiresSpot,
         OutputFiles = outputs,
         // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
         TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
@@ -958,7 +964,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && !IsSpendCapBlocked;
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && !IsSpendCapBlocked && Gpu.IsRunnable;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {

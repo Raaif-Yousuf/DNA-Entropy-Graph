@@ -68,6 +68,13 @@ reasonable for most sequences.
 - **Model**: which version of the analysis model to use. The default, `evo2_7b`, is the
   right choice for almost everyone. Bigger models exist and cost more; the app will warn
   you and ask you to confirm before using one.
+- **Graphics card (GPU)**: under **Model and graphics card (GPU)** you can choose which rented graphics card the run uses. **Automatic** is the
+  cheapest one that can run the model and is the right choice for almost everyone. The list also offers an A100 with 40 GB or 80 GB, which costs more
+  and is only worth it for very long sequences; the **Estimate** line follows the card you pick. When more than one model is offered, the
+  model picker appears here too, and the two are linked: choosing a model that needs a bigger card switches the card for you (a line under the
+  pickers says so), and choosing a card switches the model if it cannot run the current one. A card that cannot run the chosen model shows a
+  lock and says why. **Lock model** and **Lock graphics card** keep one choice where it is; if that makes a pair that will not run, the
+  page warns you and **Run** waits until you tick **Run anyway**.
 - **Find genes**: on by default for pasted or FASTA sequences (this predicts gene
   locations for you); off automatically for GenBank input, since a GenBank file already
   has its own genes recorded, and those are used instead.
