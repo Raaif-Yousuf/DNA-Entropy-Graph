@@ -91,6 +91,16 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void New_run_resolves_with_its_option_preset_picker_not_without_one()
+    {
+        // Issue #136's wired-to-nothing observable: the picker is an optional constructor argument, so a missing registration
+        // would not fail resolution; the page would just show an empty picker. Presets must be there.
+        using var provider = BuildRealServiceProvider();
+
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>().Presets.ShouldNotBeNull();
+    }
+
+    [Fact]
     public void Every_Presentation_facing_and_Cloud_gateway_interface_resolves()
     {
         using var provider = BuildRealServiceProvider();
@@ -238,6 +248,38 @@ public class DiResolutionTests
         var wizard = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.WizardViewModel>();
         wizard.SetupSteps.ShouldNotBeNull();
         wizard.ProjectRow.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void The_real_google_composition_hands_the_gateway_the_saved_results_retention_at_each_use()
+    {
+        // Issue #114's wired-to-nothing observable: the options the real storage gateway is built from read the retention setting.
+        // Before the fix nothing set ResultsRetentionDays, so the bucket rule stayed at 90 whatever the setting said.
+        var root = Path.Combine(Path.GetTempPath(), "deg-114-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var services = new ServiceCollection();
+            services.AddDnaEntropyGraph(appDataRoot: root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Google);
+            using var provider = services.BuildServiceProvider();
+            var options = provider.GetRequiredService<DnaEntropyGraph.Cloud.Rest.GoogleCloudOptions>();
+            var settings = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.ISettingsStore>();
+
+            options.ResultsRetentionDays.ShouldBe(90);
+            settings.SetString(DnaEntropyGraph.Core.Cloud.ResultsRetentionSetting.Key, "30");
+            options.ResultsRetentionDays.ShouldBe(30);
+
+            // The Settings control itself: choosing a length in the real ViewModel changes what the gateway's options read.
+            var vm = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.CloudResultsSettingsViewModel>();
+            vm.SelectedChoice = vm.Choices.Single(c => c.Days == 180);
+            options.ResultsRetentionDays.ShouldBe(180);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     [Fact]

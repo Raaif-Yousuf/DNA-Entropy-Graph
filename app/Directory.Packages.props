@@ -10,6 +10,9 @@
     <!-- App installer and updater (MIT). vpk 1.2.161 pairs with this version. -->
     <PackageVersion Include="Velopack" Version="1.2.161" />
 
+    <!-- App: the entropy overview chart on Results (issue #118). MIT. Pulls ScottPlot (MIT), SkiaSharp and HarfBuzzSharp (MIT). Only DnaEntropyGraph.App references it. -->
+    <PackageVersion Include="ScottPlot.WinUI" Version="5.1.59" />
+
     <!-- Presentation (MVVM), no WinUI reference -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 

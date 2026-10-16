@@ -212,11 +212,7 @@ class _ReadCollector(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
 
     def _record(self, keys: list[str]) -> None:
-        target = (
-            self.scan.serialization_reads
-            if any(m in cuf.SERIALIZATION_METHODS for m in self.method_stack)
-            else self.scan.real_reads
-        )
+        target = self.scan.serialization_reads if any(m in cuf.SERIALIZATION_METHODS for m in self.method_stack) else self.scan.real_reads
         target.update(keys)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -247,9 +243,7 @@ class _ReadCollector(ast.NodeVisitor):
 def _load_specs(spec_module: Path) -> tuple[SpecScan, set[str], ast.Module]:
     rel = spec_module.as_posix()
     tree = ast.parse(spec_module.read_text(encoding="utf-8"), filename=rel)
-    classes = [
-        node for node in tree.body if isinstance(node, ast.ClassDef) and cuf.DATACLASS_DECORATORS & cuf._decorator_names(node)
-    ]
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef) and cuf.DATACLASS_DECORATORS & cuf._decorator_names(node)]
     specs = {node.name for node in classes}
     scan = SpecScan()
     for node in classes:
@@ -307,19 +301,13 @@ def find_findings(scan: SpecScan) -> list[cuf.Finding]:
         if key in scan.real_reads:
             continue
         if key in scan.serialization_reads:
-            findings.append(
-                cuf.Finding(key, "SERIALIZED-ONLY", fd.path, fd.line, "read only while serializing, never acted on")
-            )
+            findings.append(cuf.Finding(key, "SERIALIZED-ONLY", fd.path, fd.line, "read only while serializing, never acted on"))
         else:
-            findings.append(
-                cuf.Finding(key, "UNREAD", fd.path, fd.line, "no attribute read of this class's field resolves anywhere")
-            )
+            findings.append(cuf.Finding(key, "UNREAD", fd.path, fd.line, "no attribute read of this class's field resolves anywhere"))
     return findings
 
 
-def check_specs(
-    spec_module: Path, read_roots: list[Path], allowlist_path: Path
-) -> tuple[list[cuf.Finding], list[str]]:
+def check_specs(spec_module: Path, read_roots: list[Path], allowlist_path: Path) -> tuple[list[cuf.Finding], list[str]]:
     if not spec_module.exists():
         raise SystemExit(f"ERROR: spec module not found: {spec_module}")
     scan = scan_specs(spec_module, read_roots)
@@ -362,14 +350,7 @@ _FIXTURE_SPECS = (
     "    def go(self):\n"
     "        return self.spec.used\n"
 )
-_FIXTURE_OTHER = (
-    "from dataclasses import dataclass\n"
-    "@dataclass\n"
-    "class Plan:\n"
-    "    ignored: int = 0\n"
-    "def use(p: Plan):\n"
-    "    return p.ignored\n"
-)
+_FIXTURE_OTHER = "from dataclasses import dataclass\n@dataclass\nclass Plan:\n    ignored: int = 0\ndef use(p: Plan):\n    return p.ignored\n"
 
 
 def self_test() -> bool:

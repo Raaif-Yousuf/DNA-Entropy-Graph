@@ -56,14 +56,17 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             throw new InvalidOperationException("The results bucket needs the installation id: a bucket without the installation-id label is invisible to the Cloud page (Hard Rule 10).");
         }
 
-        ResultsBucket.ValidateRetentionDays(_options.ResultsRetentionDays);
+        // Read the retention once for the whole call (#114) and pass it down: the option may read settings.json each time, and a change
+        // landing mid-call must not make a bucket look drifted or fail the read-back.
+        var retention = _options.ResultsRetentionDays;
+        ResultsBucket.ValidateRetentionDays(retention);
         var labels = ResultsBucket.Labels(installationId, _options.AppVersion);
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         var existing = await FindOursAsync(projectId, preferOwnInstallation: true, cancellationToken).ConfigureAwait(false);
         return existing is not null
-            ? await ConvergeAsync(existing, cancellationToken).ConfigureAwait(false)
-            : await CreateAsync(projectId, projectNumber, labels, cancellationToken).ConfigureAwait(false);
+            ? await ConvergeAsync(existing, retention, cancellationToken).ConfigureAwait(false)
+            : await CreateAsync(projectId, projectNumber, labels, retention, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
@@ -167,7 +170,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     // ------------------------------------------------------------------ create
 
-    private async Task<string> CreateAsync(string projectId, string projectNumber, IReadOnlyDictionary<string, string> labels, CancellationToken cancellationToken)
+    private async Task<string> CreateAsync(string projectId, string projectNumber, IReadOnlyDictionary<string, string> labels, int retention, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < MaxNameAttempts; attempt++)
         {
@@ -178,7 +181,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                 Location = _options.BucketLocation,
                 Labels = labels.ToDictionary(p => p.Key, p => p.Value),
                 IamConfiguration = DesiredIamConfiguration(),
-                Lifecycle = DesiredLifecycle(),
+                Lifecycle = DesiredLifecycle(retention),
             };
 
             StorageData.Bucket? created;
@@ -217,11 +220,11 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             if (replayed)
             {
                 // A replayed insert may have been the one that half-applied: repair it now (patch, read back) instead of failing.
-                await RepairAsync(created, cancellationToken).ConfigureAwait(false);
+                await RepairAsync(created, retention, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                ThrowIfNotApplied(created);
+                ThrowIfNotApplied(created, retention);
             }
 
 
@@ -232,10 +235,10 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             if (preferred is not null && !string.Equals(preferred.Name, name, StringComparison.Ordinal))
             {
                 await DeleteOwnEmptyBucketAsync(name, cancellationToken).ConfigureAwait(false);
-                return await ConvergeAsync(preferred, cancellationToken).ConfigureAwait(false);
+                return await ConvergeAsync(preferred, retention, cancellationToken).ConfigureAwait(false);
             }
 
-            await WriteConfigAsync(name, cancellationToken).ConfigureAwait(false);
+            await WriteConfigAsync(name, retention, cancellationToken).ConfigureAwait(false);
             return name;
         }
 
@@ -305,9 +308,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             },
             cancellationToken, singleRequest: true);
 
-    private async Task WriteConfigAsync(string bucket, CancellationToken cancellationToken)
+    private async Task WriteConfigAsync(string bucket, int retention, CancellationToken cancellationToken)
     {
-        var json = ResultsBucket.ConfigJson(_options.CurrentInstallationId ?? throw new InvalidOperationException("The installation id became unreadable while the bucket was being set up."), _options.AppVersion, _options.ResultsRetentionDays, _options.TimeProvider.GetUtcNow());
+        var json = ResultsBucket.ConfigJson(_options.CurrentInstallationId ?? throw new InvalidOperationException("The installation id became unreadable while the bucket was being set up."), _options.AppVersion, retention, _options.TimeProvider.GetUtcNow());
         var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(json);
         try
         {
@@ -329,25 +332,25 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     // ------------------------------------------------------------------ adopt and repair
 
-    private async Task<string> ConvergeAsync(StorageData.Bucket bucket, CancellationToken cancellationToken)
+    private async Task<string> ConvergeAsync(StorageData.Bucket bucket, int retention, CancellationToken cancellationToken)
     {
         // The config file is written whenever it is absent, also on an adopted bucket: the call that created the bucket may have
         // died before its write landed (conditional, so a file that is already there stands).
-        await RepairAsync(bucket, cancellationToken).ConfigureAwait(false);
-        await WriteConfigAsync(bucket.Name, cancellationToken).ConfigureAwait(false);
+        await RepairAsync(bucket, retention, cancellationToken).ConfigureAwait(false);
+        await WriteConfigAsync(bucket.Name, retention, cancellationToken).ConfigureAwait(false);
         return bucket.Name;
     }
 
-    private async Task RepairAsync(StorageData.Bucket bucket, CancellationToken cancellationToken)
+    private async Task RepairAsync(StorageData.Bucket bucket, int retention, CancellationToken cancellationToken)
     {
-        if (Problems(bucket).Count == 0)
+        if (Problems(bucket, retention).Count == 0)
         {
             return;
         }
 
         // Drifted (a changed retention, or a rule or setting that never applied): patch, then read back and compare. The
         // user's own lifecycle rules are kept; only the jobs/ and cache/ Delete rules are ours and are replaced.
-        var patch = new StorageData.Bucket { IamConfiguration = DesiredIamConfiguration(), Lifecycle = DesiredLifecycle(bucket.Lifecycle?.Rule) };
+        var patch = new StorageData.Bucket { IamConfiguration = DesiredIamConfiguration(), Lifecycle = DesiredLifecycle(retention, bucket.Lifecycle?.Rule) };
         await _pipeline.ExecuteAsync(
             "Storage.PatchBucket",
             async ct =>
@@ -363,7 +366,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             },
             cancellationToken, singleRequest: true).ConfigureAwait(false);
 
-        ThrowIfNotApplied(await GetAsync(bucket.Name, cancellationToken).ConfigureAwait(false));
+        ThrowIfNotApplied(await GetAsync(bucket.Name, cancellationToken).ConfigureAwait(false), retention);
     }
 
     private static StorageData.Bucket.IamConfigurationData DesiredIamConfiguration() => new()
@@ -373,12 +376,12 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     };
 
     /// <summary>Our two rules, after any rules in <paramref name="existing"/> that are not ours (a user's own lifecycle rules survive a patch).</summary>
-    private StorageData.Bucket.LifecycleData DesiredLifecycle(IEnumerable<StorageData.Bucket.LifecycleData.RuleData>? existing = null) => new()
+    private StorageData.Bucket.LifecycleData DesiredLifecycle(int retention, IEnumerable<StorageData.Bucket.LifecycleData.RuleData>? existing = null) => new()
     {
         Rule =
         [
             .. (existing ?? []).Where(r => !IsOurRule(r)),
-            DeleteRule(ResultsBucket.JobsPrefix, Math.Max(_options.ResultsRetentionDays, LongestOwnAge(existing, ResultsBucket.JobsPrefix))),
+            DeleteRule(ResultsBucket.JobsPrefix, Math.Max(retention, LongestOwnAge(existing, ResultsBucket.JobsPrefix))),
             DeleteRule(ResultsBucket.CachePrefix, Math.Max(ResultsBucket.CacheRetentionDays, LongestOwnAge(existing, ResultsBucket.CachePrefix))),
         ],
     };
@@ -409,9 +412,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     // ------------------------------------------------------------------ read-back
 
-    private void ThrowIfNotApplied(StorageData.Bucket readBack)
+    private void ThrowIfNotApplied(StorageData.Bucket readBack, int retention)
     {
-        var problems = Problems(readBack);
+        var problems = Problems(readBack, retention);
         if (problems.Count > 0)
         {
             throw new CloudOperationException(
@@ -424,7 +427,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     }
 
     /// <summary>What a bucket read back from Google gets wrong. Empty means every setting is what was asked for.</summary>
-    private List<string> Problems(StorageData.Bucket bucket)
+    private List<string> Problems(StorageData.Bucket bucket, int retention)
     {
         var problems = new List<string>();
         if (bucket.IamConfiguration?.UniformBucketLevelAccess?.Enabled != true)
@@ -439,9 +442,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
         // A jobs/ or cache/ age LONGER than asked for is not drift: the bucket is shared, and shortening it would delete another
         // installation's files early (Hard Rule 14, #597). Only a missing rule or a shorter age is repaired.
-        if (!HasDeleteRule(bucket, ResultsBucket.JobsPrefix, _options.ResultsRetentionDays, orLonger: true))
+        if (!HasDeleteRule(bucket, ResultsBucket.JobsPrefix, retention, orLonger: true))
         {
-            problems.Add($"no rule deletes {ResultsBucket.JobsPrefix} objects after {_options.ResultsRetentionDays} days or more");
+            problems.Add($"no rule deletes {ResultsBucket.JobsPrefix} objects after {retention} days or more");
         }
 
         if (!HasDeleteRule(bucket, ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays, orLonger: true))
