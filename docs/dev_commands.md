@@ -202,7 +202,21 @@ worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <ti
 
 `--merge-when-green` waits for the PR checks and merges only if none failed (exit 5 failed, 6 pending at the timeout).
 
-Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh).
+Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh), `scripts/tests/test_land_wt_resw.py` (the Resources.resw merge below).
+
+### Resources.resw merge driver: `scripts/resw_merge.py`
+
+Nearly every branch appends keys to the end of `Resources.resw`, so a plain text merge conflicts there every time (and `git merge-file --union` is banned for it: overlapping hunks break the XML). `scripts/resw_merge.py %O %A %B` is a git merge driver that merges per `<data name=...>` block: a key added on one side (or on both with identical content) is kept, theirs' new keys go after ours' last block, a key deleted on one side and untouched on the other is deleted, and the same key changed differently on both sides (or deleted vs changed) is a real conflict with markers around only that block. The result must parse as XML with no duplicate names, else exit 1. Line endings follow ours.
+
+`.gitattributes` routes the file to the driver (`merge=resw`), but git only runs a driver that is defined in config. One-time setup per clone, from the primary checkout (every worktree shares that `.git/config`, so once is enough):
+
+```powershell
+git config merge.resw.driver '"C:/Users/<you>/DNA-Entropy-Graph/worker/.venv/Scripts/python.exe" "C:/Users/<you>/DNA-Entropy-Graph/scripts/resw_merge.py" %O %A %B'
+```
+
+Use absolute forward-slash paths (git runs the driver through `sh`, which does not expand `%USERPROFILE%`). Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/DnaEntropyGraph.App/Strings/en-US/Resources.resw` (must print `merge: resw`). Without the config git silently falls back to the text merge.
+
+`land_wt.py` does not depend on that setup: it passes the driver (this checkout's script, the running venv python) and the attribute as per-command `-c` flags for its merge of origin/main, so a lane branch that predates the `.gitattributes` line still merges. A real conflict still refuses and names the file.
 
 ## Landing a PR from the shared checkout: `scripts/land_pr.py`
 

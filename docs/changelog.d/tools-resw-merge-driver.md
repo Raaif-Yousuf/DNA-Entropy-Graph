@@ -1,0 +1,1 @@
+- Added `scripts/resw_merge.py`, a key-aware 3-way git merge driver for `Resources.resw` (keys appended on both sides no longer conflict; same-key edits still do), routed by `.gitattributes` and passed to `land_wt.py`'s merge of origin/main; one-time clone setup is in `docs/dev_commands.md`.
