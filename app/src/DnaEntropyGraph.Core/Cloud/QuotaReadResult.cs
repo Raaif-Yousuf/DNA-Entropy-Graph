@@ -19,8 +19,8 @@ public static class QuotaMetrics
     /// <c>"gpu"</c> is the placeholder the preflight passes today (<c>PreflightChecks</c>) and means the first tier, the L4.
     /// A value that already is a metric name is returned as it is.
     /// </summary>
-    public static string? ForAccelerator(string acceleratorType)
-        => acceleratorType?.Trim().ToLowerInvariant() switch
+    public static string? ForAccelerator(string acceleratorType, bool spot = false)
+        => spot ? Preemptible(ForAccelerator(acceleratorType)) : acceleratorType?.Trim().ToLowerInvariant() switch
         {
             "gpu" or "nvidia-l4" or "nvidia_l4_gpus" => NvidiaL4Gpus,
             "nvidia-tesla-a100" or "nvidia_a100_gpus" => NvidiaA100Gpus,
@@ -28,10 +28,12 @@ public static class QuotaMetrics
             "nvidia-h100-80gb" or "nvidia_h100_gpus" => NvidiaH100Gpus,
             _ => null,
         };
+
+    /// <summary>The Spot (preemptible) twin of a regional GPU metric: a Spot run draws on its own quota line, not the on-demand one. Null when there is no metric.</summary>
+    private static string? Preemptible(string? metric) => metric is null ? null : "PREEMPTIBLE_" + metric;
 }
 
-/// <summary>
-/// One quota line: the limit and what is already used (Compute reports both as numbers). A line whose limit the reply did not
+/// <summary>One quota line: the limit and what is already used (Compute reports both as numbers). A line whose limit the reply did not
 /// carry has a null <see cref="Limit"/> and so a null <see cref="Remaining"/>: UNKNOWN for that metric, never zero and never absent.
 /// </summary>
 public sealed record QuotaMetric(string Metric, double? Limit, double Usage)
