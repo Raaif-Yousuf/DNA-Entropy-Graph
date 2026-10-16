@@ -1,0 +1,1 @@
+- Added examples/ (phiX174 as GenBank and FASTA, with provenance and licence) and a 'use the example' section in the Run page of the user guide (#171). The in-app 'Try an example' button and real-model expected outputs are tracked separately.
