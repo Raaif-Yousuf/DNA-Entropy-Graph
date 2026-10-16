@@ -101,6 +101,20 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void New_run_resolves_with_the_catalog_backed_gpu_pickers_and_the_run_machine_comes_from_them()
+    {
+        // Issue #87's wired-to-nothing observable: the pickers are an optional constructor argument, so a missing registration would not fail
+        // resolution; the page would fall back to its own default pickers. The container must hold the shipped catalog, and the page's pickers must
+        // resolve a machine the catalog (not a literal) names.
+        using var provider = BuildRealServiceProvider();
+
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.GpuCatalog>().ShouldBeSameAs(DnaEntropyGraph.Core.Cloud.GpuCatalog.Shipped);
+        var gpu = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>().Gpu;
+        gpu.Gpus.Count.ShouldBeGreaterThan(1);
+        DnaEntropyGraph.Core.Cloud.CloudJobRequestFactory.MachineTypeFor(gpu.Tier).ShouldBe("g2-standard-8");
+    }
+
+    [Fact]
     public void The_real_build_asks_NCBI_and_New_run_and_the_engine_share_that_one_lookup()
     {
         // Issue #684 / Hard Rule 2: the lookup is an optional argument of NewRunViewModel, so a missing registration would not fail resolution; the

@@ -174,6 +174,31 @@ per-region quota memory, persisted per project instead of the prototype's
 - Not built: the user-facing "other continents" toggle (the ladder walks every offered zone, the bucket's continent first), per-tier escalation on a click,
   and the last-good-zone memory (#210).
 
+### 3.1 The model and GPU catalog (issue #87)
+
+`GpuCatalog.Shipped` (`app/src/DnaEntropyGraph.Core/Cloud/GpuCatalog.cs`) is the one table of models and GPU tiers: per model the
+precision, size, card count, memory and whether it needs Hopper (copied from the worker's `hardware.py`
+`MODEL_REQUIREMENTS`, which refuses a run whose hardware disagrees); per tier the machine type, accelerator id, quota metric, card count,
+memory, Hopper, Spot-only and the 7B window ceiling. It is a Core table, not a JSON file: it needs no
+file, DI or load-failure path, a wrong row fails a test, and `CloudJobRequestFactory.MachineTypeFor` reads it, so the machine a run
+starts and the machine the pickers and the estimate name cannot drift apart. GPUs are listed cheapest first.
+
+- **Fit**: Hopper first, then card count, then memory (`GpuFit`). MEASURED (project memory, prototype): Evo 2 7B runs on an L4 and an A100
+  only; 1B, 20B and 40B need Hopper FP8 (H100), 40B two of them (`a3-highgpu-2g`, Spot or Flex-start only).
+- **Linking** (`ModelGpuLinker`, pure): a model pick raises an unpinned GPU to the cheapest offered tier that fits; a GPU pick moves an
+  unpinned model to the largest offered model that fits (a tie keeps the current one); a pinned side never moves, so the pair can be
+  infeasible, which the page warns about and asks the user to confirm. "Automatic" (`CheapestAvailable`) stays automatic in
+  `RunOptions.GpuTier` while the cheapest tier is the answer and names the tier otherwise, so a model that needs a bigger card never
+  starts on an L4.
+- **What is offered is issue #14's switch.** `Offered` per model and tier in the catalog is the only thing to change when #14 (ship
+  evo2_40b and evo2_1b_base, or hide them; an owner DECISION, open) is decided. MEASURED 2026-10-15: the app had offered only evo2_7b
+  (no model picker existed), so only evo2_7b and the L4, A100 40 and A100 80 tiers are offered, and the model picker is hidden while one
+  model is offered. `GpuCatalogTests.Today_only_the_standard_7b_model...` pins that state.
+- **Accelerator and quota** per tier (`GpuEntry.Accelerator`, `QuotaMetric`) are what issue #414's accelerator-type field and the
+  preflight quota check can read instead of the `"gpu"` placeholder; this change does not wire them into `VmSpec`.
+- **Window ceiling**: `GpuEntry.ContextCeiling` is 8,192 for the L4 and null (unmeasured, never guessed) for the others; the clamp offer
+  of science_and_formats.md section 3 is not built on it yet.
+
 ## 4. Labels and naming
 
 Covered field-by-field in [`job_contract.md`](job_contract.md) section 2 (identifiers) -

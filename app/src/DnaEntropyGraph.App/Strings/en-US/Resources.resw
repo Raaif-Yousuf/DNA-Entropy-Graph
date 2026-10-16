@@ -2093,4 +2093,85 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
     <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
   </data>
+  <data name="NewRunGpuExpander.Header" xml:space="preserve">
+    <value>Model and graphics card (GPU)</value>
+  </data>
+  <data name="NewRunModelCombo.Header" xml:space="preserve">
+    <value>Model</value>
+  </data>
+  <data name="NewRunGpuCombo.Header" xml:space="preserve">
+    <value>Graphics card (GPU)</value>
+  </data>
+  <data name="NewRunModelLock.Content" xml:space="preserve">
+    <value>Lock model</value>
+  </data>
+  <data name="NewRunGpuLock.Content" xml:space="preserve">
+    <value>Lock graphics card</value>
+  </data>
+  <data name="NewRunGpuConfirm.Content" xml:space="preserve">
+    <value>Run anyway, I understand it will probably fail</value>
+  </data>
+  <data name="NewRunGpu_Auto" xml:space="preserve">
+    <value>Automatic (the cheapest that runs the model)</value>
+  </data>
+  <data name="NewRunGpuAuto" xml:space="preserve">
+    <value>Automatic: {0}</value>
+  </data>
+  <data name="NewRunGpu_L4" xml:space="preserve">
+    <value>L4, 24 GB</value>
+  </data>
+  <data name="NewRunGpu_A100_40" xml:space="preserve">
+    <value>A100, 40 GB</value>
+  </data>
+  <data name="NewRunGpu_A100_80" xml:space="preserve">
+    <value>A100, 80 GB</value>
+  </data>
+  <data name="NewRunGpu_H100" xml:space="preserve">
+    <value>H100, 80 GB</value>
+  </data>
+  <data name="NewRunGpu_H100x2" xml:space="preserve">
+    <value>Two H100, 80 GB each</value>
+  </data>
+  <data name="NewRunGpuLocked" xml:space="preserve">
+    <value>{0} (locked: {1})</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsHopper" xml:space="preserve">
+    <value>needs an H100 graphics card</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsMoreGpus" xml:space="preserve">
+    <value>needs two graphics cards</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsMoreMemory" xml:space="preserve">
+    <value>the card has too little memory for it</value>
+  </data>
+  <data name="NewRunGpuLock_NoOfferedGpu" xml:space="preserve">
+    <value>no graphics card this app offers can run it</value>
+  </data>
+  <data name="NewRunGpuMisfit" xml:space="preserve">
+    <value>{0} will not run on {1}: {2}. Choose another graphics card or model, or tick Run anyway below.</value>
+  </data>
+  <data name="NewRunGpuSwitchedNotice" xml:space="preserve">
+    <value>Switched the graphics card to {0} for {1}.</value>
+  </data>
+  <data name="NewRunModelSwitchedNotice" xml:space="preserve">
+    <value>Switched the model to {0} to fit {1}.</value>
+  </data>
+  <data name="NewRunModel_evo2_7b" xml:space="preserve">
+    <value>Evo 2 7B (standard)</value>
+  </data>
+  <data name="NewRunModel_evo2_7b_262k" xml:space="preserve">
+    <value>Evo 2 7B, 262k context</value>
+  </data>
+  <data name="NewRunModel_evo2_1b_base" xml:space="preserve">
+    <value>Evo 2 1B (needs an H100, not a cheap option)</value>
+  </data>
+  <data name="NewRunModel_evo2_20b" xml:space="preserve">
+    <value>Evo 2 20B (needs an H100)</value>
+  </data>
+  <data name="NewRunModel_evo2_40b" xml:space="preserve">
+    <value>Evo 2 40B (experimental, expensive, quota rarely granted)</value>
+  </data>
+  <data name="NewRunModel_Unknown" xml:space="preserve">
+    <value>Unknown model</value>
+  </data>
 </root>

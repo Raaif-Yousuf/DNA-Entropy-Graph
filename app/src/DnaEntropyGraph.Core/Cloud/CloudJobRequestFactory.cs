@@ -86,13 +86,9 @@ public static class CloudJobRequestFactory
     };
 
     /// <summary>The machine type for a GPU tier; JobEngine asks it which worker image (-cuda or -cpu) the run needs before the request exists.</summary>
-    public static string MachineTypeFor(GpuTier tier) => tier switch
-    {
-        GpuTier.A100_40 => "a2-highgpu-1g",
-        GpuTier.A100_80 => "a2-ultragpu-1g",
-        GpuTier.H100 => "a3-highgpu-1g",
-        _ => "g2-standard-8",
-    };
+    public static string MachineTypeFor(GpuTier tier)
+        => GpuCatalog.Shipped.Gpus.FirstOrDefault(g => g.Tier == tier)?.MachineType
+            ?? GpuCatalog.Shipped.Gpu(GpuTier.L4).MachineType; // CheapestAvailable: no ladder runs yet (#86), so it starts on the first tier, the L4.
 
     private static IReadOnlyList<string> ZonesFor(string? preference)
     {

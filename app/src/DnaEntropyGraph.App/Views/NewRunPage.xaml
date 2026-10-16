@@ -178,6 +178,52 @@
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
+            <!-- Issue #87: the model and graphics card pickers are linked; a lock keeps one side where it is. Run waits on the confirmation when the pair will not fit. -->
+            <Expander x:Uid="NewRunGpuExpander" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind ViewModel.Gpu.HasModelChoice}">
+                        <ComboBox
+                            x:Uid="NewRunModelCombo"
+                            ItemsSource="{x:Bind ViewModel.Gpu.Models}"
+                            SelectedItem="{x:Bind ViewModel.Gpu.SelectedModel, Mode=TwoWay}"
+                            DisplayMemberPath="Label"
+                            MinWidth="320" />
+                        <ToggleButton x:Uid="NewRunModelLock" IsChecked="{x:Bind ViewModel.Gpu.ModelPinned, Mode=TwoWay}" VerticalAlignment="Bottom" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ComboBox
+                            x:Uid="NewRunGpuCombo"
+                            ItemsSource="{x:Bind ViewModel.Gpu.Gpus}"
+                            SelectedItem="{x:Bind ViewModel.Gpu.SelectedGpu, Mode=TwoWay}"
+                            MinWidth="320">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:GpuChoiceItem">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon Glyph="&#xE72E;" FontSize="12" Visibility="{x:Bind IsLocked, Mode=OneWay}" />
+                                        <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <ToggleButton x:Uid="NewRunGpuLock" IsChecked="{x:Bind ViewModel.Gpu.GpuPinned, Mode=TwoWay}" VerticalAlignment="Bottom" />
+                    </StackPanel>
+                    <TextBlock
+                        Text="{x:Bind ViewModel.Gpu.NoticeText, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.Gpu.HasNotice, Mode=OneWay}"
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock
+                        Text="{x:Bind ViewModel.Gpu.WarningText, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.Gpu.HasWarning, Mode=OneWay}"
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                    <CheckBox
+                        x:Uid="NewRunGpuConfirm"
+                        IsChecked="{x:Bind ViewModel.Gpu.IsConfirmed, Mode=TwoWay}"
+                        Visibility="{x:Bind ViewModel.Gpu.HasWarning, Mode=OneWay}" />
+                </StackPanel>
+            </Expander>
+
             <!-- Issue #136: option presets. The summary line under the picker lists what the next run will use. -->
             <Expander x:Uid="NewRunPresetExpander" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <StackPanel Spacing="8">

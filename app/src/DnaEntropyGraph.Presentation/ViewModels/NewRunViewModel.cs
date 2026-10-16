@@ -20,13 +20,12 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// </summary>
 public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 {
-    // The model the New run page runs. There is no model picker on the page yet (a bigger model needs a confirmation
-    // and a cost estimate first), so this is the one model the app offers, not a property nothing binds.
+    // The model the page starts with, used where a default RunOptions is wanted (the boot disk and context length defaults). The model a run
+    // really uses comes from the linked pickers (Gpu, issue #87), which start on the first model the catalog offers: this one.
     private const string DefaultModelId = "evo2_7b";
 
-    // The tier and VM kind the page's Run uses (RunOptions defaults: the cheapest GPU, on-demand), so the estimate prices the
-    // machine a run on this page really starts. When a tier or Spot picker lands it must feed both StartRunAsync and the estimate.
-    private const GpuTier DefaultTier = GpuTier.CheapestAvailable;
+    // The VM kind the page's Run uses (RunOptions default: on-demand), so the estimate prices the machine a run on this page really starts.
+    // When a Spot picker lands it must feed both StartRunAsync and the estimate. The tier comes from the Gpu pickers.
     private const bool DefaultSpot = false;
 
     // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
@@ -110,8 +109,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
         bool? offerAnnotation = null,
         bool? offerAccession = null,
-        IAccessionLookup? accessionLookup = null)
+        IAccessionLookup? accessionLookup = null,
+        GpuPlanViewModel? gpu = null)
     {
+        Gpu = gpu ?? new GpuPlanViewModel(GpuCatalog.Shipped, strings);
+        Gpu.Changed += OnGpuPlanChanged;
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _accessionLookup = accessionLookup;
         _clipboard = clipboard;
@@ -206,6 +208,15 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     partial void OnAccessionStartTextChanged(string value) => AccessionMessage = string.Empty;
 
     partial void OnAccessionEndTextChanged(string value) => AccessionMessage = string.Empty;
+
+    /// <summary>The linked model and graphics card pickers (issue #87): what a run uses, what it costs, and whether Run waits for a confirmation.</summary>
+    public GpuPlanViewModel Gpu { get; }
+
+    private void OnGpuPlanChanged()
+    {
+        StartRunCommand.NotifyCanExecuteChanged();
+        _ = RefreshEstimateAsync();
+    }
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -871,8 +882,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         var outputs = _outputSelections[group];
         var options = new RunOptions
         {
-            ModelId = DefaultModelId,
+            ModelId = Gpu.ModelId,
             RunTarget = "Cloud",
+            GpuTier = Gpu.Tier,
             InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
             AnnotationPath = SelectedItem.AnnotationPath,
             Accession = SelectedItem.Accession,
@@ -929,7 +941,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen;
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && Gpu.IsRunnable;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
@@ -1067,7 +1079,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         string diskText;
         try
         {
-            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
+            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(Gpu.Tier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
