@@ -847,4 +847,38 @@ public sealed class HistoryViewModelTests
         Item(vm, "other").HasOwnerRequest.ShouldBeFalse();
         Item(vm, "other").CopyOwnerRequestCommand.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task A_cancelled_run_with_a_cloud_copy_offers_Download_partial_results_and_the_other_runs_keep_Download_again()
+    {
+        var vm = await Loaded(Row("stopped", JobPhase.Cancelled), Row("done"));
+
+        Item(vm, "stopped").CanRedownload.ShouldBeTrue();
+        Item(vm, "stopped").RedownloadLabel.ShouldBe("Runs_RedownloadPartial_Label");
+        Item(vm, "done").RedownloadLabel.ShouldBe("Runs_RedownloadAgain_Label");
+    }
+
+    [Fact]
+    public async Task A_cancelled_run_with_no_cloud_copy_offers_nothing_to_download()
+    {
+        _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(false);
+
+        var vm = await Loaded(Row("stopped", JobPhase.Cancelled));
+
+        Item(vm, "stopped").CanRedownload.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Partial_results_of_a_cancelled_run_are_reported_as_expected_not_as_a_warning_and_the_button_calls_the_service_for_that_run()
+    {
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new RedownloadResult(CloudResultsStatus.Partial, 0));
+        var vm = await Loaded(Row("stopped", JobPhase.Cancelled), Row("done"));
+
+        await Item(vm, "stopped").RedownloadCommand.ExecuteAsync(null);
+        await _cloud.Received(1).RedownloadAsync(Arg.Is<RunRecord>(r => r.JobId == "stopped"), Arg.Any<CancellationToken>());
+        _toasts.Received(1).ShowToast("Runs_Redownload_CancelledPartial_Title", "Runs_Redownload_CancelledPartial_Body", ToastSeverity.Info);
+
+        await Item(vm, "done").RedownloadCommand.ExecuteAsync(null);
+        _toasts.Received(1).ShowToast("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body", ToastSeverity.Warning);
+    }
 }

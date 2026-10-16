@@ -1036,8 +1036,17 @@
   <data name="RunsRerunButton.Content" xml:space="preserve">
     <value>Run again</value>
   </data>
-  <data name="RunsRedownloadButton.Content" xml:space="preserve">
+  <data name="Runs_RedownloadAgain_Label" xml:space="preserve">
     <value>Download again</value>
+  </data>
+  <data name="Runs_RedownloadPartial_Label" xml:space="preserve">
+    <value>Download partial results</value>
+  </data>
+  <data name="Runs_Redownload_CancelledPartial_Title" xml:space="preserve">
+    <value>Partial results downloaded</value>
+  </data>
+  <data name="Runs_Redownload_CancelledPartial_Body" xml:space="preserve">
+    <value>This run was cancelled, so the folder holds only what was finished before it stopped. Press Run again on the row to run it in full.</value>
   </data>
   <data name="RunsDeleteCloudButton.Content" xml:space="preserve">
     <value>Delete cloud copy</value>
