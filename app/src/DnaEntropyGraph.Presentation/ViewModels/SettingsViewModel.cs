@@ -50,6 +50,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(SaveDiagnosticsCommand))]
     private bool _isSavingDiagnostics;
 
+    /// <summary>
+    /// Issue #141: the "include my notes and tags" box. Off by default and never remembered: it goes back to off after each save
+    /// that was written, so a later bundle is private again unless the user ticks it again.
+    /// </summary>
+    [ObservableProperty]
+    private bool _includeNotesAndTags;
+
     // Not an observable property: only OpenDiagnosticsFolderCommand's CanExecute depends on it.
     private string? _lastDiagnosticsPath;
 
@@ -163,7 +170,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             // The build reads every log and run file: never on the UI thread. Task.Run gets no token on purpose: a Task.Run
             // bound to an already-cancelled token never starts the delegate, and the exporter's cleanup of the picker's empty
             // file would be skipped. The exporter observes the token itself and throws OperationCanceledException.
-            await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken), CancellationToken.None);
+            var includeNotes = IncludeNotesAndTags;
+            IncludeNotesAndTags = false;
+            await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken, includeNotes), CancellationToken.None);
             _lastDiagnosticsPath = path;
             OpenDiagnosticsFolderCommand.NotifyCanExecuteChanged();
             Report("DiagnosticsSaved_Title", string.Format(_strings.GetString("DiagnosticsSaved_Body"), path), ToastSeverity.Success);

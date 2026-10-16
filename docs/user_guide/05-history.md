@@ -42,7 +42,7 @@ box to show only running, completed, failed or cancelled runs.
 
 ## Notes and tags
 
-Open a run's results and use **Your notes** to write a note (for example, "the clone that failed sequencing") and tags separated by commas (for example, "clone7, redo"). Press **Save notes**; the page says **Saved.** when it is stored with the run on this computer. Tags show as small chips on the run's row on the Runs page, with the start of the note under them, and typing a word of a note or a tag into the search box shows only the runs that carry it. A note stays on this computer; it is never sent to Google Cloud.
+Open a run's results and use **Your notes** to write a note (for example, "the clone that failed sequencing") and tags separated by commas (for example, "clone7, redo"). Press **Save notes**; the page says **Saved.** when it is stored with the run on this computer. Tags show as small chips on the run's row on the Runs page, with the start of the note under them, and typing a word of a note or a tag into the search box shows only the runs that carry it. A note stays on this computer; it is never sent to Google Cloud. The diagnostics file you save from Settings leaves your notes and tags out, and scrubs them wherever they appear, unless you tick **Include my run notes and tags in the file** before pressing Save diagnostics. The box clears itself after each file is saved.
 
 ### Messages from the app
 

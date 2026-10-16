@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Core.Diagnostics;
 
@@ -51,7 +52,7 @@ public static partial class DiagnosticsBundleBuilder
     private static partial Regex LogFile();
 
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction; no zip is produced.</exception>
-    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info)
+    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info, bool includeNotesAndTags = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(runs);
@@ -66,7 +67,7 @@ public static partial class DiagnosticsBundleBuilder
         foreach (var run in runs)
         {
             ids.Map(run.JobId);
-            AddRunNames(run, scrub);
+            AddRunNames(run, scrub, includeNotesAndTags);
         }
 
         var loaded = new List<Loaded>();
@@ -105,7 +106,7 @@ public static partial class DiagnosticsBundleBuilder
             },
             Indented);
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
-        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => ToHistoryRow(run, ids.Map(run.JobId))), Indented);
+        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => includeNotesAndTags ? WithNotesAndTags(ToHistoryRow(run, ids.Map(run.JobId)), run) : ToHistoryRow(run, ids.Map(run.JobId))), Indented);
 
         // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
         // the original is written nowhere in the zip.
@@ -166,9 +167,18 @@ public static partial class DiagnosticsBundleBuilder
         _ => null,
     };
 
-    private static void AddRunNames(RunRecord run, HashSet<string> scrub)
+    private static void AddRunNames(RunRecord run, HashSet<string> scrub, bool includeNotesAndTags)
     {
-        foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix, run.Notes })
+        // Issue #141: a note and a tag are the user's own words, scrubbed like a name unless the user ticked the box to share them.
+        if (!includeNotesAndTags)
+        {
+            foreach (var tag in RunTags.Parse(run.TagsJson))
+            {
+                scrub.Add(tag);
+            }
+        }
+
+        foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix, includeNotesAndTags ? null : run.Notes })
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -325,6 +335,15 @@ public static partial class DiagnosticsBundleBuilder
         installationId = run.InstallationId,
         imported = run.Imported,
     };
+
+    // Only when the user ticked "include my notes and tags" (issue #141): the row plus those two fields, nothing else added.
+    private static object WithNotesAndTags(object row, RunRecord run)
+    {
+        var node = JsonSerializer.SerializeToNode(row)!.AsObject();
+        node["notes"] = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes;
+        node["tags"] = JsonSerializer.SerializeToNode(RunTags.Parse(run.TagsJson));
+        return node;
+    }
 
     private static byte[] Zip(SortedDictionary<string, string> entries, DateTimeOffset createdUtc)
     {
