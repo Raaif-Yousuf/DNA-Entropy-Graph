@@ -25,8 +25,8 @@ public sealed partial class SetupStepsViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    /// <summary>The region the GPU is asked for: the first of the zone ladder's defaults (the run starts there when nothing else is chosen).</summary>
-    public const string GpuAskRegion = "us-central1";
+    /// <summary>The region the GPU is asked for: the region of the zone ladder's defaults (the run starts there when nothing else is chosen): one source of truth, <see cref="CloudJobRequestFactory.DefaultRegion"/>.</summary>
+    public static string GpuAskRegion => CloudJobRequestFactory.DefaultRegion;
 
     private readonly GpuQuotaRequester? _gpuRequester;
 
