@@ -1,11 +1,14 @@
-"""scripts/check_resw_driver.py -- the installed Resources.resw merge driver must be origin/main's script (issue #800).
+"""scripts/check_resw_driver.py -- the installed Resources.resw merge driver must exist and track origin/main (issue #800).
 
 `setup_git_drivers.py` installs a copy of resw_merge.py under the git common dir and points `merge.resw.driver` at
-it. That copy is not updated by `git pull`, so it can drift from origin/main. This check fails when the configured driver's script does not exist, and
-WARNS (exit 0) when its bytes differ from `git show origin/main:scripts/resw_merge.py`: landing runs premerge in throwaway worktrees sharing the config, so a
-drift failure would block every landing after a driver change on main.
+it. That copy is not updated by `git pull`, so it can drift from origin/main.
 
-It skips (exit 0) when the driver is not configured (CI, a fresh clone) or there is no origin/main to compare with.
+- The configured script does not exist: ERROR, exit 1 (every resw merge would conflict).
+- Its bytes differ from `git show origin/main:scripts/resw_merge.py`: WARNING, exit 0. Landing runs premerge in
+  throwaway worktrees that share this config, so a failure here would block every landing after a driver change on
+  main until someone re-ran setup.
+- Not configured (CI, a fresh clone) or no origin/main to compare with: skipped, exit 0.
+
 The fix is always one command, printed in the message.
 """
 
