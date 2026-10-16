@@ -69,7 +69,7 @@ public sealed class KeyboardShortcutTests
         clipboard.ReadTextAsync().Returns(Task.FromResult<string?>("ACGTACGT"));
         var viewModel = NewRun(clipboard);
 
-        await viewModel.PasteFromClipboardCommand.ExecuteAsync(null);
+        await viewModel.PasteFromClipboardAsync();
 
         viewModel.PasteText.ShouldBe("ACGTACGT");
         viewModel.IsPasteOpen.ShouldBeTrue();
@@ -83,7 +83,7 @@ public sealed class KeyboardShortcutTests
         var viewModel = NewRun(clipboard);
         viewModel.PasteText = "keep me";
 
-        await viewModel.PasteFromClipboardCommand.ExecuteAsync(null);
+        await viewModel.PasteFromClipboardAsync();
 
         viewModel.PasteText.ShouldBe("keep me");
         viewModel.StatusMessage.ShouldBe("NewRunStatusClipboardEmpty");

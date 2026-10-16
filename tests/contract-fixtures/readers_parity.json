@@ -1,0 +1,236 @@
+{
+  "$schema_note": "Not a real JSON Schema; documents the contract for humans/xUnit/pytest.",
+  "description": "Reader parity vectors (issue #393): the exact records, notices and error text the worker's readers/fasta.py (read_fasta) and readers/genbank.py (read_genbank) produce for a fixed set of inputs. worker/tests/test_readers_parity.py replays every case against the Python readers; the C# FastaLiteTests/GenBankLiteTests replay the same file against FastaLite/GenBankLite. A wording change in either reader fails the test on its side until the fixture and both ports agree. GenBankLite is deliberately partial (LOCUS/ORIGIN/gene-CDS counts only), so a case compares records' sequences and gene counts, notices and error text; where the port's text deliberately differs, the case carries `csharp_divergence` (the port's own expected value, with the reason).",
+  "source": {
+    "generated_by": "A one-off script run against the worker at fixture-build time (Python readers called on a temp file per case, then deleted, not committed); the Python test re-derives every value."
+  },
+  "fasta_cases": [
+    {
+      "id": "multi_record_three",
+      "text": ">seq1\nACGT\n>seq2\nTTTT\n>seq3\nGGGG\n",
+      "python": {
+        "records": [
+          {
+            "header": "seq1",
+            "seq": "ACGT"
+          },
+          {
+            "header": "seq2",
+            "seq": "TTTT"
+          },
+          {
+            "header": "seq3",
+            "seq": "GGGG"
+          }
+        ],
+        "notices": [
+          "Read 3 record(s) from the FASTA (all processed)."
+        ]
+      }
+    },
+    {
+      "id": "duplicate_ids_different_descriptions",
+      "text": ">seq1 first description\nACGT\n>seq1 second description\nTTTT\n",
+      "python": {
+        "records": [
+          {
+            "header": "seq1 first description",
+            "seq": "ACGT"
+          },
+          {
+            "header": "seq1 second description",
+            "seq": "TTTT"
+          }
+        ],
+        "notices": [
+          "1 id(s) repeat across records (fingerprints: 2bb7a7fd); records are still kept and numbered separately.",
+          "Read 2 record(s) from the FASTA (all processed)."
+        ]
+      }
+    },
+    {
+      "id": "empty_after_header_is_skipped",
+      "text": ">seq1 secret name\nACGT\n>seq2 empty one\n>seq3\nTTTT\n",
+      "python": {
+        "records": [
+          {
+            "header": "seq1 secret name",
+            "seq": "ACGT"
+          },
+          {
+            "header": "seq3",
+            "seq": "TTTT"
+          }
+        ],
+        "notices": [
+          "Skipped FASTA record 2 (14 chars): no sequence lines after its header.",
+          "Read 2 record(s) from the FASTA (all processed)."
+        ]
+      }
+    },
+    {
+      "id": "bare_header_is_flagged",
+      "text": ">\nACGT\n>named\nTTTT\n",
+      "python": {
+        "records": [
+          {
+            "header": "",
+            "seq": "ACGT"
+          },
+          {
+            "header": "named",
+            "seq": "TTTT"
+          }
+        ],
+        "notices": [
+          "1 record(s) have an empty header line (a bare '>' with no name).",
+          "Read 2 record(s) from the FASTA (all processed)."
+        ]
+      }
+    },
+    {
+      "id": "every_record_empty",
+      "text": ">seq1\n>seq2\n",
+      "python": {
+        "error": "The FASTA file has no records with a sequence."
+      }
+    },
+    {
+      "id": "no_header_line",
+      "text": "ACGTACGT",
+      "python": {
+        "error": "No FASTA records found (expected a '>' header line)."
+      }
+    }
+  ],
+  "genbank_cases": [
+    {
+      "id": "sample_single_record",
+      "text": "LOCUS       toy_locus                126 bp    DNA              UNK 01-JAN-1980\nDEFINITION  Toy locus for DNA-Entropy GenBank tests.\nACCESSION   toy_locus\nVERSION     toy_locus\nKEYWORDS    .\nSOURCE      .\n  ORGANISM  .\n            .\nFEATURES             Location/Qualifiers\n     gene            1..42\n                     /gene=\"geneA\"\n                     /locus_tag=\"TOY_0001\"\n     gene            complement(85..126)\n                     /gene=\"geneB\"\n                     /locus_tag=\"TOY_0002\"\n     CDS             1..42\n                     /gene=\"geneA\"\n                     /product=\"hypothetical protein\"\nORIGIN\n        1 atgcgtacgt tagcactgac cggtattccg aaactggcgt aaccggttaa ccggttaacc\n       61 ggttaaccgg ttaaccggtt aaccatgaaa cgttttggca cctaaggcct taaggcctta\n      121 aggcct\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ATGCGTACGTTAGCACTGACCGGTATTCCGAAACTGGCGTAACCGGTTAACCGGTTAACCGGTTAACCGGTTAACCGGTTAACCATGAAACGTTTTGGCACCTAAGGCCTTAAGGCCTTAAGGCCT",
+            "gene_count": 2
+          }
+        ],
+        "notices": [
+          "Read 1 record(s) with 2 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      },
+      "csharp_divergence": {
+        "notices": [],
+        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
+        "issue": 689
+      }
+    },
+    {
+      "id": "multi_record_two",
+      "text": "LOCUS       geneious|urn:local:.:x:0  58 bp    DNA              UNK 01-JAN-1980\nDEFINITION  multi test geneious|urn:local:.:x:0.\nACCESSION   geneious|urn:local:.:x:0\nVERSION     geneious|urn:local:.:x:0\nKEYWORDS    .\nSOURCE      .\n  ORGANISM  .\n            .\nFEATURES             Location/Qualifiers\n     gene            1..30\n                     /gene=\"gA\"\n     gene            complement(34..57)\n                     /gene=\"gB\"\nORIGIN\n        1 atgcgtacgt tagcactgac cggtattccg aaactggcgt aaacgtacgt acgtacgt\n//\nLOCUS       geneious|urn:local:.:x:1  57 bp    DNA              UNK 01-JAN-1980\nDEFINITION  multi test geneious|urn:local:.:x:1.\nACCESSION   geneious|urn:local:.:x:1\nVERSION     geneious|urn:local:.:x:1\nKEYWORDS    .\nSOURCE      .\n  ORGANISM  .\n            .\nFEATURES             Location/Qualifiers\n     gene            10..45\n                     /gene=\"gC\"\nORIGIN\n        1 tttaaacccg ggatgaaacg ttttggcacc taaggcctta aggccttaag gcctaaa\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ATGCGTACGTTAGCACTGACCGGTATTCCGAAACTGGCGTAAACGTACGTACGTACGT",
+            "gene_count": 2
+          },
+          {
+            "seq": "TTTAAACCCGGGATGAAACGTTTTGGCACCTAAGGCCTTAAGGCCTTAAGGCCTAAA",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "Read 2 record(s) with 3 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      },
+      "csharp_divergence": {
+        "notices": [
+          "Read 2 record(s) with 3 gene/CDS feature(s) from the GenBank (not re-annotated)."
+        ],
+        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
+        "issue": 689
+      }
+    },
+    {
+      "id": "empty_origin_record_skipped_second_kept",
+      "text": "LOCUS       empty_one   0 bp\nORIGIN\n//\nLOCUS       real_one   4 bp\nORIGIN\n        1 acgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Skipped GenBank record 1 (id 9 chars): no nucleotide sequence.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      },
+      "csharp_divergence": {
+        "notices": [
+          "Skipped GenBank record 1 (locus 9 chars): no nucleotide sequence."
+        ],
+        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
+        "issue": 689
+      }
+    },
+    {
+      "id": "all_n_record_skipped_with_a_real_one",
+      "text": "LOCUS       gap   4 bp\nORIGIN\n        1 nnnn\n//\nLOCUS       real   4 bp\nORIGIN\n        1 acgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Skipped GenBank record 1 (id 3 chars): no nucleotide sequence.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      },
+      "csharp_divergence": {
+        "notices": [
+          "Skipped GenBank record 1 (locus 3 chars): no nucleotide sequence."
+        ],
+        "reason": "GenBankLite words notices its own way: it says 'locus' where the worker says 'id', and only reports 'Read N record(s)' for two or more records (counting gene and CDS lines together). Alignment is tracked in the issue named in `issue`.",
+        "issue": 689
+      }
+    },
+    {
+      "id": "no_locus_line",
+      "text": "DEFINITION  no locus line at all.\nFEATURES             Location/Qualifiers\nORIGIN\n        1 acgtn\n//\n",
+      "python": {
+        "error": "No GenBank records found in the file."
+      },
+      "csharp_divergence": {
+        "error": "No GenBank records with a nucleotide sequence found (expected a LOCUS/ORIGIN block).",
+        "reason": "GenBankLite names the action in its own words; Biopython finds no records and the worker says so.",
+        "issue": 689
+      }
+    },
+    {
+      "id": "truncated_mid_feature_table",
+      "text": "LOCUS       trunc    10 bp    DNA\nFEATURES             Location/Qualifiers\n     gene            1..5\n                     /gene=",
+      "python": {
+        "error": "Could not parse the GenBank file (record 1): Premature end of line during features table. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the GenBank file (record 1): the feature table ends before the sequence starts (a truncated file). Check the file was not truncated or hand-edited, then re-export it from the tool that made it.",
+        "reason": "GenBankLite validates the feature table itself and words the cause in its own terms; Biopython's text is its scanner's.",
+        "issue": 689
+      }
+    },
+    {
+      "id": "missing_origin",
+      "text": "LOCUS       nosource    5 bp    DNA\nDEFINITION  no origin block.\nFEATURES             Location/Qualifiers\n     gene            1..5\n                     /gene=\"x\"\n//\n",
+      "python": {
+        "error": "Could not parse the GenBank file (record 1): Premature end of features table, marker '//' found. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the GenBank file (record 1): the feature table ends with the record terminator before the sequence starts. Check the file was not truncated or hand-edited, then re-export it from the tool that made it.",
+        "reason": "Same as truncated_mid_feature_table: GenBankLite's own wording for the same refusal.",
+        "issue": 689
+      }
+    }
+  ]
+}
