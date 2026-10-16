@@ -506,18 +506,28 @@ exercise.
 - **Spend ledger and monthly cap (issue #109)**: `LedgerRecordingRunRepository` wraps the run
  repository, so every writer of a run row (runner, reconciler, cleanup) feeds the ledger the first
  time a row reaches an ended phase. `SpendLedger` appends one `vm_runtime` `CostLedger` row per run
- (idempotent by run id): start to end of the run, times the machine's hourly rate (Spot rate for a
- Spot run) plus the hourly share of the run's boot disk, from `pricing.json`. Every figure is an
- ESTIMATE; a machine the price list lacks writes no row. THEORY (unverified): the run's own start
- to end overstates a little (it includes upload time before the VM exists), and a run that failed
- before creating a VM still has a machine type, so it is booked at about zero cost. Issue #557
- will replace the estimate with the instance-timestamp figure. `MonthlySpend` is not stored: the
+ (idempotent: migration 0003's unique index on (RunId, Kind) plus INSERT OR IGNORE, so two writers
+ book it once). COUNTED: VM time only, from `RunRecord.VmReadyAt` (set by the runner in
+ `RecordVmNameAsync`, the moment it knows its VM exists, kept if already set) to the run's end,
+ times the machine's hourly rate (Spot rate for a Spot run) plus the hourly share of the run's boot
+ disk, from `pricing.json`; a run with no VM books nothing. Runs still going are counted apart as
+ `InProgressUsd` (VM time so far, from the later of VM start and the start of the month, to now),
+ so the gate and the card see work in flight, and both say "includes runs in progress". NOT
+ COUNTED: a VM kept alive or left stopped after its run ended (the run's row stops at its end;
+ the Cloud page lists those), time before the VM existed (upload, preflight, stockout retries),
+ bucket storage, and anything Google bills that this app did not start. Every figure is an
+ ESTIMATE; a machine the price list lacks writes no row. The run row is stored first, then the
+ ledger row (a failed store books nothing; the retry books it once). Issue #557 will replace the
+ estimate with the instance-timestamp figure. `MonthlySpend` is not stored: the
  month-to-date is summed from the ledger over the local calendar month (the PC's time zone, by
  when a row ended). Settings `spend_cap_usd` (empty or unusable is no cap) and
  `spend_cap_hard_stop` drive `SpendLedger.CheckAsync`: month-to-date plus the run's estimate at or
  above the cap is a warning (the New run page shows the card, Run stays allowed), or with the hard
- stop on is blocked. The engine's own check at Run uses month-to-date only (no estimate), refuses
- with `spend_cap` (action: Open Settings) before any file is staged or resource created. The
+ stop on is blocked (the card also disables Run). The card and the engine share one path
+ (`RunSpendCheck.CheckAsync`: the run's estimate, its `MaxUsd`, plus month-to-date against the cap),
+ so they cannot disagree; the engine asks it after the input is validated (bases known) and before
+ any bucket object or VM, and refuses with `spend_cap` (action: Open Settings). The card re-asks
+ whenever the page is shown and with no file chosen. The
  stopped-VM idle sweep (the third checkbox of the issue) is the reconciler's (#530).
 
 ## 11. The job runner and operation polling (issues #58, #256)

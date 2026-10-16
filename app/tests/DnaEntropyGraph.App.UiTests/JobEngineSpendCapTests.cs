@@ -36,9 +36,9 @@ public class JobEngineSpendCapTests
         public WorkerImageResolution Resolve(string appVersion, bool gpu) => new(WorkerImageStatus.Available, Pinned);
     }
 
-    private sealed class Pricing : IPricingSource
+    private sealed class Pricing(string json) : IPricingSource
     {
-        public PricingLoadResult Load() => PricingTable.Parse(PricingJson);
+        public PricingLoadResult Load() => PricingTable.Parse(json);
     }
 
     private sealed class MemorySettings : ISettingsStore
@@ -86,6 +86,21 @@ public class JobEngineSpendCapTests
             }
         }
 
+        public Task<CostLedgerEntry?> TryAppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
+        {
+            lock (_rows)
+            {
+                if (entry.RunId is not null && _rows.Any(r => r.RunId == entry.RunId && r.Kind == entry.Kind))
+                {
+                    return Task.FromResult<CostLedgerEntry?>(null);
+                }
+
+                var stored = entry with { Id = _rows.Count + 1 };
+                _rows.Add(stored);
+                return Task.FromResult<CostLedgerEntry?>(stored);
+            }
+        }
+
         public Task<CostLedgerEntry> AppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
         {
             lock (_rows)
@@ -99,14 +114,15 @@ public class JobEngineSpendCapTests
 
     private sealed class Harness
     {
-        public Harness(FakeGcp gcp)
+        public Harness(FakeGcp gcp, string? pricingJson = null)
         {
             Gcp = gcp;
             Settings = new MemorySettings();
             Ledger = new MemoryLedger();
-            Gate = new SpendLedger(Ledger, new Pricing(), Settings, TimeProvider.System, TimeZoneInfo.Local);
-            var messenger = new WeakReferenceMessenger();
             Inner = new MemoryRuns();
+            var pricing = new Pricing(pricingJson ?? PricingJson);
+            Gate = new SpendLedger(Ledger, pricing, Settings, TimeProvider.System, TimeZoneInfo.Local, Inner);
+            var messenger = new WeakReferenceMessenger();
             Runs = new LedgerRecordingRunRepository(Inner, Gate);
             messenger.Register<Harness, RunPhaseChangedMessage>(this, (_, m) =>
             {
@@ -123,7 +139,7 @@ public class JobEngineSpendCapTests
             Engine = new JobEngine(
                 messenger, runner, gcp, Settings, Runs, new MemoryProjects(),
                 new LocalRunInputStore(Path.Combine(TempRoot, "appdata-" + Guid.NewGuid().ToString("N"))),
-                new Image(), new ScriptedAccessionLookup(), new ActiveRuns(), spendGate: Gate);
+                new Image(), new ScriptedAccessionLookup(), new ActiveRuns(), estimates: new CostEstimateService(pricing, Inner, Gate));
         }
 
         public FakeGcp Gcp { get; }
@@ -173,8 +189,11 @@ public class JobEngineSpendCapTests
         var row = rows.Single();
         row.RunId.ShouldBe(jobId);
         row.Kind.ShouldBe("vm_runtime");
-        row.UsdEst.ShouldNotBeNull();
+        row.UsdEst.ShouldNotBeNull().ShouldBeGreaterThan(0, "the VM existed for a moment, so the booked cost is not zero");
+        row.StartedUtc.ShouldNotBe(default, "booked from the VM's own start");
         var run = (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        run.VmReadyAt.ShouldNotBeNull("the runner records when the VM was known to exist, the start of what is booked");
+        row.StartedUtc.ShouldBe(run.VmReadyAt!.Value);
         run.EstimatedCostUsd.ShouldBe(row.UsdEst);
         run.VmSeconds.ShouldNotBeNull();
     }
@@ -203,10 +222,41 @@ public class JobEngineSpendCapTests
         var h = new Harness(new FakeGcp().WithSelectedProject(Project));
         await h.Ledger.AppendAsync(new CostLedgerEntry("vm_runtime", DateTimeOffset.UtcNow, "earlier", EndedUtc: DateTimeOffset.UtcNow, UsdEst: 12), CancellationToken.None);
         h.Settings.SetString(SpendCapSettings.CapUsdKey, "10");
+        (await h.Gate.CheckAsync(null, CancellationToken.None)).Level.ShouldBe(SpendCapLevel.Warning, "the cap is read, so the only thing that lets the run start is that the hard stop is off");
 
         await h.Engine.StartRunAsync(Options(), CancellationToken.None);
 
         (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
         h.Gcp.CreatedSpecs.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_run_whose_own_estimate_would_reach_the_cap_is_refused_though_the_months_spend_alone_is_under_it()
+    {
+        // Cap 10, month so far 6, and a price of 40 an hour makes this run's own estimate about 8: the card says "will not start".
+        var expensive = PricingJson.Replace("\"onDemandUsdPerHour\":1.0", "\"onDemandUsdPerHour\":40.0", StringComparison.Ordinal).Replace("\"spotUsdPerHour\":0.4", "\"spotUsdPerHour\":20.0", StringComparison.Ordinal);
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), expensive);
+        await h.Ledger.AppendAsync(new CostLedgerEntry("vm_runtime", DateTimeOffset.UtcNow, "earlier", EndedUtc: DateTimeOffset.UtcNow, UsdEst: 6), CancellationToken.None);
+        h.Settings.SetString(SpendCapSettings.CapUsdKey, "10");
+        h.Settings.SetString(SpendCapSettings.HardStopKey, "true");
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe(RunErrorCodes.SpendCap);
+        h.Gcp.CreatedSpecs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_same_run_at_a_price_that_stays_under_the_cap_starts()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        await h.Ledger.AppendAsync(new CostLedgerEntry("vm_runtime", DateTimeOffset.UtcNow, "earlier", EndedUtc: DateTimeOffset.UtcNow, UsdEst: 6), CancellationToken.None);
+        h.Settings.SetString(SpendCapSettings.CapUsdKey, "10");
+        h.Settings.SetString(SpendCapSettings.HardStopKey, "true");
+
+        await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
     }
 }

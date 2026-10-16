@@ -456,7 +456,10 @@ public sealed class CloudJobRunner
 
         try
         {
-            await _rows.UpdateRowAsync(jobId, row => row with { VmName = vmName }, cancellationToken).ConfigureAwait(false);
+            // Issue #109: this is the moment the run knows its VM exists, so it is also where VM billing time starts for the spend
+            // ledger (VmReadyAt is never set elsewhere). Kept if already set: a re-attach must not move the start forward.
+            var vmKnownAt = DateTimeOffset.UtcNow;
+            await _rows.UpdateRowAsync(jobId, row => row with { VmName = vmName, VmReadyAt = row.VmReadyAt ?? vmKnownAt }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

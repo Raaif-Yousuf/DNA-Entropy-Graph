@@ -103,11 +103,11 @@ public sealed partial class SpendCapSettingsViewModel : ObservableObject
     {
         try
         {
-            var spent = await _gate.MonthToDateUsdAsync(CancellationToken.None);
+            var spent = await _gate.MonthToDateAsync(CancellationToken.None);
             MonthToDateText = string.Format(
                 CultureInfo.CurrentCulture,
-                _strings.GetString("SpendMonthToDate"),
-                spent.ToString("0.00", CultureInfo.InvariantCulture));
+                _strings.GetString(spent.InProgressUsd > 0 ? "SpendMonthToDateWithLive" : "SpendMonthToDate"),
+                spent.TotalUsd.ToString("0.00", CultureInfo.InvariantCulture));
         }
         catch (Exception)
         {

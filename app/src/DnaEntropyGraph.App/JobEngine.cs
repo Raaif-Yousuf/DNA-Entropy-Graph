@@ -37,7 +37,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IWorkerImageProvider _images;
     private readonly IAccessionLookup _accessionLookup;
     private readonly Func<string?> _downloadsFolder;
-    private readonly ISpendCapGate? _spendGate;
+    private readonly ICostEstimateService? _estimates;
 
     public JobEngine(
         IMessenger messenger,
@@ -51,9 +51,9 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IAccessionLookup accessionLookup,
         ActiveRuns activeRuns,
         Func<string?>? downloadsFolder = null,
-        ISpendCapGate? spendGate = null)
+        ICostEstimateService? estimates = null)
     {
-        _spendGate = spendGate;
+        _estimates = estimates;
         _activeRuns = activeRuns;
         _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
         _messenger = messenger;
@@ -76,14 +76,6 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         if (!IsCloudTarget(options.RunTarget))
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.TargetNotSupported, cancellationToken).ConfigureAwait(false);
-            return jobId;
-        }
-
-        // Issue #109: the hard stop refuses before anything exists. It checks this month's recorded spend (the run's own estimate is
-        // shown on the New run page's card); a warning never stops a run. A ledger that cannot be read does not block the user.
-        if (_spendGate is not null && await IsBlockedBySpendCapAsync(cancellationToken).ConfigureAwait(false))
-        {
-            await FailBeforeStartAsync(jobId, options, RunErrorCodes.SpendCap, cancellationToken).ConfigureAwait(false);
             return jobId;
         }
 
@@ -110,6 +102,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         // Issue #684: an NCBI accession is no file. It is checked here with the worker's own pattern (Hard Rule 2), nothing is copied or
         // uploaded, and the manifest names it; the worker fetches the record on the VM.
         StagedInput? staged;
+        long? bases = null;
         var uploads = new List<StagedInput>();
         if (options.Accession is not null)
         {
@@ -129,6 +122,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 return jobId;
             }
 
+            bases = lookup.Length;
             staged = StagedInput.ForAccession(accession.Accession, accession.Range);
             uploads.Add(staged);
         }
@@ -150,6 +144,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 return jobId;
             }
 
+            bases = check.TotalLength;
             uploads.Add(staged);
         }
 
@@ -193,6 +188,15 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         catch (SettingsUnavailableException ex)
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.Other, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
+            return jobId;
+        }
+
+        // Issue #109: the hard stop refuses before any bucket object or VM exists. It asks the same shared path the New run page's card asks
+        // (RunSpendCheck: the run's own estimate plus this month's spend against the cap), so the card and the engine cannot disagree. A
+        // warning never stops a run, and a ledger or price list that cannot be read does not block the user.
+        if (await IsBlockedBySpendCapAsync(options, bases, cancellationToken).ConfigureAwait(false))
+        {
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.SpendCap, cancellationToken).ConfigureAwait(false);
             return jobId;
         }
 
@@ -278,11 +282,17 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         }
     }
 
-    private async Task<bool> IsBlockedBySpendCapAsync(CancellationToken cancellationToken)
+    private async Task<bool> IsBlockedBySpendCapAsync(RunOptions options, long? bases, CancellationToken cancellationToken)
     {
+        if (_estimates is null)
+        {
+            return false;
+        }
+
         try
         {
-            return (await _spendGate!.CheckAsync(null, cancellationToken).ConfigureAwait(false)).Level == SpendCapLevel.Blocked;
+            var (_, cap) = await _estimates.CheckAsync(CloudJobRequestFactory.MachineTypeFor(options.GpuTier), options.SpotVm, bases, options.BootDiskGb, cancellationToken).ConfigureAwait(false);
+            return cap?.Level == SpendCapLevel.Blocked;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -180,7 +180,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<ICostLedgerRepository>(),
             sp.GetRequiredService<DnaEntropyGraph.Core.Cost.IPricingSource>(),
             sp.GetRequiredService<ISettingsStore>(),
-            TimeProvider.System));
+            TimeProvider.System,
+            runs: sp.GetRequiredService<RunRepository>()));
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ISpendCapGate>(sp => sp.GetRequiredService<SpendLedger>());
         services.AddSingleton<IRunRepository>(sp => new LedgerRecordingRunRepository(sp.GetRequiredService<RunRepository>(), sp.GetRequiredService<SpendLedger>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));

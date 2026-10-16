@@ -27,7 +27,7 @@ public sealed class SpendCapSettingsTests
     public SpendCapSettingsTests()
     {
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
-        _gate.MonthToDateUsdAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(3.5));
+        _gate.MonthToDateAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(new SpendSummary(3.5, 0)));
     }
 
     private SpendCapSettingsViewModel Create() => new(_settings, _strings, _gate);
@@ -105,6 +105,20 @@ public sealed class SpendCapSettingsTests
         }
 
         vm.MonthToDateText.ShouldBe("SpendMonthToDate");
-        await _gate.Received().MonthToDateUsdAsync(Arg.Any<CancellationToken>());
+        await _gate.Received().MonthToDateAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Runs_in_progress_are_named_in_the_month_to_date_line()
+    {
+        _gate.MonthToDateAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(new SpendSummary(3.5, 1.25)));
+        var vm = Create();
+
+        for (var i = 0; i < 200 && vm.MonthToDateText.Length == 0; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        vm.MonthToDateText.ShouldBe("SpendMonthToDateWithLive");
     }
 }

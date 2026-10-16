@@ -412,6 +412,12 @@
   <data name="SpendMonthToDate" xml:space="preserve">
     <value>Estimated spending so far this month: ${0}</value>
   </data>
+  <data name="SpendMonthToDateWithLive" xml:space="preserve">
+    <value>Estimated spending so far this month: ${0} (includes runs in progress, counted up to now)</value>
+  </data>
+  <data name="NewRunSpendCapInProgress" xml:space="preserve">
+    <value>The month's figure includes runs in progress.</value>
+  </data>
   <data name="RunError_vm_end_unconfirmed" xml:space="preserve">
     <value>The run stopped, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>

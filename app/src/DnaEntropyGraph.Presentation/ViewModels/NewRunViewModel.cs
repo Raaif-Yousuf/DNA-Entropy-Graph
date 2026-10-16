@@ -324,6 +324,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// <summary>True when the hard stop will refuse this run; the card then reads as an error. A warning leaves Run allowed.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsSpendCapWarning))]
+    [NotifyCanExecuteChangedFor(nameof(StartRunCommand))]
     private bool _isSpendCapBlocked;
 
     public bool HasSpendCap => SpendCapText.Length > 0;
@@ -632,6 +633,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private Task ReceiveNavigationParameterAsync(object? parameter)
     {
         _intake?.Attach(this);
+        // The page is showing (again): a cap changed in Settings, or spend booked since, must show now (issue #109).
+        _ = RefreshEstimateAsync();
         return parameter is DroppedItems dropped ? AddDroppedAsync(dropped) : Task.CompletedTask;
     }
 
@@ -945,7 +948,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen;
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && !IsSpendCapBlocked;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
@@ -1076,7 +1079,22 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             EstimateText = string.Empty;
             EstimateDiskText = string.Empty;
-            SetSpendCap(null);
+            // No file yet: a cap this month's spend has already reached still shows (the estimate of a run that is not chosen is zero).
+            SpendCapStatus? noFileCap = null;
+            try
+            {
+                noFileCap = await _estimates.CheckSpendCapAsync(null, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // Advice only.
+            }
+
+            if (version == Volatile.Read(ref _estimateVersion))
+            {
+                SetSpendCap(noFileCap);
+            }
+
             return;
         }
 
@@ -1085,12 +1103,14 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         SpendCapStatus? cap = null;
         try
         {
-            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
+            // The same shared path the engine asks at Run (issue #109), so the card and the refusal cannot disagree. A cap check that
+            // throws is no card and never takes the estimate away (the helper keeps them apart).
+            var (result, status) = await _estimates.CheckAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
                 : string.Empty;
-            cap = await _estimates.CheckSpendCapAsync(result.Estimate?.MaxUsd, CancellationToken.None);
+            cap = status;
         }
         catch (Exception)
         {
@@ -1120,6 +1140,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             IsSpendCapBlocked ? "NewRunSpendCapBlocked" : "NewRunSpendCapWarning",
             Format("NewRunEstimateMoney", status.MonthToDateUsd.ToString("0.00", CultureInfo.InvariantCulture)),
             Format("NewRunEstimateMoney", cap.ToString("0.00", CultureInfo.InvariantCulture)));
+        if (status.InProgressUsd > 0)
+        {
+            // The month figure includes VM time accrued by runs that have not ended; say so.
+            SpendCapText += " " + _strings.GetString("NewRunSpendCapInProgress");
+        }
     }
 
     private void ClearEstimate()
@@ -1127,7 +1152,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Interlocked.Increment(ref _estimateVersion);
         EstimateText = string.Empty;
         EstimateDiskText = string.Empty;
-        SetSpendCap(null);
+        // The cap card is about the month, not the file: re-ask it with no file chosen.
+        _ = RefreshEstimateAsync();
     }
 
     private string EstimateLine(CostEstimateResult result)
