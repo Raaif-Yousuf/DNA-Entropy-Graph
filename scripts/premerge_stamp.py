@@ -36,6 +36,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -85,7 +86,30 @@ def _read_landed(path: Path) -> dict[str, dict]:
 
 LANDED_MAX_AGE_SECONDS = 72 * 3600  # a lane landed in the evening is merged the next morning
 _LOCK_STALE_SECONDS = 30.0
-_LOCK_WAIT_SECONDS = 10.0
+_LOCK_WAIT_SECONDS = 45.0  # must exceed _LOCK_STALE_SECONDS, or a waiter gives up before a dead writer's lock is takeable
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _take_over_stale(lock: Path) -> bool:
+    """Rename a stale lock to a unique name (only one waiter's rename succeeds), then delete it. True when
+    this call removed a stale lock and the caller should retry creating its own."""
+    try:
+        if time.time() - lock.stat().st_mtime <= _LOCK_STALE_SECONDS:
+            return False
+        moved = lock.with_name(f"landed-prs.lock.stale.{os.getpid()}.{threading.get_ident()}.{time.monotonic_ns()}")
+        os.rename(lock, moved)
+    except OSError:
+        return False  # gone already, or another waiter won the rename
+    try:
+        if time.time() - moved.stat().st_mtime <= _LOCK_STALE_SECONDS:
+            # We renamed a FRESH lock that another waiter created after our stat: put it back if we can.
+            with contextlib.suppress(OSError):
+                os.rename(moved, lock)
+            return False
+    except OSError:
+        return False
+    moved.unlink(missing_ok=True)
+    return True
 
 
 @contextlib.contextmanager
@@ -98,12 +122,8 @@ def _landed_lock(path: Path):
             os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             break
         except FileExistsError:
-            try:
-                if time.time() - lock.stat().st_mtime > _LOCK_STALE_SECONDS:
-                    lock.unlink(missing_ok=True)
-                    continue
-            except OSError:
-                pass
+            if _take_over_stale(lock):
+                continue
             if time.monotonic() > deadline:
                 raise TimeoutError(f"could not take {lock}") from None
             time.sleep(0.02)
@@ -125,6 +145,8 @@ def record_landed(repo: Path, pr: str, sha: str, now: float | None = None) -> No
 
     Read-modify-write under a lock file, written to a temp file and os.replace()d so a reader never sees
     half a file; expired records are pruned on every write."""
+    if not _SHA.match(sha or ""):
+        raise ValueError(f"record_landed needs the full 40-hex head sha, got {sha!r}")
     path = landed_path(repo)
     if path is None:
         return
@@ -134,13 +156,33 @@ def record_landed(repo: Path, pr: str, sha: str, now: float | None = None) -> No
         records[str(pr)] = {"head": sha, "time": stamp_time}
         tmp = path.with_name(f"landed-prs.{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_text(json.dumps(records), encoding="utf-8", newline="\n")
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
+
+
+def _replace_with_retry(tmp: Path, dest: Path, attempts: int = 10, pause: float = 0.05) -> None:
+    """os.replace, retried on PermissionError (Windows: a reader or scanner holds the file open for a moment);
+    the temp file is deleted when the last attempt fails."""
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp, dest)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(pause)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
 
 def landed_head(repo: Path, pr: str, now: float | None = None) -> str | None:
     """The head sha land_wt.py verified for PR `pr` (within LANDED_MAX_AGE_SECONDS), else None."""
-    path = landed_path(repo)
-    record = _read_landed(path).get(str(pr)) if path is not None else None
+    try:
+        path = landed_path(repo)
+        record = _read_landed(path).get(str(pr)) if path is not None else None
+    except OSError:
+        return None  # unreadable means no record; the hook then denies with its clear message
     if not isinstance(record, dict) or not _fresh(record, time.time() if now is None else now):
         return None
     head = record.get("head")

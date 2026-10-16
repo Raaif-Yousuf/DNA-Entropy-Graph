@@ -784,3 +784,15 @@ def test_the_run_lock_records_the_commit_so_a_killed_run_leftover_can_be_judged_
     body.write_text("body\n", encoding="utf-8", newline="\n")
     assert lw.land(ctx, "feat/794-x", sha, "feat: x", body) == lw.EXIT_OK
     assert seen[0]["sha"] == sha and seen[0]["pid"] == os.getpid()
+
+
+def test_a_failing_record_landed_only_warns_and_the_landing_still_succeeds(world, monkeypatch, capsys):
+    import premerge_stamp
+
+    def boom(*_a, **_k):
+        raise PermissionError("held open")
+
+    monkeypatch.setattr(premerge_stamp, "record_landed", boom)
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    assert "WARNING: could not record the landed PR" in capsys.readouterr().out

@@ -58,7 +58,8 @@ import premerge_stamp as stamp  # noqa: E402
 BYPASS_VAR = "DEG_SKIP_PREMERGE"
 
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_PS_BYPASS = re.compile(rf"\$env:{BYPASS_VAR}\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s;]+)", re.IGNORECASE)
+_PS_BYPASS_NAME = re.compile(rf"^\$env:{BYPASS_VAR}(?P<eq>=(?P<val>.*))?$", re.IGNORECASE)
+_CONTINUATION = re.compile(r"[`\\]\r?\n[ \t]*")
 # `gh pr merge` flags that take a value in the next token (`--flag=value` carries its own).
 _MERGE_VALUE_FLAGS = {"-R", "--repo", "--match-head-commit", "-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email"}
 
@@ -89,25 +90,44 @@ BARE_MERGE_HINT = (
     "a bare `gh pr merge` merges whatever the current branch is."
 )
 
+LITERAL_HINT = (
+    "\n\nThis hook cannot resolve variables or subexpressions ($pr, $sha, $(...), (...)). Write the pull request "
+    "number and the --match-head-commit sha as literal values."
+)
 
-def _segments(text: str) -> list[list[str]]:
+
+class Tok(str):
+    """A token with the quote information the bypass check needs."""
+
+    quoted_start: bool = False
+    groups: tuple[str, ...] = ()  # the inner text of each $(...) / (...) in the word, scanned for commands too
+    expr: bool = False  # contained a variable or a $(...) / (...) subexpression, so its value is unknown here
+
+
+def _segments(text: str) -> list[list[Tok]]:
     """Split a shell or PowerShell command into commands of tokens, honouring ' and " quoting.
 
-    Separators (; & | ( ) and newlines) only count outside quotes, and quote characters are removed from
-    the tokens, so `gh issue comment 5 --body "see gh pr merge"` is one command whose body is one token."""
-    segments: list[list[str]] = []
-    tokens: list[str] = []
+    Separators (; & | and newlines, and a `(` or `)` at the start of a command) only count outside quotes, and
+    quote characters are removed from the tokens, so `gh issue comment 5 --body "see gh pr merge"` is one command
+    whose body is one token. `$(...)` and a `(...)` argument are grouped into the word they appear in."""
+    segments: list[list[Tok]] = []
+    tokens: list[Tok] = []
     word: list[str] = []
-    in_word = False
+    state = {"in_word": False, "quoted_start": False, "expr": False}
+    groups: list[str] = []
     quote = ""
     i = 0
 
     def end_word() -> None:
-        nonlocal in_word
-        if in_word:
-            tokens.append("".join(word))
+        if state["in_word"]:
+            tok = Tok("".join(word))
+            tok.quoted_start = state["quoted_start"]
+            tok.expr = state["expr"] or "$" in tok
+            tok.groups = tuple(groups)
+            groups.clear()
+            tokens.append(tok)
             word.clear()
-            in_word = False
+            state.update(in_word=False, quoted_start=False, expr=False)
 
     def end_segment() -> None:
         nonlocal tokens
@@ -115,6 +135,23 @@ def _segments(text: str) -> list[list[str]]:
         if tokens:
             segments.append(tokens)
         tokens = []
+
+    def start_word(quoted: bool) -> None:
+        if not state["in_word"]:
+            state.update(in_word=True, quoted_start=quoted)
+
+    def group_end(start: int) -> int:
+        """Index just past the `)` matching the `(` at `start` (or the end of the text)."""
+        depth, j = 0, start
+        while j < len(text):
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            j += 1
+        return j
 
     while i < len(text):
         ch = text[i]
@@ -129,23 +166,43 @@ def _segments(text: str) -> list[list[str]]:
                 word.append(ch)
         elif ch in "'\"":
             quote = ch
-            in_word = True
+            start_word(True)
+        elif ch == "(" and (state["in_word"] or tokens):
+            # `$(...)` glued to a word, or a `(...)` argument after the command name: one opaque expression.
+            end = group_end(i)
+            start_word(False)
+            word.append(text[i:end])
+            groups.append(text[i + 1 : end - 1] if text[end - 1 : end] == ")" else text[i + 1 : end])
+            state["expr"] = True
+            i = end
+            continue
         elif ch in ";&|()\n\r":
             end_segment()
         elif ch.isspace():
             end_word()
         else:
             word.append(ch)
-            in_word = True
+            start_word(False)
         i += 1
     end_segment()
     return segments
 
 
-def _gh_pr_call(tokens: list[str]) -> tuple[str, list[str], str | None] | None:
+def _segments_with_groups(text: str, depth: int = 0) -> list[list[Tok]]:
+    """`_segments`, plus the commands inside every `$(...)` / `(...)` group (so `echo $(gh pr create)` is seen)."""
+    segments = _segments(text)
+    if depth < 4:
+        for tokens in list(segments):
+            for tok in tokens:
+                for inner in tok.groups:
+                    segments.extend(_segments_with_groups(inner, depth + 1))
+    return segments
+
+
+def _gh_pr_call(tokens: list[Tok]) -> tuple[str, list[Tok], str | None] | None:
     """(verb, args after the verb, bash-style inline bypass reason) when this command is `gh [flags] pr create|merge`."""
     i, bypass = 0, None
-    while i < len(tokens) and _ENV_ASSIGN.match(tokens[i]):
+    while i < len(tokens) and not tokens[i].quoted_start and _ENV_ASSIGN.match(tokens[i]):
         name, _, value = tokens[i].partition("=")
         if name == BYPASS_VAR:
             bypass = value or "(no reason given)"
@@ -160,33 +217,48 @@ def _gh_pr_call(tokens: list[str]) -> tuple[str, list[str], str | None] | None:
     return None
 
 
-def _merge_args(args: list[str]) -> tuple[str | None, str | None]:
-    """(pull request number, --match-head-commit value) of `gh pr merge`'s arguments, skipping flag values."""
-    target = match_head = None
+def _merge_args(args: list[Tok]) -> tuple[Tok | None, Tok | None]:
+    """(pull request number token, --match-head-commit value token) of `gh pr merge`'s arguments, skipping flag values."""
+    target: Tok | None = None
+    match_head: Tok | None = None
     i = 0
     while i < len(args):
         tok = args[i]
         if tok.startswith("-"):
             name, eq, value = tok.partition("=")
+            carried: Tok = Tok(value)
             if not eq and tok in _MERGE_VALUE_FLAGS:
-                value = args[i + 1] if i + 1 < len(args) else ""
+                carried = args[i + 1] if i + 1 < len(args) else Tok("")
                 i += 1
             if name == "--match-head-commit":
-                match_head = value
+                match_head = carried
         elif target is None:
-            tail = tok.rstrip("/").rsplit("/", 1)[-1]
-            target = tail if tail.isdigit() else ""
+            target = tok
         i += 1
-    return (target or None), match_head
+    return target, match_head
 
 
-def _bypass_reason(inline: str | None, whole_command: str) -> str | None:
-    if inline:
-        return inline
-    ps = _PS_BYPASS.search(whole_command)
-    if ps:
-        return ps.group(1).strip("'\"") or "(no reason given)"
-    return os.environ.get(BYPASS_VAR) or None
+def _pr_number(token: str) -> str | None:
+    tail = token.rstrip("/").rsplit("/", 1)[-1]
+    return tail if tail.isdigit() else None
+
+
+def _powershell_bypass(segments: list[list[Tok]]) -> str | None:
+    """A reason from an UNQUOTED `$env:DEG_SKIP_PREMERGE=<reason>` (or `= <reason>`) anywhere in the command."""
+    for tokens in segments:
+        for i, tok in enumerate(tokens):
+            found = None if tok.quoted_start else _PS_BYPASS_NAME.match(tok)
+            if not found:
+                continue
+            if found.group("eq"):
+                return found.group("val") or (tokens[i + 1] if i + 1 < len(tokens) else "") or "(no reason given)"
+            if i + 2 < len(tokens) and tokens[i + 1] == "=":
+                return tokens[i + 2] or "(no reason given)"
+    return None
+
+
+def _bypass_reason(inline: str | None, ps: str | None) -> str | None:
+    return inline or ps or os.environ.get(BYPASS_VAR) or None
 
 
 def _log_bypass(repo: Path, verb: str, reason: str) -> None:
@@ -203,14 +275,16 @@ def _log_bypass(repo: Path, verb: str, reason: str) -> None:
 
 def verdict(command: str, cwd: str | Path | None) -> str | None:
     """The reason to deny, or None to stay silent."""
-    scanned = _stash._strip_cat_heredoc_bodies(command or "")
-    for tokens in _segments(scanned):
+    scanned = _CONTINUATION.sub(" ", _stash._strip_cat_heredoc_bodies(command or ""))
+    segments = _segments_with_groups(scanned)
+    ps_bypass = _powershell_bypass(segments)
+    for tokens in segments:
         call = _gh_pr_call(tokens)
         if call is None:
             continue
         verb, args, inline = call
         repo = Path(cwd) if cwd else Path.cwd()
-        bypass = _bypass_reason(inline, scanned)
+        bypass = _bypass_reason(inline, ps_bypass)
         ok, reason = stamp.check_stamp(repo)
         if ok:
             continue
@@ -222,12 +296,18 @@ def verdict(command: str, cwd: str | Path | None) -> str | None:
             target, match_head = _merge_args(args)
             if target is None:
                 return message + BARE_MERGE_HINT
-            landed = stamp.landed_head(repo, target)
+            if target.expr or (match_head is not None and match_head.expr):
+                return message + LITERAL_HINT
+            number = _pr_number(target)
+            if number is None:
+                return message + BARE_MERGE_HINT
+            landed = stamp.landed_head(repo, number)
             if landed is None:
                 return message
-            if match_head and len(match_head) >= 7 and (landed.startswith(match_head) or match_head.startswith(landed)):
+            pin = str(match_head or "")
+            if len(pin) >= 7 and (landed.startswith(pin) or pin.startswith(landed)):
                 continue
-            return message + LANDED_HINT.format(pr=target, sha=landed)
+            return message + LANDED_HINT.format(pr=number, sha=landed)
         return message
     return None
 
@@ -275,10 +355,18 @@ def self_test() -> int:
             heredoc = "git commit -m \"$(cat <<'EOF'\nsay gh pr create here\nEOF\n)\""
             expect("a cat heredoc body is not a command", verdict(heredoc, repo), False)
 
-            stamp.record_landed(repo, "77", "a1b2c3d4e5f6")
+            stamp.record_landed(repo, "77", "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678")
             expect("a landed merge without the pinned head is denied", verdict("gh pr merge 77 --merge", repo), True)
-            expect("a landed merge with the pinned head is allowed", verdict("gh pr merge 77 --match-head-commit a1b2c3d4e5f6", repo), False)
-            expect("merge of another PR is still denied", verdict("gh pr merge 78 --match-head-commit a1b2c3d4e5f6", repo), True)
+            expect(
+                "a landed merge with the pinned head is allowed",
+                verdict("gh pr merge 77 --match-head-commit a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", repo),
+                False,
+            )
+            expect(
+                "merge of another PR is still denied",
+                verdict("gh pr merge 78 --match-head-commit a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", repo),
+                True,
+            )
             expect("create is not unlocked by a landed PR", verdict("gh pr create", repo), True)
             expect("a quoted mention is not a command", verdict('gh issue comment 1 --body "gh pr merge"', repo), False)
             stamp.write_stamp(repo, "fast")

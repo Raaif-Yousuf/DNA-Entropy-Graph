@@ -37,7 +37,12 @@ Seven hooks live here, all registered as `PreToolUse` hooks in `.claude/settings
   its `gh pr create` is a child process the hook never sees, and it records `{pr: verified head sha}` in
   `<common-git-dir>/landed-prs.json` (locked, atomic replace, 72 hour expiry, expired records pruned). A later
   `gh pr merge <n> --match-head-commit <that sha>` of that PR is allowed from any checkout; without the pin, or with
-  a bare `gh pr merge`, it is denied and the message prints the exact command.
+  a bare `gh pr merge`, it is denied and the message prints the exact command. Line continuations (backtick or
+  backslash then newline) are joined first. A target or pin that is a variable or subexpression (`$pr`, `$(...)`,
+  `(...)`) cannot be resolved by a hook, so it is denied with a "use literal values" message; commands inside such
+  groups are still scanned. The bypass variable only counts when unquoted. The record needs a full 40-hex head sha
+  (`record_landed` refuses anything else), is written under a lock (a stale lock is renamed away by exactly one
+  waiter) and published with a retried `os.replace`; `land_wt.py` turns any failure there into a WARNING.
   Known bypasses, by design (the hook is a speed bump for an agent that forgot, not a security boundary):
   a command built at run time (`$cmd = "gh pr create"; iex $cmd`, `sh -c "gh pr create"`, `python -c ...`), an
   alias or wrapper script around `gh`, `gh api repos/.../pulls` (create) or `.../merge`, the GitHub MCP
