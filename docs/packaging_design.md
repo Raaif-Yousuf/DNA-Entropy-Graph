@@ -1,5 +1,10 @@
 # Packaging design: installer, signing, update channel, version lockstep, container images
 
+Last updated 2026-10-15. Built today: the self-contained publish, an unsigned `vpk pack`
+in `ci-app.yml` on every run, the version-lockstep check and the notices and scanning
+(section 8). Not built: `release.yml` (issue #178), signing, the update check in the app
+(issue #179), published container images.
+
 **Status update (2026-09-19):** the line below used to read "specification, not yet
 implemented" and name `app/`, `worker/vm/`, and `worker/Dockerfile.*` as not existing yet.
 All three now exist (`app/DnaEntropyGraph.sln`, issue #61; `worker/vm/startup.sh`, issue

@@ -1,0 +1,1 @@
+- docs: CLAUDE.md pitfall for dotnet format ENDOFLINE now says what #462 measured (a stale CRLF tree; fix_eol.py).
