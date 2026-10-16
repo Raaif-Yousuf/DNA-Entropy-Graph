@@ -188,7 +188,7 @@ public static class RunErrorCodes
     public static IReadOnlySet<string> WorkerErrorCodes { get; } = new HashSet<string>(
         [
             "GPU_NOT_VISIBLE", "IMAGE_PULL_FAILED", "MANIFEST_INVALID", "WORKER_CRASH", "MODEL_NEEDS_HOPPER", "MODEL_OOM",
-            "BATCH_LIMIT_EXCEEDED", "INPUT_INVALID", "WORKER_VERSION_MISMATCH", .. WorkerStatusCodesWithoutDedicatedCopy,
+            "BATCH_LIMIT_EXCEEDED", "INPUT_INVALID", "WORKER_VERSION_MISMATCH", "RUN_TIME_LIMIT", .. WorkerStatusCodesWithoutDedicatedCopy,
         ],
         StringComparer.Ordinal);
 

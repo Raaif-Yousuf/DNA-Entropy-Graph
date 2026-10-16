@@ -748,7 +748,7 @@ def test_a_foreign_exceptions_free_text_code_never_reaches_result_json(
 
     assert result.inputs[0].error["code"] == "WORKER_CRASH"
     on_disk = (tmp_path / "result.json").read_text(encoding="utf-8")
-    assert "my-patient-42" not in on_disk or free_text_code != "my-patient-42"
+    assert "my-patient-42" not in on_disk
     written = json.loads(on_disk)["inputs"][0]["error"]["code"]
     assert written == "WORKER_CRASH"
 

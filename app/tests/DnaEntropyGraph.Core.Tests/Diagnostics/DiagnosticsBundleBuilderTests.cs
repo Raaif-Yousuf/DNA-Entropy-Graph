@@ -332,15 +332,15 @@ public class DiagnosticsBundleBuilderTests
         const string FreeText = "my-patient-42";
         var folder = SeededFolder();
         // Keep the seeded file (its data-named fields are what the scrub list is harvested from) and swap only error.code.
-        var planted = System.Text.Json.Nodes.JsonNode.Parse(folder[$"runs/job-1/{file}"])!.AsObject();
+        var planted = System.Text.Json.Nodes.JsonNode.Parse(folder[$"runs/20261001-080000-abc234/{file}"])!.AsObject();
         planted["error"] = new System.Text.Json.Nodes.JsonObject { ["code"] = FreeText, ["retriable"] = false };
-        folder[$"runs/job-1/{file}"] = planted.ToJsonString();
+        folder[$"runs/20261001-080000-abc234/{file}"] = planted.ToJsonString();
         folder["logs/app-20261003.log"] += $"\n12:20 error code {FreeText} reported";
 
         var entries = BuildSeeded(folder);
 
         entries.Count.ShouldBeGreaterThan(5, "vacuity: a real bundle was built");
-        entries[$"files/runs/job-1/{file}"].ShouldContain("<redacted>");
+        entries[$"files/runs/20261001-080000-abc234/{file}"].ShouldContain("<redacted>");
         string.Concat(entries.Values).ShouldNotContain(FreeText);
     }
 
@@ -348,18 +348,18 @@ public class DiagnosticsBundleBuilderTests
     public void A_known_worker_error_code_ships_in_result_json()
     {
         var folder = SeededFolder();
-        folder["runs/job-1/result.json"] = JsonSerializer.Serialize(new { schema = 1, jobId = "job-1", status = "failed", error = new { code = "MODEL_OOM", retriable = true } });
+        folder["runs/20261001-080000-abc234/result.json"] = JsonSerializer.Serialize(new { schema = 1, jobId = "job-1", status = "failed", error = new { code = "MODEL_OOM", retriable = true } });
 
-        BuildSeeded(folder)["files/runs/job-1/result.json"].ShouldContain("\"code\": \"MODEL_OOM\"");
+        BuildSeeded(folder)["files/runs/20261001-080000-abc234/result.json"].ShouldContain("\"code\": \"MODEL_OOM\"");
     }
 
     [Fact]
     public void An_error_code_that_is_an_object_ships_nothing_of_it()
     {
         var folder = SeededFolder();
-        folder["runs/job-1/result.json"] = "{\"status\":\"failed\",\"error\":{\"code\":{\"x\":\"my-patient-42\"}}}";
+        folder["runs/20261001-080000-abc234/result.json"] = "{\"status\":\"failed\",\"error\":{\"code\":{\"x\":\"my-patient-42\"}}}";
 
-        var result = BuildSeeded(folder)["files/runs/job-1/result.json"];
+        var result = BuildSeeded(folder)["files/runs/20261001-080000-abc234/result.json"];
 
         result.ShouldNotContain("my-patient-42");
     }
