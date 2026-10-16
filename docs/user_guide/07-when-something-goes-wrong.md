@@ -185,6 +185,16 @@ available tier. *(`MODEL_NEEDS_HOPPER`)*
 **Treat as RNA** if the message suggests that. This is the same check described in
 [03-run.md](03-run.md). *(`INPUT_INVALID`)*
 
+## The genome viewer says it needs a Microsoft component
+
+The built-in genome viewer uses Microsoft's free WebView2 Runtime. Windows 11 and most
+up-to-date Windows 10 computers already have it. If yours does not, the viewer page says so
+and shows an **Install the WebView2 Runtime** link; install it, then open the run again. You
+do not need to restart the app. While it is missing, the page still draws the entropy track
+of the run as a simple chart under the link, so you can see the result (you cannot zoom or
+see the sequence). The same chart appears if the viewer is installed but fails to start.
+Everything else in the app, including **Open in IGV** on the Results page, works without it.
+
 ## Results are missing or won't download
 
 **"These results were deleted after your retention period"**, cloud copies of results

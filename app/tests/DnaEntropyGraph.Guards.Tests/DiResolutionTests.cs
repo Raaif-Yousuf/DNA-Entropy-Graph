@@ -91,6 +91,16 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void New_run_resolves_with_its_option_preset_picker_not_without_one()
+    {
+        // Issue #136's wired-to-nothing observable: the picker is an optional constructor argument, so a missing registration
+        // would not fail resolution; the page would just show an empty picker. Presets must be there.
+        using var provider = BuildRealServiceProvider();
+
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>().Presets.ShouldNotBeNull();
+    }
+
+    [Fact]
     public void Every_Presentation_facing_and_Cloud_gateway_interface_resolves()
     {
         using var provider = BuildRealServiceProvider();
