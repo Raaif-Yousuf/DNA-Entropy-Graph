@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Presentation.Services;
@@ -47,6 +48,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly OutputSelectionStore _outputStore;
     private readonly IDiagnosticsLog _log;
     private readonly IClipboardTextReader? _clipboard;
+    private readonly Func<string, string, Topology, AnnotationCheckResult> _validateAnnotation;
     private bool _applyingPreset;
 
     // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
@@ -103,9 +105,13 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         IInputFileSystem? files = null,
         NewRunIntake? intake = null,
         IClipboardTextReader? clipboard = null,
-        PresetPickerViewModel? presets = null)
+        PresetPickerViewModel? presets = null,
+        Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
+        bool? offerAnnotation = null)
     {
         _clipboard = clipboard;
+        _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
+        OffersAnnotation = offerAnnotation ?? WorkerManifestSupport.Annotation;
         Presets = presets;
         if (presets is not null)
         {
@@ -147,6 +153,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             {
                 RefreshOutputChoices();
                 StartRunCommand.NotifyCanExecuteChanged();
+                AddAnnotationCommand.NotifyCanExecuteChanged();
                 _ = RefreshEstimateAsync();
             }
         }
@@ -157,6 +164,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     /// <summary>The "Files you get back" boxes for the selected file's kind (a GenBank file or a FASTA/pasted sequence); empty while the kind is not known.</summary>
     public ObservableCollection<OutputChoiceItem> OutputChoices { get; } = [];
+
+    /// <summary>True while the worker the run starts on reads a paired GFF3 (<see cref="WorkerManifestSupport.Annotation"/>): only then does the page offer Add GFF3 and take a dropped GFF3.</summary>
+    public bool OffersAnnotation { get; }
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -259,6 +269,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         OnPropertyChanged(nameof(HasOutputChoices));
         OnPropertyChanged(nameof(HasNoOutputChosen));
         StartRunCommand.NotifyCanExecuteChanged();
+        AddAnnotationCommand.NotifyCanExecuteChanged();
     }
 
     public bool HasEstimate => EstimateText.Length > 0;
@@ -318,6 +329,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         var messages = new List<string>();
         try
         {
+            // A GFF3 is not a sequence of its own: it is held back until the FASTA files of this drop are on the page, then paired (issue #686).
+            var annotations = new List<string>();
+            var added = new List<InputPillItem>();
             foreach (var path in paths ?? [])
             {
                 if (await Task.Run(() => _files.DirectoryExists(path), CancellationToken.None))
@@ -330,14 +344,16 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
                     foreach (var file in files)
                     {
-                        await AddFileAsync(file, isPasted: false, cancellationToken);
+                        await AddOrHoldAsync(file, annotations, added, cancellationToken);
                     }
                 }
                 else
                 {
-                    await AddFileAsync(path, isPasted: false, cancellationToken);
+                    await AddOrHoldAsync(path, annotations, added, cancellationToken);
                 }
             }
+
+            await PairAnnotationsAsync(annotations, added, messages, cancellationToken);
         }
         finally
         {
@@ -345,6 +361,128 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             PostStatus(messages);
         }
     }
+
+    private async Task AddOrHoldAsync(string path, List<string> annotations, List<InputPillItem> added, CancellationToken cancellationToken)
+    {
+        if (AnnotationFileTypes.IsAnnotationFile(path))
+        {
+            annotations.Add(path);
+            return;
+        }
+
+        var (pill, _) = await AddFileAsync(path, isPasted: false, cancellationToken);
+        if (pill is not null)
+        {
+            added.Add(pill);
+        }
+    }
+
+    /// <summary>
+    /// Pairs each dropped GFF3 with a FASTA pill: the one with the same name (without the extension) among the files just added, else the
+    /// only FASTA on the page. With several FASTA files and no name that matches, nothing is guessed: the page says to select one and press Add GFF3.
+    /// </summary>
+    private async Task PairAnnotationsAsync(List<string> annotations, List<InputPillItem> added, List<string> messages, CancellationToken cancellationToken)
+    {
+        if (annotations.Count == 0)
+        {
+            return;
+        }
+
+        if (!OffersAnnotation)
+        {
+            messages.Add(_strings.GetString("NewRunStatusAnnotationUnavailable"));
+            return;
+        }
+
+        foreach (var gff in annotations)
+        {
+            var candidates = Items.Where(item => item.Kind == InputKind.Fasta && item.IsValid).ToList();
+            var stem = Path.GetFileNameWithoutExtension(gff);
+            bool SameStem(InputPillItem item) => string.Equals(Path.GetFileNameWithoutExtension(item.Path), stem, StringComparison.OrdinalIgnoreCase);
+            var target = candidates.FirstOrDefault(item => added.Contains(item) && SameStem(item))
+                ?? candidates.FirstOrDefault(SameStem)
+                ?? (candidates.Count == 1 ? candidates[0] : null);
+            if (target is null)
+            {
+                messages.Add(_strings.GetString(candidates.Count == 0 ? "NewRunStatusAnnotationNoFasta" : "NewRunStatusAnnotationAmbiguous"));
+                continue;
+            }
+
+            await AttachAnnotationAsync(target, gff, messages, cancellationToken);
+        }
+    }
+
+    /// <summary>Checks the GFF3 against the FASTA on this PC (Hard Rule 2) and, when it fits, shows it on the pill. A GFF3 that does not fit is not kept: the page says why.</summary>
+    private async Task AttachAnnotationAsync(InputPillItem pill, string gffPath, List<string> messages, CancellationToken cancellationToken)
+    {
+        var topology = Presets?.Topology ?? Topology.Auto;
+        AnnotationCheckResult result;
+        try
+        {
+            result = await Task.Run(() => _validateAnnotation(pill.Path, gffPath, topology), cancellationToken).WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (result.Problem is { } problem)
+        {
+            messages.Add(_strings.GetString(AnnotationProblemCopy.KeyFor(problem.Code)));
+            return;
+        }
+
+        pill.ApplyAnnotation(gffPath, result);
+    }
+
+    private bool CanAddAnnotation() => OffersAnnotation && SelectedItem is { Kind: InputKind.Fasta, IsValid: true };
+
+    /// <summary>The Add GFF3 button: chooses a GFF3 for the selected FASTA when its name does not say which one it belongs to.</summary>
+    [RelayCommand(CanExecute = nameof(CanAddAnnotation))]
+    private async Task AddAnnotationAsync(CancellationToken cancellationToken)
+    {
+        var pill = SelectedItem;
+        if (pill is null)
+        {
+            return;
+        }
+
+        string? picked;
+        try
+        {
+            picked = await _filePicker.PickAnnotationFileAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            ReportFailure(ex, "NewRunStatusBrowseFailed");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(picked))
+        {
+            return;
+        }
+
+        BeginOperation();
+        var messages = new List<string>();
+        try
+        {
+            await AttachAnnotationAsync(pill, picked, messages, cancellationToken);
+        }
+        finally
+        {
+            EndOperation();
+            PostStatus(messages);
+        }
+    }
+
+    /// <summary>Takes the paired GFF3 off the selected FASTA (the FASTA stays), so the worker finds the genes itself again.</summary>
+    [RelayCommand]
+    private void RemoveAnnotation(InputPillItem? item) => item?.ClearAnnotation();
 
     /// <summary>Starts something that may say a line of help. The status line is cleared only by the operation that finds no other one running, so a second drop does not wipe what the first one is about to say.</summary>
     private void BeginOperation()
@@ -611,6 +749,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             ModelId = DefaultModelId,
             RunTarget = "Cloud",
             InputPath = SelectedItem!.Path,
+            AnnotationPath = SelectedItem.AnnotationPath,
             TreatAsRna = IsTreatingAsRna,
             Direction = Presets?.Direction ?? Direction.BothCombined,
             ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
@@ -772,6 +911,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
 
         StartRunCommand.NotifyCanExecuteChanged();
+
+        AddAnnotationCommand.NotifyCanExecuteChanged();
         if (ReferenceEquals(pill, SelectedItem))
         {
             _ = RefreshEstimateAsync();

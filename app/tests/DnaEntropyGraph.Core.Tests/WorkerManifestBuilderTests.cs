@@ -72,6 +72,34 @@ public class WorkerManifestBuilderTests
     }
 
     [Fact]
+    public void A_staged_annotation_becomes_the_annotation_of_the_input_before_it_not_an_input_of_its_own()
+    {
+        // Issue #686: worker manifest.py (#704) reads inputs[].annotation, the object name of a GFF3 staged beside the FASTA.
+        var m = Build(inputs: [new StagedInput("x", "a.fasta"), new StagedInput("y", "genes.gff3", IsAnnotation: true)]);
+
+        var inputs = m.GetProperty("inputs").EnumerateArray().ToList();
+        inputs.Count.ShouldBe(1);
+        inputs[0].GetProperty("path").GetString().ShouldBe("input/a.fasta");
+        inputs[0].GetProperty("annotation").GetString().ShouldBe("input/genes.gff3");
+    }
+
+    [Fact]
+    public void An_input_without_an_annotation_has_no_annotation_field()
+        => Build().GetProperty("inputs")[0].TryGetProperty("annotation", out _).ShouldBeFalse();
+
+    [Fact]
+    public void An_annotation_with_no_input_before_it_is_refused()
+        => Should.Throw<ArgumentException>(() => Build(inputs: [new StagedInput("y", "genes.gff3", IsAnnotation: true), new StagedInput("x", "a.fasta")]));
+
+    [Fact]
+    public void An_annotation_name_that_could_leave_the_job_prefix_is_refused()
+        => Should.Throw<ArgumentException>(() => Build(inputs: [new StagedInput("x", "a.fasta"), new StagedInput("y", "..", IsAnnotation: true)]));
+
+    [Fact]
+    public void Two_annotations_for_one_input_are_refused()
+        => Should.Throw<ArgumentException>(() => Build(inputs: [new StagedInput("x", "a.fasta"), new StagedInput("y", "g1.gff3", IsAnnotation: true), new StagedInput("z", "g2.gff3", IsAnnotation: true)]));
+
+    [Fact]
     public void Input_options_use_the_wire_vocabulary()
     {
         var options = Opts(o => o with
