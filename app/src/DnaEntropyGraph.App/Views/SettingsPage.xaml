@@ -96,6 +96,17 @@
                 </Border>
             </StackPanel>
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsCloudResultsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsCloudResultsExplainer" TextWrapping="Wrap" />
+                        <ComboBox x:Uid="CloudRetentionBox" ItemsSource="{x:Bind CloudResults.Choices}" DisplayMemberPath="Label" SelectedItem="{x:Bind CloudResults.SelectedChoice, Mode=TwoWay}" />
+                        <TextBlock x:Uid="SettingsCloudResultsNote" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind CloudResults.RetentionStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsNotificationsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">
@@ -104,6 +115,46 @@
                         <CheckBox x:Uid="OpenFolderWhenDoneBox" IsChecked="{x:Bind Notifications.OpenFolderWhenDone, Mode=TwoWay}" />
                         <CheckBox x:Uid="OpenResultsWhenDoneBox" IsChecked="{x:Bind Notifications.OpenResultsWhenDone, Mode=TwoWay}" />
                         <TextBlock Text="{x:Bind Notifications.NotificationsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsThisPcHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Uid="SettingsThisPcExplainer" TextWrapping="Wrap" />
+                        <!-- Where to run (issues #120, #173). A choice that cannot work right now is greyed out and the reason is the line under the box. -->
+                        <StackPanel Spacing="4">
+                            <ComboBox x:Uid="RunTargetBox" ItemsSource="{x:Bind ThisPc.Picker.Options}" SelectedValuePath="Value" SelectedValue="{x:Bind ThisPc.Picker.SelectedTarget, Mode=TwoWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RunTargetOption">
+                                        <!-- A choice that cannot work right now reads greyed out; the reason is the line under the box. Picking it is refused by RunTargetPickerViewModel (a {Binding} on the row's IsEnabled is not used: check_app_wiring cannot see the item type). -->
+                                        <ContentControl Content="{x:Bind Label}" IsEnabled="{x:Bind IsAvailable, Mode=OneWay}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <TextBlock Text="{x:Bind ThisPc.Picker.ThisPcReason, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.Picker.Note, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock Text="{x:Bind ThisPc.Picker.SaveStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <!-- The health card. -->
+                        <StackPanel Spacing="4">
+                            <TextBlock x:Uid="ThisPcHealthHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind ThisPc.GpuText, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.DiskText, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.EngineText, Mode=OneWay}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ThisPc.BlockersText, Mode=OneWay}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button x:Uid="ThisPcRefreshButton" Command="{x:Bind ThisPc.RefreshCommand}" />
+                            <Button x:Uid="ThisPcInstallButton" Command="{x:Bind ThisPc.InstallCommand}" />
+                            <Button x:Uid="ThisPcRepairButton" Command="{x:Bind ThisPc.RepairCommand}" />
+                            <Button x:Uid="ThisPcRemoveButton" Command="{x:Bind ThisPc.RemoveCommand}" />
+                            <Button x:Uid="ThisPcCancelButton" Command="{x:Bind ThisPc.CancelInstallCommand}" />
+                            <ProgressRing IsActive="{x:Bind ThisPc.IsBusy, Mode=OneWay}" Width="20" Height="20" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind ThisPc.ProgressText, Mode=OneWay}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ThisPc.StatusText, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                     </StackPanel>
                 </Border>
             </StackPanel>
