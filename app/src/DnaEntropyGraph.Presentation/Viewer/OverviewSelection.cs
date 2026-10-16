@@ -15,6 +15,39 @@ public sealed record ViewerRunTarget(string RunFolder, string? Locus = null)
     public string? Contig => Locus is { } l && l.LastIndexOf(':') is var i and > 0 ? l[..i] : null;
 }
 
+/// <summary>
+/// The drag on the overview strip as a small state machine (issue #699), kept out of the control so it is tested without a pointer. The control
+/// calls <see cref="Release"/> BEFORE it releases pointer capture: WinUI may raise capture-lost (<see cref="Cancel"/>) synchronously inside that call,
+/// and the range is already in hand by then. A press and release less than <see cref="ClickPixels"/> apart is a click, not a drag.
+/// </summary>
+public sealed class OverviewDrag
+{
+    public const double ClickPixels = 4;
+
+    private (double X, double Pixel)? _start;
+
+    public bool IsActive => _start is not null;
+
+    /// <summary>Where the drag began, in bases; null when none is under way.</summary>
+    public double? StartBase => _start?.X;
+
+    public void Begin(double baseAt, double pixelX) => _start = (baseAt, pixelX);
+
+    /// <summary>Ends the drag. The range dragged, or null for a click, for a release with no press, or after <see cref="Cancel"/>.</summary>
+    public OverviewRange? Release(double baseAt, double pixelX)
+    {
+        if (_start is not { } start)
+        {
+            return null;
+        }
+
+        _start = null;
+        return Math.Abs(pixelX - start.Pixel) < ClickPixels ? null : new OverviewRange(start.X, baseAt);
+    }
+
+    public void Cancel() => _start = null;
+}
+
 /// <summary>Turns a drag on the overview strip into a viewer target. Pure, so the clamping and the click rule are unit tested.</summary>
 public static class OverviewSelection
 {

@@ -27,7 +27,7 @@ public sealed class EntropyOverviewChart : UserControl
 
     private readonly WinUIPlot _plot = new();
     private ScottPlot.Plottables.HorizontalSpan? _span;
-    private double? _dragStart;
+    private readonly OverviewDrag _drag = new();
 
     public EntropyOverviewChart()
     {
@@ -39,8 +39,8 @@ public sealed class EntropyOverviewChart : UserControl
         _plot.PointerPressed += OnPointerPressed;
         _plot.PointerMoved += OnPointerMoved;
         _plot.PointerReleased += OnPointerReleased;
-        _plot.PointerCanceled += (_, _) => EndDrag(null);
-        _plot.PointerCaptureLost += (_, _) => EndDrag(null);
+        _plot.PointerCanceled += (_, _) => AbortDrag();
+        _plot.PointerCaptureLost += (_, _) => AbortDrag();
     }
 
     /// <summary>Executed with an <see cref="OverviewRange"/> (bases along the contig) when the user finishes a drag on the strip.</summary>
@@ -64,13 +64,13 @@ public sealed class EntropyOverviewChart : UserControl
             return;
         }
 
-        _dragStart = BaseAt(e);
+        _drag.Begin(BaseAt(e), e.GetCurrentPoint(_plot).Position.X);
         _plot.CapturePointer(e.Pointer);
     }
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
-        if (_dragStart is not { } start)
+        if (_drag.StartBase is not { } start)
         {
             return;
         }
@@ -89,29 +89,29 @@ public sealed class EntropyOverviewChart : UserControl
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
-        var end = _dragStart is null ? (double?)null : BaseAt(e);
+        // The range first: ReleasePointerCapture may raise PointerCaptureLost synchronously, which aborts the drag.
+        var range = _drag.Release(BaseAt(e), e.GetCurrentPoint(_plot).Position.X);
         _plot.ReleasePointerCapture(e.Pointer);
-        EndDrag(end);
+        HideSpan();
+        if (range is { } dragged && RangeSelectedCommand is { } command && command.CanExecute(dragged))
+        {
+            command.Execute(dragged);
+        }
     }
 
-    private void EndDrag(double? end)
+    private void AbortDrag()
     {
-        var start = _dragStart;
-        _dragStart = null;
+        _drag.Cancel();
+        HideSpan();
+    }
+
+    private void HideSpan()
+    {
         if (_span is not null)
         {
             _plot.Plot.Remove(_span);
             _span = null;
             _plot.Refresh();
-        }
-
-        if (start is { } from && end is { } to && RangeSelectedCommand is { } command)
-        {
-            var range = new OverviewRange(from, to);
-            if (command.CanExecute(range))
-            {
-                command.Execute(range);
-            }
         }
     }
 
@@ -124,7 +124,7 @@ public sealed class EntropyOverviewChart : UserControl
     private void Redraw()
     {
         _span = null;
-        _dragStart = null;
+        _drag.Cancel();
         if (Contig is not { } contig)
         {
             _plot.Reset(new ScottPlot.Plot());

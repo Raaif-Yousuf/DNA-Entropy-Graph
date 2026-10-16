@@ -412,6 +412,13 @@ public sealed partial class ViewerViewModel : ObservableObject
                     if (_targetLocus is not null)
                     {
                         Send(new { cmd = "goto", locus = _targetLocus });
+
+                        // Once: a Retry or a reloaded page must not pull the user back to this range.
+                        _targetLocus = null;
+                        if (Contigs.Count > 0)
+                        {
+                            _targetContig = null;
+                        }
                     }
                 }
 

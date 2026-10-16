@@ -146,6 +146,23 @@ public sealed class OverviewDragSelectTests : IDisposable
     }
 
     [Fact]
+    public async Task The_locus_is_applied_once_so_a_retry_keeps_where_the_user_is()
+    {
+        var vm = Viewer(C("c1", 1000));
+        vm.OpenFromNavigation(new ViewerRunTarget(_dir, "c1:11-60"));
+        await vm.ContigsReady;
+        vm.OnViewerMessage("{\"evt\":\"ready\"}");
+        vm.OnViewerMessage("{\"evt\":\"loaded\"}");
+        Sent("goto").Count.ShouldBe(1);
+
+        vm.OnViewerMessage("{\"evt\":\"error\"}");
+        vm.RetryCommand.Execute(null);
+        vm.OnViewerMessage("{\"evt\":\"loaded\"}");
+
+        Sent("goto").Count.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_plain_folder_string_still_opens_the_run_with_no_goto()
     {
         var vm = Viewer(C("c1", 1000));
