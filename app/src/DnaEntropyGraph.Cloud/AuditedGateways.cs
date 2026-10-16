@@ -7,7 +7,12 @@ namespace DnaEntropyGraph.Cloud;
 // logical call, however many retries the pipeline made inside it); every read passes straight through and is never logged. They wrap the
 // gateway the container hands out (the Resilient* wrapper over FakeGcp, or the real Google gateway that runs the pipeline itself), so the
 // audit sits at the one seam every caller already uses and is the same in the fake and the real build. The pipeline stays untouched.
-// AuditedGatewayTests.Every_mutating_method_of_every_gateway_is_audited fails if a method is added to an interface and not routed here.
+// CloudAuditTests.Every_classified_mutation_has_an_audited_decorator_that_records_it (driven from CloudAuditTests.Classified, which a
+// reflection scan of every I*Gateway in Core keeps complete) fails if a method is added to an interface and not routed here.
+// A started line (written before the call, same correlation id as the finished line) is kept for the calls that span several API calls
+// and cannot be replayed: Compute create/reuse/start/delete, Storage.EnsureBucket, Storage.DeletePrefix and Iam.EnsureWorkerIdentity.
+// Short single-request writes (stop VM, delete disk, upload, enable API/services, link billing, create project, quota request) write only
+// the finished line.
 
 /// <summary>Implemented by every audit decorator, so a guard can see through it to the gateway it wraps.</summary>
 public interface IAuditedGateway
@@ -22,7 +27,7 @@ public sealed class AuditedComputeGateway(IComputeGateway inner, CloudAuditor au
     private static string Vm(string zone, string name) => $"zones/{zone}/instances/{name}";
 
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.CreateVm", () => (Vm(zone, spec.VmName), spec.JobId), () => inner.CreateVmAsync(spec, zone, cancellationToken), started: true);
+        => auditor.RunAsync("Compute.CreateVm", () => (Vm(zone, spec.VmName), spec.JobId), () => inner.CreateVmAsync(spec, zone, cancellationToken), started: true, mintRequestId: true);
 
     public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
         => auditor.RunAsync("Compute.ReuseVm", () => (Vm(zone, existingVmName), spec.JobId), () => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken), started: true);
@@ -63,14 +68,14 @@ public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor au
     public object Inner => inner;
 
     public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
-        => auditor.RunAsync("Storage.EnsureBucket", () => ($"projects/{projectId}", null), () => inner.EnsureBucketAsync(projectId, cancellationToken), bucket => $"buckets/{bucket}");
+        => auditor.RunAsync("Storage.EnsureBucket", () => ($"projects/{projectId}", null), () => inner.EnsureBucketAsync(projectId, cancellationToken), bucket => $"buckets/{bucket}", started: true);
 
     public Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
         // Only the job prefix is named: the part of the key below it can carry the user's own file name.
         => auditor.RunAsync("Storage.Upload", () => PrefixOf(bucket, objectKey), () => inner.UploadAsync(bucket, objectKey, content, cancellationToken));
 
     public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
-        => auditor.RunAsync("Storage.DeletePrefix", () => PrefixOf(bucket, prefix.TrimEnd('/') + "/_"), () => inner.DeletePrefixAsync(bucket, prefix, cancellationToken));
+        => auditor.RunAsync("Storage.DeletePrefix", () => PrefixOf(bucket, prefix.TrimEnd('/') + "/_"), () => inner.DeletePrefixAsync(bucket, prefix, cancellationToken), started: true);
 
     public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken)
         => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);
@@ -117,7 +122,7 @@ public sealed class AuditedWorkerIdentityGateway(IWorkerIdentityGateway inner, C
 
     // Creates the worker service account and its role, and writes the project and bucket bindings: the one IAM write seam.
     public Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
-        => auditor.RunAsync("Iam.EnsureWorkerIdentity", () => ($"projects/{projectId}/buckets/{bucket}", null), () => inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken));
+        => auditor.RunAsync("Iam.EnsureWorkerIdentity", () => ($"projects/{projectId}/buckets/{bucket}", null), () => inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken), started: true);
 }
 
 public sealed class AuditedServiceEnablementGateway(IServiceEnablementGateway inner, CloudAuditor auditor) : IServiceEnablementGateway, IAuditedGateway

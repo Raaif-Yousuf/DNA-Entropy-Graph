@@ -81,7 +81,9 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         var instance = ComputeVmShape.Build(spec, zone, labels, spec.ServiceAccountEmail);
 
         // One id for this call: every replay of the insert POST by the pipeline carries it (see the class remarks).
-        var requestId = Guid.NewGuid().ToString();
+        // Issue #245: the id is read from the audit scope (the decorator minted it before its started line) and noted before the call, so
+        // a refused insert still leaves it in the audit entry.
+        var requestId = DnaEntropyGraph.Core.Cloud.Audit.CloudAuditContext.RequestIdForCall();
         var operation = await CallAsync(
             "compute.instances.insert",
             token =>

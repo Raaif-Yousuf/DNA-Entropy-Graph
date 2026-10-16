@@ -122,17 +122,30 @@ public class ProductionCloudWiringTests : IDisposable
         audited.Inner.ShouldNotBeOfType<FakeGcp>();
     }
 
-    public static TheoryData<Type> AuditedInterfaces() => new()
+    // Every I*Gateway interface in Core, found by reflection, must resolve to its audit decorator: a hand list could not fail for a gateway
+    // nobody remembered to add. A gateway with no mutating call may be exempted here, with the reason (none today).
+    private static readonly Dictionary<Type, string> ReadOnlyGateways = [];
+
+    public static TheoryData<Type> AuditedInterfaces()
     {
-        typeof(IComputeGateway),
-        typeof(IStorageGateway),
-        typeof(IWorkerIdentityGateway),
-        typeof(IProjectSetupGateway),
-        typeof(IProjectCatalogGateway),
-        typeof(IBillingGateway),
-        typeof(IServiceEnablementGateway),
-        typeof(IQuotaGateway),
-    };
+        var data = new TheoryData<Type>();
+        foreach (var type in typeof(IComputeGateway).Assembly.GetTypes().Where(t => t.IsInterface && t.Name.StartsWith('I') && t.Name.EndsWith("Gateway", StringComparison.Ordinal)))
+        {
+            if (!ReadOnlyGateways.ContainsKey(type))
+            {
+                data.Add(type);
+            }
+        }
+
+        return data;
+    }
+
+    [Fact]
+    public void The_audited_interface_scan_finds_the_gateways_and_has_no_stale_exemption()
+    {
+        AuditedInterfaces().Count.ShouldBeGreaterThanOrEqualTo(8, "the scan must find the gateways, or the theory below is vacuous");
+        ReadOnlyGateways.Keys.ShouldAllBe(t => t.IsInterface && t.Name.EndsWith("Gateway", StringComparison.Ordinal));
+    }
 
     [Theory]
     [MemberData(nameof(AuditedInterfaces))]

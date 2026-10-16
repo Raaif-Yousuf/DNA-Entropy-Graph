@@ -21,6 +21,22 @@ public static class CloudAuditContext
         holder.OperationId = operationId ?? holder.OperationId;
     }
 
+    /// <summary>
+    /// The request id a call that makes up its own id (the compute insert's <c>requestId</c>) must send. When the decorator minted one before the
+    /// call (so the <c>started</c> line could carry it) that one is used; otherwise a new one is made and noted, so a call that then fails
+    /// still leaves its id in the audit entry. Outside any scope it is just a fresh id.
+    /// </summary>
+    public static string RequestIdForCall()
+    {
+        var holder = Current.Value;
+        if (holder is null)
+        {
+            return Guid.NewGuid().ToString();
+        }
+
+        return holder.RequestId ??= Guid.NewGuid().ToString();
+    }
+
     internal static Scope Begin()
     {
         var holder = new Holder();

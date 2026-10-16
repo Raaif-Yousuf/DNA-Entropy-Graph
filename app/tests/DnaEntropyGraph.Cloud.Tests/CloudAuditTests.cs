@@ -158,23 +158,38 @@ public class CloudAuditTests
         JsonSerializer.Serialize(log.Entries).ShouldNotContain("a@b.com");
     }
 
-    // Closed lists (issue #245 review): every method of every gateway interface is named here as a mutation or a read. A method that
-    // is in neither fails this test until someone decides which it is and, for a mutation, routes it through CloudAuditor.
-    private static readonly Dictionary<Type, (string[] Mutations, string[] Reads)> Classified = new()
+    // Closed lists (issue #245 review): every method of every I*Gateway interface in Core is named here as a mutation (with the operation
+    // its audit entry must carry) or a read. A method, or a whole gateway interface, that is not listed fails until someone decides which
+    // it is and, for a mutation, routes it through CloudAuditor.
+    private static readonly Dictionary<Type, ((string Method, string Operation)[] Mutations, string[] Reads)> Classified = new()
     {
         [typeof(IComputeGateway)] = (
-            ["CreateVmAsync", "ReuseVmAsync", "StartVmAsync", "StopVmAsync", "DeleteVmAsync", "DeleteDiskAsync"],
+            [
+                ("CreateVmAsync", "Compute.CreateVm"), ("ReuseVmAsync", "Compute.ReuseVm"), ("StartVmAsync", "Compute.StartVm"),
+                ("StopVmAsync", "Compute.StopVm"), ("DeleteVmAsync", "Compute.DeleteVm"), ("DeleteDiskAsync", "Compute.DeleteDisk"),
+            ],
             ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync"]),
         [typeof(IStorageGateway)] = (
-            ["EnsureBucketAsync", "UploadAsync", "DeletePrefixAsync"],
+            [("EnsureBucketAsync", "Storage.EnsureBucket"), ("UploadAsync", "Storage.Upload"), ("DeletePrefixAsync", "Storage.DeletePrefix")],
             ["DownloadAsync", "TryDownloadAsync", "ListBucketsAsync", "GetPrefixUsageAsync", "ListChildPrefixesAsync"]),
-        [typeof(IProjectSetupGateway)] = (["EnableComputeApiAsync"], ["GetProjectStateAsync", "IsBillingEnabledAsync", "IsComputeApiEnabledAsync"]),
-        [typeof(IWorkerIdentityGateway)] = (["EnsureWorkerIdentityAsync"], []),
-        [typeof(IServiceEnablementGateway)] = (["EnableServicesAsync"], ["IsServiceEnabledAsync"]),
-        [typeof(IBillingGateway)] = (["LinkProjectAsync"], ["GetBillingStatusAsync", "ListOpenBillingAccountsAsync"]),
-        [typeof(IProjectCatalogGateway)] = (["CreateProjectAsync"], ["ListActiveProjectsAsync", "GetProjectAsync"]),
-        [typeof(IQuotaGateway)] = (["RequestQuotaIncreaseAsync"], ["GetGpuQuotaAsync", "ReadQuotaAsync", "GetQuotaIncreaseEligibilityAsync"]),
+        [typeof(IProjectSetupGateway)] = ([("EnableComputeApiAsync", "ProjectSetup.EnableComputeApi")], ["GetProjectStateAsync", "IsBillingEnabledAsync", "IsComputeApiEnabledAsync"]),
+        [typeof(IWorkerIdentityGateway)] = ([("EnsureWorkerIdentityAsync", "Iam.EnsureWorkerIdentity")], []),
+        [typeof(IServiceEnablementGateway)] = ([("EnableServicesAsync", "ServiceUsage.EnableServices")], ["IsServiceEnabledAsync"]),
+        [typeof(IBillingGateway)] = ([("LinkProjectAsync", "Billing.LinkProject")], ["GetBillingStatusAsync", "ListOpenBillingAccountsAsync"]),
+        [typeof(IProjectCatalogGateway)] = ([("CreateProjectAsync", "ProjectCatalog.CreateProject")], ["ListActiveProjectsAsync", "GetProjectAsync"]),
+        [typeof(IQuotaGateway)] = ([("RequestQuotaIncreaseAsync", "Quota.RequestQuotaIncrease")], ["GetGpuQuotaAsync", "ReadQuotaAsync", "GetQuotaIncreaseEligibilityAsync"]),
     };
+
+    [Fact]
+    public void Every_gateway_interface_in_Core_is_classified_so_a_new_one_cannot_dodge_the_audit()
+    {
+        var found = typeof(IComputeGateway).Assembly.GetTypes()
+            .Where(t => t.IsInterface && System.Text.RegularExpressions.Regex.IsMatch(t.Name, @"^I\w*Gateway$"))
+            .ToList();
+        found.Count.ShouldBeGreaterThanOrEqualTo(8, "the scan must find the gateways, or this guard is vacuous");
+        found.Except(Classified.Keys).ShouldBeEmpty("classify the new gateway interface in CloudAuditTests.Classified and add its Audited* decorator");
+        Classified.Keys.Except(found).ShouldBeEmpty("a classified interface that no longer exists is a stale entry");
+    }
 
     [Fact]
     public void Every_method_of_every_gateway_interface_is_classified_as_a_mutation_or_a_read()
@@ -182,44 +197,106 @@ public class CloudAuditTests
         foreach (var (type, (mutations, reads)) in Classified)
         {
             var actual = type.GetMethods().Select(m => m.Name).Order().ToArray();
-            actual.ShouldBe(mutations.Concat(reads).Order().ToArray(), type.Name + ": classify the new method in CloudAuditTests.Classified (and audit it if it mutates)");
+            actual.ShouldBe(mutations.Select(m => m.Method).Concat(reads).Order().ToArray(), type.Name + ": classify the new method in CloudAuditTests.Classified (and audit it if it mutates)");
+        }
+    }
+
+    private static object? ArgFor(Type type) => type switch
+    {
+        _ when type == typeof(CancellationToken) => CancellationToken.None,
+        _ when type == typeof(string) => "jobs/job-9/in/x.gb",
+        _ when type == typeof(Stream) => new MemoryStream(),
+        _ when type == typeof(VmSpec) => Spec("job-9"),
+        _ when type == typeof(QuotaIncreaseRequest) => new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret),
+        _ when type == typeof(IReadOnlyList<string>) => new[] { "compute.googleapis.com" },
+        _ => throw new NotSupportedException("teach CloudAuditTests.ArgFor to build a " + type.Name),
+    };
+
+    private static Task Invoke(object target, string method)
+    {
+        var info = target.GetType().GetMethod(method)!;
+        return (Task)info.Invoke(target, info.GetParameters().Select(p => ArgFor(p.ParameterType)).ToArray())!;
+    }
+
+    public static TheoryData<string> ClassifiedGateways()
+    {
+        var data = new TheoryData<string>();
+        foreach (var type in Classified.Keys)
+        {
+            data.Add(type.Name);
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ClassifiedGateways))]
+    public async Task Every_classified_mutation_has_an_audited_decorator_that_records_it(string gatewayName)
+    {
+        // Each interface's decorator is found by reflection in the Cloud assembly (it must exist), run over a stub inner, and every
+        // Mutation it lists must leave exactly one finished entry with the listed operation; every Read must leave none.
+        var type = Classified.Keys.Single(t => t.Name == gatewayName);
+        var (mutations, reads) = Classified[type];
+        var decoratorType = typeof(AuditedComputeGateway).Assembly.GetTypes()
+            .SingleOrDefault(t => t.IsClass && !t.IsAbstract && type.IsAssignableFrom(t) && typeof(IAuditedGateway).IsAssignableFrom(t));
+        decoratorType.ShouldNotBeNull(type.Name + " has no Audited* decorator in DnaEntropyGraph.Cloud");
+
+        foreach (var (method, operation) in mutations)
+        {
+            var log = new MemoryLog();
+            var inner = Substitute.For([type], []);
+            var decorator = Activator.CreateInstance(decoratorType, inner, new CloudAuditor(log, () => "i", TimeProvider.System))!;
+            await Invoke(decorator, method);
+            log.Entries.Select(e => e.Operation).ShouldBe([operation], type.Name + "." + method + " must record exactly one " + operation);
+            JsonSerializer.Serialize(log.Entries.Concat(log.Started)).ShouldNotContain("JUSTIFICATION");
+        }
+
+        foreach (var read in reads)
+        {
+            var log = new MemoryLog();
+            var decorator = Activator.CreateInstance(decoratorType, Substitute.For([type], []), new CloudAuditor(log, () => "i", TimeProvider.System))!;
+            await Invoke(decorator, read);
+            log.Entries.ShouldBeEmpty(type.Name + "." + read + " is a read and must not be logged");
+            log.Started.ShouldBeEmpty();
         }
     }
 
     [Fact]
-    public async Task Every_classified_mutation_has_an_audited_decorator_that_records_it()
+    public async Task Decorated_mutations_keep_their_resource_naming_without_leaking_the_input()
     {
-        // The decorator of each interface must record each of its Mutations (and nothing for its Reads): prove it by name through the real decorators.
         var log = new MemoryLog();
         var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
-        var compute = Substitute.For<IComputeGateway>();
         var storage = Substitute.For<IStorageGateway>();
-        var quota = Substitute.For<IQuotaGateway>();
         storage.EnsureBucketAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("b");
         var ct = CancellationToken.None;
-        var spec = Spec("job-9");
 
-        var c = new AuditedComputeGateway(compute, auditor);
-        await c.CreateVmAsync(spec, "z", ct);
-        await c.ReuseVmAsync(spec, "deg-job-9", "z", ct);
-        await c.StartVmAsync("deg-job-9", "z", ct);
-        await c.StopVmAsync("deg-job-9", "z", ct);
-        await c.DeleteVmAsync("deg-job-9", "z", ct);
-        await c.DeleteDiskAsync("deg-job-9", "z", ct);
-        var s = new AuditedStorageGateway(storage, auditor);
-        await s.EnsureBucketAsync("p", ct);
-        await s.UploadAsync("b", "jobs/job-9/in/x.gb", new MemoryStream(), ct);
-        await s.DeletePrefixAsync("b", "jobs/job-9/", ct);
-        await new AuditedQuotaGateway(quota, auditor).RequestQuotaIncreaseAsync("p", new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret), ct);
+        await new AuditedStorageGateway(storage, auditor).EnsureBucketAsync("p", ct);
+        await new AuditedStorageGateway(storage, auditor).DeletePrefixAsync("b", "jobs/job-9/", ct);
+        await new AuditedStorageGateway(storage, auditor).UploadAsync("b", "jobs/job-9/in/" + Secret + ".gb", new MemoryStream(), ct);
+        await new AuditedQuotaGateway(Substitute.For<IQuotaGateway>(), auditor).RequestQuotaIncreaseAsync("p", new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret), ct);
 
-        log.Entries.Select(e => e.Operation).ShouldBe([
-            "Compute.CreateVm", "Compute.ReuseVm", "Compute.StartVm", "Compute.StopVm", "Compute.DeleteVm", "Compute.DeleteDisk",
-            "Storage.EnsureBucket", "Storage.Upload", "Storage.DeletePrefix", "Quota.RequestQuotaIncrease"]);
-        var quotaEntry = log.Entries.Last();
-        quotaEntry.Resource.ShouldBe("projects/p/quotas/NVIDIA_L4_GPUS/regions/us-central1");
-        JsonSerializer.Serialize(log.Entries).ShouldNotContain("JUSTIFICATION");
+        log.Entries.Select(e => e.Resource).ShouldBe(
+            ["buckets/b", "buckets/b/jobs/job-9", "buckets/b/jobs/job-9", "projects/p/quotas/NVIDIA_L4_GPUS/regions/us-central1"]);
         JsonSerializer.Serialize(log.Entries).ShouldNotContain(Secret);
-        log.Entries.Single(e => e.Operation == "Storage.DeletePrefix").Resource.ShouldBe("buckets/b/jobs/job-9");
+    }
+
+    [Fact]
+    public async Task The_multi_step_non_replayable_mutations_also_write_a_started_line()
+    {
+        // Creating the bucket, deleting a prefix and creating the worker identity each span several API calls and cannot simply be
+        // replayed: a process killed in the middle must leave evidence that they began (the VM calls are covered by the neighbours).
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
+        var storage = Substitute.For<IStorageGateway>();
+        storage.EnsureBucketAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("b");
+        var ct = CancellationToken.None;
+
+        await new AuditedStorageGateway(storage, auditor).EnsureBucketAsync("p", ct);
+        await new AuditedStorageGateway(storage, auditor).DeletePrefixAsync("b", "jobs/job-9/", ct);
+        await new AuditedWorkerIdentityGateway(Substitute.For<IWorkerIdentityGateway>(), auditor).EnsureWorkerIdentityAsync("p", "b", ct);
+
+        log.Started.Select(e => e.Operation).ShouldBe(["Storage.EnsureBucket", "Storage.DeletePrefix", "Iam.EnsureWorkerIdentity"]);
+        log.Entries.Select(e => e.CorrelationId).ShouldBe(log.Started.Select(e => e.CorrelationId));
     }
 
     [Fact]

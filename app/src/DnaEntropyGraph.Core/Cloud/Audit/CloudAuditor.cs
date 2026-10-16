@@ -28,10 +28,16 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
 
     /// <param name="describe">Names the resource and job id. Run INSIDE the guarded region: an argument that is null makes the call fail (and be recorded) instead of throwing out of the decorator.</param>
     /// <param name="started">True for a long mutation (create, reuse, start, delete a VM): a <c>started</c> line is written before the call, so a process killed mid-call still leaves evidence; the finished line carries the same correlation id.</param>
-    public async Task<T> RunAsync<T>(string operation, Func<(string Resource, string? JobId)> describe, Func<Task<T>> call, Func<T, string?>? resourceFrom = null, bool started = false)
+    /// <param name="mintRequestId">True when the gateway sends a client-made request id (the compute insert): one is minted here, before the <c>started</c> line, and the gateway reads it through <see cref="CloudAuditContext.RequestIdForCall"/>, so the started line and a failed finished line both carry it.</param>
+    public async Task<T> RunAsync<T>(string operation, Func<(string Resource, string? JobId)> describe, Func<Task<T>> call, Func<T, string?>? resourceFrom = null, bool started = false, bool mintRequestId = false)
     {
         var start = time.GetTimestamp();
         using var scope = CloudAuditContext.Begin();
+        if (mintRequestId)
+        {
+            scope.Holder.RequestId = Guid.NewGuid().ToString();
+        }
+
         var resource = "(unknown)";
         string? jobId = null;
         var correlation = started ? Guid.NewGuid().ToString("N")[..12] : null;
@@ -74,6 +80,8 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
             await call().ConfigureAwait(false);
             return true;
         }, null, started).ConfigureAwait(false);
+
+
     public static string Name(CloudErrorKind kind) => kind switch
     {
         CloudErrorKind.Billing => "billing",
