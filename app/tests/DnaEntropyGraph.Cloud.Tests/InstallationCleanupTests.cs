@@ -296,6 +296,53 @@ public class InstallationCleanupTests
     }
 
     [Fact]
+    public async Task A_failure_that_is_not_a_cloud_error_on_the_second_computer_is_reported_per_item_and_the_sweep_goes_on()
+    {
+        // #740 round 2 (M1): the first computer is already gone when the second one throws something CloudOperationException does not cover (here under ActiveRuns.CancelAsync,
+        // which lets the body's exception reach the caller). The sweep must not abort: it reports the first as deleted, the second as failed, and still does the disk.
+        var compute = Substitute.For<IComputeGateway>();
+        var storage = Substitute.For<IStorageGateway>();
+        compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(
+        [
+            new VmDescriptor("deg-one", Zone, "RUNNING", Labels: new Dictionary<string, string>(Labels(Mine)) { ["job-id"] = "one" }),
+            new VmDescriptor("deg-two", Zone, "RUNNING", Labels: new Dictionary<string, string>(Labels(Mine)) { ["job-id"] = "two" }),
+        ]);
+        compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
+        compute.DeleteVmAsync("deg-two", Zone, Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new InvalidOperationException("boom"));
+        compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([Disk("d-1")]);
+        storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns([]);
+
+        var report = await new InstallationCleanup(compute, storage, new InMemoryRunRepository(), new ActiveRuns()).DeleteAllAsync(Project, Mine, CancellationToken.None);
+
+        report.Items.Single(i => i.Name == "deg-one").Outcome.ShouldBe(CleanupOutcome.Deleted, Describe(report));
+        var two = report.Items.Single(i => i.Name == "deg-two");
+        two.Outcome.ShouldBe(CleanupOutcome.Failed);
+        two.Detail.ShouldBe(nameof(InvalidOperationException), "the error class only, never the message");
+        await compute.Received(1).DeleteDiskAsync("d-1", Zone, Arg.Any<CancellationToken>());
+        report.Complete.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_computer_deleted_and_created_again_under_the_same_name_after_the_dialog_is_not_the_one_that_was_confirmed()
+    {
+        // #740 round 2 (L5): the confirmed set matches on name and zone AND the creation time where both sides have one.
+        var created = DateTimeOffset.Parse("2026-10-15T10:00:00Z");
+        var compute = Substitute.For<IComputeGateway>();
+        var storage = Substitute.For<IStorageGateway>();
+        var shown = new VmDescriptor("deg-x", Zone, "RUNNING", CreatedAt: created, Labels: Labels(Mine));
+        var now = new VmDescriptor("deg-x", Zone, "RUNNING", CreatedAt: created.AddHours(1), Labels: Labels(Mine));
+        compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([now]);
+        compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([]);
+        storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns([]);
+        var confirmed = new InstallationInventory([shown], [], null, new PrefixUsage(0, 0));
+
+        var report = await new InstallationCleanup(compute, storage).DeleteAllAsync(Project, Mine, CancellationToken.None, confirmed);
+
+        await compute.DidNotReceiveWithAnyArgs().DeleteVmAsync(default!, default!, Arg.Any<CancellationToken>());
+        report.Items.Single().Detail.ShouldBe(InstallationCleanup.NotConfirmedCode);
+    }
+
+    [Fact]
     public async Task Cancellation_stops_the_cleanup_and_propagates()
     {
         var (gcp, _) = await RigAsync();

@@ -151,13 +151,25 @@ public sealed class InstallationCleanup
                 continue;
             }
 
-            if (confirmed is not null && !confirmed.Vms.Any(v => v.Name == vm.Name && v.Zone == vm.Zone))
+            if (confirmed is not null && !confirmed.Vms.Any(v => SameResource(v.Name, v.Zone, v.CreatedAt, vm.Name, vm.Zone, vm.CreatedAt)))
             {
                 items.Add(new CleanupItem(CleanupKind.Vm, vm.Name, vm.Zone, CleanupOutcome.Skipped, NotConfirmedCode));
                 continue;
             }
 
-            await DeleteVmAndEndItsRunAsync(vm, items, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await DeleteVmAndEndItsRunAsync(vm, items, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Whatever escaped the body (ActiveRuns.CancelAsync lets its exception reach the caller) is this computer's failure, never the sweep's: the ones before it are
+                // already gone and the report must say so, and the ones after it still get their turn (#740).
+                if (!items.Any(i => i.Kind == CleanupKind.Vm && i.Name == vm.Name && i.Location == vm.Zone))
+                {
+                    items.Add(FailedItem(CleanupKind.Vm, vm.Name, vm.Zone, ex));
+                }
+            }
         }
 
         // --- Disks: listed again now, so the ones a deleted VM held are seen detached.
@@ -166,9 +178,9 @@ public sealed class InstallationCleanup
         {
             diskListing = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
         }
-        catch (CloudOperationException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            items.Add(new CleanupItem(CleanupKind.Disk, DiskListingName, string.Empty, CleanupOutcome.Failed, ex.Error.Code, ex.Kind));
+            items.Add(FailedItem(CleanupKind.Disk, DiskListingName, string.Empty, ex));
         }
 
         var deletedDisks = new List<DiskDescriptor>();
@@ -181,7 +193,7 @@ public sealed class InstallationCleanup
                 continue;
             }
 
-            if (confirmed is not null && !confirmed.Disks.Any(d => d.Name == disk.Name && d.Zone == disk.Zone))
+            if (confirmed is not null && !confirmed.Disks.Any(d => SameResource(d.Name, d.Zone, d.CreatedAt, disk.Name, disk.Zone, disk.CreatedAt)))
             {
                 items.Add(new CleanupItem(CleanupKind.Disk, disk.Name, disk.Zone, CleanupOutcome.Skipped, NotConfirmedCode));
                 continue;
@@ -202,12 +214,12 @@ public sealed class InstallationCleanup
         if (deletedDisks.Count > 0)
         {
             IReadOnlyList<DiskDescriptor>? remaining = null;
-            CloudOperationException? readBackFailure = null;
+            Exception? readBackFailure = null;
             try
             {
                 remaining = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
             }
-            catch (CloudOperationException ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 readBackFailure = ex;
             }
@@ -216,7 +228,7 @@ public sealed class InstallationCleanup
             {
                 if (remaining is null)
                 {
-                    items.Add(new CleanupItem(CleanupKind.Disk, disk.Name, disk.Zone, CleanupOutcome.NotVerified, readBackFailure!.Error.Code, readBackFailure.Kind));
+                    items.Add(FailedItem(CleanupKind.Disk, disk.Name, disk.Zone, readBackFailure!) with { Outcome = CleanupOutcome.NotVerified });
                     continue;
                 }
 
@@ -261,9 +273,9 @@ public sealed class InstallationCleanup
                         ? new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.Deleted, RecoverableForDays: recoverable)
                         : new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.NotVerified, StillThereCode));
                 }
-                catch (CloudOperationException ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    items.Add(new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.NotVerified, ex.Error.Code, ex.Kind));
+                    items.Add(FailedItem(CleanupKind.JobData, prefix, bucket.Name, ex) with { Outcome = CleanupOutcome.NotVerified });
                 }
             }
         }
@@ -312,9 +324,9 @@ public sealed class InstallationCleanup
             {
                 still = await _compute.GetVmAsync(vm.Name, vm.Zone, cancellationToken).ConfigureAwait(false);
             }
-            catch (CloudOperationException ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                items.Add(new CleanupItem(CleanupKind.Vm, vm.Name, vm.Zone, CleanupOutcome.NotVerified, ex.Error.Code, ex.Kind));
+                items.Add(FailedItem(CleanupKind.Vm, vm.Name, vm.Zone, ex) with { Outcome = CleanupOutcome.NotVerified });
                 return;
             }
 
@@ -386,10 +398,28 @@ public sealed class InstallationCleanup
             items.Add(new CleanupItem(kind, name, location, CleanupOutcome.Failed, PrefixRefusedCode));
             return false;
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            items.Add(FailedItem(kind, name, location, ex));
+            return false;
+        }
     }
 
     private static async Task<bool> TryAsync<T>(Func<Task<T>> delete, CleanupKind kind, string name, string location, List<CleanupItem> items)
         => await TryAsync(async () => { await delete().ConfigureAwait(false); }, kind, name, location, items).ConfigureAwait(false);
+    /// <summary>A Failed item for an exception: the cloud error's code and kind, else only the exception's class name (never its message, which can carry a name or a path).</summary>
+    private static CleanupItem FailedItem(CleanupKind kind, string name, string location, Exception ex)
+        => ex is CloudOperationException cloud
+            ? new CleanupItem(kind, name, location, CleanupOutcome.Failed, cloud.Error.Code, cloud.Kind)
+            : new CleanupItem(kind, name, location, CleanupOutcome.Failed, ex.GetType().Name);
+
+    /// <summary>
+    /// The same resource as the one the user was shown: name and zone, and the creation time when both sides have one (a computer or disk deleted and created again under the
+    /// same name is a different resource). THEORY (unverified): the gateways report Compute's creationTimestamp; the descriptors carry no numeric resource id.
+    /// </summary>
+    private static bool SameResource(string name, string zone, DateTimeOffset? createdAt, string otherName, string otherZone, DateTimeOffset? otherCreatedAt)
+        => name == otherName && zone == otherZone && (createdAt is null || otherCreatedAt is null || createdAt == otherCreatedAt);
+
     private static bool BelongsTo(VmDescriptor vm, string installationId)
         => vm.Labels is { } labels
             && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
