@@ -246,8 +246,11 @@ public sealed class CloudCliApp
             stdout.Write(builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", stdout.NewLine, StringComparison.Ordinal));
             if (read > MaxObjectBytes)
             {
-                stderr.WriteLine($"ERROR: {Ascii(command.Key)} is larger than {MaxObjectBytes} bytes, so only the first {MaxObjectBytes} bytes were printed. Download the rest from the Google Cloud console.");
-                return CloudCliExitCode.CloudError;
+                // Exit 0, not CloudError: the head WAS printed and a caller that saves stdout (cloud_gpu_test.ps1 pulls the log) must keep
+                // it. The notice goes into the output itself, so a saved file says it is cut, and to stderr for the console.
+                stdout.WriteLine();
+                stdout.WriteLine($"[truncated: only the first {MaxObjectBytes} bytes are shown]");
+                stderr.WriteLine($"WARNING: {Ascii(command.Key)} is larger than {MaxObjectBytes} bytes, so only the first {MaxObjectBytes} bytes were printed. Download the rest from the Google Cloud console.");
             }
         }
 
@@ -273,6 +276,10 @@ public sealed class CloudCliApp
                 }
 
                 metadata = built;
+
+                // Developer-mode carve-out (#759): the pinned worker image list ships embedded in the WinUI app, which this console host
+                // cannot reference, so it cannot enforce the allowlist the app enforces. It says so every time instead of staying silent.
+                stderr.WriteLine($"WARNING: --worker-image {Ascii(command.WorkerImage)} is not checked against the pinned worker image list that ships with the app (this is the developer path, like the app's developer mode). Use only a digest you released yourself.");
             }
             catch (ArgumentException ex)
             {

@@ -606,7 +606,9 @@ function Wait-GpuTestResult {
         [Parameter(Mandatory)][string]$JobId,
         [Parameter(Mandatory)][string]$LogDir,
         [Parameter(Mandatory)][int]$TimeoutSeconds,
-        [Parameter(Mandatory)][int]$PollSeconds
+        [Parameter(Mandatory)][int]$PollSeconds,
+        [string]$ExpectedImage = '',
+        [string]$ExpectedVm = ''
     )
     $resultKey = "jobs/$JobId/logs/gpu-test-result.json"
     $logKey = "jobs/$JobId/logs/gpu-test.log"
@@ -640,11 +642,19 @@ function Wait-GpuTestResult {
     try {
         $parsed = $result.Text | ConvertFrom-Json -ErrorAction Stop
         if ($null -eq $parsed.exitCode) { throw 'no exitCode' }
-        return [int]$parsed.exitCode
     } catch {
         Write-UsageError "the gpu-test result object was not readable JSON with an exitCode. Read $resultKey in bucket $Bucket in the Google Cloud console."
         return $null
     }
+    # The result must be THIS run's: the image it ran and the VM that wrote it. (A reused job id is also refused before create.)
+    if (($ExpectedImage -and $parsed.image -cne $ExpectedImage) -or ($ExpectedVm -and $parsed.vm.name -cne $ExpectedVm)) {
+        Write-UsageError "the gpu-test result in $resultKey is not from this run (image '$($parsed.image)', VM '$($parsed.vm.name)'; expected '$ExpectedImage' on '$ExpectedVm'), so it was not trusted. Read it in bucket $Bucket, then run again with a new -JobId."
+        return $null
+    }
+    if ($parsed.error) {
+        Write-UsageError "the VM stopped before any test ran: $($parsed.error). Read $logKey (pulled above) and jobs/$JobId/logs/startup.log in bucket $Bucket."
+    }
+    return [int]$parsed.exitCode
 }
 
 function Invoke-Apply {
@@ -714,6 +724,20 @@ function Invoke-Apply {
         $effectiveBucket = [string]$ensureName
     }
 
+    # A job id whose result object exists is a FINISHED run: its verdict would be read as this run's. Refuse before any VM exists.
+    if ($Image) {
+        $existing = Get-CloudCliText -CloudCliPath $cloudCli -CliArgs (New-ObjectGetArgs -ProjectId $ProjectId -Bucket $effectiveBucket -Key "jobs/$JobId/logs/gpu-test-result.json")
+        if ($existing.Exit -eq 0) {
+            Write-UsageError "jobs/$JobId/logs/gpu-test-result.json already exists in bucket ${effectiveBucket}: that job id was used by an earlier run, and its result would be read as this one. No VM was created. Run again with a new -JobId (or without -JobId)."
+            exit 2
+        }
+        if ($existing.Exit -ne 5) {
+            Write-UsageError "object get exited $($existing.Exit) while checking for an earlier result of job $JobId, so no VM was created. Check the internet connection and that the app is signed in, then run again."
+            $Script:ApplyCreateFailed = $true
+            return
+        }
+    }
+
     $vmName = "deg-$JobId"
     $createArgs = New-VmCreateArgs -ProjectId $ProjectId -Zone $Zone -ServiceAccount $ServiceAccount -InstallationId $InstallationId `
         -JobId $JobId -Model $Model -MachineType $MachineType -AppVersion $AppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds `
@@ -736,7 +760,7 @@ function Invoke-Apply {
             $timeout = if ($GpuTestTimeoutSeconds -gt 0) { $GpuTestTimeoutSeconds } else { [math]::Max(60, $MaxRunDurationSeconds - 60) }
             $logTarget = if ($LogDir) { $LogDir } else { Join-Path ([IO.Path]::GetTempPath()) (Join-Path 'deg-gpu-test' $JobId) }
             $Script:GpuTestExit = Wait-GpuTestResult -CloudCliPath $cloudCli -ProjectId $ProjectId -Bucket $effectiveBucket -JobId $JobId `
-                -LogDir $logTarget -TimeoutSeconds $timeout -PollSeconds $PollSeconds
+                -LogDir $logTarget -TimeoutSeconds $timeout -PollSeconds $PollSeconds -ExpectedImage $Image -ExpectedVm $vmName
             if ($null -eq $Script:GpuTestExit) {
                 Write-UsageError "pytest -m gpu: NO RESULT. Nothing was proven."
             } elseif ($Script:GpuTestExit -eq 0) {
@@ -806,15 +830,16 @@ function New-ApplyStub {
     # A stub CloudCli that logs every call to calls.txt next to it: `vm create` exits $CreateExit, `resources list --json` prints
     # $JsonBody, any other `resources list` prints an empty table, everything else exits 0.
     # Issue #759: `bucket ensure` prints {"name":"deg-test-bucket"}; `object get` of the result key prints $ResultBody (or exits
-    # $ResultExit when that is non-zero, 5 meaning "not there yet"), any other `object get` prints a pytest summary line.
+    # $ResultExit when that is non-zero, 5 meaning "not there yet"), any other `object get` prints a pytest summary line. The result
+    # object only exists after `vm create` ran (the way a real run's does), unless -ResultPreexists (a reused job id).
     param(
         [Parameter(Mandatory)][string]$Directory, [int]$CreateExit = 0, [int]$DeleteExit = 0, [int]$TableExit = 0, [string]$JsonBody = '[]',
-        [int]$ResultExit = 0, [string]$ResultBody = '{"exitCode":0,"timedOut":false}'
+        [int]$ResultExit = 0, [string]$ResultBody = '{"exitCode":0,"timedOut":false}', [switch]$ResultPreexists
     )
     $resultLines = if ($ResultExit -eq 0) { @("echo $ResultBody", 'exit /b 0') } else { @("exit /b $ResultExit") }
     $body = @(
         '>>"%~dp0calls.txt" echo %*',
-        ('echo %*|findstr /c:"vm create" >nul && exit /b ' + $CreateExit),
+        ('echo %*|findstr /c:"vm create" >nul && (type nul>"%~dp0created.flag" & exit /b ' + $CreateExit + ')'),
         ('echo %*|findstr /c:"vm delete" >nul && exit /b ' + $DeleteExit),
         'echo %*|findstr /c:"bucket ensure" >nul && goto ensure',
         'echo %*|findstr /c:"object get" >nul && goto objget',
@@ -834,7 +859,7 @@ function New-ApplyStub {
         'echo == 3 passed ==',
         'exit /b 0',
         ':objresult'
-    ) + $resultLines
+    ) + $(if ($ResultPreexists) { @() } else { @('if not exist "%~dp0created.flag" exit /b 5') }) + $resultLines
     return New-StubCli -Directory $Directory -Body $body
 }
 
@@ -989,26 +1014,27 @@ function Invoke-SelfTest {
     # -Apply -Image (issue #759): the gpu-test run. Bucket ensure, create with the startup flags, poll the result object, pull the log,
     # delete, leak scan, table. The stub answers `object get` for the result and the log; -ResultExit 5 means "not there yet".
     $digest = 'ghcr.io/raaif-yousuf/dna-entropy-worker:0.1.0-cuda@sha256:' + ('ab' * 32)
+    $okBody = '{"exitCode":0,"timedOut":false,"image":"' + $digest + '","vm":{"name":"deg-20261015-120000-ab3xy9"}}'
     $imgBase = @('-NoProfile', '-File', $PSCommandPath, '-ProjectId', 'fake-test-project', '-ServiceAccount', 'w@fake-test-project.iam.gserviceaccount.com',
         '-Zone', 'us-central1-a', '-JobId', '20261015-120000-ab3xy9', '-InstallationId', 'inst123', '-Apply', '-SettleSeconds', '0', '-PollSeconds', '0',
         '-Image', $digest)
     $imgDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-img-" + [guid]::NewGuid().ToString('N'))
     $imgLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-imglog-" + [guid]::NewGuid().ToString('N'))
     try {
-        $imgStub = New-ApplyStub -Directory $imgDir -DeleteExit 5 -ResultBody '{"exitCode":0,"timedOut":false}'
+        $imgStub = New-ApplyStub -Directory $imgDir -DeleteExit 5 -ResultBody $okBody
         $imgOut = @(& pwsh @imgBase -CloudCliPath $imgStub -LogDir $imgLogDir 2>&1 | ForEach-Object { "$_" })
         Check "-Apply -Image against a passing stub exits 0" ($LASTEXITCODE -eq 0)
         $imgCalls = @(Get-Content -Path (Join-Path $imgDir 'calls.txt'))
         $verbs = @($imgCalls | ForEach-Object { ($_ -split ' ')[0..1] -join ' ' })
-        Check "-Apply -Image calls CloudCli in order: bucket ensure, vm create, object get x2, vm delete, resources list x2" (
-            ($verbs -join ',') -eq 'bucket ensure,vm create,object get,object get,vm delete,resources list,resources list')
+        Check "-Apply -Image calls CloudCli in order: bucket ensure, result pre-check, vm create, object get x2, vm delete, resources list x2" (
+            ($verbs -join ',') -eq 'bucket ensure,object get,vm create,object get,object get,vm delete,resources list,resources list')
         $createCall = @($imgCalls | Where-Object { $_ -like 'vm create *' })[0]
         Check "-Apply -Image passes the digest, the bucket, gpu-test mode and the GPU expectation to vm create" (
             $createCall -like "*--worker-image $digest*" -and $createCall -like '*--bucket deg-test-bucket*' -and
             $createCall -like '*--startup-mode gpu-test*' -and $createCall -like '*--expect-gpu true*')
         Check "-Apply -Image polls the result object and then pulls the log (keys under jobs/<job>/logs)" (
-            $imgCalls[2] -like '*--key jobs/20261015-120000-ab3xy9/logs/gpu-test-result.json*' -and
-            $imgCalls[3] -like '*--key jobs/20261015-120000-ab3xy9/logs/gpu-test.log*' -and $imgCalls[2] -like '*--bucket deg-test-bucket*')
+            $imgCalls[3] -like '*--key jobs/20261015-120000-ab3xy9/logs/gpu-test-result.json*' -and
+            $imgCalls[4] -like '*--key jobs/20261015-120000-ab3xy9/logs/gpu-test.log*' -and $imgCalls[3] -like '*--bucket deg-test-bucket*')
         $pulled = Join-Path $imgLogDir 'gpu-test.log'
         Check "-Apply -Image writes the pulled log to -LogDir" ((Test-Path $pulled) -and ((Get-Content -Raw $pulled) -match '3 passed'))
         Check "-Apply -Image reports the pytest verdict and not 'NOT RUN'" (($imgOut -join "`n") -match 'pytest -m gpu: PASSED' -and ($imgOut -join "`n") -notmatch 'NOT RUN')
@@ -1019,15 +1045,60 @@ function Invoke-SelfTest {
         Remove-StubCli -Directory $imgLogDir
     }
 
+    # A reused -JobId whose result object already exists (a finished run of the same id) is refused BEFORE a VM is created: the old
+    # result would be read as this run's verdict (stale PASS).
+    $reDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-reuse-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $reStub = New-ApplyStub -Directory $reDir -ResultBody $okBody -ResultPreexists
+        $reOut = & pwsh @imgBase -CloudCliPath $reStub -LogDir $imgLogDir 2>&1 | Out-String
+        Check "-Apply -Image with a job id that already has a gpu-test result exits 2" ($LASTEXITCODE -eq 2)
+        Check "-Apply -Image with a reused job id names the key and says to use a new -JobId" ($reOut -match 'gpu-test-result\.json' -and $reOut -match '-JobId')
+        $reCalls = @(Get-Content -Path (Join-Path $reDir 'calls.txt'))
+        Check "-Apply -Image with a reused job id creates no VM" (@($reCalls | Where-Object { $_ -like 'vm create *' }).Count -eq 0)
+    } finally {
+        Remove-StubCli -Directory $reDir
+    }
+
+    # A result that is not this run's (another image or another VM name) is not trusted as a verdict.
+    $stDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-stale-" + [guid]::NewGuid().ToString('N'))
+    $stLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-stalelog-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $otherDigest = 'ghcr.io/raaif-yousuf/dna-entropy-worker:0.0.9-cuda@sha256:' + ('cd' * 32)
+        $stStub = New-ApplyStub -Directory $stDir -ResultBody ($okBody -replace [regex]::Escape($digest), $otherDigest)
+        $stOut = & pwsh @imgBase -CloudCliPath $stStub -LogDir $stLogDir 2>&1 | Out-String
+        Check "-Apply -Image does not pass on a result written by another image" ($LASTEXITCODE -eq 1 -and $stOut -notmatch 'pytest -m gpu: PASSED' -and $stOut -match 'not from this run')
+        Remove-StubCli -Directory $stDir
+        $stStub = New-ApplyStub -Directory $stDir -ResultBody ($okBody -replace 'deg-20261015-120000-ab3xy9', 'deg-someone-elses-job')
+        $stOut = & pwsh @imgBase -CloudCliPath $stStub -LogDir $stLogDir 2>&1 | Out-String
+        Check "-Apply -Image does not pass on a result written by another VM" ($LASTEXITCODE -eq 1 -and $stOut -notmatch 'pytest -m gpu: PASSED' -and $stOut -match 'not from this run')
+    } finally {
+        Remove-StubCli -Directory $stDir
+        Remove-StubCli -Directory $stLogDir
+    }
+
+    # An early failure result (GPU never visible, image pull failed) ends the wait at once and names the error.
+    $efDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-early-" + [guid]::NewGuid().ToString('N'))
+    $efLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-earlylog-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $efBody = '{"exitCode":7,"timedOut":false,"error":"GPU_NOT_VISIBLE","image":"' + $digest + '","vm":{"name":"deg-20261015-120000-ab3xy9"}}'
+        $efStub = New-ApplyStub -Directory $efDir -ResultBody $efBody
+        $efOut = & pwsh @imgBase -CloudCliPath $efStub -LogDir $efLogDir 2>&1 | Out-String
+        Check "-Apply -Image whose VM reported an early failure exits 1 and names the error" ($LASTEXITCODE -eq 1 -and $efOut -match 'GPU_NOT_VISIBLE')
+        Check "-Apply -Image reports the early failure as FAILED, not as a pass" ($efOut -match 'pytest -m gpu: FAILED \(exit code 7\)')
+    } finally {
+        Remove-StubCli -Directory $efDir
+        Remove-StubCli -Directory $efLogDir
+    }
+
     # -Bucket skips `bucket ensure`.
     $bkDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-bk-" + [guid]::NewGuid().ToString('N'))
     $bkLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-bklog-" + [guid]::NewGuid().ToString('N'))
     try {
-        $bkStub = New-ApplyStub -Directory $bkDir -ResultBody '{"exitCode":0,"timedOut":false}'
+        $bkStub = New-ApplyStub -Directory $bkDir -ResultBody $okBody
         & pwsh @imgBase -CloudCliPath $bkStub -LogDir $bkLogDir -Bucket 'my-own-bucket' 2>&1 | Out-Null
         $bkCalls = @(Get-Content -Path (Join-Path $bkDir 'calls.txt'))
         Check "-Apply -Image -Bucket skips bucket ensure and uses the given bucket" (
-            @($bkCalls | Where-Object { $_ -like 'bucket ensure*' }).Count -eq 0 -and @($bkCalls | Where-Object { $_ -like '*--bucket my-own-bucket*' }).Count -ge 2)
+            @($bkCalls | Where-Object { $_ -like 'bucket ensure*' }).Count -eq 0 -and @($bkCalls | Where-Object { $_ -like '*--bucket my-own-bucket*' }).Count -ge 3)
     } finally {
         Remove-StubCli -Directory $bkDir
         Remove-StubCli -Directory $bkLogDir
@@ -1037,7 +1108,7 @@ function Invoke-SelfTest {
     $pfDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-pf-" + [guid]::NewGuid().ToString('N'))
     $pfLogDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-pflog-" + [guid]::NewGuid().ToString('N'))
     try {
-        $pfStub = New-ApplyStub -Directory $pfDir -ResultBody '{"exitCode":1,"timedOut":false}'
+        $pfStub = New-ApplyStub -Directory $pfDir -ResultBody ($okBody -replace '"exitCode":0', '"exitCode":1')
         $pfOut = & pwsh @imgBase -CloudCliPath $pfStub -LogDir $pfLogDir 2>&1 | Out-String
         Check "-Apply -Image whose pytest failed exits 1" ($LASTEXITCODE -eq 1)
         Check "-Apply -Image whose pytest failed says FAILED with the exit code" ($pfOut -match 'pytest -m gpu: FAILED \(exit code 1\)')

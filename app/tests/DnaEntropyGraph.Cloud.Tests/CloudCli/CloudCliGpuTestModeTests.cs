@@ -177,4 +177,57 @@ public class CloudCliGpuTestModeTests
         missing.Err.ShouldContain("not there yet");
         missing.Out.ShouldBeEmpty();
     }
+
+    [Fact]
+    public async Task Object_get_over_the_cap_prints_the_head_with_a_truncation_notice_and_exits_ok()
+    {
+        var fake = new FakeGcp();
+        var bucket = FakeGcp.BucketName(Project);
+        fake.PutObject(bucket, "jobs/job9/logs/gpu-test.log", Encoding.ASCII.GetBytes(new string('x', (4 * 1024 * 1024) + 10)));
+
+        var result = await RunAsync(fake, "object", "get", "--project", Project, "--bucket", bucket, "--key", "jobs/job9/logs/gpu-test.log");
+
+        // Exit 0: the caller (cloud_gpu_test.ps1) pulls the log whatever the size, and a CloudError exit read as "not pulled".
+        result.ExitCode.ShouldBe(CloudCliExitCode.Ok, result.Err);
+        result.Out.ShouldContain("[truncated: only the first 4194304 bytes are shown]");
+        result.Out.Count(c => c == 'x').ShouldBe(4 * 1024 * 1024);
+        result.Err.ShouldStartWith("WARNING:");
+        result.Err.ShouldContain("Google Cloud console");
+    }
+
+    [Fact]
+    public async Task Object_get_at_exactly_the_cap_is_not_reported_as_truncated()
+    {
+        var fake = new FakeGcp();
+        var bucket = FakeGcp.BucketName(Project);
+        fake.PutObject(bucket, "k", Encoding.ASCII.GetBytes(new string('a', 4 * 1024 * 1024)));
+
+        var result = await RunAsync(fake, "object", "get", "--project", Project, "--bucket", bucket, "--key", "k");
+
+        result.ExitCode.ShouldBe(CloudCliExitCode.Ok, result.Err);
+        result.Out.ShouldNotContain("truncated");
+        result.Err.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Vm_create_with_a_worker_image_warns_that_the_digest_is_not_checked_against_the_pinned_list()
+    {
+        var fake = new FakeGcp();
+
+        var result = await RunAsync(fake, Create("--worker-image", Image, "--bucket", "deg-my-lab-1", "--startup-mode", "gpu-test"));
+
+        result.ExitCode.ShouldBe(CloudCliExitCode.Ok, result.Err);
+        result.Err.ShouldStartWith("WARNING:");
+        result.Err.ShouldContain("pinned worker image list");
+        result.Err.ShouldContain("developer");
+        result.Err.ShouldContain(Image);
+    }
+
+    [Fact]
+    public async Task Vm_create_without_a_worker_image_prints_no_image_warning()
+    {
+        var result = await RunAsync(new FakeGcp(), Create());
+
+        result.Err.ShouldNotContain("pinned worker image list");
+    }
 }

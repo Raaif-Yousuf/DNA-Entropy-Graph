@@ -189,31 +189,75 @@ keep_hold() {
   cleanup "$after"
 }
 
+# gpu_test_early_fail CODE MESSAGE (issue #759): in gpu-test mode, a failure BEFORE the tests can start (GPU not visible, image pull
+# failed) still ends in gpu-test.log and, LAST, gpu-test-result.json, so scripts/cloud_gpu_test.ps1 stops polling at once instead of
+# waiting out its whole deadline. Outside gpu-test mode it does nothing (a job reports through status.json and result.json). exitCode 7
+# is the infrastructure failure; "error" carries the code. GPU_TEST_LOG / GPU_TEST_RESULT exist so a test can point the files elsewhere.
+gpu_test_early_fail() {
+  [ "$MODE" = "gpu-test" ] || return 0
+  local log="${GPU_TEST_LOG:-/var/log/deg-gpu-test.log}" result="${GPU_TEST_RESULT:-/tmp/deg-gpu-test-result.json}"
+  echo "ERROR: $1: $2" > "$log"
+  put_object "$log" "jobs/${JOB}/logs/gpu-test.log" || true
+  printf '{"schema":1,"jobId":"%s","mode":"gpu-test","exitCode":7,"timedOut":false,"error":"%s","image":"%s","vm":{"name":"%s","zone":"%s"},"finishedAt":"%s"}\n' \
+    "$JOB" "$1" "$IMAGE" "$NAME" "$ZONE" "$(date -u +%FT%TZ)" > "$result"
+  put_object "$result" "jobs/${JOB}/logs/gpu-test-result.json" || true
+}
+
 # gpu_test_run (issue #759, scripts/cloud_gpu_test.ps1): the whole of gpu-test mode. Runs `pytest -m gpu` inside the image (the
 # image must carry pytest and worker/tests, see Dockerfile.cuda), uploads the log and then, LAST, gpu-test-result.json (the file
-# the caller polls for, like result.json for a job), and applies the lifecycle. The deadline is maxRunDuration minus a 10 minute
-# margin (at least 60 s) so a hung test is cut off by `timeout` (exit 124) before Compute Engine kills the VM. Returns pytest's
-# exit code. GPU_TEST_LOG / GPU_TEST_RESULT exist so a test can point the files somewhere writable.
+# the caller polls for, like result.json for a job), and applies the lifecycle. Returns pytest's exit code.
+#   - The deadline is counted from BOOT (/proc/uptime, like keep_hold: the GPU wait and the image pull already used part of
+#     maxRunDuration) and ends 10 minutes before maxRunDuration (at least 60 s), so a hung test is cut off before Compute Engine
+#     kills the VM.
+#   - The container runs under `--init` with a NAME. `timeout` signals the docker CLI, and with python as PID 1 (no SIGTERM handler)
+#     the signal never reached the tests; tini forwards it. `timeout -k 30` escalates to KILL, and on a timeout `docker kill <name>`
+#     stops the container itself. exit 124 is normalised for both timeout outcomes.
+#   - The tests are selected by COLLECTION (`pytest --collect-only -m gpu` per file inside the image), not by grepping file text: a
+#     file that only mentions the marker is not run and a marker set another way is not missed. A file that cannot be imported in the
+#     image (it needs a dev-only dependency) is named in the log and left out.
+# GPU_TEST_LOG / GPU_TEST_RESULT / GPU_TEST_UPTIME_FILE exist so a test can point the files somewhere writable.
 gpu_test_run() {
   local log="${GPU_TEST_LOG:-/var/log/deg-gpu-test.log}" result="${GPU_TEST_RESULT:-/tmp/deg-gpu-test-result.json}"
-  local limit=$(( (MAX_RUN_MIN - 10) * 60 )) rc timed_out=false
+  local cname="deg-gputest-${JOB}" up limit rc timed_out=false started=$SECONDS select_py
+  up=$(cut -d. -f1 "${GPU_TEST_UPTIME_FILE:-/proc/uptime}" 2>/dev/null)
+  limit=$(( (MAX_RUN_MIN - 10) * 60 - ${up:-$SECONDS} ))
   if [ "$limit" -lt 60 ]; then
     limit=60
   fi
+  select_py=$(cat <<'PY'
+import glob, subprocess, sys
+files = []
+for f in sorted(glob.glob("tests/test_*.py")):
+    r = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "gpu", "-p", "no:cacheprovider", f],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        files.append(f)
+    elif r.returncode != 5:
+        print("not collected (could not be imported in this image):", f, flush=True)
+if not files:
+    print("no gpu test files found", flush=True)
+    sys.exit(5)
+sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-m", "gpu", "-p", "no:cacheprovider", "-q", "-ra", *files]))
+PY
+)
   status running
-  if timeout "$limit" docker run --rm \
+  docker rm -f "$cname" >/dev/null 2>&1 || true  # a leftover of an earlier boot of this job would block --name
+  if timeout -k 30 "$limit" docker run --rm --init --name "$cname" \
     "${GPU_FLAGS[@]}" --shm-size=8g \
     -v /var/cache/deg-hf:/hf-cache \
     -e HF_HOME=/hf-cache \
     -w /opt/worker \
     "$IMAGE" \
-    bash -c 'files=$(grep -l "pytest.mark.gpu" tests/test_*.py); [ -n "$files" ] || { echo "no gpu test files found"; exit 5; }; exec python -m pytest -m gpu -p no:cacheprovider -q -ra $files' 2>&1 | tee "$log"; then
+    python -c "$select_py" 2>&1 | tee "$log"; then
     rc=0
   else
     rc=${PIPESTATUS[0]}
   fi
-  if [ "$rc" = "124" ]; then
+  # 124: `timeout` ended it; 137 after the full limit: the -k KILL had to finish it. Either way stop the container by name.
+  if [ "$rc" = "124" ] || { [ "$rc" = "137" ] && [ $(( SECONDS - started )) -ge "$limit" ]; }; then
     timed_out=true
+    rc=124
+    docker kill "$cname" || true
   fi
   # A skipped GPU test is not a pass: with torch or evo2 not importable every gpu test skips itself and pytest still exits 0.
   # Exit code 6 says "the GPU tests did not really run".
@@ -249,7 +293,15 @@ shutdown -h "+$(( MAX_RUN_MIN + 15 ))" &
 # startup-script re-runs on every boot, including a restart after STOP. If a previous boot
 # already reached a terminal stage, do not repeat the whole install/run cycle — just apply
 # the lifecycle again (harmless if it already happened) and exit clean.
-if get_object "jobs/${JOB}/status.json" 2>/dev/null | grep -Eq '"stage":"(done|failed|cancelled)"'; then
+# gpu-test mode keys on its OWN result object: a reused job id can carry an old status.json=done from an earlier run, which must not
+# make a fresh VM skip the tests (the caller also refuses a job id whose result object already exists).
+if [ "$MODE" = "gpu-test" ]; then
+  gpu_done=$(get_object "jobs/${JOB}/logs/gpu-test-result.json" 2>/dev/null || true)
+  if [ -n "$gpu_done" ]; then
+    cleanup "$LIFECYCLE"
+    exit 0
+  fi
+elif get_object "jobs/${JOB}/status.json" 2>/dev/null | grep -Eq '"stage":"(done|failed|cancelled)"'; then
   cleanup "$LIFECYCLE"
   exit 0
 fi
@@ -269,6 +321,7 @@ if [ "$EXPECT_GPU" = "true" ]; then
   done
   if [ "$gpu_up" != true ]; then
     status failed '{"code":"GPU_NOT_VISIBLE","message":"GPU driver did not come up within 5 minutes","retriable":false}'
+    gpu_test_early_fail GPU_NOT_VISIBLE "GPU driver did not come up within 5 minutes"
     cleanup delete  # a box whose GPU never came up is not worth stopping-and-reusing
     exit 1
   fi
@@ -281,6 +334,7 @@ status installing
 # tag) so every VM in a batch, and every retry, runs byte-identical bits.
 if ! docker pull "$IMAGE"; then
   status failed '{"code":"IMAGE_PULL_FAILED","retriable":true}'
+  gpu_test_early_fail IMAGE_PULL_FAILED "docker pull of the worker image failed"
   cleanup "$LIFECYCLE"
   exit 1
 fi
