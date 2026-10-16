@@ -188,7 +188,7 @@ State is under `--state` (default `%TEMP%\deg-land-queue`): `queue.txt`, `taken.
 the pid in `runner.json` is alive and exits clean after `stop` (the stop file is consumed). It is built to run detached and survive the session that
 started it: a later session reads `status`. Every log is append-only: `retry` appends `RETRY <key>` to `taken.log` and `RETRY <branch> @ <sha>` to
 `done.log` (a rewrite would make `tail -F` monitors replay the file). When an item fails, a later queued item whose sha has the failed sha as an
-ancestor is logged `SKIPPED-STACK` and never attempted. After a merge the main checkout is fast-forwarded, only when it is on `main`. MEASURED 2026-10-15 defects of the scratchpad scripts it replaces, each with a test:
+ancestor is logged `SKIPPED-STACK` and never attempted. With `run --ff-main` (default off) the main checkout is fast-forwarded after a merge, only when it is on `main`, clean and has no `index.lock`; the outcome is logged as `FF-MAIN ...` in `done.log`. A DIRTY re-land closes the old PR with `--delete-branch` only when the PR head is a branch this queue created, never the lane's own. A pending check at the timeout never merges (`FAILED rc=6`). An `inflight.json` with no verdict at start becomes `FAILED interrupted`, so `retry` applies. `add` rejects a bad sha, a `|` or whitespace in the branch, or `|red=` in the title; `stop` refuses when no runner is alive. MEASURED 2026-10-15 defects of the scratchpad scripts it replaces, each with a test:
 
 - Items are keyed `branch@sha`, not by the whole line, so editing a queued title (or a trailing space) never re-takes a landed
   branch; a new sha of the same branch is a new item.
