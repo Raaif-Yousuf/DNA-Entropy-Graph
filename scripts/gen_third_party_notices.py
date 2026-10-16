@@ -76,9 +76,18 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
-ALLOWED_LICENSES: frozenset[str] = frozenset({
-    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "ISC", "Zlib", "CC0-1.0",
-})
+ALLOWED_LICENSES: frozenset[str] = frozenset(
+    {
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "0BSD",
+        "ISC",
+        "Zlib",
+        "CC0-1.0",
+    }
+)
 DENIED_PREFIXES: tuple[str, ...] = ("GPL-", "LGPL-", "AGPL-")
 
 # .NET projects that reach a distributed artefact (the Velopack installer payload).
@@ -108,8 +117,8 @@ CARVE_OUTS: dict[tuple[str, str], dict[str, str]] = {
         "issue": "301",
         "note": (
             "DECISION (owner recommendation, 2026-09-19, issue #301 comment -- NOT YET "
-            "formally written into docs/hard_rules.md rule 21's own \"Carve-out\" line, "
-            "which still reads \"None currently recorded\" as of this generation): allowed "
+            'formally written into docs/hard_rules.md rule 21\'s own "Carve-out" line, '
+            'which still reads "None currently recorded" as of this generation): allowed '
             "in the worker's [genes] extra, the -cuda/-cpu container images, and the local "
             "engine's pinned lock file only. Never in app/, any .csproj, or the installer "
             "payload. THIRD-PARTY-NOTICES.md listing Prodigal/pyrodigal under GPL-3.0 is "
@@ -117,6 +126,7 @@ CARVE_OUTS: dict[tuple[str, str], dict[str, str]] = {
         ),
     },
 }
+
 
 # A licence string this generator cannot classify purely from ALLOWED_LICENSES/DENIED_PREFIXES
 # (a non-SPDX LicenseRef-* expression, or a package with no local metadata to read at all),
@@ -146,7 +156,7 @@ CURATED_LICENSES: dict[tuple[str, str], CuratedLicense] = {
         note=(
             "MEASURED 2026-09-19: worker/.venv/Lib/site-packages/biopython-*.dist-info/"
             "licenses/LICENSE.rst read directly. Package-wide licence is the permissive, "
-            "attribution-only \"Biopython License Agreement\" (do-anything-with-notice, no "
+            'attribution-only "Biopython License Agreement" (do-anything-with-notice, no '
             "copyleft); some individual files are additionally dual-licensed BSD-3-Clause. "
             "Not a GPL/LGPL/AGPL family licence either way; treated as allowed the same way "
             "CLAUDE.md's stack table treats every other permissive academic/BSD-style "
@@ -162,8 +172,8 @@ CURATED_LICENSES: dict[tuple[str, str], CuratedLicense] = {
         verified=False,
         note=(
             "THEORY (unverified by THIS generator; carried from docs/tech_stack.md's own "
-            "Worker table, itself marked THEORY there too -- \"unverified this session; "
-            "well-known licence\"): torch is not installed in worker/.venv (Hard Rule 1/5 "
+            'Worker table, itself marked THEORY there too -- "unverified this session; '
+            'well-known licence"): torch is not installed in worker/.venv (Hard Rule 1/5 '
             "-- the laptop venv stays GPU-free; [evo] only installs on a GPU box/container), "
             "so there is no local metadata for this generator to read directly. Re-run this "
             "generator inside worker/vm's own container build (where [evo] is actually "
@@ -228,11 +238,14 @@ class NoticesGenerationError(RuntimeError):
 # .NET enumeration
 # ---------------------------------------------------------------------------
 
+
 def _dotnet_list_packages(csproj: Path) -> list[tuple[str, str]]:
     """Return [(name, resolvedVersion), ...] for one project's direct + transitive packages."""
     proc = subprocess.run(
         ["dotnet", "list", str(csproj), "package", "--include-transitive", "--format", "json"],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if proc.returncode != 0:
         raise NoticesGenerationError(f"'dotnet list package' failed for {csproj}: {proc.stdout}\n{proc.stderr}")
@@ -288,8 +301,12 @@ def _is_platform_nuget_package(name: str) -> bool:
     either "allowed" or "denied"), and flagged as a DECISION in this lane's report rather
     than assumed silently, since nobody had actually asked this question before this
     generator's first real run surfaced it."""
-    if name in {"Microsoft.Web.WebView2", "Microsoft.Windows.SDK.BuildTools",
-                "Microsoft.Windows.SDK.BuildTools.MSIX", "Microsoft.Windows.SDK.NET.Ref"}:
+    if name in {
+        "Microsoft.Web.WebView2",
+        "Microsoft.Windows.SDK.BuildTools",
+        "Microsoft.Windows.SDK.BuildTools.MSIX",
+        "Microsoft.Windows.SDK.NET.Ref",
+    }:
         return True
     return name.startswith("Microsoft.WindowsAppSDK")
 
@@ -315,14 +332,12 @@ def collect_dotnet_dependencies(app_root: Path) -> list[Dependency]:
 # Python enumeration
 # ---------------------------------------------------------------------------
 
+
 def _parse_pyproject_dependencies(pyproject: Path) -> tuple[list[str], dict[str, list[str]]]:
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     project = data.get("project", {})
     core = [_pep508_name(d) for d in project.get("dependencies", [])]
-    extras = {
-        group: [_pep508_name(d) for d in deps]
-        for group, deps in project.get("optional-dependencies", {}).items()
-    }
+    extras = {group: [_pep508_name(d) for d in deps] for group, deps in project.get("optional-dependencies", {}).items()}
     return core, extras
 
 
@@ -363,7 +378,9 @@ def _venv_license_lookup(venv_python: Path, names: list[str]) -> dict[str, dict]
     )
     proc = subprocess.run(
         [str(venv_python), "-c", script, json.dumps(names)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if proc.returncode != 0:
         raise NoticesGenerationError(f"worker venv license lookup failed: {proc.stdout}\n{proc.stderr}")
@@ -393,9 +410,7 @@ def collect_python_dependencies(worker_root: Path) -> list[Dependency]:
     if not pyproject.is_file():
         raise NoticesGenerationError(f"expected {pyproject} to exist")
     if not venv_python.is_file():
-        raise NoticesGenerationError(
-            f"expected {venv_python} to exist (Hard Rule 20: worker\\.venv, never the bare python on PATH)"
-        )
+        raise NoticesGenerationError(f"expected {venv_python} to exist (Hard Rule 20: worker\\.venv, never the bare python on PATH)")
 
     core, extras = _parse_pyproject_dependencies(pyproject)
     shipped_names = list(core)
@@ -429,13 +444,13 @@ def _python_dependency(name: str, scope: str, info: dict) -> Dependency:
         return Dependency("pypi", name, info["version"], scope, raw_license, True, "worker/.venv (importlib.metadata)")
     if curated and curated.raw is None:
         return Dependency("pypi", name, "(not installed)", scope, curated.license, curated.verified, curated.note)
-    return Dependency("pypi", name, "(not installed)", scope, "UNKNOWN", False,
-                       "not installed in worker/.venv and no curated override recorded")
+    return Dependency("pypi", name, "(not installed)", scope, "UNKNOWN", False, "not installed in worker/.venv and no curated override recorded")
 
 
 # ---------------------------------------------------------------------------
 # Vendored web assets (scripts/vendored_assets.json)
 # ---------------------------------------------------------------------------
+
 
 class VendoredAssetError(NoticesGenerationError):
     """A vendored asset is missing, tampered with, or under a licence Hard Rule 21 rejects."""
@@ -478,9 +493,7 @@ def load_vendored_assets(repo_root: Path, manifest: Path | None = None) -> list[
                 "re-vendor from the pinned source, or update the manifest if the change is intended"
             )
         if not _license_allowed(asset.license):
-            raise VendoredAssetError(
-                f"{asset.path}: licence '{asset.license}' is not MIT/Apache/BSD (Hard Rule 21)"
-            )
+            raise VendoredAssetError(f"{asset.path}: licence '{asset.license}' is not MIT/Apache/BSD (Hard Rule 21)")
         out.append(asset)
     out.sort(key=lambda a: a.path.lower())
     return out
@@ -489,8 +502,12 @@ def load_vendored_assets(repo_root: Path, manifest: Path | None = None) -> list[
 def render_vendored_section(assets: list[VendoredAsset]) -> str:
     # Heading names the common parent directory of every listed asset.
     directory = posixpath.commonpath([posixpath.dirname(a.path) for a in assets]) + "/"
-    lines = [f"## Vendored web assets (app installer payload, `{directory}`)", "",
-             "| Asset | Version | Licence | Source | sha256 |", "|---|---|---|---|---|"]
+    lines = [
+        f"## Vendored web assets (app installer payload, `{directory}`)",
+        "",
+        "| Asset | Version | Licence | Source | sha256 |",
+        "|---|---|---|---|---|",
+    ]
     for a in assets:
         shasum = f" (shasum {a.upstream_shasum})" if a.upstream_shasum else ""
         lines.append(f"| {a.name} ({a.description}) | {a.version} | {a.license} | {a.source}{shasum} | {a.sha256.upper()} |")
@@ -501,6 +518,7 @@ def render_vendored_section(assets: list[VendoredAsset]) -> str:
 # ---------------------------------------------------------------------------
 # Classification + rendering
 # ---------------------------------------------------------------------------
+
 
 def classify(dep: Dependency) -> str:
     """Return 'allowed', 'denied-with-carveout', 'denied', 'unrecognized', 'dev-only', or
@@ -519,8 +537,7 @@ def classify(dep: Dependency) -> str:
     return "unrecognized"
 
 
-def render(dotnet_deps: list[Dependency], python_deps: list[Dependency],
-           vendored: list[VendoredAsset] | None = None) -> str:
+def render(dotnet_deps: list[Dependency], python_deps: list[Dependency], vendored: list[VendoredAsset] | None = None) -> str:
     lines: list[str] = []
     lines.append("# Third-Party Notices")
     lines.append("")
@@ -571,14 +588,12 @@ def render(dotnet_deps: list[Dependency], python_deps: list[Dependency],
         lines.extend(render_vendored_section(vendored).rstrip("\n").split("\n"))
         lines.append("")
 
-    lines.append(
-        "## Platform components (Microsoft proprietary redistributables, not a third-party OSS choice)"
-    )
+    lines.append("## Platform components (Microsoft proprietary redistributables, not a third-party OSS choice)")
     lines.append("")
     lines.append(
         "The Windows App SDK, WebView2, and Windows SDK build tools a WinUI 3 app is built "
-        "on, under Microsoft's own \"MICROSOFT SOFTWARE LICENSE TERMS\" (their nuspecs "
-        "declare `<license type=\"file\">`, not an SPDX expression). Whether Hard Rule 21's "
+        'on, under Microsoft\'s own "MICROSOFT SOFTWARE LICENSE TERMS" (their nuspecs '
+        'declare `<license type="file">`, not an SPDX expression). Whether Hard Rule 21\'s '
         "MIT/Apache/BSD gate reaches the platform runtime itself, as opposed to a dependency "
         "this project chose to add, is an open scoping question - flagged as a DECISION "
         "rather than assumed silently either way."
@@ -607,16 +622,17 @@ def render(dotnet_deps: list[Dependency], python_deps: list[Dependency],
         lines.append("## UNRESOLVED licence problems (this generator refuses to call the tree clean)")
         lines.append("")
         for d in problems:
-            lines.append(f"- **{d.name} {d.version}** ({d.ecosystem}): licence `{d.license}` is not "
-                          f"MIT/Apache-2.0/BSD, and no `CARVE_OUTS`/`CURATED_LICENSES` entry resolves it. "
-                          f"Source: {d.license_source}.")
+            lines.append(
+                f"- **{d.name} {d.version}** ({d.ecosystem}): licence `{d.license}` is not "
+                f"MIT/Apache-2.0/BSD, and no `CARVE_OUTS`/`CURATED_LICENSES` entry resolves it. "
+                f"Source: {d.license_source}."
+            )
         lines.append("")
 
     return "\n".join(lines) + "\n"
 
 
-def generate(app_root: Path, worker_root: Path, repo_root: Path | None = None,
-             manifest: Path | None = None) -> tuple[str, bool]:
+def generate(app_root: Path, worker_root: Path, repo_root: Path | None = None, manifest: Path | None = None) -> tuple[str, bool]:
     """Return (rendered_markdown, clean). clean=False means an unresolved licence problem exists.
     Raises VendoredAssetError (a NoticesGenerationError) for a bad vendored asset."""
     repo_root = repo_root if repo_root is not None else app_root.resolve().parent
@@ -631,6 +647,7 @@ def generate(app_root: Path, worker_root: Path, repo_root: Path | None = None,
 # ---------------------------------------------------------------------------
 # Self-test: pure classify()/render() logic, no dotnet/venv required.
 # ---------------------------------------------------------------------------
+
 
 def self_test() -> bool:
     ok = True
@@ -648,8 +665,7 @@ def self_test() -> bool:
 
     gpl_no_carveout = Dependency("pypi", "some-gpl-tool", "1.0", "shipped", "GPL-3.0-or-later", True, "test")
     check(
-        "a GPL-family shipped dependency with NO carve-out classifies as denied (the gate this whole "
-        "script exists to enforce)",
+        "a GPL-family shipped dependency with NO carve-out classifies as denied (the gate this whole script exists to enforce)",
         classify(gpl_no_carveout) == "denied",
     )
 
@@ -667,8 +683,7 @@ def self_test() -> bool:
 
     weird = Dependency("pypi", "some-custom-licensed-tool", "1.0", "shipped", "LicenseRef-Something-Weird", True, "test")
     check(
-        "an unrecognised, non-SPDX licence string with no curated override classifies as unrecognized "
-        "(never silently allowed)",
+        "an unrecognised, non-SPDX licence string with no curated override classifies as unrecognized (never silently allowed)",
         classify(weird) == "unrecognized",
     )
 
@@ -697,8 +712,7 @@ def self_test() -> bool:
     # outcomes, or a future refactor that made classify() a no-op could still show "PASS".
     outcomes = {classify(d) for d in [mit, compound, gpl_no_carveout, gpl_with_carveout, dev_gpl, weird, biopython]}
     check(
-        "the self-test actually exercised every classify() outcome "
-        f"(saw {sorted(outcomes)}, need all 5)",
+        f"the self-test actually exercised every classify() outcome (saw {sorted(outcomes)}, need all 5)",
         outcomes == {"allowed", "denied", "denied-with-carveout", "dev-only", "unrecognized"},
     )
 
@@ -733,8 +747,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {args.out}")
 
     if not clean:
-        print("ERROR: one or more shipped dependencies have an unresolved licence problem "
-              "(see the UNRESOLVED section above) -- Hard Rule 21.", file=sys.stderr)
+        print(
+            "ERROR: one or more shipped dependencies have an unresolved licence problem (see the UNRESOLVED section above) -- Hard Rule 21.",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

@@ -98,6 +98,113 @@ public sealed class EntropyTrackTests : IDisposable
     public void A_missing_file_is_null()
         => BedGraphReader.Read(Path.Combine(_dir, "nope.bedgraph"), binSize: 1).ShouldBeNull();
 
+    // ---- #700: the reader's speed work must not change what it reads ----
+
+    private string WriteBytes(string name, string text)
+    {
+        var path = Path.Combine(_dir, name);
+        File.WriteAllBytes(path, new System.Text.UTF8Encoding(false).GetBytes(text));
+        return path;
+    }
+
+    [Fact]
+    public void Windows_line_endings_a_missing_final_newline_and_space_separators_read_the_same()
+    {
+        var path = WriteBytes("crlf.bedgraph", "# note\r\ntrack type=bedGraph\r\nc1 0 1 1.5\r\nc1\t1\t2\t+2.5e0\r\n  c1\t2\t4\t-0.5  ");
+        var means = BedGraphReader.Read(path, binSize: 4)!.Contigs.Single().Means;
+        means.ShouldBe([(1.5f + 2.5f - 1f) / 4f], 0.0001f);
+    }
+
+    [Fact]
+    public void A_row_with_an_extra_field_is_read_and_one_with_too_few_is_unreadable()
+    {
+        BedGraphReader.Read(WriteBytes("five.bedgraph", "c1\t0\t1\t2\t255,0,0\n"), binSize: 1)!.Contigs.Single().Means.ShouldBe([2f]);
+        BedGraphReader.Read(WriteBytes("three.bedgraph", "c1\t0\t1\n"), binSize: 1).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("c1\t-1\t1\t1\n")]
+    [InlineData("c1\t2\t1\t1\n")]
+    [InlineData("c1\t0\t1\tNaN\n")]
+    [InlineData("c1\t0\t1\tInfinity\n")]
+    [InlineData("c1\t0\t1\t1.2.3\n")]
+    [InlineData("c1\t0\t99999999999\t1\n")]
+    public void Rows_the_old_reader_refused_are_still_refused(string text)
+        => BedGraphReader.Read(WriteBytes("bad.bedgraph", text), binSize: 1).ShouldBeNull();
+
+    [Fact]
+    public void A_multi_megabyte_file_with_interleaved_contigs_and_wide_rows_matches_a_straightforward_reference()
+    {
+        // Large enough to straddle any read buffer; mixes per-base rows, wide rows and two contigs that alternate.
+        var rnd = new Random(7);
+        var text = new System.Text.StringBuilder();
+        var position = new[] { 0, 0 };
+        for (var row = 0; row < 250_000; row++)
+        {
+            var c = rnd.Next(2);
+            var width = rnd.Next(10) == 0 ? rnd.Next(2, 40) : 1;
+            var value = rnd.NextDouble() * 2;
+            text.Append(FormattableString.Invariant($"contig{c}\t{position[c]}\t{position[c] + width}\t{value:0.######}\n"));
+            position[c] += width;
+        }
+
+        var path = WriteBytes("big.bedgraph", text.ToString());
+        var got = BedGraphReader.Read(path, binSize: 16)!;
+        var want = Reference(text.ToString(), 16);
+
+        got.Contigs.Select(c => c.Name).ShouldBe(want.Keys.ToList());
+        foreach (var contig in got.Contigs)
+        {
+            var (length, means) = want[contig.Name];
+            contig.Length.ShouldBe(length);
+            contig.Means.Length.ShouldBe(means.Length);
+            for (var i = 0; i < means.Length; i++)
+            {
+                if (float.IsNaN(means[i]))
+                {
+                    float.IsNaN(contig.Means[i]).ShouldBeTrue();
+                }
+                else
+                {
+                    contig.Means[i].ShouldBe(means[i], 0.0001f);
+                }
+            }
+        }
+    }
+
+    /// <summary>The slow, obvious reading of a well-formed bedGraph: split each line, add value x bases to each bin.</summary>
+    private static Dictionary<string, (int Length, float[] Means)> Reference(string text, int binSize)
+    {
+        var sums = new Dictionary<string, List<(double Sum, int Count)>>();
+        var lengths = new Dictionary<string, int>();
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var f = line.Split('\t');
+            var (start, end, value) = (int.Parse(f[1]), int.Parse(f[2]), double.Parse(f[3], System.Globalization.CultureInfo.InvariantCulture));
+            if (!sums.TryGetValue(f[0], out var bins))
+            {
+                sums[f[0]] = bins = [];
+                lengths[f[0]] = 0;
+            }
+
+            lengths[f[0]] = Math.Max(lengths[f[0]], end);
+            for (var p = start; p < end; p++)
+            {
+                while (bins.Count <= p / binSize)
+                {
+                    bins.Add((0, 0));
+                }
+
+                var (s, n) = bins[p / binSize];
+                bins[p / binSize] = (s + value, n + 1);
+            }
+        }
+
+        return sums.ToDictionary(
+            kv => kv.Key,
+            kv => (lengths[kv.Key], Enumerable.Range(0, (lengths[kv.Key] + binSize - 1) / binSize).Select(i => i < kv.Value.Count && kv.Value[i].Count > 0 ? (float)(kv.Value[i].Sum / kv.Value[i].Count) : float.NaN).ToArray()));
+    }
+
     [Fact]
     public void Resample_to_fewer_points_averages_neighbours_and_keeps_the_shape()
     {
