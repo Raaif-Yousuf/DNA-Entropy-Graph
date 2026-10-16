@@ -504,7 +504,7 @@ anything marked `gpu` needs a real CUDA GPU the dev box does not have
 ```powershell
 scripts\cloud_gpu_test.ps1                   # dry-run (default): prints the plan, machine type, zone, estimated cost/minutes, creates nothing
 scripts\cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <worker sa email> -Apply   # create, delete and leak-scan ONE labelled VM (UNVERIFIED, billed)
-scripts\cloud_gpu_test.ps1 -PrintApplyArgs -ProjectId <id> -ServiceAccount <email>    # print the `vm create` argument list as JSON, no cloud call
+scripts\cloud_gpu_test.ps1 -PrintApplyArgs -ProjectId <id> -ServiceAccount <email>    # print the create/delete/list/leak argument lists as JSON, no cloud call
 scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
@@ -518,7 +518,10 @@ label are plan-only, `-DiskSizeGb` other than 150 is refused, and `-Image` is re
 or build `app/tools/DnaEntropyGraph.CloudCli`). It never falls back to a raw cloud CLI call: Appendix C denies one to agents on purpose.
 What it does today: `vm create`, then `vm delete` in a `finally` (so a failed create or a Ctrl+C does not leave a billing VM), the leak
 scan (`resources list --kind vm --json`; unparsable output or a non-zero exit fails the check), and last of all CloudCli's resource
-table, whose final line is `OK: 0 resource(s)` when nothing is left. It prints `pytest -m gpu: NOT RUN`: the created VM has no startup
+table, whose final line is `OK: 0 resource(s)` when nothing is left. A failed create is never read as clean: the delete is retried
+up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete exit 5 is reported as "not proof it is gone", the scan and the
+table still run, and the run exits 1. A failing final table call also exits 1. `-MaxRunDurationSeconds` must be 1 to 86400 (24 h) or
+`-Apply` exits 2. `-PrintApplyArgs` prints `{create, delete, list, leak}`, all four argument lists. It prints `pytest -m gpu: NOT RUN`: the created VM has no startup
 script (CloudCli cannot set metadata) and `worker/vm/startup.sh` only runs the worker. Default `-MaxRunDurationSeconds` is 3600 because
 that limit is the only backstop if the delete fails. The contract is tested twice: `-SelfTest` checks the list against a recorded flag
 list and runs the whole flow against a stub CloudCli, and `app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/CloudGpuTestScriptContractTests.cs`

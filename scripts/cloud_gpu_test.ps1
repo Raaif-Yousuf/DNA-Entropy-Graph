@@ -175,8 +175,15 @@
     build locations, then PATH.
 
 .PARAMETER PrintApplyArgs
-    Print the `vm create` argument list as a JSON array and exit 0. Creates
+    Print the CloudCli argument lists -Apply would use, as one JSON object
+    {create, delete, list, leak} of string arrays, and exit 0. Creates
     nothing and makes no cloud call.
+
+.PARAMETER SettleSeconds
+    After a FAILED `vm create`, -Apply retries `vm delete` up to 3 times,
+    waiting this many seconds between tries while the VM is not found yet
+    (CloudCli exit 5), because a create that errored may still materialise
+    a VM. Default 10.
 
 .PARAMETER SelfTest
     Run against synthetic inputs (label formatting, cost/duration math, the
@@ -223,6 +230,7 @@ param(
     [string]$Image = '',
     [string]$ServiceAccount = '',
     [string]$CloudCliPath = '',
+    [int]$SettleSeconds = 10,
     [switch]$PrintApplyArgs,
     [switch]$Apply,
     [switch]$SelfTest,
@@ -460,7 +468,8 @@ function Invoke-LeakCheck {
     }
     # --kind vm: the results bucket is meant to outlive a run (lifecycle=results), so only a VM left behind is a leak.
     # stdout alone is parsed (stderr is left to the console): merging them would put a warning line into the JSON.
-    $stdout = & $CloudCliPath 'resources' 'list' '--project' $ProjectId '--install' $InstallationId '--kind' 'vm' '--json'
+    $leakArgs = New-ResourcesListArgs -ProjectId $ProjectId -InstallationId $InstallationId -Json
+    $stdout = & $CloudCliPath @leakArgs
     $exitCode = $LASTEXITCODE
     $couldNotVerify = "leak check: could not verify that nothing is left running. List the VMs for installation-id=$InstallationId in the Google Cloud console and delete any deg- VM by hand."
     if ($exitCode -ne 0) {
@@ -503,6 +512,24 @@ $Script:CloudCliVmCreateFlags = @(
     'project', 'zone', 'install', 'job', 'model', 'machine-type', 'service-account', 'app-version', 'lifecycle',
     'max-run-duration', 'instance-termination-action'
 )
+$Script:CloudCliVmDeleteFlags = @('project', 'zone', 'name')
+$Script:CloudCliResourcesListFlags = @('project', 'install', 'kind')
+
+# The most -Apply will ask for: the app's own 24 hour hard ceiling on a VM's life (issue #12).
+$Script:MaxRunDurationCeilingSeconds = 86400
+
+function New-VmDeleteArgs {
+    param([Parameter(Mandatory)][string]$ProjectId, [Parameter(Mandatory)][string]$Zone, [Parameter(Mandatory)][string]$Name)
+    return @('vm', 'delete', '--project', $ProjectId, '--zone', $Zone, '--name', $Name)
+}
+
+function New-ResourcesListArgs {
+    # --kind vm: the results bucket is meant to outlive a run, so only a VM left behind is a leak. -Json is the machine-read scan.
+    param([Parameter(Mandatory)][string]$ProjectId, [Parameter(Mandatory)][string]$InstallationId, [switch]$Json)
+    $listArgs = @('resources', 'list', '--project', $ProjectId, '--install', $InstallationId, '--kind', 'vm')
+    if ($Json) { $listArgs += '--json' }
+    return $listArgs
+}
 
 # The boot disk CloudCli's gateway creates (ComputeVmShape.BootDiskGb). -DiskSizeGb is plan-only, so another value cannot be honoured.
 $Script:CloudCliBootDiskGb = 150
@@ -545,7 +572,8 @@ function Invoke-Apply {
         [Parameter(Mandatory)][int]$MaxRunDurationSeconds,
         [Parameter(Mandatory)][string]$JobId,
         [string]$Image = '',
-        [string]$CloudCliPath = ''
+        [string]$CloudCliPath = '',
+        [int]$SettleSeconds = 10
     )
     if (-not $ProjectId) {
         Write-UsageError "-Apply requires -ProjectId (working-on-gcp skill: no default project is set; blocked on #24)."
@@ -563,6 +591,10 @@ function Invoke-Apply {
         Write-UsageError "-Apply cannot honour -DiskSizeGb ${DiskSizeGb}: CloudCli always creates a $($Script:CloudCliBootDiskGb) GB boot disk. Run without -DiskSizeGb."
         exit 2
     }
+    if ($MaxRunDurationSeconds -lt 1 -or $MaxRunDurationSeconds -gt $Script:MaxRunDurationCeilingSeconds) {
+        Write-UsageError "-Apply needs -MaxRunDurationSeconds between 1 and $($Script:MaxRunDurationCeilingSeconds) (24 hours), not $MaxRunDurationSeconds. Pass a value in that range."
+        exit 2
+    }
     $cloudCli = if ($CloudCliPath) { $CloudCliPath } else { Find-CloudCli }
     if (-not $cloudCli -or -not (Test-Path -LiteralPath $cloudCli)) {
         Write-UsageError "-Apply cannot proceed: no built CloudCli found. Build it from app/ (dotnet publish app/tools/DnaEntropyGraph.CloudCli -c Release) or pass -CloudCliPath."
@@ -576,17 +608,34 @@ function Invoke-Apply {
 
     # try/finally so even a Ctrl+C (or a real failure) mid-create deletes the VM again: a half-made VM bills. The delete runs even
     # when create failed (the create may have reached Google before the failure). CloudCli exits 5 when the VM is not there.
+    # A failed create is NOT a clean state: Google may have accepted the request (CloudCli exit 4 says "check for anything
+    # half-made"), so the delete is retried while it finds nothing, an exit 5 is reported (never read as "clean"), and the caller
+    # still runs the leak scan and the resource table. The failure is recorded in $Script:ApplyCreateFailed for the exit code.
+    $Script:ApplyCreateFailed = $false
+    $deleteArgs = New-VmDeleteArgs -ProjectId $ProjectId -Zone $Zone -Name $vmName
     try {
         Write-Host "Creating $vmName via $cloudCli ..."
         & $cloudCli @createArgs
-        if ($LASTEXITCODE -ne 0) { throw "CloudCli vm create exited $LASTEXITCODE" }
-        Write-Host "$vmName created."
-        Write-Host "pytest -m gpu: NOT RUN. CloudCli cannot set the startup metadata yet and worker/vm/startup.sh only runs the worker (issue #83 stays open)."
+        if ($LASTEXITCODE -ne 0) {
+            $Script:ApplyCreateFailed = $true
+            Write-UsageError "vm create exited $LASTEXITCODE. Looking for a half-made $vmName to delete."
+        } else {
+            Write-Host "$vmName created."
+            Write-Host "pytest -m gpu: NOT RUN. CloudCli cannot set the startup metadata yet and worker/vm/startup.sh only runs the worker (issue #83 stays open)."
+        }
     } finally {
-        Write-Host "Deleting $vmName ..."
-        & $cloudCli 'vm' 'delete' '--project' $ProjectId '--zone' $Zone '--name' $vmName
-        $deleteExit = $LASTEXITCODE
-        if ($deleteExit -ne 0 -and $deleteExit -ne 5) {
+        $attempts = if ($Script:ApplyCreateFailed) { 3 } else { 1 }
+        $deleteExit = 0
+        for ($try = 1; $try -le $attempts; $try++) {
+            Write-Host "Deleting $vmName ..."
+            & $cloudCli @deleteArgs
+            $deleteExit = $LASTEXITCODE
+            if ($deleteExit -ne 5) { break }
+            if ($try -lt $attempts -and $SettleSeconds -gt 0) { Start-Sleep -Seconds $SettleSeconds }
+        }
+        if ($deleteExit -eq 5) {
+            Write-UsageError "vm delete did not find $vmName in zone $Zone (exit 5). That is not proof it is gone: the leak check below decides."
+        } elseif ($deleteExit -ne 0) {
             Write-UsageError "vm delete exited $deleteExit. $vmName may still exist and bill: delete it in the Google Cloud console (project $ProjectId, zone $Zone), or run CloudCli 'vm delete --project $ProjectId --zone $Zone --name $vmName' yourself."
         }
     }
@@ -595,7 +644,13 @@ function Invoke-Apply {
 function Write-ResourceTable {
     # The run's last output: CloudCli's own table of this installation's VMs. Its footer is 'OK: <n> resource(s)'.
     param([Parameter(Mandatory)][string]$CloudCliPath, [Parameter(Mandatory)][string]$ProjectId, [Parameter(Mandatory)][string]$InstallationId)
-    & $CloudCliPath 'resources' 'list' '--project' $ProjectId '--install' $InstallationId '--kind' 'vm' | ForEach-Object { Write-Host $_ }
+    $tableArgs = New-ResourcesListArgs -ProjectId $ProjectId -InstallationId $InstallationId
+    & $CloudCliPath @tableArgs | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-UsageError "resource table: 'CloudCli resources list' exited $LASTEXITCODE, so the list above is not trustworthy. List the VMs for installation-id=$InstallationId in the Google Cloud console and delete any deg- VM by hand."
+        return $false
+    }
+    return $true
 }
 
 # ---------------------------------------------------------------------------
@@ -623,15 +678,16 @@ function Remove-StubCli {
 function New-ApplyStub {
     # A stub CloudCli that logs every call to calls.txt next to it: `vm create` exits $CreateExit, `resources list --json` prints
     # $JsonBody, any other `resources list` prints an empty table, everything else exits 0.
-    param([Parameter(Mandatory)][string]$Directory, [int]$CreateExit = 0, [string]$JsonBody = '[]')
+    param([Parameter(Mandatory)][string]$Directory, [int]$CreateExit = 0, [int]$DeleteExit = 0, [int]$TableExit = 0, [string]$JsonBody = '[]')
     $body = @(
         '>>"%~dp0calls.txt" echo %*',
-        'echo %*|findstr /c:"vm create" >nul && exit /b ' + $CreateExit,
+        ('echo %*|findstr /c:"vm create" >nul && exit /b ' + $CreateExit),
+        ('echo %*|findstr /c:"vm delete" >nul && exit /b ' + $DeleteExit),
         'echo %*|findstr /c:"resources list" >nul || exit /b 0',
         'echo %*|findstr /c:"--json" >nul && goto json',
         'echo KIND  NAME  LOCATION  STATUS  INSTALLATION  JOB',
         'echo OK: 0 resource(s^)',
-        'exit /b 0',
+        "exit /b $TableExit",
         ':json',
         "echo $JsonBody",
         'exit /b 0'
@@ -740,7 +796,20 @@ function Invoke-SelfTest {
     $printed = & pwsh -NoProfile -File $PSCommandPath -ProjectId 'p1' -ServiceAccount 'w@p1.iam.gserviceaccount.com' `
         -Zone 'us-central1-a' -JobId '20261015-120000-ab3xy9' -InstallationId 'inst123' -MaxRunDurationSeconds 1200 -PrintApplyArgs 2>&1 | Out-String
     Check "-PrintApplyArgs exits 0 and creates nothing" ($LASTEXITCODE -eq 0)
-    $printedArgs = @($printed | ConvertFrom-Json)
+    $printedObj = $printed | ConvertFrom-Json
+    $printedArgs = @($printedObj.create)
+    $deleteArgs = @($printedObj.delete)
+    $listArgs = @($printedObj.list)
+    $leakArgs = @($printedObj.leak)
+    foreach ($set in @(@{ N = 'vm delete'; A = $deleteArgs; Allowed = $Script:CloudCliVmDeleteFlags; Verb = 'vm delete' },
+                       @{ N = 'resources list'; A = $listArgs; Allowed = $Script:CloudCliResourcesListFlags; Verb = 'resources list' },
+                       @{ N = 'resources list (leak scan)'; A = $leakArgs; Allowed = $Script:CloudCliResourcesListFlags; Verb = 'resources list' })) {
+        $verbOk = ("$($set.A[0]) $($set.A[1])" -eq $set.Verb)
+        $bad = @($set.A | Select-Object -Skip 2 | Where-Object { $_ -is [string] -and $_.StartsWith('--') -and $_ -ne '--json' -and $set.Allowed -notcontains $_.Substring(2) })
+        Check "$($set.N) args start with '$($set.Verb)' and use only flags CloudCliParser accepts (unknown: $($bad -join ', '))" ($verbOk -and $bad.Count -eq 0 -and $set.A.Count -ge 6)
+    }
+    Check "vm delete args name the deg-<job> VM" ($deleteArgs -contains 'deg-20261015-120000-ab3xy9')
+    Check "the leak scan args are json and vm-only, the table args are not json" (($leakArgs -contains '--json') -and ($leakArgs -contains 'vm') -and -not ($listArgs -contains '--json'))
     Check "vm create args start with 'vm create' and no positional name" ($printedArgs[0] -eq 'vm' -and $printedArgs[1] -eq 'create' -and $printedArgs[2].StartsWith('--'))
     $flagsUsed = @($printedArgs | Where-Object { $_ -is [string] -and $_.StartsWith('--') })
     $unknownFlags = @($flagsUsed | Where-Object { $Script:CloudCliVmCreateFlags -notcontains $_.Substring(2) })
@@ -779,15 +848,59 @@ function Invoke-SelfTest {
 
     # A failed create still tries to delete the VM (a half-made VM bills), and a leftover VM in the scan fails the run.
     $failDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-fail-" + [guid]::NewGuid().ToString('N'))
+    $failBase = @('-NoProfile', '-File', $PSCommandPath, '-ProjectId', 'fake-test-project', '-ServiceAccount', 'w@fake-test-project.iam.gserviceaccount.com',
+        '-Zone', 'us-central1-a', '-JobId', '20261015-120000-ab3xy9', '-InstallationId', 'inst123', '-Apply', '-SettleSeconds', '0')
     try {
-        $failStub = New-ApplyStub -Directory $failDir -CreateExit 1 -JsonBody '[{"name":"deg-x","zone":"us-central1-a"}]'
-        & pwsh -NoProfile -File $PSCommandPath -ProjectId 'fake-test-project' -ServiceAccount 'w@fake-test-project.iam.gserviceaccount.com' `
-            -Zone 'us-central1-a' -JobId '20261015-120000-ab3xy9' -InstallationId 'inst123' -Apply -CloudCliPath $failStub 2>&1 | Out-Null
-        Check "-Apply whose create fails exits non-zero" ($LASTEXITCODE -ne 0)
+        # create exit 4 (CloudCli: "check resources list for anything half-made"), the delete finds nothing (exit 5), and the scan
+        # then finds a VM that materialised late: the leak must be reported, not hidden behind the create error.
+        $failStub = New-ApplyStub -Directory $failDir -CreateExit 4 -DeleteExit 5 -JsonBody '[{"name":"deg-x","zone":"us-central1-a"}]'
+        $failOut = & pwsh @failBase -CloudCliPath $failStub 2>&1 | Out-String
+        Check "-Apply whose create fails exits 1" ($LASTEXITCODE -eq 1)
         $failCalls = @(Get-Content -Path (Join-Path $failDir 'calls.txt'))
-        Check "-Apply whose create fails still attempts the delete" (@($failCalls | Where-Object { $_ -like 'vm delete *' }).Count -eq 1)
+        Check "-Apply whose create fails still attempts the delete (and retries while it finds nothing)" (@($failCalls | Where-Object { $_ -like 'vm delete *' }).Count -ge 2)
+        Check "-Apply whose create fails still runs the leak scan" (@($failCalls | Where-Object { $_ -like 'resources list *--json*' }).Count -eq 1)
+        Check "-Apply whose create fails prints the leak the scan found" ($failOut -match 'still exist' -and $failOut -match 'deg-x')
+        Check "-Apply does not call a delete exit 5 clean after a failed create" ($failOut -match 'did not find')
+        Check "-Apply whose create fails still ends with the resource table" ($failCalls[-1] -like 'resources list *' -and $failCalls[-1] -notlike '*--json*')
     } finally {
         Remove-StubCli -Directory $failDir
+    }
+
+    # create fails, nothing exists anywhere: still exit 1 (the create failed) and the scan still ran.
+    $failDir2 = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-fail2-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $failStub2 = New-ApplyStub -Directory $failDir2 -CreateExit 1 -DeleteExit 5
+        & pwsh @failBase -CloudCliPath $failStub2 2>&1 | Out-Null
+        Check "-Apply whose create fails and finds nothing still exits 1" ($LASTEXITCODE -eq 1)
+        Check "-Apply whose create fails and finds nothing still ran the leak scan" (@(Get-Content -Path (Join-Path $failDir2 'calls.txt') | Where-Object { $_ -like 'resources list *--json*' }).Count -eq 1)
+    } finally {
+        Remove-StubCli -Directory $failDir2
+    }
+
+    # The final table call failing must fail the run, not leave exit 0 with the wrong last line.
+    $tableDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-table-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $tableStub = New-ApplyStub -Directory $tableDir -TableExit 1
+        $tableOut = & pwsh @failBase -CloudCliPath $tableStub 2>&1 | Out-String
+        Check "-Apply whose final resource table call fails exits 1" ($LASTEXITCODE -eq 1)
+        Check "-Apply whose final resource table call fails says so" ($tableOut -match 'resource table')
+    } finally {
+        Remove-StubCli -Directory $tableDir
+    }
+
+    # -MaxRunDurationSeconds: a finite, positive value up to the 24 hour ceiling; anything else is refused before any CLI call.
+    $ceilDir = Join-Path ([IO.Path]::GetTempPath()) ("deg-selftest-ceil-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $ceilStub = New-ApplyStub -Directory $ceilDir
+        foreach ($bad in @(86401, 0, -5)) {
+            $ceilOut = & pwsh @failBase -CloudCliPath $ceilStub -MaxRunDurationSeconds $bad 2>&1 | Out-String
+            Check "-Apply refuses -MaxRunDurationSeconds $bad (exit 2, names the limit)" ($LASTEXITCODE -eq 2 -and $ceilOut -match '86400')
+        }
+        Check "-Apply refused every bad duration before calling CloudCli" (-not (Test-Path (Join-Path $ceilDir 'calls.txt')))
+        & pwsh @failBase -CloudCliPath $ceilStub -MaxRunDurationSeconds 86400 2>&1 | Out-Null
+        Check "-Apply accepts exactly the 86400 ceiling" ($LASTEXITCODE -eq 0)
+    } finally {
+        Remove-StubCli -Directory $ceilDir
     }
 
     # Find-CloudCli's PATH fallback still finds the real executable name.
@@ -853,7 +966,13 @@ if ($PrintApplyArgs) {
     $printArgs = New-VmCreateArgs -ProjectId $ProjectId -Zone $zoneChoice.Zone -ServiceAccount $ServiceAccount `
         -InstallationId $effectiveInstallationId -JobId $effectiveJobId -Model $Model -MachineType $MachineType `
         -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -MaxRunDurationSeconds $MaxRunDurationSeconds
-    ConvertTo-Json -InputObject @($printArgs) -Compress
+    $printName = "deg-$effectiveJobId"
+    [ordered]@{
+        create = @($printArgs)
+        delete = @(New-VmDeleteArgs -ProjectId $ProjectId -Zone $zoneChoice.Zone -Name $printName)
+        list   = @(New-ResourcesListArgs -ProjectId $ProjectId -InstallationId $effectiveInstallationId)
+        leak   = @(New-ResourcesListArgs -ProjectId $ProjectId -InstallationId $effectiveInstallationId -Json)
+    } | ConvertTo-Json -Compress
     exit 0
 }
 
@@ -874,10 +993,11 @@ if (-not $Apply) {
 
 Invoke-Apply -ProjectId $ProjectId -Zone $zoneChoice.Zone -ServiceAccount $ServiceAccount -InstallationId $effectiveInstallationId `
     -MachineType $MachineType -Model $Model -AppVersion $effectiveAppVersion -Lifecycle $Lifecycle -DiskSizeGb $DiskSizeGb `
-    -MaxRunDurationSeconds $MaxRunDurationSeconds -JobId $effectiveJobId -Image $Image -CloudCliPath $CloudCliPath
+    -MaxRunDurationSeconds $MaxRunDurationSeconds -JobId $effectiveJobId -Image $Image -CloudCliPath $CloudCliPath -SettleSeconds $SettleSeconds
 
+# Always runs, also after a failed create: the scan and the table are how a half-made VM gets reported.
 $resolvedCli = if ($CloudCliPath) { $CloudCliPath } else { Find-CloudCli }
 $leakOk = Invoke-LeakCheck -InstallationId $effectiveInstallationId -ProjectId $ProjectId -CloudCliPath $resolvedCli
-Write-ResourceTable -CloudCliPath $resolvedCli -ProjectId $ProjectId -InstallationId $effectiveInstallationId
-if (-not $leakOk) { exit 1 }
+$tableOk = Write-ResourceTable -CloudCliPath $resolvedCli -ProjectId $ProjectId -InstallationId $effectiveInstallationId
+if ($Script:ApplyCreateFailed -or -not $leakOk -or -not $tableOk) { exit 1 }
 exit 0
