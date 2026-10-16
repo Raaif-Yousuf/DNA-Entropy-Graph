@@ -233,6 +233,36 @@ def parse_recording_dropped_locations(text: str, fmt: str):
         yield record, texts
 
 
+_MAX_COORDINATE = 2**63 - 1  # a position past this is not a coordinate, it is an overflow
+
+
+def _malformed_notice(
+    label: str, gene_id: str, parts, begin: int, end: int, record_id: str, seq_len: int
+) -> str:
+    """The notice for a feature whose coordinates do not fit its record (issue #331), worded for
+    what is actually wrong (issue #694): a between-bases site (``1^2``, Biopython reads it as a
+    zero-length span), a position too large to be a coordinate, or a span outside the sequence."""
+    if any(int(p.end) == int(p.start) for p in parts):
+        return (
+            f"{label} feature {gene_id!r} has a location between two bases (a site such as 1^2), "
+            "not a span of bases, so it has no bases to measure; dropped from the gene features. "
+            "Give it a span in the source file (for example 1..42) and run again."
+        )
+    if any(int(p.end) > _MAX_COORDINATE for p in parts):
+        return (
+            f"{label} feature {gene_id!r} has a position too large to be a real coordinate "
+            f"(more than {_MAX_COORDINATE}); dropped from the gene features. Correct the position "
+            "in the source file (for example 1..42) and run again."
+        )
+    return (
+        f"{label} feature {gene_id!r} has coordinates {begin}..{end}, which fall "
+        f"outside record {record_id!r}'s own sequence length of {seq_len} nt; "
+        "dropped from the gene features (not reported) rather than kept with a "
+        "wrong span. This means the file's feature table disagrees with its own "
+        "ORIGIN block; check the file was not truncated or hand-edited."
+    )
+
+
 def _features_of(
     record, label: str = "GenBank", location_texts: list[str] | None = None, index: int = 1
 ) -> tuple[list[GeneFeature], list[str]]:
@@ -261,10 +291,16 @@ def _features_of(
     dropped_notice = _dropped_location_notice(record, source, location_texts, label, index)
     if dropped_notice:
         notices.append(dropped_notice)
-    for f in source:
+    # Issue #694: a gene feature that is dropped (unreadable or out-of-range location) is replaced
+    # by the CDS feature carrying the same gene id, per id, so one bad gene feature does not erase
+    # its gene while the others keep their own. Only when the record uses gene features at all.
+    fallback_ids: list[str] = []
+
+    def _map(f) -> bool:
+        """Map one source feature; False when it was dropped (with its notice, if it has one)."""
         loc = f.location
         if loc is None:
-            continue  # reported by the notice above (issue #543), never silently
+            return False  # reported by the notice above (issue #543), never silently
         begin = int(loc.start) + 1  # Biopython is 0-based half-open -> our 1-based inclusive
         end = int(loc.end)
         strand = "-" if loc.strand == -1 else "+"
@@ -294,15 +330,8 @@ def _features_of(
             not allow_end_overrun and any(int(p.end) > seq_len for p in parts)
         )
         if malformed:
-            notices.append(
-                f"{label} feature {gene_id!r} has coordinates {begin}..{end}, which fall "
-                f"outside record {record.id!r}'s own sequence length of {seq_len} nt; "
-                "dropped from the gene features (not reported) rather than kept with a "
-                "wrong span. This means the file's feature table disagrees with its own "
-                "ORIGIN block; check the file was not truncated or hand-edited."
-            )
-            continue
-
+            notices.append(_malformed_notice(label, gene_id, parts, begin, end, record.id, seq_len))
+            return False
         segments: tuple[tuple[int, int], ...] = ()
         if is_compound:
             # Sorted ascending by genomic start, not transcript/part order (Biopython
@@ -343,6 +372,35 @@ def _features_of(
                 begin=begin, end=end, strand=strand, partial=partial, gene_id=gene_id, segments=segments
             )
         )
+        return True
+
+    dropped_gene_ids: list[str] = []
+    for f in source:
+        if not _map(f) and gene_feats:
+            gid = _feature_id(f)
+            if gid != f.type:  # a gene with no name of its own cannot be matched to a CDS
+                dropped_gene_ids.append(gid)
+    if dropped_gene_ids:
+        kept_ids = {g.gene_id for g in features}
+        wanted = set(dropped_gene_ids) - kept_ids
+        for cds in cds_feats:
+            gid = _feature_id(cds)
+            if gid in wanted and _map(cds):
+                wanted.discard(gid)  # one stand-in per gene id
+                fallback_ids.append(gid)
+        if fallback_ids:
+            shown = ", ".join(_shown_location_text(g) for g in fallback_ids[:_DROPPED_SHOWN])
+            more = (
+                f", and {len(fallback_ids) - _DROPPED_SHOWN} more"
+                if len(fallback_ids) > _DROPPED_SHOWN
+                else ""
+            )
+            notices.append(
+                f"{label} record {index}: {len(fallback_ids)} gene feature(s) could not be used, so the "
+                f"CDS feature with the same gene id was used instead ({shown}{more}). Its span is the "
+                "coding sequence, not the full gene. Correct the gene feature's location in the source "
+                "file to use the gene's own span."
+            )
     return features, notices
 
 

@@ -178,6 +178,19 @@ You can also open your results in other tools you may already have:
   position-by-position graph view built for this kind of track, so the detailed,
   base-by-base picture is best viewed in IGV or the app's own embedded viewer instead.
 
+## Checking a batch, comparing two runs, and testing a change
+
+These three are worker commands for now; the app has no buttons for them yet.
+
+- **A batch of sequences.** When one run has three or more sequences, the run's summary file
+  (`stats.txt` for GenBank, `<name>.summary.txt` for FASTA) marks any sequence whose average entropy
+  is far from the rest as `OUTLIER`. Use it to spot the one odd clone among many.
+- **Two runs.** `dna-entropy compare A.entropy.tsv B.entropy.tsv` writes a track of B minus A (open it
+  in IGV under the two runs) and a short list of the positions that changed most. Use `--offset` when
+  the two sequences are not the same length.
+- **A single change.** `dna-entropy variants -i my.fasta --positions 120` scores the three possible
+  substitutions at position 120 and writes `variants.tsv`. It prints the cost first (each change is one
+  model run) and stops at 50 changes unless you raise `--max-variants`.
 ## Related
 
 [glossary.md](glossary.md) for "bit," "context length," "reverse complement," "GenBank,"

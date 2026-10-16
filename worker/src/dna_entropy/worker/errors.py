@@ -133,8 +133,16 @@ WORKER_ERROR_CODES: tuple[ErrorCodeSpec, ...] = (
         "no further record or input starts, what finished is uploaded, and result.json "
         "says this. Matches docs/copy_catalog.md's RunTimeLimit row.",
     ),
+    ErrorCodeSpec(
+        "GPU_TESTS_FAILED",
+        "worker/vm/startup.sh (gpu-test mode)",
+        retriable=False,
+        note="Issue #759: scripts/cloud_gpu_test.ps1 boots the VM in gpu-test mode, which runs "
+        "`pytest -m gpu` inside the image; this is the status code when pytest exits non-zero. "
+        "A developer tool, never shown to a lab user, so it has no copy_catalog row. Written by "
+        "the startup script, not any Python module.",
+    ),
 )
-
 WORKER_ERROR_CODE_INDEX: dict[str, ErrorCodeSpec] = {spec.code: spec for spec in WORKER_ERROR_CODES}
 WORKER_ERROR_CODE_SET: frozenset[str] = frozenset(WORKER_ERROR_CODE_INDEX.keys())
 
