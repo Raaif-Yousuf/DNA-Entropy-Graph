@@ -93,6 +93,29 @@ Depending on what your input was and which output files you kept turned on:
   numbers in a plain table, openable directly in Excel or similar, for anyone who would
   rather look at numbers than a picture.
 
+By default a run also writes a few companions, so the folder holds more than the files
+above. This is the whole default set for one sequence called `my_run`:
+
+- `my_run.fasta`, `my_run.gb`, `my_run.entropy.bedgraph`, `my_run.entropy.geneious.gff3`,
+  `my_run.entropy.tsv`, and `stats.txt` (or `my_run.summary.txt` for a FASTA or pasted
+  sequence): the files described above.
+- **A surprisal track** (`my_run.surprisal.bedgraph` and `my_run.surprisal.geneious.gff3`,
+  and a column in the spreadsheet): where entropy says how unsure the model was at a
+  position, surprisal says how unexpected the base that is really there was. It costs no
+  extra time or money, so it is on by default. The worker can leave it out
+  (`--no-surprisal`); a switch for it in the app is planned.
+- **A smoothed entropy track** (`my_run.entropy.smooth51.bedgraph`): a rolling average over
+  51 bases that shows the landscape. The raw track is always written too.
+- **Low- and high-entropy regions** (`my_run.regions.bed`, `my_run.regions.gff3`): the
+  stretches the app calls unusually predictable or unpredictable.
+- **A gene table** (`my_run.genes.tsv`, `my_run.genes.csv`, `my_run.genes.gff3`), when your
+  run has genes: mean, lowest and highest entropy per gene.
+- **`provenance.json`**: which model, settings and version made these files, so a run can
+  be reproduced.
+
+Bigger extras (the per-base probabilities, which take 16 bytes per base) are off unless
+you ask for them.
+
 ## Viewing your results
 
 The app shows two views itself:
