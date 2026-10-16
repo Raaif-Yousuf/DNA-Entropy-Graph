@@ -6,6 +6,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
+using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -31,6 +32,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly IShellLauncher _launcher;
     private readonly IGcpAccount _account;
     private readonly TimeProvider _time;
+    private readonly IEntropyOverviewSource? _overview;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
 
@@ -59,8 +61,10 @@ public sealed partial class HistoryViewModel : ObservableObject
         IStringResourceProvider strings,
         IShellLauncher launcher,
         IGcpAccount account,
-        TimeProvider time)
+        TimeProvider time,
+        IEntropyOverviewSource? overview = null)
     {
+        _overview = overview;
         _runRepository = runRepository;
         _remover = remover;
         _navigator = navigator;
@@ -110,6 +114,7 @@ public sealed partial class HistoryViewModel : ObservableObject
 
             _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder))];
             ApplyFilter();
+            SparklineWork = LoadSparklinesAsync(_items, generation, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -125,6 +130,48 @@ public sealed partial class HistoryViewModel : ObservableObject
 
             // The page calls this fire-and-forget on open, so an escaped exception would be unobserved: say so and name the action.
             Toast(RunsCopy.RefreshFailed);
+        }
+    }
+
+    /// <summary>The sparkline reading started by the last load (issue #118); the list shows first and the lines fill in, so tests await this.</summary>
+    public Task SparklineWork { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Reads each finished run's entropy track one at a time, off the UI thread, and puts a small line on its card. A run
+    /// that was replaced by a newer load is skipped, and one run that cannot be read costs only its own line.
+    /// </summary>
+    private async Task LoadSparklinesAsync(IReadOnlyList<RunListItem> items, int generation, CancellationToken cancellationToken)
+    {
+        if (_overview is null)
+        {
+            return;
+        }
+
+        foreach (var item in items)
+        {
+            var folder = item.Run.OutputDir;
+            if (!item.HasLocalFiles || string.IsNullOrWhiteSpace(folder) || item.Run.Phase is not (JobPhase.Completed or JobPhase.PartiallyCompleted))
+            {
+                continue;
+            }
+
+            if (generation != Volatile.Read(ref _loadGeneration) || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                var contig = (await Task.Run(() => _overview.Load(folder), CancellationToken.None))?.Contigs.FirstOrDefault();
+                if (contig is not null)
+                {
+                    item.Sparkline = TrackResampler.Resample(contig.Means, RunListItem.SparklinePoints);
+                }
+            }
+            catch (Exception)
+            {
+                // No line on this card; the rest of the list is unaffected.
+            }
         }
     }
 

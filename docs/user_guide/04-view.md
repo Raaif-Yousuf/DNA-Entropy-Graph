@@ -50,6 +50,12 @@ example), it is available as an Advanced option.
 When a run finishes, choose **View results** on the run page. You can also open any
 finished run later with **Open** on its row of the Runs page. The Results page shows:
 
+- **The entropy picture.** Under the buttons, a chart of entropy (0 to 2 bits) along the
+  first sequence in your file, drawn straight from the track the run wrote, so it appears
+  at once without opening the genome viewer. A dashed line, when there is one, marks the
+  seam (see above). **Save picture** writes it as a PNG in the results folder and shows it
+  in File Explorer. A run that wrote no entropy track has no picture; run it again with the
+  entropy track ticked on New run.
 - **Entropy by sequence.** One line per sequence in your file: its length, its mean,
   lowest and highest entropy in bits, and the reading direction used. These numbers are
   read from the summary file the run wrote into your results folder, so they are exactly

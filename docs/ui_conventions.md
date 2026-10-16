@@ -284,6 +284,25 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - **Open with (issue #108).** The Settings switch (Files group, `FileAssociationSettingsViewModel`) adds or removes HKCU "Open with" entries for `.gb .gbk .genbank .fasta .fa .fna` (`FileAssociationService`, Core; `CurrentUserClasses`, App): a program id whose open command is this exe, listed under each extension's `OpenWithProgids`. It never sets an extension's default value. A launch with sequence files (the second instance hands its command line to the first) goes through `ActivationRouter` to New run, as a `DroppedItems` navigation parameter that `NewRunPage.OnNavigatedTo` forwards to `NewRunViewModel.ReceiveNavigationParameterCommand`. Only local full paths to sequence types are accepted (`AppDeepLink.TryGetInputFiles`: no UNC or device root in either slash form, no wildcard, no other file type). DECISION (agent-made, reversible): a drive letter mapped to a network share is allowed, because the mapping is the user's own and Open with is chosen on that file in Explorer. Files go to the New run screen that is already showing (`NewRunIntake`, attached by `NewRunPage.OnNavigatedTo`) so a draft survives, and a launch is held until the shell has made its first navigation (`ShellReadiness`, marked by `MainWindow`). Enable is all or nothing, Disable removes the keys it created once empty, both are refused on a `--profile` sandbox (the entries live in the real registry) and unless the process is `DnaEntropyGraph.App.exe` (never `dotnet.exe`); the Velopack uninstall hook (`Program.OnBeforeUninstall`) also removes them.
 - Not built: the idle-VM and keep-alive-expiry notifications (the reconciler in Core/Cloud has no event for them yet).
 
+## 13. The entropy overview and sparklines (issue #118)
+
+- Data path: `Core/Tracks/BedGraphReader` reads the raw `<name>.entropy.bedgraph` into **binned means** (16 bases per bin, so a
+  100 Mb contig is about 6 million floats, not 400 MB), `EntropyOverviewSource` finds that file one folder down in the run
+  folder, never entering a link, and reads each contig's `seam` from the neighbouring `provenance.json` (a missing or broken
+  file costs only the seam). A row that is not four fields makes the whole file unreadable (null), never a half chart.
+- Results: `ResultsViewModel.Overview` (the first contig) is loaded after the page's stats, off the UI thread, and bound to
+  `Controls/EntropyOverviewChart` (ScottPlot.WinUI `WinUIPlot`, mouse input off). `EntropyPlotBuilder` is plain ScottPlot with no
+  WinUI types, so the **Save picture** button (`OverviewPngExporter`, light colours on white, 1600 x 480) draws exactly what the
+  chart draws and is tested headless in `App.UiTests` (a real PNG with the real SkiaSharp natives). The PNG goes in the run's own
+  folder, named from the contig with only letters, digits and `_-.` kept.
+- Runs: `RunListItem.Sparkline` (48 points, `TrackResampler`) is filled after the list shows, one finished run at a time, by
+  `HistoryViewModel.LoadSparklinesAsync`; `Controls/EntropySparkline` is a plain `Polyline` (a ScottPlot control per card would
+  own one GPU surface each). `EntropyOverviewSource` remembers the last 64 tracks by path, size and write time.
+- Not done: drag-select on the strip to jump the viewer (the Viewer page has no locus parameter yet), and a contig picker for a
+  multi-contig run (the first contig is shown).
+- Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
+  (`THIRD-PARTY-NOTICES.md` regenerated).
+
 ## Related
 
 [`copy_catalog.md`](copy_catalog.md) (the narration, phase-title, and error-catalog text
