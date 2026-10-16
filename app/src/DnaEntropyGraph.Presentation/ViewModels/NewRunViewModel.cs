@@ -582,6 +582,13 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private Task ReceiveNavigationParameterAsync(object? parameter)
     {
         _intake?.Attach(this);
+
+        // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.
+        if (parameter is NavigationArrival arrival)
+        {
+            parameter = arrival.IsNewNavigation ? arrival.Parameter : null;
+        }
+
         return parameter is DroppedItems dropped ? AddDroppedAsync(dropped) : Task.CompletedTask;
     }
 
@@ -799,7 +806,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     }
 
     /// <summary>
-    /// Empties the page once a run has started (issue #527): the files, the paste box and the RNA choice. Pasted copies of the files
+    /// Empties the page once a run has started (issue #527): the files, the paste box, the status line and the RNA choice. The preset,
+    /// the ticked outputs and the run target stay: they are the user's intent for runs in general (docs/ui_conventions.md section 9). Pasted copies of the files
     /// that were not run are deleted like a Remove would; the copy behind the run that started stays, because a retry restages from
     /// its recorded path. The user's own files are never touched (Hard Rule 14).
     /// </summary>
@@ -809,6 +817,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Items.Clear();
         SelectedItem = null;
         PasteText = string.Empty;
+        IsPasteOpen = false;
+        StatusMessage = string.Empty;
         IsTreatingAsRna = false;
         OnPropertyChanged(nameof(OfferTreatAsRna));
         foreach (var item in dropped.Where(item => !ReferenceEquals(item, startedItem)))

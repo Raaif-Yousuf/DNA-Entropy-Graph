@@ -154,6 +154,56 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task After_a_run_starts_no_stale_status_line_or_open_paste_box_is_left_behind()
+    {
+        var path = Write("clean.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _viewModel.IsPasteOpen = true;
+        _viewModel.PasteText = Path.Combine(_dir, "no-such-file.fasta");
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        _viewModel.HasStatusMessage.ShouldBeTrue("the setup: a path-not-found line is showing");
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBeEmpty();
+        _viewModel.HasStatusMessage.ShouldBeFalse();
+        _viewModel.IsPasteOpen.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_navigation_parameter_is_taken_only_on_a_new_navigation_not_when_Back_returns_to_the_page()
+    {
+        // Issue #527: Back re-delivers the Open-with files the page was first opened with; they were already run, so they must not return.
+        var path = Write("openwith.fasta", ">o\n" + Dna + "\n");
+
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(new NavigationArrival(Drop(path), IsNewNavigation: false));
+        _viewModel.Items.ShouldBeEmpty();
+
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(new NavigationArrival(Drop(path), IsNewNavigation: true));
+        _viewModel.Items.Select(i => i.Path).ShouldBe([path]);
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(3, false)]
+    public void Only_the_New_navigation_mode_counts_as_a_new_navigation(int mode, bool expectedNew)
+        => NavigationArrival.From("p", mode).IsNewNavigation.ShouldBe(expectedNew);
+
+    [Fact]
+    public async Task Back_to_the_page_still_attaches_it_to_the_intake()
+    {
+        var intake = new NewRunIntake();
+        var viewModel = new NewRunViewModel(_picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates, new OutputSelectionStore(Substitute.For<ISettingsStore>()), _log, intake: intake);
+        var path = Write("later.fasta", ">l\n" + Dna + "\n");
+
+        await viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(new NavigationArrival(null, IsNewNavigation: false));
+
+        intake.TryAdd(Drop(path)).ShouldBeTrue("a Back arrival is still 'this screen is showing'");
+    }
+
+    [Fact]
     public async Task A_start_that_fails_keeps_the_files_so_the_user_can_try_again()
     {
         var path = Write("again.fasta", ">x\n" + Dna + "\n");

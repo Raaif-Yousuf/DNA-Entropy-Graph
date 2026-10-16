@@ -86,6 +86,23 @@ public sealed class PresetPickerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_started_run_empties_the_files_but_keeps_the_preset_and_the_ticked_outputs_for_the_next_run()
+    {
+        // Issue #527 decision: the preset (and the run target, which is the Settings picker) is the user's intent and persists; only per-file state resets.
+        await AddFasta();
+        Picker.SelectedItem = Item("plasmid_qc");
+        var ticked = _viewModel.OutputChoices.Where(c => c.IsChecked).Select(c => c.Entry.Kind).ToList();
+        ticked.ShouldNotBeEmpty();
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        Picker.SelectedItem.ShouldBe(Item("plasmid_qc"));
+        await AddFasta();
+        _viewModel.OutputChoices.Where(c => c.IsChecked).Select(c => c.Entry.Kind).ShouldBe(ticked);
+    }
+
+    [Fact]
     public async Task A_preset_ticks_its_files_in_the_boxes_already_shown()
     {
         await AddFasta();
