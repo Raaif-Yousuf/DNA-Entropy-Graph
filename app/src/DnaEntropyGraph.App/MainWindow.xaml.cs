@@ -53,8 +53,18 @@ public sealed partial class MainWindow : Window
     {
         RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
         _readiness.MarkReady();
+        // Issue #143: the first-launch tour opens once layout has run, so the nav items it points at have a size; the pane layout is told first.
+        ViewModel.OnNavigationDisplayModeChanged((int)RootNavigationView.DisplayMode);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => _ = ViewModel.OnWindowLoadedAsync());
     }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
         => ViewModel.NavigateToCommand.Execute((args.SelectedItemContainer as NavigationViewItem)?.Tag);
+
+    // Issue #143: the tour tips point at nav items, which a narrow window hides.
+    private void RootNavigationView_DisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args)
+        => ViewModel.OnNavigationDisplayModeChanged((int)args.DisplayMode);
+
+    private void TourTip_Closed(TeachingTip sender, TeachingTipClosedEventArgs args)
+        => ViewModel.OnTourTipClosed((int)args.Reason);
 }

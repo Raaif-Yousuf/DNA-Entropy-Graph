@@ -205,6 +205,19 @@ worker\.venv\Scripts\python.exe scripts\land_wt.py --branch feat/510-x --sha <ti
 
 Tests: `scripts/tests/test_land_wt.py` (temp repo, bare fake origin, fake venv through a junction, stub gh), `scripts/tests/test_land_wt_resw.py` (the Resources.resw merge below).
 
+### Pruning landed worktrees: `scripts/prune_worktrees.py`
+
+Removes agent worktrees whose branch already landed (#794; MEASURED 2026-10-16: 151 registered worktrees). Dry run by default.
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\prune_worktrees.py                       # dry run: removed / kept-and-why table
+worker\.venv\Scripts\python.exe scripts\prune_worktrees.py --apply [--use-gh] [--delete-merged-branches] [--min-age-hours 6]
+```
+
+Every ambiguity resolves toward KEEP. Removed only when: not the primary checkout or the one it runs from (realpath compare), not locked, not itself a link, does not contain another worktree (agents nest under `.claude/worktrees/`), landed (HEAD an ancestor of origin/main, so detached heads too; with `--use-gh`, a MERGED PR into main whose head contains the worktree HEAD and no OPEN one, from one batched `gh pr list`; a CLOSED or stacked PR does not count), it has a commit of its own or is no longer fresh (a HEAD on origin/main's first-parent history is a lane just started and is kept only while touched within `--fresh-lane-hours`, default 48; older, it is a stale checkout and the other rules decide), no rebase/merge/cherry-pick/revert/bisect in progress, nothing touched within `--min-age-hours` (default 6; two directory levels plus git's own state files; an unreadable timestamp keeps it), no uncommitted/untracked changes, no skip-worktree/assume-unchanged files, no ignored file beyond build output at its known roots (`app\{src,tests}\<project>\{bin,obj}`, `.artifacts`, `__pycache__` under worker/scripts, the pytest/ruff/mypy caches, `worker\*.egg-info`; `worker\.venv` only as a link), nothing under `app\secrets`, and every directory scannable (long-path aware) with no nested repository (a dry run scans too). Every junction is unlinked and verified gone BEFORE `git worktree remove`; if one will not unlink, or git then fails, the links are recreated and the worktree stays. Orphan `%TEMP%\landwt\<slug>-<14 digits>` dirs git no longer lists are deleted only if they hold a `.git` file, no live lock, are old enough, and either git can read them (HEAD in origin/main, clean) or, the real killed-run case where `git worktree prune` already deleted the admin dir, land_wt's lock record (`sha`, written since #794) names a commit that is pushed to origin; older leftovers with no recorded sha are kept for a human (never `locks` or `logs`; the root must be named `landwt` unless `--allow-any-tmp-root`). A dry run does not fetch (`--fetch` to; `--apply` fetches). It ends with `git worktree prune`, and `--delete-merged-branches` drops local branches merged into origin/main whose tip is NOT on its first-parent history (a pre-created lane is; a real merged feature branch is not), or PR-merged into main with `--use-gh`, that no surviving worktree has checked out, never main, master, develop or release/*. Limitation: a live process whose cwd is in a worktree is not detected (Windows has no cheap way); `--min-age-hours` is the protection. Run the dry run at the start of each wave.
+
+Tests: `scripts/tests/test_prune_worktrees.py` (temp repo, bare fake origin, real junction on Windows with a sentinel dir that must survive, stub gh).
+
 ### Resources.resw merge driver: `scripts/resw_merge.py`
 
 Nearly every branch appends keys to the end of `Resources.resw`, so a plain text merge conflicts there every time (and `git merge-file --union` is banned for it: overlapping hunks break the XML). `scripts/resw_merge.py %O %A %B` is a git merge driver that merges per `<data name=...>` block: a key added on one side (or on both with identical content) is kept, theirs' new keys go after ours' last block, a key deleted on one side and untouched on the other is deleted, and the same key changed differently on both sides (or deleted vs changed) is a real conflict with markers around only that block. The result must parse as XML with no duplicate names. Every failure exit (real conflict, invalid XML, duplicate name, unterminated block, undecodable bytes) leaves conflict markers in the file (whole-file when it is not one block), so a later `git add` cannot silently drop theirs. Line endings follow ours' first line ending. Reordering of existing keys on theirs is ignored (key set and content only).
@@ -215,9 +228,9 @@ Nearly every branch appends keys to the end of `Resources.resw`, so a plain text
 worker\.venv\Scripts\python.exe scripts\setup_git_drivers.py
 ```
 
-Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/DnaEntropyGraph.App/Strings/en-US/Resources.resw` (must print `merge: resw`). Without the config git silently falls back to the text merge. Re-run it if the checkout or the venv moves.
+Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/DnaEntropyGraph.App/Strings/en-US/Resources.resw` (must print `merge: resw`). Without the config git silently falls back to the text merge. MEASURED 2026-10-16 (#800): git runs the driver with the MERGED branch's tree checked out, and a branch older than the driver has neither `scripts/resw_merge.py` nor the `merge=resw` line in its `.gitattributes`, so it used to conflict on `Resources.resw` for lack of both. The setup therefore (1) installs origin/main's `scripts/resw_merge.py` (never the running checkout's, which may be a stale branch; run `git fetch` first) as `<git-common-dir>/deg-drivers/resw_merge.py` and points the config at it, (2) runs it with the primary checkout's `worker\.venv` python (falling back to the interpreter running setup when that venv is absent), so removing a lane worktree breaks nothing, and (3) appends the `merge=resw` line to `<git-common-dir>/info/attributes`, keeping every other line byte for byte and warning about a different `merge=` value for the same path. It then checks `git check-attr` and fails if the file is still not routed. `scripts/check_resw_driver.py` (a premerge gate) fails when the configured script is missing and only WARNS (exit 0) when the installed copy differs from origin/main's blob (landing runs premerge in throwaway worktrees sharing the config, so a drift failure would block every landing); it prints the one command that fixes it: re-run the setup after `resw_merge.py` changes on main.
 
-`land_wt.py` does not depend on that setup: for its merge of origin/main it passes the driver (this checkout's script, the running venv python) as `-c merge.resw.driver=...` and the attribute through a unique temp `core.attributesFile` (the user's own global attributes text plus the resw line, deleted after the merge), so a lane branch that predates the `.gitattributes` line still merges and nothing leaks into the shared repo config. It is not written to `info/attributes`: MEASURED 2026-10-16, git reads that only from the common dir (a linked worktree's own copy is ignored), so it would leak into the shared repo. A real conflict still refuses and names the file.
+`land_wt.py` does not depend on that setup: for its merge of origin/main it passes the driver (this checkout's script, the running venv python) as `-c merge.resw.driver=...` and the attribute through a unique temp `core.attributesFile` (the user's own global attributes text plus the resw line, deleted after the merge), so a lane branch that predates the `.gitattributes` line still merges and nothing leaks into the shared repo config. A real conflict still refuses and names the file.
 
 ## Landing a PR from the shared checkout: `scripts/land_pr.py`
 
@@ -490,7 +503,9 @@ Windows user); it never reads a key file and never signs in itself. Run from `ap
 ```powershell
 dotnet run --project tools/DnaEntropyGraph.CloudCli -- resources list --project <id> [--install <id>] [--kind vm|bucket|all] [--json]
 dotnet run --project tools/DnaEntropyGraph.CloudCli -- bucket describe --project <id> [--name <bucket>] [--json]
-dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm create --project <id> --zone <zone> --install <id> --service-account <email> [--job <id>] [--model <m>] [--machine-type <t>] [--lifecycle <l>] [--app-version <v>] [--max-run-duration 90|90s|30m|2h] [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- bucket ensure --project <id> [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- object get --project <id> --bucket <bucket> --key <object> [--json]
+dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm create --project <id> --zone <zone> --install <id> --service-account <email> [--job <id>] [--model <m>] [--machine-type <t>] [--lifecycle <l>] [--app-version <v>] [--max-run-duration 90|90s|30m|2h] [--worker-image <name@sha256:...> --bucket <bucket> [--startup-mode worker|gpu-test] [--expect-gpu true|false]] [--json]
 dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> --zone <zone> --name deg-<job id> [--json]
 ```
 
@@ -498,7 +513,15 @@ dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> 
   table ending in `OK: <n> resource(s)`; `--json` prints an array of `{kind,name,zone,location,status,installation,job}` and nothing else.
   The results bucket is meant to outlive a run, so a leak scan uses `--kind vm` (that is what `scripts/cloud_gpu_test.ps1` runs).
 - `vm create` only builds a `VmSpec`, so the six labels, `maxRunDuration` (default 30m) and termination action DELETE are always set;
-  there is no flag to weaken them. A missing `--job` generates one.
+  there is no flag to weaken them. A missing `--job` generates one. With `--worker-image` (a full reference pinned by digest, else exit 2)
+  and `--bucket` the VM also gets `worker/vm/startup.sh` and its `deg-*` attributes through `StartupMetadata.Build` (lifecycle always
+  delete); `--startup-mode gpu-test` adds `deg-mode=gpu-test`, which makes the script run `pytest -m gpu` instead of a job (#759).
+  `bucket ensure` creates (idempotently) and names the project's bucket; `object get` prints one object (ASCII, capped at 4 MiB) and a
+  missing one is exit 5 ("not there yet"), which is how `cloud_gpu_test.ps1` polls for the result. An object over the cap prints a leading
+  `[truncated: only the last 4194304 bytes are shown]` line and then its LAST 4 MiB (a log's verdict, the pytest summary, is at its end),
+  plus a `WARNING:` on stderr, and exits 0 so a caller that saves stdout keeps it.
+  `--worker-image` is a developer path: CloudCli does NOT check the digest against the pinned worker image list (that list is embedded in the
+  WinUI app, which a console host cannot reference), so `vm create` prints a `WARNING:` saying so. Use only a digest you released yourself.
 - `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label. A name not
   found in the given zone is exit 5 (never "already gone"): the error names the zone it was found in, or says to check
   `resources list --kind vm`. `resources list --install <id>` filters VMs only; the shared results bucket is always listed.
@@ -519,31 +542,46 @@ anything marked `gpu` needs a real CUDA GPU the dev box does not have
 
 ```powershell
 scripts\cloud_gpu_test.ps1                   # dry-run (default): prints the plan, machine type, zone, estimated cost/minutes, creates nothing
-scripts\cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <worker sa email> -Apply   # create, delete and leak-scan ONE labelled VM (UNVERIFIED, billed)
-scripts\cloud_gpu_test.ps1 -PrintApplyArgs -ProjectId <id> -ServiceAccount <email>    # print the create/delete/list/leak argument lists as JSON, no cloud call
+scripts\cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <worker sa email> -Apply                      # create, delete and leak-scan ONE labelled VM (UNVERIFIED, billed)
+scripts\cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <email> -Image <name@sha256:...> -Apply        # the same, and run pytest -m gpu on it, pull the log (UNVERIFIED, billed)
+scripts\cloud_gpu_test.ps1 -PrintApplyArgs -ProjectId <id> -ServiceAccount <email> [-Image <digest>]       # print every CloudCli argument list as JSON, no cloud call
 scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
-**Updated 2026-10-16: `-Apply` builds its `vm create` arguments from CloudCli's own flag list (#619), but it is still UNVERIFIED
-against a real project and does not yet run `pytest -m gpu` (#83 stays open).** The argument list is `New-VmCreateArgs`: only flags
-`CloudCliParser` accepts (`--project --zone --install --job --model --machine-type --service-account --app-version --lifecycle
---max-run-duration`). CloudCli builds the six labels, `DELETE` and the duration through `VmSpec`, so the script cannot weaken them.
-Consequences: the GPU comes from `-MachineType` (L4 with `g2-standard-8`), `-AcceleratorType`/`-AcceleratorCount` and the `purpose`
-label are plan-only, `-DiskSizeGb` other than 150 is refused, and `-Image` is refused (CloudCli has no image or startup-metadata flag).
-`-Apply` needs `-ProjectId` and `-ServiceAccount` (exit 2 without them) and a built CloudCli (exit 3 without one; pass `-CloudCliPath`
-or build `app/tools/DnaEntropyGraph.CloudCli`). It never falls back to a raw cloud CLI call: Appendix C denies one to agents on purpose.
-What it does today: `vm create`, then `vm delete` in a `finally` (so a failed create or a Ctrl+C does not leave a billing VM), the leak
-scan (`resources list --kind vm --json`; unparsable output or a non-zero exit fails the check), and last of all CloudCli's resource
-table, whose final line is `OK: 0 resource(s)` when nothing is left. A failed create is never read as clean: the delete is retried
-up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete exit 5 is reported as "not proof it is gone", the scan and the
-table still run, and the run exits 1. A failing final table call also exits 1. `-MaxRunDurationSeconds` must be 1 to 86400 (24 h) or
-`-Apply` exits 2. `-PrintApplyArgs` prints `{create, delete, list, leak}`, all four argument lists. It prints `pytest -m gpu: NOT RUN`: the created VM has no startup
-script (CloudCli cannot set metadata) and `worker/vm/startup.sh` only runs the worker. Default `-MaxRunDurationSeconds` is 3600 because
-that limit is the only backstop if the delete fails. The contract is tested twice: `-SelfTest` checks the list against a recorded flag
-list and runs the whole flow against a stub CloudCli, and `app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/CloudGpuTestScriptContractTests.cs`
-feeds the script's real `-PrintApplyArgs` output to the real parser over `FakeGcp`. `docs/ToTest.md` carries the row for a real run.
-Read `working-on-gcp` before running it for real: it creates real, billed cloud resources. Launch detached and poll rather than
-blocking a single tool call on it (see the `a-tool-call-caps-at-600s` memory seed).
+**Updated 2026-10-16: `-Apply` builds its CloudCli arguments from CloudCli's own flag list (#619) and, with `-Image`, runs the GPU tests
+on the VM (#83, #759); both are UNVERIFIED against a real project.** The argument lists are `New-VmCreateArgs` and friends: only flags
+`CloudCliParser` accepts. CloudCli builds the six labels, `DELETE` and the duration through `VmSpec`, so the script cannot weaken them.
+Consequences: the GPU comes from `-MachineType` (L4 with `g2-standard-8`), `-AcceleratorType` and the `purpose` label are plan-only,
+and `-DiskSizeGb` other than 150 is refused. `-Apply` needs `-ProjectId` and `-ServiceAccount` (exit 2 without them) and a built CloudCli
+(exit 3 without one; pass `-CloudCliPath` or build `app/tools/DnaEntropyGraph.CloudCli`). It never falls back to a raw cloud CLI call:
+Appendix C denies one to agents on purpose. `-MaxRunDurationSeconds` must be 1 to 86400 (24 h), default 3600 (that limit is the only
+backstop if the delete fails), or `-Apply` exits 2.
+
+**Without `-Image`**: `vm create` (no startup script, so the VM idles), then `vm delete` in a `finally`, the leak scan, and last of all
+CloudCli's resource table, whose final line is `OK: 0 resource(s)` when nothing is left. It prints `pytest -m gpu: NOT RUN`.
+
+**With `-Image <name@sha256:...>`** (a tag instead of a digest is exit 2): `bucket ensure` (or `-Bucket <name>`), `vm create` in gpu-test mode
+(`--startup-mode gpu-test --expect-gpu true`), then polling `jobs/<job>/logs/gpu-test-result.json` (`-PollSeconds`, up to
+`-GpuTestTimeoutSeconds`, default maxRunDuration minus 60 s), pulling `gpu-test.log` to `-LogDir` (default `%TEMP%\deg-gpu-test\<job>`),
+`vm delete` (exit 5 is expected: the VM already deleted itself), the leak scan and the table. The run passes only when pytest exited 0.
+On the VM, `startup.sh`'s `gpu_test_run` runs `pytest -m gpu` inside the image on only the test files whose `-m gpu` collection is non-empty
+(the image has pytest and `worker/tests` but not the `dev` extra: hypothesis is MPL-2.0, so a file that cannot be imported there and carries no gpu marker is named in
+the log and left out; a gpu-marked file that cannot be collected FAILS the run with exit 6 and `error` `GPU_TEST_COLLECTION_ERROR`), under `docker run --init --name deg-gputest-<job>` with `timeout -k 30` counted from boot (maxRunDuration minus 10
+minutes minus the uptime) and a `docker kill` by name on a timeout, uploads `logs/gpu-test.log` then `logs/gpu-test-result.json`
+(`exitCode`, `timedOut`, `image`, `vm`; see job_contract.md) last, and applies the lifecycle. A failure before the tests can start (GPU not
+visible, image pull failed) writes the same two objects with `exitCode` 7 and an `error` code, so the script stops waiting at once. The
+script refuses (exit 2) a `-JobId` whose result object already exists, and does not trust a result whose `image` or `vm.name` is not this
+run's (a stale PASS). A run whose GPU tests were all
+skipped, or none ran, is exit code 6, never a pass (THEORY (unverified), from reading `test_evo_predictor.py`'s `importorskip` fixtures:
+without torch/evo2 every gpu test skips and pytest still exits 0). The image must be built from `Dockerfile.cuda` after #759, or it has no tests to run.
+
+**A failed create is never read as clean**: the delete is retried up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete
+exit 5 is reported as "not proof it is gone", the scan and the table still run, and the run exits 1. A failing final table call also exits 1.
+
+The contract is tested twice: `-SelfTest` checks every list against a recorded flag list and runs the whole flow against a stub CloudCli,
+and `app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/CloudGpuTestScriptContractTests.cs` feeds the script's real `-PrintApplyArgs` output to the
+real parser over `FakeGcp`. `docs/ToTest.md` carries the rows for a real run. Read `working-on-gcp` before running it for real: it creates
+real, billed cloud resources. Launch detached and poll rather than blocking a single tool call on it (see the `a-tool-call-caps-at-600s` memory seed).
 
 ## PowerShell equivalents of common Unix commands
 

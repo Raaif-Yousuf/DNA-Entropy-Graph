@@ -57,13 +57,14 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IRunTargetResolver targets,
         LocalRunDriver local,
         Func<string?>? downloadsFolder = null,
+        AppDataRoot? dataRoot = null,
         ICostEstimateService? estimates = null)
     {
         _estimates = estimates;
         _targets = targets;
         _local = local;
         _activeRuns = activeRuns;
-        _downloadsFolder = downloadsFolder ?? Services.KnownFolders.Downloads;
+        _downloadsFolder = downloadsFolder ?? (dataRoot ?? AppDataRoot.Default()).DefaultOutputSource(Services.KnownFolders.Downloads);
         _messenger = messenger;
         _runner = runner;
         _account = account;
