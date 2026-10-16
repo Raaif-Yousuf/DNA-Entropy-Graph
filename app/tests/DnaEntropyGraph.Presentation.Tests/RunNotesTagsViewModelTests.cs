@@ -151,6 +151,8 @@ public sealed class RunNotesTagsViewModelTests
         await vm.SaveAnnotationsCommand.ExecuteAsync(null);
 
         vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesSaved);
+        // The cut must not leave half an emoji behind: a lone surrogate is stored as the replacement character.
+        await _annotations.Received(1).UpdateAsync("r", Arg.Any<string?>(), Arg.Is<string?>(j => j != null && !j.Contains('\uFFFD') && !j.Contains("\\uFFFD", StringComparison.OrdinalIgnoreCase)), Arg.Any<CancellationToken>());
     }
 
     [Fact]

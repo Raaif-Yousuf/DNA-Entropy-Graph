@@ -113,6 +113,18 @@ public sealed class DiagnosticsNotesTagsTests
     }
 
     [Fact]
+    public void A_note_the_redactor_cannot_clean_is_withheld_whole_instead_of_failing_the_bundle()
+    {
+        // A two-part token shape: the scan's credential rule matches it and the redactor's three-part rule does not.
+        var note = "pasted eyJabcdefghijk.abcdefghijkl by mistake";
+        var run = new RunRecord(JobId, JobPhase.Completed, new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero), Notes: note);
+
+        var history = BuildFor(run, "ok\n", include: true)["run-history.json"];
+
+        JsonNode.Parse(history)!.AsArray().Single()!["notes"]!.GetValue<string>().ShouldBe("<omitted: note withheld>");
+    }
+
+    [Fact]
     public void With_the_box_ticked_a_note_holding_a_path_an_email_and_a_sequence_is_redacted_and_the_bundle_is_still_made()
     {
         var note = @"see C:\Lab\Patient42\plate.fasta, mail jane.roe@example.org, read ACGTACGTACGTACGTACGTACGTACGT end";
