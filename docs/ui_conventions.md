@@ -251,6 +251,15 @@ left as unnecessary caution.
   a name box would promise something false. The XAML to restore is on #514.
 - `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
   next to Run once there is more than one pill.
+- **Model and graphics card pickers (issue #87).** The "Model and graphics card (GPU)" expander is `GpuPlanViewModel`
+  (a thin shell over the pure `ModelGpuLinker`, over `GpuCatalog.Shipped`). Picking a model raises an unpinned card to
+  the cheapest offered one that runs it; picking a card moves an unpinned model to the largest offered one that fits;
+  each side has a **Lock** toggle that keeps it where it is. A card that cannot run the chosen model shows a lock icon
+  and the reason in the list but can still be picked (the override). A pair that will not run shows a warning and a
+  "Run anyway" tick, and **Run** waits for the tick; any later change withdraws it. What the linker moved on its own is
+  said in a line under the pickers (an in-page line, not a toast: the page has no toast host). The model picker is
+  hidden while the catalog offers one model (today). The row that proves the wiring: choose the A100 and the
+  `RunOptions.GpuTier` the page starts is `A100_40`, so the request names `a2-highgpu-1g` and the estimate is asked for it.
 ## 10. Settings page (issues #106, #104)
 
 `SettingsPage` has **no title of its own**: the shell's `NavigationView` header already shows "Settings" (#627), the same
