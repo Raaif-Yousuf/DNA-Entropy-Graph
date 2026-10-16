@@ -101,6 +101,333 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 CloudErrorKind.Network);
     }
 
+    /// <summary>
+    /// Issue #670: <c>acceleratorTypes.aggregatedList</c> filtered to the accelerator's name, following the page token, answering every zone
+    /// that lists it. It asks for partial success: a zone Compute could not read is simply not in the answer (this is advice for the ladder,
+    /// which falls back to the requested zones on an empty answer, not a safety decision like the VM listings).
+    /// THEORY (unverified, no live project): that the <c>name = "nvidia-l4"</c> filter syntax matches.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        if (!LabelValuePattern.IsMatch(acceleratorType ?? string.Empty))
+        {
+            return [];
+        }
+
+        var zones = new List<string>();
+        string? pageToken = null;
+        do
+        {
+            var requestedToken = pageToken;
+            var page = await CallAsync(
+                "compute.acceleratorTypes.aggregatedList",
+                token =>
+                {
+                    var request = _service.AcceleratorTypes.AggregatedList(project);
+                    request.Filter = $"name = \"{acceleratorType}\"";
+                    request.PageToken = requestedToken;
+                    request.ModifyRequest += message =>
+                        message.RequestUri = new Uri(message.RequestUri + (string.IsNullOrEmpty(message.RequestUri!.Query) ? "?" : "&") + "returnPartialSuccess=true");
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.AcceleratorTypesScopedList>())
+            {
+                if (scoped?.AcceleratorTypes is { Count: > 0 } found && found.Any(a => string.Equals(a.Name, acceleratorType, StringComparison.Ordinal)) && ZoneName(scope) is { Length: > 0 } zone)
+                {
+                    zones.Add(zone);
+                }
+            }
+
+            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            if (next is not null && next == pageToken)
+            {
+                return zones;
+            }
+
+            pageToken = next;
+        }
+        while (pageToken is not null);
+
+        return zones;
+    }
+
+    /// <summary>
+    /// Issue #94. Order matters: the label rewrite (the claim) comes FIRST, carrying the label fingerprint read at the start, so of two jobs
+    /// racing for one VM only one passes it (the loser fails with a precondition error before it has written anything). Only the winner then
+    /// replaces the scheduling limits (<c>setScheduling</c> has no fingerprint, so written first a loser could overwrite the winner's
+    /// <c>maxRunDuration</c>) and the metadata (fingerprinted), and starts it. A failure after the claim leaves the VM labelled for this job and
+    /// stopped: the caller ends it. THEORY (unverified, no live project): that <c>instances.setScheduling</c> accepts <c>maxRunDuration</c> and
+    /// <c>instanceTerminationAction</c> on a stopped instance.
+    /// </summary>
+    public async Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        ArgumentException.ThrowIfNullOrWhiteSpace(existingVmName);
+        var reuse = spec with { ExistingVmName = existingVmName };
+        var labels = reuse.ToLabels();
+        var project = RequireProject();
+        if (!string.Equals(project, spec.ProjectId, StringComparison.Ordinal))
+        {
+            throw new CloudOperationException(
+                new CloudError("PROJECT_MISMATCH", null, "The VM spec names a different Google Cloud project from the selected one, so no VM was started."),
+                CloudErrorKind.Other);
+        }
+
+        ComputeData.Instance instance;
+        try
+        {
+            instance = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            throw new CloudOperationException(new CloudError("VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone."), CloudErrorKind.Other);
+        }
+
+        if (instance.Status is not ("TERMINATED" or "STOPPED"))
+        {
+            throw new CloudOperationException(new CloudError("VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{instance.Status}', not stopped."), CloudErrorKind.Other);
+        }
+
+        // A reuse that cannot name the boot disk must not start: skipping would leave the old job's labels on a billed disk (Hard Rules 9-10).
+        var bootDisk = ParseBootDisk(instance)
+            ?? throw new CloudOperationException(new CloudError("VM_NO_BOOT_DISK", null, $"The VM '{existingVmName}' lists no boot disk this app can relabel, so it was not reused."), CloudErrorKind.Other);
+        var target = labels.ToDictionary(p => p.Key, p => p.Value);
+
+        // The claim: the one write that carries a fingerprint of the labels, so of two jobs racing for this VM only one passes it.
+        // A lost ANSWER to our own write, then a retry, meets 412 because the fingerprint moved; if the labels already equal the target
+        // the write did land, so it is accepted (a rival's labels differ, so a lost claim still fails).
+        var labelBody = new ComputeData.InstancesSetLabelsRequest { Labels = target, LabelFingerprint = instance.LabelFingerprint };
+        try
+        {
+            var claim = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(labelBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            await AwaitOperationAsync(project, zone, claim, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
+        {
+            var current = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            if (!LabelsEqual(current.Labels, target))
+            {
+                throw;
+            }
+        }
+
+        // Issue #678: the boot disk keeps the OLD job's labels from its creation; relabel it (a disk's own label fingerprint) so every resource
+        // of this job carries its labels (Hard Rules 9-10). A failure here is a start failure: the VM is not started, the caller ends it.
+        await RelabelBootDiskAsync(project, bootDisk, target, cancellationToken).ConfigureAwait(false);
+        var scheduling = await CallAsync("compute.instances.setScheduling", token => _service.Instances.SetScheduling(ComputeVmShape.Scheduling(reuse), project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        await AwaitOperationAsync(project, zone, scheduling, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+
+        var metadataBody = new ComputeData.Metadata { Items = ComputeVmShape.MetadataItems(reuse), Fingerprint = instance.Metadata?.Fingerprint };
+        var metadata = await CallAsync("compute.instances.setMetadata", token => _service.Instances.SetMetadata(metadataBody, project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        await AwaitOperationAsync(project, zone, metadata, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+
+        var start = await CallAsync("compute.instances.start", token => _service.Instances.Start(project, zone, existingVmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        await AwaitOperationAsync(project, zone, start, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+
+        return await GetAsync(project, existingVmName, zone, cancellationToken).ConfigureAwait(false)
+            ?? throw new CloudOperationException(
+                new CloudError("START_OUTCOME_UNKNOWN", null, $"Compute Engine reported the start of '{existingVmName}' done, but the VM cannot be found."),
+                CloudErrorKind.Network);
+    }
+
+    private readonly record struct BootDisk(string Name, string Location, bool Regional);
+
+    /// <summary>
+    /// The boot disk named by the instance's <c>source</c> URL: a zonal <c>.../zones/z/disks/name</c> or a regional <c>.../regions/r/disks/name</c>
+    /// (a query, a trailing slash and a relative or beta URL are tolerated), or null when the instance lists no boot disk or the URL names no disk.
+    /// </summary>
+    private static BootDisk? ParseBootDisk(ComputeData.Instance instance)
+    {
+        var source = instance.Disks?.FirstOrDefault(d => d.Boot == true)?.Source;
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return null;
+        }
+
+        var cut = source.IndexOfAny(['?', '#']);
+        var segments = (cut < 0 ? source : source[..cut]).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 2; i >= 2; i--)
+        {
+            if (segments[i] == "disks" && segments[i - 2] is "zones" or "regions")
+            {
+                return new BootDisk(segments[i + 1], segments[i - 1], segments[i - 2] == "regions");
+            }
+        }
+
+        return null;
+    }
+
+    private async Task RelabelBootDiskAsync(string project, BootDisk disk, Dictionary<string, string> target, CancellationToken cancellationToken)
+    {
+        string? fingerprint;
+        if (disk.Regional)
+        {
+            var current = await CallAsync("compute.regionDisks.get", token => _service.RegionDisks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            fingerprint = current.LabelFingerprint;
+        }
+        else
+        {
+            var current = await CallAsync("compute.disks.get", token => _service.Disks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            fingerprint = current.LabelFingerprint;
+        }
+
+        try
+        {
+            ComputeData.Operation relabel;
+            if (disk.Regional)
+            {
+                var body = new ComputeData.RegionSetLabelsRequest { Labels = target, LabelFingerprint = fingerprint };
+                relabel = await CallAsync("compute.regionDisks.setLabels", token => _service.RegionDisks.SetLabels(body, project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var body = new ComputeData.ZoneSetLabelsRequest { Labels = target, LabelFingerprint = fingerprint };
+                relabel = await CallAsync("compute.disks.setLabels", token => _service.Disks.SetLabels(body, project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+
+            await AwaitOperationAsync(project, disk.Location, relabel, goneIsDone: false, cancellationToken, regional: disk.Regional).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
+        {
+            // A lost answer, then a retry: the fingerprint moved because the write landed. Accept only when the labels already equal the target.
+            IDictionary<string, string>? now = disk.Regional
+                ? (await CallAsync("compute.regionDisks.get", token => _service.RegionDisks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)).Labels
+                : (await CallAsync("compute.disks.get", token => _service.Disks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)).Labels;
+            if (!LabelsEqual(now, target))
+            {
+                throw;
+            }
+        }
+    }
+
+    private static bool LabelsEqual(IDictionary<string, string>? actual, IReadOnlyDictionary<string, string> target)
+        => actual is not null && actual.Count == target.Count && target.All(p => actual.TryGetValue(p.Key, out var value) && string.Equals(value, p.Value, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Issue #105: <c>instances.start</c> on the VM as it is, polled to <c>DONE</c>. No label, scheduling or metadata write (that is
+    /// <see cref="ReuseVmAsync"/>). A 404 is <c>VM_NOT_FOUND</c>, never a silent success: the caller asked for a VM to run.
+    /// </summary>
+    public async Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        ComputeData.Operation operation;
+        try
+        {
+            operation = await CallAsync("compute.instances.start", token => _service.Instances.Start(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            throw new CloudOperationException(new CloudError("VM_NOT_FOUND", 404, $"The VM '{vmName}' is gone."), CloudErrorKind.Other);
+        }
+
+        await AwaitOperationAsync(project, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Issue #105: <c>disks.aggregatedList</c> filtered on the app label and this installation's label, following the page token, asking for partial
+    /// success so an unreachable zone is REPORTED (it fails the whole listing, like the VM listings: a short list must never read as "no disks").
+    /// The server filter is the query; every disk is checked again here, so one without both labels can never be returned. Regional disks list under
+    /// <c>regions/..</c>, and their scope name is returned as the zone.
+    /// </summary>
+    public async Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        if (!LabelValuePattern.IsMatch(installationId ?? string.Empty))
+        {
+            return [];
+        }
+
+        var filter = $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.installation-id = \"{installationId}\")";
+        var found = new List<DiskDescriptor>();
+        string? pageToken = null;
+        do
+        {
+            var requestedToken = pageToken;
+            var page = await CallAsync(
+                "compute.disks.aggregatedList",
+                token =>
+                {
+                    var request = _service.Disks.AggregatedList(project);
+                    request.Filter = filter;
+                    request.PageToken = requestedToken;
+                    request.ModifyRequest += message =>
+                        message.RequestUri = new Uri(message.RequestUri + (string.IsNullOrEmpty(message.RequestUri!.Query) ? "?" : "&") + "returnPartialSuccess=true");
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (page.Unreachables is { Count: > 0 } unreachable)
+            {
+                throw new CloudOperationException(
+                    new CloudError("ZONES_UNREACHABLE", null, $"Compute Engine could not list these places: {string.Join(", ", unreachable.Select(u => ZoneName(u) ?? u))}."),
+                    CloudErrorKind.Network);
+            }
+
+            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.DisksScopedList>())
+            {
+                foreach (var disk in scoped?.Disks ?? [])
+                {
+                    if (disk.Labels is { } labels
+                        && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
+                        && labels.TryGetValue("installation-id", out var owner) && owner == installationId)
+                    {
+                        found.Add(new DiskDescriptor(
+                            disk.Name,
+                            ZoneName(disk.Zone ?? disk.Region) ?? ZoneName(scope) ?? string.Empty,
+                            (int)Math.Min(disk.SizeGb ?? 0, int.MaxValue),
+                            disk.Status ?? string.Empty,
+                            new Dictionary<string, string>(labels),
+                            ParseTime(disk.CreationTimestamp),
+                            (disk.Users ?? []).Select(u => ZoneName(u) ?? u).ToList()));
+                    }
+                }
+            }
+
+            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            if (next is not null && next == pageToken)
+            {
+                throw new CloudOperationException(
+                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the disk list may be incomplete."),
+                    CloudErrorKind.Network);
+            }
+
+            pageToken = next;
+        }
+        while (pageToken is not null);
+
+        return found;
+    }
+
+    /// <summary>
+    /// Issue #105: <c>disks.delete</c>, polled to <c>DONE</c>. <paramref name="zone"/> is the disk's scope as the listing returned it: a zone (<c>us-central1-a</c>) or,
+    /// for a regional disk, a region (<c>us-central1</c>), which goes to <c>regionDisks.delete</c> (a zonal delete of a regional disk is a 404, and a 404 here
+    /// means "already gone"). Already gone is a success; a disk still attached is the platform's own 400, passed through.
+    /// </summary>
+    public async Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        var regional = !IsZoneName(zone);
+        ComputeData.Operation operation;
+        try
+        {
+            operation = regional
+                ? await CallAsync("compute.regionDisks.delete", token => _service.RegionDisks.Delete(project, zone, diskName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)
+                : await CallAsync("compute.disks.delete", token => _service.Disks.Delete(project, zone, diskName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return;
+        }
+
+        await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken, regional).ConfigureAwait(false);
+    }
+
+    /// <summary>A zone name ends in one letter after the region (<c>us-central1-a</c>); a region (<c>us-central1</c>) does not.</summary>
+    internal static bool IsZoneName(string location) => System.Text.RegularExpressions.Regex.IsMatch(location ?? string.Empty, "-[a-z]$");
+
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);
 
@@ -221,8 +548,29 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     {
         try
         {
-            var instance = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-            return ToDescriptor(instance, zone);
+            // Issue #691: read the raw answer so its Date header (the platform's own clock) can ride on the descriptor.
+            (ComputeData.Instance instance, DateTimeOffset? serverNow) = await CallAsync(
+                "compute.instances.get",
+                async token =>
+                {
+                    using var message = _service.Instances.Get(project, zone, vmName).CreateRequest();
+                    using var response = await _service.HttpClient.SendAsync(message, token).ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        // ExecuteAsync would have thrown this itself; the raw path must raise the same exception so the classification is unchanged. It is the ONLY
+                        // hand-rolled request (ExecuteAsync exposes no response headers), so there is no shared helper to drift from: the parity tests in
+                        // GoogleComputeGatewayTests compare its exceptions with the ExecuteAsync path's for each error shape.
+                        var error = await _service.DeserializeError(response).ConfigureAwait(false);
+                        throw new GoogleApiException(_service.Name, error?.Message) { Error = error, HttpStatusCode = response.StatusCode };
+                    }
+
+                    var read = await _service.DeserializeResponse<ComputeData.Instance>(response).ConfigureAwait(false);
+                    // A cached or proxied answer replays an old Date (its Age says how old): that is not the platform's time now, so it is dropped.
+                    // Precision of the rest: see PlatformClock.Read (one-second resolution, a round-trip behind).
+                    return (read, response.Headers.Age is { } age && age > TimeSpan.Zero ? null : response.Headers.Date);
+                },
+                cancellationToken).ConfigureAwait(false);
+            return ToDescriptor(instance, zone) with { ServerNow = serverNow };
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
@@ -231,7 +579,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>Polls the zone operation until <c>DONE</c> and throws its error. <paramref name="goneIsDone"/>: a stop or delete whose operation says the VM is not found has nothing left to do.</summary>
-    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken)
+    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken, bool regional = false)
     {
         if (!IsDone(operation))
         {
@@ -240,7 +588,9 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             var outcome = await OperationPoller.PollAsync(
                 async token =>
                 {
-                    latest = await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
+                    latest = regional
+                        ? await CallAsync("compute.regionOperations.get", pollToken => _service.RegionOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false)
+                        : await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
                     return new OperationPoll<bool>(IsDone(latest), true, null);
                 },
                 _options.OperationDeadline,
@@ -314,7 +664,9 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             instance.StatusMessage,
             ParseTime(instance.CreationTimestamp),
             instance.Labels is null ? null : new Dictionary<string, string>(instance.Labels),
-            ParseTime(instance.LastStopTimestamp));
+            ParseTime(instance.LastStopTimestamp),
+            ZoneName(instance.MachineType),
+            ParseTime(instance.LastStartTimestamp));
 
     /// <summary>The zone name from a zone URL (<c>.../zones/us-central1-a</c>) or an aggregated-list key (<c>zones/us-central1-a</c>).</summary>
     private static string? ZoneName(string? url)
@@ -339,7 +691,8 @@ internal static class ComputeVmShape
 
     public const int BootDiskGb = 150;
 
-    public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
+    /// <summary>The metadata items a VM for this spec carries: the spec's own plus the project-wide-SSH block (used by create and by reuse).</summary>
+    public static List<ComputeData.Metadata.ItemsData> MetadataItems(VmSpec spec)
     {
         var items = new List<ComputeData.Metadata.ItemsData>();
         foreach (var (key, value) in spec.Metadata ?? new Dictionary<string, string>())
@@ -353,19 +706,27 @@ internal static class ComputeVmShape
             items.Add(new ComputeData.Metadata.ItemsData { Key = "block-project-ssh-keys", Value = "true" });
         }
 
+        return items;
+    }
+
+    /// <summary>The lifetime limits every VM carries (Hard Rule 10), for create and for reuse.</summary>
+    public static ComputeData.Scheduling Scheduling(VmSpec spec) => new()
+    {
+        MaxRunDuration = new ComputeData.Duration { Seconds = (long)Math.Ceiling(spec.MaxRunDuration.TotalSeconds) },
+        InstanceTerminationAction = spec.TerminationAction,
+        OnHostMaintenance = "TERMINATE",
+        AutomaticRestart = false,
+    };
+
+    public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
+    {
         return new ComputeData.Instance
         {
             Name = spec.VmName,
             MachineType = $"zones/{zone}/machineTypes/{spec.MachineType}",
             Labels = labels.ToDictionary(p => p.Key, p => p.Value),
-            Metadata = new ComputeData.Metadata { Items = items },
-            Scheduling = new ComputeData.Scheduling
-            {
-                MaxRunDuration = new ComputeData.Duration { Seconds = (long)Math.Ceiling(spec.MaxRunDuration.TotalSeconds) },
-                InstanceTerminationAction = spec.TerminationAction,
-                OnHostMaintenance = "TERMINATE",
-                AutomaticRestart = false,
-            },
+            Metadata = new ComputeData.Metadata { Items = MetadataItems(spec) },
+            Scheduling = Scheduling(spec),
             Disks =
             [
                 new ComputeData.AttachedDisk

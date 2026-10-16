@@ -237,7 +237,18 @@ internal sealed class ManualTimeProvider : TimeProvider
 {
     private DateTimeOffset _utcNow;
 
-    public ManualTimeProvider(DateTimeOffset start) => _utcNow = start;
+    private readonly bool _timestampFollowsClock;
+
+    /// <param name="timestampFollowsClock">When true, "elapsed" (what <see cref="TimeProvider.GetElapsedTime(long)"/> measures) moves with <see cref="Advance"/>, as the app's own clock does; by default it stays the machine's real clock.</param>
+    public ManualTimeProvider(DateTimeOffset start, bool timestampFollowsClock = false)
+    {
+        _utcNow = start;
+        _timestampFollowsClock = timestampFollowsClock;
+    }
+
+    public override long TimestampFrequency => _timestampFollowsClock ? TimeSpan.TicksPerSecond : base.TimestampFrequency;
+
+    public override long GetTimestamp() => _timestampFollowsClock ? _utcNow.Ticks : base.GetTimestamp();
 
     public override DateTimeOffset GetUtcNow() => _utcNow;
 

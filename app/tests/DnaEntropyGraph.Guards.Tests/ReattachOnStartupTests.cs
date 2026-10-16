@@ -119,6 +119,32 @@ public class ReattachOnStartupTests : IDisposable
     }
 
     [Fact]
+    public async Task The_launch_entry_ends_a_This_PC_run_a_killed_app_left_Running_as_interrupted()
+    {
+        // Observable: with the local pass not called from the entry, the row stays Running for ever (issue #734).
+        using var provider = Build(connected: true);
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(
+            new RunRecord("local-killed-1", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: "local"),
+            CancellationToken.None);
+
+        await AppStartup.BeginAsync(provider, CancellationToken.None);
+
+        var row = await RowAsync(provider, "local-killed-1");
+        row.Phase.ShouldBe(JobPhase.Failed);
+        row.ErrorCode.ShouldBe("local_run_interrupted");
+    }
+
+    [Fact]
+    public async Task Every_program_the_production_launcher_starts_goes_through_the_kill_on_close_job()
+    {
+        using var provider = Build(connected: true);
+
+        provider.GetRequiredService<DnaEntropyGraph.LocalEngine.IProcessLauncher>().ShouldBeOfType<DnaEntropyGraph.LocalEngine.SystemProcessLauncher>();
+        provider.GetRequiredService<DnaEntropyGraph.LocalEngine.WindowsKillOnCloseJob>().ShouldNotBeNull();
+        await Task.CompletedTask;
+    }
+
+    [Fact]
     public void The_reconciler_resolves_from_the_production_container()
     {
         using var provider = Build(connected: true);
@@ -136,7 +162,7 @@ public class ReattachOnStartupTests : IDisposable
         await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
 
         var row = await RowAsync(provider, "job-launch");
-        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+        row.Phase.ShouldBe(JobPhase.Completed, $"{row.ErrorCode}: {row.ErrorDetail}");
         row.OutputDir.ShouldNotBeNull();
         Directory.EnumerateFiles(row.OutputDir, "*", SearchOption.AllDirectories).ShouldNotBeEmpty();
     }
@@ -257,7 +283,7 @@ public class ReattachOnStartupTests : IDisposable
         await ((ReconcileOnReconnect)observer).WhenIdleAsync();
 
         var row = await RowAsync(provider, "job-reconnect");
-        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+        row.Phase.ShouldBe(JobPhase.Completed, $"{row.ErrorCode}: {row.ErrorDetail}");
         provider.GetRequiredService<CloudRetryLog>().IsOffline.ShouldBeFalse("the offline banner's source still hears every change");
     }
 
@@ -289,7 +315,7 @@ public class ReattachOnStartupTests : IDisposable
         await observer.WhenIdleAsync();
 
         var row = await RowAsync(provider, "job-probe");
-        row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
+        row.Phase.ShouldBe(JobPhase.Completed, $"{row.ErrorCode}: {row.ErrorDetail}");
     }
 
     [Fact]
@@ -322,8 +348,9 @@ public class ReattachOnStartupTests : IDisposable
     {
         private int _reads;
 
+        // Read 1 is the This PC pass at launch (issue #734); read 2 is the cloud reattach's own listing, the one this test needs to fail.
         public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
-            => Interlocked.Increment(ref _reads) == 1 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
+            => Interlocked.Increment(ref _reads) == 2 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
 
         public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
     }

@@ -73,6 +73,10 @@ public class CloudJobRunnerGuaranteesTests
 
         public Func<string, CancellationToken, Task<IReadOnlyList<VmDescriptor>>>? OnFind { get; set; }
 
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+
         public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
             => OnCreate is null ? inner.CreateVmAsync(spec, zone, cancellationToken) : OnCreate(spec, zone, cancellationToken);
 
@@ -91,6 +95,12 @@ public class CloudJobRunnerGuaranteesTests
             => inner.ListByInstallationAsync(installationId, cancellationToken);
 
         public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+
+        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
     }
 
     // ---- M1: a gateway's own deadline (an OCE with the caller's token live) is not the caller cancelling ----
@@ -277,7 +287,7 @@ public class CloudJobRunnerGuaranteesTests
         // maxRunDuration is 11 s, the default wait limit 5.5 s, and the VM reads RUNNING after 6 looks (6 s). Waiting 5.5 s
         // from Running would run past the platform's deletion at 11 s (vm_unhealthy); measured from creation the deadline
         // has already passed at the first look and the runner ends the VM itself.
-        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"));
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"), timestampFollowsClock: true); // the runner's own elapsed clock moves with the looks
         var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithBootStatusPolls(5).WithMaxRunDurationEnforced();
         var compute = new ScriptedCompute(gcp)
         {
@@ -300,6 +310,78 @@ public class CloudJobRunnerGuaranteesTests
         var result = await runner.RunAsync(TestInputs.Request("job-m4", Spec("job-m4", TimeSpan.FromSeconds(11))), CancellationToken.None);
 
         result.FailureCode.ShouldBe(RunErrorCodes.ResultTimeout, result.FailureMessage);
+    }
+
+    // ---- #89: a VM the platform deleted at its maxRunDuration is RUN_TIME_LIMIT, not "lost" ----
+
+    [Fact]
+    public async Task A_VM_the_platform_deleted_at_its_run_limit_is_recorded_as_run_time_limit()
+    {
+        // Virtual time. The app was not looking (a closed laptop lid): the clock jumps past the VM's maxRunDuration between
+        // two looks, the platform has deleted the VM, no result.json exists. The record must say the run hit its limit.
+        // Issue #691: the age of the last look is carried by the MONOTONIC clock, so the jump moves it too (THEORY (unverified): Windows's
+        // performance counter keeps counting through sleep; a monotonic clock that stopped in sleep would under-count here and read vm_unhealthy).
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"), timestampFollowsClock: true);
+        var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithMaxRunDurationEnforced();
+        var looks = 0;
+        var compute = new ScriptedCompute(gcp)
+        {
+            OnGet = (name, zone, token) =>
+            {
+                if (++looks == 3)
+                {
+                    time.Advance(TimeSpan.FromMinutes(30));
+                }
+
+                return gcp.GetVmAsync(name, zone, token);
+            },
+        };
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, gcp, repo)
+        {
+            TimeProvider = time,
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromSeconds(1),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+        };
+
+        var result = await runner.RunAsync(TestInputs.Request("job-rtl", Spec("job-rtl", TimeSpan.FromMinutes(20))), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldBe(RunErrorCodes.RunTimeLimit, result.FailureMessage);
+        LastRow(repo, "job-rtl").ErrorCode.ShouldBe(RunErrorCodes.RunTimeLimit);
+    }
+
+    [Fact]
+    public async Task A_VM_lost_well_before_its_run_limit_is_still_vm_unhealthy()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"));
+        var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never);
+        var looks = 0;
+        var compute = new ScriptedCompute(gcp)
+        {
+            OnGet = async (name, zone, token) =>
+            {
+                if (++looks == 3)
+                {
+                    await gcp.DeleteVmAsync(name, zone, token);
+                }
+
+                return await gcp.GetVmAsync(name, zone, token);
+            },
+        };
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(compute, gcp, gcp, gcp, gcp, repo)
+        {
+            TimeProvider = time,
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromSeconds(1),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+        };
+
+        var result = await runner.RunAsync(TestInputs.Request("job-lost", Spec("job-lost", TimeSpan.FromHours(4))), CancellationToken.None);
+
+        result.FailureCode.ShouldBe(RunErrorCodes.VmUnhealthy, result.FailureMessage);
     }
 
     // ---- M5: a VM from an earlier runner, in a zone that is not the ladder's first, is adopted ----

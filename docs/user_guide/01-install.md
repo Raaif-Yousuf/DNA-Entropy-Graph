@@ -63,8 +63,16 @@ You can also press **Check now** in Settings > About and updates, and pick the *
 versions (the default, Stable, only offers finished releases). The same page shows what changes in the version on offer.
 A copy of the app that did not come from the installer cannot update itself; download the newest `Setup.exe` instead.
 
+## Running from a USB stick (portable)
+
+To keep everything beside the program instead of in your user folder, create an empty file named `portable.flag` in the same folder as `DnaEntropyGraph.App.exe` and start the app. Your history, settings and saved input copies then live in a `data` folder next to it, your results go to an `outputs` folder there too, and you can carry the whole folder to another PC. If you installed with Setup.exe, put the file next to `Update.exe`, one level above the program folder, so updates keep it. Open with in Settings is not available in this mode. Your Google sign-in does not travel (Windows locks it to you on one PC), so on the new PC press Sign in again.
+
 ## Related
 
 [02-connect-google-cloud.md](02-connect-google-cloud.md), the next step.
 [07-when-something-goes-wrong.md](07-when-something-goes-wrong.md), if the install itself
 does not go as described above.
+
+## Optional: running on this PC
+
+If your computer has an NVIDIA graphics card with about 24 GB of memory, the app can run the analysis there instead of on a rented computer. Open **Settings**, find **This PC**, and read the health check: it tells you whether your card, driver and disk space are enough. If they are, choose **Install**. If they are not, the app keeps using the cloud and nothing else changes. See [Settings](08-settings.md).

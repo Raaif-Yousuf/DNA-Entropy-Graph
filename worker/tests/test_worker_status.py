@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 import dna_entropy.worker.status as status_module
 from dna_entropy.worker.blobstore import BlobstoreError, LocalBlobstore
 from dna_entropy.worker.status import GpuInfo, StatusWriter, WorkerInfo
@@ -361,3 +363,133 @@ def test_write_local_fallback_writes_utf8_with_lf(tmp_path, monkeypatch) -> None
     raw = path.read_bytes()
     assert b"\r\n" not in raw  # newline="\n", never CRLF
     assert json.loads(raw.decode("utf-8"))["status"] == "done"
+
+
+def test_stage_started_at_moves_only_when_the_stage_changes(tmp_path: Path, monkeypatch) -> None:
+    """The app reads stage age from the worker's own clock (updatedAt - stageStartedAt), so a resumed
+    run does not grant a stuck stage a fresh allowance (#90 review)."""
+    clock = iter(f"2026-10-15T10:{m:02d}:00Z" for m in range(0, 59))
+    monkeypatch.setattr(status_module, "utc_now_iso", lambda: next(clock))
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job1", interval_seconds=999)
+    w.start()
+    try:
+        first = _status(store)
+        assert first["stageStartedAt"] == first["startedAt"]
+
+        w.update(stage="model-loading")
+        loading = _status(store)
+        assert loading["stage"] == "model-loading"
+        assert loading["stageStartedAt"] > first["stageStartedAt"]
+
+        w.update(percent=10.0)  # same stage again: the clock must not restart
+        again = _status(store)
+        assert again["stageStartedAt"] == loading["stageStartedAt"]
+        assert again["updatedAt"] > loading["updatedAt"]
+
+        w.update(stage="model-loading")  # naming the same stage is not a transition
+        assert _status(store)["stageStartedAt"] == loading["stageStartedAt"]
+    finally:
+        w.stop()
+
+
+# --- issue #675 review: cancelSeen is the worker's explicit acknowledgement of control/cancel ---
+
+
+def test_cancel_seen_is_false_until_the_worker_marks_it_and_then_written_at_once(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    writer = StatusWriter(store, "job-1", interval_seconds=3600)
+    writer.start()
+    try:
+        assert json.loads(store.read_text("status.json"))["cancelSeen"] is False
+        before = json.loads(store.read_text("status.json"))["heartbeatSeq"]
+
+        writer.mark_cancel_seen()
+
+        doc = json.loads(store.read_text("status.json"))
+        assert doc["cancelSeen"] is True
+        assert doc["heartbeatSeq"] > before
+    finally:
+        writer.stop()
+
+
+# --- issue #522: a progress-liveness signal, distinct from the heartbeat ---------------------
+
+
+def test_status_starts_with_no_windows_done_and_a_last_progress_time(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job-1", interval_seconds=3600)
+    w.start()
+    try:
+        doc = _status(store)
+        assert doc["windowsDone"] == 0
+        assert doc["lastProgressAt"] == doc["startedAt"]
+    finally:
+        w.stop()
+
+
+def test_a_heartbeat_with_a_wedged_compute_thread_does_not_move_progress(tmp_path: Path) -> None:
+    """The #522 symptom: the background thread keeps ticking (heartbeatSeq and updatedAt move)
+    while nothing calls mark_progress (a hung CUDA call). windowsDone and lastProgressAt must NOT move."""
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job-1", interval_seconds=3600)
+    w.start()
+    try:
+        w.mark_progress()
+        w._write_status()
+        first = _status(store)
+        assert first["windowsDone"] == 1
+        w._write_status()  # what each background tick does
+        w._write_status()
+        later = _status(store)
+        assert later["heartbeatSeq"] == first["heartbeatSeq"] + 2
+        assert later["windowsDone"] == first["windowsDone"] == 1
+        assert later["lastProgressAt"] == first["lastProgressAt"]
+    finally:
+        w.stop()
+
+
+def test_mark_progress_counts_windows_and_moves_last_progress_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = iter(f"2026-10-15T10:00:{s:02d}Z" for s in range(0, 59))
+    monkeypatch.setattr(status_module, "utc_now_iso", lambda: next(clock))
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job-1", interval_seconds=3600)
+    seen = []
+    for _ in range(3):
+        w.mark_progress()
+        w._write_status()
+        doc = _status(store)
+        seen.append((doc["windowsDone"], doc["lastProgressAt"]))
+    assert [n for n, _ in seen] == [1, 2, 3]
+    assert len({t for _, t in seen}) == 3, "lastProgressAt must move on every progress event"
+
+
+def test_a_stage_change_counts_as_progress_but_a_repeat_of_the_same_stage_does_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = iter(f"2026-10-15T10:00:{s:02d}Z" for s in range(0, 59))
+    monkeypatch.setattr(status_module, "utc_now_iso", lambda: next(clock))
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job-1", interval_seconds=3600)
+    w.update(stage="running")
+    moved = _status(store)["lastProgressAt"]
+    w.update(stage="running", percent=5.0)  # same stage: a percent write alone is not forward progress
+    assert _status(store)["lastProgressAt"] == moved
+    w.update(stage="uploading")
+    assert _status(store)["lastProgressAt"] != moved
+    assert _status(store)["windowsDone"] == 0, "a stage change is not a window"
+
+
+def test_mark_progress_is_safe_from_many_threads(tmp_path: Path) -> None:
+    import threading
+
+    w = StatusWriter(LocalBlobstore(tmp_path), "job-1", interval_seconds=3600)
+    threads = [threading.Thread(target=lambda: [w.mark_progress() for _ in range(200)]) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    w._write_status()
+    assert _status(w._store)["windowsDone"] == 800

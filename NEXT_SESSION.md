@@ -1,85 +1,114 @@
-# Handoff: after the 2026-10-15/16 wave
+# Handoff: after the 2026-10-16b wave
 
-> Overwritten every session. Re-check `git log -1 origin/main` and `gh pr list` before trusting anything here.
+> Overwritten every session. Re-check `git log -1 origin/main`, `gh pr list` and the runner's `done.log` before trusting anything here.
 
 ## What this session was
 
-One orchestrator, at most 3 Sonnet lanes at a time, each in its own worktree. Every lane diff got a
-framing-free cold review, and cloud/deletion diffs got 2 to 4 rounds, before it was queued.
-- **Landing backlog:** about 40 finished branches had failed to land on gates or conflicts after main moved.
-  Three repair lanes fixed them, and a scratchpad queue runner (`land_wt.py --merge-when-green` per item)
-  landed them one at a time.
-- **New work, in issue order:** #114, #619/#83, #759, #761/#653, #116, #113, #87, #91, #92, #109, #111,
-  #100/#557, #117, #141, #112. Also the #740 fixes on the app12 chain.
-- **Tools that landed:** `scripts/resw_merge.py`, a key-aware `Resources.resw` merge driver. `land_wt.py`
-  uses it automatically. Run `worker\.venv\Scripts\python.exe scripts\setup_git_drivers.py` once per clone,
-  so a plain `git merge` uses it too.
+One orchestrator, at most 3 Sonnet lanes in worktrees. Every lane diff got a framing-free cold review before landing,
+and deletion or tooling diffs got 2 rounds.
+- **Unblocked the landing queue.**
+  - #788: the C# GenBank validator ports Biopython's location verdict and shows the worker's dropped-feature notice.
+  - #791: the cloud chain gained the missing `RunErrorActions` rows. It was rebuilt twice: as `-ea`, then as `-ea2` after
+    local-engine landed its own rows.
+- **Landed:**
+  - Issues: #114 (retention), local-engine #120/#173/#174, #788, #89, #90.
+  - Tools: #794 (`scripts/prune_worktrees.py`), #792 (ruff format of scripts/).
+- **Built and reviewed, landing or held:** #138 CLI (held), #144 portable mode, #143 onboarding tour, #800 resw driver fix.
+- **Cleanup:**
+  - Worktrees went from 153 to 55, local branches from 383 to 73, and remote branches from about 100 to 4.
+  - A worktree was kept if it had uncommitted changes or commits not on main.
+  - A local branch was kept if its content is in no other branch (a `git merge-tree` check against main and every queued or held tip).
+
+## The landing runner (still running when this session ended)
+
+`%TEMP%\claude\C--Users-raaif-DNA-Entropy-Graph\2fcad6ed-bcba-448f-9b07-bbd7f0ed5eff\scratchpad\land_queue.sh`
+is an orphan from an earlier session. It reads `queue.txt` (`branch|sha|title`; a line starting `#` is skipped), runs
+`land_wt.py --merge-when-green` per line, and appends `MERGED`/`FAILED ... b @ sha` to `done.log`.
+- **Skip rule:** a line whose `b @ sha` is already in `done.log`, FAILED or MERGED, is never retried. To retry the same sha,
+  delete its FAILED line from `done.log`.
+- **Stopping it:** `touch STOP` in that folder.
+- **Queued, in order:**
+  1. feat/144-portable-mode @ 513d1109 (retry; the last failure was flaky test #808)
+  2. The `-ea2` cloud chain from 94 up to 759: 94, 670, 678, 679, 691, 105, 99, 675, worker5, 723, 759
+  3. fix/694-origin-wrap-writers-r2-ea @ 6128545b, then feat/129-130-192-analysis-commands-r2-ea @ 3d2407e4
+  4. fix/resw-merge-driver-conflicts @ cfd5a6c6 (#800)
+  5. fix/prune-tools-build-output @ d8037b2d
+  6. feat/143-onboarding-tour @ 3b69c020
+- **If a chain item fails, comment out the items above it in the same chain at once.** They are stacked.
+- **If it died:** re-run the remaining items one at a time with `scripts/land_wt.py`, or land `feat/land-queue-tool` first.
 
 ## Start here next session
 
-1. **Finish the landing queue, in this order.** Skip any entry that is already an ancestor of origin/main
-   (`git merge-base --is-ancestor <sha> origin/main`). Land with
-   `scripts/land_wt.py --branch <b> --sha <s> --title ... --body-file ... --merge-when-green`, one at a time.
-   The PR body is the branch's own `docs/changelog.d/` fragment plus `Closes #n`.
-   - **Before this session:** fix/694-origin-wrap-writers @ d3f9ea34, feat/129-130-192-analysis-commands @ 62227c12
-   - **GPU test path:** feat/619-83-gpu-test-apply @ 5d982249
-   - **Cloud stack (a linear chain):** feat/89-vm-termination-verified-rs @ 1e50eb7f, feat/90-heartbeat-stage-deadlines-rs @ 22ae7653,
-     feat/94-reuse-stopped-vm-rs @ 19290227, feat/670-zone-ladder-rs @ bc1492d3, fix/678-reuse-labels-rs @ 4f42e2ef,
-     fix/679-vmname-and-limit-rs @ 78fe2929, fix/691-clock-skew-rs @ e418d098, feat/105-cloud-page-gateway-rs @ e7b40b65,
-     feat/99-gpu-quota-request-r2-rs @ ec5651c9, feat/675-slow-run-control-r2-rs @ 37289401,
-     worker5/494-496-522-299-rs @ 1da65a24, cloud9/723-progress-stall-rs @ d35daf1e
-   - **GPU test mode (contains worker5):** feat/759-gpu-test-mode @ 24ad77f7
-   - **Manifest fields:** feat/704-manifest-fields-rs @ 7a3c2025
-   - **app10 chain:** feat/app10-base-rs @ 399e6d83, feat/app10-688-gc-codons-rs @ a4c2596c, feat/app10-684-accession-rs @ be136437
-   - **app12 chain (#740 fixed, two review rounds):** feat/app12-base-rs @ fe786cfb, feat/app12-99-gpu-ask-rs @ 7752a66e,
-     feat/app12-105-cloud-page-rs @ 0f1f00c9, feat/app12-675-slow-run-rs @ 8f896ef6,
-     feat/app12-717-redownload-partial-rs @ bcf3cced, feat/app12-677-settings-followups-rs @ 1e898ca3
-   - **Independent branches:** fix/114-retention-setting-wired @ 2a7cac3d, feat/local-engine-119-120-173-174 @ 27ea5150,
-     chore/scripts-ruff-format-r2 @ 56efdfc0
-   - **Built on the app12 tip:** feat/111-import-runs @ 89f0486b, feat/113-nothing-left-running @ 252f28ba,
-     feat/91-spot-provisioning @ e5d715ba, feat/92-flex-start @ 8ae970c6 (on 91), feat/87-gpu-planner @ 2506341e
-   - **On 91 + 87:** feat/109-spend-ledger @ 25650ff7. It has migration 0003; 91 has 0002, so 91 must land first.
-   - **On 109:** feat/100-557-run-cost @ 88dc3f66
-   - **Last:** ci/761-653-codeql-src-only @ 637bec69. Its pinned `format_arity_sites.txt` will drift. Regenerate it
-     with the command in `docs/hard_rules.md` Rule 13, then commit. Once it lands, CodeQL stops tracing test stubs.
-2. **Held, not queued:**
-   - feat/141-run-notes-tags @ 34f367b0: fix #782 first. Its High finding: a common tag makes Save diagnostics fail.
-   - feat/112-per-account-runs @ ba82fa16: built and tested, never cold-reviewed. It adds migration 0004,
-     so it lands after 109/100/141.
-   - feat/land-queue-tool @ 18dbd629: re-run `uvx ruff format scripts` after chore/scripts-ruff-format-r2 lands, then land it.
-     It gives you `scripts/land_queue.py` instead of a scratchpad runner.
-3. **Then continue issues in ascending order.**
-   - **Triage (2026-10-15):** #35/#37/#84/#85/#95/#96 are BLOCKED (owner, real GPU or a new account). #98 is
-     DONE in its own scope; rescope it and close. #104 is an epic split into #639-#644.
-   - **Next unbuilt:** #93 (keep-alive queue, L), #97 (wizard real GPU test step), #137/#138/#139 (watch
-     folder, CLI, schedule), #142 (shared signed URL; check iam.signBlob first), #143 to #146, #148 to #152.
-   - **Filed this session:** #759 (done), #761, #768 to #772, #780, #782, #784.
+1. **Check `done.log`.** Fix any FAILED item (read its `land-*.log` and the premerge log under `%TEMP%\landwt\logs`).
+   CodeQL `cs/invalid-string-formatting` false positives still appear until #761 lands. Dismiss them by hand after
+   checking the resw template.
+2. **Held: cold review first.** These are the `-ea2` chain from #684 up. Their merges with local-engine were made by hand:
+   - feat/app10-684-accession-rs-ea2 @ 771442c3
+   - feat/app12-base-rs-ea2 @ d0087cbd, then 99 @ 8bb5ff55, 105 @ c4ea0cea, 675 @ cc23fff8, 717 @ a7d1d843, 677 @ 60919412
+   - feat/111-import-runs-ea2 @ 58733319, feat/113-nothing-left-running-ea2 @ a763d303
+   - feat/91-spot-provisioning-ea2 @ 48e2f2fb, feat/92-flex-start-ea2 @ 93fe7b31 (on 91), feat/87-gpu-planner-ea2 @ 431606c3
+   - feat/109-spend-ledger-ea2 @ 0f5566bb (on 91 and 87), then feat/100-557-run-cost-ea2 @ 394615b2
+
+   Review the merge resolutions: `NewRunViewModel.BuildRunOptions` (a This PC run carries the GPU planner's ModelId and
+   tier), and 100-ea2 deleting `Core/RunTargets.cs` in favour of the local engine's `RunTargets`. Then queue them in that
+   order. Migrations stay 0002 (#91) and 0003 (#109).
+3. **#138 CLI, held:** feat/138-cli @ 432104bf. Its cold-review findings are below. Fix them on a fresh agent AFTER the
+   chain lands, because they touch `JobReconciler` and `JobEngine`.
+   - **Recommended fix (THEORY):** a driver lease in SQLite (`runs.driver_pid` plus a heartbeat).
+     - The reconciler takes over any row whose lease expired, including CLI runs started after the app launched.
+     - A second process never double-drives.
+     - `deg` cancels the runner on Ctrl-C and waits for a terminal or durable state before exiting.
+   - **DECISIONs to review:** #801 (deg is separate from CloudCli) and #802 (no `--wait` hands off to the app).
+   - **Packaging:** #803 (deg.exe is not shipped yet).
+4. **Still held from before:**
+   - feat/141-run-notes-tags: fix #782 first.
+   - feat/112-per-account-runs: never cold-reviewed; migration 0004.
+   - feat/land-queue-tool: re-run ruff format.
+   - ci/761-653-codeql-src-only: last; regenerate `format_arity_sites.txt`.
+5. **Then continue issues in ascending order.** From triage on 2026-10-16:
+   - **Built and closable:** #44 (rescope; move the keep-idle box to #93), and #168 and #182 (only an owner step is left).
+   - **Next buildable:** #137/#139 (after #138), #142 (signed URL), #146 + #164 (crash reporting + correlation ids),
+     #148 (budgets), #156/#159/#195 (viewer theming), #157/#158, #167, #198.
+   - **After the chain:** #93 (keep-alive queue), #149, #150, #151, #152, #177.
+   - **Blocked (owner or real GPU):** #84, #85, #95, #96, #163, #166, #170.
+
+### #138 cold-review findings (round 1)
+- **HIGH:** the CLI process is the only driver of its run. Ctrl-C or `--timeout` while provisioning can leave a VM and a
+  row stuck at Provisioning, and the "continues in the cloud" copy is false before Preparing.
+- **HIGH:** `ActiveRuns` is per process, and `JobReconciler.cs:613` only reattaches rows created before the app started.
+  So an open app never collects a CLI run, an app launched mid-CLI-run double-drives it, and `deg cancel` from a second
+  shell can overwrite Cancelled.
+- **MED-HIGH:** `Start-DegRun .\file` resolves against the process cwd, not `$PWD`. `Invoke-Deg` swallows a non-zero exit
+  that has no `ERROR:` line.
+- **MEDIUM:**
+  - `SqliteDatabase.IsReadable` treats a busy DB as corrupt, so it can quarantine the app's live DB.
+  - Two migrators can race on one DB.
+  - The OAuth client file is not found beside `deg.exe`.
+  - `RedownloadAsync` writes back a stale row.
+- **LOW:**
+  - Exit codes for `cloud_not_connected` and an expired sign-in.
+  - Tests that only cover the failure path.
+  - `AppVersion` is now read from the Hosting assembly.
+  - `ActiveRuns` is registered twice.
 
 ## Measured this session
 
-- **CodeQL `cs/invalid-string-formatting` false positives stall landings.**
-  - Cause: CodeQL traces a test stub's IStrings template into product `string.Format` calls.
-  - Fix: #761 (queued last).
-  - Until then: dismiss by hand after checking the resw template has the right placeholders (done for #760, #762, #767, #771, #779).
-- **Format failures were the commonest landing failure.** dotnet format whitespace and final newlines.
-  Run `dotnet format --verify-no-changes` on every lane tip before queuing.
-- **Push rejection after a re-landing.** A re-landed branch whose remote already has the earlier landing's
-  merge commit is rejected on push. Re-land under `-r2`.
-- **Cold reviews kept finding real defects in every lane, often High.** Examples:
-  - The exit dialog could close before Google received the stop request.
-  - A Spot "preemption" was inferred from a user's own delete.
-  - A FLEX_START queue wait counted against the run limit.
-  - A Save diagnostics could fail on a common tag.
-
-  Round 2+ still found Highs on cloud diffs.
-- **Read-only gcloud only.** A hook blocks printing a token. Live checks of Compute API shapes
-  (preempted operation filter, FLEX_START body) are THEORY rows in docs/ToTest.md.
+- **Hand-merged chains go stale fast.** Any landing that appends to `RunErrorActions.cs`, `RunErrorCodes.cs`,
+  `ServiceRegistration.cs` or `Resources.resw` conflicts every queued branch that also appends there.
+  - Land independent branches that touch these files BEFORE re-merging a long chain.
+  - Or re-merge the chain bottom-up once and land it without interleaving.
+- **The resw merge driver failed on older branches (#800).** git ran the driver script from the merged tree, so
+  branches older than the driver had no script and no attribute line. `setup_git_drivers.py` now installs `origin/main`'s
+  copy under `.git/deg-drivers/` and writes `info/attributes`. Re-run it once per clone after #800 lands.
+- **New files from lanes often lack a final newline.** That fails premerge's `dotnet format` gate. Two branches failed
+  landing on it.
+- **`RepoPaths.AllXamlFiles` included obj/bin copies.** It is fixed on the #143 branch. A guard test using `Single()` on a
+  file name failed in in-tree builds.
+- **Flaky under load:** `ReattachOnStartupTests` (#808) and `RunTargetPickerSharingTests` (once).
+- **Monitors on `done.log` replay the whole file when it is rewritten in place.** Append only.
 
 ## Owner asks
 
-- **A real GPU run.** Run #83/#759 end to end and close the gpu-vm ToTest rows. This needs a billing-enabled
-  project, L4 quota, the worker service account email, and a worker image digest built from the new
-  `worker/Dockerfile.cuda` (see #759's ToTest row). Recommendation: set up the project in OWNER_TODO 1a/1b first;
-  then one `cloud_gpu_test.ps1 -Apply -Image <digest>` run proves #37, #74, #83 and #759 together.
-- **Still open from before:** #703, #672 (branch protection: CI is still not a merge gate), #721, #14 (which models to offer;
-  `GpuCatalog` is now the one place to change), and the agent DECISIONs to review.
+- **DECISIONs to review:** #801 and #802 (CLI).
+- **A real GPU run is still the biggest unproven area.** #83/#759 end to end needs OWNER_TODO 1a/1b.
+- **Earlier asks, still open:** #672 (branch protection), #14 (which models to offer).

@@ -8,6 +8,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Setup;
 using DnaEntropyGraph.LocalEngine;
@@ -61,7 +62,8 @@ public static class ServiceRegistration
         // App-owned, WinUI-bound services (Presentation depends on their
         // interfaces only - docs/architecture.md section 2).
         services.AddSingleton<IDispatcher, DispatcherAdapter>();
-        services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
+        // Issue #825: one messenger per container, never the process-wide static, so two containers (tests run in parallel) never hear each other.
+        services.AddSingleton<IMessenger>(_ => new WeakReferenceMessenger());
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
@@ -85,7 +87,8 @@ public static class ServiceRegistration
         services.AddSingleton(sp => new FileAssociationService(
             sp.GetRequiredService<IClassesRegistry>(),
             () => Environment.ProcessPath,
-            () => sp.GetRequiredService<AppDataRoot>().IsOverride));
+            () => sp.GetRequiredService<AppDataRoot>().IsOverride,
+            () => sp.GetRequiredService<AppDataRoot>().IsPortable));
         services.AddTransient<FileAssociationSettingsViewModel>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
@@ -162,8 +165,8 @@ public static class ServiceRegistration
         // SqliteDatabase and SettingsStore both take a file path, so each
         // gets a factory registration rather than the type-to-type shorthand
         // the rest of this method uses.
-        services.AddSingleton(_ => new SqliteDatabase(databasePath));
-        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
+        services.AddSingleton(_ => new SqliteDatabase(databasePath, portable: root.IsPortable));
+        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
         services.AddSingleton<ISettingsStore>(sp => sp.GetRequiredService<SettingsStore>());
@@ -188,7 +191,7 @@ public static class ServiceRegistration
         services.AddSingleton<IRunHistoryRemover>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
         services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
             sp.GetRequiredService<IRunInputStore>(),
-            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
+            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             [root.Path]));
         services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
 
@@ -208,7 +211,7 @@ public static class ServiceRegistration
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),
             sp.GetRequiredService<IRunRepository>(),
-            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
+            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             sp.GetRequiredService<TimeProvider>()));
 
         // Issue #106: the support zip. The source only ever lists settings.json, logs and runs under the app data
@@ -228,9 +231,38 @@ public static class ServiceRegistration
             Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
-        // LocalEngine.
-        services.AddSingleton<LocalEngineManager>();
-        services.AddSingleton<RunTargetResolver>();
+        // LocalEngine (issues #120, #172, #173, #174): the This PC path. Everything that starts a program goes through the one
+        // IProcessLauncher (Hard Rule 6), so a test or a dev run can replace it.
+        // One kill-on-close Job Object for the whole app (issue #734): every child it starts dies with it, however the app ends. The container disposes it at a clean exit.
+        services.AddSingleton<WindowsKillOnCloseJob>();
+        services.AddSingleton<IProcessLauncher>(sp => new SystemProcessLauncher(sp.GetRequiredService<WindowsKillOnCloseJob>()));
+        services.AddSingleton<IGpuDetector>(sp => new NvidiaSmiGpuDetector(sp.GetRequiredService<IProcessLauncher>(), NvidiaSmiGpuDetector.WindowsCandidates()));
+        services.AddSingleton<IFreeDiskSpace, DriveFreeDiskSpace>();
+        services.AddSingleton<LocalEngineLayout>(sp => LocalEngineSetup.Layout(sp.GetRequiredService<AppDataRoot>()));
+        services.AddSingleton<LocalEngineManager>(sp => new LocalEngineManager(
+            sp.GetRequiredService<IGpuDetector>(),
+            sp.GetRequiredService<IFreeDiskSpace>(),
+            sp.GetRequiredService<IProcessLauncher>(),
+            sp.GetRequiredService<LocalEngineLayout>(),
+            JobEngine.AppVersion()));
+        services.AddSingleton<ILocalReadinessSource>(sp => sp.GetRequiredService<LocalEngineManager>());
+        services.AddSingleton<IRunTargetResolver, RunTargetResolver>();
+        services.AddSingleton<ILocalEngineInstaller>(sp => LocalEngineSetup.Installer(
+            sp.GetRequiredService<IProcessLauncher>(),
+            sp.GetRequiredService<LocalEngineLayout>(),
+            sp.GetRequiredService<AppDataRoot>(),
+            sp.GetRequiredService<LocalEngineManager>()));
+        services.AddSingleton<LocalJobRunner>(sp =>
+        {
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new LocalJobRunner(
+                sp.GetRequiredService<IProcessLauncher>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<LocalEngineLayout>(),
+                sp.GetRequiredService<AppDataRoot>().RunsDirectory,
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
+        services.AddSingleton<LocalRunDriver>();
 
         // App-owned singleton that survives navigation (docs/architecture.md section 3).
         // Registered once as its own concrete type and exposed through both
@@ -251,12 +283,32 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IQuotaGateway>(),
                 sp.GetRequiredService<IWorkerIdentityGateway>(),
                 sp.GetRequiredService<IRunRepository>(),
-                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
+            {
+                // Issue #675: safe production defaults until the app lane binds a real question and a real notice. With no UI a stall is answered at once with "end it as the
+                // run chose" (never a question nobody can answer, never a VM left billing), and a notice is logged by id and kind (never a sequence, a file name or an email).
+                OnStall = StallDecisions.EndAsRunChose,
+                OnNotice = notice => sp.GetRequiredService<IDiagnosticsLog>().Warning("run-notice", notice.JobId, notice.Kind.ToString()),
+            };
         });
         // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
         // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.
         // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
         services.AddSingleton<ActiveRuns>();
+        // Issue #99: the wizard's GPU step asks Google for the L4 and project-wide GPU quota through this (the app lane binds it).
+        services.AddSingleton<GpuQuotaRequester>(sp => new GpuQuotaRequester(sp.GetRequiredService<IQuotaGateway>()));
+        // Issue #105: what this installation has in the project, and "delete everything": for the Cloud page (the app lane binds it).
+        services.AddSingleton<InstallationCleanup>(sp =>
+        {
+            // Run rows and the driver registry are what end a run whose VM the cleanup deletes (Hard Rule 11); without them it would leave the row Running.
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new InstallationCleanup(
+                sp.GetRequiredService<IComputeGateway>(),
+                sp.GetRequiredService<IStorageGateway>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<ActiveRuns>(),
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
@@ -270,7 +322,7 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ActiveRuns>(),
                 sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
-                Services.KnownFolders.Downloads,
+                root.DefaultOutputSource(Services.KnownFolders.Downloads),
                 log: sp.GetRequiredService<IDiagnosticsLog>());
         });
         services.AddSingleton<JobEngine>();
@@ -302,6 +354,9 @@ public static class ServiceRegistration
         services.AddTransient<FilesSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
+        // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
+        services.AddSingleton<RunTargetPickerViewModel>();
+        services.AddTransient<ThisPcSettingsViewModel>();
         services.AddTransient<CloudResultsSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.

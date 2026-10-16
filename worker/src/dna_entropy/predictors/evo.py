@@ -20,6 +20,11 @@ from .hardware import require_hardware
 from .logits import aligned_acgt_probs, normalize_model_output
 
 
+def probe_cuda() -> bool:
+    """True when torch can see a CUDA device (the local-engine health check, issue #173)."""
+    return bool(torch.cuda.is_available())
+
+
 class EvoPredictor:
     """Wraps Evo 2 to produce per-position A/C/G/T probabilities."""
 
