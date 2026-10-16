@@ -626,6 +626,34 @@ public class GoogleStorageGatewayTests
     }
 
     [Fact]
+    public async Task A_retention_changed_between_two_calls_is_what_the_second_call_patches_to()
+    {
+        // Issue #114: the options read the retention at each use (a source, like the installation id), so a Settings change reaches the
+        // very next EnsureBucketAsync without restarting the app. A value fixed once at startup would send 30 both times.
+        var days = 30;
+        var rig = new GoogleGatewayHarness(retries: 2, retentionSource: () => days);
+        rig.Handler.Returns(Get, Project, 200, ProjectBody());
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 30)));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+        rig.Handler.To(Patch, BucketPath(existing)).ShouldBeEmpty("the bucket already says 30");
+
+        days = 120;
+        rig.Handler.Returns(Get, Project, 200, ProjectBody());
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 30)));
+        rig.Handler.Returns(Patch, BucketPath(existing), 200, "{}");
+        rig.Handler.Returns(Get, BucketPath(existing), 200, BucketJson(existing, jobsAge: 120));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Patch, BucketPath(existing)).Single().Body);
+        RuleAge(body.RootElement, "jobs/").ShouldBe(120);
+    }
+
+    [Fact]
     public async Task A_patch_for_another_reason_keeps_the_longer_jobs_age_it_found()
     {
         var rig = NewRig(retentionDays: 7);

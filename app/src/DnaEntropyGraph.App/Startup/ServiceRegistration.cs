@@ -340,6 +340,8 @@ public static class ServiceRegistration
                 }
             },
             AppVersion = JobEngine.AppVersion(),
+            // Issue #114: the saved "Cloud results retention", read at each use so a change patches the bucket rule on the next run.
+            ResultsRetentionDaysSource = () => ResultsRetentionSetting.Days(sp.GetRequiredService<ISettingsStore>()),
         });
         services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
             sp.GetRequiredService<IGcpAccessTokenSource>(),
