@@ -969,3 +969,151 @@ def test_a_nullable_string_property_is_a_display_property(tmp_path):
         {"src/Demo.Presentation/RunListItem.cs": cs, "src/Demo.App/Views/RunsPage.xaml": page},
     )
     assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+# --- #601: UNREGISTERED-RESOLVE blind spots ---------------------------------------------------------------------
+
+
+def test_a_generic_resolve_of_an_unregistered_type_is_reported(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<IOptions<Missing>>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["IOptions<Missing>"]  # was: nothing, the regex stopped at '<'
+
+
+def test_a_generic_resolve_of_a_registered_generic_type_is_not_reported(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton<IRepo<Run, Guid>, Repo>();",
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<IRepo<Run,Guid>>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+            "src/Demo.Core/Repo.cs": "public sealed class Repo { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_generic_type_parameter_resolve_is_not_reported(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "src/Demo.App/Startup/Helpers.cs": "public static class H { public static T Get<T>(IServiceProvider p) => p.GetRequiredService<T>(); }\n",
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_resolve_in_another_startup_file_is_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "src/Demo.App/Startup/AppStartup.cs": (
+                "public static class AppStartup { public static void Run(IServiceProvider p) {"
+                " p.GetRequiredService<Dep>(); p.GetRequiredService<Ghost>(); } }\n"
+            ),
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Ghost"]
+
+
+def test_a_resolve_in_a_test_file_is_not_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "tests/Demo.Tests/T.cs": "public class T { void A(IServiceProvider p) { p.GetRequiredService<Ghost>(); } }\n",
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_type_registered_in_another_startup_file_satisfies_a_resolve(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "src/Demo.App/Startup/Extra.cs": "public static class Extra { public static void Add(IServiceCollection s) { s.AddSingleton<Other>(); } }\n",
+            "src/Demo.App/Startup/AppStartup.cs": "public static class A { public static void Run(IServiceProvider p) { p.GetRequiredService<Other>(); } }\n",
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+            "src/Demo.Core/Other.cs": "public sealed class Other { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_method_group_factory_is_a_factory_registration_not_constructor_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Watcher>(CreateWatcher);"),
+            "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []  # was: Watcher(Func<int>)
+
+
+def test_an_interface_and_implementation_method_group_factory_is_skipped_too(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<IWatcher, Watcher>(Startup.Create);"),
+            "src/Demo.Core/Watcher.cs": "public sealed class Watcher : IWatcher { public Watcher(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []
+
+
+def test_a_plain_registration_is_still_constructor_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Watcher>();"),
+            "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == ["Watcher(Func<int>)"]
+
+
+def test_a_cast_bodied_factory_registers_the_cast_type(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton(_ => (IFoo)new Foo());",
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<IFoo>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+            "src/Demo.Core/Foo.cs": "public sealed class Foo : IFoo { public Foo(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []  # was: IFoo (registered nothing)
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []  # a factory, so Foo's constructor is not injected
+
+
+def test_a_cast_bodied_factory_registers_what_it_returns_not_the_implementation(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton(_ => (IFoo)new Foo());",
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<Foo>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+            "src/Demo.Core/Foo.cs": "public sealed class Foo : IFoo { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Foo"]
