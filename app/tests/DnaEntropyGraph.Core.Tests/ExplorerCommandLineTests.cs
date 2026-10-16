@@ -22,6 +22,10 @@ public class ExplorerCommandLineTests
     [InlineData(@"C:\Lab\sub\\")]
     [InlineData("C:\\Lab\\a\"b.bed")]
     [InlineData(@"relative\a.bed")]
+    [InlineData(@"C:a.bed")] // drive-relative: rooted, but resolved against that drive's current directory
+    [InlineData(@"C:Lab\a.bed")]
+    [InlineData(@"\Lab\a.bed")] // root-relative: rooted, but on whichever drive Explorer is on
+    [InlineData(@"\a.bed")]
     [InlineData("")]
     [InlineData("   ")]
     public void A_path_that_cannot_be_quoted_safely_is_refused(string path)
