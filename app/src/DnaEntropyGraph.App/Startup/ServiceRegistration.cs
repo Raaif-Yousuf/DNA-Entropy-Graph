@@ -62,7 +62,8 @@ public static class ServiceRegistration
         // App-owned, WinUI-bound services (Presentation depends on their
         // interfaces only - docs/architecture.md section 2).
         services.AddSingleton<IDispatcher, DispatcherAdapter>();
-        services.AddSingleton<IMessenger>(WeakReferenceMessenger.Default);
+        // Issue #825: one messenger per container, never the process-wide static, so two containers (tests run in parallel) never hear each other.
+        services.AddSingleton<IMessenger>(_ => new WeakReferenceMessenger());
         services.AddSingleton<NavigationService>();
         services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
@@ -86,7 +87,8 @@ public static class ServiceRegistration
         services.AddSingleton(sp => new FileAssociationService(
             sp.GetRequiredService<IClassesRegistry>(),
             () => Environment.ProcessPath,
-            () => sp.GetRequiredService<AppDataRoot>().IsOverride));
+            () => sp.GetRequiredService<AppDataRoot>().IsOverride,
+            () => sp.GetRequiredService<AppDataRoot>().IsPortable));
         services.AddTransient<FileAssociationSettingsViewModel>();
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
@@ -171,8 +173,8 @@ public static class ServiceRegistration
         // SqliteDatabase and SettingsStore both take a file path, so each
         // gets a factory registration rather than the type-to-type shorthand
         // the rest of this method uses.
-        services.AddSingleton(_ => new SqliteDatabase(databasePath));
-        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>()));
+        services.AddSingleton(_ => new SqliteDatabase(databasePath, portable: root.IsPortable));
+        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
         services.AddSingleton<ISettingsStore>(sp => sp.GetRequiredService<SettingsStore>());
@@ -197,7 +199,7 @@ public static class ServiceRegistration
         services.AddSingleton<IRunHistoryRemover>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
         services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
             sp.GetRequiredService<IRunInputStore>(),
-            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
+            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             [root.Path]));
         services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
 
@@ -217,7 +219,7 @@ public static class ServiceRegistration
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),
             sp.GetRequiredService<IRunRepository>(),
-            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads),
+            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             sp.GetRequiredService<TimeProvider>()));
 
         // Issue #106: the support zip. The source only ever lists settings.json, logs and runs under the app data
@@ -329,7 +331,7 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ActiveRuns>(),
                 sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
-                Services.KnownFolders.Downloads,
+                root.DefaultOutputSource(Services.KnownFolders.Downloads),
                 log: sp.GetRequiredService<IDiagnosticsLog>());
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
@@ -379,6 +381,9 @@ public static class ServiceRegistration
         services.AddTransient<ThisPcSettingsViewModel>();
         services.AddTransient<CloudResultsSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
+        // Issue #143: one tour state shared by the window's tips and the Settings replay button.
+        services.AddSingleton<TourSettings>();
+        services.AddSingleton<TourViewModel>();
         // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.
         services.AddSingleton<IAppUpdateSource, Services.VelopackUpdateSource>();
         services.AddSingleton<IActiveRunProbe, Services.ActiveRunProbe>();
