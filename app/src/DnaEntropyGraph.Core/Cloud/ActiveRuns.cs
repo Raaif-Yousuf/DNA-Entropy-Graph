@@ -123,6 +123,45 @@ public sealed class ActiveRuns
         }
     }
 
+    /// <summary>
+    /// Issue #113: begins a cancel for the job WITHOUT stopping its driver yet, so a caller can send its own request first (or alongside) and bound the driver wait itself
+    /// (<see cref="CancelAsync"/> stops the driver before it runs its body, unbounded). Null when a cancel for the job is already in flight (the caller reports "already ending").
+    /// Dispose the scope when done: the settle marker stays until then, so nothing else drives the job meanwhile.
+    /// </summary>
+    public CancelScope? TryBeginCancel(string jobId)
+    {
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _cancels.TryAdd(jobId, settled) ? new CancelScope(this, jobId, settled) : null;
+    }
+
+    /// <summary>A cancel begun by <see cref="TryBeginCancel"/>.</summary>
+    public sealed class CancelScope : IDisposable
+    {
+        private readonly ActiveRuns _owner;
+        private readonly string _jobId;
+        private readonly TaskCompletionSource _settled;
+        private int _disposed;
+
+        internal CancelScope(ActiveRuns owner, string jobId, TaskCompletionSource settled)
+        {
+            _owner = owner;
+            _jobId = jobId;
+            _settled = settled;
+        }
+
+        /// <summary>Stops the job's driver (if any) and completes when it has ended. Never faults.</summary>
+        public async Task StopDriverAsync() => await _owner.StopDriverAsync(_jobId).ConfigureAwait(false);
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _owner._cancels.TryRemove(_jobId, out _);
+                _settled.TrySetResult();
+            }
+        }
+    }
+
     /// <summary>Completes when the user cancel in progress for the job (<see cref="CancelAsync"/>) has ended; already complete when there is none.</summary>
     public Task WhenCancelSettledAsync(string jobId) => _cancels.TryGetValue(jobId, out var settled) ? settled.Task : Task.CompletedTask;
 

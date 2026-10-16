@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DnaEntropyGraph.Core.Abstractions;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -8,6 +9,26 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>? onPhaseChanged)
 {
+    // Issue #113 (H2): every phase write of a job is atomic. One process-wide lock per job id (shared by every RunRowStore: the runner's, the cleanup's, the
+    // reconciler's) so two in-process writers never interleave their read and their write, AND a write conditional on the phase that was read
+    // (IRunRepository.TryUpsertIfPhaseAsync) so a writer outside this lock (another process on the same database) cannot be overwritten either.
+    // A job id is a short string: the dictionary is not pruned (a few bytes per run this process touched).
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> JobLocks = new();
+
+    private const int MaxLostRaces = 8;
+
+    private static async Task<IDisposable> LockJobAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var gate = JobLocks.GetOrAdd(jobId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return new Releaser(gate);
+    }
+
+    private sealed class Releaser(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
+
     public async Task<RunRecord?> LatestRecordAsync(string jobId, CancellationToken cancellationToken)
     {
         var all = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
@@ -33,10 +54,25 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
     /// <summary>Rewrites the latest row with <paramref name="change"/> applied, phase untouched. A job with no row yet has nothing to annotate.</summary>
     public async Task UpdateRowAsync(string jobId, Func<RunRecord, RunRecord> change, CancellationToken cancellationToken)
     {
-        var existing = await LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
-        if (existing is not null)
+        using var _ = await LockJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+        for (var attempt = 0; ; attempt++)
         {
-            await runs.UpsertAsync(change(existing), cancellationToken).ConfigureAwait(false);
+            var existing = await LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (existing is null)
+            {
+                return;
+            }
+
+            // Conditional on the phase that was read, like a phase write: an annotation that read Running must not turn a Cancelled back into Running.
+            if (await runs.TryUpsertIfPhaseAsync(change(existing), existing.Phase, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            if (attempt >= MaxLostRaces)
+            {
+                throw new InvalidOperationException($"The run row of job '{jobId}' kept changing under an annotation.");
+            }
         }
     }
 
@@ -49,36 +85,60 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        var existing = await LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
-        var current = existing?.Phase ?? JobPhase.Draft;
-        if (current == phase || JobStateMachine.HasAlreadyPassed(current, phase))
+        var committed = false;
+        using (await LockJobAsync(jobId, cancellationToken).ConfigureAwait(false))
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                var existing = await LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
+                var current = existing?.Phase ?? JobPhase.Draft;
+                if (current == phase || JobStateMachine.HasAlreadyPassed(current, phase))
+                {
+                    return;
+                }
+
+                // A terminal phase is never left: from Completed, Cancelled or Failed every other phase is illegal, so a writer that lost a race to one throws here.
+                JobStateMachine.EnsureLegalTransition(current, phase);
+
+                // The repository replaces every column on upsert, so start from the
+                // row the engine wrote first (name, options, project, installation
+                // id...) and change only the phase; a fresh blank record would wipe
+                // them on the first phase change.
+                var now = DateTimeOffset.UtcNow;
+                var next = existing is null
+                    ? new RunRecord(jobId, phase, now)
+                    : existing with { Phase = phase };
+                if (JobStateMachine.IsTerminal(phase))
+                {
+                    next = next with { FinishedAt = now };
+                }
+
+                if (errorCode is not null)
+                {
+                    next = next with { ErrorCode = errorCode, ErrorDetail = errorDetail };
+                }
+
+                // Hard Rule 16 discipline named in issue #58's own Done-when:
+                // committed to the repository BEFORE the UI (onPhaseChanged) is told.
+                if (await runs.TryUpsertIfPhaseAsync(next, existing?.Phase, cancellationToken).ConfigureAwait(false))
+                {
+                    committed = true;
+                    break;
+                }
+
+                // Lost a race to a writer outside this lock: read again and judge the new row.
+                if (attempt >= MaxLostRaces)
+                {
+                    throw new InvalidOperationException($"The run row of job '{jobId}' kept changing under a phase write to '{phase}'.");
+                }
+            }
+        }
+
+        if (!committed)
         {
             return;
         }
 
-        JobStateMachine.EnsureLegalTransition(current, phase);
-
-        // The repository replaces every column on upsert, so start from the
-        // row the engine wrote first (name, options, project, installation
-        // id...) and change only the phase; a fresh blank record would wipe
-        // them on the first phase change.
-        var now = DateTimeOffset.UtcNow;
-        var next = existing is null
-            ? new RunRecord(jobId, phase, now)
-            : existing with { Phase = phase };
-        if (JobStateMachine.IsTerminal(phase))
-        {
-            next = next with { FinishedAt = now };
-        }
-
-        if (errorCode is not null)
-        {
-            next = next with { ErrorCode = errorCode, ErrorDetail = errorDetail };
-        }
-
-        // Hard Rule 16 discipline named in issue #58's own Done-when:
-        // committed to the repository BEFORE the UI (onPhaseChanged) is told.
-        await runs.UpsertAsync(next, cancellationToken).ConfigureAwait(false);
         try
         {
             onPhaseChanged?.Invoke(jobId, phase);
