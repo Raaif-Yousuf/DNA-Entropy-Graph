@@ -19,6 +19,8 @@ public static class RunErrorCodes
     public const string WorkerImageUnavailable = "no_worker_image";
     public const string WorkerImageRefused = "worker_image_refused";
     public const string ResultTimeout = "result_timeout";
+    /// <summary>Compute Engine deleted the VM at its <c>maxRunDuration</c> (Hard Rule 10's backstop) before any result.json (#89).</summary>
+    public const string RunTimeLimit = "run_time_limit";
     public const string WorkerNoHeartbeat = "worker_no_heartbeat";
     public const string WorkerHeartbeatStale = "worker_heartbeat_stale";
     public const string WorkerFailed = "worker_failed";
@@ -90,7 +92,7 @@ public static class RunErrorCodes
     public static IReadOnlyList<string> All { get; } =
     [
         NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
-        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
+        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
         InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied,
@@ -160,6 +162,7 @@ public static class RunErrorCodes
         "BATCH_LIMIT_EXCEEDED" => BatchLimitExceeded,
         "INPUT_INVALID" => InputInvalid,
         "WORKER_VERSION_MISMATCH" => WorkerVersionMismatch,
+        "RUN_TIME_LIMIT" => RunTimeLimit,
         _ => null,
     };
 
@@ -182,6 +185,7 @@ public static class RunErrorCodes
         WorkerImageUnavailable => "RunError_no_worker_image",
         WorkerImageRefused => "RunError_worker_image_refused",
         ResultTimeout => "RunError_result_timeout",
+        RunTimeLimit => "RunError_run_time_limit",
         WorkerNoHeartbeat => "RunError_worker_no_heartbeat",
         WorkerHeartbeatStale => "RunError_worker_heartbeat_stale",
         WorkerFailed => "RunError_worker_failed",

@@ -544,6 +544,18 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   `maxRunDuration` plus 5 minutes). Ending first lets the runner give up on its own terms: end the
   VM per the user's choice, verify it, record `result_timeout`. A worker still uploading in the last
   3 minutes loses that tail; that is the honest outcome of a run that used its whole limit.
+- **The platform's limit is the user's cap plus 15 minutes (issue #89).** `CloudJobRequestFactory` sets `VmSpec.MaxRunDuration`
+  to `RunOptions.MaxRunDurationMinutes + 15 min` (`VmGrace`), with `instanceTerminationAction=DELETE` (`VmSpec` rejects anything else).
+  The worker enforces the user's cap itself (manifest `limits.maxRunSeconds`, `runner.py` `_RunDeadline`): past it no further record or input starts,
+  finished work is uploaded and `result.json` carries `RUN_TIME_LIMIT` (mapped to the app's `run_time_limit`), so a worker that is merely slow
+  stops its own VM before Compute Engine deletes it; the VM's own deadline is the backstop for a worker that hangs.
+  **The arithmetic.** The platform's `maxRunDuration` = cap + 15 min counts from VM start (THEORY (unverified) for a VM that was stopped and started again, see ToTest #94). The worker therefore counts its own cap from VM start too: it reads `/proc/uptime` once at start (only when `DEG_VM_NAME` is set, i.e. on an app-created VM, so a laptop's uptime never shortens a local run) and treats that as already elapsed. Boot (up to 8 min), image pull (15) and manifest download (15) are stage allowances that come OUT of the cap, not on top of it, so the worker's graceful stop always lands at cap from VM start and the 15 min grace is left for the upload, `result.json` and the VM's own stop/delete. The verdict is taken at a checkpoint (a window or contig boundary, or an input start), never from a clock read after the work ended: a last window that finished in time whose upload ran past the cap is a finished run. `startup.sh` reads the VM limit
+  (`deg-max-run-min`), so keep-alive is capped against the platform deadline, not the cap. A VM that was seen created, is now gone, and whose
+  `maxRunDuration` has passed with no `result.json` and no worker error code in `status.json` is recorded `run_time_limit` (not `vm_unhealthy`):
+  the run hit its limit while the app was not looking (a closed laptop lid, a resume). When the app is looking it ends the run first
+  (`result_timeout`, above). THEORY (unverified): Compute Engine deletes at exactly `creationTimestamp + maxRunDuration`; ToTest #89 measures it.
+  Already built before #89 and now covered by name: labels and `DELETE` guard (`VmSpec`), the Insert fields (`GoogleComputeGateway`),
+  the post-result stop/delete verification (`VmTerminator.EnsureVmEndedAsync`, `lifecycle_unverified` / `vm_end_unconfirmed`).
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
