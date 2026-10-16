@@ -1,7 +1,9 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Diagnostics;
+using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -59,7 +61,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         IFilePicker filePicker,
         IFolderLauncher folderLauncher,
         TimeProvider time,
-        IThemeApplier themeApplier)
+        IThemeApplier themeApplier,
+        IMessenger? messenger = null)
     {
         _settingsStore = settingsStore;
         _toastService = toastService;
@@ -73,7 +76,27 @@ public sealed partial class SettingsViewModel : ObservableObject
         // What is on screen wins over what is saved: a choice that could not be saved (#558) is still applied, and the radio must say so.
         var shown = Array.IndexOf(ThemeNames, themeApplier.CurrentTheme);
         _themeIndex = shown >= 0 ? shown : Array.IndexOf(ThemeNames, ReadTheme(settingsStore)) is var i and >= 0 ? i : SystemThemeIndex;
+
+        // Issue #677: Reset all settings empties the file, so the theme goes back to "Use system": the window follows at once and the radio says so.
+        messenger?.Register<SettingsViewModel, SettingsResetMessage>(this, static (vm, _) => vm.ResetTheme());
     }
+
+    /// <summary>Shows and applies the starting theme without saving it (nothing is saved after a reset) and without the "theme updated" toast.</summary>
+    private void ResetTheme()
+    {
+        _themeApplier.Apply(ThemeNames[SystemThemeIndex]);
+        _showingStartingTheme = true;
+        try
+        {
+            ThemeIndex = SystemThemeIndex;
+        }
+        finally
+        {
+            _showingStartingTheme = false;
+        }
+    }
+
+    private bool _showingStartingTheme;
 
     private static string? ReadTheme(ISettingsStore settingsStore)
     {
@@ -91,6 +114,12 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnThemeIndexChanged(int value)
     {
+        if (_showingStartingTheme)
+        {
+            // Reset all settings (#677): the radio is only catching up with what the reset already applied; nothing to save and no toast.
+            return;
+        }
+
         if (value < 0 || value >= ThemeNames.Length)
         {
             // A RadioButtons control reports -1 when nothing is selected; there is no theme to apply.

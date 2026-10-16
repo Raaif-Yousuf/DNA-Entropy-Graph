@@ -1,85 +1,84 @@
-# Handoff: after the 2026-10-15/16 wave
+# Handoff: after the 2026-10-16c wave
 
-> Overwritten every session. Re-check `git log -1 origin/main` and `gh pr list` before trusting anything here.
+> Overwritten every session. Re-check `git log -1 origin/main`, `gh pr list` and the runner's `done.log` before trusting anything here.
 
 ## What this session was
 
-One orchestrator, at most 3 Sonnet lanes at a time, each in its own worktree. Every lane diff got a
-framing-free cold review, and cloud/deletion diffs got 2 to 4 rounds, before it was queued.
-- **Landing backlog:** about 40 finished branches had failed to land on gates or conflicts after main moved.
-  Three repair lanes fixed them, and a scratchpad queue runner (`land_wt.py --merge-when-green` per item)
-  landed them one at a time.
-- **New work, in issue order:** #114, #619/#83, #759, #761/#653, #116, #113, #87, #91, #92, #109, #111,
-  #100/#557, #117, #141, #112. Also the #740 fixes on the app12 chain.
-- **Tools that landed:** `scripts/resw_merge.py`, a key-aware `Resources.resw` merge driver. `land_wt.py`
-  uses it automatically. Run `worker\.venv\Scripts\python.exe scripts\setup_git_drivers.py` once per clone,
-  so a plain `git merge` uses it too.
+One orchestrator, at most 3 Sonnet lanes in worktrees, every lane diff cold-reviewed (cloud, deletion and tooling diffs 2 to 7 rounds).
+Issues worked in ascending order from the 2026-10-16b triage; about 45 branches were built and reviewed.
+
+- **Landed this session:** #94, #670, #678, #679, #691, #99 (gateway + wizard), #675, #723, #759 (GPU test mode), #694 (+#543),
+  #129/#130/#192, #800 (resw driver), #143, #144, #784 (a real product race: a cancel during VM reuse could leave a
+  running VM), #825 (every DI container shared `WeakReferenceMessenger.Default`), app10 #684/#686/#688, app12 base, #105 app side.
+- **Closed as already done (verified on main):** #44, #54, #299, #480, #583, #627, #712.
+- **Cleanup:** worktrees 87 -> 3, local branches 160 -> 52 (all queued, held or active), remote branches -> main + the
+  Dependabot PR + the branch landing. Every removed worktree's dirty state is archived (diff + untracked tar) in
+  `%TEMP%\claude\C--Users-raaif-DNA-Entropy-Graph\9a565426-06c5-4d10-8b43-9ca87d758089\scratchpad\worktree-archive\`
+  (index.txt maps each to its branch). The tracked "modifications" there are stale trees from branch refs moved by
+  later lanes, not lost work.
+
+## The landing runner (still running when this session ended)
+
+`%TEMP%\claude\C--Users-raaif-DNA-Entropy-Graph\2fcad6ed-bcba-448f-9b07-bbd7f0ed5eff\scratchpad\land_queue.sh`, orphan, reads
+`queue.txt` (`branch|sha|title`, `#` skipped), appends `MERGED`/`FAILED ... b @ sha` to `done.log`. Stop: `touch STOP` there.
+A `b @ sha` already in done.log is never retried; requeue a fixed branch under a new name (`-r2`) or a new sha.
+Order (landing now, top first): the `-ea3` cloud chain (675, 717, 677, 111, 113, 91, 92, 87, 109, 100), then 214, 148,
+204 -> 205 -> 208 -> 209 (stacked), 239, tool-lq-land, 255, 242 -> 244 -> 243 (stacked), 259, 450, 303, 245, 479,
+262/534, 488/491, 563, 613, 423, 499 (stacked on 243), 527, 451, 247 -> 497 -> 699 (stacked), 842, 567, 568 -> 601
+(stacked), 652, 141, 611/689/796, and this handoff.
+
+**Expect landing failures that need a small repair lane, by design:**
+- Hot files (ServiceRegistration, Resources.resw, RunErrorCodes/Actions, SettingsPage, ToTest.md) will conflict as
+  the chain lands. The resw merge driver is installed in this clone (`setup_git_drivers.py`).
+- `feat/242-settings-export` adds a guard that fails when any settings key is neither exported nor excluded; keys
+  added by the chain (spend cap, This PC, cloud results), budget (#148) and proxy (#239) must be added to
+  `SettingsCatalog` at that landing.
+- `docs/303` changes shipped Spot prices (L4 0.18 -> 0.51 MEASURED); `feat/214` tests that pin the shipped Spot
+  value may need the new number.
+- `tool-lq-land` replaces the scratchpad runner with `scripts/land_queue.py` (#813). Switch to it once it lands.
 
 ## Start here next session
 
-1. **Finish the landing queue, in this order.** Skip any entry that is already an ancestor of origin/main
-   (`git merge-base --is-ancestor <sha> origin/main`). Land with
-   `scripts/land_wt.py --branch <b> --sha <s> --title ... --body-file ... --merge-when-green`, one at a time.
-   The PR body is the branch's own `docs/changelog.d/` fragment plus `Closes #n`.
-   - **Before this session:** fix/694-origin-wrap-writers @ d3f9ea34, feat/129-130-192-analysis-commands @ 62227c12
-   - **GPU test path:** feat/619-83-gpu-test-apply @ 5d982249
-   - **Cloud stack (a linear chain):** feat/89-vm-termination-verified-rs @ 1e50eb7f, feat/90-heartbeat-stage-deadlines-rs @ 22ae7653,
-     feat/94-reuse-stopped-vm-rs @ 19290227, feat/670-zone-ladder-rs @ bc1492d3, fix/678-reuse-labels-rs @ 4f42e2ef,
-     fix/679-vmname-and-limit-rs @ 78fe2929, fix/691-clock-skew-rs @ e418d098, feat/105-cloud-page-gateway-rs @ e7b40b65,
-     feat/99-gpu-quota-request-r2-rs @ ec5651c9, feat/675-slow-run-control-r2-rs @ 37289401,
-     worker5/494-496-522-299-rs @ 1da65a24, cloud9/723-progress-stall-rs @ d35daf1e
-   - **GPU test mode (contains worker5):** feat/759-gpu-test-mode @ 24ad77f7
-   - **Manifest fields:** feat/704-manifest-fields-rs @ 7a3c2025
-   - **app10 chain:** feat/app10-base-rs @ 399e6d83, feat/app10-688-gc-codons-rs @ a4c2596c, feat/app10-684-accession-rs @ be136437
-   - **app12 chain (#740 fixed, two review rounds):** feat/app12-base-rs @ fe786cfb, feat/app12-99-gpu-ask-rs @ 7752a66e,
-     feat/app12-105-cloud-page-rs @ 0f1f00c9, feat/app12-675-slow-run-rs @ 8f896ef6,
-     feat/app12-717-redownload-partial-rs @ bcf3cced, feat/app12-677-settings-followups-rs @ 1e898ca3
-   - **Independent branches:** fix/114-retention-setting-wired @ 2a7cac3d, feat/local-engine-119-120-173-174 @ 27ea5150,
-     chore/scripts-ruff-format-r2 @ 56efdfc0
-   - **Built on the app12 tip:** feat/111-import-runs @ 89f0486b, feat/113-nothing-left-running @ 252f28ba,
-     feat/91-spot-provisioning @ e5d715ba, feat/92-flex-start @ 8ae970c6 (on 91), feat/87-gpu-planner @ 2506341e
-   - **On 91 + 87:** feat/109-spend-ledger @ 25650ff7. It has migration 0003; 91 has 0002, so 91 must land first.
-   - **On 109:** feat/100-557-run-cost @ 88dc3f66
-   - **Last:** ci/761-653-codeql-src-only @ 637bec69. Its pinned `format_arity_sites.txt` will drift. Regenerate it
-     with the command in `docs/hard_rules.md` Rule 13, then commit. Once it lands, CodeQL stops tracing test stubs.
-2. **Held, not queued:**
-   - feat/141-run-notes-tags @ 34f367b0: fix #782 first. Its High finding: a common tag makes Save diagnostics fail.
-   - feat/112-per-account-runs @ ba82fa16: built and tested, never cold-reviewed. It adds migration 0004,
-     so it lands after 109/100/141.
-   - feat/land-queue-tool @ 18dbd629: re-run `uvx ruff format scripts` after chore/scripts-ruff-format-r2 lands, then land it.
-     It gives you `scripts/land_queue.py` instead of a scratchpad runner.
-3. **Then continue issues in ascending order.**
-   - **Triage (2026-10-15):** #35/#37/#84/#85/#95/#96 are BLOCKED (owner, real GPU or a new account). #98 is
-     DONE in its own scope; rescope it and close. #104 is an epic split into #639-#644.
-   - **Next unbuilt:** #93 (keep-alive queue, L), #97 (wizard real GPU test step), #137/#138/#139 (watch
-     folder, CLI, schedule), #142 (shared signed URL; check iam.signBlob first), #143 to #146, #148 to #152.
-   - **Filed this session:** #759 (done), #761, #768 to #772, #780, #782, #784.
+1. **Check `done.log`.** For each FAILED: read `land-<branch>.log` and `%TEMP%\landwt\logs\<branch>-*.premerge.log`.
+   CI-only flakes: rerun the failed job once (`gh run rerun <id> --failed`). CodeQL `cs/invalid-string-formatting`
+   on resw templates is a known false positive (#761): check the template, dismiss, merge by hand.
+2. **Then #830 (P1): thread the run's own project AND account through every gateway call.** Compute calls and the
+   reconciler use the currently selected project/account, so a switch mid-run orphans the VM. Held behind it:
+   - `feat/260-switch-project` @ 4e0f53dc (#260; DECISION comment on the issue: rebase on #830, drop the guard).
+   - `feat/112-per-account-runs` @ 823a8c2d (#112, never landed; review findings on the issue; renumber its
+     migration after 0003, #842 now enforces contiguity).
+   - #519 (accounts section) belongs in the same lane.
+3. **Still held from before:** #138 CLI (`feat/138-cli` @ 432104bf; findings in the 2026-10-16b handoff, git history of
+   this file), `ci/761-653-codeql-src-only` (its `scripts/tests/test_codeql_workflow.py:65` still asserts the old
+   build line, so it fails premerge as is).
+4. **Built, NOT cold-reviewed, not queued (the session ended first):** `tooling/584-notices-regen` @ 0c5a4fc8
+   (#584, built on tool-lq-land; needs a ToTest app-dev row citing 0c5a4fc8) and `tooling/812-prune-content-check`
+   @ 599804b9 (#812, content-based prune with `--contained-in` and `--remote`). Cold-review both, then queue.
+5. **Code-scanning dismissals:** after `quality/488-491-codescan` lands, dismiss the reviewed false positives listed in
+   `...\9a565426-...\scratchpad\codescan-dismiss.tsv` (165 FALSE-POSITIVE rows; the NOISE-CONFIG rows close by config).
+6. **Next buildable, ascending:** #514, #515, #522-follow-ups, #523, #552, #556 (after #109), #566, #571, #588, #591
+   (DECISION), #598, #610, #620, #624, #630, #631, #668, #680, #697, #720, #722, #735, #741, #768, #769, #772, #803,
+   #828, #840, #841, #846, #847, plus the cost family #215-#225 once #100/#109 land.
 
 ## Measured this session
 
-- **CodeQL `cs/invalid-string-formatting` false positives stall landings.**
-  - Cause: CodeQL traces a test stub's IStrings template into product `string.Format` calls.
-  - Fix: #761 (queued last).
-  - Until then: dismiss by hand after checking the resw template has the right placeholders (done for #760, #762, #767, #771, #779).
-- **Format failures were the commonest landing failure.** dotnet format whitespace and final newlines.
-  Run `dotnet format --verify-no-changes` on every lane tip before queuing.
-- **Push rejection after a re-landing.** A re-landed branch whose remote already has the earlier landing's
-  merge commit is rejected on push. Re-land under `-r2`.
-- **Cold reviews kept finding real defects in every lane, often High.** Examples:
-  - The exit dialog could close before Google received the stop request.
-  - A Spot "preemption" was inferred from a user's own delete.
-  - A FLEX_START queue wait counted against the run limit.
-  - A Save diagnostics could fail on a common tag.
-
-  Round 2+ still found Highs on cloud diffs.
-- **Read-only gcloud only.** A hook blocks printing a token. Live checks of Compute API shapes
-  (preempted operation filter, FLEX_START body) are THEORY rows in docs/ToTest.md.
+- **A cancel during VM reuse could leave a running VM under a cancelled run (#784).** It looked like a flaky test.
+  Treat a flaky cloud test as a product race until proven otherwise.
+- **GCS lists objects alphabetically, so `manifest.json` is deleted early in a prefix sweep.** The delete now removes
+  it last (#262/#534).
+- **`gh` itself failed to start (0xC0000142) during a long wave and land_wt reported "no checks were reported"**
+  (#811). land_wt now reports gh read failures as such and bounds every gh/git call.
+- **Shipped L4 Spot price was about 3x low** (0.18 vs 0.51/h, cloud.google.com Spot pricing, #303).
+- **Only `Window.Resources` converters crash XamlCompiler silently; `Page.Resources` builds** (#423).
+- **A newer app.db was silently used by an older app, and a busy DB could be quarantined or deleted** (#842).
+- **Two heavy slots (heavy.py) are the right limit with 3 lanes:** RAM stayed above 12 GB free; lanes queued for
+  slots for up to an hour during 20x stress loops, which is acceptable.
+- **Lanes left sleep monitors that kept waking finished agents.** Stop a finished agent with TaskStop once its
+  result is in.
 
 ## Owner asks
 
-- **A real GPU run.** Run #83/#759 end to end and close the gpu-vm ToTest rows. This needs a billing-enabled
-  project, L4 quota, the worker service account email, and a worker image digest built from the new
-  `worker/Dockerfile.cuda` (see #759's ToTest row). Recommendation: set up the project in OWNER_TODO 1a/1b first;
-  then one `cloud_gpu_test.ps1 -Apply -Image <digest>` run proves #37, #74, #83 and #759 together.
-- **Still open from before:** #703, #672 (branch protection: CI is still not a merge gate), #721, #14 (which models to offer;
-  `GpuCatalog` is now the one place to change), and the agent DECISIONs to review.
+- **GPU runs are blocked on #24.** The only configured gcloud project is `clair-corpus-52g9xx` (the CLAIR project). Create
+  `deg-dev` per OWNER_TODO 1b, or say to use the CLAIR project, and `cloud_gpu_test.ps1 -Apply` can run #83/#84/#85.
+- **DECISIONs:** #801, #802 (CLI), #14, #672, plus the agent-made ones recorded this session (#450 docs follow
+  workflows; #260 hold).

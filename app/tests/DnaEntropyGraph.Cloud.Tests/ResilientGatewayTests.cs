@@ -245,12 +245,36 @@ public class ResilientGatewayTests
                 var gateway = make(gcp, rig.Pipeline);
 
                 var args = method.GetParameters().Select(ArgumentFor).ToArray();
-                var task = (Task)method.Invoke(gateway, args)!;
-                await task;
-
-                if (rig.Log.Retries.Count != 1)
+                if (method.Name == nameof(IStorageGateway.DeletePrefixAsync))
                 {
-                    failures.Add($"{type.Name}.{method.Name} logged {rig.Log.Retries.Count} retries");
+                    args[1] = "jobs/x/"; // a delete refuses a prefix that is not a folder path, so the sample must be one
+                }
+
+                var task = (Task)method.Invoke(gateway, args)!;
+                // ReuseVmAsync is a composite (read, claim, scheduling, metadata, start) and not idempotent as a whole: replaying it after
+                // a transient failure meets a VM that already started. It goes through the pipeline for the breaker and the token refresh
+                // but is attempted once, so the 503 reaches the caller (the provisioner then looks by label) and no retry is logged.
+                var isComposite = method.Name is nameof(IComputeGateway.ReuseVmAsync) or nameof(IStorageGateway.DeletePrefixAsync); // DeletePrefix: a sweep of per-object pipeline calls, attempted once here (#105 review)
+                if (isComposite)
+                {
+                    var thrown = await Should.ThrowAsync<CloudOperationException>(() => task);
+                    thrown.Kind.ShouldBe(CloudErrorKind.Network, "the one 503 must reach the caller unreplayed");
+                }
+                else if (method.Name == nameof(IComputeGateway.StartVmAsync))
+                {
+                    // The fake holds no VM called "x": after the one retried 503 the start meets the real not-found answer.
+                    var thrown = await Should.ThrowAsync<CloudOperationException>(() => task);
+                    thrown.Error.Code.ShouldBe("VM_NOT_FOUND", "the 503 must have been retried, not surfaced");
+                }
+                else
+                {
+                    await task;
+                }
+
+                var expectedRetries = isComposite ? 0 : 1;
+                if (rig.Log.Retries.Count != expectedRetries)
+                {
+                    failures.Add($"{type.Name}.{method.Name} logged {rig.Log.Retries.Count} retries, expected {expectedRetries}");
                 }
             }
         }
@@ -293,9 +317,29 @@ public class ResilientGatewayTests
             return Spec();
         }
 
+        if (type == typeof(QuotaIncreaseRequest))
+        {
+            return new QuotaIncreaseRequest(QuotaMetrics.GpusAllRegions, null, 1, "deg-sample", "sample");
+        }
+
+        if (parameter.Name == "metric")
+        {
+            return QuotaMetrics.GpusAllRegions;
+        }
+
         if (type == typeof(Stream))
         {
             return new MemoryStream();
+        }
+
+        if (type == typeof(bool))
+        {
+            return false;
+        }
+
+        if (type == typeof(Action))
+        {
+            return null; // EndVmAsync's optional acceptance callback
         }
 
         if (type == typeof(IReadOnlyList<string>))

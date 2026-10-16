@@ -60,6 +60,13 @@ COPY src ./src
 # the same `uv export --locked` pattern Dockerfile.cpu uses.
 RUN pip install ".[genes,evo]"
 
+# gpu-test mode (issue #759): worker/vm/startup.sh runs `pytest -m gpu` inside this image
+# (`deg-mode=gpu-test`, scripts/cloud_gpu_test.ps1), so it carries pytest (MIT) and the tests
+# folder. NOT the `dev` extra: hypothesis there is MPL-2.0 and this image ships (Hard Rule 21),
+# which is also why startup.sh passes only the test files that carry a gpu marker.
+COPY tests ./tests
+RUN pip install pytest
+
 # Weights are NOT baked into the image (design D6): the worker fetches/mirrors them via
 # worker/src/dna_entropy/worker/weights.py's cache/models/<id>/ convention at runtime, so
 # this image stays a fixed, reusable artifact across every model id.

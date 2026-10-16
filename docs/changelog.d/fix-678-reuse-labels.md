@@ -1,0 +1,1 @@
+- Cloud: a reused VM's boot disk is relabelled to the new job (disks.setLabels) after the instance claim and before the start  A 412 on either label write is re-read and accepted when the labels already equal the target; a reuse that finds no boot disk throws before any write; regional boot disks use the regional disk API (#678 review).
