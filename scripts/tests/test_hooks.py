@@ -52,14 +52,13 @@ def _run_hook(hook_path: Path, payload: dict) -> tuple[int, dict | None]:
 def _denied(decision: dict | None) -> bool:
     if decision is None:
         return False
-    return (
-        decision.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-    )
+    return decision.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
 
 # ---------------------------------------------------------------------------
 # block_git_stash.py
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "command",
@@ -94,12 +93,7 @@ def test_block_git_stash_allows_read_only_and_prose(command):
 def test_block_git_stash_ignores_cat_heredoc_body():
     # A commit message heredoc that quotes the ban is data `cat` echoes back,
     # not a command -- see the hook's own module docstring.
-    command = (
-        "git commit -m \"$(cat <<'EOF'\n"
-        "fix: document why we never git stash here\n"
-        "EOF\n"
-        ")\""
-    )
+    command = "git commit -m \"$(cat <<'EOF'\nfix: document why we never git stash here\nEOF\n)\""
     assert stash_hook.verdict(command) is None
 
 
@@ -127,6 +121,7 @@ def test_block_git_stash_fails_open_on_malformed_stdin(tmp_path):
 # ---------------------------------------------------------------------------
 # block_recursive_delete.py
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "command",
@@ -216,6 +211,7 @@ def test_block_recursive_delete_end_to_end_denies():
 # block_agent_dispatch_in_worktree.py
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def git_repo_with_worktree(tmp_path):
     """A throwaway git repo (NOT this repo) with one commit and one linked
@@ -297,6 +293,7 @@ def test_agent_dispatch_end_to_end_allows_from_primary(git_repo_with_worktree):
 # "the agent that OWNS this worktree" (deny) from "a different agent whose cwd was
 # moved here" (allow) by comparing the caller's agent id with the worktree's name.
 
+
 @pytest.fixture(autouse=True)
 def _isolate_shape_log(tmp_path, monkeypatch):
     monkeypatch.setenv("DEG_HOOK_PAYLOAD_SHAPE_LOG", str(tmp_path / "isolated-shapes.jsonl"))
@@ -366,9 +363,7 @@ def test_agent_dispatch_allows_a_caller_owning_no_agent_worktree_in_any_linked_w
     assert decision is None
 
 
-def test_agent_dispatch_denies_the_sonnet_even_when_its_cwd_is_another_worktree(
-    agent_worktree, git_repo_with_worktree
-):
+def test_agent_dispatch_denies_the_sonnet_even_when_its_cwd_is_another_worktree(agent_worktree, git_repo_with_worktree):
     _primary, other = git_repo_with_worktree  # "branch-a"; the Sonnet owns agent_worktree
     code, decision = _dispatch(other, agent_id=SONNET_ID)
     assert code == 0
@@ -481,6 +476,7 @@ def test_agent_dispatch_unwritable_shape_log_never_fails_the_hook(agent_worktree
 # block_unlabelled_vm_create.py
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -498,10 +494,7 @@ def test_block_unlabelled_vm_create_denies_missing_flags(command):
 @pytest.mark.parametrize(
     "command",
     [
-        (
-            "gcloud compute instances create deg-job-1 --labels=app=dna-entropy-graph,job-id=1 "
-            "--max-run-duration=14400s"
-        ),
+        ("gcloud compute instances create deg-job-1 --labels=app=dna-entropy-graph,job-id=1 --max-run-duration=14400s"),
         "CloudCli vm create --labels app=x --max-run-duration 14400s",
         "gcloud compute instances list",
         "gcloud compute instances delete deg-job-1",
@@ -531,6 +524,7 @@ def test_block_unlabelled_vm_create_end_to_end_denies():
 # scripts/check_*.py and scripts/hooks/run_hook.py's own shape.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "hook_name",
     [
@@ -543,7 +537,9 @@ def test_block_unlabelled_vm_create_end_to_end_denies():
 def test_hook_self_test_flag_passes(hook_name):
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / hook_name), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
