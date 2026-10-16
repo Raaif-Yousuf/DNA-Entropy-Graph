@@ -52,6 +52,20 @@ public class SetupErrorResourceTests
         SetupErrorCodes.ResourceKey(SetupErrorCodes.ProjectQuota).ShouldBe("SetupError_PROJECT_QUOTA");
     }
 
+    [Fact]
+    public void The_wizard_quota_lines_name_one_action_and_the_bucket_gets_its_plain_phrase_first()
+    {
+        // Cold review of #99 (Hard Rule 13): every message names one action; jargon gets the plain phrase first.
+        var resw = ReswValues();
+
+        resw["WizardQuota_NotYet"].ShouldContain(resw["SetupAction_RequestGpuAllowance"]);
+        resw["WizardQuota_Unknown"].ShouldContain(resw["WizardCheckAllButton.Content"]);
+        resw["WizardStorage_Ok"].ShouldContain("online folder", Case.Insensitive);
+        resw["WizardStep_Storage_Why"].IndexOf("online folder", StringComparison.OrdinalIgnoreCase)
+            .ShouldBeLessThan(resw["WizardStep_Storage_Why"].IndexOf("bucket", StringComparison.OrdinalIgnoreCase), "the plain phrase comes before the word bucket");
+        resw.ShouldContainKey("WizardRequest_NoProjectYet");
+    }
+
     [Theory]
     [InlineData(SetupErrorCodes.Permission, "SetupError_PERMISSION", "SetupAction_CopyRequestForOwner")]
     [InlineData(SetupErrorCodes.ApiDisabled, "SetupError_API_DISABLED", "SetupAction_TurnItOn")]
