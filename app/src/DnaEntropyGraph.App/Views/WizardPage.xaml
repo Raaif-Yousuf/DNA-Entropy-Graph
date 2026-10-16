@@ -36,6 +36,11 @@
                     <ProgressBar IsIndeterminate="True" Visibility="{x:Bind IsRunning, Mode=OneWay}" />
                     <TextBlock Text="{x:Bind MessageText, Mode=OneWay}" Visibility="{x:Bind HasMessage, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                     <TextBlock Text="{x:Bind NoteText, Mode=OneWay}" Visibility="{x:Bind HasNote, Mode=OneWay}" TextWrapping="Wrap" />
+                    <!-- The GPU row only: ask Google, then its answer and the one button that answer leaves (every other row never shows these). -->
+                    <Button x:Uid="WizardGpuAskButton" Command="{x:Bind AskCommand}" Visibility="{x:Bind HasAsk, Mode=OneWay}" />
+                    <TextBlock Text="{x:Bind AskResultText, Mode=OneWay}" Visibility="{x:Bind HasAskResult, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    <Button Content="{x:Bind AskActionText, Mode=OneWay}" Command="{x:Bind AskActionCommand, Mode=OneWay}" Visibility="{x:Bind HasAskActionCommand, Mode=OneWay}" />
+                    <HyperlinkButton Content="{x:Bind AskActionText, Mode=OneWay}" NavigateUri="{x:Bind AskLinkUri, Mode=OneWay}" Visibility="{x:Bind HasAskLink, Mode=OneWay}" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button Content="{x:Bind ActionText, Mode=OneWay}" Command="{x:Bind ActionCommand}" Visibility="{x:Bind HasCommandAction, Mode=OneWay}" />
                         <HyperlinkButton Content="{x:Bind ActionText, Mode=OneWay}" NavigateUri="{x:Bind LinkUri, Mode=OneWay}" Visibility="{x:Bind HasLinkAction, Mode=OneWay}" />
