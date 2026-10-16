@@ -1,0 +1,1 @@
+- The embedded viewer has keyboard navigation (#247): arrow keys pan, + and - zoom, Home or 1 shows the whole record, 2 and 3 show 10 kb and 1 kb, Ctrl+L focuses the position box. The decisions live in `ViewerKeyboard` (C#, unit tested); bridge.js only forwards keys.

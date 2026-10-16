@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using Xunit;
 
@@ -88,6 +89,28 @@ internal sealed class InMemoryRunRepository : IRunRepository
         finally
         {
             Recorded -= Handler;
+        }
+    }
+
+    private readonly object _conditionalGate = new();
+
+    /// <summary>Atomic like the SQLite one: the check and the append happen under one lock. <see cref="BeforeUpsert"/> runs BEFORE it, in the gap between a writer's read and its write.</summary>
+    public async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
+    {
+        if (BeforeUpsert is { } hook)
+        {
+            await hook(run, cancellationToken).ConfigureAwait(false);
+        }
+
+        lock (_conditionalGate)
+        {
+            if (DnaEntropyGraph.Core.Cloud.RunRowStore.LatestRecord(_runs.ToList(), run.JobId)?.Phase != expectedPhase)
+            {
+                return false;
+            }
+
+            _runs.Enqueue(run);
+            return true;
         }
     }
 }

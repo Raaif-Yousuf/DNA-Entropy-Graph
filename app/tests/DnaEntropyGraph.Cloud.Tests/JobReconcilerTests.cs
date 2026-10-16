@@ -139,6 +139,40 @@ public class JobReconcilerTests
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
+        /// <summary>A killed app's leftovers for an NCBI accession run (issue #684): a row at <paramref name="phase"/> whose options name the accession, no copy of any input, no VM.</summary>
+        public async Task SeedAccessionAsync(string jobId, JobPhase phase, string accession, string? range = null, bool uploaded = false)
+        {
+            var options = new RunOptions
+            {
+                ModelId = "evo2_7b",
+                RunTarget = "Cloud",
+                Accession = accession,
+                AccessionRange = range,
+                OutputFolder = TestInputs.OutputParent(jobId),
+            };
+            var vmName = "deg-" + jobId;
+            if (uploaded)
+            {
+                var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", Image, [StagedInput.ForAccession(accession, range)], options.OutputFolder!);
+                await Runner.UploadInputsAsync(request, CancellationToken.None);
+                vmName = request.Spec.VmName;
+            }
+
+            await Repo.UpsertAsync(
+                new RunRecord(
+                    jobId,
+                    phase,
+                    Launch.AddMinutes(-5),
+                    Target: "cloud",
+                    OptionsJson: RunOptionsJson.Serialize(options),
+                    ProjectId: Project,
+                    Bucket: uploaded ? FakeGcp.BucketName(Project) : null,
+                    VmName: vmName,
+                    AppVersion: "0.1.0",
+                    InstallationId: "install-1"),
+                CancellationToken.None);
+        }
+
         /// <summary>
         /// The state a killed app leaves behind: the run row at <paramref name="phase"/>, the app's own copy of the input,
         /// optionally the uploaded manifest and a VM (whose simulated worker has already acted per the fake's mode).
@@ -364,6 +398,46 @@ public class JobReconcilerTests
         outcome.FinalPhase.ShouldBe(JobPhase.Completed, outcome.ErrorCode);
         env.Gcp.CreateAttempts.ShouldBe(1);
         (await env.Gcp.FindByJobIdAsync("job-v", CancellationToken.None)).Count.ShouldBe(1);
+    }
+
+    // ---- an NCBI accession run (issue #684) has no file: nothing to find, nothing to upload ----
+
+    [Theory]
+    [InlineData(JobPhase.Validating)]
+    [InlineData(JobPhase.Provisioning)]
+    public async Task An_accession_run_killed_before_a_VM_existed_resumes_with_no_upload_and_its_manifest_names_the_accession(JobPhase phase)
+    {
+        var env = new Env();
+        await env.SeedAccessionAsync("job-n", phase, "NC_045512.2", "100-500", uploaded: phase == JobPhase.Provisioning);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-n");
+
+        outcome.Action.ShouldBe(ReattachAction.Resumed, outcome.ErrorCode);
+        outcome.FinalPhase.ShouldBe(JobPhase.Completed, outcome.ErrorCode);
+        env.Gcp.CreateAttempts.ShouldBe(1);
+        var keys = env.Gcp.ObjectKeys(FakeGcp.BucketName(Project));
+        keys.ShouldNotContain(key => key.Contains("/input/", StringComparison.Ordinal), "an accession is fetched by the worker, so no input is uploaded");
+        var manifest = System.Text.Json.JsonDocument.Parse(env.Gcp.GetObjectBytes(FakeGcp.BucketName(Project), "jobs/job-n/manifest.json")).RootElement;
+        var input = manifest.GetProperty("inputs")[0];
+        input.GetProperty("accession").GetString().ShouldBe("NC_045512.2");
+        input.GetProperty("accessionRange").GetString().ShouldBe("100-500");
+        input.TryGetProperty("path", out _).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("not an accession", null)]
+    [InlineData("NC_045512.2", "500-100")]
+    public async Task An_accession_run_whose_recorded_accession_no_longer_checks_out_fails_as_invalid_and_creates_nothing(string accession, string? range)
+    {
+        // The row is the app's own file on disk; a damaged or hand-edited one must not reach the cloud (Hard Rule 2).
+        var env = new Env();
+        await env.SeedAccessionAsync("job-x", JobPhase.Provisioning, accession, range);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-x");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedUnrecoverable);
+        env.Row("job-x").ErrorCode.ShouldBe(RunErrorCodes.InputAccessionInvalid);
+        env.Gcp.CreateAttempts.ShouldBe(0);
     }
 
     // ---- a run killed before a VM could exist restarts from the app's own copy of the input ----

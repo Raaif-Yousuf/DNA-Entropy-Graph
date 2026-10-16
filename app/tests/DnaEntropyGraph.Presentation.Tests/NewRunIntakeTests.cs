@@ -47,6 +47,7 @@ public sealed class NewRunIntakeTests : IDisposable
             estimates,
             new OutputSelectionStore(Substitute.For<ISettingsStore>()),
             Substitute.For<IDiagnosticsLog>(),
+            TestGpu.Plan(),
             intake: _intake);
     }
 
