@@ -117,6 +117,8 @@ public sealed partial class InputPillItem : ObservableObject
         {
             InputKind.GenBank => "NewRunPillKind_GenBank",
             InputKind.Fasta => "NewRunPillKind_Fasta",
+            InputKind.Embl => "NewRunPillKind_Embl",
+            InputKind.SnapGene => "NewRunPillKind_SnapGene",
             _ => "NewRunPillKind_Paste",
         });
         // A failed file stops at its first problem, so its counts would be partial: show none.
@@ -164,7 +166,7 @@ public sealed partial class InputPillItem : ObservableObject
                 : Format("NewRunPillRecordsMany", result.RecordCount),
             Format("NewRunPillBases", result.TotalLength),
         };
-        if (result.Kind == InputKind.GenBank)
+        if (result.Kind is InputKind.GenBank or InputKind.Embl or InputKind.SnapGene)
         {
             parts.Add(result.GeneCount == 1 ? _strings.GetString("NewRunPillGenesOne") : Format("NewRunPillGenesMany", result.GeneCount));
         }

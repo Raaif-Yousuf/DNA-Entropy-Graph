@@ -108,6 +108,17 @@ public sealed record RunOptions
     /// <summary>S = W - K: derived, not user-chosen (see <see cref="Window" />). Manifest: <c>analysis.stride</c>.</summary>
     public int Stride { get; init; } = 4096;
 
+    // ---- Topology and presets (issue #136) ----
+
+    /// <summary>Whether each contig is treated as a circle (a plasmid). Manifest: <c>analysis.topology</c>, written only when not <see cref="Topology.Auto"/>.</summary>
+    public Topology Topology { get; init; } = Topology.Auto;
+
+    /// <summary>The id of the option preset this run started from, or null when the options were set by hand. Recorded with the run; not sent to the worker.</summary>
+    public string? PresetId { get; init; }
+
+    /// <summary>The preset's name as the user knew it when the run started (a user preset can be renamed or deleted later). Recorded with the run; not sent to the worker.</summary>
+    public string? PresetName { get; init; }
+
     // ---- Genes ----
 
     /// <summary>
@@ -174,13 +185,23 @@ public sealed record RunOptions
     public bool KeepWorkerLogInOutputFolder { get; init; }
 }
 
-/// <summary>Spec 4.3 "Input / Format" row. Wire name: <c>inputs[].informat</c> ("auto" | "genbank" | "fasta" | "paste").</summary>
+/// <summary>Whether a contig is a line or a circle. Wire name: <c>analysis.topology</c> ("auto" | "linear" | "circular"); auto lets a GenBank LOCUS line decide.</summary>
+public enum Topology
+{
+    Auto,
+    Linear,
+    Circular,
+}
+
+/// <summary>Spec 4.3 "Input / Format" row. Wire name: <c>inputs[].informat</c> ("auto" | "genbank" | "fasta" | "paste" | "embl" | "snapgene").</summary>
 public enum InputFormat
 {
     Auto,
     GenBank,
     Fasta,
     Plain,
+    Embl,
+    SnapGene,
 }
 
 /// <summary>Spec 4.3 "Input / FASTA records" row. Wire name: <c>inputs[].fastaRecords</c> ("all" | "first").</summary>
