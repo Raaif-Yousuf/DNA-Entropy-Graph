@@ -240,21 +240,30 @@ public sealed partial class HistoryViewModel : ObservableObject
         {
             PresetText = PresetLine(run),
             OpenStoragePageCommand = new RelayCommand(() => OpenStoragePage(run)),
-            ShowStoragePage = _storagePageOffered.Contains(run.JobId),
+            ShowStoragePage = _storagePageOffered.Contains(run.JobId) && HasStoragePageLink(run),
         };
     }
 
     // Job ids whose last Delete cloud copy was refused as not this installation's: their row offers Open storage page until the list is reopened.
     private readonly HashSet<string> _storagePageOffered = new(StringComparer.Ordinal);
 
+    // A row imported from another computer can carry any text: only a plain jobs/<id>/ folder in a bucket-shaped name is ever put in a link.
+    private static readonly System.Text.RegularExpressions.Regex StorageJobFolder = new(@"\Ajobs/[a-z0-9_-]{1,63}/\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex StorageBucketName = new(@"\A[a-z0-9][a-z0-9._-]{0,62}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool HasStoragePageLink(RunRecord run)
+        => run.Bucket is not null && run.JobPrefix is not null && StorageBucketName.IsMatch(run.Bucket) && StorageJobFolder.IsMatch(run.JobPrefix);
+
     private void OpenStoragePage(RunRecord run)
     {
-        if (string.IsNullOrWhiteSpace(run.Bucket) || string.IsNullOrWhiteSpace(run.JobPrefix))
+        if (!HasStoragePageLink(run))
         {
             return;
         }
 
-        if (!_launcher.OpenUrl($"https://console.cloud.google.com/storage/browser/{Uri.EscapeDataString(run.Bucket)}/{run.JobPrefix}"))
+        var folder = string.Join('/', run.JobPrefix!.TrimEnd('/').Split('/').Select(Uri.EscapeDataString));
+        if (!_launcher.OpenUrl($"https://console.cloud.google.com/storage/browser/{Uri.EscapeDataString(run.Bucket!)}/{folder}/"))
         {
             Toast(RunsCopy.OpenMissing);
         }

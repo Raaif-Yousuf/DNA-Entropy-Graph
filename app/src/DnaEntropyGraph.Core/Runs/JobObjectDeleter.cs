@@ -57,7 +57,7 @@ public sealed class CloudDeleteRefusedException : Exception
 /// </summary>
 public sealed partial class JobObjectDeleter : IJobObjectDeleter
 {
-    private const string ManifestName = "manifest.json";
+    private const string ManifestName = ResultsBucket.ManifestObject;
 
     private readonly IStorageGateway _storage;
     private readonly Func<string?> _installationId;

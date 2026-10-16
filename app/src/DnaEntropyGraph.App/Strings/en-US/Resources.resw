@@ -2139,7 +2139,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Blocked by your organization</value>
   </data>
   <data name="Runs_DeleteCloud_FailedOrgPolicy_Body" xml:space="preserve">
-    <value>A rule set by your organization blocked the delete, and nothing was deleted. Ask your organization's administrator to allow it, then choose Delete cloud copy again.</value>
+    <value>A rule set by your organization blocked the delete, and nothing was deleted. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
   </data>
   <data name="Runs_DeleteCloud_FailedQuota_Title" xml:space="preserve">
     <value>Google is limiting requests</value>

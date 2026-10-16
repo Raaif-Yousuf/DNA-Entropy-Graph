@@ -1392,7 +1392,10 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   on the retry. (THEORY, unverified: persisting a "verified" flag on the run row would also survive an outside deletion of the manifest; not built, it needs a
   migration.) The installation id is a write-once file untouched by Reset all settings (`SettingsStore.cs:172-191`, #558/#565), and manifests have carried
   `createdBy.installationId` since `69707244` (2026-10-02, #460), before any release. An empty prefix is success only when the bucket listing succeeded; a 404 bucket is
-  `StorageNotFound` and the row is not changed. It then calls `DeletePrefixAsync` and reads the prefix back with `GetPrefixUsageAsync`, comparing with the count before:
+  `StorageNotFound` and the row is not changed. The shared name of the manifest object is `ResultsBucket.ManifestObject`.
+  Known limits (no code): (1) an object written under the prefix after the manifest was deleted (a late worker write) is stranded, and a later Delete cloud copy
+  answers `NotConfirmed` (the manifest is gone), so that leftover is removed from Open storage page; (2) `StorageNotFound` offers no storage button, so a user whose
+  bucket is in another project looks at the Cloud page instead. Open storage page links are only built for a `jobs/<id>/` folder in a bucket-shaped name, with each segment escaped. It then calls `DeletePrefixAsync` and reads the prefix back with `GetPrefixUsageAsync`, comparing with the count before:
   none left is success even if the call threw afterwards; the same count left means nothing was deleted, so the real classified error surfaces
   (`CloudDeleteResult.ErrorKind`: permission, billing and API-off each have their own Runs copy, anything else the general one); only some-gone-some-left throws
   `PartialCloudDeleteException(Remaining)` -> `PartiallyDeleted` with the count (singular copy for one). The

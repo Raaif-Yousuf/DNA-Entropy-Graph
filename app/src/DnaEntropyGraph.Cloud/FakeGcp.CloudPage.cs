@@ -227,7 +227,7 @@ public sealed partial class FakeGcp
         ThrowIfScriptedTransient();
         ThrowIfDeleteScripted(prefix);
         // Like Cloud Storage: lexicographic key order, except that the folder's manifest.json (the proof of ownership) goes last.
-        var manifestKey = prefix + "manifest.json";
+        var manifestKey = prefix + ResultsBucket.ManifestObject;
         var keys = _objects.Keys.Where(k => k.Bucket == bucket && k.Key.StartsWith(prefix, StringComparison.Ordinal))
             .OrderBy(k => k.Key == manifestKey ? 1 : 0)
             .ThenBy(k => k.Key, StringComparer.Ordinal)

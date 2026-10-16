@@ -142,7 +142,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     {
         StoragePrefixes.RequireDeletable(prefix);
         var deleted = 0;
-        var manifestKey = prefix + "manifest.json";
+        var manifestKey = prefix + ResultsBucket.ManifestObject;
         var manifestListed = false;
         await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
         {

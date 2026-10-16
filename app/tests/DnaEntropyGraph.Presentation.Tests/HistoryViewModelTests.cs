@@ -762,6 +762,23 @@ public sealed class HistoryViewModelTests
         _launcher.Received(1).OpenUrl("https://console.cloud.google.com/storage/browser/b/jobs/a/");
     }
 
+    [Theory]
+    [InlineData("jobs/../x/")]
+    [InlineData("jobs/a/b/")]
+    [InlineData("jobs/a?x=1/")]
+    [InlineData("jobs/a")]
+    public async Task A_row_whose_stored_folder_is_not_a_plain_job_folder_gets_no_storage_button_and_no_link(string prefix)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.OtherComputer);
+        var vm = await Loaded(Row("a") with { JobPrefix = prefix });
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+        Item(vm, "a").OpenStoragePageCommand!.Execute(null);
+
+        Item(vm, "a").ShowStoragePage.ShouldBeFalse();
+        _launcher.DidNotReceiveWithAnyArgs().OpenUrl(default!);
+    }
+
     [Fact]
     public async Task A_cloud_delete_in_a_missing_bucket_toasts_storage_not_found_without_the_storage_button()
     {
