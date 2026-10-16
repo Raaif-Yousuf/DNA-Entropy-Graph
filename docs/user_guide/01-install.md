@@ -35,6 +35,16 @@ university and company networks restrict what can be installed. Ask your IT depa
 to allow it, or install it on a personal computer instead; the cloud account this app
 uses is entirely separate from anything IT would need to configure.
 
+## Removing the app
+
+Uninstall from Windows Settings > Apps. The app asks once whether to also delete your run history, settings and saved copies of your input files;
+the default is **No**, so a later reinstall finds everything as it was. Your result files (in your output folder, by default Downloads) are never
+deleted by the uninstaller. If you do not answer within about ten seconds, or the uninstall runs silently (for example from an IT tool), your data is kept. If a folder named
+`DNAEntropyGraph.removing-` followed by letters and digits is left next to your data folder after you chose Yes, it is the last of the removed data, and you can delete it yourself. To remove your data by hand, open Settings > Files > Open data folder before uninstalling and delete what is inside.
+
+**If the viewer says it needs the WebView2 runtime:** use the link on that screen to install Microsoft's free WebView2 Runtime, then reopen the
+results. Everything else in the app works without it.
+
 ## First launch
 
 The app opens to a short welcome screen explaining what it does and roughly what a run

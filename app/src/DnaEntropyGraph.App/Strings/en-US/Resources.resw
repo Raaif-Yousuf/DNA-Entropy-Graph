@@ -427,42 +427,6 @@
   <data name="NewRunRemoveItem.Content" xml:space="preserve">
     <value>Remove</value>
   </data>
-  <data name="NewRunAddGff3.Content" xml:space="preserve">
-    <value>Add GFF3</value>
-  </data>
-  <data name="NewRunRemoveGff3.Content" xml:space="preserve">
-    <value>Remove GFF3</value>
-  </data>
-  <data name="NewRunPillAnnotationLine" xml:space="preserve">
-    <value>Genes from {0}: {1}. The gene finder (Prodigal) is skipped for this file.</value>
-  </data>
-  <data name="NewRunStatusAnnotationUnavailable" xml:space="preserve">
-    <value>Pairing a GFF3 is not available in this version of the app yet. Remove the GFF3 and run the FASTA alone, or update the app.</value>
-  </data>
-  <data name="NewRunStatusAnnotationNoFasta" xml:space="preserve">
-    <value>A GFF3 needs a FASTA file to go with. Add the FASTA file first, then add the GFF3 again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationAmbiguous" xml:space="preserve">
-    <value>There is more than one FASTA file and the GFF3 name does not match any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
-  </data>
-  <data name="NewRunAnnotationProblem_FileUnreadable" xml:space="preserve">
-    <value>The GFF3 or its FASTA file could not be read. Check that both still exist and are not open in another program, then add the GFF3 again.</value>
-  </data>
-  <data name="NewRunAnnotationProblem_FileTooLarge" xml:space="preserve">
-    <value>The GFF3 file is too large to pair. Choose a smaller GFF3, or run the FASTA without it.</value>
-  </data>
-  <data name="NewRunAnnotationProblem_NotFasta" xml:space="preserve">
-    <value>A GFF3 can only be paired with a FASTA file. Use a FASTA copy of the sequence, or run a GenBank file, which already carries its genes.</value>
-  </data>
-  <data name="NewRunAnnotationProblem_NoFeatures" xml:space="preserve">
-    <value>The GFF3 has no gene or CDS rows we can read. Check that it is a GFF3 file with nine tab-separated columns, then add it again.</value>
-  </data>
-  <data name="NewRunAnnotationProblem_NoNameMatch" xml:space="preserve">
-    <value>No sequence name in the GFF3 matches a sequence name in the FASTA file. Make the first column of the GFF3 match the FASTA header, then add it again.</value>
-  </data>
-  <data name="NewRunAnnotationProblem_NoneFit" xml:space="preserve">
-    <value>Every gene in the GFF3 runs past the end of its sequence. Check that the GFF3 belongs to this FASTA file, then add it again.</value>
-  </data>
   <data name="NewRunTreatAsRna.Content" xml:space="preserve">
     <value>Treat as RNA</value>
   </data>
@@ -1725,6 +1689,12 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="AboutBuild_Text" xml:space="preserve">
     <value>Build {0}</value>
   </data>
+  <data name="UninstallRemoveData_Title" xml:space="preserve">
+    <value>Remove your data too?</value>
+  </data>
+  <data name="UninstallRemoveData_Body" xml:space="preserve">
+    <value>DNA Entropy Graph is being removed. Also delete your run history, settings and saved copies of your input files from this computer? Choose No to keep them for a later reinstall. Your result files in your output folder are never deleted.</value>
+  </data>
   <data name="NewRunPresetExpander.Header" xml:space="preserve">
     <value>Option presets</value>
   </data>
@@ -1836,6 +1806,42 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="NewRunPillKind_SnapGene" xml:space="preserve">
     <value>SnapGene</value>
+  </data>
+  <data name="NewRunAddGff3.Content" xml:space="preserve">
+    <value>Add GFF3</value>
+  </data>
+  <data name="NewRunRemoveGff3.Content" xml:space="preserve">
+    <value>Remove GFF3</value>
+  </data>
+  <data name="NewRunPillAnnotationLine" xml:space="preserve">
+    <value>Genes from {0}: {1}. The gene finder (Prodigal) is skipped for this file.</value>
+  </data>
+  <data name="NewRunStatusAnnotationUnavailable" xml:space="preserve">
+    <value>Pairing a GFF3 is not available in this version of the app yet. Remove the GFF3 and run the FASTA alone, or update the app.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNoFasta" xml:space="preserve">
+    <value>A GFF3 needs a FASTA file to go with. Add the FASTA file first, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAmbiguous" xml:space="preserve">
+    <value>There is more than one FASTA file and the GFF3 name does not match any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileUnreadable" xml:space="preserve">
+    <value>The GFF3 or its FASTA file could not be read. Check that both still exist and are not open in another program, then add the GFF3 again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_FileTooLarge" xml:space="preserve">
+    <value>The GFF3 file is too large to pair. Choose a smaller GFF3, or run the FASTA without it.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NotFasta" xml:space="preserve">
+    <value>A GFF3 can only be paired with a FASTA file. Use a FASTA copy of the sequence, or run a GenBank file, which already carries its genes.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoFeatures" xml:space="preserve">
+    <value>The GFF3 has no gene or CDS rows we can read. Check that it is a GFF3 file with nine tab-separated columns, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoNameMatch" xml:space="preserve">
+    <value>No sequence name in the GFF3 matches a sequence name in the FASTA file. Make the first column of the GFF3 match the FASTA header, then add it again.</value>
+  </data>
+  <data name="NewRunAnnotationProblem_NoneFit" xml:space="preserve">
+    <value>Every gene in the GFF3 runs past the end of its sequence. Check that the GFF3 belongs to this FASTA file, then add it again.</value>
   </data>
   <!-- #686 GFF3 pairing: notices -->
   <data name="NewRunNotice_AnnotationLinesSkipped" xml:space="preserve">
