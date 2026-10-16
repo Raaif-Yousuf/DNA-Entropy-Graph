@@ -1,0 +1,1 @@
+- Fixed a race where cancelling a run during the start of a reused VM could leave that VM running (#784): an in-flight create or reuse is now registered before the gateway call, so a cancel always waits for it and ends the VM. The fake cloud also writes the simulated worker's files before it shows the VM as RUNNING.
