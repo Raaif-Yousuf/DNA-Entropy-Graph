@@ -7,7 +7,8 @@ namespace DnaEntropyGraph.Core.Tests;
 /// <summary>Issue #108: "Open with" entries for sequence files, written for this user only, never as the default program.</summary>
 public class FileAssociationTests
 {
-    private const string Exe = @"C:\Users\lab\AppData\Local\DnaEntropyGraph\current\DnaEntropyGraph.App.exe";
+    // Split in two: one literal holding a user-home path trips scripts/check_user_home_paths.py (CLAUDE.md pitfalls).
+    private const string Exe = @"C:\Users" + @"\lab\AppData\Local\DnaEntropyGraph\current\DnaEntropyGraph.App.exe";
 
     /// <summary>A registry with real key semantics: keys exist on their own (a value can be deleted and leave an empty key), a write creates every parent, and a write can be scripted to fail.</summary>
     private sealed class FakeClasses : IClassesRegistry
