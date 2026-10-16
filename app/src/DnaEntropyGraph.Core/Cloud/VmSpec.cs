@@ -205,6 +205,8 @@ public sealed record VmSpec(
 /// null means unknown, which the idle-VM sweep treats as "not provably idle", never as "idle". <paramref name="MachineType"/> is the machine
 /// type's name (<c>g2-standard-8</c>) when the gateway read it; reuse (#94) needs it to match, and null never matches.
 /// <paramref name="StartedAt"/> is when the instance last started (the real instance's <c>lastStartTimestamp</c>); see <see cref="RunClockStart"/>.
+/// <paramref name="ServerNow"/> is the platform's own clock at the read (the HTTP <c>Date</c> header of the real gateway's answer; issue #691): the app's clock is wrong by an
+/// unknown skew, so a VM's age against its run limit is judged as <c>ServerNow - RunClockStart</c>, never as the laptop's now minus a platform timestamp. Null means unknown.
 /// </summary>
 public sealed record VmDescriptor(
     string Name,
@@ -215,7 +217,8 @@ public sealed record VmDescriptor(
     IReadOnlyDictionary<string, string>? Labels = null,
     DateTimeOffset? StoppedAt = null,
     string? MachineType = null,
-    DateTimeOffset? StartedAt = null)
+    DateTimeOffset? StartedAt = null,
+    DateTimeOffset? ServerNow = null)
 {
     /// <summary>
     /// When the platform's <c>maxRunDuration</c> clock for this VM last started: its last start (<c>lastStartTimestamp</c>), which a reused VM

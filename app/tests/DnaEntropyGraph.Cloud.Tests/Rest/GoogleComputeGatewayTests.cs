@@ -897,6 +897,138 @@ public class GoogleComputeGatewayTests
         vm.RunClockStart.ShouldBe(vm.StartedAt);
     }
 
+    // Issue #691: the platform's own clock rides on every answer (the HTTP Date header), so the app can judge a VM's age without trusting the laptop's clock.
+    [Fact]
+    public async Task A_VM_read_carries_the_servers_own_time_from_the_Date_header()
+    {
+        var rig = new GoogleGatewayHarness();
+        var serverTime = new DateTimeOffset(2026, 10, 9, 12, 30, 15, TimeSpan.Zero);
+        rig.Handler.Calls(Get, OldInstance, _ =>
+        {
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(StoppedOld("RUNNING"), System.Text.Encoding.UTF8, "application/json") };
+            response.Headers.Date = serverTime;
+            return Task.FromResult(response);
+        });
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.ServerNow.ShouldBe(serverTime);
+    }
+
+    // Issue #691 review: a cached or proxied answer replays an OLD Date; its Age header says how old. It is not the platform's time now: ignored.
+    [Theory]
+    [InlineData(3600)]
+    [InlineData(5)]
+    public async Task A_replayed_answer_with_an_Age_header_carries_no_server_time(int ageSeconds)
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Calls(Get, OldInstance, _ =>
+        {
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(StoppedOld("RUNNING"), System.Text.Encoding.UTF8, "application/json") };
+            response.Headers.Date = new DateTimeOffset(2026, 10, 9, 12, 30, 15, TimeSpan.Zero);
+            response.Headers.Age = TimeSpan.FromSeconds(ageSeconds);
+            return Task.FromResult(response);
+        });
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.ServerNow.ShouldBeNull();
+        vm.Name.ShouldBe("deg-job-old", "the VM itself is still read");
+    }
+
+    // Issue #691 review: GetVmAsync reads the raw answer (for its Date header) instead of ExecuteAsync. Whatever Google answers with, it must raise the
+    // exception ExecuteAsync raises (same code, status, message and kind), or the classification of every VM look would quietly differ. The reuse path's own
+    // instances.get still goes through ExecuteAsync, so it is the reference.
+    private static void ScriptEveryAttempt(GoogleGatewayHarness rig, int status, string body, string contentType = "application/json")
+    {
+        for (var i = 0; i < 6; i++)
+        {
+            rig.Handler.Calls(Get, OldInstance, _ => Task.FromResult(new HttpResponseMessage((System.Net.HttpStatusCode)status) { Content = new StringContent(body, System.Text.Encoding.UTF8, contentType) }));
+        }
+    }
+
+    private static async Task<CloudOperationException> ThrownByGetAsync(int status, string body, string contentType = "application/json")
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptEveryAttempt(rig, status, body, contentType);
+        return await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None));
+    }
+
+    private static async Task<CloudOperationException> ThrownByExecuteAsync(int status, string body, string contentType = "application/json")
+    {
+        var rig = new GoogleGatewayHarness();
+        ScriptEveryAttempt(rig, status, body, contentType);
+        return await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+    }
+
+    private const string QuotaFailureBody = "{\"error\":{\"code\":403,\"message\":\"Request denied.\",\"status\":\"PERMISSION_DENIED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"subject\":\"project:my-lab\",\"description\":\"GPUS_ALL_REGIONS\"}]}]}}";
+
+    [Fact]
+    public async Task A_403_SERVICE_DISABLED_on_a_VM_look_is_ApiDisabled_exactly_as_ExecuteAsync_reports_it()
+    {
+        var body = RpcError(403, "PERMISSION_DENIED", "Request failed.", "SERVICE_DISABLED");
+
+        var raw = await ThrownByGetAsync(403, body);
+        var reference = await ThrownByExecuteAsync(403, body);
+
+        raw.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
+        raw.Error.ShouldBe(reference.Error);
+        raw.Kind.ShouldBe(reference.Kind);
+    }
+
+    [Fact]
+    public async Task A_403_with_a_QuotaFailure_detail_on_a_VM_look_is_Quota_exactly_as_ExecuteAsync_reports_it()
+    {
+        var raw = await ThrownByGetAsync(403, QuotaFailureBody);
+        var reference = await ThrownByExecuteAsync(403, QuotaFailureBody);
+
+        raw.Kind.ShouldBe(CloudErrorKind.Quota);
+        raw.Error.ShouldBe(reference.Error);
+        raw.Kind.ShouldBe(reference.Kind);
+    }
+
+    [Theory]
+    [InlineData(502, "<html><body><h1>502 Bad Gateway</h1></body></html>", "text/html")]
+    [InlineData(500, "upstream connect error", "text/plain")]
+    [InlineData(403, "<html>Forbidden</html>", "text/html")]
+    [InlineData(400, "", "application/json")]
+    public async Task A_non_JSON_error_body_on_a_VM_look_gives_the_same_exception_as_ExecuteAsync(int status, string body, string contentType)
+    {
+        var raw = await ThrownByGetAsync(status, body, contentType);
+        var reference = await ThrownByExecuteAsync(status, body, contentType);
+
+        raw.Error.ShouldBe(reference.Error);
+        raw.Kind.ShouldBe(reference.Kind);
+        raw.Error.HttpStatus.ShouldBe(status);
+    }
+
+    [Fact]
+    public async Task A_401_on_a_VM_look_refreshes_the_token_and_replays_with_the_new_one()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 401, RpcError(401, "UNAUTHENTICATED", "Request had invalid authentication credentials."))
+            .Returns(Get, OldInstance, 200, StoppedOld("RUNNING"));
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.Name.ShouldBe("deg-job-old");
+        rig.Tokens.Refreshes.ShouldBe(1);
+        rig.Handler.To(Get, OldInstance).Select(c => c.Authorization).ShouldBe(["Bearer ya29.test-token-1", "Bearer ya29.test-token-2"]);
+    }
+
+    [Fact]
+    public async Task A_VM_read_without_a_Date_header_has_no_server_time_and_is_still_read()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, OldInstance, 200, StoppedOld("RUNNING"));
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.ServerNow.ShouldBeNull();
+        vm.Name.ShouldBe("deg-job-old");
+    }
+
     [Fact]
     public async Task Reuse_of_a_VM_that_is_not_stopped_is_refused_before_any_change()
     {
