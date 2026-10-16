@@ -96,6 +96,17 @@
                 </Border>
             </StackPanel>
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsCloudResultsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsCloudResultsExplainer" TextWrapping="Wrap" />
+                        <ComboBox x:Uid="CloudRetentionBox" ItemsSource="{x:Bind CloudResults.Choices}" DisplayMemberPath="Label" SelectedItem="{x:Bind CloudResults.SelectedChoice, Mode=TwoWay}" />
+                        <TextBlock x:Uid="SettingsCloudResultsNote" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind CloudResults.RetentionStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsNotificationsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">

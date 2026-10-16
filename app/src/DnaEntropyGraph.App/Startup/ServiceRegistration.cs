@@ -335,6 +335,7 @@ public static class ServiceRegistration
         // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
         services.AddSingleton<RunTargetPickerViewModel>();
         services.AddTransient<ThisPcSettingsViewModel>();
+        services.AddTransient<CloudResultsSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.
         services.AddSingleton<IAppUpdateSource, Services.VelopackUpdateSource>();
@@ -384,6 +385,8 @@ public static class ServiceRegistration
                 }
             },
             AppVersion = JobEngine.AppVersion(),
+            // Issue #114: the saved "Cloud results retention", read at each use so a change patches the bucket rule on the next run.
+            ResultsRetentionDaysSource = () => ResultsRetentionSetting.Days(sp.GetRequiredService<ISettingsStore>()),
         });
         services.AddSingleton<GoogleCloudGatewaySet>(sp => GoogleCloudGateways.Create(
             sp.GetRequiredService<IGcpAccessTokenSource>(),

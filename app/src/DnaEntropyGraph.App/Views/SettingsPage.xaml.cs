@@ -22,10 +22,13 @@ public sealed partial class SettingsPage : Page
 
     public ThisPcSettingsViewModel ThisPc { get; }
 
+    public CloudResultsSettingsViewModel CloudResults { get; }
+
     public UpdateViewModel Updates { get; }
 
     public SettingsPage()
     {
+        CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
         Files = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FilesSettingsViewModel>();
