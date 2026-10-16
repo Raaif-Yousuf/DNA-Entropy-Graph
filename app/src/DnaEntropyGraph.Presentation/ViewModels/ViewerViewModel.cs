@@ -48,6 +48,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     private readonly IFastaIndexStore? _indexStore;
     private readonly long _maxIndexedBytes;
     private int _openGeneration;
+    private CancellationTokenSource? _openCts;
     private int _contigGeneration;
     private int _fallbackGeneration;
     private bool _settingSelection;
@@ -208,8 +209,16 @@ public sealed partial class ViewerViewModel : ObservableObject
     /// <summary>Completes when the index of a long FASTA (issue #497) of the last <see cref="OpenRun"/> is built and applied; already complete when none was needed.</summary>
     public Task OpenReady { get; private set; } = Task.CompletedTask;
 
+    /// <summary>The page was left: stop a running index build (issue #497). Nothing of it is applied.</summary>
+    public void CancelOpen()
+    {
+        _openGeneration++;
+        _openCts?.Cancel();
+    }
+
     public void OpenRun(string? runFolder)
     {
+        CancelOpen();
         _openGeneration++;
         OpenReady = Task.CompletedTask;
         _lastRunFolder = runFolder;
@@ -233,7 +242,8 @@ public sealed partial class ViewerViewModel : ObservableObject
             // Issue #497: a long FASTA gets a .fai in the app's own folder; building it can take seconds, so not on this thread.
             ResetRunState();
             ShowLoading();
-            OpenReady = OpenIndexedAsync(runFolder, _openGeneration);
+            _openCts = new CancellationTokenSource();
+            OpenReady = OpenIndexedAsync(runFolder, _openGeneration, _openCts.Token);
             return;
         }
 
@@ -242,14 +252,18 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     private bool IsIndexable(string? fastaPath) => fastaPath is not null && new FileInfo(fastaPath).Length <= _maxIndexedBytes;
 
-    private async Task OpenIndexedAsync(string runFolder, int generation)
+    private async Task OpenIndexedAsync(string runFolder, int generation, CancellationToken cancellationToken)
     {
         IgvLoadPlan plan;
         try
         {
-            plan = await Task.Run(() => IgvLoadPlanner.Plan(runFolder, _maxFastaBytes, _indexStore, _maxIndexedBytes));
+            plan = await Task.Run(() => IgvLoadPlanner.PlanCancellable(runFolder, _maxFastaBytes, _indexStore, _maxIndexedBytes, cancellationToken), CancellationToken.None);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception)
         {
             // Never leave the page on "Loading" for a file that vanished or an unreadable folder.
             plan = new IgvLoadPlan(IgvPlanFailure.IndexFailed, runFolder, null);
@@ -531,7 +545,14 @@ public sealed partial class ViewerViewModel : ObservableObject
         IsViewerVisible = false;
         IsLoading = false;
         ErrorTitle = _strings.GetString(copy.TitleKey);
-        ErrorBody = _strings.GetString(copy.BodyKey);
+        var body = _strings.GetString(copy.BodyKey);
+        if (failure == ViewerFailure.SequenceTooLarge)
+        {
+            // The limit in force: the in-page one with no index store, the indexed one with it. Formatted from the constants (issue #497).
+            body = string.Format(System.Globalization.CultureInfo.CurrentCulture, body, ViewerLimits.Describe(_indexStore is null ? _maxFastaBytes : _maxIndexedBytes));
+        }
+
+        ErrorBody = body;
         ActionUrl = actionUrl;
         ActionLabel = copy.ActionKey is null ? string.Empty : _strings.GetString(copy.ActionKey);
         IsErrorVisible = true;

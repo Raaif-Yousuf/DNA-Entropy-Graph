@@ -32,6 +32,14 @@ public static class ViewerLimits
     /// genome is out of scope).
     /// </summary>
     public const long MaxIndexedFastaBytes = 1024L * 1024 * 1024;
+
+    /// <summary>A limit in the words the user reads ("1 GB", "50 MB"), so the message is formatted from the constant and never drifts from it.</summary>
+    public static string Describe(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 and var b when b % (1024L * 1024 * 1024) == 0 => $"{b / (1024L * 1024 * 1024)} GB",
+        >= 1024L * 1024 and var b when b % (1024L * 1024) == 0 => $"{b / (1024L * 1024)} MB",
+        _ => $"{bytes} bytes",
+    };
 }
 
 /// <summary>
@@ -56,6 +64,15 @@ public static class IgvLoadPlanner
         long maxFastaBytes = ViewerLimits.MaxFastaBytes,
         IFastaIndexStore? indexStore = null,
         long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes)
+        => PlanCancellable(runFolder, maxFastaBytes, indexStore, maxIndexedBytes, CancellationToken.None);
+
+    /// <summary><see cref="Plan"/> whose index build stops with <see cref="OperationCanceledException"/> when the page is left (issue #497).</summary>
+    public static IgvLoadPlan PlanCancellable(
+        string? runFolder,
+        long maxFastaBytes,
+        IFastaIndexStore? indexStore,
+        long maxIndexedBytes,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(runFolder) || !Directory.Exists(runFolder))
         {
@@ -96,7 +113,7 @@ public static class IgvLoadPlanner
 
             try
             {
-                indexUrl = ViewerUrls.IndexBaseUrl + Uri.EscapeDataString(Path.GetFileName(indexStore.EnsureIndex(fastaPath)));
+                indexUrl = ViewerUrls.IndexBaseUrl + Uri.EscapeDataString(Path.GetFileName(indexStore.EnsureIndex(fastaPath, cancellationToken)));
             }
             catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
             {

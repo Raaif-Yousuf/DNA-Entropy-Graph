@@ -365,7 +365,7 @@
     <value>This sequence is too large for the built-in viewer</value>
   </data>
   <data name="ViewerSequenceTooLarge_Body" xml:space="preserve">
-    <value>The sequence file is larger than 1 GB, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
+    <value>The sequence file is larger than {0}, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>

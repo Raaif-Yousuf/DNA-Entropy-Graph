@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -13,13 +15,14 @@ public sealed record FastaIndexEntry(string Name, long Length, long Offset, int 
 /// </summary>
 public static class FastaIndexWriter
 {
-    public static List<FastaIndexEntry> Build(Stream fasta, int bufferSize = 1 << 16)
+    public static List<FastaIndexEntry> Build(Stream fasta, int bufferSize = 1 << 16, CancellationToken cancellationToken = default)
     {
         var state = new Builder();
         var buffer = new byte[Math.Max(1, bufferSize)];
         int n;
         while ((n = fasta.Read(buffer, 0, buffer.Length)) > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             for (var i = 0; i < n; i++)
             {
                 state.Feed(buffer[i]);
@@ -38,7 +41,7 @@ public static class FastaIndexWriter
     }
 
     /// <summary>Builds the index of <paramref name="fastaPath"/> into <paramref name="faiPath"/> (temp file, then move; nothing is left behind on failure).</summary>
-    public static void BuildTo(string fastaPath, string faiPath)
+    public static void BuildTo(string fastaPath, string faiPath, CancellationToken cancellationToken = default)
     {
         var folder = Path.GetDirectoryName(Path.GetFullPath(faiPath))!;
         Directory.CreateDirectory(folder);
@@ -48,7 +51,7 @@ public static class FastaIndexWriter
             List<FastaIndexEntry> entries;
             using (var fasta = new FileStream(fastaPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16, FileOptions.SequentialScan))
             {
-                entries = Build(fasta);
+                entries = Build(fasta, cancellationToken: cancellationToken);
             }
 
             using (var writer = new StreamWriter(temp, false, new UTF8Encoding(false)))
@@ -64,6 +67,70 @@ public static class FastaIndexWriter
             {
                 File.Delete(temp);
             }
+        }
+    }
+
+    /// <summary>
+    /// True when the stored index at <paramref name="faiPath"/> fits a FASTA of <paramref name="fastaLength"/> bytes: non-empty, every line five
+    /// numeric columns, names unique, records in order, and the last record ends exactly where the file ends (only line breaks may follow).
+    /// A truncated, damaged or stale index fails this and is rebuilt.
+    /// </summary>
+    public static bool IsValidFor(string faiPath, long fastaLength, string? fastaPath = null)
+    {
+        try
+        {
+            var lines = File.ReadAllLines(faiPath).Where(l => l.Length > 0).ToList();
+            if (lines.Count == 0)
+            {
+                return false;
+            }
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            long previousEnd = 0;
+            foreach (var line in lines)
+            {
+                var f = line.Split('\t');
+                if (f.Length != 5
+                    || f[0].Length == 0
+                    || !names.Add(f[0])
+                    || !long.TryParse(f[1], NumberStyles.None, CultureInfo.InvariantCulture, out var length)
+                    || !long.TryParse(f[2], NumberStyles.None, CultureInfo.InvariantCulture, out var offset)
+                    || !int.TryParse(f[3], NumberStyles.None, CultureInfo.InvariantCulture, out var lineBases)
+                    || !int.TryParse(f[4], NumberStyles.None, CultureInfo.InvariantCulture, out var lineWidth)
+                    || (lineBases > 0 && lineWidth < lineBases)
+                    || offset < previousEnd)
+                {
+                    return false;
+                }
+
+                previousEnd = lineBases > 0 ? offset + (length / lineBases * lineWidth) + (length % lineBases) : offset;
+                if (previousEnd > fastaLength)
+                {
+                    return false;
+                }
+            }
+
+            if (fastaPath is null)
+            {
+                return fastaLength - previousEnd <= 1024;
+            }
+
+            using var fasta = new FileStream(fastaPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            fasta.Seek(previousEnd, SeekOrigin.Begin);
+            int b;
+            while ((b = fasta.ReadByte()) >= 0)
+            {
+                if (b != '\n' && b != '\r')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
         }
     }
 
@@ -223,25 +290,126 @@ public interface IFastaIndexStore
     /// <summary>The folder every index is written to (and the viewer serves).</summary>
     string Directory { get; }
 
-    /// <summary>The path of the index of <paramref name="fastaPath"/>, built first when it is missing or the FASTA changed. Throws <see cref="FormatException"/> or <see cref="IOException"/>.</summary>
-    string EnsureIndex(string fastaPath);
+    /// <summary>
+    /// The path of the index of <paramref name="fastaPath"/>, built first when it is missing, damaged or the FASTA changed. Concurrent calls
+    /// for one file build it once. Throws <see cref="FormatException"/>, <see cref="IOException"/> or <see cref="OperationCanceledException"/>.
+    /// </summary>
+    string EnsureIndex(string fastaPath, CancellationToken cancellationToken = default);
 }
 
-public sealed class FastaIndexStore(string directory) : IFastaIndexStore
+public sealed class FastaIndexStore(string directory, Action<string>? buildObserver = null) : IFastaIndexStore
 {
+    /// <summary>An index not used for this long is evicted by the sweep that runs once per process.</summary>
+    public static readonly TimeSpan DefaultMaxAge = TimeSpan.FromDays(30);
+
+    private static readonly TimeSpan OrphanTempAge = TimeSpan.FromHours(1);
+
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
+    private int _swept;
+
     public string Directory { get; } = directory;
 
-    public string EnsureIndex(string fastaPath)
+    public string EnsureIndex(string fastaPath, CancellationToken cancellationToken = default)
     {
+        System.IO.Directory.CreateDirectory(Directory);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Interlocked.Exchange(ref _swept, 1) == 0)
+        {
+            Sweep(DefaultMaxAge);
+        }
+
         var info = new FileInfo(fastaPath);
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{info.FullName.ToUpperInvariant()}|{info.Length}|{info.LastWriteTimeUtc.Ticks}")))[..24].ToLowerInvariant();
         var fai = Path.Combine(Directory, key + ".fai");
-        if (!File.Exists(fai))
+        var gate = _gates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        gate.Wait(cancellationToken);
+        try
         {
-            FastaIndexWriter.BuildTo(fastaPath, fai);
-        }
+            if (File.Exists(fai) && FastaIndexWriter.IsValidFor(fai, info.Length, info.FullName))
+            {
+                Touch(fai);
+                return fai;
+            }
 
-        return fai;
+            buildObserver?.Invoke(fai);
+            FastaIndexWriter.BuildTo(fastaPath, fai, cancellationToken);
+            File.WriteAllText(Path.Combine(Directory, key + ".src"), info.FullName, new UTF8Encoding(false));
+            return fai;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Housekeeping: deletes orphan temp files left by a killed build, indexes not used for <paramref name="maxAge"/>, and indexes whose FASTA
+    /// no longer exists (each index has a <c>.src</c> note of the file it was made for). Never throws.
+    /// </summary>
+    public void Sweep(TimeSpan maxAge)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(Directory))
+            {
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            foreach (var tmp in System.IO.Directory.EnumerateFiles(Directory, "*.tmp"))
+            {
+                if (now - File.GetLastWriteTimeUtc(tmp) > OrphanTempAge)
+                {
+                    TryDelete(tmp);
+                }
+            }
+
+            foreach (var fai in System.IO.Directory.EnumerateFiles(Directory, "*.fai").ToList())
+            {
+                var src = Path.ChangeExtension(fai, ".src");
+                var expired = now - File.GetLastWriteTimeUtc(fai) > maxAge;
+                var sourceGone = File.Exists(src) && !File.Exists(File.ReadAllText(src));
+                if (expired || sourceGone)
+                {
+                    TryDelete(fai);
+                    TryDelete(src);
+                }
+            }
+
+            foreach (var src in System.IO.Directory.EnumerateFiles(Directory, "*.src").ToList())
+            {
+                if (!File.Exists(Path.ChangeExtension(src, ".fai")))
+                {
+                    TryDelete(src);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Housekeeping only: a locked file is swept next time.
+        }
+    }
+
+    private static void Touch(string path)
+    {
+        try
+        {
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 }

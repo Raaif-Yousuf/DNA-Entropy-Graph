@@ -105,7 +105,7 @@ public sealed class ViewerIndexedFastaTests : IDisposable
     public void An_unwritable_index_folder_is_IndexFailed()
     {
         var store = Substitute.For<IFastaIndexStore>();
-        store.EnsureIndex(Arg.Any<string>()).Returns(_ => throw new IOException("disk full"));
+        store.EnsureIndex(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => throw new IOException("disk full"));
 
         IgvLoadPlanner.Plan(_run, maxFastaBytes: 3, indexStore: store).Failure.ShouldBe(IgvPlanFailure.IndexFailed);
     }
@@ -188,7 +188,7 @@ public sealed class ViewerIndexedFastaTests : IDisposable
     {
         var gate = new TaskCompletionSource();
         var slow = Substitute.For<IFastaIndexStore>();
-        slow.EnsureIndex(Arg.Any<string>()).Returns(_ =>
+        slow.EnsureIndex(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
         {
             gate.Task.Wait();
             return Path.Combine(_faiDir, "late.fai");
@@ -203,6 +203,58 @@ public sealed class ViewerIndexedFastaTests : IDisposable
 
         vm.Status.ShouldBe(ViewerStatus.NoRun);
         vm.MapRunFolder.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Leaving_the_page_cancels_the_index_build_and_applies_nothing()
+    {
+        var started = new TaskCompletionSource();
+        var sawCancel = false;
+        var slow = Substitute.For<IFastaIndexStore>();
+        slow.EnsureIndex(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
+        {
+            started.SetResult();
+            ci.Arg<CancellationToken>().WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+            sawCancel = ci.Arg<CancellationToken>().IsCancellationRequested;
+            ci.Arg<CancellationToken>().ThrowIfCancellationRequested();
+            return Path.Combine(_faiDir, "late.fai");
+        });
+        var vm = Make(slow);
+        vm.OpenRun(_run);
+        await started.Task;
+
+        vm.CancelOpen();
+        await vm.OpenReady;
+
+        sawCancel.ShouldBeTrue();
+        vm.MapRunFolder.ShouldBeNull();
+        vm.Status.ShouldBe(ViewerStatus.Loading);
+    }
+
+    [Fact]
+    public void The_too_large_message_names_the_limit_in_force_taken_from_ViewerLimits()
+    {
+        _strings.GetString("ViewerSequenceTooLarge_Body").Returns("over {0}");
+
+        var noStore = Make(null, maxFasta: 3);
+        noStore.OpenRun(_run);
+
+        ViewerLimits.Describe(ViewerLimits.MaxIndexedFastaBytes).ShouldBe("1 GB");
+        ViewerLimits.Describe(ViewerLimits.MaxFastaBytes).ShouldBe("50 MB");
+        noStore.ErrorBody.ShouldBe("over 3 bytes");
+    }
+
+    [Fact]
+    public async Task The_too_large_message_with_an_index_store_names_the_indexed_limit()
+    {
+        _strings.GetString("ViewerSequenceTooLarge_Body").Returns("over {0}");
+        var vm = Make(_store, maxFasta: 3, maxIndexed: 5);
+
+        vm.OpenRun(_run);
+        await vm.OpenReady;
+
+        vm.Status.ShouldBe(ViewerStatus.SequenceTooLarge);
+        vm.ErrorBody.ShouldBe("over 5 bytes");
     }
 
     [Fact]
