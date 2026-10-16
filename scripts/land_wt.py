@@ -21,12 +21,20 @@ WHAT IT DOES, IN ORDER (a refusal before step 4 changes nothing; no step ever fo
    (the venv's editable install points at the shared tree) and its dotnet obj/bin under the
    worktree. Red refuses; the log path is printed.
 7. Push HEAD to `refs/heads/<land-branch>` (default: the branch name) and `gh pr create`.
-   Merging stays a human call: `gh pr merge <n> --merge`.
+   Merging stays a human call (`gh pr merge <n> --merge`) unless `--merge-when-green` is passed (#666):
+   then, after the PR opens, it polls `gh pr checks <pr> --json name,bucket,state` every `--checks-poll`
+   seconds up to `--checks-timeout`, refuses at once when any check is fail/cancel (naming them), refuses
+   when anything is still pending (or no check exists) at the timeout, and only when every check is
+   pass/skipping runs `gh pr merge <pr> --merge` (a merge commit). Either refusal leaves the PR open.
+   `--rerun-failed-once` (default on, `--no-rerun-failed-once` to disable): the first red result re-runs each failed
+   run once (`gh run rerun <run> --failed`, after the other checks settle), appends a line to
+   `<git-dir>/flaky-checks.log` and waits again; a second red refuses.
 8. ALWAYS, success or not: unlink the junction with `os.rmdir`, check it is gone, and only then
    `git worktree remove --force`. MEASURED: an earlier tool deleted the real venv through a junction.
    If the junction cannot be removed the worktree is LEFT IN PLACE (and named) rather than removed.
 
-Exit codes: 0 PR opened, 1 refused (nothing pushed), 2 bad usage, 3 premerge red, 4 failed after work began.
+Exit codes: 0 PR opened (and merged, with --merge-when-green), 1 refused (nothing pushed), 2 bad usage, 3 premerge red,
+4 failed after work began, 5 a PR check failed (PR open, not merged), 6 a PR check still pending at the timeout (PR open, not merged).
 Console output is ASCII (`OK:` / `ERROR:` / `-`).
 """
 
@@ -57,6 +65,12 @@ LOCK_DIR = "locks"
 LOCK_MAX_AGE_SECONDS = 24 * 3600
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE, EXIT_RED, EXIT_FAILED = 0, 1, 2, 3, 4
+EXIT_CHECKS_RED, EXIT_CHECKS_PENDING = 5, 6
+CHECKS_TIMEOUT_SECONDS = 30 * 60
+CHECKS_POLL_SECONDS = 20.0
+# `gh pr checks` buckets: pass and skipping are green, fail and cancel are red, anything else (pending) is not done.
+GREEN_BUCKETS = {"pass", "skipping"}
+RED_BUCKETS = {"fail", "cancel"}
 
 # premerge(worktree, venv, full) -> (exit code, combined output). Injectable so tests never run the real gates.
 PremergeFn = Callable[[Path, Path, bool], "tuple[int, str]"]
@@ -209,6 +223,8 @@ class Ctx:
     gh: list[str] = field(default_factory=lambda: ["gh"])
     premerge: PremergeFn = run_premerge
     pid_alive: Callable[[int], bool] = pid_alive
+    sleep: Callable[[float], None] = time.sleep  # injectable: tests never wait on a real clock
+    monotonic: Callable[[], float] = time.monotonic
     log: list[str] = field(default_factory=list)
 
     def say(self, message: str) -> None:
@@ -362,7 +378,130 @@ def _create_pr(ctx: Ctx, wt: Path, land_branch: str, title: str, body_file: Path
     return _text(proc.stdout).splitlines()[-1] if proc.stdout.strip() else "(no url printed)"
 
 
-def land(ctx: Ctx, branch: str, sha: str, title: str, body_file: Path, *, full: bool = False, land_branch: str | None = None) -> int:
+def _read_checks(ctx: Ctx, pr: str) -> list[dict[str, str]] | None:
+    """The PR's checks as `[{"name", "bucket", "state"}]`, or None when gh has none to report yet (it prints
+    "no checks reported" and exits 1 right after a PR opens). Exit 8 means "pending" and still carries the JSON."""
+    argv = [*ctx.gh, "pr", "checks", pr, "--json", "name,bucket,state,link"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, check=False)
+    except OSError as err:
+        raise LandError(f"gh could not run ({err}). Install gh, then run `gh pr checks {pr} --watch` and merge by hand") from err
+    try:
+        data = json.loads(_text(proc.stdout))
+    except ValueError:
+        return None
+    return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else None
+
+
+def _names(checks: Sequence[dict[str, str]]) -> str:
+    return ", ".join(str(c.get("name", "?")) for c in checks)
+
+
+RUN_ID = re.compile(r"/actions/runs/(\d+)")
+
+
+def _run_ids(checks: Sequence[dict[str, str]]) -> list[str]:
+    """The distinct GitHub Actions run ids behind these checks (from their `link`), in first-seen order."""
+    ids: list[str] = []
+    for c in checks:
+        match = RUN_ID.search(str(c.get("link", "")))
+        if match and match.group(1) not in ids:
+            ids.append(match.group(1))
+    return ids
+
+
+def _log_flaky(ctx: Ctx, pr: str, red: Sequence[dict[str, str]], runs: Sequence[str]) -> None:
+    """Append one line to `<git-dir>/flaky-checks.log`: a failed check that a rerun was spent on. Best effort."""
+    try:
+        git_dir = Path(_text(git(ctx.repo, "rev-parse", "--absolute-git-dir").stdout))
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} pr={pr} checks={_names(red).replace(', ', ',')} runs={','.join(runs)}\n"
+        with (git_dir / "flaky-checks.log").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(line)
+    except (LandError, OSError) as err:
+        ctx.say(f"WARNING: could not write flaky-checks.log: {err}")
+
+
+def _rerun_failed(ctx: Ctx, pr: str, red: Sequence[dict[str, str]]) -> bool:
+    """`gh run rerun <run> --failed` once for each failed run. False when it could not be done for every run."""
+    runs = _run_ids(red)
+    if not runs:
+        return False
+    _log_flaky(ctx, pr, red, runs)
+    ok = True
+    for run in runs:
+        try:
+            proc = subprocess.run([*ctx.gh, "run", "rerun", run, "--failed"], capture_output=True, check=False)
+        except OSError:
+            return False
+        if proc.returncode != 0:
+            ctx.say(f"WARNING: `gh run rerun {run} --failed` failed: {_text(proc.stderr or proc.stdout)}")
+            ok = False
+    if ok:
+        ctx.say(f"- failed check(s) {_names(red)} re-run once (flaky-checks.log); waiting again")
+    return ok
+
+
+def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
+    """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green.
+
+    With `rerun_failed_once`, the first red result (once no check is still running, because `gh run rerun --failed`
+    needs a finished run) re-runs the failed runs a single time and waits again with a fresh deadline; a second red refuses."""
+    deadline = ctx.monotonic() + timeout
+    rerun_spent = False
+    while True:
+        checks = _read_checks(ctx, pr)
+        waiting: list[dict[str, str]] = []
+        if checks:
+            red = [c for c in checks if c.get("bucket") in RED_BUCKETS]
+            waiting = [c for c in checks if c.get("bucket") not in GREEN_BUCKETS and c not in red]
+            if red and rerun_failed_once and not rerun_spent and waiting:
+                pass  # a rerun needs the run finished: keep polling until the rest settle (still bounded by the deadline)
+            elif red and rerun_failed_once and not rerun_spent:
+                rerun_spent = True
+                if _rerun_failed(ctx, pr, red):
+                    deadline = ctx.monotonic() + timeout
+                    ctx.sleep(poll)  # let the rerun replace the stale red before it is read again
+                    continue
+                ctx.say(f"ERROR: not merging {pr}: failed check(s) {_names(red)} could not be re-run. Re-run them by hand; the PR stays open")
+                return EXIT_CHECKS_RED
+            elif red:
+                again = " (still red after one re-run)" if rerun_spent else ""
+                ctx.say(f"ERROR: not merging {pr}: failed check(s){again}: {_names(red)}. Fix them and push; the PR stays open")
+                return EXIT_CHECKS_RED
+            if not waiting and not red:
+                break
+        if ctx.monotonic() >= deadline:
+            what = f"still pending: {_names(waiting)}" if waiting else "no checks were reported"
+            ctx.say(
+                f"ERROR: not merging {pr}: {what} after {int(timeout)} s. Run `gh pr checks {pr} --watch`, then merge by hand; the PR stays open"
+            )
+            return EXIT_CHECKS_PENDING
+        ctx.sleep(min(poll, deadline - ctx.monotonic()))
+    argv = [*ctx.gh, "pr", "merge", pr, "--merge"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, check=False)
+    except OSError as err:
+        raise LandError(f"gh could not run ({err}). Merge {pr} by hand with `gh pr merge --merge`") from err
+    if proc.returncode != 0:
+        raise LandError(f"all checks passed but `gh pr merge` failed: {_text(proc.stderr or proc.stdout)}. Merge {pr} by hand")
+    ctx.say(f"OK: all checks passed; merged {pr}")
+    return EXIT_OK
+
+
+def land(
+    ctx: Ctx,
+    branch: str,
+    sha: str,
+    title: str,
+    body_file: Path,
+    *,
+    full: bool = False,
+    land_branch: str | None = None,
+    merge_when_green: bool = False,
+    checks_timeout: float = CHECKS_TIMEOUT_SECONDS,
+    checks_poll: float = CHECKS_POLL_SECONDS,
+    rerun_failed_once: bool = True,
+) -> int:
     land_branch = land_branch if land_branch is not None else branch
     slug = slugify(branch)
     wt: Path | None = None
@@ -397,8 +536,12 @@ def land(ctx: Ctx, branch: str, sha: str, title: str, body_file: Path, *, full: 
         git(wt, "push", REMOTE, f"HEAD:refs/heads/{land_branch}")
         pushed = True
         url = _create_pr(ctx, wt, land_branch, title, body_file)
-        ctx.say(f"OK: pushed {land_branch} and opened {url}. Merge with: gh pr merge {url.rsplit('/', 1)[-1]} --merge")
-        rc = EXIT_OK
+        if merge_when_green:
+            ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
+            rc = _merge_when_green(ctx, url, checks_timeout, checks_poll, rerun_failed_once)
+        else:
+            ctx.say(f"OK: pushed {land_branch} and opened {url}. Merge with: gh pr merge {url.rsplit('/', 1)[-1]} --merge")
+            rc = EXIT_OK
     except LandError as err:
         ctx.say(f"ERROR: {err}")
         rc = err.code
@@ -433,6 +576,19 @@ def main(argv: Sequence[str] | None = None, *, repo: Path | None = None, premerg
     ap.add_argument("--body-file", required=True, type=Path)
     ap.add_argument("--full", action="store_true", help="full premerge (default --fast)")
     ap.add_argument("--land-branch", default=None, help="remote branch to push (default: --branch)")
+    ap.add_argument(
+        "--merge-when-green", action="store_true", help="after the PR opens, wait for every check and merge (merge commit) only if none failed"
+    )
+    ap.add_argument(
+        "--checks-timeout", type=float, default=CHECKS_TIMEOUT_SECONDS, help="seconds to wait for checks before refusing (default 1800)"
+    )
+    ap.add_argument("--checks-poll", type=float, default=CHECKS_POLL_SECONDS, help="seconds between check polls (default 20)")
+    ap.add_argument(
+        "--rerun-failed-once",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="with --merge-when-green: re-run failed checks once (flaky runners) before refusing; --no-rerun-failed-once disables",
+    )
     ap.add_argument("--venv", type=Path, default=None, help="real venv to junction (default: the running venv)")
     ap.add_argument("--gh", default=os.environ.get("LAND_WT_GH", "gh"), help="path of the gh executable (one path, spaces allowed)")
     args = ap.parse_args(argv)
@@ -442,7 +598,19 @@ def main(argv: Sequence[str] | None = None, *, repo: Path | None = None, premerg
     ctx = Ctx(repo=repo, venv=args.venv or _default_venv(repo), gh=[args.gh])
     if premerge is not None:
         ctx.premerge = premerge
-    return land(ctx, args.branch, args.sha, args.title, args.body_file.resolve(), full=args.full, land_branch=args.land_branch)
+    return land(
+        ctx,
+        args.branch,
+        args.sha,
+        args.title,
+        args.body_file.resolve(),
+        full=args.full,
+        land_branch=args.land_branch,
+        merge_when_green=args.merge_when_green,
+        checks_timeout=args.checks_timeout,
+        checks_poll=args.checks_poll,
+        rerun_failed_once=args.rerun_failed_once,
+    )
 
 
 if __name__ == "__main__":
