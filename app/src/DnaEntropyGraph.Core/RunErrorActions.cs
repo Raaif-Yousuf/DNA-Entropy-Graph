@@ -44,6 +44,7 @@ public static class RunErrorActions
         [RunErrorCodes.WorkerImageUnavailable] = RunErrorAction.UpdateApp,
         [RunErrorCodes.WorkerImageRefused] = RunErrorAction.UpdateApp,
         [RunErrorCodes.ResultTimeout] = RunErrorAction.StartAgain,
+        [RunErrorCodes.RunTimeLimit] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerNoHeartbeat] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerHeartbeatStale] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerFailed] = RunErrorAction.SaveDiagnostics,
