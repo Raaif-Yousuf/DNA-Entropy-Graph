@@ -25,6 +25,7 @@ public static class EmblLite
         var coded = new List<InputNotice>();
 
         var open = false;
+        RecordIdentity? identity = null; // Biopython's record id, fed the ID line and the AC / SV lines (#847)
         var inSeq = false;
         var tableChecked = false; // Biopython reads the feature table once per record
         long? idLength = null; // the ID line's length and topology decide how an origin-wrapping location reads
@@ -40,15 +41,16 @@ public static class EmblLite
             // readers/genbank.py::records_from_parsed, shared by the EMBL reader: no sequence, or only N, is skipped.
             if (recSeq.Length == 0 || recSeq.All(c => c == 'N'))
             {
-                notices.Add($"Skipped EMBL record {recordIndex}: no nucleotide sequence.");
+                notices.Add($"Skipped EMBL record {recordIndex} (id {PrivacySafeText.DescribeLen(identity!.Id)}): no nucleotide sequence.");
                 coded.Add(new InputNotice(InputNoticeCode.GenBankRecordSkippedNoSequence, recordIndex));
             }
             else
             {
                 // #796: the same dropped-location rule and counts as a GenBank record (the worker shares records_from_parsed).
-                var (genes, cds) = GenBankLite.ReadTableFeatures("EMBL", recordIndex, tableFeatures, notices, coded);
-                records.Add(new GenBankLiteRecord(string.Empty, recSeq, genes, cds, recordIndex));
+                var (genes, cds, mapped) = GenBankLite.ReadTableFeatures("EMBL", recordIndex, tableFeatures, notices, coded);
+                records.Add(new GenBankLiteRecord(string.Empty, recSeq, genes, cds, recordIndex) { MappedCount = mapped });
             }
+            identity = null;
             open = false;
             inSeq = false;
             tableChecked = false;
@@ -75,6 +77,10 @@ public static class EmblLite
                 if (open)
                 {
                     (idLength, idCircular) = ReadIdLine(line);
+                    var rest = line.Length > 5 ? line[5..] : string.Empty;
+                    var name = rest.Count(c => c == ';') == 6 ? rest.Trim().Split(';')[0].Trim() : rest.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+                    identity = new RecordIdentity(name);
+                    identity.FeedEmblIdLine(line);
                 }
                 continue;
             }
@@ -111,6 +117,10 @@ public static class EmblLite
                 {
                     tableChecked = true; // no feature table in this record
                 }
+                else
+                {
+                    identity?.FeedEmblHeader(line);
+                }
             }
             if (line.StartsWith("SQ", StringComparison.Ordinal))
             {
@@ -142,11 +152,15 @@ public static class EmblLite
         }
         if (records.Count == 0)
         {
-            throw new GenBankReadException("No EMBL records with a nucleotide sequence found (expected an ID line and an SQ block).");
+            // readers/genbank.py::records_from_parsed with the EMBL label: no record at all, or every record skipped for want of a sequence.
+            throw new GenBankReadException(recordIndex == 0
+                ? "No EMBL records found in the file."
+                : "The EMBL file has no records with a nucleotide sequence (a truncated or sequence-less export). "
+                  + "Re-export the file from the tool that made it, with its sequence included.");
         }
 
         // The worker counts the features it maps: a record's gene features, else its CDS features (records_from_parsed).
-        var totalFeatures = records.Sum(r => r.GeneCount > 0 ? r.GeneCount : r.CdsCount);
+        var totalFeatures = records.Sum(r => r.Mapped);
         notices.Add($"Read {records.Count} record(s) with {totalFeatures} gene feature(s) from the EMBL (not re-annotated).");
         coded.Add(new InputNotice(InputNoticeCode.GenBankRead, records.Count, totalFeatures));
 

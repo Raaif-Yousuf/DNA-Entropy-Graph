@@ -124,6 +124,14 @@ internal static class GenBankFeatureTable
             }
             if (Array.IndexOf(format.EndMarkers, line) >= 0)
             {
+                // EmblScanner.parse_footer: the line AFTER the end marker must be the SQ / CO header, or the file is refused. The table walk
+                // above runs over a following record's ID and FH lines as if they were features, so a record that lacks its XX / SQ / //
+                // ends up here (MEASURED 2026-10-16: "Footer format unexpected"). The text the worker echoes is user text, so it is left out.
+                if (!IsSequenceHeader(Raw(index + 1) ?? string.Empty, format))
+                {
+                    throw RefuseLikeWorker(recordNumber, "Footer format unexpected", format);
+                }
+
                 end = index;
                 return features;
             }

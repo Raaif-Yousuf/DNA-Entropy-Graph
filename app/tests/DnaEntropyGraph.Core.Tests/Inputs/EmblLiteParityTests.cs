@@ -15,34 +15,44 @@ public sealed class EmblLiteParityTests
 {
     public static IEnumerable<object[]> Cases() => EmblCases();
 
-    private const string Tail = "Check the file was not truncated or hand-edited, or re-export it from the tool that made it.";
-
     [Fact]
-    public void The_fixture_carries_the_dropped_and_the_refused_shapes_so_the_theory_cannot_go_vacuous()
+    public void The_fixture_carries_the_dropped_the_refused_and_the_skipped_shapes_so_the_theory_cannot_go_vacuous()
     {
         var cases = Cases().Select(c => (ParityCase)c[0]).ToList();
 
         cases.ShouldContain(c => c.Python.Notices.Any(n => n.StartsWith("EMBL record 1: 1 gene feature(s) were dropped", StringComparison.Ordinal)));
-        cases.Count(c => c.Python.Error is not null).ShouldBeGreaterThanOrEqualTo(3);
+        cases.ShouldContain(c => c.Python.Notices.Any(n => n.StartsWith("Skipped EMBL record 1 (id ", StringComparison.Ordinal)));
+        cases.Count(c => c.Python.Error is not null).ShouldBeGreaterThanOrEqualTo(6);
+    }
+
+    [Fact]
+    public void Every_divergence_says_why_and_never_hides_a_text_the_app_could_match()
+    {
+        // An error the app can word exactly as the worker does carries no divergence: its text is compared with python.error.
+        foreach (var c in Cases().Select(c => (ParityCase)c[0]).Where(c => c.CSharpDivergence is not null))
+        {
+            c.CSharpDivergence!.Reason.ShouldNotBeNullOrWhiteSpace(c.Id);
+            c.Python.Error.ShouldNotBeNull($"{c.Id}: only a refusal diverges");
+            c.CSharpDivergence.Error.ShouldNotBeNullOrWhiteSpace(c.Id);
+        }
     }
 
     [Theory]
     [MemberData(nameof(Cases))]
     public void Matches_the_workers_read_embl_sequences_gene_counts_notices_and_refusals(ParityCase testCase)
     {
-        if (testCase.Python.Error is not null)
+        var expectedError = testCase.CSharpDivergence?.Error ?? testCase.Python.Error;
+        if (expectedError is not null)
         {
+            // Where the app words a refusal differently the fixture says so (csharp_divergence); otherwise the text is the worker's, word for word.
             var ex = Should.Throw<GenBankReadException>(() => EmblLite.Read(testCase.Text), $"case {testCase.Id}");
-
-            // The reason is Biopython's own text (an assert has none); the frame and the action are the worker's.
-            ex.Message.ShouldStartWith("Could not parse the EMBL file (record 1): ", customMessage: testCase.Id);
-            ex.Message.ShouldEndWith(Tail, customMessage: testCase.Id);
+            ex.Message.ShouldBe(expectedError, $"case {testCase.Id} error text");
             return;
         }
 
         var result = EmblLite.Read(testCase.Text);
 
-        result.Records.Select(r => (r.Seq, Genes: r.GeneCount > 0 ? r.GeneCount : r.CdsCount))
+        result.Records.Select(r => (r.Seq, Genes: r.Mapped))
             .ShouldBe(testCase.Python.Records.Select(r => (r.Seq, r.GeneCount)), $"case {testCase.Id} records");
         result.Notices.ShouldBe(testCase.Python.Notices, $"case {testCase.Id} notices");
     }

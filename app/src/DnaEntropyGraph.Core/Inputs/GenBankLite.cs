@@ -14,7 +14,17 @@ public sealed class GenBankReadException(string message) : Exception(message)
 /// this class ("light GenBank parse: LOCUS, ORIGIN, count gene/CDS").
 /// </summary>
 /// <param name="SourceIndex">1-based position among all LOCUS blocks in the file, counting skipped ones (0 when built by hand).</param>
-public sealed record GenBankLiteRecord(string LocusName, string Seq, int GeneCount, int CdsCount, int SourceIndex = 0);
+public sealed record GenBankLiteRecord(string LocusName, string Seq, int GeneCount, int CdsCount, int SourceIndex = 0)
+{
+    /// <summary>
+    /// How many features the worker maps for this record: its gene features if it has any (even when every one was dropped), else its CDS
+    /// features. When built by hand, the surviving gene count, else the surviving CDS count.
+    /// </summary>
+    public int Mapped => MappedCount ?? (GeneCount > 0 ? GeneCount : CdsCount);
+
+    /// <summary>Set by the readers, which know whether the record had gene features at all.</summary>
+    public int? MappedCount { get; init; }
+}
 
 /// <summary>Result of a light GenBank read: every record found plus any non-fatal notices.</summary>
 public sealed record GenBankLiteResult(IReadOnlyList<GenBankLiteRecord> Records, IReadOnlyList<string> Notices)
@@ -75,7 +85,7 @@ public static class GenBankLite
     /// (or, in a record with no gene features, a CDS) whose location cannot be read, with one counted notice per record (#543, #788, #796), and counts
     /// the rest. Returns the gene and CDS counts that survive.
     /// </summary>
-    internal static (int Genes, int Cds) ReadTableFeatures(
+    internal static (int Genes, int Cds, int Mapped) ReadTableFeatures(
         string label, int recordIndex, IReadOnlyList<(string Key, string? DroppedText)> tableFeatures, List<string> notices, List<InputNotice> coded)
     {
         var sourceKey = tableFeatures.Any(f => f.Key == "gene") ? "gene" : "CDS";
@@ -88,7 +98,13 @@ public static class GenBankLite
 
         // Counted from the parsed feature table (a wrapped qualifier line that starts with "gene" is not a feature),
         // without the features whose location the worker cannot read.
-        return (tableFeatures.Count(f => f.Key == "gene" && f.DroppedText is null), tableFeatures.Count(f => f.Key == "CDS" && f.DroppedText is null));
+        var genes = tableFeatures.Count(f => f.Key == "gene" && f.DroppedText is null);
+        var cds = tableFeatures.Count(f => f.Key == "CDS" && f.DroppedText is null);
+
+        // The worker maps the gene features if the record HAS any (_features_of: `gene_feats or cds_feats`), even when every one of them was dropped,
+        // and only then falls back to the CDS features, so a CDS is never counted beside a lost gene. Not modelled (#847): a gene dropped for lying
+        // outside the sequence, and the CDS that stands in for a dropped gene with the same gene id (#694).
+        return (genes, cds, sourceKey == "gene" ? genes : cds);
     }
 
     // Python counts code points: cut at 40, to 37 plus "...".
@@ -117,6 +133,8 @@ public static class GenBankLite
         var inOrigin = false;
         var seq = new System.Text.StringBuilder();
         var recordIndex = 0;
+        RecordIdentity? identity = null; // Biopython's record id, fed the header lines (#847)
+        var originLine = -1; // the line of the ORIGIN header, to tell a file that ends right after it
         var tableChecked = false; // Biopython reads the feature table once per record, in its header
         long? locusLength = null; // the LOCUS line's length and topology: they decide how an origin-wrapping location reads
         var locusCircular = false;
@@ -134,16 +152,18 @@ public static class GenBankLite
             // `not seq or set(seq.upper()) <= {"N"}`): a placeholder, not data.
             if (recSeq.Length == 0 || recSeq.All(c => c == 'N'))
             {
-                notices.Add($"Skipped GenBank record {recordIndex} (id {PrivacySafeText.DescribeLen(locusName)}): no nucleotide sequence.");
+                // The worker measures Biopython's record id (the VERSION or ACCESSION text, else the LOCUS name), never the id itself.
+                notices.Add($"Skipped GenBank record {recordIndex} (id {PrivacySafeText.DescribeLen(identity!.Id)}): no nucleotide sequence.");
                 coded.Add(new InputNotice(InputNoticeCode.GenBankRecordSkippedNoSequence, recordIndex));
             }
             else
             {
                 // Issue #543/#788: the worker drops a gene (or, in a record with no gene features, a CDS) whose location cannot
                 // be read, with one counted notice per record; so does the pill's gene count.
-                (geneCount, cdsCount) = ReadTableFeatures("GenBank", recordIndex, tableFeatures, notices, coded);
-                records.Add(new GenBankLiteRecord(locusName, recSeq, geneCount, cdsCount, recordIndex));
+                (geneCount, cdsCount, var mapped) = ReadTableFeatures("GenBank", recordIndex, tableFeatures, notices, coded);
+                records.Add(new GenBankLiteRecord(locusName, recSeq, geneCount, cdsCount, recordIndex) { MappedCount = mapped });
             }
+            identity = null;
             locusName = null;
             geneCount = 0;
             cdsCount = 0;
@@ -169,6 +189,7 @@ public static class GenBankLite
                 }
                 var parts = rawLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                 locusName = parts.Length > 1 ? parts[1] : string.Empty;
+                identity = new RecordIdentity(locusName);
                 (locusLength, locusCircular) = ReadLocusHeader(parts);
                 continue;
             }
@@ -244,6 +265,10 @@ public static class GenBankLite
                     // Scanner.parse_header: a record terminator before any feature table or sequence header (#611).
                     throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, "Premature end of sequence data marker '//' found");
                 }
+                else
+                {
+                    identity?.FeedGenBankHeader(rawLine);
+                }
             }
             if (PythonText.TrimEnd(rawLine) == "//") // Biopython compares the right-stripped line with "//" exactly
             {
@@ -253,16 +278,26 @@ public static class GenBankLite
             if (IsOriginHeader(rawLine))
             {
                 inOrigin = true;
+                originLine = lineIndex;
                 continue;
             }
         }
         if (locusName is not null)
         {
+            // The last real line: the "" after a final newline is not a line.
+            var lastLine = lines[^1].Length == 0 ? lines.Length - 2 : lines.Length - 1;
             if (!inOrigin)
             {
-                // Scanner.parse_header / parse_footer: the file ends before the sequence block starts (header only), or right after its
-                // header line with no sequence (#611). A file that ends INSIDE the sequence is only warned about, so it is read.
+                // Scanner.parse_header / parse_footer: the file ends before the sequence block starts (header only), or right after a sequence
+                // header line such as BASE COUNT (#611).
                 throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, tableChecked ? "Premature end of file" : "Premature end of line during sequence data");
+            }
+
+            if (originLine == lastLine)
+            {
+                // parse_footer reads the line after the ORIGIN header and raises when there is none (MEASURED 2026-10-16). A file that ends
+                // later, inside the sequence, is only warned about ("Premature end of file in sequence data"), so it is read.
+                throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, "Premature end of file");
             }
 
             FlushRecord(); // file ended without a trailing "//"
@@ -278,7 +313,7 @@ public static class GenBankLite
         }
 
         // The worker counts the features it maps: a record's gene features, else its CDS features (records_from_parsed).
-        var totalFeatures = records.Sum(r => r.GeneCount > 0 ? r.GeneCount : r.CdsCount);
+        var totalFeatures = records.Sum(r => r.Mapped);
         notices.Add($"Read {records.Count} record(s) with {totalFeatures} gene feature(s) from the GenBank (not re-annotated).");
         coded.Add(new InputNotice(InputNoticeCode.GenBankRead, records.Count, totalFeatures));
 

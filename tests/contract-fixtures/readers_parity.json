@@ -197,6 +197,61 @@
       "python": {
         "error": "Could not parse the GenBank file (record 1): Premature end of features table, marker '//' found. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
       }
+    },
+    {
+      "id": "final_record_origin_header_ends_the_file",
+      "text": "LOCUS       a   4 bp\nORIGIN\n        1 acgt\n//\nLOCUS       b   4 bp\nORIGIN\n",
+      "python": {
+        "error": "Could not parse the GenBank file (record 2): Premature end of file. Check the file was not truncated or hand-edited, and that its ORIGIN block matches its own LOCUS/FEATURES."
+      }
+    },
+    {
+      "id": "all_genes_dropped_beside_a_cds_of_another_gene",
+      "text": "LOCUS       a   8 bp\nFEATURES             Location/Qualifiers\n     gene            abc\n                     /gene=\"x\"\n     CDS             1..4\n                     /gene=\"y\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank record 1: 1 gene feature(s) were dropped because their location text could not be read (gene 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "skipped_record_id_is_the_version_line",
+      "text": "LOCUS       short   0 bp\nVERSION     LONGER_ACC.2\nORIGIN\n//\nLOCUS       real   4 bp\nORIGIN\n        1 acgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Skipped GenBank record 1 (id 12 chars): no nucleotide sequence.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "skipped_record_id_is_the_accession_without_a_version",
+      "text": "LOCUS       short   0 bp\nACCESSION   ACC12345\nORIGIN\n//\nLOCUS       real   4 bp\nORIGIN\n        1 acgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Skipped GenBank record 1 (id 8 chars): no nucleotide sequence.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
     }
   ],
   "embl_cases": [
@@ -244,6 +299,22 @@
         "notices": [
           "EMBL record 1: 1 CDS feature(s) were dropped because their location text could not be read (CDS 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
           "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_all_genes_dropped_beside_a_cds_of_another_gene",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            abc\nFT                   /gene=\"x\"\nFT   CDS             1..4\nFT                   /gene=\"y\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "EMBL record 1: 1 gene feature(s) were dropped because their location text could not be read (gene 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "Read 1 record(s) with 0 gene feature(s) from the EMBL (not re-annotated)."
         ]
       }
     },
@@ -303,6 +374,11 @@
       "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            join()\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
       "python": {
         "error": "Could not parse the EMBL file (record 1): CompoundLocation should have at least 2 parts, not []. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the EMBL file (record 1): a feature location is not valid EMBL (it cannot be read as a position or a range). Check the file was not truncated or hand-edited, or re-export it from the tool that made it.",
+        "reason": "Biopython's own exception text for a refused location (an assert has none) is not ported; the app names the record and gives the worker's action.",
+        "issue": 796
       }
     },
     {
@@ -310,6 +386,11 @@
       "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   misc_feature    1..5,9..12\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
       "python": {
         "error": "Could not parse the EMBL file (record 1): AssertionError. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the EMBL file (record 1): a feature location is not valid EMBL (it cannot be read as a position or a range). Check the file was not truncated or hand-edited, or re-export it from the tool that made it.",
+        "reason": "Biopython's own exception text for a refused location (an assert has none) is not ported; the app names the record and gives the worker's action.",
+        "issue": 796
       }
     },
     {
@@ -317,6 +398,93 @@
       "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   )\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
       "python": {
         "error": "Could not parse the EMBL file (record 1): AssertionError. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the EMBL file (record 1): a feature location is not valid EMBL (it cannot be read as a position or a range). Check the file was not truncated or hand-edited, or re-export it from the tool that made it.",
+        "reason": "Biopython's own exception text for a refused location (an assert has none) is not ported; the app names the record and gives the worker's action.",
+        "issue": 796
+      }
+    },
+    {
+      "id": "embl_record_missing_its_xx_sq_and_terminator_swallows_the_next_record",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nID   two; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "error": "Could not parse the EMBL file (record 1): Footer format unexpected: 'FH   Key             Location/Qualifiers\n'. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the EMBL file (record 1): Footer format unexpected. Check the file was not truncated or hand-edited, or re-export it from the tool that made it.",
+        "reason": "The worker echoes the offending line of the file in this message; the app never puts file text in a message.",
+        "issue": 796
+      }
+    },
+    {
+      "id": "embl_two_xx_lines_after_the_table",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nXX\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "error": "Could not parse the EMBL file (record 1): Footer format unexpected: 'XX\n'. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the EMBL file (record 1): Footer format unexpected. Check the file was not truncated or hand-edited, or re-export it from the tool that made it.",
+        "reason": "The worker echoes the offending line of the file in this message; the app never puts file text in a message.",
+        "issue": 796
+      }
+    },
+    {
+      "id": "embl_table_then_xx_at_the_end_of_the_file",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nXX\n",
+      "python": {
+        "error": "Could not parse the EMBL file (record 1): Footer format unexpected: ''. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
+      },
+      "csharp_divergence": {
+        "error": "Could not parse the EMBL file (record 1): Footer format unexpected. Check the file was not truncated or hand-edited, or re-export it from the tool that made it.",
+        "reason": "The worker echoes the offending line of the file in this message; the app never puts file text in a message.",
+        "issue": 796
+      }
+    },
+    {
+      "id": "embl_skipped_record_id_is_the_accession_and_version",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nSQ   Sequence 0 BP;\n//\nID   two; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "Skipped EMBL record 1 (id 5 chars): no nucleotide sequence.",
+          "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_skipped_record_id_is_the_name_in_the_older_id_layout",
+      "text": "ID   shortname standard; DNA; UNC; 0 BP.\nXX\nSQ   Sequence 0 BP;\n//\nID   real standard; DNA; UNC; 8 BP.\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt                                                                  8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Skipped EMBL record 1 (id 9 chars): no nucleotide sequence.",
+          "Read 1 record(s) with 0 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_no_records_at_all",
+      "text": "nothing here\n",
+      "python": {
+        "error": "No EMBL records found in the file."
+      }
+    },
+    {
+      "id": "embl_every_record_without_a_sequence",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nSQ   Sequence 0 BP;\n//\n",
+      "python": {
+        "error": "The EMBL file has no records with a nucleotide sequence (a truncated or sequence-less export). Re-export the file from the tool that made it, with its sequence included."
       }
     }
   ]
