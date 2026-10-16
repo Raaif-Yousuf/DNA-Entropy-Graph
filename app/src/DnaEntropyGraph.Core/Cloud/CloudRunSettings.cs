@@ -9,6 +9,9 @@ internal sealed class CloudRunSettings
 {
     public TimeSpan CreateTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>Issue #92: added to a flex-start spec's wait to bound its create, so Compute Engine's own answer when the request expires arrives before the app gives up.</summary>
+    public TimeSpan FlexStartMargin { get; set; } = TimeSpan.FromMinutes(5);
+
     public TimeSpan CreateSettleTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan? UploadTimeout { get; set; }

@@ -95,6 +95,13 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the
         // backstop at the same instant.
         var plan = await PlanZonesAsync(request, spec, progress, cancellationToken).ConfigureAwait(false);
+        if (spec.FlexStart && plan.Zones.Count > 1)
+        {
+            // Issue #92: a queued request waits in the zone it was made in, so the ladder would sit in its first zone for the whole wait and never reach the rest.
+            // One zone (the best candidate) is asked; a wait that runs out is reported as the stockout it is.
+            plan = plan with { Zones = [plan.Zones[0]] };
+        }
+
         return await RunLadderAsync(request, spec, plan, progress, cancellationToken).ConfigureAwait(false);
     }
 
@@ -105,7 +112,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     private async Task<ZoneAttempt> TryZoneAsync(CloudJobRequest request, VmSpec spec, AttemptState state, RunProgress progress, CancellationToken cancellationToken)
     {
         var zone = state.Zone;
-        var createTimeout = settings.CreateTimeout;
+        // Issue #92: a queued (flex-start) create is bounded by the wait it asked for plus a margin, never by the ordinary 30 s.
+        var createTimeout = spec.FlexStart && spec.FlexStartWait is { } flexWait ? flexWait + settings.FlexStartMargin : settings.CreateTimeout;
         {
             // The kind the gateway (or the resilience pipeline in front of
             // it) already decided. Re-deriving it from the error text would
@@ -115,6 +123,11 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             var createTimedOut = false;
             Task<VmDescriptor>? createTask = null;
             progress.VmMayExist = true;
+            if (spec.FlexStart)
+            {
+                NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpu);
+            }
+
             var outcome = await OperationPoller.PollAsync<VmDescriptor>(
                 async _ =>
                 {
@@ -145,6 +158,11 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 createTimeout,
                 cancellationToken,
                 time: settings.TimeProvider).ConfigureAwait(false);
+
+            if (spec.FlexStart)
+            {
+                NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpuEnded);
+            }
 
             if (createTimedOut)
             {
@@ -205,6 +223,29 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             // stockout after trying them all is the bug this guards against.
             return ZoneAttempt.Lost(zone, kind);
         }
+    }
+
+    /// <summary>
+    /// Issue #92: tells whoever shows the run that it is (or is no longer) waiting for a card. Off the run's own path: a handler that blocks or throws costs the run nothing.
+    /// </summary>
+    private void NotifyWaiting(string jobId, RunNoticeKind kind)
+    {
+        if (settings.OnNotice is not { } handler)
+        {
+            return;
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                handler(new RunNotice(jobId, kind));
+            }
+            catch (Exception)
+            {
+                // A notice is advice for the screen; the run goes on without it.
+            }
+        });
     }
 
     /// <summary>The zones to try, in order, and whether the quota read says there is none anywhere (#670).</summary>
@@ -544,7 +585,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     {
         // Issue #91: a stopped VM does not say whether it was created Spot, and a Spot run must start a Spot VM (and an on-demand one must not
         // start a Spot VM), so a Spot run never reuses one. THEORY (unverified): reuse of an on-demand VM by a later run after a Spot run left its own stopped VM is judged by machine type only.
-        if (jobIsFinished is null || spec.Spot)
+        if (jobIsFinished is null || spec.Spot || spec.FlexStart)
         {
             return null;
         }

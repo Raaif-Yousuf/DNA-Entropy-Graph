@@ -49,6 +49,22 @@ public sealed record VmSpec(
     /// </summary>
     public bool Spot { get; init; }
 
+    /// <summary>
+    /// Issue #92: wait for a GPU (<c>scheduling.provisioningModel=FLEX_START</c>, Compute Engine's Dynamic Workload Scheduler). The create is queued until
+    /// capacity is found, for at most <see cref="FlexStartWait"/>, instead of failing at once with a stockout. Never together with <see cref="Spot"/>.
+    /// A flex VM still carries the six labels, a <c>maxRunDuration</c> and <c>instanceTerminationAction=DELETE</c> (Hard Rule 10).
+    /// </summary>
+    public bool FlexStart { get; init; }
+
+    /// <summary>Issue #92: how long the queued request may wait for capacity (the instance <c>params.requestValidForDuration</c>). Required when <see cref="FlexStart"/> is on, null otherwise.</summary>
+    public TimeSpan? FlexStartWait { get; init; }
+
+    /// <summary>
+    /// The longest a FLEX_START VM may run, and the longest its request may wait. THEORY (unverified, no live project): Compute Engine's documented cap for a
+    /// flex-start VM is seven days; docs/ToTest.md carries the row that proves it against a real project.
+    /// </summary>
+    public static readonly TimeSpan FlexStartLimit = TimeSpan.FromDays(7);
+
     /// <summary>The <c>app</c> label's fixed value - every DNA Entropy Graph resource carries the same one.</summary>
     public const string AppLabelValue = "dna-entropy-graph";
 
@@ -127,6 +143,28 @@ public sealed record VmSpec(
         if (MaxRunDuration <= TimeSpan.Zero)
         {
             throw new InvalidOperationException("VmSpec is missing a positive maxRunDuration (Hard Rule 10).");
+        }
+
+        if (FlexStart)
+        {
+            if (Spot)
+            {
+                throw new InvalidOperationException("VmSpec cannot ask for a Spot VM and a queued (flex-start) VM at once.");
+            }
+
+            if (FlexStartWait is not { } wait || wait <= TimeSpan.Zero || wait > FlexStartLimit)
+            {
+                throw new InvalidOperationException($"VmSpec's flex-start wait must be more than zero and at most {FlexStartLimit.TotalDays:0} days.");
+            }
+
+            if (MaxRunDuration > FlexStartLimit)
+            {
+                throw new InvalidOperationException($"VmSpec's maxRunDuration must be at most {FlexStartLimit.TotalDays:0} days for a flex-start VM.");
+            }
+        }
+        else if (FlexStartWait is not null)
+        {
+            throw new InvalidOperationException("VmSpec names a flex-start wait but does not ask for a flex-start VM.");
         }
 
         if (Metadata is not null)

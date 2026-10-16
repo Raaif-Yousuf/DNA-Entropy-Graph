@@ -335,7 +335,13 @@
     <value>Your project has no graphics card allowance in the places we tried. Ask Google to raise it in the Google Cloud console, then start the run again.</value>
   </data>
   <data name="RunError_stockout" xml:space="preserve">
-    <value>Google had no free graphics cards in any place we tried. Start the run again in a few minutes.</value>
+    <value>Google had no free graphics cards in any place we tried. Press Wait for a graphics card and Google will keep looking for one for you, which may take a while.</value>
+  </data>
+  <data name="RunError_stockout_waited" xml:space="preserve">
+    <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
+  </data>
+  <data name="RunNotice_WaitingForGpu" xml:space="preserve">
+    <value>Waiting for Google to free up a graphics card. This can take from a few minutes to a few hours, and the app has to stay open. Press Cancel to stop waiting.</value>
   </data>
   <data name="RunError_already_exists" xml:space="preserve">
     <value>A rented computer for this run already exists. Open the Cloud page and delete it, then start the run again.</value>
@@ -1038,6 +1044,9 @@
   </data>
   <data name="RunsRemoveButton.Content" xml:space="preserve">
     <value>Remove from list</value>
+  </data>
+  <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
+    <value>Wait for a graphics card</value>
   </data>
   <data name="RunsCopyOwnerRequestButton.Content" xml:space="preserve">
     <value>Copy request for the project owner</value>

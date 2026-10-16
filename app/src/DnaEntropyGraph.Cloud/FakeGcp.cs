@@ -941,6 +941,12 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 $"Quota exceeded for quota metric in region of zone '{zone}'. Limit: 0.0.");
         }
 
+        // Issue #92: a queued (flex-start) request is the answer to a stockout, so it is not turned away by one; it waits and is granted or expires.
+        if (spec.FlexStart && (_flexGrantAfter is not null || _flexExpireAfter is not null))
+        {
+            return CreateQueuedAsync(spec, zone, key, cancellationToken);
+        }
+
         if (Consume(_stockoutRemainingByZone, zone))
         {
             throw Build(
@@ -950,6 +956,60 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
+        return Task.FromResult(GrantCreate(spec, zone, key));
+    }
+
+    private TimeSpan? _flexGrantAfter;
+    private TimeSpan? _flexExpireAfter;
+    private readonly TaskCompletionSource _flexQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Issue #92: a flex-start create is queued (the VM exists, PROVISIONING, from the first moment, as a pending request does) and granted after
+    /// <paramref name="wait"/> of real time. A create that is not flex-start is untouched.
+    /// </summary>
+    public FakeGcp WithFlexStartGrantedAfter(TimeSpan wait)
+    {
+        _flexGrantAfter = wait;
+        _flexExpireAfter = null;
+        return this;
+    }
+
+    /// <summary>Issue #92: a flex-start create is queued and never granted: after <paramref name="wait"/> its request expires and the create fails as a stockout, leaving no VM.</summary>
+    public FakeGcp WithFlexStartExpiringAfter(TimeSpan wait)
+    {
+        _flexExpireAfter = wait;
+        _flexGrantAfter = null;
+        return this;
+    }
+
+    /// <summary>Completes when the first flex-start create has been queued.</summary>
+    public Task FlexStartQueued => _flexQueued.Task;
+
+    private async Task<VmDescriptor> CreateQueuedAsync(VmSpec spec, string zone, (string, string) key, CancellationToken cancellationToken)
+    {
+        // The pending request is on the server from now on: a caller that gives up (cancels its wait) does not remove it, only a delete or an expiry does.
+        var now = _timeProvider.GetUtcNow();
+        _vms[key] = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        _flexQueued.TrySetResult();
+        await Task.Delay(_flexGrantAfter ?? _flexExpireAfter!.Value, cancellationToken).ConfigureAwait(false);
+        if (!_vms.ContainsKey(key))
+        {
+            // Deleted while queued: the request is gone.
+            throw Build(CloudErrorKind.Other, "FLEX_START_REQUEST_CANCELLED", null, $"The request for '{spec.VmName}' was cancelled.");
+        }
+
+        if (_flexGrantAfter is null)
+        {
+            _vms.TryRemove(key, out _);
+            throw Build(CloudErrorKind.Stockout, "FLEX_START_REQUEST_EXPIRED", null, $"The request for '{spec.VmName}' waited for capacity in zone '{zone}' and was not granted in time.");
+        }
+
+        _vms.TryRemove(key, out _);
+        return GrantCreate(spec, zone, key);
+    }
+
+    private VmDescriptor GrantCreate(VmSpec spec, string zone, (string, string) key)
+    {
         var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow(), InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
         _vms[key] = vm;
         _labelFingerprints[key] = NextFingerprint();
@@ -964,18 +1024,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _spotPreemptionsLeft--;
             _preemptAt[key] = _timeProvider.GetUtcNow();
             _preemptingKeys[key] = 0;
-            return Task.FromResult(vm);
+            return vm;
         }
 
         if (!spec.Spot && _onDemandLossesLeft > 0)
         {
             _onDemandLossesLeft--;
             _preemptAt[key] = _timeProvider.GetUtcNow();
-            return Task.FromResult(vm);
+            return vm;
         }
 
         RunSimulatedWorker(spec, zone);
-        return Task.FromResult(vm);
+        return vm;
     }
 
     private readonly ConcurrentDictionary<string, string[]> _acceleratorZones = new(StringComparer.OrdinalIgnoreCase);

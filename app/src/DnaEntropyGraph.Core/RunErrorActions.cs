@@ -27,6 +27,9 @@ public enum RunErrorAction
     RestoreFile,
     CheckAccession,
     NarrowRange,
+
+    /// <summary>Issue #92: the Runs page's "Wait for a graphics card" button (a run queued by Google until a card is free).</summary>
+    WaitForGpu,
 }
 
 /// <summary>
@@ -85,7 +88,7 @@ public static class RunErrorActions
         ["billing"] = RunErrorAction.GoogleConsole,
         ["api_disabled"] = RunErrorAction.GoogleConsole,
         ["quota"] = RunErrorAction.GoogleConsole,
-        ["stockout"] = RunErrorAction.WaitAndRetry,
+        ["stockout"] = RunErrorAction.WaitForGpu,
         ["already_exists"] = RunErrorAction.OpenCloudPage,
         ["permission"] = RunErrorAction.OpenSettings,
         ["org_policy"] = RunErrorAction.AskAdministrator,
@@ -130,6 +133,7 @@ public static class RunErrorActions
         RunErrorAction.RestoreFile => ["Restore the id"],
         RunErrorAction.CheckAccession => ["Check the accession"],
         RunErrorAction.NarrowRange => ["smaller range"],
+        RunErrorAction.WaitForGpu => [resources["RunsWaitForGpuButton.Content"]],
         _ => [],
     };
 }
