@@ -12,3 +12,8 @@
 # the one the tests were written against (MEASURED 2026-09-19: a CRLF fixture
 # was committed with its CRLFs already stripped).
 worker/tests/data/malformed/** -text
+
+# Resources.resw gets a key-aware 3-way merge (scripts/resw_merge.py); a plain text merge
+# conflicts on every pair of branches that both append keys. The driver itself is configured
+# once per clone (docs/dev_commands.md); without that, git falls back to the text merge.
+app/src/DnaEntropyGraph.App/Strings/en-US/Resources.resw merge=resw

@@ -36,6 +36,7 @@ public static class RunsCopy
 
     /// <summary>The clause naming who is to receive the role (<c>{0}</c> the signed-in email), the request text's <c>{3}</c>; left out when nobody is signed in.</summary>
     public const string OwnerRequestGrantee = "Runs_OwnerRequest_Grantee";
+    public const string PresetLine = "Runs_PresetLine";
 
     public static readonly RunsMessage OwnerRequestCopied = Pair("Runs_OwnerRequest_Copied_Title", "Runs_OwnerRequest_Copied_Body", ToastSeverity.Success);
     public static readonly RunsMessage OwnerRequestCopyFailed = Pair("Runs_OwnerRequest_CopyFailed_Title", "Runs_OwnerRequest_CopyFailed_Body", ToastSeverity.Error);
@@ -89,7 +90,7 @@ public static class RunsCopy
     [
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
-        OwnerRequestActAs, OwnerRequestGrantee, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
+        OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         .. FilterKeys,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
