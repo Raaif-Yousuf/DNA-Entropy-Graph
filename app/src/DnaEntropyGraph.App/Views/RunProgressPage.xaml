@@ -30,10 +30,12 @@
         <TextBlock
             Grid.Row="1"
             Style="{StaticResource TitleTextBlockStyle}"
+            AutomationProperties.LiveSetting="Polite"
             Text="{x:Bind ViewModel.StageTitle, Mode=OneWay}" />
 
         <TextBlock
             Grid.Row="2"
+            AutomationProperties.LiveSetting="Polite"
             Text="{x:Bind ViewModel.StatusDetailText, Mode=OneWay}" />
 
         <ProgressBar
