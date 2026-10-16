@@ -146,6 +146,26 @@ def _cmd_selftest(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_health(_args: argparse.Namespace) -> int:
+    """One line of JSON for the app's local-engine health check (issue #173): the worker's own
+    version, whether the ``[evo]`` extra imports, and whether CUDA is usable. Torch is only ever
+    touched inside ``predictors/evo.py`` (Hard Rule 1), so that module answers the CUDA question.
+    Never fails: an import error or a broken driver is the answer ``false``, not a crash."""
+    import json
+
+    evo_ok = False
+    cuda_ok = False
+    try:
+        from ..predictors import evo  # imports torch and evo2
+
+        evo_ok = True
+        cuda_ok = bool(evo.probe_cuda())
+    except Exception:  # noqa: BLE001 - a missing wheel, a DLL load error or a driver fault all mean "not usable"
+        pass
+    print(json.dumps({"worker": __version__, "evo": evo_ok, "cuda": cuda_ok}))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dna-entropy-worker")
     parser.add_argument("--version", action="version", version=f"dna-entropy-worker {__version__}")
@@ -168,6 +188,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     selftest_p = sub.add_parser("selftest", help="GPU-free smoke test; prints OK and exits 0 on success.")
     selftest_p.set_defaults(func=_cmd_selftest)
+
+    health_p = sub.add_parser("health", help="Print one JSON line: worker version, evo import, CUDA usable.")
+    health_p.set_defaults(func=_cmd_health)
 
     return parser
 
