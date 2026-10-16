@@ -40,6 +40,9 @@ public enum FileAssociationRefusal
 
     /// <summary>The app runs on a sandbox profile (<c>--profile</c>); the entries live in the real user's registry, outside any profile.</summary>
     SandboxProfile,
+
+    /// <summary>The app runs in portable mode (issue #144); the entries would live in this PC's registry and point at a stick that may be gone.</summary>
+    PortableMode,
 }
 
 /// <summary>A refusal that is not a failure: nothing was written. The message is for logs; the user sees a string chosen by <see cref="Reason"/>.</summary>
@@ -56,7 +59,7 @@ public sealed class FileAssociationRefusedException(FileAssociationRefusal reaso
 /// Enable is all or nothing (a failure rolls back what was written), Disable removes the keys it created once they are empty, and
 /// both are refused on a sandbox profile, whose registry writes would land in the real user's Explorer.
 /// </summary>
-public sealed class FileAssociationService(IClassesRegistry registry, Func<string?> programPath, Func<bool>? isSandboxProfile = null)
+public sealed class FileAssociationService(IClassesRegistry registry, Func<string?> programPath, Func<bool>? isSandboxProfile = null, Func<bool>? isPortable = null)
 {
     /// <summary>The installed app's exe (Velopack <c>--mainExe</c>, ci-app.yml). Anything else is not registered.</summary>
     public const string ExecutableName = "DnaEntropyGraph.App.exe";
@@ -155,6 +158,11 @@ public sealed class FileAssociationService(IClassesRegistry registry, Func<strin
         if (isSandboxProfile?.Invoke() == true)
         {
             throw new FileAssociationRefusedException(FileAssociationRefusal.SandboxProfile);
+        }
+
+        if (isPortable?.Invoke() == true)
+        {
+            throw new FileAssociationRefusedException(FileAssociationRefusal.PortableMode);
         }
     }
 }

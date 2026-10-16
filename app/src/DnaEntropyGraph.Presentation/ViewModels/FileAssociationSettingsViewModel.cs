@@ -61,6 +61,7 @@ public sealed partial class FileAssociationSettingsViewModel : ObservableObject
             {
                 FileAssociationRefusal.NotTheAppExecutable => "OpenWithNotInstalled",
                 FileAssociationRefusal.SandboxProfile => "OpenWithSandbox",
+                FileAssociationRefusal.PortableMode => "OpenWithPortable",
                 _ => "OpenWithNotSaved",
             });
         }

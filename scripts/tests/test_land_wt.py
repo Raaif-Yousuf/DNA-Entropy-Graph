@@ -758,3 +758,20 @@ def test_rerun_flag_defaults_on_and_can_be_negated(world, monkeypatch):
     assert seen["rerun_failed_once"] is True
     assert lw.main([*base, "--no-rerun-failed-once"], repo=world.clone) == 0
     assert seen["rerun_failed_once"] is False
+
+
+def test_the_run_lock_records_the_commit_so_a_killed_run_leftover_can_be_judged_later(world):
+    """scripts/prune_worktrees.py (#794) decides whether an unreadable leftover is safe to delete from this sha."""
+    sha = world.commit_on_branch("feat/794-x", {"b.txt": b"new\n"})
+    ctx = world.ctx()
+    seen: list[dict] = []
+
+    def premerge(wt: Path, venv: Path, full: bool) -> tuple[int, str]:
+        seen.append(json.loads((ctx.tmp_root / "locks" / f"{wt.name}.json").read_text(encoding="utf-8")))
+        return 0, "PREMERGE: PASS\n"
+
+    ctx.premerge = premerge
+    body = world.root / "body.md"
+    body.write_text("body\n", encoding="utf-8", newline="\n")
+    assert lw.land(ctx, "feat/794-x", sha, "feat: x", body) == lw.EXIT_OK
+    assert seen[0]["sha"] == sha and seen[0]["pid"] == os.getpid()
