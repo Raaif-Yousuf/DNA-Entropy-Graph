@@ -1,0 +1,1 @@
+- Tools (#800): `setup_git_drivers.py` installs the Resources.resw merge driver from a copy under the git common dir and routes the file through `info/attributes`, so merging a branch older than the driver (no `scripts/resw_merge.py`, no `merge=resw` line in its tree) no longer conflicts. Re-run it once per clone.
