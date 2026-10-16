@@ -220,6 +220,54 @@
   <data name="RunProgressDeleteVm.Content" xml:space="preserve">
     <value>Delete VM now</value>
   </data>
+  <data name="RunNotice_UnknownStage" xml:space="preserve">
+    <value>the current step</value>
+  </data>
+  <data name="RunNotice_Slow" xml:space="preserve">
+    <value>{0} is taking longer than usual ({1} minutes so far). Nothing is wrong yet. Keep waiting, or press Cancel run if you would rather stop.</value>
+  </data>
+  <data name="RunNotice_Stalled" xml:space="preserve">
+    <value>The computer has stopped reporting progress during {0}. A window is asking what to do. Choose Stop, Delete or Keep waiting.</value>
+  </data>
+  <data name="StallDialog_Title" xml:space="preserve">
+    <value>This run looks stuck: {3}</value>
+  </data>
+  <data name="StallDialog_Body_Stuck" xml:space="preserve">
+    <value>The step {0} on the rented computer {2} has run far longer than it should (about {1} minutes). Stop keeps the rented computer so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_Body_Stale" xml:space="preserve">
+    <value>The rented computer {2} has stopped reporting progress during {0} (about {1} minutes). Stop keeps it so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_Body_NoHeartbeat" xml:space="preserve">
+    <value>The rented computer {2} never reported that it started working (about {1} minutes). Stop keeps it so you can look later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_RunLabel" xml:space="preserve">
+    <value>{0} (job {1})</value>
+  </data>
+  <data name="StallDialog_RunLabelNoName" xml:space="preserve">
+    <value>job {0}</value>
+  </data>
+  <data name="StallDialog_ThisComputer" xml:space="preserve">
+    <value>for this run</value>
+  </data>
+  <data name="StallConfirm_Title" xml:space="preserve">
+    <value>Delete the rented computer {2}?</value>
+  </data>
+  <data name="StallConfirm_Body" xml:space="preserve">
+    <value>The rented computer {2} and its disk will be deleted and billing for them stops. It belongs to {3}. Press Delete it to go ahead, or Keep waiting to leave it as it is. A deleted computer cannot be brought back.</value>
+  </data>
+  <data name="StallConfirm_Delete" xml:space="preserve">
+    <value>Delete it</value>
+  </data>
+  <data name="StallDialog_Stop" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="StallDialog_Delete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="StallDialog_KeepWaiting" xml:space="preserve">
+    <value>Keep waiting</value>
+  </data>
   <data name="RunProgressStayOpenBanner.Message" xml:space="preserve">
     <value>You can close the app. The run continues in the cloud and results download when you come back.</value>
   </data>
