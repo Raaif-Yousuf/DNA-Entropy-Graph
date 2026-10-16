@@ -42,6 +42,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -51,6 +52,7 @@ from land_wt import CHECKS_TIMEOUT_SECONDS, pid_alive
 
 Runner = Callable[[list[str], "Path | None"], "tuple[int, str]"]
 
+_HB_LOCK = threading.Lock()
 STDERR_MARK = "\n--- stderr ---\n"
 STALE_MARGIN_SECONDS = 30 * 60  # a runner heartbeat older than checks_timeout + this is stale (a reused pid, or a hung runner)
 _DONE_KEY = re.compile(r"(\S+) @ ([0-9A-Za-z]+)\s*$")
@@ -245,7 +247,14 @@ class State:
                 with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(json.dumps({"pid": pid, "ts": ts}))
                 return
-            cur = self.runner()
+            kind, cur = self._runner_raw()
+            if kind == "missing":
+                continue
+            if kind == "unreadable":  # held open mid-replace by its owner: it is alive, wait and look again
+                if attempt < 39:
+                    sleep(0.1)
+                    continue
+                raise AlreadyRunning("runner.json cannot be read right now. Check `status`")
             if cur is None:
                 try:
                     age = time.time() - path.stat().st_mtime
@@ -279,12 +288,24 @@ class State:
                 raise AlreadyRunning("another runner claimed this state directory at the same moment. Check `status`")
         raise AlreadyRunning("could not claim this state directory. Check `status`")
 
-    def runner(self) -> dict[str, float] | None:
+    def _runner_raw(self) -> tuple[str, dict[str, float] | None]:
+        """(`missing` | `unreadable` | `empty` | `bad` | `ok`, data). A read error is NOT an empty file: the file may be mid-replace."""
         try:
-            data = json.loads(self._read("runner.json"))
-        except ValueError:
-            return None
-        return data if isinstance(data, dict) and "pid" in data else None
+            text = self._p("runner.json").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return "missing", None
+        except OSError:
+            return "unreadable", None
+        if not text.strip():
+            return "empty", None
+        try:
+            data = json.loads(text)
+            return "ok", {"pid": int(data["pid"]), "ts": float(data.get("ts", 0))}
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return "bad", None
+
+    def runner(self) -> dict[str, float] | None:
+        return self._runner_raw()[1]
 
     def clear_runner(self, pid: int) -> None:
         cur = self.runner()
@@ -319,6 +340,7 @@ class Env:
     pid: int = field(default_factory=os.getpid)
     alive: Callable[[int], bool] = pid_alive
     ff_main: bool = False
+    heartbeat_seconds: float = 60.0
     checks_timeout: float = CHECKS_TIMEOUT_SECONDS
     known_red: tuple[str, ...] = field(default_factory=lambda: tuple(n.strip() for n in os.environ.get("KNOWN_RED", "").split(",") if n.strip()))
 
@@ -393,9 +415,14 @@ def _mergeability(env: Env, pr: str) -> str:
     return state
 
 
-def merge_green(env: Env, pr: str, known_red: Sequence[str] = ()) -> tuple[str, str]:
+def merge_green(env: Env, pr: str, known_red: Sequence[str] = (), head_oid: str | None = None) -> tuple[str, str]:
     """(`MERGED` | `DIRTY` | `PENDING` | `REFUSED`, detail). One rerun of the failed runs (flakes.log). Never merges with a check pending."""
     ignore = set(env.known_red) | set(known_red)
+    if head_oid is None:  # pin the head we are about to wait on: a later push must make the merge fail, not ride along
+        try:
+            head_oid = str(json.loads(env.run_json_text("gh", "pr", "view", pr, "--json", "headRefOid")).get("headRefOid", ""))
+        except (ValueError, AttributeError):
+            head_oid = ""
     env.sleep(20)
     checks, timed_out = _settle(env, pr)
     bad = _failing(checks, ignore)
@@ -416,7 +443,8 @@ def merge_green(env: Env, pr: str, known_red: Sequence[str] = ()) -> tuple[str, 
         return "REFUSED", "no checks were reported"
     if _mergeability(env, pr) == "DIRTY":
         return "DIRTY", ""
-    rc, out = env.run("gh", "pr", "merge", pr, "--merge")
+    pin = ["--match-head-commit", head_oid] if head_oid else []
+    rc, out = env.run("gh", "pr", "merge", pr, "--merge", *pin)
     if rc == 0:
         return "MERGED", ""
     if _mergeability(env, pr) == "DIRTY":
@@ -450,10 +478,27 @@ def _land(env: Env, it: Item, land_branch: str | None, delegate_merge: bool) -> 
     return rc, out, found[-1] if found else None
 
 
-def _find_existing_pr(env: Env, it: Item) -> tuple[str, str, str] | str | None:
-    """A PR from an earlier attempt of this item: (`OPEN`|`MERGED`, number, head ref), an error text, or None.
-    Matches the candidate head refs and requires the PR head to be this sha or contain it (land_wt merges main in, so the head
-    is usually a descendant)."""
+def _is_ancestor(env: Env, older: str, newer: str) -> bool | None:
+    """True / False, or None when git cannot tell (rc 128: an unfetchable object is unknown, not false)."""
+    rc = env.run("git", "merge-base", "--is-ancestor", older, newer)[0]
+    return True if rc == 0 else False if rc == 1 else None
+
+
+def _head_is_sha_plus_main_merges(env: Env, it: Item, oid: str) -> bool:
+    """The PR head is the item's sha plus only merge commits whose second parent is already in origin/main (what land_wt adds)."""
+    rc, out = env.run("git", "rev-list", "--first-parent", "--parents", f"{it.sha}..{oid}")
+    rows = [ln.split() for ln in out.splitlines() if ln.strip()]
+    if rc != 0 or not rows:
+        return False
+    if any(len(r) != 3 or _is_ancestor(env, r[2], "origin/main") is not True for r in rows):
+        return False
+    base = rows[-1][1]
+    return base.startswith(it.sha) or it.sha.startswith(base)
+
+
+def _find_existing_pr(env: Env, it: Item) -> tuple[str, str, str, str] | str | None:
+    """A PR from an earlier attempt of this item: (`OPEN`|`MERGED`, number, head ref, head oid), an error text, or None.
+    An open PR is resumed only when its head is this sha or this sha plus merges of main (never unverified commits)."""
     env.run("git", "fetch", "-q", "origin")
     for ref in (it.branch, f"{it.branch}-{it.sha[:7]}", f"{it.branch}-{it.sha[:7]}-r2"):
         rc, out = env.run("gh", "pr", "list", "--state", "all", "--head", ref, "--json", "number,headRefOid,state", "--limit", "20")
@@ -464,12 +509,21 @@ def _find_existing_pr(env: Env, it: Item) -> tuple[str, str, str] | str | None:
         except ValueError:
             return f"FAILED gh pr list rc={rc} printed no JSON {it.branch} @ {it.sha}"
         for row in rows if isinstance(rows, list) else []:
-            oid, state = str(row.get("headRefOid", "")), str(row.get("state", ""))
+            oid, state, num = str(row.get("headRefOid", "")), str(row.get("state", "")), str(row.get("number"))
             if state not in {"OPEN", "MERGED"}:
                 continue
-            same = bool(oid) and (oid.startswith(it.sha) or it.sha.startswith(oid))
-            if same or (oid and env.run("git", "merge-base", "--is-ancestor", it.sha, oid)[0] == 0):
-                return state, str(row.get("number")), ref
+            if oid and (oid.startswith(it.sha) or it.sha.startswith(oid)):
+                return state, num, ref, oid
+            if state == "MERGED":
+                if _is_ancestor(env, it.sha, "origin/main") is True:
+                    return state, num, ref, oid
+                anc = _is_ancestor(env, it.sha, oid) if oid else None
+                if anc is True:
+                    return state, num, ref, oid
+                if anc is None:
+                    return f"FAILED cannot verify merged PR #{num} (head not fetchable; check it by hand, then `retry`) {it.branch} @ {it.sha}"
+            elif oid and _head_is_sha_plus_main_merges(env, it, oid):
+                return state, num, ref, oid
     return None
 
 
@@ -490,12 +544,13 @@ def process_item(env: Env, it: Item) -> str:
         return found
     resume = found if found and found[0] == "OPEN" else None
     if found and found[0] == "MERGED":
-        return f"MERGED #{found[1]} {it.branch} @ {it.sha} (recovered)"
+        return f"MERGED-RECOVERED #{found[1]} {it.branch} @ {it.sha}"
     head_ref = it.branch if land_branch is None else land_branch
-    attempt = 1
+    attempt = 2 if resume and resume[2].endswith("-r2") else 1
+    resume_oid = resume[3] if resume else None
     while True:
         if resume:  # an earlier attempt left an open PR: wait on it, never open a second one
-            (_, pr, head_ref), resume = resume, None
+            (_, pr, head_ref, _oid), resume = resume, None
             rc, out, used_delegate = 0, "", False
             st.set_inflight(it, f"resuming #{pr}")
         else:
@@ -513,7 +568,8 @@ def process_item(env: Env, it: Item) -> str:
             return f"FAILED land_wt printed no PR url {it.branch} @ {it.sha}"
         else:
             st.set_inflight(it, f"waiting for checks on #{pr}")
-            verdict, detail = merge_green(env, pr, it.known_red)
+            verdict, detail = merge_green(env, pr, it.known_red, resume_oid if not used_delegate and resume_oid else None)
+            resume_oid = None
             if verdict == "MERGED":
                 return f"MERGED #{pr} {it.branch} @ {it.sha}"
         if verdict == "DIRTY" and attempt == 1 and pr:  # (c) re-land the same sha on top of the new main
@@ -536,7 +592,8 @@ def process_item(env: Env, it: Item) -> str:
 
 
 def _heartbeat(env: Env) -> None:
-    State(env.state).write_runner(env.pid, env.clock(), env.sleep)
+    with _HB_LOCK:
+        State(env.state).write_runner(env.pid, env.clock(), env.sleep)
 
 
 def _stacked_on(env: Env, failed: set[str], it: Item) -> str | None:
@@ -590,6 +647,14 @@ def drain(env: Env, *, forever: bool = False) -> None:
     st = State(env.state)
     st.claim_runner(env.pid, env.clock(), env.alive, env.stale_after, env.sleep)
     _recover_interrupted(st)
+    stop_beat = threading.Event()
+
+    def beat() -> None:
+        while not stop_beat.wait(env.heartbeat_seconds):
+            _heartbeat(env)
+
+    beater = threading.Thread(target=beat, name="land-queue-heartbeat", daemon=True)
+    beater.start()
     try:
         while True:
             _heartbeat(env)
@@ -607,7 +672,7 @@ def drain(env: Env, *, forever: bool = False) -> None:
             st.mark_taken(it)
             blocker = _stacked_on(env, st.failed_keys(), it)
             if blocker is not None:  # 3: never attempt what stands on a failure
-                st.append_done(f"SKIPPED-STACK {it.branch} @ {it.sha} (stacked on failed {blocker.replace('@', ' @ ')})")
+                st.append_done(f"SKIPPED-STACK (stacked on failed {blocker.replace('@', ' @ ')}) {it.branch} @ {it.sha}")
                 continue
             try:
                 result = process_item(env, it)
@@ -620,6 +685,8 @@ def drain(env: Env, *, forever: bool = False) -> None:
             else:
                 env.run("git", "fetch", "-q", "origin")
     finally:
+        stop_beat.set()
+        beater.join(timeout=5)
         st.clear_runner(env.pid)
 
 

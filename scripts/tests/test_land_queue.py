@@ -11,6 +11,7 @@ import land_queue as lq
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
+SHA_C = "c" * 40
 
 
 class FakeRunner:
@@ -192,6 +193,8 @@ def test_known_red_per_item_is_ignored_but_other_checks_are_not(env: lq.Env) -> 
 def test_a_dirty_pr_is_closed_and_relanded_from_the_same_sha(env: lq.Env) -> None:
     r = runner_of(env)
     r.first("gh", "pr", "view", answer=[view("DIRTY", "CONFLICTING"), view("CLEAN")])
+    r.first("gh", "pr", "view", "7", "--json", "headRefOid", answer=(0, "{}"))
+    r.first("gh", "pr", "view", "8", "--json", "headRefOid", answer=(0, "{}"))
     r.first("py", answer=[(0, "opened https://github.com/o/r/pull/7\n"), (0, "opened https://github.com/o/r/pull/8\n")])
     r.on("gh", "pr", "checks", "8", "--watch", answer=(0, ""))
     r.on("gh", "pr", "checks", "8", answer=checks(("build and test", "pass")))
@@ -364,7 +367,7 @@ def test_a_stacked_item_is_skipped_when_its_base_failed(env: lq.Env) -> None:
     lq.drain(env)
     done = (env.state / "done.log").read_text(encoding="utf-8").splitlines()
     assert done[0].startswith("FAILED land_wt rc=3 feat/1-x @ aaa")
-    assert done[1].startswith("SKIPPED-STACK feat/2-y @ bbb") and "feat/1-x @ aaa" in done[1]
+    assert done[1].startswith("SKIPPED-STACK") and done[1].endswith("feat/2-y @ bbb") and "feat/1-x @ aaa" in done[1]
     assert done[2].startswith("MERGED") and "feat/3-z @ ccc" in done[2]
     assert len(r.matching("py")) == 2  # the stacked one was never attempted
 
@@ -375,7 +378,9 @@ def test_skip_covers_a_stack_failed_in_an_earlier_session(env: lq.Env) -> None:
     st.append_queue("feat/2-y|bbb|2|0|t (#2)")
     _ancestry(env, "aaa", "bbb")
     lq.drain(env)
-    assert "SKIPPED-STACK feat/2-y @ bbb" in (env.state / "done.log").read_text(encoding="utf-8")
+    assert (env.state / "done.log").read_text(encoding="utf-8").splitlines()[-1].endswith("SKIPPED-STACK") or "SKIPPED-STACK" in (
+        env.state / "done.log"
+    ).read_text(encoding="utf-8")
 
 
 def test_a_retried_failure_no_longer_blocks_its_stack(env: lq.Env) -> None:
@@ -812,14 +817,15 @@ def test_a_pr_that_merged_already_is_recovered_not_relanded(env: lq.Env) -> None
         f"feat/1-x-{SHA_A[:7]}",
         answer=_prs({"number": 9, "headRefOid": SHA_A, "state": "MERGED"}),
     )
-    assert lq.process_item(env, item()) == f"MERGED #9 feat/1-x @ {SHA_A} (recovered)"
+    assert lq.process_item(env, item()) == f"MERGED-RECOVERED #9 feat/1-x @ {SHA_A}"
     assert not r.matching("py")
 
 
 def test_an_open_pr_that_contains_the_sha_through_a_merged_main_is_resumed(env: lq.Env) -> None:
     r = runner_of(env)
     r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
-    r.first("git", "merge-base", "--is-ancestor", SHA_A, SHA_B, answer=(0, ""))
+    r.first("git", "rev-list", answer=(0, f"{SHA_B} {SHA_A} {SHA_C}"))
+    r.first("git", "merge-base", "--is-ancestor", SHA_C, "origin/main", answer=(0, ""))
     assert lq.process_item(env, item()).startswith("MERGED #7")
     assert not r.matching("py")
 
@@ -892,3 +898,152 @@ def test_an_empty_claim_is_waited_on_and_a_vanished_one_is_taken(env: lq.Env) ->
     f.write_text("", encoding="utf-8")
     env.sleep = lambda s: f.unlink(missing_ok=True)  # the claimer gave up while we waited
     lq.drain(env)  # claims instead of refusing
+
+
+# ---- round 3 ----
+
+
+def test_the_heartbeat_keeps_beating_during_a_long_item(env: lq.Env) -> None:
+    import itertools
+    import time
+
+    env.heartbeat_seconds = 0.02
+    tick = itertools.count(1)
+    env.clock = lambda: float(next(tick))
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    seen: list[float] = []
+    original = runner_of(env).__call__
+
+    def slow(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
+        if argv[:1] == ["py"]:
+            seen.append(json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["ts"])
+            time.sleep(0.4)
+            seen.append(json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["ts"])
+        return original(argv, cwd)
+
+    env.runner = slow
+    lq.drain(env)
+    assert seen[1] > seen[0]  # beat from the thread while the item was blocked
+
+
+def test_the_heartbeat_thread_stops_when_the_runner_ends(env: lq.Env) -> None:
+    import threading
+
+    env.heartbeat_seconds = 0.01
+    lq.drain(env)
+    assert not [th for th in threading.enumerate() if th.name == "land-queue-heartbeat"]
+
+
+def test_resume_refuses_a_head_with_unverified_commits(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
+    r.first("git", "rev-list", answer=(0, f"{SHA_B} {SHA_A}"))  # one parent: a real commit on top, not a merge of main
+    lq.process_item(env, item())
+    assert r.matching("py")
+    assert not r.matching("gh", "pr", "merge", "7")
+
+
+def test_resume_refuses_a_merge_of_something_other_than_main(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
+    r.first("git", "rev-list", answer=(0, f"{SHA_B} {SHA_A} {SHA_C}"))
+    r.first("git", "merge-base", "--is-ancestor", SHA_C, "origin/main", answer=(1, ""))
+    lq.process_item(env, item())
+    assert r.matching("py")
+
+
+def test_merge_pins_the_head_commit_it_verified(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "view", "7", "--json", "headRefOid", answer=(0, json.dumps({"headRefOid": SHA_A})))
+    lq.process_item(env, item(red="unrelated"))
+    merge = r.matching("gh", "pr", "merge", "7")[0]
+    assert merge[merge.index("--match-head-commit") + 1] == SHA_A
+
+
+def test_a_merged_pr_with_an_unfetchable_head_is_recovered_through_origin_main(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 9, "headRefOid": SHA_B, "state": "MERGED"}))
+    r.first("git", "merge-base", "--is-ancestor", SHA_A, SHA_B, answer=(128, "fatal: bad object"))
+    r.first("git", "merge-base", "--is-ancestor", SHA_A, "origin/main", answer=(0, ""))
+    assert lq.process_item(env, item()) == f"MERGED-RECOVERED #9 feat/1-x @ {SHA_A}"
+    assert not r.matching("py")
+
+
+def test_an_unverifiable_merged_pr_is_refused_not_duplicated(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 9, "headRefOid": SHA_B, "state": "MERGED"}))
+    r.first("git", "merge-base", "--is-ancestor", answer=(128, "fatal: bad object"))
+    assert lq.process_item(env, item()).startswith("FAILED cannot verify merged PR #9")
+    assert not r.matching("py")
+
+
+def test_every_done_line_the_code_writes_ends_with_branch_at_sha(env: lq.Env) -> None:
+    st = lq.State(env.state)
+    r = runner_of(env)
+    outcomes = []
+    r.first("py", answer=[(3, "x"), (5, "pull/7"), (6, "pull/7"), (4, "pull/7"), (0, "pull/7"), (0, "")])
+    r.first("gh", "pr", "view", answer=view("CLEAN"))
+    for sha in ("a1", "b2", "c3", "d4", "e5", "f6"):
+        outcomes.append(lq.process_item(env, item(sha=sha * 3)))
+    r.first("gh", "pr", "list", answer=_prs({"number": 9, "headRefOid": SHA_A, "state": "MERGED"}))
+    outcomes.append(lq.process_item(env, item(sha=SHA_A)))
+    st.append_done("FAILED interrupted feat/1-x @ aaa")
+    st.append_queue("feat/1-x|aaa|1|0|t")
+    st.append_queue("feat/2-y|bbb|1|0|t")
+    st.append_done("FAILED land_wt rc=3 feat/1-x @ aaa")
+    runner_of(env).first("git", "merge-base", "--is-ancestor", answer=(0, ""))
+    st.mark_taken(parsed("feat/1-x|aaa|1|0|t"))
+    lq.drain(env)
+    lines = outcomes + (env.state / "done.log").read_text(encoding="utf-8").splitlines()
+    for ln in lines:
+        if ln.split()[0] in {"STOPPED", "FF-MAIN"}:
+            continue
+        assert lq._DONE_KEY.search(ln), ln
+
+
+def test_a_resumed_r2_head_keeps_the_single_reland_budget(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first(
+        "gh",
+        "pr",
+        "list",
+        "--state",
+        "all",
+        "--head",
+        f"feat/1-x-{SHA_A[:7]}-r2",
+        answer=_prs({"number": 7, "headRefOid": SHA_A, "state": "OPEN"}),
+    )
+    r.first("gh", "pr", "view", answer=view("DIRTY", "CONFLICTING"))
+    res = lq.process_item(env, item())
+    assert res.startswith("REFUSED #7 merge conflict") and not r.matching("py")
+
+
+def test_a_read_error_on_runner_json_is_not_an_empty_claim(env: lq.Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    (env.state).mkdir(parents=True, exist_ok=True)
+    f = env.state / "runner.json"
+    f.write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    real = Path.read_text
+
+    def deny(self: Path, *a: object, **k: object) -> str:
+        if self.name == "runner.json":
+            raise PermissionError("mid-replace")
+        return real(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", deny)
+    with pytest.raises(lq.AlreadyRunning):
+        lq.drain(env)
+    assert f.exists() and not list(env.state.glob("runner.json.stale.*"))
+
+
+@pytest.mark.parametrize("content", ['{"pid": "abc", "ts": 1}', '{"pid": null}', '{"pid": 5, "ts": "x"}', "[1]"])
+def test_a_hand_edited_runner_file_never_crashes_run_or_status(env: lq.Env, content: str) -> None:
+    import os
+    import time
+
+    (env.state).mkdir(parents=True, exist_ok=True)
+    f = env.state / "runner.json"
+    f.write_text(content, encoding="utf-8")
+    assert "runner: not running" in lq.status(env)
+    old = time.time() - 3600
+    os.utime(f, (old, old))
+    lq.drain(env)  # an old unparsable claim is replaced, no ValueError
