@@ -41,6 +41,12 @@ internal static class GoogleApiErrors
         return new RpcStatus(http, StatusNameForHttp(http), exception.Error?.Message ?? exception.Message, [], false);
     }
 
+    /// <summary>The error of a failed raw HTTP call (a gateway that sends its own request, such as Cloud Quotas): from the JSON body when Google sent one, else from the status code.</summary>
+    public static RpcStatus FromHttpResponse(int http, string? body)
+        => !string.IsNullOrWhiteSpace(body) && TryParseBody(body, http, out var parsed)
+            ? parsed
+            : new RpcStatus(http, StatusNameForHttp(http), string.IsNullOrWhiteSpace(body) ? $"HTTP {http}" : body.Length > 300 ? body[..300] : body, [], false);
+
     /// <summary>The <c>error</c> of a finished operation (a gRPC code number, a message, and the detail objects).</summary>
     public static RpcStatus FromOperationError(int? grpcCode, string? message, IEnumerable<IDictionary<string, object>>? details)
     {

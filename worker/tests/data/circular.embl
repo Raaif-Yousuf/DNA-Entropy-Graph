@@ -1,0 +1,28 @@
+ID   toy_locus; ; circular; DNA; ; UNC; 126 BP.
+XX
+AC   toy_locus;
+XX
+DE   Toy locus for DNA-Entropy GenBank tests
+XX
+KW   
+XX
+OS   .
+OC   .
+XX
+FH   Key             Location/Qualifiers
+FH
+FT   gene            1..42
+FT                   /gene="geneA"
+FT                   /locus_tag="TOY_0001"
+FT   gene            complement(85..126)
+FT                   /gene="geneB"
+FT                   /locus_tag="TOY_0002"
+FT   CDS             1..42
+FT                   /gene="geneA"
+FT                   /product="hypothetical protein"
+XX
+SQ   Sequence 126 BP; 32 A; 32 C; 31 G; 31 T; 0 other;
+     atgcgtacgt tagcactgac cggtattccg aaactggcgt aaccggttaa ccggttaacc        60
+     ggttaaccgg ttaaccggtt aaccatgaaa cgttttggca cctaaggcct taaggcctta       120
+     aggcct                                                                  126
+//

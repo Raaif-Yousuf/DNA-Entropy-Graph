@@ -42,6 +42,7 @@ from .gpu import detect_gpu
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError, StoreSpec
 from .result import InputResult, JobResult, ResultFile, ResultGpu, ResultStats, ResultTiming
+from .stage import stage_input
 from .status import (
     DEFAULT_INTERVAL_SECONDS,
     GpuInfo,
@@ -192,12 +193,18 @@ class _SharedPredictor:
             )
             restored = False
             was_empty = False
+            if self._cancel is not None:
+                # A cancel that arrived while the input was staged: no cache restore, no model load.
+                self._cancel.check_or_raise()
             if use_cache:
                 restored = self._restore_weights(cfg.model, status)
                 try:
                     was_empty = not snapshot_tree(self._hf_dir)  # type: ignore[arg-type]
                 except OSError:
                     was_empty = False
+            if self._cancel is not None:
+                # The cache restore can take minutes: look again before the longest step.
+                self._cancel.check_or_raise()
             status.update(stage="model-loading")
             try:
                 self._predictor = self._factory(cfg)
@@ -316,12 +323,12 @@ def _measure_batch_total_nt(store: Blobstore, manifest: JobManifest, tmp: Path) 
     total = 0
     for input_spec in manifest.inputs:
         try:
-            local_input = tmp / "prescan" / Path(input_spec.path).name
-            store.download_file(input_spec.path, local_input)
+            staged = stage_input(store, input_spec, tmp / "prescan", cache_dir=tmp / "entrez-cache")
             cfg = manifest.build_run_config(
                 input_spec,
-                local_input_path=str(local_input),
+                local_input_path=str(staged.local_input),
                 local_out_dir=str(tmp / "prescan-out"),
+                local_annotation_path=str(staged.local_annotation) if staged.local_annotation else None,
             )
             loaded = load_input(cfg)
             total += sum(len(c.seq) for c in loaded.contigs)
@@ -353,6 +360,7 @@ def _run_one_input(
     deadline.check_or_raise()
 
     def _on_window() -> None:
+        status.mark_progress()  # #522: the compute thread is alive and moving, unlike the heartbeat thread
         cancel.check_or_raise()
         deadline.check_or_raise()
 
@@ -370,13 +378,14 @@ def _run_one_input(
     # same as a bad sequence inside it — not crash the whole job (job_contract.md §7,
     # regression-tested by test_missing_input_file_fails_that_input_not_the_whole_job).
     try:
-        local_input = tmp / "input" / Path(input_spec.path).name
-        store.download_file(input_spec.path, local_input)
+        staged = stage_input(store, input_spec, tmp / "input", cache_dir=tmp / "entrez-cache")
+        local_input = staged.local_input
 
         cfg = manifest.build_run_config(
             input_spec,
             local_input_path=str(local_input),
             local_out_dir=str(local_out),
+            local_annotation_path=str(staged.local_annotation) if staged.local_annotation else None,
         )
         predictor = shared_predictor.get(cfg, status)
         status.update(stage="running", detail={"input": input_spec.id})
@@ -384,7 +393,10 @@ def _run_one_input(
             cfg,
             on_window=_on_window,
             on_contig=_on_contig,
-            provenance_extra={"input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest()},
+            provenance_extra={
+                "input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest(),
+                **staged.provenance_extra,
+            },
             predictor=predictor,
         )
     except JobCancelledError:
@@ -554,7 +566,11 @@ def run_job_outcome(
         )
     # issue #338: manifest.limits.cancelPollSeconds now actually reaches the throttle
     # CancelWatcher applies to its own store round-trips (see cancel.py's docstring).
-    cancel = CancelWatcher(store, poll_interval_seconds=float(manifest.limits.cancel_poll_seconds))
+    cancel = CancelWatcher(
+        store,
+        poll_interval_seconds=float(manifest.limits.cancel_poll_seconds),
+        on_seen=status.mark_cancel_seen,
+    )
     # Issue #89: limits.maxRunSeconds was parsed and never read; the worker now enforces the user's cap.
     deadline = _RunDeadline(
         float(manifest.limits.max_run_seconds), time_source, already_elapsed=vm_uptime_seconds()

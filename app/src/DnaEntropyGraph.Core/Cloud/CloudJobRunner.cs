@@ -107,8 +107,26 @@ public sealed class CloudJobRunner
     /// <summary>How long a worker heartbeat may stay unchanged before the run fails. Null means 20 times the manifest's heartbeat interval (600 s).</summary>
     public TimeSpan? HeartbeatStaleTimeout { get => _settings.HeartbeatStaleTimeout; init => _settings.HeartbeatStaleTimeout = value; }
 
+    /// <summary>How long the worker's progress fields may stay unchanged while its heartbeat ticks in the running stage before the run fails as <c>worker_progress_stalled</c> (default 20 minutes, issue #723).</summary>
+    public TimeSpan ProgressStallTimeout { get => _settings.ProgressStallTimeout; init => _settings.ProgressStallTimeout = value; }
+
     /// <summary>Per-stage deadlines replacing the defaults for the stages named (docs/job_contract.md section 5); null means the defaults.</summary>
     public IReadOnlyDictionary<string, TimeSpan>? StageDeadlines { get => _settings.StageDeadlines; init => _settings.StageDeadlines = value; }
+
+    /// <summary>Issue #675: told when a stage is taking longer than usual (75 percent of its deadline) and when a stall question opens or is withdrawn. Called on the runner's own task: a UI must marshal. A handler that throws is ignored.</summary>
+    public Action<RunNotice>? OnNotice { get => _settings.OnNotice; init => _settings.OnNotice = value; }
+
+    /// <summary>Issue #675: asked to choose Stop, Delete or Keep waiting when the heartbeat watch fires, instead of the VM being ended at once; see <see cref="StallDecision"/>. Null keeps the old behaviour.</summary>
+    public StallDecision? OnStall { get => _settings.OnStall; init => _settings.OnStall = value; }
+
+    /// <summary>Issue #675 review: how long a stall question may stay unanswered before it counts as no answer; see <see cref="CloudRunSettings.StallAnswerTimeout"/>.</summary>
+    public TimeSpan? StallAnswerTimeout { get => _settings.StallAnswerTimeout; init => _settings.StallAnswerTimeout = value; }
+
+    /// <summary>How long a cancel waits for the worker to show a sign of life after <c>control/cancel</c> is written (default 60 s, docs/job_contract.md section 6); zero turns the graceful step off.</summary>
+    public TimeSpan CancelAckTimeout { get => _settings.CancelAckTimeout; init => _settings.CancelAckTimeout = value; }
+
+    /// <summary>After the worker acknowledged a cancel, how long to wait for it to finish before the VM is deleted anyway (default 2 minutes).</summary>
+    public TimeSpan CancelFinishTimeout { get => _settings.CancelFinishTimeout; init => _settings.CancelFinishTimeout = value; }
 
     /// <summary>The longest one gateway call may take before the runner treats it as a transient failure and looks again.</summary>
     public TimeSpan CallTimeout { get => _settings.CallTimeout; init => _settings.CallTimeout = value; }
@@ -166,7 +184,7 @@ public sealed class CloudJobRunner
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
         _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync, quotaGateway, BucketLocationAsync, ClaimZoneAsync);
-        _canceller = new VmCanceller(_rows, _provisioner, _terminator);
+        _canceller = new VmCanceller(_rows, _provisioner, _terminator, new GracefulCancel(computeGateway, storageGateway, _calls, _settings));
         _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
     }

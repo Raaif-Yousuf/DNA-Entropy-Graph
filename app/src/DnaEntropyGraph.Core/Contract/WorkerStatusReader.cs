@@ -7,7 +7,7 @@ namespace DnaEntropyGraph.Core.Contract;
 /// <see cref="WorkerVersion"/> is empty in the snapshots <c>worker/vm/startup.sh</c> writes for its own infra stages
 /// (booting, installing) and filled by the container's worker, which is how the two are told apart.
 /// </summary>
-public sealed record WorkerStatusSnapshot(string? Stage, long? HeartbeatSeq, string? UpdatedAt, string? WorkerVersion, string? StageStartedAt = null, string? StartedAt = null)
+public sealed record WorkerStatusSnapshot(string? Stage, long? HeartbeatSeq, string? UpdatedAt, string? WorkerVersion, string? StageStartedAt = null, string? StartedAt = null, bool CancelSeen = false, int? WindowsDone = null, string? LastProgressAt = null)
 {
     /// <summary>True once the container's worker (not only the startup script) has written the file: its heartbeat is running.</summary>
     public bool WorkerOwned => !string.IsNullOrEmpty(WorkerVersion);
@@ -53,7 +53,10 @@ public static class WorkerStatusReader
                 ReadString(root, "updatedAt"),
                 root.TryGetProperty("worker", out var worker) && worker.ValueKind == JsonValueKind.Object ? ReadString(worker, "version") : null,
                 ReadString(root, "stageStartedAt"),
-                ReadString(root, "startedAt"));
+                ReadString(root, "startedAt"),
+                root.TryGetProperty("cancelSeen", out var seen) && seen.ValueKind == JsonValueKind.True,
+                root.TryGetProperty("windowsDone", out var windows) && windows.ValueKind == JsonValueKind.Number && windows.TryGetInt32(out var done) ? done : null,
+                ReadString(root, "lastProgressAt"));
         }
         catch (JsonException)
         {
