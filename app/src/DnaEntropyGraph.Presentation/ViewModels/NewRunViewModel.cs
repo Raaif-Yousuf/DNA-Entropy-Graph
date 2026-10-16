@@ -20,14 +20,11 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// </summary>
 public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 {
-    // The model the New run page runs. There is no model picker on the page yet (a bigger model needs a confirmation
-    // and a cost estimate first), so this is the one model the app offers, not a property nothing binds.
+    // The model the page starts with, used where a default RunOptions is wanted (the boot disk and context length defaults). The model a run
+    // really uses comes from the linked pickers (Gpu, issue #87), which start on the first model the catalog offers: this one.
     private const string DefaultModelId = "evo2_7b";
 
-    // The tier and VM kind the page's Run uses (RunOptions defaults: the cheapest GPU, on-demand), so the estimate prices the
-    // machine a run on this page really starts. When a tier or Spot picker lands it must feed both StartRunAsync and the estimate.
-    private const GpuTier DefaultTier = GpuTier.CheapestAvailable;
-    private const bool DefaultSpot = false;
+    // The tier and the VM kind (on-demand, or Spot where the tier is Spot-only) come from the Gpu pickers and feed both StartRunAsync and the estimate.
 
     // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
     private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
@@ -47,6 +44,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
     private readonly OutputSelectionStore _outputStore;
     private readonly IDiagnosticsLog _log;
+    private readonly IAccessionLookup? _accessionLookup;
     private readonly IClipboardTextReader? _clipboard;
     private readonly Func<string, string, Topology, AnnotationCheckResult> _validateAnnotation;
     private bool _applyingPreset;
@@ -104,6 +102,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         ICostEstimateService estimates,
         OutputSelectionStore outputStore,
         IDiagnosticsLog log,
+        GpuPlanViewModel gpu,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null,
         NewRunIntake? intake = null,
@@ -111,8 +110,15 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         PresetPickerViewModel? presets = null,
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
         bool? offerAnnotation = null,
+        bool? offerAccession = null,
+        IAccessionLookup? accessionLookup = null,
         RunTargetPickerViewModel? runTarget = null)
     {
+        // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
+        Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
+        Gpu.Changed += OnGpuPlanChanged;
+        OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
+        _accessionLookup = accessionLookup;
         RunTarget = runTarget;
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
@@ -172,6 +178,49 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     /// <summary>True while the worker the run starts on reads a paired GFF3 (<see cref="WorkerManifestSupport.Annotation"/>): only then does the page offer Add GFF3 and take a dropped GFF3.</summary>
     public bool OffersAnnotation { get; }
+
+    /// <summary>True while the worker the run starts on fetches an NCBI accession (<see cref="WorkerManifestSupport.Accession"/>): only then does the page offer the Fetch from NCBI box.</summary>
+    public bool OffersAccession { get; }
+
+    /// <summary>The accession typed in the Fetch from NCBI box (issue #684).</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(AddAccessionCommand))]
+    private string _accessionText = string.Empty;
+
+    /// <summary>Where in the record to start (1-based), or empty for the whole record.</summary>
+    [ObservableProperty]
+    private string _accessionStartText = string.Empty;
+
+    /// <summary>Where in the record to stop (inclusive), or empty for the whole record.</summary>
+    [ObservableProperty]
+    private string _accessionEndText = string.Empty;
+
+    /// <summary>What is wrong with the typed accession or range, with the one thing to do; empty when there is nothing to say.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAccessionMessage))]
+    private string _accessionMessage = string.Empty;
+
+    public bool HasAccessionMessage => AccessionMessage.Length > 0;
+
+    /// <summary>True while NCBI is being asked whether the typed record exists and fits (Hard Rule 2); the page shows a progress line and Add waits.</summary>
+    [ObservableProperty]
+    private bool _isCheckingAccession;
+
+    // A message is about what was typed when it was made: any edit makes it stale.
+    partial void OnAccessionTextChanged(string value) => AccessionMessage = string.Empty;
+
+    partial void OnAccessionStartTextChanged(string value) => AccessionMessage = string.Empty;
+
+    partial void OnAccessionEndTextChanged(string value) => AccessionMessage = string.Empty;
+
+    /// <summary>The linked model and graphics card pickers (issue #87): what a run uses, what it costs, and whether Run waits for a confirmation.</summary>
+    public GpuPlanViewModel Gpu { get; }
+
+    private void OnGpuPlanChanged()
+    {
+        StartRunCommand.NotifyCanExecuteChanged();
+        _ = RefreshEstimateAsync();
+    }
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -711,6 +760,92 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     private bool CanAddPasted() => !string.IsNullOrWhiteSpace(PasteText);
 
+    // Literal keys, so the wiring check (and a reader) can see every string a lookup problem can show.
+    private static string LookupProblemKey(AccessionLookupProblem problem) => problem switch
+    {
+        AccessionLookupProblem.NotFound => "NewRunAccessionLookup_NotFound",
+        AccessionLookupProblem.RangeOutsideRecord => "NewRunAccessionLookup_RangeOutsideRecord",
+        AccessionLookupProblem.TooLarge => "NewRunAccessionLookup_TooLarge",
+        AccessionLookupProblem.RateLimited => "NewRunAccessionLookup_RateLimited",
+        AccessionLookupProblem.NcbiTrouble => "NewRunAccessionLookup_NcbiTrouble",
+        AccessionLookupProblem.TimedOut => "NewRunAccessionLookup_TimedOut",
+        _ => "NewRunAccessionLookup_Unreachable",
+    };
+
+    private bool CanAddAccession() => OffersAccession && !string.IsNullOrWhiteSpace(AccessionText);
+
+    /// <summary>
+    /// Fetch from NCBI (issue #684): checks the typed accession and range with the worker's own rules (Hard Rule 2), and makes a pill the run
+    /// fetches on the VM. A problem stays in the box with one line to fix it; nothing is requested from NCBI on this PC.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanAddAccession))]
+    private async Task AddAccessionAsync()
+    {
+        var check = AccessionInput.Check(AccessionText, AccessionStartText, AccessionEndText);
+        if (check.Problem is { } problem)
+        {
+            AccessionMessage = _strings.GetString(problem switch
+            {
+                AccessionProblem.RangeIncomplete => "NewRunAccessionProblem_RangeIncomplete",
+                AccessionProblem.RangeInvalid => "NewRunAccessionProblem_RangeInvalid",
+                _ => "NewRunAccessionProblem_NotAnAccession",
+            });
+            return;
+        }
+
+        if (Items.Any(item => item.IsAccession && item.Accession == check.Accession && item.AccessionRange == check.Range))
+        {
+            AccessionMessage = _strings.GetString("NewRunAccessionAlreadyAdded");
+            return;
+        }
+
+        // Hard Rule 2: one small request to NCBI from this PC (the same one the run makes again before it starts), so a typo that happens to be a
+        // well-formed accession, or a record the worker will not read, is told here and not after a rented computer is billed. Its answer also gives
+        // the pill a length, which the cost estimate needs.
+        long? length = null;
+        if (_accessionLookup is not null)
+        {
+            AccessionMessage = string.Empty;
+            IsCheckingAccession = true;
+            try
+            {
+                var found = await _accessionLookup.LookupAsync(check.Accession, check.Range, CancellationToken.None);
+                if (found.Problem is { } lookupProblem)
+                {
+                    AccessionMessage = _strings.GetString(LookupProblemKey(lookupProblem));
+                    return;
+                }
+
+                length = found.Length;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _log.Warning("new-run", null, ErrorClass(exception));
+                AccessionMessage = _strings.GetString(LookupProblemKey(AccessionLookupProblem.Unreachable));
+                return;
+            }
+            finally
+            {
+                IsCheckingAccession = false;
+            }
+        }
+
+        var pill = InputPillItem.ForAccession(check.Accession, check.Range, _strings);
+        if (length is { } bases)
+        {
+            pill.ApplyAccessionLength(bases);
+        }
+
+        Items.Add(pill);
+        SelectedItem ??= pill;
+        AccessionText = string.Empty;
+        AccessionStartText = string.Empty;
+        AccessionEndText = string.Empty;
+        AccessionMessage = string.Empty;
+        RefreshOutputChoices();
+        StartRunCommand.NotifyCanExecuteChanged();
+    }
+
     [RelayCommand(CanExecute = nameof(CanRemoveItem), AllowConcurrentExecutions = true)]
     private async Task RemoveItemAsync(InputPillItem? item)
     {
@@ -751,10 +886,14 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         var outputs = _outputSelections[group];
         var options = new RunOptions
         {
-            ModelId = DefaultModelId,
+            ModelId = Gpu.ModelId,
             RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
-            InputPath = SelectedItem!.Path,
+            GpuTier = Gpu.Tier,
+            SpotVm = Gpu.RequiresSpot,
+            InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
             AnnotationPath = SelectedItem.AnnotationPath,
+            Accession = SelectedItem.Accession,
+            AccessionRange = SelectedItem.AccessionRange,
             TreatAsRna = IsTreatingAsRna,
             Direction = Presets?.Direction ?? Direction.BothCombined,
             ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
@@ -807,12 +946,12 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen;
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && Gpu.IsRunnable;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
         IsTreatingAsRna = value;
-        foreach (var item in Items.ToList())
+        foreach (var item in Items.Where(i => !i.IsAccession).ToList())
         {
             if (cancellationToken.IsCancellationRequested)
             {
@@ -945,7 +1084,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         string diskText;
         try
         {
-            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
+            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(Gpu.Tier), Gpu.RequiresSpot, bases, DefaultBootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))

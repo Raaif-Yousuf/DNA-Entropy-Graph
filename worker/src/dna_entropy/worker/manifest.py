@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from ..analysis.composition import DEFAULT_GC_WINDOW
 from ..analysis.regions import (
     DEFAULT_MERGE_GAP,
     DEFAULT_MIN_LENGTH,
@@ -37,6 +38,8 @@ from ..analysis.regions import (
 from ..analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS, validate_smoothing_windows
 from ..config import AmbiguityPolicy, Direction, PredictorKind, RunConfig, Topology, TrackFormat
 from ..predictors.hardware import MODEL_REQUIREMENTS, model_requirement
+from ..readers import entrez
+from ..validation.validators import ValidationError
 from .batch_limits import DEFAULT_MAX_INPUTS, DEFAULT_MAX_TOTAL_NT
 
 # Exactly one schema version exists today (job_contract.md §8). A worker that sees a
@@ -94,15 +97,39 @@ _FASTA_RECORDS_VALUES: frozenset[str] = frozenset({"all", "first"})
 # all (see build_run_config's own note). Validated here the same way as everywhere else.
 _TRACK_FORMAT_VALUES: dict[str, TrackFormat] = {t.value: t for t in TrackFormat}
 
+# issue #704: inputs[].informat. "auto" sniffs; the rest force a reader (readers/input.py).
+_INFORMAT_VALUES: tuple[str, ...] = ("auto", "genbank", "fasta", "paste", "embl", "snapgene")
+
+
+def _optional_text(d: dict, key: str, *, where: str) -> str | None:
+    """An optional non-empty string field: absent -> None; anything else that is not a
+    non-empty string (a bool, a number, a list, "") is refused rather than coerced."""
+    if key not in d:
+        return None
+    raw = d[key]
+    if not isinstance(raw, str) or not raw.strip():
+        raise ManifestError(f"manifest.json {where}.{key} must be a non-empty string, got {raw!r}")
+    return raw
+
+
+def parse_accession_range(text: str) -> tuple[int, int]:
+    """``"100-500"`` (or ``"100..500"``) -> ``(100, 500)``; raises :class:`ManifestError`."""
+    parts = text.replace("..", "-").split("-")
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        raise ManifestError(f"manifest.json inputs[].accessionRange {text!r} must look like 100-500")
+    return int(parts[0]), int(parts[1])
+
 
 @dataclass
 class InputSpec:
     """One entry of ``manifest.json``'s ``inputs`` array."""
 
     id: str
-    path: str  # store-relative, e.g. "input/SetTnpB-Evo.gb"
     name: str
-    informat: str = "auto"  # auto | genbank | fasta | paste
+    # store-relative, e.g. "input/SetTnpB-Evo.gb". Required unless `accession` is given (#133),
+    # which the worker fetches from NCBI itself; then it is empty.
+    path: str = ""
+    informat: str = "auto"  # auto | genbank | fasta | paste | embl | snapgene
     start: int = 1
     rna: bool = False
     genes: bool = False
@@ -119,6 +146,14 @@ class InputSpec:
     fasta_records: str = field(
         default="all", metadata={"json_name": "fastaRecords"}
     )  # all | first (D14: "all" is the default; "first" is parity-only)
+    # issue #704 / #135: store-relative object name of a GFF3 staged beside a FASTA input; its
+    # genes replace Prodigal (RunConfig.annotation_path). Absent means none.
+    annotation: str | None = None
+    # issue #704 / #133: an NCBI accession the worker fetches (Entrez, keyless) when `path` is
+    # absent, and an optional "start-end" (1-based, inclusive) range of it. The NCBI API key is
+    # never part of the manifest (docs/job_contract.md section 3).
+    accession: str | None = None
+    accession_range: str | None = field(default=None, metadata={"json_name": "accessionRange"})
 
     @staticmethod
     def from_dict(d: dict) -> InputSpec:
@@ -135,16 +170,57 @@ class InputSpec:
             raise ManifestError(
                 f"manifest.json inputs[].fastaRecords {raw_fasta_records!r} is not one of {valid}"
             )
+        informat = str(d.get("informat", "auto"))
+        if informat not in _INFORMAT_VALUES:
+            raise ManifestError(
+                f"manifest.json inputs[].informat {informat!r} is not one of {sorted(_INFORMAT_VALUES)}"
+            )
+        annotation = _optional_text(d, "annotation", where="inputs[]")
+        accession = _optional_text(d, "accession", where="inputs[]")
+        range_text = _optional_text(d, "accessionRange", where="inputs[]")
+        if accession is None:
+            if range_text is not None:
+                raise ManifestError("manifest.json inputs[].accessionRange needs inputs[].accession")
+            path = str(_require(d, "path", where="inputs[]"))
+        else:
+            if d.get("path"):
+                raise ManifestError(
+                    "manifest.json inputs[] has both path and accession: use one (an accession "
+                    "input is fetched by the worker, so it has no path)"
+                )
+            if informat not in ("auto", "genbank"):
+                raise ManifestError(
+                    f"manifest.json inputs[].informat {informat!r} cannot be combined with accession "
+                    "(a fetched record is always GenBank; use auto or genbank)"
+                )
+            if annotation is not None:
+                raise ManifestError(
+                    "manifest.json inputs[].annotation cannot be combined with accession "
+                    "(a GFF3 pairs with a FASTA file, and a fetched record is GenBank)"
+                )
+            span = parse_accession_range(range_text) if range_text is not None else (None, None)
+            try:
+                accession = entrez.validate_request(accession, span[0], span[1])
+            except ValidationError as exc:
+                raise ManifestError(f"manifest.json inputs[].accession or accessionRange: {exc}") from exc
+            path = ""
+        if annotation is not None and informat in ("genbank", "embl", "snapgene"):
+            raise ManifestError(
+                f"manifest.json inputs[].annotation needs a FASTA input, but informat is {informat!r}"
+            )
         return InputSpec(
             id=str(_require(d, "id", where="inputs[]")),
-            path=str(_require(d, "path", where="inputs[]")),
+            path=path,
             name=str(_require(d, "name", where="inputs[]")),
-            informat=str(d.get("informat", "auto")),
+            informat=informat,
             start=int(d.get("start", 1)),
             rna=bool(d.get("rna", False)),
             genes=bool(d.get("genes", False)),
             ambiguity_policy=policy,
             fasta_records=raw_fasta_records,
+            annotation=annotation,
+            accession=accession,
+            accession_range=range_text,
         )
 
 
@@ -220,6 +296,10 @@ class AnalysisSpec:
     region_min_length: int = field(default=DEFAULT_MIN_LENGTH, metadata={"json_name": "regionMinLength"})
     region_merge_gap: int = field(default=DEFAULT_MERGE_GAP, metadata={"json_name": "regionMergeGap"})
 
+    # issue #704 / #191: the GC-percent track's centred window, in bases (odd); read only when
+    # the `gc` output is named.
+    gc_window: int = field(default=DEFAULT_GC_WINDOW, metadata={"json_name": "gcWindow"})
+
     # issue #126: window sizes (odd numbers of bases) of the smoothed entropy tracks; [] = none.
     smoothing_windows: list[int] = field(
         default_factory=lambda: list(DEFAULT_SMOOTHING_WINDOWS), metadata={"json_name": "smoothingWindows"}
@@ -255,6 +335,13 @@ class AnalysisSpec:
             smoothing_windows = list(validate_smoothing_windows(raw_windows))
         except ValueError as exc:
             raise ManifestError(f"manifest.json analysis.smoothingWindows: {exc}") from exc
+        gc_window = d.get("gcWindow", DEFAULT_GC_WINDOW)
+        if isinstance(gc_window, bool) or not isinstance(gc_window, int):
+            raise ManifestError(f"manifest.json analysis.gcWindow {gc_window!r} must be an odd whole number")
+        try:
+            validate_smoothing_windows([gc_window])
+        except ValueError as exc:
+            raise ManifestError(f"manifest.json analysis.gcWindow: {exc}") from exc
         region_threshold = _region_number(d, "regionThreshold", DEFAULT_THRESHOLD_BITS, whole=False)
         region_min_length = _region_number(d, "regionMinLength", DEFAULT_MIN_LENGTH, whole=True)
         region_merge_gap = _region_number(d, "regionMergeGap", DEFAULT_MERGE_GAP, whole=True)
@@ -297,6 +384,7 @@ class AnalysisSpec:
             track_format=track_format,
             topology=topology,
             smoothing_windows=smoothing_windows,
+            gc_window=gc_window,
             region_threshold=region_threshold,
             region_min_length=region_min_length,
             region_merge_gap=region_merge_gap,
@@ -382,6 +470,27 @@ class WorkerRef:
 
 
 @dataclass
+class PresetSpec:
+    """``manifest.json``'s optional ``preset`` (issue #704 / #136): which option preset the app
+    used. Provenance only: the options themselves are already in the other fields."""
+
+    id: str
+    name: str
+
+    @staticmethod
+    def from_dict(d: object) -> PresetSpec:
+        if not isinstance(d, dict):
+            raise ManifestError(f"manifest.json preset must be an object with id and name, got {d!r}")
+        out: dict[str, str] = {}
+        for key in ("id", "name"):
+            raw = d.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                raise ManifestError(f"manifest.json preset.{key} must be a non-empty string, got {raw!r}")
+            out[key] = raw
+        return PresetSpec(id=out["id"], name=out["name"])
+
+
+@dataclass
 class JobManifest:
     """A fully parsed, validated ``manifest.json``."""
 
@@ -395,6 +504,7 @@ class JobManifest:
     lifecycle: Lifecycle
     store: StoreSpec
     worker: WorkerRef = field(default_factory=WorkerRef)
+    preset: PresetSpec | None = None
 
     @staticmethod
     def parse(text: str) -> JobManifest:
@@ -425,6 +535,7 @@ class JobManifest:
         lifecycle = Lifecycle.from_dict(d.get("lifecycle", {}))
         store = StoreSpec.from_dict(_require(d, "store", where=""))
         worker = WorkerRef.from_dict(d.get("worker", {}))
+        preset = PresetSpec.from_dict(d["preset"]) if "preset" in d else None
 
         return JobManifest(
             schema=schema,
@@ -437,6 +548,7 @@ class JobManifest:
             lifecycle=lifecycle,
             store=store,
             worker=worker,
+            preset=preset,
         )
 
     def build_run_config(
@@ -445,6 +557,7 @@ class JobManifest:
         *,
         local_input_path: str,
         local_out_dir: str,
+        local_annotation_path: str | None = None,
     ) -> RunConfig:
         """Build the :class:`~dna_entropy.config.RunConfig` for one input, given where the
         runner has already staged it locally (via the blobstore) and where local outputs
@@ -462,6 +575,11 @@ class JobManifest:
         fewer files on disk, not the full set regardless.
         """
         informat = None if input_spec.informat == "auto" else input_spec.informat
+        if input_spec.annotation is not None and local_annotation_path is None:
+            raise ManifestError(
+                f"inputs[{input_spec.id}].annotation is declared but was not staged "
+                "(pass local_annotation_path)"
+            )
         outputs_specified = bool(self.outputs)
 
         def _wanted(name: str) -> bool:
@@ -530,4 +648,11 @@ class JobManifest:
             region_min_length=self.analysis.region_min_length,
             region_merge_gap=self.analysis.region_merge_gap,
             include_gene_summary=_wanted("gene_summary"),
+            # issue #704 / #135, #191, #136
+            annotation_path=local_annotation_path if input_spec.annotation is not None else None,
+            include_gc="gc" in self.outputs,  # opt-in only, like probs
+            gc_window=self.analysis.gc_window,
+            include_codons="codons" in self.outputs,
+            preset_id=self.preset.id if self.preset else None,
+            preset_name=self.preset.name if self.preset else None,
         )
