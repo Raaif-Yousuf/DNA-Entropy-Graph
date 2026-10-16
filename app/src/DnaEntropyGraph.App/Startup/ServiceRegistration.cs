@@ -197,6 +197,7 @@ public static class ServiceRegistration
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IRunHistoryRemover>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
+        services.AddSingleton<IRunAnnotations>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
         services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
             sp.GetRequiredService<IRunInputStore>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),

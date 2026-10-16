@@ -37,8 +37,12 @@ A run that failed shows, under its status, a short plain explanation of why and 
 to do about it. A run that finished but needs your attention (for example, your results are
 saved but we could not confirm the rented computer shut down) shows the same kind of note.
 
-Use the search box to find a run by its name, its input file name or its id, and the status
+Use the search box to find a run by its name, its input file name, its id, its note or its tags (capitals do not matter), and the status
 box to show only running, completed, failed or cancelled runs.
+
+## Notes and tags
+
+Open a run's results and use **Your notes** to write a note (for example, "the clone that failed sequencing") and tags separated by commas (for example, "clone7, redo"). Press **Save notes**; the page says **Saved.** when it is stored with the run on this computer. Tags show as small chips on the run's row on the Runs page, with the start of the note under them, and typing a word of a note or a tag into the search box shows only the runs that carry it. A note stays on this computer; it is never sent to Google Cloud.
 
 ### Messages from the app
 

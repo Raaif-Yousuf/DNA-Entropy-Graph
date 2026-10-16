@@ -755,7 +755,7 @@
     <value>This removes the run from this list only. Its files and cloud copy are not deleted. Choose Continue to go ahead.</value>
   </data>
   <data name="RunsSearchBox.PlaceholderText" xml:space="preserve">
-    <value>Search by name, file or id</value>
+    <value>Search by name, file, note or tag</value>
   </data>
   <data name="RunsSearchBox.AutomationProperties.Name" xml:space="preserve">
     <value>Search runs</value>
@@ -2818,5 +2818,32 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
     <value>Wait for a graphics card</value>
+  </data>
+  <data name="Results_NotesSaved" xml:space="preserve">
+    <value>Saved.</value>
+  </data>
+  <data name="Results_NotesSaveFailed" xml:space="preserve">
+    <value>Could not save your note. Press Save notes to try again; if it keeps failing, close any other window of this app and try once more.</value>
+  </data>
+  <data name="ResultsNotesHeading.Text" xml:space="preserve">
+    <value>Your notes</value>
+  </data>
+  <data name="ResultsNotesBox.Header" xml:space="preserve">
+    <value>Note</value>
+  </data>
+  <data name="ResultsNotesBox.PlaceholderText" xml:space="preserve">
+    <value>For example: the clone that failed sequencing</value>
+  </data>
+  <data name="ResultsTagsBox.Header" xml:space="preserve">
+    <value>Tags (separate with commas)</value>
+  </data>
+  <data name="ResultsTagsBox.PlaceholderText" xml:space="preserve">
+    <value>For example: clone7, redo</value>
+  </data>
+  <data name="ResultsSaveNotesButton.Content" xml:space="preserve">
+    <value>Save notes</value>
+  </data>
+  <data name="RunsTagChip.AutomationProperties.Name" xml:space="preserve">
+    <value>Tag</value>
   </data>
 </root>

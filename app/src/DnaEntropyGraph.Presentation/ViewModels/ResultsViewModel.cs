@@ -37,6 +37,30 @@ public sealed partial class ResultsViewModel : ObservableObject
     private IReadOnlyList<RunOutputFile> _outputFiles = [];
     private string? _folder;
     private int _loadGeneration;
+    private readonly IRunAnnotations? _annotations;
+    private string? _annotationsJobId;
+
+    // Issue #141: the run's own notes and tags, edited here. TagsText is the one-line form ("clone7, redo").
+    [ObservableProperty]
+    private string _notesText = string.Empty;
+
+    [ObservableProperty]
+    private string _tagsText = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAnnotationsStatus))]
+    private string _annotationsStatusText = string.Empty;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SaveAnnotationsCommand))]
+    private bool _canEditAnnotations;
+
+    // A "Saved" left on screen after the next keystroke would be a lie.
+    partial void OnNotesTextChanged(string value) => AnnotationsStatusText = string.Empty;
+
+    partial void OnTagsTextChanged(string value) => AnnotationsStatusText = string.Empty;
+
+    public bool HasAnnotationsStatus => AnnotationsStatusText.Length > 0;
 
     [ObservableProperty]
     private string _title = string.Empty;
@@ -64,8 +88,10 @@ public sealed partial class ResultsViewModel : ObservableObject
         IStringResourceProvider strings,
         IExternalViewerOpener viewers,
         IEntropyOverviewSource? overviewSource = null,
-        IOverviewImageExporter? imageExporter = null)
+        IOverviewImageExporter? imageExporter = null,
+        IRunAnnotations? annotations = null)
     {
+        _annotations = annotations;
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
         _runRepository = runRepository;
@@ -125,6 +151,12 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
+
+            // Issue #141: the note belongs to the run, not to its folder, so it shows (and saves) even when the folder is gone.
+            _annotationsJobId = run.JobId;
+            NotesText = run.Notes ?? string.Empty;
+            TagsText = RunTags.Format(RunTags.Parse(run.TagsJson));
+            CanEditAnnotations = _annotations is not null;
             var folder = run.OutputDir;
 
             // Listing a folder and reading its summaries is disk work (maybe a network drive): off the UI thread.
@@ -171,6 +203,11 @@ public sealed partial class ResultsViewModel : ObservableObject
         _folder = null;
         _outputFiles = [];
         Title = string.Empty;
+        _annotationsJobId = null;
+        NotesText = string.Empty;
+        TagsText = string.Empty;
+        AnnotationsStatusText = string.Empty;
+        CanEditAnnotations = false;
         Overview = null;
         NoticeText = string.Empty;
         StatsNoticeText = string.Empty;
@@ -357,6 +394,35 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         var safe = new string([.. contigName.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' ? c : '_')]).Trim('.');
         return safe.Length == 0 ? "entropy" : safe.Replace("..", "_");
+    }
+
+    /// <summary>
+    /// Issue #141: saves the note and tags of this run. Writes only those two columns (through <see cref="IRunAnnotations"/>), so a
+    /// phase change landing at the same moment is never overwritten. A failure keeps what was typed and says so.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanEditAnnotations))]
+    private async Task SaveAnnotationsAsync(CancellationToken cancellationToken)
+    {
+        if (_annotations is null || _annotationsJobId is not { } jobId)
+        {
+            return;
+        }
+
+        var notes = string.IsNullOrWhiteSpace(NotesText) ? null : NotesText.Trim();
+        var tags = RunTags.ParseInput(TagsText);
+        try
+        {
+            await _annotations.UpdateAsync(jobId, notes, RunTags.Serialize(tags), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaveFailed);
+            return;
+        }
+
+        NotesText = notes ?? string.Empty;
+        TagsText = RunTags.Format(tags);
+        AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaved);
     }
 
     [RelayCommand]

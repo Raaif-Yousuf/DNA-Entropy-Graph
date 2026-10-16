@@ -271,7 +271,8 @@ public sealed partial class HistoryViewModel : ObservableObject
         var inputName = options?.InputPath;
         return Contains(run.Name, text) || Contains(run.JobId, text) || Contains(run.Notes, text)
                || Contains(string.IsNullOrWhiteSpace(inputName) ? null : Path.GetFileName(inputName), text)
-               || Contains(options?.Accession, text) || Contains(options?.AccessionRange, text);
+               || Contains(options?.Accession, text) || Contains(options?.AccessionRange, text)
+               || RunTags.Parse(run.TagsJson).Any(tag => Contains(tag, text));
 
         static bool Contains(string? haystack, string needle) => haystack?.Contains(needle, StringComparison.OrdinalIgnoreCase) == true;
     }
@@ -308,15 +309,17 @@ public sealed partial class HistoryViewModel : ObservableObject
             WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
+            Tags = RunTags.Parse(run.TagsJson),
+            NotesText = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes,
             IsImported = run.Imported,
             ImportedText = run.Imported ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
         };
     }
 
-    /// <summary>The "Preset: name" line of a run started from an option preset (issue #136), read from the options the run recorded.</summary>
     private static string ShortInstallation(string? id) => string.IsNullOrWhiteSpace(id) ? "?" : id.Length > 8 ? id[..8] : id;
 
+    /// <summary>The "Preset: name" line of a run started from an option preset (issue #136), read from the options the run recorded.</summary>
     private string? PresetLine(RunRecord run)
         => RunOptionsJson.TryDeserialize(run.OptionsJson)?.PresetName is { Length: > 0 } name
             ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.PresetLine), name)

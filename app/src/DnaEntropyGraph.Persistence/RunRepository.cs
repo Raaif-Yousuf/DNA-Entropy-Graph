@@ -11,7 +11,7 @@ namespace DnaEntropyGraph.Persistence;
 /// <c>CreatedAt</c>) rather than relying on Dapper's implicit name matching,
 /// so a rename on either side is a compile error here, not a silent NULL.
 /// </summary>
-public sealed class RunRepository : IRunRepository, IRunHistoryRemover
+public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnnotations
 {
     private const string SelectAllSql = """
         SELECT Id, Name, IsBatch, Target, Phase, ErrorCode, ErrorDetail, CreatedAt, StartedAt, VmReadyAt, FinishedAt,
@@ -31,8 +31,8 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
     // Upsert overwrote these columns, the very next phase change after a
     // user typed a note would silently erase it - a wired-to-nothing bug
     // that would not show up until someone actually used the feature.
-    // When #141 is built, it gets its own UpdateNotesAsync/UpdateTagsAsync
-    // rather than going through this general Upsert.
+    // Issue #141: notes and tags are written by UpdateAsync (IRunAnnotations),
+    // which writes only those two columns, never through this general Upsert.
     private const string UpsertSql = """
         INSERT INTO Runs (
             Id, Name, IsBatch, Target, Phase, ErrorCode, ErrorDetail, CreatedAt, StartedAt, VmReadyAt, FinishedAt,
@@ -133,6 +133,17 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
 
             throw;
         }
+    }
+
+    /// <summary>Issue #141: writes only Notes and TagsJson, so it can neither overwrite a concurrent phase write nor be overwritten by one.</summary>
+    public async Task UpdateAsync(string jobId, string? notes, string? tagsJson, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(
+            "UPDATE Runs SET Notes = @Notes, TagsJson = @TagsJson WHERE Id = @Id;",
+            new { Id = jobId, Notes = notes, TagsJson = tagsJson },
+            cancellationToken: cancellationToken);
+        await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 
     public async Task DeleteAsync(string jobId, CancellationToken cancellationToken)
