@@ -31,9 +31,25 @@
                 Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasRetryAction), Mode=OneWay}" />
         </StackPanel>
 
-        <wv2:WebView2
-            x:Name="Viewer"
-            Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.IsViewerVisible), Mode=OneWay}" />
+        <Grid
+            RowSpacing="8"
+            Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.IsViewerVisible), Mode=OneWay}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <ComboBox
+                x:Name="ContigSelector"
+                x:Uid="ViewerContigSelector"
+                MinWidth="240"
+                ItemsSource="{x:Bind ViewModel.Contigs}"
+                SelectedItem="{x:Bind ViewModel.SelectedContig, Mode=TwoWay}"
+                DisplayMemberPath="Name"
+                Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasContigs), Mode=OneWay}" />
+            <wv2:WebView2
+                x:Name="Viewer"
+                Grid.Row="1" />
+        </Grid>
 
         <StackPanel
             HorizontalAlignment="Center"

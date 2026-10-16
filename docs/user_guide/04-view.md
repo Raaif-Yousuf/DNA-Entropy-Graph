@@ -131,6 +131,12 @@ It works with no internet connection, because everything it needs ships inside t
 reads your results from the folder on your computer. It follows the app's light or dark
 theme.
 
+If your file holds more than one sequence record, a **Sequence record** list appears above
+the viewer. Choose a record and the viewer jumps straight to it. For a run that read both
+directions and combined them, the viewer also marks the seam (see above) with a thin red
+band at that base on each record; point at it to read what it means. A run that has no
+seam shows no marker.
+
 Open it from a finished run with the **Open viewer** button on the run page. If the viewer
 says it could not draw the run, choose **Try again**. Sequences larger than 50 MB are too
 big for the built-in viewer; open the sequence file and the entropy track in IGV on your

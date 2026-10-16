@@ -352,6 +352,15 @@
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>
   </data>
+  <data name="ViewerContigSelector.Header" xml:space="preserve">
+    <value>Sequence record</value>
+  </data>
+  <data name="ViewerContigSelector.PlaceholderText" xml:space="preserve">
+    <value>Choose a record to jump to</value>
+  </data>
+  <data name="ViewerSeamLabel" xml:space="preserve">
+    <value>Where the reverse read hands over to the forward read</value>
+  </data>
   <data name="RunProgressOpenViewer.Content" xml:space="preserve">
     <value>Open viewer</value>
   </data>
