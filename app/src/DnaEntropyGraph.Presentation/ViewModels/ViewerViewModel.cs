@@ -3,6 +3,7 @@ using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Tracks;
+using DnaEntropyGraph.Core.Viewers;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.Viewer;
 
@@ -18,6 +19,7 @@ public enum ViewerStatus
     NoEntropyTrack,
     AmbiguousSequenceFile,
     SequenceTooLarge,
+    IndexFailed,
     Loading,
     Ready,
     ViewerError,
@@ -43,6 +45,9 @@ public sealed partial class ViewerViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly IEntropyOverviewSource _overviewSource;
     private readonly long _maxFastaBytes;
+    private readonly IFastaIndexStore? _indexStore;
+    private readonly long _maxIndexedBytes;
+    private int _openGeneration;
     private int _contigGeneration;
     private int _fallbackGeneration;
     private bool _settingSelection;
@@ -115,8 +120,12 @@ public sealed partial class ViewerViewModel : ObservableObject
         IWebViewRuntimeProbe probe,
         IStringResourceProvider strings,
         IEntropyOverviewSource overviewSource,
-        long maxFastaBytes = ViewerLimits.MaxFastaBytes)
+        long maxFastaBytes = ViewerLimits.MaxFastaBytes,
+        IFastaIndexStore? indexStore = null,
+        long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes)
     {
+        _indexStore = indexStore;
+        _maxIndexedBytes = maxIndexedBytes;
         _probe = probe;
         _strings = strings;
         _overviewSource = overviewSource;
@@ -196,8 +205,13 @@ public sealed partial class ViewerViewModel : ObservableObject
     /// <summary><see cref="ActionUrl"/> as a <see cref="Uri"/> (what a XAML <c>NavigateUri</c> binds to).</summary>
     public Uri? ActionUri => ActionUrl is null ? null : new Uri(ActionUrl);
 
+    /// <summary>Completes when the index of a long FASTA (issue #497) of the last <see cref="OpenRun"/> is built and applied; already complete when none was needed.</summary>
+    public Task OpenReady { get; private set; } = Task.CompletedTask;
+
     public void OpenRun(string? runFolder)
     {
+        _openGeneration++;
+        OpenReady = Task.CompletedTask;
         _lastRunFolder = runFolder;
         _fallbackGeneration++; // a slow fallback read for the previous run must not land on this one
         if (string.IsNullOrWhiteSpace(runFolder))
@@ -214,6 +228,41 @@ public sealed partial class ViewerViewModel : ObservableObject
         }
 
         var plan = IgvLoadPlanner.Plan(runFolder, _maxFastaBytes);
+        if (plan.Failure == IgvPlanFailure.SequenceTooLarge && _indexStore is not null && IsIndexable(plan.FastaPath))
+        {
+            // Issue #497: a long FASTA gets a .fai in the app's own folder; building it can take seconds, so not on this thread.
+            ResetRunState();
+            ShowLoading();
+            OpenReady = OpenIndexedAsync(runFolder, _openGeneration);
+            return;
+        }
+
+        ApplyPlan(plan);
+    }
+
+    private bool IsIndexable(string? fastaPath) => fastaPath is not null && new FileInfo(fastaPath).Length <= _maxIndexedBytes;
+
+    private async Task OpenIndexedAsync(string runFolder, int generation)
+    {
+        IgvLoadPlan plan;
+        try
+        {
+            plan = await Task.Run(() => IgvLoadPlanner.Plan(runFolder, _maxFastaBytes, _indexStore, _maxIndexedBytes));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Never leave the page on "Loading" for a file that vanished or an unreadable folder.
+            plan = new IgvLoadPlan(IgvPlanFailure.IndexFailed, runFolder, null);
+        }
+
+        if (generation == _openGeneration)
+        {
+            ApplyPlan(plan);
+        }
+    }
+
+    private void ApplyPlan(IgvLoadPlan plan)
+    {
         switch (plan.Failure)
         {
             case IgvPlanFailure.FolderMissing:
@@ -230,6 +279,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 return;
             case IgvPlanFailure.SequenceTooLarge:
                 Fail(ViewerStatus.SequenceTooLarge, ViewerFailure.SequenceTooLarge);
+                return;
+            case IgvPlanFailure.IndexFailed:
+                Fail(ViewerStatus.IndexFailed, ViewerFailure.IndexFailed);
                 return;
         }
 
@@ -450,12 +502,17 @@ public sealed partial class ViewerViewModel : ObservableObject
     // A problem with this run (or the control): nothing to show, nothing mapped, nothing to resend.
     private void Fail(ViewerStatus status, ViewerFailure failure, string? actionUrl = null)
     {
+        ResetRunState();
+        ShowError(status, failure, actionUrl);
+    }
+
+    private void ResetRunState()
+    {
         _loadJson = null;
         MapRunFolder = null;
         _contigGeneration++;
         ClearContigs();
         FallbackContig = null;
-        ShowError(status, failure, actionUrl);
     }
 
     // A failure of the viewer page itself: keep the run so a retry or a reloaded page redraws it.

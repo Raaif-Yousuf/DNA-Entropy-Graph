@@ -365,7 +365,7 @@
     <value>This sequence is too large for the built-in viewer</value>
   </data>
   <data name="ViewerSequenceTooLarge_Body" xml:space="preserve">
-    <value>The sequence file is larger than 50 MB, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
+    <value>The sequence file is larger than 1 GB, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>
@@ -2107,5 +2107,11 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="OpenWithPortable" xml:space="preserve">
     <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
+  </data>
+  <data name="ViewerIndexFailed_Title" xml:space="preserve">
+    <value>The viewer could not prepare this sequence file</value>
+  </data>
+  <data name="ViewerIndexFailed_Body" xml:space="preserve">
+    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
 </root>
