@@ -30,6 +30,44 @@ public sealed class RunTargetPickerTests
 
     private static LocalCapability Blocked(params LocalBlocker[] blockers) => new(false, blockers, null, 100L << 30);
 
+    private sealed class RecordingContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state)
+            => ThreadPool.QueueUserWorkItem(_ =>
+            {
+                SetSynchronizationContext(this);
+                d(state);
+            });
+    }
+
+    [Fact]
+    public async Task Refreshing_sets_the_bound_properties_on_the_context_that_called_it_not_on_a_pool_thread()
+    {
+        // Settings binds ThisPcReason/Note OneWay; a PropertyChanged raised off the UI thread throws RPC_E_WRONG_THREAD in WinUI.
+        _readiness.CheckAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+            return new LocalReadiness(Blocked(LocalBlocker.NoNvidiaGpu), LocalEngineHealth.NotInstalled());
+        });
+        var vm = Create();
+        var raisedOn = new List<SynchronizationContext?>();
+        vm.PropertyChanged += (_, _) => raisedOn.Add(SynchronizationContext.Current);
+        var ui = new RecordingContext();
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(ui);
+        try
+        {
+            await vm.RefreshAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        raisedOn.ShouldNotBeEmpty();
+        raisedOn.ShouldAllBe(c => ReferenceEquals(c, ui));
+    }
+
     [Fact]
     public void With_nothing_saved_the_choice_is_Cloud_and_the_three_places_are_offered_in_order()
     {

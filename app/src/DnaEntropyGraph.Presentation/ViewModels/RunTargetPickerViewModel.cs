@@ -171,7 +171,8 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
         LocalReadiness? readiness;
         try
         {
-            readiness = await _readiness.CheckAsync(cancellationToken).ConfigureAwait(false);
+            // No ConfigureAwait(false): the code below sets properties the page binds, so it must resume on the caller's (UI) context.
+            readiness = await _readiness.CheckAsync(cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
