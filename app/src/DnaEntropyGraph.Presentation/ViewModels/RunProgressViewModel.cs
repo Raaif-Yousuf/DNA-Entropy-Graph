@@ -92,6 +92,24 @@ public sealed partial class RunProgressViewModel : ObservableObject
 
         messenger.Register<RunProgressViewModel, RunPhaseChangedMessage>(this, static (recipient, message) => recipient.OnRunPhaseChanged(message));
         messenger.Register<RunProgressViewModel, RunProgressChangedMessage>(this, static (recipient, message) => recipient.OnRunProgressChanged(message));
+        messenger.Register<RunProgressViewModel, RunNoticeMessage>(this, static (recipient, message) => recipient.OnRunNotice(message));
+    }
+
+    /// <summary>The "taking longer than usual" or "looks stuck" line for this run (issue #675); empty when there is none.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSlowNotice))]
+    private string _slowNoticeText = string.Empty;
+
+    public bool HasSlowNotice => SlowNoticeText.Length > 0;
+
+    private void OnRunNotice(RunNoticeMessage message)
+    {
+        if (message.JobId != JobId)
+        {
+            return;
+        }
+
+        _dispatcher.Enqueue(() => SlowNoticeText = message.Text);
     }
 
     partial void OnJobIdChanged(string? value)
@@ -132,6 +150,12 @@ public sealed partial class RunProgressViewModel : ObservableObject
         IsVmActionable = phase is JobPhase.Provisioning or JobPhase.Preparing or JobPhase.Running or JobPhase.Finalizing;
         CanCancel = !IsTerminal(phase) && phase != JobPhase.Cancelling;
         IsStayOpenBannerVisible = !IsTerminal(phase);
+        if (IsTerminal(phase))
+        {
+            // A finished run is no longer slow.
+            SlowNoticeText = string.Empty;
+        }
+
         _outputFolder = null;
         UpdateCanOpenViewer();
         if (phase is JobPhase.Completed or JobPhase.PartiallyCompleted)

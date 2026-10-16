@@ -104,6 +104,9 @@ class RunConfig:
     name: str = "user_locus"
     input_path: str | None = None  # None => read from stdin
     informat: str | None = None  # "genbank"|"fasta"|"paste" override; None => auto-detect
+    # issue #135: a GFF3 file paired with a FASTA input. Its genes replace Prodigal (which then
+    # never runs). Only valid with FASTA input; None => no pairing.
+    annotation_path: str | None = None
     predictor: PredictorKind = PredictorKind.MOCK
     model: str = "evo2_7b"
     device: str = "cuda"
@@ -198,3 +201,7 @@ class RunConfig:
     include_gc: bool = False
     gc_window: int = 51
     include_codons: bool = False
+    # issue #704 / #136: the app's option preset, recorded in provenance.json's run section and
+    # read by nothing else (a preset is the app's own shorthand for options it already sent).
+    preset_id: str | None = None
+    preset_name: str | None = None

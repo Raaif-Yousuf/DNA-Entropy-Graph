@@ -349,6 +349,7 @@ def _write_provenance(
     processed: list[tuple[Contig, DirectionResult]],
     t0: float,
     extra: dict[str, Any] | None,
+    input_format: str = "",
 ) -> str:
     """Build and write ``provenance.json`` (issue #82). Always called, never gated by an
     ``include_*`` flag -- see :func:`run`'s own docstring."""
@@ -378,6 +379,8 @@ def _write_provenance(
         ambiguity_policy=cfg.ambiguity_policy.value,
         rna=cfg.rna,
         topology=cfg.topology.value,
+        input_format=input_format or None,
+        preset={"id": cfg.preset_id, "name": cfg.preset_name or ""} if cfg.preset_id else None,
         contigs=contigs,
         wall_time_seconds=time.perf_counter() - t0,
         extra=extra,
@@ -569,6 +572,7 @@ def _write_genbank_outputs(
             start=cfg.start,
             out_dir=cfg.out_dir,
             source="genbank",
+            circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
         )
         outputs.append(genes_gff)
     if cfg.include_gene_summary:
@@ -677,9 +681,13 @@ def _write_standard_outputs(
 
     genes: list[GeneFeature] = []
     genes_by_contig: list[list[GeneFeature]] = [[] for _ in processed]
-    if cfg.genes:
+    # issue #135: genes supplied by a paired GFF3 are the file's own, so Prodigal never runs,
+    # even with --genes (a contig with no GFF3 rows gets no genes rather than a second opinion).
+    annotated = cfg.annotation_path is not None
+    if annotated or cfg.genes:
         for i, (c, _dr) in enumerate(processed):
-            g = ProdigalAnnotator().annotate(c.seq)  # may raise AnnotatorError (explicit opt-in)
+            # Prodigal may raise AnnotatorError (explicit opt-in)
+            g = list(c.features) if annotated else ProdigalAnnotator().annotate(c.seq)
             genes_by_contig[i] = g
             genes += g
         if cfg.include_genes_gff3:
@@ -691,11 +699,12 @@ def _write_standard_outputs(
                     ],
                     start=cfg.start,
                     out_dir=cfg.out_dir,
-                    source="pyrodigal",
+                    source="gff3" if annotated else "pyrodigal",
+                    circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
                 )
             )
 
-    if cfg.include_gene_summary and cfg.genes:
+    if cfg.include_gene_summary and (cfg.genes or annotated):
         outputs += _write_gene_summary(cfg, processed, genes_by_contig)
     outputs += _write_composition(cfg, processed, genes_by_contig, notices)
 
@@ -705,7 +714,7 @@ def _write_standard_outputs(
         try:
             records = []
             for (c, dr), g in zip(processed, genes_by_contig, strict=True):
-                gb_features = g or _try_annotate(c.seq)
+                gb_features = g if annotated else (g or _try_annotate(c.seq))
                 records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
             outputs.append(
                 GenBankWriter().write_multi(
@@ -718,6 +727,22 @@ def _write_standard_outputs(
         except Exception:
             pass  # GenBank is a bonus on this path; never fail the core run over it
     return outputs, genes
+
+
+def validate_run_options(cfg: RunConfig) -> None:
+    """Refuse run options that cannot mean anything, raising :class:`PipelineError` that names the
+    option. Needs no input, so a caller that is about to spend something first (the CLI's NCBI
+    fetch, issue #133) can check before it does; :func:`run` calls it again at its own top."""
+    try:
+        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
+            validate_smoothing_windows(cfg.smoothing_windows)
+        if cfg.include_gc:
+            validate_smoothing_windows([cfg.gc_window])
+        validate_region_options(
+            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
+        )
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
 
 
 def run(
@@ -766,16 +791,7 @@ def run(
     """
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
-    try:
-        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
-            validate_smoothing_windows(cfg.smoothing_windows)
-        if cfg.include_gc:
-            validate_smoothing_windows([cfg.gc_window])
-        validate_region_options(
-            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
-        )
-    except ValueError as exc:
-        raise PipelineError(str(exc)) from exc
+    validate_run_options(cfg)
     loaded = load_input(cfg, raw)
     # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
     # "all records" default — readers/input.py has no opinion on it (and must not: Lane A
@@ -834,7 +850,7 @@ def run(
                     _write_genbank_outputs(cfg, processed)
                 else:
                     _write_standard_outputs(cfg, processed)
-                _write_provenance(cfg, processed, t0, provenance_extra)
+                _write_provenance(cfg, processed, t0, provenance_extra, loaded.input_format)
             except Exception as write_exc:
                 # Best-effort salvage: never mask the original exception (re-raised below).
                 # One ASCII line, class name only (no path or message), so losing the
@@ -850,7 +866,7 @@ def run(
         genes = [f for c, _ in processed for f in c.features]
     else:
         outputs, genes = _write_standard_outputs(cfg, processed, notices)
-    outputs.append(_write_provenance(cfg, processed, t0, provenance_extra))
+    outputs.append(_write_provenance(cfg, processed, t0, provenance_extra, loaded.input_format))
 
     first_contig, first_dr = processed[0]
     all_values = np.concatenate([dr.values for _, dr in processed])

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ..analysis.batch_qc import MIN_BATCH, batch_qc
 from ..analysis.entropy import summarize
 from .base import write_text_lf
 
@@ -110,8 +111,13 @@ class SummaryWriter:
             f"entropy mean (all): {overall.mean:.4f} bits",
             f"entropy min (all):  {overall.minimum:.4f} bits",
             f"entropy max (all):  {overall.maximum:.4f} bits",
-            "",
         ]
+        # issue #192: a batch (3 or more inputs) is scored for outliers. Keys are new ("batch QC ...")
+        # so the app's summary reader, which takes the first value of each key, is never shadowed.
+        qc = batch_qc(sections) if len(sections) >= MIN_BATCH else None
+        if qc is not None:
+            lines.append(f"batch QC flagged:   {sum(r.flagged for r in qc)} of {len(qc)}")
+        lines.append("")
         for i, (chrom, values) in enumerate(sections):
             s = summarize(values)
             lines += [
@@ -126,6 +132,13 @@ class SummaryWriter:
                 lines += _surprisal_lines(surprisal[i], indent="  ")
             if provenance is not None:
                 lines += _provenance_lines(provenance[i], indent="  ")
+            if qc is not None:
+                row = qc[i]
+                lines += [
+                    f"  batch QC z-score: {row.z_score:.2f}",
+                    f"  batch QC median:  {row.median:.4f} bits",
+                    f"  batch QC flag:    {'OUTLIER' if row.flagged else 'ok'}",
+                ]
             lines.append("")
         text = "\n".join(lines).rstrip("\n") + "\n"
         return write_text_lf(Path(out_dir) / (filename or f"{name}.summary.txt"), text)

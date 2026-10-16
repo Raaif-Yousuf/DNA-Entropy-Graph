@@ -28,7 +28,7 @@ A worktree is REMOVED only when ALL of these hold:
   Deeper in-place edits are NOT seen (a tracked-file edit shows up in `git status` anyway; an edit of an ignored file
   deeper than two levels does not, and the ignored-file rule below is what protects it);
 - it has no uncommitted or untracked changes, no skip-worktree or assume-unchanged file, no ignored file other than
-  build output at its known roots (app/{src,tests}/<project>/{bin,obj}, .artifacts, __pycache__ under worker or scripts,
+  build output at its known roots (app/{src,tests,tools}/<project>/{bin,obj}, .hypothesis, .artifacts, __pycache__ under worker or scripts,
   .pytest_cache/.ruff_cache/.mypy_cache at the root, worker or scripts, worker/*.egg-info), `worker/.venv` only when it
   is a link (a real directory there is kept), and no file under app/secrets;
 - every directory in it can be scanned (long-path aware) and none is a nested repository. A dry run scans too, so it
@@ -92,10 +92,11 @@ TMP_ROOT_NAME = "landwt"
 LANDWT_NAME = re.compile(r"^.+-\d{14}$")
 PROTECTED_BRANCHES = ("main", "master", "develop", "release/*")
 BUILD_OUTPUT = re.compile(
-    r"^(?:app/(?:src|tests)/[^/]+/(?:bin|obj)"
+    r"^(?:app/(?:src|tests|tools)/[^/]+/(?:bin|obj)"
     r"|(?:app/)?\.artifacts"
     r"|(?:(?:worker|scripts)/(?:[^/]+/)*)?__pycache__"
     r"|(?:(?:worker|scripts)/)?\.(?:pytest|ruff|mypy)_cache"
+    r"|(?:worker/)?\.hypothesis"
     r"|worker/(?:src/)?[^/]+\.egg-info)(?:/|$)"
 )
 IN_PROGRESS = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG")

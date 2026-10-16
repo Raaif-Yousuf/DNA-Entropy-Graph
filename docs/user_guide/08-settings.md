@@ -26,6 +26,10 @@ Each run's results are also stored in a storage area in your own Google Cloud pr
 
 Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (off, so a finished run never pulls you away from what you are typing). When the app is not the window in front (or is minimized), the message also appears as a Windows notification, for a run that finished and for one that failed; **Open run** on it (or a click on the notification) opens that run's Results page, even if you had closed the app. If you do not see it, check that Windows Focus Assist is not hiding notifications. They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
 
+## Help
+
+The first time you open the app, a short tour points at New run, Runs, Cloud and Settings, one step at a time. Press **Next** to move on or **Skip tour** to close it; the app remembers you have seen it. **Show the tour again** in this group starts it over, and **Open the user guide** opens this guide in your web browser. The **Help** button at the top right of the window opens the guide page for the screen you are on (for example, Help on the Cloud page opens the costs and cleanup page). After **Reset all settings** the tour shows again at the next start.
+
 ## This PC
 
 Run the analysis on your own computer instead of a rented one. It needs an NVIDIA graphics card with about 24 GB of memory, an NVIDIA driver of version 550 or newer, and 30 GB of free disk space. The **Where to run** box chooses the default for new runs: **Cloud**, **This PC**, or **Auto** (This PC when it can run the model, the cloud when it cannot). If this PC cannot run the model, **This PC** is greyed out and the line under the box says why and what to do.
@@ -49,7 +53,7 @@ your sequences, file names, results, email address or sign-in.
 
 ## Advanced
 
-A collapsed group. **Reset all settings** asks first, then puts every setting back to its starting value; your runs, results and input files are not touched. Close the app and open it again to finish. A note says whether this copy is using a pretend cloud for testing. The analysis program image box is for developers: it works only when developer mode is already on in the settings file. If you paste an address that is not a full one, the box says so and the shipped image is used until you paste a full one. After a reset, every group on the page shows its starting values at once.
+A collapsed group. **Reset all settings** asks first, then puts every setting back to its starting value; your runs, results and input files are not touched. Nothing needs a restart: the theme goes back to Use system at once. A note says whether this copy is using a pretend cloud for testing. The analysis program image box is for developers: it works only when developer mode is already on in the settings file. If you paste an address that is not a full one, the box says so and the shipped image is used until you paste a full one. After a reset, every group on the page shows its starting values at once.
 
 ## External viewers
 

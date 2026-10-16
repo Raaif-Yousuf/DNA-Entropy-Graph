@@ -66,6 +66,32 @@ public class SetupErrorResourceTests
         resw.ShouldContainKey("WizardRequest_NoProjectYet");
     }
 
+    [Fact]
+    public void The_gpu_ask_copy_gives_the_plain_phrase_before_the_words_gpu_and_quota()
+    {
+        // Cold review of #740 (finding 8, Hard Rule 13): no jargon without the plain phrase first.
+        var resw = ReswValues();
+        var keys = resw.Keys.Where(k => k.StartsWith("WizardGpuAsk", StringComparison.Ordinal)).ToList();
+        keys.Count.ShouldBeGreaterThanOrEqualTo(8, "the scan must see the whole GPU ask copy");
+
+        foreach (var key in keys)
+        {
+            var text = resw[key];
+            var gpu = text.IndexOf("GPU", StringComparison.Ordinal);
+            if (gpu >= 0)
+            {
+                text.IndexOf("graphics card", StringComparison.OrdinalIgnoreCase).ShouldBeInRange(0, gpu, $"{key}: the plain phrase 'graphics card' comes before 'GPU'");
+            }
+
+            var quota = text.IndexOf("quota", StringComparison.OrdinalIgnoreCase);
+            if (quota >= 0)
+            {
+                var plain = text.IndexOf("limit", StringComparison.OrdinalIgnoreCase);
+                plain.ShouldBeInRange(0, quota, $"{key}: the plain word 'limit' comes before 'quota'");
+            }
+        }
+    }
+
     [Theory]
     [InlineData(SetupErrorCodes.Permission, "SetupError_PERMISSION", "SetupAction_CopyRequestForOwner")]
     [InlineData(SetupErrorCodes.ApiDisabled, "SetupError_API_DISABLED", "SetupAction_TurnItOn")]
