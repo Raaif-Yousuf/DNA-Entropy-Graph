@@ -3,6 +3,37 @@ using DnaEntropyGraph.Core.Contract;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
+/// <summary>
+/// The platform's own time at one look (<see cref="VmDescriptor.ServerNow"/>) with a monotonic mark taken when it was read, so "platform now" later is
+/// <c>ServerNow + monotonic elapsed</c>. A wall-clock difference stored once and added to a later wall clock is broken by an NTP step or a resume from
+/// sleep between the two; a monotonic interval is not (issue #691).
+/// </summary>
+internal readonly record struct PlatformReading(DateTimeOffset ServerNow, long Mark);
+
+/// <summary>
+/// When a VM's platform run-limit clock started (platform time) and the platform reading to age it with; a null reading (no server time, or an
+/// implausible one) means "judge on this laptop's own clock".
+/// </summary>
+internal readonly record struct VmClockBasis(DateTimeOffset RunClockStart, PlatformReading? Reading);
+
+internal static class PlatformClock
+{
+    /// <summary>
+    /// A server time more than this far from the laptop's wall clock is a broken proxy or a broken clock (1970, or days off), not information:
+    /// it is refused and the laptop's own clock is used. A real laptop clock is off by seconds, rarely by hours.
+    /// </summary>
+    public static readonly TimeSpan MaxPlausibleSkew = TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// The reading to keep, or null when <paramref name="serverNow"/> is absent or implausible. PRECISION (issue #691 review): the HTTP <c>Date</c>
+    /// header has one-second resolution (truncated, so it reads up to 1 s behind the platform) and was generated before the answer crossed the
+    /// network (another 0.1 to 1.5 s behind, THEORY (unverified): ToTest measures it). So "platform now" runs at most about 2.5 s BEHIND true, never
+    /// ahead: a VM that vanished within that margin of its limit may read vm_unhealthy, and nothing reads run_time_limit early. The margin is small
+    /// beside a limit of tens of minutes, so it is documented, not compensated.
+    /// </summary>
+    public static PlatformReading? Read(DateTimeOffset? serverNow, DateTimeOffset localNow, long mark)
+        => serverNow is { } server && (server - localNow).Duration() <= MaxPlausibleSkew ? new PlatformReading(server, mark) : null;
+}
 internal enum BootOutcome
 {
     Running,
@@ -87,25 +118,148 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// success ends the run through <see cref="RunFailureException"/>, with the VM ended per the user's
     /// choice first and the outcome of that recorded (Hard Rule 11).
     /// </summary>
-    public async Task<string> AwaitResultAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken)
+    public async Task<string> AwaitResultAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null)
+    {
+        // Issue #675: a stall question opened to the caller is withdrawn however the wait ends (the result arrived, the run was ended, the run was cancelled).
+        using var stall = new StallState();
+        try
+        {
+            return await AwaitResultCoreAsync(request, bucket, zone, cancellationToken, vmStartMark, stall).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Notices run off the poll loop (a blocking handler must not hang it); the ones already given are let finish, but never for longer than a moment.
+            await stall.DrainNoticesAsync(NoticeDrainTimeout).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The question put to the caller when the heartbeat watch fires (issue #675): the open task, its token source, and the verdict it was asked about.</summary>
+    private sealed class StallState : IDisposable
+    {
+        private readonly object _noticeGate = new();
+        private Task _notices = Task.CompletedTask;
+        private CancellationTokenSource? _cts;
+
+        /// <summary>Runs <paramref name="handler"/> with the notice on the thread pool, after the notices given before it (in order), never on the caller's thread.</summary>
+        public void Enqueue(Action<RunNotice> handler, RunNotice notice)
+        {
+            lock (_noticeGate)
+            {
+                _notices = _notices.ContinueWith(
+                    _ =>
+                    {
+                        try
+                        {
+                            handler(notice);
+                        }
+                        catch (Exception)
+                        {
+                            // Whoever shows the notice failing must never end the run.
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+            }
+        }
+
+        public async Task DrainNoticesAsync(TimeSpan limit)
+        {
+            Task pending;
+            lock (_noticeGate)
+            {
+                pending = _notices;
+            }
+
+            await Task.WhenAny(pending, Task.Delay(limit, TimeProvider.System)).ConfigureAwait(false);
+        }
+
+        public Task<StallChoice>? Choice { get; private set; }
+
+        public HeartbeatVerdict? Verdict { get; private set; }
+
+        public bool IsOpen => Choice is not null;
+
+        public void Open(StallDecision ask, StallPrompt prompt, HeartbeatVerdict verdict, CancellationToken runToken, TimeSpan? answerTimeout, TimeProvider time)
+        {
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(runToken);
+            Verdict = verdict;
+            var token = _cts.Token;
+
+            // The handler runs on the thread pool, never on the poll loop: one that blocks synchronously (a modal dialog on the wrong thread, a lock) would otherwise
+            // freeze the poll and the result limit with it. Its task is also cut at the answer timeout. Throwing, faulting, cancelling and timing out are all
+            // "no answer", and the run then ends the way it chose.
+            var asked = Task.Run(() => ask(prompt, token), token);
+            Choice = answerTimeout is { } limit && limit > TimeSpan.Zero ? asked.WaitAsync(limit, time, token) : asked;
+        }
+
+        /// <summary>What the caller chose, or null when its task faulted or was cancelled (no answer).</summary>
+        public StallChoice? TakeChoice() => Choice is { IsCompletedSuccessfully: true } done ? done.Result : null;
+
+        /// <summary>Withdraws the question: its token is cancelled and whatever the task later does is ignored.</summary>
+        public void Close()
+        {
+            if (Choice is { } task)
+            {
+                _cts?.Cancel();
+                _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+
+            _cts?.Dispose();
+            _cts = null;
+            Choice = null;
+            Verdict = null;
+        }
+
+        public void Dispose() => Close();
+    }
+
+    /// <summary>How long the end of a wait lets the notices already given finish: a handler that blocks costs the run this much, never more.</summary>
+    private static readonly TimeSpan NoticeDrainTimeout = TimeSpan.FromSeconds(2);
+
+    private void Notify(StallState stall, RunNotice notice)
+    {
+        if (settings.OnNotice is { } handler)
+        {
+            stall.Enqueue(handler, notice);
+        }
+    }
+
+    private async Task<string> AwaitResultCoreAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark, StallState stall)
     {
         var key = WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json";
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
         var clockStart = settings.StartClock();
         string? lastTransient = null;
-        DateTimeOffset? vmCreatedAt = null;
+        DateTimeOffset? vmCreatedAt = null; // when the platform's limit clock last started, on the PLATFORM's clock (see VmDescriptor.RunClockStart)
+        PlatformReading? platform = null; // the platform's time at the last look that found the VM, with a monotonic mark (issue #691); none until one does
 
-        // The VM's maxRunDuration started when Compute Engine created it, not when it reached Running: a boot of several
-        // minutes, or a resume, has already used part of it. With the default limit the clock is moved forward by the VM's
-        // age at the first look that reports a creation time (a gateway that reports none leaves it at "from Running").
+        // The VM's maxRunDuration started when Compute Engine last STARTED it (its creation, for a new VM; the start of the reuse, for a VM
+        // created days ago, #94), not when it reached Running: a boot of several minutes, or a resume, has already used part of it. With the
+        // default limit the clock is moved forward by the VM's age at the first look that reports a start time (a gateway that reports
+        // none leaves it at "from Running").
+        //
+        // Skew-safe: when this run started the VM itself, the age is the runner's OWN clock between that moment and now. Subtracting the
+        // platform's timestamp from the app's wall clock instead is wrong by the whole skew of the laptop's clock (an hour fast fires the
+        // deadline an hour early). Only a VM the run did not start (adopted after a restart) has no mark and falls back to the wall-clock
+        // difference, clamped to the VM's own limit; THEORY (unverified): that fallback is off by the laptop's skew.
         var elapsedBeforeClock = TimeSpan.Zero;
         var ageKnown = settings.ResultTimeout is not null;
+        if (vmStartMark is { } mark && !ageKnown)
+        {
+            ageKnown = true;
+            var sinceStart = settings.TimeProvider.GetElapsedTime(mark, clockStart);
+            elapsedBeforeClock = sinceStart > TimeSpan.Zero ? sinceStart : TimeSpan.Zero;
+        }
+
         var statusKey = WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json";
         var progressKey = WorkerManifestBuilder.JobPrefix(request.JobId) + "progress.jsonl";
         var watch = new HeartbeatWatch(
             VmProvisioner.ExpectsGpu(request.Spec.MachineType),
             settings.FirstHeartbeatTimeout,
-            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor));
+            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor),
+            settings.StageDeadlines,
+            settings.ProgressStallTimeout);
 
         while (true)
         {
@@ -121,12 +275,13 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 lastTransient = null;
-                vmCreatedAt = vm?.CreatedAt ?? vmCreatedAt;
-                if (!ageKnown && vm?.CreatedAt is { } createdAt)
+                vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
+                platform = PlatformClock.Read(vm?.ServerNow, settings.TimeProvider.GetUtcNow(), settings.StartClock()) ?? platform;
+                if (!ageKnown && vm?.RunClockStart is { } clockBegan)
                 {
                     ageKnown = true;
-                    var age = settings.TimeProvider.GetUtcNow() - createdAt - settings.ElapsedSince(clockStart);
-                    elapsedBeforeClock = age > TimeSpan.Zero ? age : TimeSpan.Zero;
+                    var age = PlatformNow(platform) - clockBegan - settings.ElapsedSince(clockStart);
+                    elapsedBeforeClock = age > TimeSpan.Zero ? (age < request.Spec.MaxRunDuration ? age : request.Spec.MaxRunDuration) : TimeSpan.Zero;
                 }
 
                 if (!VmFacts.IsHealthyRunning(vm, out var reason) && !VmFacts.IsBooting(vm))
@@ -140,7 +295,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                     }
 
                     // Only a VM that is GONE (not merely stopped or preempted) can be one the platform deleted at its limit.
-                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null ? vmCreatedAt : null).ConfigureAwait(false);
+                    throw await VmLostAsync(request, bucket, zone, reason, cancellationToken, vm is null && vmCreatedAt is { } clockStartedAt ? new VmClockBasis(clockStartedAt, platform) : null).ConfigureAwait(false);
                 }
 
                 // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
@@ -148,6 +303,67 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
                 var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart));
+                if (watch.TakeSlowNotice() is { } slow)
+                {
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.SlowStage, slow.Stage, slow.InStage, slow.Deadline));
+                }
+
+                // Issue #675: with a stall handler the verdict is a question for the person (Stop, Delete, Keep waiting), asked once while it is open; the polling for
+                // result.json goes on meanwhile. A box with no GPU is never asked about (it is deleted at once, as startup.sh does).
+                var forceStop = false;
+                var forceDelete = false;
+                if (verdict is { DeleteVm: true } && stall.IsOpen)
+                {
+                    // A box with no GPU is deleted at once whatever a question open about something else was waiting for: withdraw the question, the delete below wins.
+                    stall.Close();
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallCleared));
+                }
+
+                if (stall.IsOpen)
+                {
+                    if (stall.Choice!.IsCompleted)
+                    {
+                        var asked = stall.Verdict!;
+                        var choice = stall.TakeChoice();
+                        stall.Close();
+                        switch (choice)
+                        {
+                            case StallChoice.KeepWaiting:
+                                watch.Snooze(settings.ElapsedSince(clockStart));
+                                verdict = null;
+                                break;
+                            case StallChoice.Stop:
+                                verdict = asked;
+                                forceStop = true;
+                                break;
+                            case StallChoice.Delete:
+                                verdict = asked;
+                                forceDelete = true;
+                                break;
+                            case StallChoice.EndAsRunChose:
+                            default:
+                                verdict = asked; // no answer (or none wanted): the default end, never a VM left billing
+                                break;
+                        }
+                    }
+                    else if (verdict is null)
+                    {
+                        stall.Close();
+                        Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallCleared));
+                    }
+                    else
+                    {
+                        verdict = null; // the question is already open: not repeated
+                    }
+                }
+                else if (verdict is not null && !verdict.DeleteVm && settings.OnStall is { } ask)
+                {
+                    var waited = settings.ElapsedSince(clockStart);
+                    stall.Open(ask, new StallPrompt(request.JobId, verdict.Code, verdict.Message, verdict.Stage, waited), verdict, cancellationToken, settings.StallAnswerTimeout, settings.TimeProvider);
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallDetected, verdict.Stage, Code: verdict.Code));
+                    verdict = null;
+                }
+
                 if (verdict is not null)
                 {
                     // A worker writes result.json BEFORE it stops its heartbeat: one last look before calling it dead.
@@ -158,7 +374,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                     }
 
                     // A box with no GPU is deleted whatever the user chose (as startup.sh does); a frozen worker's VM is ended per the user's choice.
-                    var heartbeatNote = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: verdict.DeleteVm).ConfigureAwait(false);
+                    var heartbeatNote = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: verdict.DeleteVm || forceDelete, forceStop: forceStop).ConfigureAwait(false);
                     throw VmEndNotes.Apply(new RunFailureException(CloudErrorKind.Other, verdict.Code, verdict.Message), heartbeatNote);
                 }
             }
@@ -184,21 +400,25 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
+    /// <summary>The platform's time now: the last reading aged by monotonic elapsed time, or this laptop's wall clock when no plausible reading was ever taken.</summary>
+    private DateTimeOffset PlatformNow(PlatformReading? reading)
+        => reading is { } r ? r.ServerNow + settings.ElapsedSince(r.Mark) : settings.TimeProvider.GetUtcNow();
+
     /// <summary>
     /// The VM is gone or no longer running and no result.json exists. Boot-time failures
     /// (<c>worker/vm/startup.sh</c>: GPU_NOT_VISIBLE, IMAGE_PULL_FAILED, MANIFEST_INVALID, WORKER_CRASH) write
     /// <c>status.json</c> and end the VM without ever writing result.json, so the cause is read from there
     /// rather than reported as a lost computer.
     /// </summary>
-    public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, DateTimeOffset? vmCreatedAt = null)
+    public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, VmClockBasis? clock = null)
     {
         var workerCode = await TryReadWorkerErrorCodeAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json", cancellationToken).ConfigureAwait(false);
         var note = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
         var mapped = RunErrorCodes.ForWorkerStatusCode(workerCode);
 
         // #89: a VM that was seen created, is gone, and whose maxRunDuration has now passed was deleted by Compute Engine at its limit
-        // (Hard Rule 10's backstop), not lost. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
-        var pastLimit = vmCreatedAt is { } created && settings.TimeProvider.GetUtcNow() >= created + request.Spec.MaxRunDuration;
+        // (Hard Rule 10's backstop), not lost. Issue #691: "now passed" is judged on the platform's clock (the last server time read plus the monotonic time since), because the laptop's clock may be an hour out; the platform's time is aged with a MONOTONIC interval so a wall-clock step cannot move it; with no plausible server time the laptop's clock is used. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
+        var pastLimit = clock is { } basis && PlatformNow(basis.Reading) >= basis.RunClockStart + request.Spec.MaxRunDuration;
         return VmEndNotes.Apply(
             mapped is not null
                 ? new RunFailureException(CloudErrorKind.Other, mapped, $"The worker reported {workerCode} in status.json and no result.json followed. {reason}")

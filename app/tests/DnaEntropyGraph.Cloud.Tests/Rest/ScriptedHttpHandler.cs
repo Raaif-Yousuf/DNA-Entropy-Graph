@@ -4,7 +4,7 @@ using System.Text;
 namespace DnaEntropyGraph.Cloud.Tests.Rest;
 
 /// <summary>One request the real gateway sent: what a wired-to-nothing gateway would get wrong.</summary>
-internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Authorization, string Body, string? ContentRange = null);
+internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Authorization, string Body, string? ContentRange = null, string? UserProject = null);
 
 /// <summary>
 /// The HTTP-level fake for the real Google gateways (no GCP access: nothing here ever leaves the process). A route is a
@@ -66,6 +66,8 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
     public IReadOnlyList<RecordedRequest> To(HttpMethod method, string absolutePath)
         => Requests.Where(r => r.Method == method && r.Uri.AbsolutePath == absolutePath).ToList();
 
+    private static string? UserProject(HttpRequestMessage request) => request.Headers.TryGetValues("X-Goog-User-Project", out var values) ? values.Single() : null;
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         if (_midBodyFailures.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var failures) && failures.Count > 0 && request.Content is not null)
@@ -74,12 +76,12 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
             var partial = new byte[limit];
             var stream = await request.Content.ReadAsStreamAsync(cancellationToken);
             var read = await stream.ReadAtLeastAsync(partial, limit, throwOnEndOfStream: false, cancellationToken);
-            Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), Encoding.UTF8.GetString(partial, 0, read), request.Content.Headers.ContentRange?.ToString()));
+            Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), Encoding.UTF8.GetString(partial, 0, read), request.Content.Headers.ContentRange?.ToString(), UserProject(request)));
             throw new HttpRequestException("The connection dropped while the request body was being sent.");
         }
 
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString()));
+        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString(), UserProject(request)));
 
         if (_routes.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var queue) && queue.Count > 0)
         {

@@ -15,6 +15,31 @@ internal sealed class RunProgress
 
     public string? Zone { get; set; }
 
+    /// <summary>The run's results bucket, once the runner has ensured it: the zone ladder reads its location to prefer zones on its continent (#670).</summary>
+    public string? Bucket { get; set; }
+
+    /// <summary>The project the bucket lives in (set with <see cref="Bucket"/>).</summary>
+    public string? ProjectId { get; set; }
+
+    /// <summary>The job id (set with <see cref="Bucket"/>): the zone claim of a parallel ladder is written under its prefix (#670).</summary>
+    public string? JobId { get; set; }
+
+    /// <summary>
+    /// A moment on the runner's own clock taken just before THIS run asked for the VM it is on to be created or started (null for a VM it
+    /// adopted, whose age only the platform knows). The platform's limit clock starts at or just after it, so the result deadline measures
+    /// from here and never subtracts the platform's timestamps from the app's wall clock, which a skewed laptop clock would get wrong.
+    /// </summary>
+    public long? VmStartMark { get; set; }
+
+    /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
+    public string? VmName { get; set; }
+
+    /// <summary><paramref name="request"/> with its spec naming the VM the run is really on, so every look at, and the end of, that VM use the right name.</summary>
+    public CloudJobRequest Resolve(CloudJobRequest request)
+        => VmName is null || string.Equals(VmName, request.Spec.VmName, StringComparison.Ordinal)
+            ? request
+            : request with { Spec = request.Spec with { ExistingVmName = VmName } };
+
     /// <summary>The service account the VM was asked to run as (issue #604), once the identity step has answered.</summary>
     public string? WorkerAccountEmail { get; set; }
 }
