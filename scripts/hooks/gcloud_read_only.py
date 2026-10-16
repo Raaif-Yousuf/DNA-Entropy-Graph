@@ -48,20 +48,78 @@ _INVOCATION = re.compile(
     re.IGNORECASE,
 )
 
-READ_VERBS = frozenset({
-    "list", "describe", "get-iam-policy", "get-value", "info", "version", "ls", "du",
-    "get-ancestors", "get-ancestors-iam-policy", "search-all-resources", "show",
-})
+READ_VERBS = frozenset(
+    {
+        "list",
+        "describe",
+        "get-iam-policy",
+        "get-value",
+        "info",
+        "version",
+        "ls",
+        "du",
+        "get-ancestors",
+        "get-ancestors-iam-policy",
+        "search-all-resources",
+        "show",
+    }
+)
 
-WRITE_VERBS = frozenset({
-    "create", "delete", "update", "set", "unset", "patch", "add-iam-policy-binding",
-    "remove-iam-policy-binding", "set-iam-policy", "enable", "disable", "start", "stop", "reset",
-    "resume", "suspend", "resize", "ssh", "scp", "deploy", "cp", "mv", "rm", "rsync", "mb", "rb",
-    "login", "logout", "revoke", "activate-service-account", "print-access-token",
-    "print-identity-token", "application-default", "import", "export", "attach-disk",
-    "detach-disk", "add-labels", "remove-labels", "add-metadata", "remove-metadata", "move",
-    "undelete", "link", "unlink", "mk", "load", "insert", "query", "cancel", "request",
-})
+WRITE_VERBS = frozenset(
+    {
+        "create",
+        "delete",
+        "update",
+        "set",
+        "unset",
+        "patch",
+        "add-iam-policy-binding",
+        "remove-iam-policy-binding",
+        "set-iam-policy",
+        "enable",
+        "disable",
+        "start",
+        "stop",
+        "reset",
+        "resume",
+        "suspend",
+        "resize",
+        "ssh",
+        "scp",
+        "deploy",
+        "cp",
+        "mv",
+        "rm",
+        "rsync",
+        "mb",
+        "rb",
+        "login",
+        "logout",
+        "revoke",
+        "activate-service-account",
+        "print-access-token",
+        "print-identity-token",
+        "application-default",
+        "import",
+        "export",
+        "attach-disk",
+        "detach-disk",
+        "add-labels",
+        "remove-labels",
+        "add-metadata",
+        "remove-metadata",
+        "move",
+        "undelete",
+        "link",
+        "unlink",
+        "mk",
+        "load",
+        "insert",
+        "query",
+        "cancel",
+        "request",
+    }
+)
 
 MESSAGE = """This gcloud/gsutil/bq call is not read-only, so it is blocked here.
 
@@ -118,8 +176,7 @@ def self_test() -> int:
     failures += [c for c in _ALLOW_CASES if verdict(c) is not None]
     for c in failures:
         print(f"self-test FAILED: {c!r}", file=sys.stderr)
-    proc = subprocess.run([sys.executable, __file__], input="not json", capture_output=True,
-                          text=True, timeout=15)
+    proc = subprocess.run([sys.executable, __file__], input="not json", capture_output=True, text=True, timeout=15)
     if proc.returncode != 0 or proc.stdout.strip():
         failures.append("<malformed stdin must fail open>")
         print("self-test FAILED: malformed stdin must fail open", file=sys.stderr)

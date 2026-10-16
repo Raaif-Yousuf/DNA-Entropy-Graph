@@ -33,7 +33,9 @@ pytestmark = pytest.mark.skipif(PWSH is None, reason="pwsh (PowerShell 7+) not f
 def _run(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(
         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT), *args],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -58,8 +60,7 @@ def test_parse_only_reads_the_real_labels_yaml_cleanly():
     labels = json.loads(proc.stdout)
     assert len(labels) == 22
     names = {label["Name"] for label in labels}
-    for expected in ("P0", "P1", "P2", "P3", "area:app", "area:worker", "area:docs",
-                      "DECISION", "owner", "spike", "needs-criteria", "post-v1"):
+    for expected in ("P0", "P1", "P2", "P3", "area:app", "area:worker", "area:docs", "DECISION", "owner", "spike", "needs-criteria", "post-v1"):
         assert expected in names
     for label in labels:
         assert label["Color"], f"{label['Name']} has no color"
@@ -104,8 +105,7 @@ def test_duplicate_label_name_is_rejected():
     dup_file = tmp_dir / "dup-labels.yml"
     try:
         dup_file.write_text(
-            "- name: P0\n  color: \"111111\"\n  description: one\n"
-            "- name: P0\n  color: \"222222\"\n  description: two\n",
+            '- name: P0\n  color: "111111"\n  description: one\n- name: P0\n  color: "222222"\n  description: two\n',
             encoding="utf-8",
         )
         proc = _run("-LabelsFile", str(dup_file))

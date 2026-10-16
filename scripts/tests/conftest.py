@@ -48,10 +48,7 @@ def _real_tree_skip_reason() -> str | None:
     except gtpn.NoticesGenerationError as error:
         return f"cannot enumerate the real dependency tree here: {error}"
     if _UNINSTALLED_MARKER in text:
-        return (
-            "worker/.venv does not have the optional extras installed, so the real "
-            "worker dependency list is incomplete here"
-        )
+        return "worker/.venv does not have the optional extras installed, so the real worker dependency list is incomplete here"
     return None
 
 

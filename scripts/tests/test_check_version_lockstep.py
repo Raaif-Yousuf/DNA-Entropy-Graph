@@ -17,7 +17,9 @@ import check_version_lockstep as cvl  # noqa: E402
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_version_lockstep.py"), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -26,7 +28,9 @@ def test_self_test_passes():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "check_version_lockstep.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
 
@@ -95,12 +99,18 @@ def _plant(root: Path, worker: str, app: str) -> None:
     (root / "worker" / "pyproject.toml").write_text(f'[project]\nname = "x"\nversion = "{worker}"\n', encoding="utf-8")
     (root / "app").mkdir()
     (root / "app" / "Directory.Build.props").write_text(
-        f"<Project><PropertyGroup><Version>{app}</Version></PropertyGroup></Project>\n", encoding="utf-8")
+        f"<Project><PropertyGroup><Version>{app}</Version></PropertyGroup></Project>\n", encoding="utf-8"
+    )
 
 
 def _cli(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(SCRIPTS_DIR / "check_version_lockstep.py"), "--root", str(root), *extra],
-                          capture_output=True, text=True, timeout=30, check=False)
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "check_version_lockstep.py"), "--root", str(root), *extra],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
 
 
 def test_a_matching_tag_passes(tmp_path):

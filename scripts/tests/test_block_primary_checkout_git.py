@@ -592,11 +592,7 @@ _GRANDCHILD = (
     "while not os.path.exists(release) and time.time() < deadline:\n"
     "    time.sleep(0.05)\n"
 )
-_PARENT = (
-    "import subprocess, sys, time\n"
-    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]])\n"
-    "time.sleep(90)\n"
-)
+_PARENT = "import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]])\ntime.sleep(90)\n"
 
 
 def _pid_alive(pid: int) -> bool:
