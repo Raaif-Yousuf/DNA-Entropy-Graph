@@ -1689,4 +1689,116 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="AboutBuild_Text" xml:space="preserve">
     <value>Build {0}</value>
   </data>
+  <data name="NewRunPresetExpander.Header" xml:space="preserve">
+    <value>Option presets</value>
+  </data>
+  <data name="NewRunPresetCombo.Header" xml:space="preserve">
+    <value>Preset</value>
+  </data>
+  <data name="NewRunPresetCombo.PlaceholderText" xml:space="preserve">
+    <value>My own choices</value>
+  </data>
+  <data name="NewRunPresetNameBox.PlaceholderText" xml:space="preserve">
+    <value>Name for a new preset</value>
+  </data>
+  <data name="NewRunPresetSave.Content" xml:space="preserve">
+    <value>Save as preset</value>
+  </data>
+  <data name="NewRunPresetDelete.Content" xml:space="preserve">
+    <value>Delete preset</value>
+  </data>
+  <data name="NewRunPresetCopy.Content" xml:space="preserve">
+    <value>Copy my presets</value>
+  </data>
+  <data name="NewRunPresetAdd.Content" xml:space="preserve">
+    <value>Add presets from the clipboard</value>
+  </data>
+  <data name="PresetSummary_Line" xml:space="preserve">
+    <value>Strands: {0}. Shape: {1}. Context: {2} bases. Files: {3}.</value>
+  </data>
+  <data name="PresetSummary_NoFiles" xml:space="preserve">
+    <value>none chosen yet</value>
+  </data>
+  <data name="PresetDirection_BothCombined" xml:space="preserve">
+    <value>both strands combined</value>
+  </data>
+  <data name="PresetDirection_BothAveraged" xml:space="preserve">
+    <value>both strands averaged</value>
+  </data>
+  <data name="PresetDirection_BothSeparate" xml:space="preserve">
+    <value>both strands kept apart</value>
+  </data>
+  <data name="PresetDirection_ForwardOnly" xml:space="preserve">
+    <value>the forward strand only</value>
+  </data>
+  <data name="PresetDirection_ReverseOnly" xml:space="preserve">
+    <value>the reverse strand only</value>
+  </data>
+  <data name="PresetTopology_Auto" xml:space="preserve">
+    <value>decided by the file</value>
+  </data>
+  <data name="PresetTopology_Linear" xml:space="preserve">
+    <value>a line</value>
+  </data>
+  <data name="PresetTopology_Circular" xml:space="preserve">
+    <value>a circle (a plasmid)</value>
+  </data>
+  <data name="Preset_quick_look_Name" xml:space="preserve">
+    <value>Quick look</value>
+  </data>
+  <data name="Preset_quick_look_Detail" xml:space="preserve">
+    <value>One pass over the forward strand and only the few files a first look needs. The fastest, cheapest run.</value>
+  </data>
+  <data name="Preset_publication_Name" xml:space="preserve">
+    <value>Publication</value>
+  </data>
+  <data name="Preset_publication_Detail" xml:space="preserve">
+    <value>Both strands combined and every default file, including the smoothed tracks, region calls and gene summary a figure draws on.</value>
+  </data>
+  <data name="Preset_plasmid_qc_Name" xml:space="preserve">
+    <value>Plasmid QC</value>
+  </data>
+  <data name="Preset_plasmid_qc_Detail" xml:space="preserve">
+    <value>Reads the sequence as a circle on both strands with no seam, and calls the low and high entropy regions.</value>
+  </data>
+  <data name="PresetStatus_NeedFile" xml:space="preserve">
+    <value>Choose a sequence file first, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_EmptyName" xml:space="preserve">
+    <value>Type a name for the preset, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_NameTaken" xml:space="preserve">
+    <value>That name belongs to a built-in preset. Type a different name, then choose Save as preset.</value>
+  </data>
+  <data name="PresetStatus_Saved" xml:space="preserve">
+    <value>Saved the preset {0}.</value>
+  </data>
+  <data name="PresetStatus_Deleted" xml:space="preserve">
+    <value>Deleted the preset {0}.</value>
+  </data>
+  <data name="PresetStatus_NothingToCopy" xml:space="preserve">
+    <value>You have no presets of your own yet. Save one first, then choose Copy my presets.</value>
+  </data>
+  <data name="PresetStatus_Copied" xml:space="preserve">
+    <value>Copied your presets. Paste them into a message or a file to share them.</value>
+  </data>
+  <data name="PresetStatus_CopyFailed" xml:space="preserve">
+    <value>Windows would not let the app copy. Close the program that is using the clipboard, then choose Copy my presets.</value>
+  </data>
+  <data name="PresetStatus_Imported" xml:space="preserve">
+    <value>Added {0} preset(s) from the clipboard.</value>
+  </data>
+  <data name="PresetStatus_ImportNone" xml:space="preserve">
+    <value>The clipboard does not hold presets this app can read. Copy the presets text again, then choose Add presets from the clipboard.</value>
+  </data>
+  <data name="Runs_PresetLine" xml:space="preserve">
+    <value>Preset: {0}</value>
+  </data>
+  <!-- app8 wave 2026-10-15: #685 EMBL and SnapGene inputs -->
+  <data name="NewRunPillKind_Embl" xml:space="preserve">
+    <value>EMBL</value>
+  </data>
+  <data name="NewRunPillKind_SnapGene" xml:space="preserve">
+    <value>SnapGene</value>
+  </data>
 </root>

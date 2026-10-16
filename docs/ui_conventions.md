@@ -53,6 +53,9 @@ first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the w
   behind the error taxonomy in `cloud_design.md` section 5, applied at the copy layer: a
   classifier bucket maps to exactly one primary action, shown as a button, with "Copy
   details for support" always available as a secondary one.
+  Guard (#176): `RunErrorActions` (Core) declares the one action of every `RunErrorCodes` code, and
+  `ErrorMessageActionGuardTests` fails when a code has no row or its `RunError_*` message does not say that
+  action. Adding a code means adding its row and its message in the same commit.
 - Numbers and dates go through `CultureInfo.CurrentCulture`; the string set itself ships
   English (`en-US`) only in v1, but the layout must tolerate roughly 30% longer strings so
   a later localization pass does not have to redo every page's layout.
