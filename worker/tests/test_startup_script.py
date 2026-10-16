@@ -340,7 +340,7 @@ def _run_gpu_test_run(
         # records `timeout [-k N] LIMIT cmd...`: the kill-after and the limit, then runs the command
         'timeout() { if [ "$1" = "-k" ]; then echo "timeout-k:$2"; shift 2; fi; '
         'echo "timeout:$1"; shift; "$@"; }',
-        # `docker kill`/`rm` are recorded and succeed; `docker run` prints a pytest-looking line, exits docker_rc
+        # `docker kill`/`rm` succeed; `docker run` prints a pytest-looking line and exits docker_rc
         f'docker() {{ echo "docker:$*"; case "$1" in kill|rm) return 0;; esac; '
         f'echo "{summary}"; return {docker_rc}; }}',
         # the result file's content is echoed so the test can read it
