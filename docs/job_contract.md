@@ -227,9 +227,12 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
     "version": "1.0.0",
     "image": "sha256:9f2b...redacted"
   },
-  "error": null
+  "error": null,
+  "cancelSeen": false
 }
 ```
+
+`cancelSeen` (issue #675) is `false` until the worker first sees `control/cancel`, then `true` (written at once): the worker's explicit acknowledgement of a cancel request (section 6).
 
 `error`, when non-null, is `{code, message, detail, retriable, remediation}`, with `code`
 drawn from the error taxonomy in `cloud_design.md` section 5. **The worker's own subset of
@@ -343,6 +346,11 @@ actually emit these two stages, is an open question for whoever picks it up next
 - If no heartbeat arrives within **60 s** of the app writing `control/cancel`, the app
  calls `instances.stop`/`instances.delete` on the VM directly rather than continuing to
  wait for a worker that may already be gone.
+- **Implemented 2026-10-15 (issue #675; DECISION, agent-made, reversible):** `CloudJobRunner.CancelAsync` writes `control/cancel` first, but only for a run whose row knows its bucket, whose
+ VM is RUNNING and whose `status.json` is worker-written (a worker that never started has nobody to answer, so no wait). It then waits up to `CancelAckTimeout` (60 s; zero turns
+ the graceful step off) for the worker's explicit acknowledgement (`cancelSeen: true` in `status.json`, a terminal stage, or `result.json`; a heartbeat tick alone is NOT one), then, once acknowledged, up to `CancelFinishTimeout` (2 minutes,
+ THEORY unverified) for a terminal stage, and only then deletes the VM exactly as before and records `Cancelled`. A request that cannot be written, a caller that gives up, or a
+ worker that never answers all end in the delete: the graceful step can never keep a VM alive. **Review fixes (rc675, 2026-10-15):** the worker now ACKNOWLEDGES explicitly: `status.json` carries `cancelSeen` (false until the worker's `CancelWatcher` first sees `control/cancel`, then true and written at once, `StatusWriter.mark_cancel_seen`), and the worker also looks for the cancel before the cache restore and before the model load (the long stages), not only between windows. A worker built before this never sets it, so the app waits the 60 s and deletes the VM as it did before #675 (partial outputs only if it uploaded them on its own). An acknowledged or finished cancel records the job folder on the row (`Bucket`, `JobPrefix`) so the partial outputs can be downloaded again while the objects exist (Hard Rule 14); **DECISION (agent-made, reversible):** the cancel does not download them itself (it has no output folder or request, only the row), the app lane's "download again" does. The graceful ask runs inside the same guard as the delete, so any exception from it still deletes the VM and ends the row.
 
 ---
 

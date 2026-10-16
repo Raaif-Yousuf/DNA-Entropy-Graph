@@ -121,6 +121,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
     private int? _allRegionsGpuCap;
+    private readonly Dictionary<(string Region, string Accelerator), int> _regionalUsed = new();
     private CloudErrorKind? _quotaReadFailure;
     private const int DefaultRegionalQuota = 1;
 
@@ -703,6 +704,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    /// <summary>Sets the regional GPU quota to a limit of <paramref name="limit"/> with <paramref name="used"/> already in use (the quota read then reports limit and usage, so the remainder is their difference).</summary>
+    public FakeGcp WithGpuQuotaUsed(string region, string acceleratorType, int limit, int used)
+    {
+        _regionalQuota[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = limit;
+        _regionalUsed[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = used;
+        return this;
+    }
+
     /// <summary>
     /// Sets the project-wide <c>GPUS_ALL_REGIONS</c> cap, which
     /// <see cref="GetGpuQuotaAsync"/> then applies as a ceiling under every
@@ -1045,6 +1054,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             return HangAsync<VmDescriptor?>(cancellationToken);
         }
 
+        if (_getVmFailure is { } getVmFailure)
+        {
+            throw Build(getVmFailure, "SCRIPTED_GET_VM_FAILURE", null, "The VM read was scripted to fail.");
+        }
+
         ThrowIfScriptedTransient();
         ExpireOverdueVms();
         if (_getVmFailuresRemaining > 0 && _getVmError is not null)
@@ -1149,7 +1163,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        ThrowIfDeleteScripted(vmName);
+        if (_silentNoOpDeletes)
+        {
+            return;
+        }
+
         var existed = _vms.TryRemove((vmName, zone), out _);
+        if (existed)
+        {
+            DetachDisksOf(vmName);
+        }
+
         _labelFingerprints.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
@@ -1299,7 +1324,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfScriptedTransient();
         IReadOnlyList<BucketDescriptor> buckets = _bucketProjects.ContainsKey(projectId)
-            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null)]
+            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null, _bucketSoftDeleteDays)]
             : [];
         return Task.FromResult(buckets);
     }
@@ -1316,9 +1341,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ThrowIfScriptedTransient();
+        ThrowIfUploadScripted(objectKey);
         using var copy = new MemoryStream();
         await content.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
         _objects[(bucket, objectKey)] = copy.ToArray();
+        OnObjectStored(bucket, objectKey);
     }
 
     public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
@@ -1412,7 +1439,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading");
             }
 
-            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
+            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(_workerGpuLineMissing ? WorkerWarmupProgressLine() : WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
             if (workerMode == FakeWorkerMode.HeartbeatingThenDone)
             {
                 _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done));
@@ -1517,9 +1544,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running");
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false);
 
-    private static string WorkerStatusJson(string jobId, long seq, string stage = "running")
+    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false)
         => new JsonObject
         {
             ["schema"] = 1,
@@ -1530,6 +1557,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             ["vm"] = new JsonObject { ["gpu"] = "NVIDIA L4" },
             ["worker"] = new JsonObject { ["version"] = "1.0.0", ["image"] = "sha256:fake" },
             ["error"] = null,
+            ["cancelSeen"] = cancelSeen,
         }.ToJsonString();
 
     private static string WorkerFirstProgressLine(bool gpu)
@@ -1545,7 +1573,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private void TickLiveWorker(string bucket, string statusKey, LiveWorker live)
     {
         var next = live with { Seq = live.Seq + 1, ReadsLeft = live.ReadsLeft - 1 };
-        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage));
+        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage, live.CancelSeen));
         if (next.ReadsLeft <= 0)
         {
             _liveWorkers.TryRemove((bucket, statusKey), out _);
@@ -1657,9 +1685,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var scripted = new Dictionary<(string Region, string Metric), int>();
+        var used = new Dictionary<(string Region, string Metric), int>();
         foreach (var ((region, accelerator), available) in _regionalQuota)
         {
             scripted[(region, MetricOf(accelerator))] = available;
+        }
+
+        foreach (var ((region, accelerator), inUse) in _regionalUsed)
+        {
+            used[(region, MetricOf(accelerator))] = inUse;
         }
 
         var regionNames = new HashSet<string>(DefaultQuotaRegions, StringComparer.OrdinalIgnoreCase);
@@ -1680,7 +1714,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
 
             table[region] = metricNames
-                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, 0))
+                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, used.GetValueOrDefault((region.ToLowerInvariant(), m))))
                 .ToList();
         }
 

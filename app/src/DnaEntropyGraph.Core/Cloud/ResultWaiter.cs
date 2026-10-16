@@ -120,6 +120,113 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// </summary>
     public async Task<string> AwaitResultAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null)
     {
+        // Issue #675: a stall question opened to the caller is withdrawn however the wait ends (the result arrived, the run was ended, the run was cancelled).
+        using var stall = new StallState();
+        try
+        {
+            return await AwaitResultCoreAsync(request, bucket, zone, cancellationToken, vmStartMark, stall).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Notices run off the poll loop (a blocking handler must not hang it); the ones already given are let finish, but never for longer than a moment.
+            await stall.DrainNoticesAsync(NoticeDrainTimeout).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The question put to the caller when the heartbeat watch fires (issue #675): the open task, its token source, and the verdict it was asked about.</summary>
+    private sealed class StallState : IDisposable
+    {
+        private readonly object _noticeGate = new();
+        private Task _notices = Task.CompletedTask;
+        private CancellationTokenSource? _cts;
+
+        /// <summary>Runs <paramref name="handler"/> with the notice on the thread pool, after the notices given before it (in order), never on the caller's thread.</summary>
+        public void Enqueue(Action<RunNotice> handler, RunNotice notice)
+        {
+            lock (_noticeGate)
+            {
+                _notices = _notices.ContinueWith(
+                    _ =>
+                    {
+                        try
+                        {
+                            handler(notice);
+                        }
+                        catch (Exception)
+                        {
+                            // Whoever shows the notice failing must never end the run.
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+            }
+        }
+
+        public async Task DrainNoticesAsync(TimeSpan limit)
+        {
+            Task pending;
+            lock (_noticeGate)
+            {
+                pending = _notices;
+            }
+
+            await Task.WhenAny(pending, Task.Delay(limit, TimeProvider.System)).ConfigureAwait(false);
+        }
+
+        public Task<StallChoice>? Choice { get; private set; }
+
+        public HeartbeatVerdict? Verdict { get; private set; }
+
+        public bool IsOpen => Choice is not null;
+
+        public void Open(StallDecision ask, StallPrompt prompt, HeartbeatVerdict verdict, CancellationToken runToken, TimeSpan? answerTimeout, TimeProvider time)
+        {
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(runToken);
+            Verdict = verdict;
+            var token = _cts.Token;
+
+            // The handler runs on the thread pool, never on the poll loop: one that blocks synchronously (a modal dialog on the wrong thread, a lock) would otherwise
+            // freeze the poll and the result limit with it. Its task is also cut at the answer timeout. Throwing, faulting, cancelling and timing out are all
+            // "no answer", and the run then ends the way it chose.
+            var asked = Task.Run(() => ask(prompt, token), token);
+            Choice = answerTimeout is { } limit && limit > TimeSpan.Zero ? asked.WaitAsync(limit, time, token) : asked;
+        }
+
+        /// <summary>What the caller chose, or null when its task faulted or was cancelled (no answer).</summary>
+        public StallChoice? TakeChoice() => Choice is { IsCompletedSuccessfully: true } done ? done.Result : null;
+
+        /// <summary>Withdraws the question: its token is cancelled and whatever the task later does is ignored.</summary>
+        public void Close()
+        {
+            if (Choice is { } task)
+            {
+                _cts?.Cancel();
+                _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+
+            _cts?.Dispose();
+            _cts = null;
+            Choice = null;
+            Verdict = null;
+        }
+
+        public void Dispose() => Close();
+    }
+
+    /// <summary>How long the end of a wait lets the notices already given finish: a handler that blocks costs the run this much, never more.</summary>
+    private static readonly TimeSpan NoticeDrainTimeout = TimeSpan.FromSeconds(2);
+
+    private void Notify(StallState stall, RunNotice notice)
+    {
+        if (settings.OnNotice is { } handler)
+        {
+            stall.Enqueue(handler, notice);
+        }
+    }
+
+    private async Task<string> AwaitResultCoreAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark, StallState stall)
+    {
         var key = WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json";
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
         var clockStart = settings.StartClock();
@@ -195,6 +302,67 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
                 var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart));
+                if (watch.TakeSlowNotice() is { } slow)
+                {
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.SlowStage, slow.Stage, slow.InStage, slow.Deadline));
+                }
+
+                // Issue #675: with a stall handler the verdict is a question for the person (Stop, Delete, Keep waiting), asked once while it is open; the polling for
+                // result.json goes on meanwhile. A box with no GPU is never asked about (it is deleted at once, as startup.sh does).
+                var forceStop = false;
+                var forceDelete = false;
+                if (verdict is { DeleteVm: true } && stall.IsOpen)
+                {
+                    // A box with no GPU is deleted at once whatever a question open about something else was waiting for: withdraw the question, the delete below wins.
+                    stall.Close();
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallCleared));
+                }
+
+                if (stall.IsOpen)
+                {
+                    if (stall.Choice!.IsCompleted)
+                    {
+                        var asked = stall.Verdict!;
+                        var choice = stall.TakeChoice();
+                        stall.Close();
+                        switch (choice)
+                        {
+                            case StallChoice.KeepWaiting:
+                                watch.Snooze(settings.ElapsedSince(clockStart));
+                                verdict = null;
+                                break;
+                            case StallChoice.Stop:
+                                verdict = asked;
+                                forceStop = true;
+                                break;
+                            case StallChoice.Delete:
+                                verdict = asked;
+                                forceDelete = true;
+                                break;
+                            case StallChoice.EndAsRunChose:
+                            default:
+                                verdict = asked; // no answer (or none wanted): the default end, never a VM left billing
+                                break;
+                        }
+                    }
+                    else if (verdict is null)
+                    {
+                        stall.Close();
+                        Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallCleared));
+                    }
+                    else
+                    {
+                        verdict = null; // the question is already open: not repeated
+                    }
+                }
+                else if (verdict is not null && !verdict.DeleteVm && settings.OnStall is { } ask)
+                {
+                    var waited = settings.ElapsedSince(clockStart);
+                    stall.Open(ask, new StallPrompt(request.JobId, verdict.Code, verdict.Message, verdict.Stage, waited), verdict, cancellationToken, settings.StallAnswerTimeout, settings.TimeProvider);
+                    Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallDetected, verdict.Stage, Code: verdict.Code));
+                    verdict = null;
+                }
+
                 if (verdict is not null)
                 {
                     // A worker writes result.json BEFORE it stops its heartbeat: one last look before calling it dead.
@@ -205,7 +373,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                     }
 
                     // A box with no GPU is deleted whatever the user chose (as startup.sh does); a frozen worker's VM is ended per the user's choice.
-                    var heartbeatNote = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: verdict.DeleteVm).ConfigureAwait(false);
+                    var heartbeatNote = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: verdict.DeleteVm || forceDelete, forceStop: forceStop).ConfigureAwait(false);
                     throw VmEndNotes.Apply(new RunFailureException(CloudErrorKind.Other, verdict.Code, verdict.Message), heartbeatNote);
                 }
             }

@@ -2114,4 +2114,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="CloudActivityLogOpenFailed" xml:space="preserve">
     <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
   </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Start the run again.</value>
+  </data>
 </root>

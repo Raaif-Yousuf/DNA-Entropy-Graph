@@ -307,6 +307,129 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
     private static bool LabelsEqual(IDictionary<string, string>? actual, IReadOnlyDictionary<string, string> target)
         => actual is not null && actual.Count == target.Count && target.All(p => actual.TryGetValue(p.Key, out var value) && string.Equals(value, p.Value, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Issue #105: <c>instances.start</c> on the VM as it is, polled to <c>DONE</c>. No label, scheduling or metadata write (that is
+    /// <see cref="ReuseVmAsync"/>). A 404 is <c>VM_NOT_FOUND</c>, never a silent success: the caller asked for a VM to run.
+    /// </summary>
+    public async Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        ComputeData.Operation operation;
+        try
+        {
+            operation = await CallAsync("compute.instances.start", token => _service.Instances.Start(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            throw new CloudOperationException(new CloudError("VM_NOT_FOUND", 404, $"The VM '{vmName}' is gone."), CloudErrorKind.Other);
+        }
+
+        await AwaitOperationAsync(project, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Issue #105: <c>disks.aggregatedList</c> filtered on the app label and this installation's label, following the page token, asking for partial
+    /// success so an unreachable zone is REPORTED (it fails the whole listing, like the VM listings: a short list must never read as "no disks").
+    /// The server filter is the query; every disk is checked again here, so one without both labels can never be returned. Regional disks list under
+    /// <c>regions/..</c>, and their scope name is returned as the zone.
+    /// </summary>
+    public async Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        if (!LabelValuePattern.IsMatch(installationId ?? string.Empty))
+        {
+            return [];
+        }
+
+        var filter = $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.installation-id = \"{installationId}\")";
+        var found = new List<DiskDescriptor>();
+        string? pageToken = null;
+        do
+        {
+            var requestedToken = pageToken;
+            var page = await CallAsync(
+                "compute.disks.aggregatedList",
+                token =>
+                {
+                    var request = _service.Disks.AggregatedList(project);
+                    request.Filter = filter;
+                    request.PageToken = requestedToken;
+                    request.ModifyRequest += message =>
+                        message.RequestUri = new Uri(message.RequestUri + (string.IsNullOrEmpty(message.RequestUri!.Query) ? "?" : "&") + "returnPartialSuccess=true");
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (page.Unreachables is { Count: > 0 } unreachable)
+            {
+                throw new CloudOperationException(
+                    new CloudError("ZONES_UNREACHABLE", null, $"Compute Engine could not list these places: {string.Join(", ", unreachable.Select(u => ZoneName(u) ?? u))}."),
+                    CloudErrorKind.Network);
+            }
+
+            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.DisksScopedList>())
+            {
+                foreach (var disk in scoped?.Disks ?? [])
+                {
+                    if (disk.Labels is { } labels
+                        && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
+                        && labels.TryGetValue("installation-id", out var owner) && owner == installationId)
+                    {
+                        found.Add(new DiskDescriptor(
+                            disk.Name,
+                            ZoneName(disk.Zone ?? disk.Region) ?? ZoneName(scope) ?? string.Empty,
+                            (int)Math.Min(disk.SizeGb ?? 0, int.MaxValue),
+                            disk.Status ?? string.Empty,
+                            new Dictionary<string, string>(labels),
+                            ParseTime(disk.CreationTimestamp),
+                            (disk.Users ?? []).Select(u => ZoneName(u) ?? u).ToList()));
+                    }
+                }
+            }
+
+            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            if (next is not null && next == pageToken)
+            {
+                throw new CloudOperationException(
+                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the disk list may be incomplete."),
+                    CloudErrorKind.Network);
+            }
+
+            pageToken = next;
+        }
+        while (pageToken is not null);
+
+        return found;
+    }
+
+    /// <summary>
+    /// Issue #105: <c>disks.delete</c>, polled to <c>DONE</c>. <paramref name="zone"/> is the disk's scope as the listing returned it: a zone (<c>us-central1-a</c>) or,
+    /// for a regional disk, a region (<c>us-central1</c>), which goes to <c>regionDisks.delete</c> (a zonal delete of a regional disk is a 404, and a 404 here
+    /// means "already gone"). Already gone is a success; a disk still attached is the platform's own 400, passed through.
+    /// </summary>
+    public async Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken)
+    {
+        var project = RequireProject();
+        var regional = !IsZoneName(zone);
+        ComputeData.Operation operation;
+        try
+        {
+            operation = regional
+                ? await CallAsync("compute.regionDisks.delete", token => _service.RegionDisks.Delete(project, zone, diskName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)
+                : await CallAsync("compute.disks.delete", token => _service.Disks.Delete(project, zone, diskName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return;
+        }
+
+        await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken, regional).ConfigureAwait(false);
+    }
+
+    /// <summary>A zone name ends in one letter after the region (<c>us-central1-a</c>); a region (<c>us-central1</c>) does not.</summary>
+    internal static bool IsZoneName(string location) => System.Text.RegularExpressions.Regex.IsMatch(location ?? string.Empty, "-[a-z]$");
+
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);
 

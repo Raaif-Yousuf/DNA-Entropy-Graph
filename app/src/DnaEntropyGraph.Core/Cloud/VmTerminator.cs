@@ -13,9 +13,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// delete when the user chose delete and by stop otherwise. Returns null when the VM was confirmed
     /// ended, else a sentence for the run's detail saying it was not, so no message claims a stop nobody checked.
     /// </summary>
-    public async Task<string?> EndVmAfterFailureAsync(CloudJobRequest request, string? zone, bool forceDelete = false)
+    public async Task<string?> EndVmAfterFailureAsync(CloudJobRequest request, string? zone, bool forceDelete = false, bool forceStop = false)
     {
-        var action = forceDelete ? AfterTaskAction.Delete : FailureEndAction(request);
+        // forceDelete wins; forceStop (the user chose Stop at a stall, #675) overrides the run's own end choice.
+        var action = forceDelete ? AfterTaskAction.Delete : forceStop ? AfterTaskAction.Stop : FailureEndAction(request);
         var error = zone is not null
             ? await EnsureVmEndedAsync(request, zone, action, CancellationToken.None).ConfigureAwait(false)
             : await EnsureVmsEndedByLabelAsync(request, action).ConfigureAwait(false);
