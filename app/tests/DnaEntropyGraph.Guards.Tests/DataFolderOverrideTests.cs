@@ -5,6 +5,7 @@ using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Presentation.Services;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -112,5 +113,92 @@ public sealed class DataFolderOverrideTests : IDisposable
         File.WriteAllText(planted, "var x = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);");
 
         FilesUsingTheLocalDataFolder([planted]).ShouldBe([planted]);
+    }
+
+    [Fact]
+    public void Startup_resolves_against_the_real_program_directory_so_a_portable_flag_beside_the_exe_is_honoured()
+    {
+        // Issue #144: behavioural. A flag planted beside the test host (AppContext.BaseDirectory, what production passes) must switch the
+        // resolver the app actually starts with to portable mode; if Startup stopped passing the program directory the flag is never looked at.
+        Environment.GetEnvironmentVariable(AppDataRoot.EnvironmentVariable).ShouldBeNull("the test needs DEG_DATA_DIR unset");
+        var flag = Path.Combine(AppContext.BaseDirectory, AppDataRoot.PortableFlagFileName);
+        var data = Path.Combine(AppContext.BaseDirectory, AppDataRoot.PortableDataFolderName);
+        File.Exists(flag).ShouldBeFalse();
+        Directory.Exists(data).ShouldBeFalse();
+        try
+        {
+            File.WriteAllText(flag, string.Empty);
+
+            var root = StartupDataRoot.ResolveForThisProcess([]);
+
+            root.IsPortable.ShouldBeTrue();
+            root.Path.ShouldBe(data);
+        }
+        finally
+        {
+            File.Delete(flag);
+            if (Directory.Exists(data))
+            {
+                Directory.Delete(data, recursive: true);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(DataFolderProblem.CannotCreate, "DataFolderUnusable_Portable_CannotCreate")]
+    [InlineData(DataFolderProblem.NotAFolder, "DataFolderUnusable_Portable_NotAFolder")]
+    public void A_portable_failure_uses_the_portable_copy_and_an_override_failure_keeps_the_profile_copy(DataFolderProblem problem, string portableKey)
+    {
+        var strings = NSubstitute.Substitute.For<IStringResourceProvider>();
+        strings.GetString(NSubstitute.Arg.Any<string>()).Returns(call => call.Arg<string>() + " {0}");
+
+        StartupDataRoot.MessageFor(new DataFolderUnusableException(problem, "P", isPortable: true), strings).ShouldBe(portableKey + " P");
+        StartupDataRoot.MessageFor(new DataFolderUnusableException(problem, "P"), strings).ShouldNotContain("Portable");
+    }
+
+    [Fact]
+    public void The_portable_failure_copy_names_one_action_and_never_the_profile_switch()
+    {
+        var resw = string.Concat(RepoPaths.AllReswFiles.Select(File.ReadAllText));
+        foreach (var key in new[] { "DataFolderUnusable_Portable_CannotCreate", "DataFolderUnusable_Portable_NotAFolder" })
+        {
+            var start = resw.IndexOf($"name=\"{key}\"", StringComparison.Ordinal);
+            start.ShouldBeGreaterThan(0, key);
+            var text = resw.Substring(start, resw.IndexOf("</data>", start, StringComparison.Ordinal) - start);
+            text.ShouldContain("portable.flag");
+            text.ShouldNotContain("--profile");
+            text.ShouldNotContain("you chose");
+        }
+    }
+    [Fact]
+    public async Task In_portable_mode_the_real_services_store_paths_relative_use_the_delete_journal()
+    {
+        // Issue #144: the DI graph is what wires the mapper, the journal choice and the default output folder to the portable root.
+        var program = Path.Combine(_scratch, "stick");
+        Directory.CreateDirectory(program);
+        File.WriteAllText(Path.Combine(program, AppDataRoot.PortableFlagFileName), string.Empty);
+        var root = AppDataRoot.Resolve([], _ => null, Path.GetTempPath(), programDirectory: program);
+        root.IsPortable.ShouldBeTrue();
+        await using var provider = Build(root);
+
+        var outputs = Path.Combine(program, "outputs", "run");
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(new RunRecord("j", JobPhase.Completed, DateTimeOffset.UtcNow) { OutputDir = outputs }, TestContext.Current.CancellationToken);
+
+        using var connection = provider.GetRequiredService<DnaEntropyGraph.Persistence.SqliteDatabase>().OpenConnection();
+        using var raw = connection.CreateCommand();
+        raw.CommandText = "SELECT OutputDir FROM Runs;";
+        ((string)raw.ExecuteScalar()!).ShouldBe(@"portable:outputs\run");
+        raw.CommandText = "PRAGMA journal_mode;";
+        ((string)raw.ExecuteScalar()!).ShouldBe("delete");
+    }
+    [Fact]
+    public void Only_AppDataRoot_names_the_portable_flag()
+    {
+        var users = RepoPaths.AllCSharpFiles
+            .Where(p => File.ReadAllText(p).Contains("\"portable.flag\"", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .ToArray();
+
+        users.ShouldBe(["AppDataRoot.cs"], "one resolver decides where state lives (#144); tests use AppDataRoot.PortableFlagFileName.");
     }
 }
