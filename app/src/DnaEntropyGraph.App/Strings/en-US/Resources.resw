@@ -1549,7 +1549,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The analysis program on this PC stopped reporting in, so it was stopped. Start the run again, and if it happens again choose Repair under This PC in Settings.</value>
   </data>
   <data name="RunError_local_worker_timed_out" xml:space="preserve">
-    <value>The analysis on this PC ran longer than the time allowed, so it was stopped. Start the run again with a longer time limit or a shorter sequence.</value>
+    <value>The analysis on this PC ran longer than the time allowed, so it was stopped. Start the run again with a shorter sequence, or choose Cloud as the place to run.</value>
   </data>
   <data name="RunError_local_worker_exit_nonzero" xml:space="preserve">
     <value>The analysis finished and its results are saved, but the analysis program reported a problem as it closed. If the results look wrong, choose Repair under This PC in Settings and run again.</value>
