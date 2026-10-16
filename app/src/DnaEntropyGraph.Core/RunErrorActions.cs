@@ -74,6 +74,7 @@ public static class RunErrorActions
         [RunErrorCodes.WorkerDefaultAccountMissing] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
+        [RunErrorCodes.DeletedByCleanup] = RunErrorAction.StartAgain,
         [RunErrorCodes.LocalEngineNotReady] = RunErrorAction.OpenSettings,
         [RunErrorCodes.LocalGpuNotUsable] = RunErrorAction.ChooseCloud,
         [RunErrorCodes.LocalWorkerCrashed] = RunErrorAction.OpenSettings,

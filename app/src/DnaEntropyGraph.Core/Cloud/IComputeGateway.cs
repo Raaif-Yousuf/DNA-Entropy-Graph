@@ -46,6 +46,24 @@ public interface IComputeGateway
     /// </summary>
     Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Issue #105: starts a stopped VM AS IT IS (no label, scheduling or metadata rewrite: that is <see cref="ReuseVmAsync"/>). A VM that is gone is a
+    /// <c>VM_NOT_FOUND</c> (404) error, never a silent success; a stockout on the start is <see cref="CloudErrorKind.Stockout"/>. Starting a VM that
+    /// already runs is accepted by Compute and is a no-op. THEORY (unverified, ToTest #105): a VM stopped past its <c>maxRunDuration</c> is accepted.
+    /// </summary>
+    Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #105: every persistent disk carrying <c>app=dna-entropy-graph</c> AND <c>installation-id=&lt;installationId&gt;</c>, across every zone, with size,
+    /// status and the VMs holding it (a disk a deleted VM left behind is what keeps billing). Like the VM listings it fails when a zone cannot be read
+    /// rather than return a partial list, and an id no label can hold answers an empty list without asking anyone. A real gateway implements this via
+    /// <c>disks.aggregatedList</c> filtered on those two labels.
+    /// </summary>
+    Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken);
+
+    /// <summary>Issue #105: deletes one disk. Already gone is a success; a disk still attached is an error. The caller reads back to verify (see <c>InstallationCleanup</c>).</summary>
+    Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken);
+
     Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);

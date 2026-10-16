@@ -313,6 +313,23 @@ requests (`regions.list` pages, `projects.get`) in one gateway method and the 60
 pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
 `FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
 
+### 6.x Asking for the quota (issue #99, the wizard's GPU step)
+
+`GpuQuotaRequester.RequestAsync(project, region, contactEmail)` asks Google for one more `NVIDIA_L4_GPUS` in the region and one more `GPUS_ALL_REGIONS`. Per quota, in
+this order: skip it when `ReadQuotaAsync` already shows at least one GPU free (limit minus usage); stop with `Failed` `QUOTA_READ_FAILED` when the read failed (the limit is unknown
+and a request built on it could ask for less than the project has: no request is created and the user retries); read eligibility
+(`IQuotaGateway.GetQuotaIncreaseEligibilityAsync`, the Cloud Quotas API's `quotaInfos.get` and its `quotaIncreaseEligibility`); only an explicit yes creates
+the request (`RequestQuotaIncreaseAsync`) for `max(1, limit + 1)`, one more than the project has now. An ineligible project gets the reason (`NoValidBillingAccount`, `NotEnoughUsageHistory`,
+`NotSupported`, `Other`), and an eligibility that says neither yes nor no is a `Failed` with `QUOTA_ELIGIBILITY_UNKNOWN`, never permission. One quota's failure never
+stops the other. The preference id is `deg-<metric-slug>[-<region>]` (no date). MEASURED 2026-10-15 (docs.cloud.google.com/docs/quotas/reference/rest/v1/projects.locations.quotaPreferences): "There is only one QuotaPreference resource for a quota value targeting a unique set of dimensions", a preference cannot be deleted, an `etag` that no longer matches is rejected `ABORTED`, and the list `filter` covers state, type and time only. So the gateway lists the project's preferences (paged), matches on service, quota id and dimensions under ANY id (a Console request, an older app version), returns one that already asks for enough (`AlreadyExisted`, nothing written), raises a lower one in place with `PATCH` and its etag (one attempt: a replay meets a changed etag), and creates one only when there is none (a replayed create whose answer was lost meets its own id: `AlreadyExists`, read as `AlreadyRequested`).
+The outcomes are `AlreadyAvailable`, `Granted` (approved at once), `Requested` (with Google, review can take days), `AlreadyRequested`, `NotEligible`, `Failed`.
+**DECISION (agent-made, reversible):** raw REST over the same bearer-token HTTP stack, not a package: NuGet has no discovery client for this API
+(`Google.Apis.CloudQuotas.v1` does not exist) and the gRPC `Google.Cloud.CloudQuotas.V1` would bring its own transport and break the injectable HTTP handler every other
+gateway and test uses. Quota preferences are not billable and carry no labels, so Hard Rules 9 and 10 do not apply to them. The API itself (`cloudquotas.googleapis.com`)
+must be enabled in the project: while it is not, both calls fail `api_disabled`. The wizard's service step enables it: `RequiredServices.Ids` is `[compute, storage, cloudquotas]` (#705, `GoogleServiceUsageGatewayTests` asserts the batch), so the earlier note that it did not was stale (rc99 review, 2026-10-15).
+Quota ids, MEASURED 2026-10-15: the docs' own `CreateQuotaPreference` example for a GPU quota is `GPUS-PER-GPU-FAMILY-per-project-region` with a `region` dimension, and Compute's resource-usage page names the standard L4 quota `GPU_FAMILY:NVIDIA_L4`, so the L4 request is that quota id with dimensions `region` and `gpu_family=NVIDIA_L4` (the earlier guess `NVIDIA-L4-GPUS-per-project-region` is gone). THEORY (unverified, no live project): the `GPUS-ALL-REGIONS-per-project` id (the docs name the global quota only as "GPUs (all regions)"), the `gpu_family` dimension key, and that a fresh project is `isEligible: true` for them; a wrong id is a 404 read as unknown (nothing asked) and a wrong dimension a rejected create. Every Cloud Quotas call sends `X-Goog-User-Project: <selected project>`: MEASURED 2026-10-15 (docs.cloud.google.com/docs/quotas/set-quota-project) that a request to a client-based API can fail when the quota project cannot be identified and that for REST the `x-goog-user-project` header sets it; THEORY (unverified): the docs do not say the Cloud Quotas API is client-based, so the header may be unnecessary (it is harmless: it needs `serviceusage.services.use` on the project the user chose). **Spot:** no preemptible request is made. MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): Spot VMs consume the standard quota until a preemptible quota is requested, and after a request "the applicable resources can only consume preemptible quota"; asking for `PREEMPTIBLE_NVIDIA_L4_GPUS` would move the project off the quota this request raises, so `QuotaMetrics.QuotaIdFor` answers null for it. `FakeGcp`: `WithQuotaEligibility`, `WithQuotaEligibilityFailure`, `WithQuotaRequestFailure`, `WithQuotaAutoGrant` (moves the
+table `GetGpuQuotaAsync` reads), `QuotaCalls` (the order of reads and creates), `QuotaRequests`.
+
 ## 7. Least-privilege IAM for the worker service account
 
 The VM runs as the service account `dna-entropy-worker@<project>.iam.gserviceaccount.com`
@@ -1339,6 +1356,29 @@ account and a role and edits two policies, and a whole-method retry would replay
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.
 
+### 16.x The Cloud page's gateway methods (issue #105)
+
+What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, `FakeGcp` and the `Resilient*` wrappers:
+
+- `IComputeGateway.StartVmAsync(vm, zone)`: `instances.start` on the VM as it is (no label, scheduling or metadata write: that is reuse, #94), polled
+  to `DONE`. A 404 is `VM_NOT_FOUND`; a stockout on the start is `stockout`. THEORY (unverified): a VM stopped past its `maxRunDuration` is accepted.
+- `IComputeGateway.ListDisksByInstallationAsync(installationId)`: `disks.aggregatedList` filtered on `labels.app` AND `labels.installation-id`
+  (`returnPartialSuccess=true`; an unreachable zone fails the listing as `ZONES_UNREACHABLE`, never a short list; every disk is re-checked for both
+  labels), returning `DiskDescriptor` (name, zone, size in GB, status, labels, creation time, the VMs holding it). `DeleteDiskAsync(disk, zone)`:
+  `disks.delete`, already gone is a success.
+- `IStorageGateway.GetPrefixUsageAsync`, `ListChildPrefixesAsync`, `DeletePrefixAsync`. The bucket has no per-installation prefix (objects live under
+  `jobs/<jobId>/`, one bucket per project shared by every installation), so an installation's footprint is the `jobs/<id>/` folders whose
+  `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
+  job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
+  `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
+  never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
+  every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),
+  one failed delete never stops the others (`Failed` with the error kind), and every delete is read back: `Deleted` means gone, `NotVerified` means the
+  platform accepted the delete and the read still finds it. A disk still held by a VM that is not ours is `Skipped`. `CleanupReport.Complete` is true only
+  when every item is `Deleted`. The service role and the worker service account are not touched here.
+- Resilience: a start keeps the breaker; listing and deleting our disks and the bucket prefix calls bypass it (cleanup that stops the meter).
+  `FakeGcp`: `WithDisk`, `WithStartFailure(kind)`, `WithDeleteFailure(name, kind)`, `WithSilentNoOpDeletes()`.
 ## 17. Overrides in Settings (issue #644)
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
@@ -1351,3 +1391,24 @@ for when the in-app wizard cannot complete them), [`threat_model.md`](threat_mod
 (why the OAuth scope this whole design needs is a large ask, and what it does and does not
 expose), `docs/migration/2026-09-19-worker-migration-inventory.md` (the exhaustive,
 line-referenced prototype-behaviour inventory this doc summarizes for implementers).
+
+Review fixes (rc105, 2026-10-15):
+
+- Every step of `DeleteAllAsync` after the up-front listings is contained: a failed VM read back, second disk listing or prefix read back is an item (`NotVerified` / `Failed`
+  with the error kind) and the sweep goes on; only the caller's cancellation propagates. A job folder whose key is not a deletable folder path (`jobs/../`, which a
+  bucket writer can create) is `Failed` with `PREFIX_REFUSED` and never deleted. Ids are compared exactly (`ab` never matches `abc`).
+- Regional disks: the listing returns a region as the disk's scope, and `DeleteDiskAsync` sends a region (a name not ending in `-<letter>`) to `regionDisks.delete`;
+  the zonal call would 404, which reads as "already gone".
+- Soft delete. MEASURED 2026-10-15 (cloud.google.com/storage/docs/soft-delete): a bucket created without a setting, including through the JSON API, gets a 7 day soft delete
+  retention, "soft-deleted objects continue to accrue storage charges", and the only supported operations on them during retention are list and restore. So a deleted job folder
+  stays billed and recoverable for 7 days. `BucketDescriptor.SoftDeleteRetentionDays` carries the bucket's policy (null unknown, 0 off) and a deleted `JobData` item carries it as
+  `RecoverableForDays`: the Cloud page says "deleted; Google keeps a recoverable copy for N days" instead of a bare "deleted". **DECISION (agent-made, reversible):** the bucket is
+  NOT created with soft delete off. The same bucket holds the shared model cache (a multi-GB re-download if deleted by mistake) and recoverability is the safe default; the cost
+  is a week of storage for small outputs. Changing it is one field on the bucket insert if the owner wants the cleanup to stop billing at once.
+- A run whose VM the cleanup deletes is ended (Hard Rule 11): the VM carries `job-id`, the run's driver is stopped through `ActiveRuns.CancelAsync` first (one writer), and once
+  the VM reads back gone a non-terminal row becomes Cancelling then Cancelled with `RunErrorCodes.DeletedByCleanup` (`cleanup_deleted`, copy `RunError_cleanup_deleted`). A VM whose delete failed leaves its row alone.
+  A VM whose run has a user cancel in progress is `Skipped` (`CANCEL_IN_PROGRESS`).
+- `ResilientStorageGateway.DeletePrefixAsync` is one attempt at this layer (`replayable: false`): the real gateway already runs each list page and each object delete through the
+  pipeline with its own retries, 401 replay and per-attempt deadline, so a second retrying layer around the whole sweep multiplied retries and replayed whole sweeps.
+- `singleRequest:` on `CloudCallPipeline.ExecuteAsync` exists in this branch's base (`CloudCallPipeline.cs`, added before #105).
+- DI: `InstallationCleanup` is registered with the run repository, `ActiveRuns` and the phase callback in all three backends (`DiResolutionTests`); `IComputeGateway.StartVmAsync` resolves through the same registration.

@@ -358,4 +358,54 @@ public class DiResolutionTests
             xaml.ShouldContain("{x:Bind ViewModel." + command + "}");
         }
     }
+
+    [Theory]
+    [InlineData(CloudBackend.Google)]
+    [InlineData(CloudBackend.Fake)]
+    [InlineData(CloudBackend.Developer)]
+    public void The_Cloud_page_gateway_pieces_resolve_in_every_backend(CloudBackend backend)
+    {
+        // Issue #105: InstallationCleanup and StartVmAsync have no caller yet (the app lane binds them); a registration that fails
+        // would only show as an exception on the first Cloud page open.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: backend);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IComputeGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IStorageGateway>().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task The_registered_cleanup_ends_the_row_of_a_run_whose_VM_it_deletes_and_StartVm_reaches_the_gateway()
+    {
+        // The observable that differs if the run repository and the driver registry were not wired into the cleanup: the row stays Running.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: CloudBackend.Developer);
+        using var provider = services.BuildServiceProvider();
+        var gcp = provider.GetRequiredService<DnaEntropyGraph.Cloud.FakeGcp>();
+        var spec = new DnaEntropyGraph.Core.Cloud.VmSpec(
+            ProjectId: "fake-project",
+            InstallationId: "inst-di",
+            JobId: "job-di",
+            Model: "evo2_7b",
+            AppVersion: "0.1.0",
+            Lifecycle: "stop",
+            MachineType: "g2-standard-8",
+            MaxRunDuration: TimeSpan.FromHours(4),
+            TerminationAction: "DELETE");
+        await gcp.CreateVmAsync(spec, "us-central1-a", CancellationToken.None);
+        var compute = provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IComputeGateway>();
+        await compute.StopVmAsync("deg-job-di", "us-central1-a", CancellationToken.None);
+        await compute.StartVmAsync("deg-job-di", "us-central1-a", CancellationToken.None);
+        (await compute.GetVmAsync("deg-job-di", "us-central1-a", CancellationToken.None))!.Status.ShouldBe("RUNNING");
+        var runs = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IRunRepository>();
+        await runs.UpsertAsync(new DnaEntropyGraph.Core.Abstractions.RunRecord("job-di", DnaEntropyGraph.Core.JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().DeleteAllAsync("fake-project", "inst-di", CancellationToken.None);
+
+        var row = (await runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "job-di");
+        row.Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Cancelled);
+        row.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.DeletedByCleanup);
+    }
 }
