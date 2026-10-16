@@ -179,19 +179,25 @@ public class CloudCliGpuTestModeTests
     }
 
     [Fact]
-    public async Task Object_get_over_the_cap_prints_the_head_with_a_truncation_notice_and_exits_ok()
+    public async Task Object_get_over_the_cap_keeps_the_TAIL_with_a_leading_truncation_notice_and_exits_ok()
     {
         var fake = new FakeGcp();
         var bucket = FakeGcp.BucketName(Project);
-        fake.PutObject(bucket, "jobs/job9/logs/gpu-test.log", Encoding.ASCII.GetBytes(new string('x', (4 * 1024 * 1024) + 10)));
+        // A log's verdict (the pytest summary) is at its END, so the end is what survives the cap.
+        const string Tail = "\nSUMMARY 1 passed\n";
+        var content = "HEAD-LINE\n" + new string('x', (4 * 1024 * 1024) + 10) + Tail;
+        fake.PutObject(bucket, "jobs/job9/logs/gpu-test.log", Encoding.ASCII.GetBytes(content));
 
         var result = await RunAsync(fake, "object", "get", "--project", Project, "--bucket", bucket, "--key", "jobs/job9/logs/gpu-test.log");
 
         // Exit 0: the caller (cloud_gpu_test.ps1) pulls the log whatever the size, and a CloudError exit read as "not pulled".
         result.ExitCode.ShouldBe(CloudCliExitCode.Ok, result.Err);
-        result.Out.ShouldContain("[truncated: only the first 4194304 bytes are shown]");
-        result.Out.Count(c => c == 'x').ShouldBe(4 * 1024 * 1024);
+        result.Out.ShouldStartWith("[truncated: only the last 4194304 bytes are shown]");
+        result.Out.TrimEnd().ShouldEndWith("SUMMARY 1 passed"); // in order, at the end
+        result.Out.ShouldNotContain("HEAD-LINE");
+        result.Out.Count(c => c == 'x').ShouldBe((4 * 1024 * 1024) - Tail.Length);
         result.Err.ShouldStartWith("WARNING:");
+        result.Err.ShouldContain("last");
         result.Err.ShouldContain("Google Cloud console");
     }
 

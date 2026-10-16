@@ -323,6 +323,8 @@ def _run_gpu_test_run(
     gpu_flags: str = "--gpus all",
     summary: str = "== 1 passed ==",
     uptime: str = "0.00",
+    elapsed: int | None = None,
+    bad_log: bool = False,
 ) -> list[str]:
     """Source the REAL gpu_test_run() with stubs for everything it touches and return the
     recorded calls, one per line. docker prints a pytest-looking line and exits docker_rc;
@@ -334,7 +336,11 @@ def _run_gpu_test_run(
         "NAME=deg-job1; ZONE=z1; LIFECYCLE=delete",
         f"GPU_FLAGS=({gpu_flags})",
         'cd "$(mktemp -d)" || exit 1',
-        "GPU_TEST_LOG=$PWD/gpu.log; GPU_TEST_RESULT=$PWD/result.json",
+        "GPU_TEST_LOG="
+        + ("/nonexistent-deg-dir/gpu.log" if bad_log else "$PWD/gpu.log")
+        + "; GPU_TEST_RESULT=$PWD/result.json",
+        # how long the tests "took" (the harness cannot wait out a real 50 minute limit)
+        *([f"GPU_TEST_ELAPSED={elapsed}"] if elapsed is not None else []),
         # a file standing in for /proc/uptime ("<seconds since boot> <idle>"); absent means "unreadable"
         *([f'echo "{uptime} 0.00" > "$PWD/uptime"', "GPU_TEST_UPTIME_FILE=$PWD/uptime"] if uptime else []),
         # records `timeout [-k N] LIMIT cmd...`: the kill-after and the limit, then runs the command
@@ -363,7 +369,9 @@ def test_gpu_test_run_runs_pytest_gpu_in_the_image_with_the_gpu_flags_and_a_dead
     docker = next(ln for ln in out if ln.startswith("docker:run"))
     assert "--gpus all" in docker
     assert "ghcr.io/x/y@sha256:abc" in docker
-    assert "gpu" in "\n".join(out)  # the selection code carries the -m gpu marker
+    code = "\n".join(out)
+    assert '"--collect-only", "-q", "-m", "gpu"' in code  # selection asks for the gpu marker
+    assert '"pytest", "-m", "gpu"' in code  # and so does the real run
     assert "timeout:3000" in out  # (MAX_RUN_MIN 60 - 10 min margin) in seconds
 
 
@@ -541,8 +549,10 @@ def test_an_early_failure_outside_gpu_test_mode_writes_nothing() -> None:
 def test_both_early_failure_paths_write_the_gpu_test_result_before_cleanup() -> None:
     text = _code_only()
     for code in ("GPU_NOT_VISIBLE", "IMAGE_PULL_FAILED"):
+        lines = [ln.strip() for ln in text.splitlines()]
+        idx = next(i for i, ln in enumerate(lines) if ln.startswith(f"gpu_test_early_fail {code}"))
+        assert lines[idx + 1].startswith("cleanup "), (code, lines[idx + 1])
         at = text.index(f"gpu_test_early_fail {code}")
-        assert text.index("cleanup", at) > at, code
         assert text.rindex("status failed", 0, at) > text.rindex("foreign_zone_exit", 0, at), code
 
 
@@ -710,3 +720,160 @@ def test_an_unknown_exit_code_still_reports_worker_crash_once(rc: int) -> None:
     calls = _run_docker_tail(rc)
     assert sum("WORKER_CRASH" in c for c in calls) == 1, calls
     assert [c for c in calls if c.startswith("cleanup:")] == ["cleanup:stop"], calls
+
+
+# --- second cold review (#759) ---------------------------------------------------------------
+
+
+def _selection_code() -> str:
+    """The Python the VM runs inside the image (the heredoc in gpu_test_run), verbatim."""
+    text = _text()
+    start = text.index("<<'PY'\n") + len("<<'PY'\n")
+    return text[start : text.index("\nPY\n", start)]
+
+
+def _run_selection(files: dict[str, str]) -> tuple[int, str]:
+    """Run the REAL selection code in a scratch tests/ folder with this venv's pytest."""
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "tests").mkdir()
+        for name, body in files.items():
+            (Path(tmp) / "tests" / name).write_text(body, encoding="utf-8", newline="\n")
+        done = subprocess.run(
+            [sys.executable, "-I", "-c", _selection_code()],
+            cwd=tmp,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return done.returncode, done.stdout + done.stderr
+
+
+_GPU_OK = (
+    "import pytest\n\n\n@pytest.mark.gpu\ndef test_on_gpu():\n    assert True\n\n\n"
+    "def test_unmarked_would_fail():\n    assert False\n"
+)
+_GPU_BROKEN = "import pytest\nimport a_dev_only_dependency_not_installed\n\n\n@pytest.mark.gpu\ndef test_x():\n    pass\n"
+_DEV_ONLY_BROKEN = "import another_dev_only_dependency_not_installed\n\n\ndef test_y():\n    pass\n"
+
+
+def test_selection_runs_only_the_gpu_marked_tests_and_passes() -> None:
+    code, out = _run_selection({"test_a.py": _GPU_OK})
+    assert code == 0, out
+    assert "1 passed" in out
+    assert "1 deselected" in out  # `-m gpu` reached the real run: the unmarked failing test did not run
+
+
+def test_selection_leaves_out_a_dev_only_file_that_cannot_import_and_mentions_no_gpu_marker() -> None:
+    code, out = _run_selection({"test_a.py": _GPU_OK, "test_dev.py": _DEV_ONLY_BROKEN})
+    assert code == 0, out
+
+
+def test_selection_fails_the_run_for_a_gpu_marked_file_that_cannot_be_collected() -> None:
+    """The run must not PASS on the other files while a gpu test silently never ran."""
+    code, out = _run_selection({"test_a.py": _GPU_OK, "test_b.py": _GPU_BROKEN})
+    assert code == 6, out
+    assert "ERROR: gpu test file could not be collected: tests/test_b.py" in out
+    assert "1 passed" in out  # the good file still ran, so the log shows both
+
+
+def test_selection_with_no_gpu_tests_at_all_is_exit_5() -> None:
+    code, out = _run_selection({"test_dev.py": _DEV_ONLY_BROKEN})
+    assert code == 5, out
+
+
+@needs_bash
+def test_gpu_test_run_reports_a_collection_error_as_exit_6_with_an_error_code() -> None:
+    import json
+
+    summary = "ERROR: gpu test file could not be collected: tests/test_b.py\n== 1 passed in 0.1s =="
+    out = _run_gpu_test_run(6, summary=summary)
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert parsed["exitCode"] == 6
+    assert parsed["error"] == "GPU_TEST_COLLECTION_ERROR"
+    assert "status:failed" in out
+
+
+@needs_bash
+def test_gpu_test_run_turns_a_collection_error_into_a_failure_even_if_the_selection_exited_0() -> None:
+    import json
+
+    out = _run_gpu_test_run(0, summary="ERROR: gpu test file could not be collected: tests/test_b.py")
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert (parsed["exitCode"], parsed["error"]) == (6, "GPU_TEST_COLLECTION_ERROR")
+
+
+@needs_bash
+def test_gpu_test_run_result_has_a_null_error_when_there_is_none() -> None:
+    import json
+
+    parsed = json.loads(next(ln for ln in _run_gpu_test_run(0) if ln.startswith("{")))
+    assert parsed["error"] is None
+
+
+@needs_bash
+def test_exit_137_after_the_full_limit_is_a_timeout_and_kills_the_container() -> None:
+    import json
+
+    out = _run_gpu_test_run(137, elapsed=3000)  # limit is 3000 s
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert (parsed["exitCode"], parsed["timedOut"]) == (124, True)
+    assert "docker:kill deg-gputest-job1" in out
+
+
+@needs_bash
+def test_exit_137_before_the_limit_is_an_oom_style_kill_not_a_timeout() -> None:
+    import json
+
+    out = _run_gpu_test_run(137, elapsed=2999)
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert (parsed["exitCode"], parsed["timedOut"]) == (137, False)
+    assert not any(ln.startswith("docker:kill") for ln in out)
+
+
+@needs_bash
+def test_a_log_that_could_not_be_written_is_never_a_pass() -> None:
+    """tee failing (disk full, unwritable path) used to read as rc 0 because only PIPESTATUS[0] was kept."""
+    import json
+
+    out = _run_gpu_test_run(0, bad_log=True)
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert parsed["exitCode"] == 8
+    assert "status:failed" in out
+
+
+def test_the_err_trap_in_gpu_test_mode_writes_the_early_failure_result_before_cleanup() -> None:
+    trap = next(ln for ln in _text().splitlines() if ln.strip().startswith("trap "))
+    assert "gpu_test_early_fail WORKER_CRASH" in trap
+    assert trap.index("gpu_test_early_fail") < trap.index("cleanup")
+
+
+@needs_bash
+def test_a_failing_early_step_in_gpu_test_mode_writes_the_result_object_through_the_real_trap() -> None:
+    import json
+
+    trap = next(ln for ln in _text().splitlines() if ln.strip().startswith("trap "))
+    lines = [
+        "set -uo pipefail",
+        _extract_function("gpu_test_early_fail"),
+        'MODE=gpu-test; IMAGE="ghcr.io/x/y@sha256:abc"; JOB=job1; NAME=deg-job1; ZONE=z1; LIFECYCLE=delete',
+        'cd "$(mktemp -d)" || exit 1',
+        "GPU_TEST_LOG=$PWD/gpu.log; GPU_TEST_RESULT=$PWD/result.json",
+        'put_object() { echo "put:$2"; '
+        '[ "${2##*/}" = "gpu-test-result.json" ] && { cat "$1"; echo; }; true; }',
+        'status() { echo "status:$1"; }',
+        'cleanup() { echo "cleanup:$1"; }',
+        trap,
+        "false",  # the failing mkdir/chown/df of the boot steps
+    ]
+    done = subprocess.run(
+        ["bash", "-s"], input=("\n".join(lines) + "\n").encode("utf-8"), capture_output=True, timeout=60
+    )
+    out = done.stdout.decode("utf-8").splitlines()
+    assert "put:jobs/job1/logs/gpu-test-result.json" in out, out
+    assert out.index("cleanup:delete") > out.index("put:jobs/job1/logs/gpu-test-result.json")
+    parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
+    assert parsed["error"] == "WORKER_CRASH"

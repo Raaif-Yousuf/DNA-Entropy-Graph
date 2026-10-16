@@ -61,9 +61,10 @@ last, so its existence means the log is complete):
 {"schema":1,"jobId":"...","mode":"gpu-test","exitCode":0,"timedOut":false,"image":"name@sha256:...","vm":{"name":"deg-<jobId>","zone":"..."},"finishedAt":"2026-10-16T12:00:00Z"}
 ```
 
-`exitCode` is pytest's, with three additions: `6` = every gpu test skipped or none ran (never a pass), `124` = the deadline passed
+`exitCode` is pytest's, with these additions: `6` = every gpu test skipped or none ran, or a gpu-marked test file could not be collected
+(`"error":"GPU_TEST_COLLECTION_ERROR"`; never a pass), `8` = the test log could not be written (`"error":"GPU_TEST_LOG_NOT_WRITTEN"`), `124` = the deadline passed
 (`timedOut` is `true`; the container was killed by name), `7` = the VM failed before any test could start (GPU never visible, image pull
-failed), in which case the object also carries `"error":"GPU_NOT_VISIBLE"` or `"IMAGE_PULL_FAILED"` and the log is that one line. The
+failed, or an unexpected boot-step error: `"error":"GPU_NOT_VISIBLE"`, `"IMAGE_PULL_FAILED"` or `"WORKER_CRASH"`), in which case the log is that one line. `error` is `null` otherwise. The
 deadline is counted from boot and ends 10 minutes before `maxRunDuration`. A caller must treat the result as its own only when `image` and
 `vm.name` match what it created, and must not reuse a job id whose result object already exists (`cloud_gpu_test.ps1` refuses both).
 

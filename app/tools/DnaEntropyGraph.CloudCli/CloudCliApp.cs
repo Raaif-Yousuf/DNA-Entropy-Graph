@@ -223,35 +223,56 @@ public sealed class CloudCliApp
         await using (stream.ConfigureAwait(false))
         {
             // Capped: a log is text for a person, and one runaway object must not fill the console. Anything outside printable ASCII becomes '?'.
-            var buffer = new byte[MaxObjectBytes + 1];
-            var read = 0;
-            while (read < buffer.Length)
+            // Over the cap the TAIL is kept (a ring of the last MaxObjectBytes): a log's verdict, the pytest summary, is at its end.
+            var ring = new byte[MaxObjectBytes];
+            var chunk = new byte[64 * 1024];
+            long total = 0;
+            while (true)
             {
-                var n = await stream.ReadAsync(buffer.AsMemory(read), cancellationToken).ConfigureAwait(false);
+                var n = await stream.ReadAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false);
                 if (n == 0)
                 {
                     break;
                 }
 
-                read += n;
+                for (var i = 0; i < n; i++)
+                {
+                    ring[(int)((total + i) % MaxObjectBytes)] = chunk[i];
+                }
+
+                total += n;
             }
 
-            var text = Encoding.UTF8.GetString(buffer, 0, Math.Min(read, MaxObjectBytes));
+            var truncated = total > MaxObjectBytes;
+            var length = (int)Math.Min(total, MaxObjectBytes);
+            var ordered = new byte[length];
+            if (truncated)
+            {
+                var start = (int)(total % MaxObjectBytes);
+                Array.Copy(ring, start, ordered, 0, MaxObjectBytes - start);
+                Array.Copy(ring, 0, ordered, MaxObjectBytes - start, start);
+            }
+            else
+            {
+                Array.Copy(ring, ordered, length);
+            }
+
+            var text = Encoding.UTF8.GetString(ordered);
             var builder = new StringBuilder(text.Length);
             foreach (var c in text)
             {
                 builder.Append(c is '\n' or '\r' or '\t' || c is >= ' ' and <= '~' ? c : '?');
             }
 
-            stdout.Write(builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", stdout.NewLine, StringComparison.Ordinal));
-            if (read > MaxObjectBytes)
+            if (truncated)
             {
-                // Exit 0, not CloudError: the head WAS printed and a caller that saves stdout (cloud_gpu_test.ps1 pulls the log) must keep
-                // it. The notice goes into the output itself, so a saved file says it is cut, and to stderr for the console.
-                stdout.WriteLine();
-                stdout.WriteLine($"[truncated: only the first {MaxObjectBytes} bytes are shown]");
-                stderr.WriteLine($"WARNING: {Ascii(command.Key)} is larger than {MaxObjectBytes} bytes, so only the first {MaxObjectBytes} bytes were printed. Download the rest from the Google Cloud console.");
+                // Exit 0, not CloudError: the tail WAS printed and a caller that saves stdout (cloud_gpu_test.ps1 pulls the log) must keep
+                // it. The notice leads the output itself, so a saved file says it is cut, and goes to stderr for the console.
+                stdout.WriteLine($"[truncated: only the last {MaxObjectBytes} bytes are shown]");
+                stderr.WriteLine($"WARNING: {Ascii(command.Key)} is larger than {MaxObjectBytes} bytes, so only the last {MaxObjectBytes} bytes were printed. Download the rest from the Google Cloud console.");
             }
+
+            stdout.Write(builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", stdout.NewLine, StringComparison.Ordinal));
         }
 
         return CloudCliExitCode.Ok;

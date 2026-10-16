@@ -213,31 +213,43 @@ gpu_test_early_fail() {
 #     the signal never reached the tests; tini forwards it. `timeout -k 30` escalates to KILL, and on a timeout `docker kill <name>`
 #     stops the container itself. exit 124 is normalised for both timeout outcomes.
 #   - The tests are selected by COLLECTION (`pytest --collect-only -m gpu` per file inside the image), not by grepping file text: a
-#     file that only mentions the marker is not run and a marker set another way is not missed. A file that cannot be imported in the
-#     image (it needs a dev-only dependency) is named in the log and left out.
+#     file that only mentions the marker is not run and a marker set another way is not missed. A file that cannot be collected and
+#     carries a gpu marker FAILS the run (exit 6, error GPU_TEST_COLLECTION_ERROR); one that needs a dev-only dependency and has no
+#     marker is named in the log and left out.
 # GPU_TEST_LOG / GPU_TEST_RESULT / GPU_TEST_UPTIME_FILE exist so a test can point the files somewhere writable.
 gpu_test_run() {
   local log="${GPU_TEST_LOG:-/var/log/deg-gpu-test.log}" result="${GPU_TEST_RESULT:-/tmp/deg-gpu-test-result.json}"
-  local cname="deg-gputest-${JOB}" up limit rc timed_out=false started=$SECONDS select_py
+  local cname="deg-gputest-${JOB}" up limit rc timed_out=false started=$SECONDS select_py err="" err_json=null tee_rc=0 rcs elapsed
   up=$(cut -d. -f1 "${GPU_TEST_UPTIME_FILE:-/proc/uptime}" 2>/dev/null)
   limit=$(( (MAX_RUN_MIN - 10) * 60 - ${up:-$SECONDS} ))
   if [ "$limit" -lt 60 ]; then
     limit=60
   fi
   select_py=$(cat <<'PY'
-import glob, subprocess, sys
-files = []
+import glob, re, subprocess, sys
+files, bad = [], []
 for f in sorted(glob.glob("tests/test_*.py")):
+    name = f.replace("\\", "/")
     r = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "gpu", "-p", "no:cacheprovider", f],
                        capture_output=True, text=True)
     if r.returncode == 0:
         files.append(f)
     elif r.returncode != 5:
-        print("not collected (could not be imported in this image):", f, flush=True)
-if not files:
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            marked = re.search(r"mark\.gpu|pytestmark", fh.read())
+        if marked:
+            bad.append(name)
+            print("ERROR: gpu test file could not be collected:", name, flush=True)
+        else:
+            print("not collected (needs a dev-only dependency, carries no gpu marker):", name, flush=True)
+rc = 5
+if files:
+    rc = subprocess.call([sys.executable, "-m", "pytest", "-m", "gpu", "-p", "no:cacheprovider", "-q", "-ra", *files])
+elif not bad:
     print("no gpu test files found", flush=True)
-    sys.exit(5)
-sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-m", "gpu", "-p", "no:cacheprovider", "-q", "-ra", *files]))
+if bad and rc in (0, 5):
+    rc = 6
+sys.exit(rc)
 PY
 )
   status running
@@ -251,10 +263,20 @@ PY
     python -c "$select_py" 2>&1 | tee "$log"; then
     rc=0
   else
-    rc=${PIPESTATUS[0]}
+    rcs=("${PIPESTATUS[@]}")
+    rc=${rcs[0]}
+    tee_rc=${rcs[1]:-0}
+  fi
+  # A log that could not be written is not a pass: under pipefail a failing tee also lands in the else branch, but with docker's rc 0.
+  if [ "$rc" = "0" ] && { [ "$tee_rc" != "0" ] || [ ! -s "$log" ]; }; then
+    echo "ERROR: the test log could not be written (exit 8), so nothing can be shown to have passed."
+    rc=8
+    err=GPU_TEST_LOG_NOT_WRITTEN
   fi
   # 124: `timeout` ended it; 137 after the full limit: the -k KILL had to finish it. Either way stop the container by name.
-  if [ "$rc" = "124" ] || { [ "$rc" = "137" ] && [ $(( SECONDS - started )) -ge "$limit" ]; }; then
+  # GPU_TEST_ELAPSED lets a test stand in for the time the tests took.
+  elapsed=${GPU_TEST_ELAPSED:-$(( SECONDS - started ))}
+  if [ "$rc" = "124" ] || { [ "$rc" = "137" ] && [ "$elapsed" -ge "$limit" ]; }; then
     timed_out=true
     rc=124
     docker kill "$cname" || true
@@ -265,9 +287,19 @@ PY
     echo "ERROR: pytest -m gpu skipped tests or ran none, so nothing was proven (exit 6): is the GPU stack importable in the image?"
     rc=6
   fi
+  # A gpu-marked file that could not be collected means a gpu test never ran: the run cannot pass on the other files.
+  if grep -q '^ERROR: gpu test file could not be collected' "$log" 2>/dev/null; then
+    err=GPU_TEST_COLLECTION_ERROR
+    if [ "$rc" = "0" ]; then
+      rc=6
+    fi
+  fi
+  if [ -n "$err" ]; then
+    err_json="\"$err\""
+  fi
   put_object "$log" "jobs/${JOB}/logs/gpu-test.log" || true
-  printf '{"schema":1,"jobId":"%s","mode":"gpu-test","exitCode":%s,"timedOut":%s,"image":"%s","vm":{"name":"%s","zone":"%s"},"finishedAt":"%s"}\n' \
-    "$JOB" "$rc" "$timed_out" "$IMAGE" "$NAME" "$ZONE" "$(date -u +%FT%TZ)" > "$result"
+  printf '{"schema":1,"jobId":"%s","mode":"gpu-test","exitCode":%s,"timedOut":%s,"error":%s,"image":"%s","vm":{"name":"%s","zone":"%s"},"finishedAt":"%s"}\n' \
+    "$JOB" "$rc" "$timed_out" "$err_json" "$IMAGE" "$NAME" "$ZONE" "$(date -u +%FT%TZ)" > "$result"
   if [ "$rc" = "0" ]; then
     status done
   else
@@ -280,7 +312,8 @@ PY
 
 # Any uncaught error anywhere below this line reports WORKER_CRASH and applies the
 # configured lifecycle rather than leaving the VM to bill silently forever.
-trap 'status failed "{\"code\":\"WORKER_CRASH\",\"retriable\":false}"; cleanup "$LIFECYCLE"' ERR
+# In gpu-test mode the early-failure result is written too, so the caller does not wait out its deadline (a no-op for a job).
+trap 'status failed "{\"code\":\"WORKER_CRASH\",\"retriable\":false}"; gpu_test_early_fail WORKER_CRASH "an unexpected error stopped the boot steps"; cleanup "$LIFECYCLE"' ERR
 
 # Deadman: if nothing else ever calls cleanup (e.g. this script itself hangs before
 # reaching one), the guest shuts down MAX_RUN_MIN+15 minutes after boot. This is a LAST

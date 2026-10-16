@@ -488,8 +488,9 @@ dotnet run --project tools/DnaEntropyGraph.CloudCli -- vm delete --project <id> 
   and `--bucket` the VM also gets `worker/vm/startup.sh` and its `deg-*` attributes through `StartupMetadata.Build` (lifecycle always
   delete); `--startup-mode gpu-test` adds `deg-mode=gpu-test`, which makes the script run `pytest -m gpu` instead of a job (#759).
   `bucket ensure` creates (idempotently) and names the project's bucket; `object get` prints one object (ASCII, capped at 4 MiB) and a
-  missing one is exit 5 ("not there yet"), which is how `cloud_gpu_test.ps1` polls for the result. An object over the cap prints its first
-  4 MiB, then a `[truncated: ...]` line (and a `WARNING:` on stderr), and exits 0: the head was printed, so a caller that saves stdout keeps it.
+  missing one is exit 5 ("not there yet"), which is how `cloud_gpu_test.ps1` polls for the result. An object over the cap prints a leading
+  `[truncated: only the last 4194304 bytes are shown]` line and then its LAST 4 MiB (a log's verdict, the pytest summary, is at its end),
+  plus a `WARNING:` on stderr, and exits 0 so a caller that saves stdout keeps it.
   `--worker-image` is a developer path: CloudCli does NOT check the digest against the pinned worker image list (that list is embedded in the
   WinUI app, which a console host cannot reference), so `vm create` prints a `WARNING:` saying so. Use only a digest you released yourself.
 - `vm delete` refuses a name that does not start with `deg-` (before any network call) and a VM that lacks the app label. A name not
@@ -535,8 +536,8 @@ CloudCli's resource table, whose final line is `OK: 0 resource(s)` when nothing 
 `-GpuTestTimeoutSeconds`, default maxRunDuration minus 60 s), pulling `gpu-test.log` to `-LogDir` (default `%TEMP%\deg-gpu-test\<job>`),
 `vm delete` (exit 5 is expected: the VM already deleted itself), the leak scan and the table. The run passes only when pytest exited 0.
 On the VM, `startup.sh`'s `gpu_test_run` runs `pytest -m gpu` inside the image on only the test files whose `-m gpu` collection is non-empty
-(the image has pytest and `worker/tests` but not the `dev` extra: hypothesis is MPL-2.0, so a file that cannot be imported there is named in
-the log and left out), under `docker run --init --name deg-gputest-<job>` with `timeout -k 30` counted from boot (maxRunDuration minus 10
+(the image has pytest and `worker/tests` but not the `dev` extra: hypothesis is MPL-2.0, so a file that cannot be imported there and carries no gpu marker is named in
+the log and left out; a gpu-marked file that cannot be collected FAILS the run with exit 6 and `error` `GPU_TEST_COLLECTION_ERROR`), under `docker run --init --name deg-gputest-<job>` with `timeout -k 30` counted from boot (maxRunDuration minus 10
 minutes minus the uptime) and a `docker kill` by name on a timeout, uploads `logs/gpu-test.log` then `logs/gpu-test-result.json`
 (`exitCode`, `timedOut`, `image`, `vm`; see job_contract.md) last, and applies the lifecycle. A failure before the tests can start (GPU not
 visible, image pull failed) writes the same two objects with `exitCode` 7 and an `error` code, so the script stops waiting at once. The
