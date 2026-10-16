@@ -52,7 +52,8 @@ package itself needs):
 ```powershell
 uvx ruff check worker
 uvx ruff format --check worker
-uvx ruff check scripts                      # lint only for scripts/ (#430): see the scripts/tests section
+uvx ruff check scripts                      # lint for scripts/ (#430): see the scripts/tests section
+uvx ruff format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -392,9 +393,10 @@ uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
-There is deliberately **no `ruff format --check scripts` gate yet**: MEASURED 2026-10-02, `uvx ruff format --check
-scripts` would rewrite 42 of 44 files (about 1,700 changed lines at the 145 limit). A mass reformat is its own
-mechanical commit and is not wired until someone lands it; the preview is `uvx ruff format --diff scripts`.
+**Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
+(`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
+`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the
+preview is `uvx ruff format --diff scripts`.
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 
@@ -517,29 +519,31 @@ anything marked `gpu` needs a real CUDA GPU the dev box does not have
 
 ```powershell
 scripts\cloud_gpu_test.ps1                   # dry-run (default): prints the plan, machine type, zone, estimated cost/minutes, creates nothing
-scripts\cloud_gpu_test.ps1 -Apply            # NOT functional yet — see below
+scripts\cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <worker sa email> -Apply   # create, delete and leak-scan ONE labelled VM (UNVERIFIED, billed)
+scripts\cloud_gpu_test.ps1 -PrintApplyArgs -ProjectId <id> -ServiceAccount <email>    # print the create/delete/list/leak argument lists as JSON, no cloud call
 scripts\cloud_gpu_test.ps1 -SelfTest
 ```
 
-**Updated 2026-10-03: the script exists (issue #317), dry-run is real,
-`CloudCli` exists (issue #60), and `-Apply` is still UNVERIFIED.** The dry-run
-path (labels, cost/duration math, the leak-check and interrupt-safety contract)
-is provable today with zero cloud spend and is exercised by `-SelfTest`.
-`-Apply` calls the built `CloudCli` (see "CloudCli" above) and fails clearly,
-naming #60/#61/#24, if the executable is not built, rather than silently
-falling back to a raw `gcloud` call: Appendix C's permission design denies
-`gcloud` to an agent on purpose. The `vm create` arguments the script builds
-do not yet match the CLI's real flags (#619), so `-Apply` refuses (exit 3, naming
-#619) before it invokes the CLI, even when a built CloudCli exists; #619 removes
-that gate. The leak check treats unparsable output or a non-zero exit as a failed
-check, never as "nothing left running". `docs/ToTest.md` carries the row for
-exercising it for real. Once it works: launches a labelled VM in the
-owner's GCP project (blocked on `OWNER_TODO.md` item 2 / issue #24 until a
-project and GPU quota exist), runs `pytest -m gpu` on it, and tears the VM
-down. Read `working-on-gcp` before running it for real: it creates real,
-billed cloud resources. Launch detached and poll
-rather than blocking a single tool call on it (a real run is 6-20 minutes;
-see the `a-tool-call-caps-at-600s` memory seed).
+**Updated 2026-10-16: `-Apply` builds its `vm create` arguments from CloudCli's own flag list (#619), but it is still UNVERIFIED
+against a real project and does not yet run `pytest -m gpu` (#83 stays open).** The argument list is `New-VmCreateArgs`: only flags
+`CloudCliParser` accepts (`--project --zone --install --job --model --machine-type --service-account --app-version --lifecycle
+--max-run-duration`). CloudCli builds the six labels, `DELETE` and the duration through `VmSpec`, so the script cannot weaken them.
+Consequences: the GPU comes from `-MachineType` (L4 with `g2-standard-8`), `-AcceleratorType`/`-AcceleratorCount` and the `purpose`
+label are plan-only, `-DiskSizeGb` other than 150 is refused, and `-Image` is refused (CloudCli has no image or startup-metadata flag).
+`-Apply` needs `-ProjectId` and `-ServiceAccount` (exit 2 without them) and a built CloudCli (exit 3 without one; pass `-CloudCliPath`
+or build `app/tools/DnaEntropyGraph.CloudCli`). It never falls back to a raw cloud CLI call: Appendix C denies one to agents on purpose.
+What it does today: `vm create`, then `vm delete` in a `finally` (so a failed create or a Ctrl+C does not leave a billing VM), the leak
+scan (`resources list --kind vm --json`; unparsable output or a non-zero exit fails the check), and last of all CloudCli's resource
+table, whose final line is `OK: 0 resource(s)` when nothing is left. A failed create is never read as clean: the delete is retried
+up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete exit 5 is reported as "not proof it is gone", the scan and the
+table still run, and the run exits 1. A failing final table call also exits 1. `-MaxRunDurationSeconds` must be 1 to 86400 (24 h) or
+`-Apply` exits 2. `-PrintApplyArgs` prints `{create, delete, list, leak}`, all four argument lists. It prints `pytest -m gpu: NOT RUN`: the created VM has no startup
+script (CloudCli cannot set metadata) and `worker/vm/startup.sh` only runs the worker. Default `-MaxRunDurationSeconds` is 3600 because
+that limit is the only backstop if the delete fails. The contract is tested twice: `-SelfTest` checks the list against a recorded flag
+list and runs the whole flow against a stub CloudCli, and `app/tests/DnaEntropyGraph.Cloud.Tests/CloudCli/CloudGpuTestScriptContractTests.cs`
+feeds the script's real `-PrintApplyArgs` output to the real parser over `FakeGcp`. `docs/ToTest.md` carries the row for a real run.
+Read `working-on-gcp` before running it for real: it creates real, billed cloud resources. Launch detached and poll rather than
+blocking a single tool call on it (see the `a-tool-call-caps-at-600s` memory seed).
 
 ## PowerShell equivalents of common Unix commands
 

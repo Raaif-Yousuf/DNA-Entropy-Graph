@@ -190,8 +190,24 @@ def _powershell_is_recursive_force(tokens: list[str]) -> bool:
 # MEASURED 2026-10-02, `-ErrorAction SilentlyContinue` read as a repo-relative target denied a delete aimed at TEMP.
 # (-Path, -LiteralPath and -Exclude/-Include are deliberately absent: the first two ARE targets; the filters are
 # not worth the risk of hiding a target.)
-_PS_VALUE_PARAMS = ("erroraction", "ea", "warningaction", "wa", "informationaction", "ia", "errorvariable", "ev",
-                    "warningvariable", "wv", "outvariable", "ov", "outbuffer", "ob", "pipelinevariable", "pv")
+_PS_VALUE_PARAMS = (
+    "erroraction",
+    "ea",
+    "warningaction",
+    "wa",
+    "informationaction",
+    "ia",
+    "errorvariable",
+    "ev",
+    "warningvariable",
+    "wv",
+    "outvariable",
+    "ov",
+    "outbuffer",
+    "ob",
+    "pipelinevariable",
+    "pv",
+)
 
 
 def _targets(tokens: list[str], powershell: bool = False) -> list[str]:
@@ -294,8 +310,7 @@ def verdict(command: str) -> str | None:
     """Return the reason to deny, or None to stay silent."""
     scanned = _strip_cat_heredoc_bodies(command or "")
 
-    for pattern, is_rf, ps in ((_RM, _posix_rm_is_recursive_force, False),
-                               (_REMOVE_ITEM, _powershell_is_recursive_force, True)):
+    for pattern, is_rf, ps in ((_RM, _posix_rm_is_recursive_force, False), (_REMOVE_ITEM, _powershell_is_recursive_force, True)):
         for match in pattern.finditer(scanned):
             tokens = _split_args(match.group("args"))
             if not is_rf(tokens):
@@ -366,8 +381,7 @@ def self_test() -> int:
     )
     if proc.returncode != 0 or proc.stdout.strip() != "":
         failures += 1
-        print("self-test FAILED: malformed stdin must fail open (exit 0, silent stdout)",
-              file=sys.stderr)
+        print("self-test FAILED: malformed stdin must fail open (exit 0, silent stdout)", file=sys.stderr)
 
     total = len(_DENY_CASES) + len(_ALLOW_CASES) + 1
     if failures:
