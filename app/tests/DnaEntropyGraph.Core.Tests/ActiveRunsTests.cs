@@ -8,6 +8,30 @@ namespace DnaEntropyGraph.Core.Tests;
 public sealed class ActiveRunsTests
 {
     [Fact]
+    public async Task Any_stays_true_while_a_cancel_is_settling_after_its_driver_ended()
+    {
+        // Issue #179 review: the updater must not restart the app while a cancel still writes the run's phases.
+        var runs = new ActiveRuns();
+        var release = new TaskCompletionSource();
+        var inCancel = new TaskCompletionSource();
+        runs.Any.ShouldBeFalse();
+
+        var cancel = runs.CancelAsync("job-1", async () =>
+        {
+            inCancel.SetResult();
+            await release.Task;
+        });
+        await inCancel.Task;
+
+        runs.IsActive("job-1").ShouldBeFalse();
+        runs.Any.ShouldBeTrue();
+
+        release.SetResult();
+        await cancel;
+        runs.Any.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Cancel_stops_the_driver_waits_for_it_and_forgets_it()
     {
         var runs = new ActiveRuns();
