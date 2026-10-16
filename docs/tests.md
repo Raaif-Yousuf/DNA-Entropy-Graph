@@ -1,5 +1,8 @@
 # Tests: what runs where
 
+Last updated 2026-10-15, checked against `main`: every workflow, script and test project named below
+exists, except the one row marked Pending.
+
 ## The matrix
 
 **Before `gh pr create`, run the one command that runs every row below that a laptop
@@ -97,7 +100,7 @@ the Hypothesis default) -- larger for pure Python/NumPy properties, smaller for 
 that drive `MockPredictor.predict` or a real Biopython parse, since a large budget is
 itself a RAM/time cost when several agents run concurrently. `hypothesis` is a `dev`-only
 extra in `worker/pyproject.toml`; it is MPL-2.0, not MIT (see
-`docs/changelog.d/test-367-property-windowing-direction.md` and the `DECISION` issue this
+the test-367 entry in `docs/sprint_log.md` and the `DECISION` issue this
 recorded under Hard Rule 21).
 
 ## Golden files (issue #161)
@@ -115,6 +118,18 @@ worker\tests\golden\regenerate.py --justification "why"` (refuses without one), 
 (a formatting change should touch every numeric file, a coordinate change one writer's file), and
 commit the files with the code. The justification is appended to
 `worker/tests/golden/JUSTIFICATIONS.txt`.
+
+## Reader parity fixture (issue #393)
+
+`tests/contract-fixtures/readers_parity.json` pins what `read_fasta` and `read_genbank` produce
+(records, notices, exact error text) for multi-record, duplicate-id, empty-after-header, all-empty,
+no-header, multi-record GenBank, skipped and truncated/malformed inputs. `worker/tests/
+test_readers_parity.py` replays it against the Python readers; the C# `FastaLiteTests` and
+`GenBankLiteTests` replay the same file against `FastaLite`/`GenBankLite`. Changing a notice's
+wording in `readers/fasta.py` fails the Python test; changing it in `FastaLite.cs` fails the C#
+test; the fixture is never edited to make a case pass. `GenBankLite` is a partial port, so a case
+may carry a `csharp_divergence` block (the port's own expected text, a reason, a tracking issue);
+those blocks are the list of known wording differences.
 
 ## Fixtures
 
@@ -155,15 +170,17 @@ itself to get the current count).
 
 ## Flaky-test policy
 
-Not yet needed at this repo's current size (`worker/tests` alone, no `app/`
-suite yet, no evidence of flakiness recorded). The standing default,
+There is no flaky-test runner or retry policy, and none is wanted yet. Flakes have
+happened (the two timing cases in the next section, and open issue #673: the SettingsStore
+concurrency tests exceed their 300 ms mutex budget on CI under load); each was fixed at its
+cause, never retried. The standing default,
 carried forward as a working principle rather than a rule with its own
 enforcement yet: **never diagnose a flake by hand from a single failure.**
 Re-run the specific failing test in isolation before concluding it is real
 or spurious, and if a test fails only under parallel execution, that is
 itself a finding worth an issue (a shared-state bug), not something to
 silence with a retry annotation. Revisit this section with a real policy
-once `app/`'s test surface is large enough to need one — see the
+if flakes become frequent enough to need one — see the
 `run_tests.py` REFERENCE-verdict row in
 `docs/migration/2026-09-19-clair-conventions-inventory.md` for the shape a
 future parallel-then-isolate-failures runner could take if this repo's
