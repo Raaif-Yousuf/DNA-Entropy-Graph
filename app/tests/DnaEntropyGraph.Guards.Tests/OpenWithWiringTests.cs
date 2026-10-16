@@ -16,10 +16,13 @@ public class OpenWithWiringTests
     {
         var code = App("MainWindow.xaml.cs");
 
-        var select = code.IndexOf("SelectedItem = RootNavigationView.MenuItems[0]", StringComparison.Ordinal);
+        var select = code.IndexOf("SelectedItem = NavSelection.Find(", StringComparison.Ordinal);
         var ready = code.IndexOf("_readiness.MarkReady()", StringComparison.Ordinal);
         select.ShouldBeGreaterThan(-1);
         ready.ShouldBeGreaterThan(select, "MarkReady must come after the first navigation is selected");
+
+        // Issue #244: a failing or slow restore must still end in MarkReady, or every Open-with launch is dropped.
+        code.IndexOf("finally", StringComparison.Ordinal).ShouldBeInRange(select, ready);
     }
 
     [Fact]
