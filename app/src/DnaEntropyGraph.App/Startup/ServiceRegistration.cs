@@ -337,6 +337,9 @@ public static class ServiceRegistration
         services.AddTransient<ThisPcSettingsViewModel>();
         services.AddTransient<CloudResultsSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
+        // Issue #143: one tour state shared by the window's tips and the Settings replay button.
+        services.AddSingleton<TourSettings>();
+        services.AddSingleton<TourViewModel>();
         // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.
         services.AddSingleton<IAppUpdateSource, Services.VelopackUpdateSource>();
         services.AddSingleton<IActiveRunProbe, Services.ActiveRunProbe>();

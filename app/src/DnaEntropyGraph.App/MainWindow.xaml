@@ -72,15 +72,15 @@
                 The three caption buttons are 46 DIP wide each, so 154 clears
                 them with a 16 DIP gap, in DIPs so it holds at any scale.
             -->
-            <!-- Issue #99: the pill is also the way back to the setup wizard (sign in, switch project, run the setup check again). -->
-            <HyperlinkButton
-                Grid.Column="1"
-                VerticalAlignment="Center"
-                Margin="0,0,154,0"
-                Content="{x:Bind ViewModel.StatusPillText, Mode=OneWay}"
-                Command="{x:Bind ViewModel.NavigateToCommand}"
-                CommandParameter="Wizard"
-                AutomationProperties.HelpText="{x:Bind ViewModel.StatusPillHelp}" />
+            <!-- Issue #99: the pill is also the way back to the setup wizard (sign in, switch project, run the setup check again). Issue #143: Help opens the user guide page for the current page. -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,154,0" Spacing="8">
+                <HyperlinkButton x:Uid="HelpButton" NavigateUri="{x:Bind ViewModel.HelpUri, Mode=OneWay}" />
+                <HyperlinkButton
+                    Content="{x:Bind ViewModel.StatusPillText, Mode=OneWay}"
+                    Command="{x:Bind ViewModel.NavigateToCommand}"
+                    CommandParameter="Wizard"
+                    AutomationProperties.HelpText="{x:Bind ViewModel.StatusPillHelp}" />
+            </StackPanel>
         </Grid>
 
         <NavigationView
@@ -93,7 +93,7 @@
             SelectionChanged="RootNavigationView_SelectionChanged"
             Loaded="RootNavigationView_Loaded">
             <NavigationView.MenuItems>
-                <NavigationViewItem x:Uid="NavNewRun" Tag="NewRun">
+                <NavigationViewItem x:Name="NewRunNavItem" x:Uid="NavNewRun" Tag="NewRun">
                     <NavigationViewItem.KeyboardAccelerators>
                         <KeyboardAccelerator Key="N" Modifiers="Control" />
                     </NavigationViewItem.KeyboardAccelerators>
@@ -101,7 +101,7 @@
                         <FontIcon Glyph="&#xE710;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem x:Uid="NavRuns" Tag="Runs">
+                <NavigationViewItem x:Name="RunsNavItem" x:Uid="NavRuns" Tag="Runs">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE81C;" />
                     </NavigationViewItem.Icon>
@@ -109,7 +109,7 @@
                         <InfoBadge Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasActiveRun), Mode=OneWay}" />
                     </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
-                <NavigationViewItem x:Uid="NavCloud" Tag="Cloud">
+                <NavigationViewItem x:Name="CloudNavItem" x:Uid="NavCloud" Tag="Cloud">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE753;" />
                     </NavigationViewItem.Icon>
@@ -153,5 +153,11 @@
             Severity="{x:Bind converters:InfoBarSeverityHelper.From(ViewModel.Messages.Severity), Mode=OneWay}"
             IsOpen="{x:Bind ViewModel.Messages.IsOpen, Mode=TwoWay}" />
         </StackPanel>
+
+        <!-- Issue #143: the first-launch tour. One tip at a time, each pointing at its nav item; TourViewModel owns which is open. -->
+        <TeachingTip x:Uid="TourStepNewRun" Target="{x:Bind NewRunNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsNewRunStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
+        <TeachingTip x:Uid="TourStepRuns" Target="{x:Bind RunsNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsRunsStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
+        <TeachingTip x:Uid="TourStepCloud" Target="{x:Bind CloudNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsCloudStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
+        <TeachingTip x:Uid="TourStepSettings" Target="{x:Bind SettingsNavItem}" PreferredPlacement="Right" IsOpen="{x:Bind ViewModel.Tour.IsSettingsStepOpen, Mode=OneWay}" ActionButtonCommand="{x:Bind ViewModel.Tour.NextCommand}" CloseButtonCommand="{x:Bind ViewModel.Tour.SkipCommand}" />
     </Grid>
 </Window>

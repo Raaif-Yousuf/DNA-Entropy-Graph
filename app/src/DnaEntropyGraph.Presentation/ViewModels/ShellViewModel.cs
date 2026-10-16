@@ -51,9 +51,19 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The update check state (issue #179): the shell's Update available bar binds to it, and Settings > About shows the same instance. Null only in tests that do not exercise updates.</summary>
     public UpdateViewModel? Updates { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null)
+    /// <summary>The first-launch tour (issue #143): the window's TeachingTips bind to it. Null only in tests that do not exercise it.</summary>
+    public TourViewModel? Tour { get; }
+
+    /// <summary>Called once the window and its first page are up: shows the first-launch tour on a profile that has not seen it (issue #143).</summary>
+    public void OnWindowLoaded() => Tour?.StartIfFirstLaunch();
+
+    /// <summary>The user guide page for the page the user is on (issue #143); the Help button in the title bar binds its link to this.</summary>
+    public Uri HelpUri => UserGuideLinks.UriFor(_currentPageKey);
+
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, TourViewModel? tour = null)
     {
         Updates = updates;
+        Tour = tour;
         _build = build;
         _completion = completion;
         _dataRoot = dataRoot;
@@ -134,6 +144,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
+        OnPropertyChanged(nameof(HelpUri));
     }
 
     /// <summary>Alt+Left (issue #110): back to the previous page; nothing when there is none.</summary>

@@ -53,6 +53,8 @@ public sealed partial class MainWindow : Window
     {
         RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
         _readiness.MarkReady();
+        // Issue #143: the first-launch tour opens now that the nav items it points at are on screen.
+        ViewModel.OnWindowLoaded();
     }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
