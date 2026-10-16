@@ -312,9 +312,22 @@ public sealed class SessionRestoreTests
         shell.NavigateToCommand.Execute("Cloud");
         await shell.PrepareSessionAsync(CancellationToken.None);
 
-        shell.StartupNavKey.ShouldBe("Cloud");
+        shell.StartupNavKey.ShouldBeNull();
         shell.NavigateToCommand.Execute("Runs");
         _inner.DidNotReceive().NavigateTo("Results", "job-1");
+    }
+
+    [Fact]
+    public async Task A_page_with_no_nav_item_opened_during_the_restore_is_not_replaced_by_New_run()
+    {
+        HaveRuns(("job-1", JobPhase.Completed));
+        Store().Save(new SessionState("Results", "job-1"));
+        var shell = Shell(new SessionRestorer(Store(), _runs));
+
+        shell.NavigateToCommand.Execute("Wizard");
+        await shell.PrepareSessionAsync(CancellationToken.None);
+
+        shell.StartupNavKey.ShouldBeNull("the window must leave the selection alone, not select the first item");
     }
 
     [Fact]
@@ -330,7 +343,7 @@ public sealed class SessionRestoreTests
         gate.SetResult([new RunRecord("job-1", JobPhase.Completed, DateTimeOffset.UtcNow)]);
         await preparing.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        shell.StartupNavKey.ShouldBe("Settings");
+        shell.StartupNavKey.ShouldBeNull();
         shell.NavigateToCommand.Execute("Runs");
         _inner.DidNotReceive().NavigateTo("Results", "job-1");
     }
