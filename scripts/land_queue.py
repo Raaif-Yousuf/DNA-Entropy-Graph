@@ -35,6 +35,7 @@ Console output is ASCII.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -50,6 +51,8 @@ from land_wt import CHECKS_TIMEOUT_SECONDS, pid_alive
 
 Runner = Callable[[list[str], "Path | None"], "tuple[int, str]"]
 
+STDERR_MARK = "\n--- stderr ---\n"
+STALE_MARGIN_SECONDS = 30 * 60  # a runner heartbeat older than checks_timeout + this is stale (a reused pid, or a hung runner)
 _DONE_KEY = re.compile(r"(\S+) @ ([0-9A-Za-z]+)\s*$")
 _PR_URL = re.compile(r"pull/(\d+)")
 
@@ -66,7 +69,8 @@ def run_command(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
         return 127, f"cannot run {argv[0]}: {err}"
     if proc.returncode == 0:  # stdout only: stderr noise must never reach a json.loads
         return 0, proc.stdout.decode("utf-8", errors="replace").strip()
-    return proc.returncode, (proc.stdout + b"\n" + proc.stderr).decode("utf-8", errors="replace").strip()
+    out = proc.stdout.decode("utf-8", errors="replace").strip()
+    return proc.returncode, out + STDERR_MARK + proc.stderr.decode("utf-8", errors="replace").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -201,28 +205,79 @@ class State:
     def consume_stop(self) -> None:
         self._p("runner.stop").unlink(missing_ok=True)
 
-    def write_runner(self, pid: int, ts: float) -> None:
-        """Heartbeat: replace our own runner.json atomically."""
+    def write_runner(self, pid: int, ts: float, sleep: Callable[[float], None] = time.sleep) -> None:
+        """Heartbeat: replace our own runner.json atomically. Another process (`status`) may hold it open (PermissionError on
+        Windows): retry a few times, then give up quietly. A heartbeat failure must never end the runner."""
         tmp = self._p(f"runner.json.{pid}.tmp")
-        tmp.write_text(json.dumps({"pid": pid, "ts": ts}), encoding="utf-8", newline="\n")
-        os.replace(tmp, self._p("runner.json"))
+        for attempt in range(4):
+            try:
+                tmp.write_text(json.dumps({"pid": pid, "ts": ts}), encoding="utf-8", newline="\n")
+                os.replace(tmp, self._p("runner.json"))
+                return
+            except OSError:
+                if attempt < 3:
+                    sleep(0.2)
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
 
-    def claim_runner(self, pid: int, ts: float, alive: Callable[[int], bool]) -> None:
-        """Create runner.json with O_EXCL so two starters cannot both win; a file whose pid is dead is stale and replaced."""
+    def claim_runner(
+        self,
+        pid: int,
+        ts: float,
+        alive: Callable[[int], bool],
+        stale_after: float = 3600.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        """Claim runner.json with O_EXCL so two starters cannot both win.
+
+        An empty or unparsable file is a claim in progress (the winner has created it and not written yet): wait briefly, and
+        only replace it when it is old. A parsed file whose pid is dead, or whose heartbeat is ancient (a reused pid), is stale:
+        it is renamed to a unique name (atomic: only one racer wins the rename) and the claim retried."""
         path = self._p("runner.json")
-        for _ in range(2):
+        for attempt in range(40):
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                cur = self.runner()
-                if cur is not None and int(cur["pid"]) != pid and alive(int(cur["pid"])):
-                    raise AlreadyRunning(f"a runner is already alive (pid {int(cur['pid'])}). Check `status`; `stop` ends it") from None
-                path.unlink(missing_ok=True)
+                pass
+            except PermissionError:
+                raise AlreadyRunning("runner.json is in use by another process. Check `status`") from None
+            else:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(json.dumps({"pid": pid, "ts": ts}))
+                return
+            cur = self.runner()
+            if cur is None:
+                try:
+                    age = time.time() - path.stat().st_mtime
+                except OSError:
+                    continue  # it vanished: try to claim again at once
+                if age < 30 and attempt < 39:
+                    sleep(0.1)
+                    continue
+                if age < 30:
+                    raise AlreadyRunning("another runner is claiming this state directory right now. Check `status`")
+                judged = None
+            else:
+                judged = int(cur["pid"])
+                if judged != pid and alive(judged) and ts - float(cur.get("ts", 0)) <= stale_after:
+                    raise AlreadyRunning(f"a runner is already alive (pid {judged}). Check `status`; `stop` ends it")
+            aside = self._p(f"runner.json.stale.{pid}.{attempt}")
+            try:
+                os.replace(path, aside)
+            except FileNotFoundError:
                 continue
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(json.dumps({"pid": pid, "ts": ts}))
-            return
-        raise AlreadyRunning("another runner claimed this state directory at the same moment. Check `status`")
+            except OSError:
+                raise AlreadyRunning("runner.json is in use by another process. Check `status`") from None
+            try:
+                moved = json.loads(aside.read_text(encoding="utf-8") or "null")
+            except (OSError, ValueError):
+                moved = None
+            if judged is not None and not (isinstance(moved, dict) and int(moved.get("pid", -1)) == judged):
+                # we moved a FRESH claim made between our read and our rename: put it back if the slot is still empty
+                with contextlib.suppress(OSError):
+                    os.link(aside, path)
+                raise AlreadyRunning("another runner claimed this state directory at the same moment. Check `status`")
+        raise AlreadyRunning("could not claim this state directory. Check `status`")
 
     def runner(self) -> dict[str, float] | None:
         try:
@@ -268,7 +323,16 @@ class Env:
     known_red: tuple[str, ...] = field(default_factory=lambda: tuple(n.strip() for n in os.environ.get("KNOWN_RED", "").split(",") if n.strip()))
 
     def run(self, *argv: str) -> tuple[int, str]:
-        return self.runner(list(argv), self.repo)
+        rc, out = self.runner(list(argv), self.repo)
+        return rc, out.replace(STDERR_MARK, "\n")
+
+    def run_json_text(self, *argv: str) -> str:
+        """stdout only, whatever the exit code (`gh pr checks --json` exits 8/1 WITH valid JSON on stdout)."""
+        return self.runner(list(argv), self.repo)[1].split(STDERR_MARK)[0].strip()
+
+    @property
+    def stale_after(self) -> float:
+        return self.checks_timeout + STALE_MARGIN_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +344,7 @@ _PENDING = {"pending", ""}
 
 
 def _checks(env: Env, pr: str) -> list[dict[str, str]]:
-    _, out = env.run("gh", "pr", "checks", pr, "--json", "name,bucket,link")
+    out = env.run_json_text("gh", "pr", "checks", pr, "--json", "name,bucket,link")
     try:
         data = json.loads(out)
     except ValueError:
@@ -313,7 +377,7 @@ def _mergeability(env: Env, pr: str) -> str:
     """CLEAN-ish / DIRTY / UNKNOWN. GitHub computes this lazily, so UNKNOWN is polled before it is given up on."""
     state = "UNKNOWN"
     for _ in range(MERGEABLE_POLLS):
-        _, out = env.run("gh", "pr", "view", pr, "--json", "mergeStateStatus,mergeable")
+        out = env.run_json_text("gh", "pr", "view", pr, "--json", "mergeStateStatus,mergeable")
         try:
             data = json.loads(out)
         except ValueError:
@@ -386,6 +450,29 @@ def _land(env: Env, it: Item, land_branch: str | None, delegate_merge: bool) -> 
     return rc, out, found[-1] if found else None
 
 
+def _find_existing_pr(env: Env, it: Item) -> tuple[str, str, str] | str | None:
+    """A PR from an earlier attempt of this item: (`OPEN`|`MERGED`, number, head ref), an error text, or None.
+    Matches the candidate head refs and requires the PR head to be this sha or contain it (land_wt merges main in, so the head
+    is usually a descendant)."""
+    env.run("git", "fetch", "-q", "origin")
+    for ref in (it.branch, f"{it.branch}-{it.sha[:7]}", f"{it.branch}-{it.sha[:7]}-r2"):
+        rc, out = env.run("gh", "pr", "list", "--state", "all", "--head", ref, "--json", "number,headRefOid,state", "--limit", "20")
+        if rc != 0:
+            return f"FAILED gh pr list rc={rc} (cannot tell whether this item is already landed; check gh auth, then `retry`) {it.branch} @ {it.sha}"
+        try:
+            rows = json.loads(out) if out.strip() else []
+        except ValueError:
+            return f"FAILED gh pr list rc={rc} printed no JSON {it.branch} @ {it.sha}"
+        for row in rows if isinstance(rows, list) else []:
+            oid, state = str(row.get("headRefOid", "")), str(row.get("state", ""))
+            if state not in {"OPEN", "MERGED"}:
+                continue
+            same = bool(oid) and (oid.startswith(it.sha) or it.sha.startswith(oid))
+            if same or (oid and env.run("git", "merge-base", "--is-ancestor", it.sha, oid)[0] == 0):
+                return state, str(row.get("number")), ref
+    return None
+
+
 def process_item(env: Env, it: Item) -> str:
     """Land one item. Without known-red checks the merge is land_wt's own `--merge-when-green` (exit 5/6 leave the PR open);
     with them (`red=` or KNOWN_RED) land_wt stops at the open PR and the merge loop here ignores the named checks."""
@@ -398,13 +485,27 @@ def process_item(env: Env, it: Item) -> str:
     if any(ln.split("\t")[-1].strip() == f"refs/heads/{it.branch}" for ln in remote.splitlines()):
         land_branch = f"{it.branch}-{it.sha[:7]}"  # (b) a closed PR's branch is still there: never push over it
     delegate = not (set(env.known_red) | set(it.known_red))
+    found = _find_existing_pr(env, it)
+    if isinstance(found, str):
+        return found
+    resume = found if found and found[0] == "OPEN" else None
+    if found and found[0] == "MERGED":
+        return f"MERGED #{found[1]} {it.branch} @ {it.sha} (recovered)"
+    head_ref = it.branch if land_branch is None else land_branch
     attempt = 1
     while True:
-        rc, out, pr = _land(env, it, land_branch, delegate)
+        if resume:  # an earlier attempt left an open PR: wait on it, never open a second one
+            (_, pr, head_ref), resume = resume, None
+            rc, out, used_delegate = 0, "", False
+            st.set_inflight(it, f"resuming #{pr}")
+        else:
+            rc, out, pr = _land(env, it, land_branch, delegate)
+            used_delegate = delegate
+            head_ref = it.branch if land_branch is None else land_branch
         tag = f"(PR #{pr} stays open) " if pr else ""
-        if delegate and rc == 0:
+        if used_delegate and rc == 0:
             return f"MERGED #{pr} {it.branch} @ {it.sha}" if pr else f"MERGED {it.branch} @ {it.sha}"
-        if delegate and rc == 4 and pr and _mergeability(env, pr) == "DIRTY":
+        if used_delegate and rc == 4 and pr and _mergeability(env, pr) == "DIRTY":
             verdict, detail = "DIRTY", ""  # land_wt could not merge: another merge made the PR conflict (c)
         elif rc != 0:
             return f"FAILED land_wt rc={rc} {tag}{it.branch} @ {it.sha}"
@@ -417,7 +518,7 @@ def process_item(env: Env, it: Item) -> str:
                 return f"MERGED #{pr} {it.branch} @ {it.sha}"
         if verdict == "DIRTY" and attempt == 1 and pr:  # (c) re-land the same sha on top of the new main
             close = ["gh", "pr", "close", pr, "--comment", "Conflicts with main after another merge; re-landing the same commit."]
-            if land_branch:  # only a branch this queue created; with none, the PR head is the lane's own branch
+            if head_ref != it.branch:  # only a branch this queue created, never the lane's own
                 close.append("--delete-branch")
             close_rc, close_out = env.run(*close)
             if close_rc != 0:
@@ -435,7 +536,7 @@ def process_item(env: Env, it: Item) -> str:
 
 
 def _heartbeat(env: Env) -> None:
-    State(env.state).write_runner(env.pid, env.clock())
+    State(env.state).write_runner(env.pid, env.clock(), env.sleep)
 
 
 def _stacked_on(env: Env, failed: set[str], it: Item) -> str | None:
@@ -478,7 +579,7 @@ def _recover_interrupted(st: State) -> None:
     tail = f"{branch} @ {sha}"
     has_verdict = False
     for raw in st._read("done.log").splitlines():
-        if raw.rstrip().endswith(tail):
+        if raw.rstrip() == tail or raw.rstrip().endswith(" " + tail):
             has_verdict = not raw.startswith("RETRY")
     if not has_verdict:
         st.append_done(f"FAILED interrupted {tail}")
@@ -487,7 +588,7 @@ def _recover_interrupted(st: State) -> None:
 
 def drain(env: Env, *, forever: bool = False) -> None:
     st = State(env.state)
-    st.claim_runner(env.pid, env.clock(), env.alive)
+    st.claim_runner(env.pid, env.clock(), env.alive, env.stale_after, env.sleep)
     _recover_interrupted(st)
     try:
         while True:
@@ -528,6 +629,8 @@ def runner_line(env: Env) -> tuple[str, bool]:
     if cur is None:
         return "runner: not running", False
     pid, age = int(cur["pid"]), int(env.clock() - float(cur.get("ts", 0)))
+    if env.alive(pid) and age > env.stale_after:
+        return f"runner: STALE? (pid {pid} exists but its heartbeat is {age} s old; a reused pid or a hung runner). `run` will replace it", False
     if env.alive(pid):
         return f"runner: alive pid {pid}, heartbeat {age} s ago", True
     return f"runner: DEAD (pid {pid} is gone; last heartbeat {age} s ago). Start it again with `run`", False

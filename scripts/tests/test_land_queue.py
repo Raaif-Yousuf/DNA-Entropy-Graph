@@ -424,9 +424,11 @@ def test_run_writes_pid_and_heartbeat_and_clears_pid_on_exit(env: lq.Env) -> Non
 
 
 def test_a_second_runner_is_refused_while_the_first_is_alive(env: lq.Env) -> None:
+    import time
+
     env.alive = lambda pid: True
     (env.state).mkdir(parents=True, exist_ok=True)
-    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": time.time()}), encoding="utf-8")
     with pytest.raises(lq.AlreadyRunning):
         lq.drain(env)
 
@@ -449,9 +451,11 @@ def test_status_reports_alive_dead_and_never_started(env: lq.Env) -> None:
 
 
 def test_main_status_exit_code_is_one_when_the_runner_is_dead(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import time
+
     state = tmp_path / "s"
     state.mkdir()
-    (state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    (state / "runner.json").write_text(json.dumps({"pid": 99, "ts": time.time()}), encoding="utf-8")
     assert lq.main(["--state", str(state), "status", "--check"], alive=lambda pid: False) == 1
     assert lq.main(["--state", str(state), "status", "--check"], alive=lambda pid: True) == 0
 
@@ -633,11 +637,13 @@ def test_run_command_keeps_stderr_out_of_a_successful_stdout(tmp_path: Path) -> 
 
 
 def test_stop_with_no_live_runner_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import time
+
     state = tmp_path / "s"
     assert lq.main(["--state", str(state), "stop"], alive=lambda pid: False) == 1
     assert not (state / "runner.stop").exists()
     assert "no live runner" in capsys.readouterr().out
-    (state / "runner.json").write_text(json.dumps({"pid": 5, "ts": 1.0}), encoding="utf-8")
+    (state / "runner.json").write_text(json.dumps({"pid": 5, "ts": time.time()}), encoding="utf-8")
     assert lq.main(["--state", str(state), "stop"], alive=lambda pid: True) == 0
     assert (state / "runner.stop").exists()
 
@@ -698,3 +704,183 @@ def test_a_stale_runner_file_is_replaced_by_the_new_pid(env: lq.Env) -> None:
     env.runner = spy
     lq.drain(env)
     assert seen == [77]
+
+
+# ---- cold-review round 2b ----
+
+
+def test_an_empty_runner_file_is_a_claim_in_progress_not_stale(env: lq.Env) -> None:
+    (env.state).mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text("", encoding="utf-8")  # created by O_EXCL, content not written yet
+    with pytest.raises(lq.AlreadyRunning):
+        lq.drain(env)
+    assert (env.state / "runner.json").exists()
+
+
+def test_an_old_empty_runner_file_is_a_dead_claim_and_is_replaced(env: lq.Env) -> None:
+    import os
+    import time
+
+    (env.state).mkdir(parents=True, exist_ok=True)
+    f = env.state / "runner.json"
+    f.write_text("", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(f, (old, old))
+    lq.drain(env)  # empty queue: claims, returns, clears
+
+
+def test_a_dead_pid_file_is_renamed_aside_not_unlinked(env: lq.Env) -> None:
+    env.alive = lambda pid: False
+    (env.state).mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    lq.drain(env)
+    assert list(env.state.glob("runner.json.stale.*"))
+
+
+def test_a_permission_error_while_claiming_is_already_running_not_a_crash(env: lq.Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    env.alive = lambda pid: False
+    (env.state).mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+
+    def boom(*a: object, **k: object) -> None:
+        raise PermissionError("held open")
+
+    monkeypatch.setattr(os, "replace", boom)
+    monkeypatch.setattr(os, "rename", boom)
+    with pytest.raises(lq.AlreadyRunning):
+        lq.drain(env)
+
+
+def test_a_heartbeat_failure_never_ends_the_runner(env: lq.Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    lq.drain(env)  # claim works first
+    (env.state / "done.log").unlink()
+    (env.state / "taken.log").unlink()
+
+    def boom(*a: object, **k: object) -> None:
+        raise PermissionError("status has it open")
+
+    monkeypatch.setattr(os, "replace", boom)
+    lq.drain(env)
+    assert "MERGED" in (env.state / "done.log").read_text(encoding="utf-8")
+
+
+def test_a_heartbeat_retries_a_transient_failure(env: lq.Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    real = os.replace
+    n = [0]
+
+    def flaky(a: object, b: object) -> None:
+        n[0] += 1
+        if n[0] < 3:
+            raise PermissionError("busy")
+        real(a, b)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", flaky)
+    lq._heartbeat(env)
+    assert json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["pid"] == env.pid
+
+
+def _prs(*rows: dict[str, str]) -> tuple[int, str]:
+    return 0, json.dumps(list(rows))
+
+
+def test_a_retry_resumes_the_open_pr_instead_of_landing_again(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("git", "ls-remote", answer=(0, "deadbeef\trefs/heads/feat/1-x\n"))
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_A, "state": "OPEN"}))
+    res = lq.process_item(env, item())
+    assert res == f"MERGED #7 feat/1-x @ {SHA_A}"
+    assert not r.matching("py")
+    assert r.matching("gh", "pr", "merge", "7", "--merge")
+
+
+def test_a_pr_that_merged_already_is_recovered_not_relanded(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first(
+        "gh",
+        "pr",
+        "list",
+        "--state",
+        "all",
+        "--head",
+        f"feat/1-x-{SHA_A[:7]}",
+        answer=_prs({"number": 9, "headRefOid": SHA_A, "state": "MERGED"}),
+    )
+    assert lq.process_item(env, item()) == f"MERGED #9 feat/1-x @ {SHA_A} (recovered)"
+    assert not r.matching("py")
+
+
+def test_an_open_pr_that_contains_the_sha_through_a_merged_main_is_resumed(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
+    r.first("git", "merge-base", "--is-ancestor", SHA_A, SHA_B, answer=(0, ""))
+    assert lq.process_item(env, item()).startswith("MERGED #7")
+    assert not r.matching("py")
+
+
+def test_a_pr_for_another_sha_is_ignored(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_B, "state": "OPEN"}))
+    r.first("git", "merge-base", "--is-ancestor", answer=(1, ""))
+    lq.process_item(env, item())
+    assert r.matching("py")
+
+
+def test_a_failed_pr_lookup_is_a_failure_not_a_duplicate_pr(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "list", answer=(1, "HTTP 502"))
+    assert lq.process_item(env, item()).startswith("FAILED gh pr list rc=1")
+    assert not r.matching("py")
+
+
+def test_a_resumed_pr_on_the_lanes_own_branch_is_never_deleted_on_dirty(env: lq.Env) -> None:
+    r = runner_of(env)
+    r.first("git", "ls-remote", answer=(0, "deadbeef\trefs/heads/feat/1-x\n"))
+    r.first("gh", "pr", "list", "--state", "all", "--head", "feat/1-x", answer=_prs({"number": 7, "headRefOid": SHA_A, "state": "OPEN"}))
+    r.first("gh", "pr", "view", answer=[view("DIRTY", "CONFLICTING"), view("CLEAN")])
+    lq.process_item(env, item())
+    assert "--delete-branch" not in _close_calls(env)[0]
+
+
+def test_json_is_parsed_even_when_gh_exits_nonzero(env: lq.Env) -> None:
+    r = runner_of(env)
+    body = json.dumps([{"name": "lint", "bucket": "fail", "link": ""}])
+    r.first("gh", "pr", "checks", "7", "--json", answer=(8, body + "\n" + lq.STDERR_MARK + "\nsome checks are pending"))
+    assert lq._checks(env, "7")[0]["name"] == "lint"
+
+
+def test_run_command_separates_stderr_on_failure(tmp_path: Path) -> None:
+    import sys
+
+    rc, out = lq.run_command([sys.executable, "-c", "import sys; print('[1]'); print('warn', file=sys.stderr); sys.exit(8)"], tmp_path)
+    assert rc == 8 and out.split(lq.STDERR_MARK)[0].strip() == "[1]" and "warn" in out
+
+
+def test_a_live_pid_with_an_ancient_heartbeat_is_stale_and_replaced(env: lq.Env) -> None:
+    env.alive = lambda pid: True  # a reused Windows pid
+    env.clock = lambda: 1_000_000.0
+    (env.state).mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    lq.drain(env)
+
+
+def test_status_marks_an_ancient_heartbeat_stale(env: lq.Env) -> None:
+    env.alive = lambda pid: True
+    env.state.mkdir(parents=True, exist_ok=True)
+    env.clock = lambda: 1_000_000.0
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    assert "STALE?" in lq.status(env)
+
+
+def test_interrupted_recovery_does_not_match_a_longer_branch_suffix(env: lq.Env) -> None:
+    st = lq.State(env.state)
+    st.append_done("MERGED #3 xfeat/1-x @ aaa")  # a different branch ending in the same text
+    st.set_inflight(parsed("feat/1-x|aaa|1|0|t"), "landing")
+    lq.drain(env)
+    assert "FAILED interrupted feat/1-x @ aaa" in (env.state / "done.log").read_text(encoding="utf-8")
