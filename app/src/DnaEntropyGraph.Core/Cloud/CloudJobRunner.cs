@@ -246,6 +246,9 @@ public sealed class CloudJobRunner
     /// <summary>Tests: how many queued flex requests the runner still remembers.</summary>
     internal int PendingQueuedRequestCount => _provisioner.PendingFlexCount;
 
+    /// <summary>Tests: how many per-job waiting-notice chains the runner still holds.</summary>
+    internal int NoticeChainCount => _provisioner.NoticeChainCount;
+
     public async Task<JobPhase> GetPhaseAsync(string jobId, CancellationToken cancellationToken)
     {
         var latest = await _rows.LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
@@ -460,7 +463,7 @@ public sealed class CloudJobRunner
             await RecordProvisioningModelAsync(request.JobId, attempt.Spec.Spot, cancellationToken).ConfigureAwait(false);
             try
             {
-                return await RunOnVmAsync(progress.Resolve(attempt), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
+                return await RunOnVmAsync(progress.Resolve(attempt), bucket, progress.Zone, cancellationToken, progress.VmStartMark, progress.VmAdopted).ConfigureAwait(false);
             }
             catch (RunFailureException preempted) when (preempted.SpotPreempted && attempt.Spec.Spot && !_terminator.AppRequestedEnd(request.JobId))
             {
@@ -544,11 +547,11 @@ public sealed class CloudJobRunner
     }
 
     /// <summary>Everything from the moment a VM exists. <see cref="RunCoreAsync"/> ends the VM for any exception that leaves here without having done so.</summary>
-    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null)
+    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null, bool adopted = false)
     {
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Preparing, cancellationToken).ConfigureAwait(false);
 
-        var (boot, bootReason) = await _waiter.WaitForBootAsync(request, zone, cancellationToken).ConfigureAwait(false);
+        var (boot, bootReason) = await _waiter.WaitForBootAsync(request, zone, adopted, cancellationToken).ConfigureAwait(false);
         if (boot == BootOutcome.TimedOut)
         {
             // THEORY (unverified): instances.stop on an instance that is not RUNNING is rejected, and a VM that never

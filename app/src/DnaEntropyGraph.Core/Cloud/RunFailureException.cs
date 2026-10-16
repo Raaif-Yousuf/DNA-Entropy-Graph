@@ -37,6 +37,12 @@ internal sealed class RunProgress
     /// </summary>
     public long? VmStartMark { get; set; }
 
+    /// <summary>
+    /// Issue #92 round 3 (F2 iii): true when the VM the run is on was found already there (adopted after the app closed), false when this run created or
+    /// started it. Only an adopted flex request may be a queued one the boot wait must not give up on; a request this run created and was granted is not.
+    /// </summary>
+    public bool VmAdopted { get; set; }
+
     /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
     public string? VmName { get; set; }
 

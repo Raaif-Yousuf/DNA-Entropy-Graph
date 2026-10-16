@@ -527,4 +527,187 @@ public class FlexStartProvisioningTests
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         runner.PendingQueuedRequestCount.ShouldBe(0);
     }
-}
+
+    // ---- cold review round 3 ----
+
+    /// <summary>Queues a flex request with a first runner, closes it (the app closes: nothing cancels or deletes), and returns the request for a second runner to adopt.</summary>
+    private static async Task<CloudJobRequest> QueueThenCloseAppAsync(FakeGcp gcp, InMemoryRunRepository repo, string jobId, VmSpec spec)
+    {
+        var request = TestInputs.Request(jobId, spec);
+        using var closed = new CancellationTokenSource();
+        var first = Task.Run(() => Runner(gcp, repo).RunAsync(request, closed.Token));
+        await gcp.FlexStartQueued.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        await closed.CancelAsync();
+        await first.ContinueWith(_ => { }, TestContext.Current.CancellationToken);
+        return request;
+    }
+
+    /// <summary>A resumed runner on a virtual clock that is a long way from the platform's, advancing one minute per look; <paramref name="onPoll"/> sees the 1-based look number.</summary>
+    private static CloudJobRunner VirtualResumedRunner(FakeGcp gcp, InMemoryRunRepository repo, VirtualTimeProvider app, Action<int> onPoll)
+    {
+        var polls = 0;
+        return new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
+        {
+            TimeProvider = app,
+            ResultTimeout = null,
+            FirstHeartbeatTimeout = TimeSpan.FromDays(9),
+            HeartbeatStaleTimeout = TimeSpan.FromDays(9),
+            CallTimeout = TimeSpan.FromSeconds(10),
+            CreateTimeout = TimeSpan.FromSeconds(10),
+            BootTimeout = TimeSpan.FromMinutes(8),
+            LifecycleTimeout = TimeSpan.FromSeconds(1),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            PollDelay = (_, _) =>
+            {
+                onPoll(Interlocked.Increment(ref polls));
+                app.Advance(TimeSpan.FromMinutes(1));
+                return Task.CompletedTask;
+            },
+        };
+    }
+
+    /// <summary>Grants the held request and waits until the fake's server has made the VM, so a virtual-time loop that polls in microseconds cannot outrun the grant.</summary>
+    private static void GrantAndWait(FakeGcp gcp, string vmName)
+    {
+        gcp.GrantFlexStart();
+        SpinWait.SpinUntil(() => gcp.GetVmAsync(vmName, Zone, CancellationToken.None).Result is { Status: "RUNNING" }, TimeSpan.FromSeconds(10)).ShouldBeTrue("the grant took effect");
+        Thread.Sleep(100); // the fake writes the simulated worker's files right after it publishes RUNNING
+    }
+
+    [Fact]
+    public async Task F2i_an_adopted_request_still_queued_after_its_own_window_ends_in_a_boot_timeout()
+    {
+        var spec = Spec("job-f30", flex: true, wait: TimeSpan.FromMilliseconds(100)) with { FlexStartMargin = TimeSpan.FromMilliseconds(100) };
+        var gcp = new FakeGcp().WithFlexStartHeld();
+        var repo = new InMemoryRunRepository();
+        var request = await QueueThenCloseAppAsync(gcp, repo, "job-f30", spec);
+
+        var second = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo, null)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            CallTimeout = TimeSpan.FromSeconds(5),
+            CreateTimeout = TimeSpan.FromSeconds(5),
+            BootTimeout = TimeSpan.FromMilliseconds(300),
+            LifecycleTimeout = TimeSpan.FromSeconds(2),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+        };
+        var result = await Task.Run(() => second.RunAsync(request, CancellationToken.None), TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldBe(RunErrorCodes.VmUnhealthy);
+        result.FailureMessage!.ShouldContain("did not finish starting");
+        (await gcp.GetVmAsync("deg-job-f30", Zone, CancellationToken.None)).ShouldBeNull("the request that never started was deleted");
+    }
+
+    [Fact]
+    public async Task F2ii_without_server_time_the_window_runs_from_the_adoption_not_from_a_platform_timestamp_on_another_clock()
+    {
+        // The laptop's clock is three days away from the platform's, and the answers carry no server time: subtracting the platform's CreatedAt from the laptop's now
+        // would call a request queued a moment ago "past its window" and give it up after the 8-minute boot timeout.
+        var platform = new VirtualTimeProvider();
+        var app = new VirtualTimeProvider();
+        app.Advance(TimeSpan.FromDays(3));
+        var gcp = new FakeGcp(platform).WithFlexStartHeld().WithoutServerTime();
+        var repo = new InMemoryRunRepository();
+        var request = await QueueThenCloseAppAsync(gcp, repo, "job-f31", Spec("job-f31", flex: true));
+
+        var result = await Task.Run(() => VirtualResumedRunner(gcp, repo, app, n =>
+            {
+                platform.Advance(TimeSpan.FromMinutes(1)); // the fake's worker finishes on the platform's clock
+                if (n == 30)
+                {
+                    GrantAndWait(gcp, "deg-job-f31");
+                }
+            }).RunAsync(request, CancellationToken.None), TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        gcp.CreatedSpecs.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task F2iii_a_fresh_flex_create_that_is_granted_and_then_hangs_booting_keeps_the_boot_hang_detector()
+    {
+        var gcp = new FakeGcp().WithFlexStartGrantedAfter(TimeSpan.FromMilliseconds(50)).WithBootStatusPolls(1_000_000);
+        var repo = new InMemoryRunRepository();
+
+        var result = await Task.Run(() => Runner(gcp, repo).RunAsync(TestInputs.Request("job-f32", Spec("job-f32", flex: true)), CancellationToken.None), TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureCode.ShouldBe(RunErrorCodes.VmUnhealthy);
+        result.FailureMessage!.ShouldContain("did not finish starting");
+    }
+
+    [Fact]
+    public async Task F2iv_failed_looks_while_an_adopted_request_is_queued_do_not_count_toward_the_boot_timeout()
+    {
+        var app = new VirtualTimeProvider();
+        var gcp = new FakeGcp(app).WithFlexStartHeld();
+        var repo = new InMemoryRunRepository();
+        var request = await QueueThenCloseAppAsync(gcp, repo, "job-f33", Spec("job-f33", flex: true));
+        gcp.WithGetVmFailures(503, 25);
+
+        var result = await Task.Run(() => VirtualResumedRunner(gcp, repo, app, n => { if (n == 28) { GrantAndWait(gcp, "deg-job-f33"); } }).RunAsync(request, CancellationToken.None), TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+    }
+
+    [Fact]
+    public async Task F2v_an_adopted_request_that_expires_and_disappears_leaves_the_boot_wait_at_once()
+    {
+        var gcp = new FakeGcp().WithFlexStartExpiringAfter(TimeSpan.FromMilliseconds(700));
+        var repo = new InMemoryRunRepository();
+        var request = await QueueThenCloseAppAsync(gcp, repo, "job-f34", Spec("job-f34", flex: true));
+
+        var second = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo, null)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            CallTimeout = TimeSpan.FromSeconds(5),
+            CreateTimeout = TimeSpan.FromSeconds(5),
+            BootTimeout = TimeSpan.FromSeconds(40),
+            LifecycleTimeout = TimeSpan.FromSeconds(2),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+        };
+        var result = await Task.Run(() => second.RunAsync(request, CancellationToken.None), TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureMessage!.ShouldNotContain("did not finish starting", Case.Insensitive, "a vanished request is a lost VM, not a boot that timed out");
+    }
+
+    [Fact]
+    public async Task F3_a_run_that_ends_terminal_forgets_a_queued_request_whose_unconfirmed_settle_left_it_remembered()
+    {
+        var spec = Spec("job-f35", flex: true, wait: TimeSpan.FromMilliseconds(100)) with { FlexStartMargin = TimeSpan.FromMilliseconds(100) };
+        var gcp = new FakeGcp().WithFlexStartHeld().WithSilentNoOpDeletes();
+        var runner = Runner(gcp, new InMemoryRunRepository());
+
+        var result = await runner.RunAsync(TestInputs.Request("job-f35", spec), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.FailureMessage.ShouldNotBeNull();
+        (await gcp.GetVmAsync("deg-job-f35", Zone, CancellationToken.None)).ShouldNotBeNull("the silent delete left the request there, so the settle note was non-null and the entry survived the create");
+        runner.PendingQueuedRequestCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task F6_no_per_job_notice_chain_outlives_both_jobs_ended_notices()
+    {
+        var gcp = new FakeGcp().WithFlexStartGrantedAfter(TimeSpan.FromMilliseconds(100));
+        var runner = Runner(gcp, new InMemoryRunRepository(), _ => { });
+
+        var a = Task.Run(() => runner.RunAsync(TestInputs.Request("job-f36a", Spec("job-f36a", flex: true), zones: ["us-central1-a"]), CancellationToken.None), TestContext.Current.CancellationToken);
+        var b = Task.Run(() => runner.RunAsync(TestInputs.Request("job-f36b", Spec("job-f36b", flex: true), zones: ["us-central1-b"]), CancellationToken.None), TestContext.Current.CancellationToken);
+        await Task.WhenAll(a, b).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < until && runner.NoticeChainCount > 0)
+        {
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        runner.NoticeChainCount.ShouldBe(0);
+    }}

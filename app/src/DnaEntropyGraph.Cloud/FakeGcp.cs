@@ -959,6 +959,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.FromResult(GrantCreate(spec, zone, key));
     }
 
+    private bool _noServerTime;
+
+    /// <summary>Issue #92 round 3: <see cref="GetVmAsync"/> answers carry no <see cref="VmDescriptor.ServerNow"/> (a proxy that strips the Date header), so a caller can only judge ages on its own clock.</summary>
+    public FakeGcp WithoutServerTime()
+    {
+        _noServerTime = true;
+        return this;
+    }
+
     private TimeSpan? _flexGrantAfter;
     private TimeSpan? _flexExpireAfter;
     private readonly TaskCompletionSource _flexQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1307,7 +1316,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
         }
 
-        return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });
+        return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _noServerTime ? null : _timeProvider.GetUtcNow() });
     }
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)

@@ -66,6 +66,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, CancellationToken cancellationToken)
     {
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+        progress.VmAdopted = false;
         if (existing.Count > 0)
         {
             progress.VmMayExist = true;
@@ -79,6 +80,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             }
 
             progress.VmName = kept.Name;
+            progress.VmAdopted = true;
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -304,6 +306,18 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
     /// <summary>The queued flex requests this instance still remembers (tests: none may outlive a run that ended terminal).</summary>
     internal int PendingFlexCount => _pendingFlex.Count;
+
+    /// <summary>Tests: how many per-job notice chains are still held (one is dropped once its job's Ended notice was delivered).</summary>
+    internal int NoticeChainCount
+    {
+        get
+        {
+            lock (_noticeGate)
+            {
+                return _noticeTails.Count;
+            }
+        }
+    }
 
     /// <summary>Round 2 (L2): forgets the queued requests of a job whose run ended terminal; a cancel takes them with <see cref="TakePendingRequests"/> instead.</summary>
     public void ForgetPendingRequests(string jobId) => TakePendingRequests(jobId);
