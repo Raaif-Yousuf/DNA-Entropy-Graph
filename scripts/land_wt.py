@@ -96,6 +96,8 @@ def _text(raw: bytes) -> str:
 
 GH_TIMEOUT_SECONDS = 300.0  # one gh call (pr checks / view / create / merge / run rerun)
 GIT_TIMEOUT_SECONDS = 600.0  # one git call (fetch / push / worktree add...)
+HEAD_READ_ATTEMPTS = 3  # reads of the PR head before the merge
+HEAD_READ_BACKOFF_SECONDS = 2.0  # sleep before read n+1 is this times n
 PREMERGE_TIMEOUT_SECONDS = 120 * 60.0  # the whole premerge run, heavy.py slot wait included
 
 
@@ -675,6 +677,27 @@ def _rerun_failed(ctx: Ctx, pr: str, red: Sequence[dict[str, str]]) -> bool:
     return ok
 
 
+def _read_pr_head(ctx: Ctx, pr: str) -> str:
+    """The PR's head oid, or "" after HEAD_READ_ATTEMPTS failed reads (non-zero exit, no oid, or a timeout) with a growing backoff."""
+    for attempt in range(1, HEAD_READ_ATTEMPTS + 1):
+        try:
+            view = run_bounded([*ctx.gh, "pr", "view", pr, "--json", "headRefOid"], timeout=ctx.gh_timeout)
+        except subprocess.TimeoutExpired:
+            view = None
+        except OSError as err:
+            raise LandError(f"gh could not run ({err}). Merge {pr} by hand with `gh pr merge --merge`") from err
+        if view is not None and view.returncode == 0:
+            try:
+                oid = str(json.loads(_text(view.stdout)).get("headRefOid", ""))
+            except (ValueError, AttributeError):
+                oid = ""
+            if oid:
+                return oid
+        if attempt < HEAD_READ_ATTEMPTS:
+            ctx.sleep(HEAD_READ_BACKOFF_SECONDS * attempt)
+    return ""
+
+
 def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
     """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green.
 
@@ -721,21 +744,11 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
             return EXIT_CHECKS_PENDING
         ctx.sleep(min(poll, deadline - ctx.monotonic()))
     # Never merge a head other than the one that was verified and pushed: read the PR's head now and pin the merge to it.
-    try:
-        view = run_bounded([*ctx.gh, "pr", "view", pr, "--json", "headRefOid"], timeout=ctx.gh_timeout)
-    except subprocess.TimeoutExpired:
-        ctx.say(
-            f"ERROR: not merging {pr}: gh could not read the PR head (timed out after {int(ctx.gh_timeout)} s). Merge by hand; the PR stays open"
-        )
-        return EXIT_CHECKS_PENDING
-    except OSError as err:
-        raise LandError(f"gh could not run ({err}). Merge {pr} by hand with `gh pr merge --merge`") from err
-    try:
-        current = str(json.loads(_text(view.stdout)).get("headRefOid", ""))
-    except (ValueError, AttributeError):
-        current = ""
+    current = _read_pr_head(ctx, pr)
     if not current:
-        ctx.say(f"ERROR: not merging {pr}: gh could not read the PR head. Merge {pr} by hand; the PR stays open")
+        ctx.say(
+            f"ERROR: not merging {pr}: gh could not read the PR head after {HEAD_READ_ATTEMPTS} tries. Merge {pr} by hand; the PR stays open"
+        )
         return EXIT_CHECKS_PENDING
     if current != pushed_head:
         ctx.say(

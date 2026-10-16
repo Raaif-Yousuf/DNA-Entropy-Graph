@@ -33,6 +33,12 @@ if hang.exists() and " ".join(sys.argv[2:4]) in hang.read_text(encoding="utf-8")
     time.sleep(60)
 if sys.argv[2:4] == ["pr", "view"]:
     import subprocess
+    failing = Path(str(log) + ".viewfail")  # the first N `pr view` calls exit 1 with no output
+    if failing.exists():
+        seen = sum(1 for ln in log.read_text(encoding="utf-8").splitlines() if json.loads(ln)[:2] == ["pr", "view"])
+        if seen <= int(failing.read_text()):
+            sys.stderr.write("HTTP 502")
+            sys.exit(1)
     fixed = Path(str(log) + ".headoid")
     oid = fixed.read_text(encoding="utf-8").strip() if fixed.exists() else ""
     if not oid:
@@ -1097,3 +1103,18 @@ def test_kill_pid_tree_ends_a_process_and_its_child_and_reports_it(tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_a_transient_pr_view_failure_is_retried_with_backoff_then_merged(world):
+    (world.root / "gh.log.viewfail").write_text("2", encoding="utf-8")
+    rc, clock = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_OK
+    assert len(_calls(world, "view")) == 3 and len(_calls(world, "merge")) == 1
+    assert clock.sleeps == [lw.HEAD_READ_BACKOFF_SECONDS, 2 * lw.HEAD_READ_BACKOFF_SECONDS]
+
+
+def test_a_pr_view_that_keeps_failing_gives_up_after_three_reads_without_merging(world):
+    (world.root / "gh.log.viewfail").write_text("99", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert len(_calls(world, "view")) == 3 and _calls(world, "merge") == []

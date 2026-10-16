@@ -1396,3 +1396,11 @@ def test_run_command_timeout_kills_the_grandchild_too(tmp_path: Path, monkeypatc
     while land_wt.pid_alive(pid) and time.time() < end:
         time.sleep(0.1)
     assert not land_wt.pid_alive(pid)
+
+
+def test_the_land_wt_bound_covers_the_worst_case_chain_of_git_and_gh_calls() -> None:
+    import land_wt
+
+    chain = lq.LAND_WT_GIT_CALLS * land_wt.GIT_TIMEOUT_SECONDS + lq.LAND_WT_GH_CALLS * land_wt.GH_TIMEOUT_SECONDS
+    assert land_wt.PREMERGE_TIMEOUT_SECONDS + 2 * land_wt.CHECKS_TIMEOUT_SECONDS + chain + 30 * 60 <= lq.LAND_WT_TIMEOUT_SECONDS
+    assert lq.LAND_WT_GIT_CALLS >= 15 and lq.LAND_WT_GH_CALLS >= 10

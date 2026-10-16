@@ -48,7 +48,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from land_wt import CHECKS_TIMEOUT_SECONDS, PREMERGE_TIMEOUT_SECONDS, kill_pid_tree, pid_alive, proc_start_time, run_bounded
+from land_wt import (
+    CHECKS_TIMEOUT_SECONDS,
+    GH_TIMEOUT_SECONDS,
+    GIT_TIMEOUT_SECONDS,
+    PREMERGE_TIMEOUT_SECONDS,
+    kill_pid_tree,
+    pid_alive,
+    proc_start_time,
+    run_bounded,
+)
 
 Runner = Callable[[list[str], "Path | None"], "tuple[int, str]"]
 
@@ -64,8 +73,22 @@ MERGEABLE_POLLS = 6
 
 
 COMMAND_TIMEOUT_SECONDS = 600.0
-# land_wt.py: premerge (heavy.py slot wait included) + the checks wait, twice (one rerun gets a fresh deadline) + git/gh calls and a margin.
-LAND_WT_TIMEOUT_SECONDS = PREMERGE_TIMEOUT_SECONDS + 2 * CHECKS_TIMEOUT_SECONDS + 30 * 60.0
+# The bound on one land_wt.py run, a sum of worst cases (every term is a bound in land_wt.py, so nothing in it can outlive this):
+#   PREMERGE_TIMEOUT_SECONDS        the gates, heavy.py slot wait included
+# + 2 * CHECKS_TIMEOUT_SECONDS      the checks wait, twice (the one rerun gets a fresh deadline)
+# + LAND_WT_GIT_CALLS * GIT_TIMEOUT the git calls in a run (fetch, rev-parse x3, diff, a show per changed file, worktree prune/add/remove,
+#                                   merge, merge-base, push, ls-remote, ...): budgeted at 20 calls, each at its 600 s bound
+# + LAND_WT_GH_CALLS * GH_TIMEOUT   the gh calls (create 1, head reads 3, merge 1, up to 2 check reads overrunning a deadline, reruns 4): 11
+# + 30 min                          margin
+LAND_WT_GIT_CALLS = 20
+LAND_WT_GH_CALLS = 11
+LAND_WT_TIMEOUT_SECONDS = (
+    PREMERGE_TIMEOUT_SECONDS
+    + 2 * CHECKS_TIMEOUT_SECONDS
+    + LAND_WT_GIT_CALLS * GIT_TIMEOUT_SECONDS
+    + LAND_WT_GH_CALLS * GH_TIMEOUT_SECONDS
+    + 30 * 60.0
+)
 
 
 def run_command(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
