@@ -218,7 +218,10 @@ to save the next person from repeating:
 to the otherwise-clean `MainWindow.xaml` and built with `dotnet build` of the App project: a clean tree built;
 `ExtendsContentIntoTitleBar="True"` on `<Window>`, a `Window.Resources` entry for a local `IValueConverter`,
 and `IsEnabled` on a `StackPanel` (which has no such property) each failed with `XamlCompiler.exe ... exited
-with code 1` (MSB3073) and no other message. Grid, Border, RelativePanel, Canvas, TextBlock and Image are
+with code 1` (MSB3073) and no other message. A local converter in `Page.Resources` (scratch copy of
+`PlaceholderPage.xaml`) BUILT CLEAN, so the converter rule hard-fails only in `Window.Resources`; a local
+converter in any other scope, or a `*Converter` element that is not a local class, is a WARN that never fails
+the gate (THEORY (unverified): they crash too). Grid, Border, RelativePanel, Canvas, TextBlock and Image are
 also flagged for `IsEnabled`; THEORY (unverified): they fail the same way.
 
 If a future Windows App SDK bump fixes either of these upstream, this section (and the

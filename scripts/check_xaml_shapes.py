@@ -16,9 +16,13 @@ SHAPES
 `TITLEBAR-ATTRIBUTE`   `ExtendsContentIntoTitleBar=...` as an attribute on a `<Window>`.
     MEASURED 2026-09-19 (#62), Windows App SDK 1.8.250906003. Set it in the code-behind
     constructor after `InitializeComponent()` instead (docs/ui_conventions.md section 8).
-`LOCAL-CONVERTER`      A `<Resources>` entry instantiating a locally defined `IValueConverter`
-    (a class under `app/src` that implements it, or a `using:` element named `*Converter`).
-    MEASURED 2026-09-19 (#62). Use an `x:Bind` method call on a static helper instead.
+`LOCAL-CONVERTER`      FAIL. A `Window.Resources` entry instantiating a locally defined `IValueConverter`
+    (a class under `app/src` that implements it). MEASURED 2026-09-19 (#62). Use an `x:Bind` method call
+    on a static helper instead.
+`LOCAL-CONVERTER-UNMEASURED`   WARN only, never fails the gate. A local converter in any other Resources scope
+    (Grid.Resources, ResourceDictionary, ...), or a `*Converter` element in Window.Resources that is not a
+    local class. MEASURED 2026-10-16: a local converter in `Page.Resources` builds clean, so that scope is
+    silent. The other scopes are THEORY (unverified).
 `NO-ISENABLED`         `IsEnabled=...` on a StackPanel, which has no such property.
     MEASURED 2026-10-16: XamlCompiler.exe exits 1 silently (reproduced on MainWindow.xaml, below). Grid, Border,
     RelativePanel, Canvas, TextBlock and Image are in the same family (no IsEnabled);
@@ -51,9 +55,10 @@ class Finding:
     line: int
     code: str
     message: str
+    level: str = "FAIL"  # FAIL = measured to crash the compiler; WARN = THEORY (unverified), never fails the gate
 
     def __str__(self) -> str:
-        return f"{self.path}:{self.line}: {self.code}: {self.message}"
+        return f"{self.path}:{self.line}: {self.level}: {self.code}: {self.message}"
 
 
 def local_converters(cs_sources: list[str]) -> set[str]:
@@ -61,6 +66,17 @@ def local_converters(cs_sources: list[str]) -> set[str]:
     for text in cs_sources:
         found.update(_CONVERTER_CLASS.findall(text))
     return found
+
+
+def _resources_owner(stack: list[str]) -> str | None:
+    """The element whose `.Resources` we are inside (`Window` for `Window.Resources`), nearest first; None outside one."""
+    for entry in reversed(stack):
+        local = entry.rsplit(":", 1)[-1]
+        if local.endswith(".Resources"):
+            return local.split(".")[0]
+        if local == "ResourceDictionary":
+            return "ResourceDictionary"
+    return None
 
 
 def scan_xaml(text: str, path: str, converters: set[str]) -> list[Finding]:
@@ -77,7 +93,7 @@ def scan_xaml(text: str, path: str, converters: set[str]) -> list[Finding]:
             continue
         line = text.count("\n", 0, match.start()) + 1
         attrs = {m.group("name") for m in _ATTR.finditer(match.group("attrs"))}
-        in_resources = any(s.endswith(".Resources") or s == "ResourceDictionary" for s in stack)
+        owner = _resources_owner(stack)
         if local == "Window" and "ExtendsContentIntoTitleBar" in attrs:
             findings.append(
                 Finding(
@@ -89,16 +105,32 @@ def scan_xaml(text: str, path: str, converters: set[str]) -> list[Finding]:
                     "(docs/ui_conventions.md section 8)",
                 )
             )
-        if in_resources and (local in converters or (local.endswith("Converter") and name != local)):
-            findings.append(
-                Finding(
-                    path,
-                    line,
-                    "LOCAL-CONVERTER",
-                    f"<{name}> is a locally defined converter instantiated in a Resources block; XamlCompiler.exe exits 1 with no message. "
-                    "Use an x:Bind method call on a static helper instead (docs/ui_conventions.md section 8)",
+        if owner is not None and (local in converters or (local.endswith("Converter") and name != local)):
+            is_local = local in converters
+            if owner == "Window" and is_local:
+                findings.append(
+                    Finding(
+                        path,
+                        line,
+                        "LOCAL-CONVERTER",
+                        f"<{name}> is a locally defined converter instantiated in Window.Resources; XamlCompiler.exe exits 1 "
+                        "with no message (MEASURED 2026-09-19). Use an x:Bind method call on a static helper instead "
+                        "(docs/ui_conventions.md section 8)",
+                    )
                 )
-            )
+            elif owner != "Page" or not is_local:
+                what = "a locally defined converter" if is_local else "a *Converter element"
+                findings.append(
+                    Finding(
+                        path,
+                        line,
+                        "LOCAL-CONVERTER-UNMEASURED",
+                        f"<{name}> is {what} in {owner}.Resources. THEORY (unverified): it crashes XamlCompiler.exe like the "
+                        "Window.Resources case. If it builds, ignore this warning; if the build exits 1 with no message, "
+                        "this is why (docs/ui_conventions.md section 8)",
+                        "WARN",
+                    )
+                )
         if local in NO_ISENABLED and "IsEnabled" in attrs:
             findings.append(
                 Finding(
@@ -165,12 +197,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {args.root} does not look like this repo (no app/src); checked nothing", file=sys.stderr)
         return 2
     findings, count = scan_repo(args.root)
+    failures = [f for f in findings if f.level == "FAIL"]
     for finding in findings:
-        print(finding, file=sys.stderr)
-    if findings:
-        print(f"\nFAIL: {len(findings)} XAML shape(s) that crash XamlCompiler.exe silently", file=sys.stderr)
+        print(finding, file=sys.stderr if finding.level == "FAIL" else sys.stdout)
+    if failures:
+        print(f"\nFAIL: {len(failures)} XAML shape(s) that crash XamlCompiler.exe silently", file=sys.stderr)
         return 1
-    print(f"OK: {count} XAML file(s) checked, no silent-crash shapes")
+    print(f"OK: {count} XAML file(s) checked, no silent-crash shapes ({len(findings)} warning(s))")
     return 0
 
 

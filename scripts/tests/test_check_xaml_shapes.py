@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,15 +29,32 @@ def test_titlebar_in_a_comment_or_on_another_element_is_fine():
     assert _codes(xaml) == []
 
 
-def test_local_converter_in_resources_found_by_class_name_and_by_suffix():
-    xaml = '<Page>\n<Page.Resources>\n  <local:BoolToVis x:Key="a"/>\n  <conv:FooConverter x:Key="b"/>\n</Page.Resources>\n</Page>'
-    assert _codes(xaml, {"BoolToVis"}) == [("LOCAL-CONVERTER", 3), ("LOCAL-CONVERTER", 4)]
+def _levels(xaml: str, converters: set[str]) -> list[tuple[str, str, int]]:
+    return [(f.level, f.code, f.line) for f in cxs.scan_xaml(xaml, "x.xaml", converters)]
+
+
+def test_local_converter_in_window_resources_is_a_hard_fail():
+    xaml = '<Window>\n<Window.Resources>\n  <local:BoolToVis x:Key="a"/>\n</Window.Resources>\n</Window>'
+    assert _levels(xaml, {"BoolToVis"}) == [("FAIL", "LOCAL-CONVERTER", 3)]
+
+
+def test_local_converter_in_page_resources_is_measured_ok_and_silent():
+    xaml = '<Page>\n<Page.Resources>\n  <local:BoolToVis x:Key="a"/>\n</Page.Resources>\n</Page>'
+    assert _levels(xaml, {"BoolToVis"}) == []
+
+
+def test_local_converter_in_an_unmeasured_scope_only_warns():
+    xaml = '<Page>\n<Grid>\n<Grid.Resources>\n  <local:BoolToVis x:Key="a"/>\n</Grid.Resources>\n</Grid>\n</Page>'
+    assert _levels(xaml, {"BoolToVis"}) == [("WARN", "LOCAL-CONVERTER-UNMEASURED", 4)]
+
+
+def test_suffix_only_converter_in_window_resources_only_warns():
+    xaml = '<Window>\n<Window.Resources>\n  <conv:FooConverter x:Key="b"/>\n</Window.Resources>\n</Window>'
+    assert _levels(xaml, set()) == [("WARN", "LOCAL-CONVERTER-UNMEASURED", 3)]
 
 
 def test_converter_outside_resources_and_stock_resources_are_fine():
-    xaml = (
-        '<Page><Page.Resources><x:Double x:Key="d">1</x:Double><Style x:Key="s" TargetType="Button"/></Page.Resources><local:BoolToVis/></Page>'
-    )
+    xaml = '<Window><Window.Resources><x:Double x:Key="d">1</x:Double></Window.Resources><local:BoolToVis/></Window>'
     assert _codes(xaml, {"BoolToVis"}) == []
 
 
@@ -71,10 +89,16 @@ def test_cli_fails_with_file_line_and_shape_then_passes_when_fixed(tmp_path):
     root = _repo(tmp_path, '<Window>\n<StackPanel IsEnabled="False"/>\n</Window>')
     bad = _run(root)
     assert bad.returncode == 1
-    assert "app/src/App/W.xaml:2: NO-ISENABLED" in bad.stderr
+    assert "app/src/App/W.xaml:2: FAIL: NO-ISENABLED" in bad.stderr
     (root / "app" / "src" / "App" / "W.xaml").write_text("<Window>\n<StackPanel/>\n</Window>", encoding="utf-8", newline="\n")
     good = _run(root)
     assert good.returncode == 0 and "1 XAML file(s) checked" in good.stdout
+
+
+def test_cli_warning_does_not_fail_but_is_printed(tmp_path):
+    root = _repo(tmp_path, "<Page><Grid><Grid.Resources><local:Conv/></Grid.Resources></Grid></Page>", "class Conv : IValueConverter { }")
+    result = _run(root)
+    assert result.returncode == 0 and "WARN" in result.stdout and "THEORY (unverified)" in result.stdout
 
 
 def test_cli_without_app_src_says_it_checked_nothing(tmp_path):
@@ -83,6 +107,9 @@ def test_cli_without_app_src_says_it_checked_nothing(tmp_path):
 
 
 def test_the_real_tree_is_clean_and_self_test_passes():
-    assert _run(SCRIPTS_DIR.parent).returncode == 0
+    real = _run(SCRIPTS_DIR.parent)
+    assert real.returncode == 0, real.stderr
+    checked = re.search(r"OK: (\d+) XAML file", real.stdout)
+    assert checked and int(checked.group(1)) >= 1, real.stdout
     proc = subprocess.run([sys.executable, str(SCRIPT), "--self-test"], capture_output=True, text=True, check=False, timeout=60)
     assert proc.returncode == 0 and "PASS" in proc.stdout
