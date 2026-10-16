@@ -124,18 +124,14 @@ def validate_row_shape(row: Row) -> list[str]:
     malformed `#`. Never touches git."""
     problems = []
     if len(row.cells) != len(COLUMNS):
-        problems.append(
-            f"L{row.line_no}: {len(row.cells)} column(s), expected {len(COLUMNS)} ({', '.join(COLUMNS)})"
-        )
+        problems.append(f"L{row.line_no}: {len(row.cells)} column(s), expected {len(COLUMNS)} ({', '.join(COLUMNS)})")
         return problems  # further checks assume the right shape
 
     number, sha_cell, needs, do_this, passing, false_pass = row.cells
     if not _ISSUE_CELL_RE.match(number):
         problems.append(f"L{row.line_no}: '#' column {number!r} is not '#' followed by digits")
     if needs not in VALID_NEEDS:
-        problems.append(
-            f"L{row.line_no}: Needs {needs!r} is not one of {sorted(VALID_NEEDS)}"
-        )
+        problems.append(f"L{row.line_no}: Needs {needs!r} is not one of {sorted(VALID_NEEDS)}")
     for name, cell in (("Do this", do_this), ("Passing looks like", passing), ("False pass looks like", false_pass)):
         if not cell:
             problems.append(f"L{row.line_no}: '{name}' is empty")
@@ -197,13 +193,11 @@ def find_duplicate_rows(rows: list[Row]) -> list[str]:
             continue  # malformed shape is reported by validate_row_shape
         key = (row.cells[0].strip().lower(), " ".join(row.cells[3].split()).lower())
         if key in seen:
-            problems.append(
-                f"L{row.line_no}: duplicate of L{seen[key]} (same issue {row.cells[0].strip()} and same 'Do this') "
-                "-- delete one"
-            )
+            problems.append(f"L{row.line_no}: duplicate of L{seen[key]} (same issue {row.cells[0].strip()} and same 'Do this') -- delete one")
         else:
             seen[key] = row.line_no
     return problems
+
 
 def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(UTC)
@@ -285,6 +279,7 @@ _BAD_SHA_TABLE = """## Queue
 
 def _init_throwaway_repo(root: Path) -> str:
     """A real, tiny git repo with one commit; returns its sha."""
+
     def run(*args):
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)
 
@@ -294,9 +289,7 @@ def _init_throwaway_repo(root: Path) -> str:
     (root / "f.txt").write_text("x\n", encoding="utf-8", newline="\n")
     run("add", "f.txt")
     run("commit", "-q", "-m", "initial")
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
-    ).stdout.strip()
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
     return sha
 
 
@@ -308,7 +301,7 @@ def self_test() -> bool:
     # --- pure logic: no git, no filesystem ---
     now = datetime(2026, 9, 19, tzinfo=UTC)
     fresh = datetime(2026, 9, 1, tzinfo=UTC)  # 18 days old
-    old = datetime(2026, 6, 1, tzinfo=UTC)    # well over 45 days old
+    old = datetime(2026, 6, 1, tzinfo=UTC)  # well over 45 days old
 
     if row_age_days(fresh, now) != 18:
         print(f"FAIL row_age_days: expected 18, got {row_age_days(fresh, now)}")
@@ -408,8 +401,12 @@ def main(argv: list[str] | None = None) -> int:
         description="Validate docs/ToTest.md's row shape, Needs values, commit shas, and row age.",
     )
     ap.add_argument("--root", type=Path, default=REPO_ROOT, help="repo root (default: the repo this script lives in)")
-    ap.add_argument("--max-age-days", type=int, default=DEFAULT_MAX_AGE_DAYS,
-                     help=f"fail a row whose closing commit is older than this many days (default {DEFAULT_MAX_AGE_DAYS})")
+    ap.add_argument(
+        "--max-age-days",
+        type=int,
+        default=DEFAULT_MAX_AGE_DAYS,
+        help=f"fail a row whose closing commit is older than this many days (default {DEFAULT_MAX_AGE_DAYS})",
+    )
     ap.add_argument("--self-test", action="store_true", help="run against synthetic fixtures and exit")
     args = ap.parse_args(argv)
 

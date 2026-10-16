@@ -96,17 +96,13 @@ def test_planted_home_path_is_named_by_the_one_command(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
 
-    proc = _run_cli(
-        "--root", str(tmp_path), "--python", sys.executable, "--only", "check_user_home_paths", "--fast"
-    )
+    proc = _run_cli("--root", str(tmp_path), "--python", sys.executable, "--only", "check_user_home_paths", "--fast")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "FAILED gates: check_user_home_paths" in proc.stdout
 
     leaked.write_text("see %USERPROFILE%\\Downloads\\x.fasta\n", encoding="utf-8", newline="\n")
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
-    clean = _run_cli(
-        "--root", str(tmp_path), "--python", sys.executable, "--only", "check_user_home_paths", "--fast"
-    )
+    clean = _run_cli("--root", str(tmp_path), "--python", sys.executable, "--only", "check_user_home_paths", "--fast")
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert "PREMERGE: PASS" in clean.stdout
 
@@ -153,8 +149,10 @@ def test_basetemp_stays_short_however_deep_the_log_dir_is(tmp_path):
 
 
 def test_a_passing_run_removes_its_basetemp_even_with_read_only_git_objects(tmp_path):
-    code = ("import sys, os, stat; d = sys.argv[sys.argv.index('--basetemp') + 1]; os.makedirs(d); "
-            "f = os.path.join(d, 'obj'); open(f, 'w').write('x'); os.chmod(f, stat.S_IREAD); print('1 passed in 0.01s')")
+    code = (
+        "import sys, os, stat; d = sys.argv[sys.argv.index('--basetemp') + 1]; os.makedirs(d); "
+        "f = os.path.join(d, 'obj'); open(f, 'w').write('x'); os.chmod(f, stat.S_IREAD); print('1 passed in 0.01s')"
+    )
     gate = pm.Gate("pt", [sys.executable, "-c", code], Path.cwd(), pytest=True)
     results, _, rc = pm.run_all([gate], log_dir=tmp_path, emit=lambda _line: None)
     assert rc == 0, results[0].output
@@ -194,6 +192,7 @@ def test_an_undeletable_basetemp_does_not_crash_the_run(monkeypatch):
     kept = [x for x in lines if x.startswith("basetemp kept (could not remove it: PermissionError): ")]
     assert len(kept) == 1
     import shutil as _sh
+
     _sh.rmtree(kept[0].split("): ", 1)[1], ignore_errors=True)
 
 
@@ -260,8 +259,12 @@ def test_the_dotnet_format_gate_has_the_forgive_hook_and_other_gates_do_not():
 
 
 def test_a_known_issue_exits_zero_but_is_printed_with_its_issue():
-    gate = pm.Gate("fmt", [sys.executable, "-c", f"import sys; sys.stdout.write({EOL!r}); sys.exit(2)"], Path.cwd(),
-                   forgive=lambda out, rc, cwd: pm.forgive_endofline(out, rc, True))
+    gate = pm.Gate(
+        "fmt",
+        [sys.executable, "-c", f"import sys; sys.stdout.write({EOL!r}); sys.exit(2)"],
+        Path.cwd(),
+        forgive=lambda out, rc, cwd: pm.forgive_endofline(out, rc, True),
+    )
     summary, code = pm.render_summary([pm.run_gate(gate)])
     assert code == 0 and "KNOWN ISSUE" in summary and "#462" in summary
 
@@ -295,3 +298,17 @@ def test_a_red_or_filtered_run_writes_no_stamp(tmp_path, monkeypatch):
     monkeypatch.setattr(pm, "build_gates", lambda *a, **k: [pm.Gate("only-gate", [sys.executable, "-c", "pass"], tmp_path)])
     assert pm.main(["--root", str(tmp_path), "--fast", "--only", "only-gate"]) == 0
     assert not stamp.exists()
+
+
+def test_scripts_format_is_gated_in_premerge_and_in_ci_docs():
+    """The bulk `ruff format scripts` (r2) is only worth keeping if a drifting file goes red in both places."""
+    found = next(g for g in pm.build_gates(REPO_ROOT) if g.name == "ruff-scripts-format")
+    assert list(found.argv) == ["uvx", "ruff", "format", "--check", "scripts"]
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci-docs.yml").read_text(encoding="utf-8")
+    assert "uvx ruff format --check scripts" in ci
+
+
+def test_scripts_are_ruff_formatted_now():
+    """Vacuity guard: the tree the gate checks is clean today, via the same command."""
+    proc = subprocess.run(["uvx", "ruff", "format", "--check", "scripts"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stdout[-800:]
