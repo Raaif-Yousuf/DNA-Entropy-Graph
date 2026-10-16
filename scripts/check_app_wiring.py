@@ -107,7 +107,11 @@ part of this docstring worth reading twice:
   declared class (`RunOptions options` ... `options.ModelId`). A `var`, a field declared elsewhere or a property
   chain (`vm.Options.ModelId`) stays a name match, so those still mask. Constructor parameters with a default
   value parse to their type and, being optional, are never an UNREGISTERED-DEPENDENCY; `AddSingleton(new Foo())`
-  registers `Foo`.
+  registers `Foo`. A constructor parameter list and an `Add*<...>` argument list are cut by balanced scanning (#478),
+  so a default such as `= default(T)` / `= new()` does not hide the parameters after it and
+  `AddSingleton<IRepo<Run, Guid>, Repo>()` registers `IRepo<Run,Guid>` once. Still NOT a C# parser: a `(` or `<`
+  inside a verbatim/raw string or an interpolated string's braces is not understood, and an attribute argument
+  list on a parameter is cut only by the leading-attribute strip.
 
 - **`DANGLING-BINDING` resolves the ViewModel by naming convention only.** A
   page whose DataContext is set to something the convention does not name is
@@ -203,9 +207,9 @@ _CLASS_DECL = re.compile(
     r"(?:class|record)\s+(\w+)",
 )
 
-_ADD_SERVICE = re.compile(
-    r"\.Add(?:Singleton|Transient|Scoped)\s*<([^>;]+)>",
-)
+# The generic form `Add*<A, B<C, D>>(...)`: only the opening is matched here; `_add_service_calls` finds the
+# matching `>` by balanced scanning (#478), because a regex stops at the first `>` of a nested generic.
+_ADD_SERVICE_OPEN = re.compile(r"\.Add(?:Singleton|Transient|Scoped)\s*<")
 # The instance form (#461): `services.AddSingleton(new Foo())` / `AddSingleton(new Foo { ... })`.
 _ADD_SERVICE_INSTANCE = re.compile(r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*new\s+([\w.]+)")
 # A factory registration (#530): `AddSingleton<T>(sp => ...)`, `AddSingleton<I, T>((IServiceProvider _) => ...)`. The
@@ -542,6 +546,55 @@ def _cut_default(token: str) -> tuple[str, bool]:
     return token, False
 
 
+def _balanced_end(text: str, start: int, open_char: str, close_char: str) -> int | None:
+    """Index of the bracket that closes the one at `text[start]`, skipping string and char literals; None when it
+    never closes (#478: a regex `([^)]*)` stops at the first `)` of a default such as `= default(T)`)."""
+    depth = 0
+    quote = ""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == "\\":
+                index += 1
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _normalise_type(type_text: str) -> str:
+    """A type as the guard compares it: no whitespace, no trailing `?`, the namespace dropped from the head only
+    (`Demo.IRepo<Run, Guid>?` -> `IRepo<Run,Guid>`). Registrations and constructor parameters both go through here."""
+    compact = re.sub(r"\s+", "", type_text).rstrip("?")
+    head, bracket, rest = compact.partition("<")
+    return head.split(".")[-1] + bracket + rest
+
+
+def _add_service_calls(text: str) -> list[tuple[str, int]]:
+    """Every `Add{Singleton,Transient,Scoped}<...>` call as (the text between the outer `<` `>`, the index just
+    after that `>`). The closing `>` is found by balanced scanning, so `<IRepo<Run, Guid>, Repo>` is one argument
+    list. A `;` inside means the angle bracket was not a generic argument list at all (a comparison), so it is skipped."""
+    calls: list[tuple[str, int]] = []
+    for match in _ADD_SERVICE_OPEN.finditer(text):
+        open_at = match.end() - 1
+        close_at = _balanced_end(text, open_at, "<", ">")
+        if close_at is None:
+            continue
+        arguments = text[open_at + 1 : close_at]
+        if ";" not in arguments:
+            calls.append((arguments, close_at + 1))
+    return calls
+
+
 def _constructor_parameters(text: str, class_name: str, skip_defaults: bool = False) -> list[str]:
     """Parameter type names of `public <class_name>(...)`, in order.
 
@@ -550,15 +603,14 @@ def _constructor_parameters(text: str, class_name: str, skip_defaults: bool = Fa
     the optional parameters are left out: the container supplies the default when nothing is registered, so an
     unregistered optional parameter is not an UNREGISTERED-DEPENDENCY.
     """
-    match = re.search(
-        rf"public\s+{re.escape(class_name)}\s*\(([^)]*)\)",
-        text,
-        re.DOTALL,
-    )
+    match = re.search(rf"public\s+{re.escape(class_name)}\s*\(", text)
     if not match:
         return []
+    close_at = _balanced_end(text, match.end() - 1, "(", ")")
+    if close_at is None:
+        return []
     types: list[str] = []
-    for token in _split_top_level(match.group(1).strip()):
+    for token in _split_top_level(text[match.end() : close_at].strip()):
         declaration, has_default = _cut_default(token)
         if has_default and skip_defaults:
             continue
@@ -566,9 +618,7 @@ def _constructor_parameters(text: str, class_name: str, skip_defaults: bool = Fa
         pieces = declaration.rsplit(None, 1)
         if len(pieces) < 2:
             continue
-        type_text = re.sub(r"\s+", "", pieces[0]).rstrip("?")
-        head, bracket, rest = type_text.partition("<")
-        types.append(head.split(".")[-1] + bracket + rest)
+        types.append(_normalise_type(pieces[0]))
     return types
 
 
@@ -578,9 +628,9 @@ def _factory_only_types(text: str) -> set[str]:
     plainly (`AddTransient<T>()`) is not in this set: that registration is still constructor-injected."""
     factory: set[str] = set()
     plain: set[str] = set()
-    for match in _ADD_SERVICE.finditer(text):
-        names = {t.strip().split(".")[-1] for t in match.group(1).split(",") if t.strip()}
-        (factory if _FACTORY_LAMBDA.match(text, match.end()) else plain).update(names)
+    for arguments, end in _add_service_calls(text):
+        names = {_normalise_type(t) for t in _split_top_level(arguments)}
+        (factory if _FACTORY_LAMBDA.match(text, end) else plain).update(names)
     for match in _ADD_SERVICE_INFERRED.finditer(text):
         factory.add(match.group(1).split(".")[-1])
     return factory - plain
@@ -596,8 +646,8 @@ def _registered_types(text: str) -> tuple[set[str], set[str]]:
     """
     every: set[str] = set()
     services: set[str] = set()
-    for match in _ADD_SERVICE.finditer(text):
-        tokens = [t.strip().split(".")[-1] for t in match.group(1).split(",")]
+    for arguments, _end in _add_service_calls(text):
+        tokens = [_normalise_type(t) for t in _split_top_level(arguments)]
         tokens = [t for t in tokens if t]
         if not tokens:
             continue
@@ -1293,6 +1343,17 @@ def self_test() -> int:
         check(
             "the instance registration form registers the type",
             _registered_types("s.AddSingleton(new Dep());")[0] == {"Dep"},
+        )
+        # 3c. The two parser shortcuts of #478 (balanced scanning; revert it and each of these fails).
+        check(
+            "a parenthesised default does not hide a later required parameter",
+            _constructor_parameters(
+                "public class Foo { public Foo(IBar bar = default(IBar), IBaz baz) { } }", "Foo", skip_defaults=True
+            ) == ["IBaz"],
+        )
+        check(
+            "a nested generic registration is one type, not two half-types",
+            _registered_types("s.AddSingleton<IRepo<Run, Guid>, Repo>();")[1] == {"IRepo<Run,Guid>"},
         )
         probe = {Path("Reader.cs"): "class R { // see Vm.Caption\n string A() => Options.Caption; }"}
         check(

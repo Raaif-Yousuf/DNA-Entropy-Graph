@@ -246,8 +246,8 @@ The machine limit lives in one place, `<lock dir>\slots.txt`, set with `heavy.py
 For `dotnet build|test|run|pack|publish` it adds `--artifacts-path <repo>\app\.artifacts\<lane>` unless one is
 given (not for `dotnet format`), so concurrent lanes never share `obj/`. `--lane <name>` is **required** for
 those commands (exit 2 without it; a shared default lane would put two agents back in one `obj/`).
-The folder is inside the repo on purpose: Cloud.Tests `FixturePaths` and Core.Tests `StartupMetadataTests`
-find the repo by walking up from the test binary, which fails under `%TEMP%`. `bin/`, `obj/` and `publish/`
+The folder is inside the repo as a convenience, no longer a requirement (#495): every test project's repo-root helper
+falls back to its own source file's path, so `--artifacts-path "$env:TEMP\deg-art\<lane>"` also works (see tests.md). `bin/`, `obj/` and `publish/`
 under it are gitignored; `dotnet pack` would also create `package/`, which is not. `dotnet test` still needs
 `app\` as the working directory (see above).
 
@@ -450,6 +450,20 @@ gh pr checks
 gh run list
 gh run view <id>
 ```
+
+**Wave findings to draft issues: `scripts/wave_findings.py` (#477).** Paste each agent's "Suspected bugs / improvements"
+bullets (`- <text> (path:line)`) into a file, then:
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\wave_findings.py findings.md      # or pipe the text in; --gh <path> picks another gh
+```
+
+Per finding it prints either `DUPLICATE of #N (open|closed): <title>` (an existing issue title shares at least 3 words and
+60% of the finding's keywords, searched with `gh issue list --search ... --state all --limit 50`) or a `NEW` block: a
+PowerShell `$body = @'...'@` in the house shape and one `gh issue create ... --label 'P3' --label 'area:<guess>'` line.
+It only drafts: the single gh call is the read-only `issue list`; nothing is created, edited or closed. The area label
+is guessed from the path and P3 is a placeholder, so read each draft before running it. A failed search prints
+`WARNING ... unchecked` and still drafts. Tests: `scripts/tests/test_wave_findings.py` (stub gh).
 
 ## CloudCli: the console host for cloud resources (#60)
 
