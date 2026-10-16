@@ -20,6 +20,26 @@ public sealed class RunStallCoordinator
     private readonly IStringResourceProvider _strings;
     private readonly IDiagnosticsLog _log;
 
+    // Per run: whether a question is open and which kind of notice the page shows now. Guarded by itself: AskAsync and OnNotice run on the runner's threads.
+    private readonly Dictionary<string, RunState> _runs = [];
+
+    private sealed class RunState
+    {
+        public bool QuestionOpen { get; set; }
+
+        public RunNoticeKind? Shown { get; set; }
+    }
+
+    private RunState StateOf(string jobId)
+    {
+        if (!_runs.TryGetValue(jobId, out var state))
+        {
+            _runs[jobId] = state = new RunState();
+        }
+
+        return state;
+    }
+
     public RunStallCoordinator(IChoiceDialogService dialog, IMessenger messenger, IStringResourceProvider strings, IDiagnosticsLog log)
     {
         _dialog = dialog;
@@ -31,15 +51,29 @@ public sealed class RunStallCoordinator
     /// <summary>The <see cref="StallDecision"/> the runner calls. Raised on a worker thread; the dialog service marshals to the UI thread.</summary>
     public async Task<StallChoice> AskAsync(StallPrompt prompt, CancellationToken cancellationToken)
     {
+        lock (_runs)
+        {
+            StateOf(prompt.JobId).QuestionOpen = true;
+        }
+
         try
         {
             return await AskCoreAsync(prompt, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            // The runner sends no StallCleared after Keep waiting (it only snoozes its watch), and a question it withdrew has already cleared it: whichever way
-            // the question ends, the "a window is asking" line must go (#740). Stop and Delete end the run, so an empty line costs nothing there.
-            _messenger.Send(new RunNoticeMessage(prompt.JobId, string.Empty));
+            // The runner sends no StallCleared after Keep waiting (it only snoozes its watch), so the "a window is asking" line must go when the question ends (#740). Only
+            // that line: a newer notice for the run (a slow step raised while the question was open) stays, and a line the runner already cleared needs no second clear.
+            lock (_runs)
+            {
+                var state = StateOf(prompt.JobId);
+                state.QuestionOpen = false;
+                if (state.Shown is null or RunNoticeKind.StallDetected)
+                {
+                    state.Shown = RunNoticeKind.StallCleared;
+                    _messenger.Send(new RunNoticeMessage(prompt.JobId, string.Empty));
+                }
+            }
         }
     }
 
@@ -90,6 +124,22 @@ public sealed class RunStallCoordinator
     public void OnNotice(RunNotice notice)
     {
         _log.Warning("run-notice", notice.JobId, notice.Kind.ToString());
+        lock (_runs)
+        {
+            var state = StateOf(notice.JobId);
+            if (notice.Kind == RunNoticeKind.StallDetected && !state.QuestionOpen && state.Shown is RunNoticeKind.StallCleared)
+            {
+                // The question already ended (answered before this announcement was published): its line would never be cleared.
+                return;
+            }
+
+            state.Shown = notice.Kind;
+            Publish(notice);
+        }
+    }
+
+    private void Publish(RunNotice notice)
+    {
         var stage = notice.Stage ?? _strings.GetString("RunNotice_UnknownStage");
         var text = notice.Kind switch
         {

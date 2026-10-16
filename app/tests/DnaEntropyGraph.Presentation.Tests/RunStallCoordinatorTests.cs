@@ -62,6 +62,38 @@ public class RunStallCoordinatorTests
     }
 
     [Fact]
+    public async Task A_newer_slow_notice_that_arrived_while_the_question_was_open_is_not_wiped_when_it_ends()
+    {
+        // #740 round 2 (L4): the question's end clears only the stall line it raised, never a newer notice for the same run.
+        var answer = new TaskCompletionSource<int?>();
+        _dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(_ => answer.Task);
+        var coordinator = NewCoordinator();
+        var asking = coordinator.AskAsync(Prompt(), CancellationToken.None);
+        coordinator.OnNotice(new RunNotice("job-1", RunNoticeKind.StallDetected, "predict", Code: RunErrorCodes.WorkerStageStuck));
+        coordinator.OnNotice(new RunNotice("job-1", RunNoticeKind.StallCleared));
+        coordinator.OnNotice(new RunNotice("job-1", RunNoticeKind.SlowStage, "export", TimeSpan.FromMinutes(9), TimeSpan.FromMinutes(12)));
+
+        answer.SetResult(2);
+        await asking;
+
+        _notices.Last().Text.ShouldContain("RunNotice_Slow", Case.Sensitive, "the slow notice raised after the stall must still be the one on the page");
+    }
+
+    [Fact]
+    public async Task A_question_that_ended_before_the_runner_announced_it_never_leaves_its_stall_line_behind()
+    {
+        // The dialog can answer (no window: Keep waiting) before the runner's StallDetected notice is published.
+        _dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns((int?)null);
+        var coordinator = NewCoordinator();
+
+        await coordinator.AskAsync(Prompt(), CancellationToken.None);
+        coordinator.OnNotice(new RunNotice("job-1", RunNoticeKind.StallDetected, "predict", Code: RunErrorCodes.WorkerStageStuck));
+
+        _notices.Last().Text.ShouldBeEmpty();
+        _notices.ShouldNotContain(n => n.Text.Contains("RunNotice_Stalled"));
+    }
+
+    [Fact]
     public async Task A_question_the_runner_withdrew_also_clears_the_notice()
     {
         _dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns<Task<int?>>(_ => throw new OperationCanceledException());
