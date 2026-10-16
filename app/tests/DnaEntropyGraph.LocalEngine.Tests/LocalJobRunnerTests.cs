@@ -1,11 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
-using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core.LocalEngine;
 using Shouldly;
 using Xunit;
@@ -267,7 +267,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         var launcher = HappyWorker();
         _runs.Seed(new RunRecord("..", JobPhase.Draft, DateTimeOffset.UtcNow, Target: "local"));
 
-        var result = await Runner(launcher).RunAsync(Request("..") , CancellationToken.None);
+        var result = await Runner(launcher).RunAsync(Request(".."), CancellationToken.None);
 
         result.ErrorCode.ShouldBe(RunErrorCodes.ManifestInvalid);
         launcher.Started.ShouldBeEmpty();

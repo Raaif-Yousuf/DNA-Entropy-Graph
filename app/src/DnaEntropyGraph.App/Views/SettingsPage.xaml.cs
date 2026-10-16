@@ -16,6 +16,8 @@ public sealed partial class SettingsPage : Page
 
     public NotificationsSettingsViewModel Notifications { get; }
 
+    public FileAssociationSettingsViewModel FileAssociation { get; }
+
     public AdvancedSettingsViewModel Advanced { get; }
 
     public ThisPcSettingsViewModel ThisPc { get; }
@@ -26,6 +28,7 @@ public sealed partial class SettingsPage : Page
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
         Files = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FilesSettingsViewModel>();
         Notifications = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<NotificationsSettingsViewModel>();
+        FileAssociation = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FileAssociationSettingsViewModel>();
         Advanced = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<AdvancedSettingsViewModel>();
         ThisPc = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ThisPcSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();

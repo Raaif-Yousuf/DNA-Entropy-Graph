@@ -86,6 +86,11 @@
                             <Button x:Uid="FilesLogsOpenButton" Command="{x:Bind Files.OpenLogsFolderCommand}" />
                         </StackPanel>
                         <TextBlock Text="{x:Bind Files.FilesStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <StackPanel Spacing="4">
+                            <CheckBox x:Uid="OpenWithBox" IsChecked="{x:Bind FileAssociation.OpenWithEnabled, Mode=TwoWay}" />
+                            <TextBlock x:Uid="OpenWithExplainer" TextWrapping="Wrap" Opacity="0.8" />
+                            <TextBlock Text="{x:Bind FileAssociation.OpenWithStatus, Mode=OneWay}" Visibility="{x:Bind FileAssociation.HasOpenWithStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
             </StackPanel>

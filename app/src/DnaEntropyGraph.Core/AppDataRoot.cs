@@ -14,7 +14,7 @@ public enum DataFolderProblem
     /// <summary>The folder could not be created or is not writable.</summary>
     CannotCreate,
 
-    /// <summary>The value is not a path the system can use (for example an embedded NUL or <c>C::b:c</c>).</summary>
+    /// <summary>The value is not a path the system can use (for example an embedded NUL or <c>C:\a:b:c</c>).</summary>
     InvalidPath,
 }
 

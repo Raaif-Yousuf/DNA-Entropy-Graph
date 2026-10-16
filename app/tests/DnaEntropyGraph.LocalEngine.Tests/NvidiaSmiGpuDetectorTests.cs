@@ -112,4 +112,5 @@ public sealed class NvidiaSmiGpuDetectorTests
         list.ShouldNotContain("nvidia-smi");
         list.Any(p => p.StartsWith(@"D:\tools", StringComparison.OrdinalIgnoreCase)).ShouldBeTrue();
         list.Count.ShouldBe(3);
-    }}
+    }
+}

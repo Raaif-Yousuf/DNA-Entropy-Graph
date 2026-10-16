@@ -33,6 +33,22 @@
   <data name="ThemeNotSaved_Body" xml:space="preserve">
     <value>The theme changed for now but could not be remembered. Close other copies of the app, then choose the theme again.</value>
   </data>
+  <!-- Issue #110: Alt, then the letter, jumps to the destination. -->
+  <data name="NavNewRun.AccessKey" xml:space="preserve">
+    <value>N</value>
+  </data>
+  <data name="NavRuns.AccessKey" xml:space="preserve">
+    <value>R</value>
+  </data>
+  <data name="NavCloud.AccessKey" xml:space="preserve">
+    <value>C</value>
+  </data>
+  <data name="NavSettings.AccessKey" xml:space="preserve">
+    <value>S</value>
+  </data>
+  <data name="NewRunStatusClipboardEmpty" xml:space="preserve">
+    <value>The clipboard has no text to paste. Copy your sequence, then press Ctrl+Shift+V again.</value>
+  </data>
   <data name="NavNewRun.Content" xml:space="preserve">
     <value>New run</value>
   </data>
@@ -1373,6 +1389,21 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="OpenResultsWhenDoneBox.Content" xml:space="preserve">
     <value>Open the Results page when a run finishes</value>
   </data>
+  <data name="OpenWithBox.Content" xml:space="preserve">
+    <value>Show DNA Entropy Graph in Open with for GenBank and FASTA files</value>
+  </data>
+  <data name="OpenWithExplainer.Text" xml:space="preserve">
+    <value>Right-click a .gb, .gbk, .fasta, .fa or .fna file in File Explorer, choose Open with, then DNA Entropy Graph, and it is added to New run. It only adds that menu entry for you; it never becomes the program a file opens in when you double-click it.</value>
+  </data>
+  <data name="OpenWithNotSaved" xml:space="preserve">
+    <value>Windows would not let the app change this. Turn the switch on or off again.</value>
+  </data>
+  <data name="OpenWithNotInstalled" xml:space="preserve">
+    <value>Open with can only be set up from the installed app, not from a copy run from source. Install DNA Entropy Graph from its download page.</value>
+  </data>
+  <data name="OpenWithSandbox" xml:space="preserve">
+    <value>This window is a test profile, and Open with belongs to your real Windows account. Start the app without a test profile to change it.</value>
+  </data>
   <data name="NotificationsNotSaved" xml:space="preserve">
     <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then change it again.</value>
   </data>
@@ -1384,6 +1415,15 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="RunPartial_Title" xml:space="preserve">
     <value>Your run finished with some files missing</value>
+  </data>
+  <data name="RunFailed_Title" xml:space="preserve">
+    <value>Your run did not finish</value>
+  </data>
+  <data name="RunFailed_Body" xml:space="preserve">
+    <value>Open the run to see what went wrong and what to do next.</value>
+  </data>
+  <data name="RunToast_OpenResults" xml:space="preserve">
+    <value>Open run</value>
   </data>
   <data name="RunPartial_Body" xml:space="preserve">
     <value>Some result files could not be made. Choose Results in the Runs list to see which ones.</value>
@@ -1606,5 +1646,143 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="ThisPcCancelButton.Content" xml:space="preserve">
     <value>Cancel</value>
+  </data>
+  <data name="WizardTitle.Text" xml:space="preserve">
+    <value>Set up Google Cloud</value>
+  </data>
+  <data name="WizardWelcome.Text" xml:space="preserve">
+    <value>DNA Entropy Graph runs on a graphics card (a GPU) that you rent by the minute in your own Google Cloud account. A typical run takes 5 to 20 minutes and costs about $0.10 to $0.50. This page connects your account and checks each thing the app needs. When a step shows Fix, press its button, or choose Do it by hand.</value>
+  </data>
+  <data name="WizardStep_SignIn_Title.Text" xml:space="preserve">
+    <value>Sign in with Google</value>
+  </data>
+  <data name="WizardStep_SignIn_Why.Text" xml:space="preserve">
+    <value>Your browser opens so you can choose your Google account. The app never sees your password.</value>
+  </data>
+  <data name="WizardSignedInBadge.Text" xml:space="preserve">
+    <value>OK</value>
+  </data>
+  <data name="WizardSignInButton.Content" xml:space="preserve">
+    <value>Sign in with Google</value>
+  </data>
+  <data name="WizardProjectListHeading.Text" xml:space="preserve">
+    <value>Choose one of your projects</value>
+  </data>
+  <data name="WizardCreateProjectButton.Content" xml:space="preserve">
+    <value>Create a new project for this app</value>
+  </data>
+  <data name="WizardBillingChoicesHeading.Text" xml:space="preserve">
+    <value>Choose the billing account to use</value>
+  </data>
+  <data name="WizardStep_TestRun_Title.Text" xml:space="preserve">
+    <value>Try it</value>
+  </data>
+  <data name="WizardStep_TestRun_Why.Text" xml:space="preserve">
+    <value>Press Finish, add a small sequence on New run and press Run. A short run costs a few cents and proves everything above works.</value>
+  </data>
+  <data name="WizardFinishButton.Content" xml:space="preserve">
+    <value>Finish and make a first run</value>
+  </data>
+  <data name="WizardRecheckButton.Content" xml:space="preserve">
+    <value>Check again</value>
+  </data>
+  <data name="WizardSkipButton.Content" xml:space="preserve">
+    <value>Skip for now</value>
+  </data>
+  <data name="WizardDoItByHandLink.Content" xml:space="preserve">
+    <value>Do it by hand</value>
+  </data>
+  <data name="WizardStep_Project_Title" xml:space="preserve">
+    <value>Choose a project</value>
+  </data>
+  <data name="WizardStep_Project_Why" xml:space="preserve">
+    <value>Everything this app creates lives in one Google Cloud project of yours. The project itself costs nothing.</value>
+  </data>
+  <data name="WizardStep_Billing_Title" xml:space="preserve">
+    <value>Billing</value>
+  </data>
+  <data name="WizardStep_Billing_Why" xml:space="preserve">
+    <value>Google charges for the rented GPU, so the project needs a billing account. You pay only for the minutes a run uses, about $0.10 to $0.50 for a typical run.</value>
+  </data>
+  <data name="WizardStep_Services_Title" xml:space="preserve">
+    <value>Turn on Google services</value>
+  </data>
+  <data name="WizardStep_Services_Why" xml:space="preserve">
+    <value>The app needs Compute Engine (the rented computer), Cloud Storage (where results are kept) and Cloud Quotas. Turning them on is free.</value>
+  </data>
+  <data name="WizardStep_Storage_Title" xml:space="preserve">
+    <value>Storage and worker account</value>
+  </data>
+  <data name="WizardStep_Storage_Why" xml:space="preserve">
+    <value>Creates a private online folder for your results (a bucket) that removes old runs by itself, and a limited account the rented computer runs as. The folder costs a few cents a month.</value>
+  </data>
+  <data name="WizardStep_Quota_Title" xml:space="preserve">
+    <value>GPU allowance</value>
+  </data>
+  <data name="WizardStep_Quota_Why" xml:space="preserve">
+    <value>New Google projects often start with no GPU allowed. Google must approve one, which can take minutes or days. You can skip this and come back.</value>
+  </data>
+  <data name="WizardStatus_Pending" xml:space="preserve">
+    <value>Not checked yet</value>
+  </data>
+  <data name="WizardStatus_Running" xml:space="preserve">
+    <value>Checking...</value>
+  </data>
+  <data name="WizardStatus_Ok" xml:space="preserve">
+    <value>OK</value>
+  </data>
+  <data name="WizardStatus_Fix" xml:space="preserve">
+    <value>Fix</value>
+  </data>
+  <data name="WizardStatus_Skipped" xml:space="preserve">
+    <value>Skipped</value>
+  </data>
+  <data name="WizardQuota_Skipped" xml:space="preserve">
+    <value>Skipped for now. Runs on a GPU will not start until Google allows one, so run the setup check again once it has.</value>
+  </data>
+  <data name="WizardQuota_None" xml:space="preserve">
+    <value>Your project is not allowed to use a GPU yet. Open Google&apos;s quota page, request one GPU, then press Check again.</value>
+  </data>
+  <data name="WizardQuota_Allowed" xml:space="preserve">
+    <value>{0}: allowed in {1} regions.</value>
+  </data>
+  <data name="WizardQuota_NotYet" xml:space="preserve">
+    <value>{0}: not allowed yet. Press Request a GPU allowance.</value>
+  </data>
+  <data name="WizardQuota_Unknown" xml:space="preserve">
+    <value>{0}: could not be read. Press Check everything again.</value>
+  </data>
+  <data name="WizardStorage_Ok" xml:space="preserve">
+    <value>Your private online folder for results (a bucket) is ready: {0}</value>
+  </data>
+  <data name="WizardProject_Pick" xml:space="preserve">
+    <value>Choose one of your projects below, or create a new one.</value>
+  </data>
+  <data name="WizardProject_None" xml:space="preserve">
+    <value>You have no projects yet. Press Create a new project for this app.</value>
+  </data>
+  <data name="WizardCopied" xml:space="preserve">
+    <value>Copied. Paste it into a message to the person who can fix this.</value>
+  </data>
+  <data name="WizardCopyFailed" xml:space="preserve">
+    <value>Windows would not let the app copy. Close other programs that use the clipboard, then press the button again.</value>
+  </data>
+  <data name="SetupHelpRequestText" xml:space="preserve">
+    <value>Hello, I use DNA Entropy Graph, which needs to work in the Google Cloud project {project}. Google reports: {problem} Could you please allow this or give me the access it needs? Thank you.</value>
+  </data>
+  <data name="WizardRequest_NoProjectYet" xml:space="preserve">
+    <value>one of your organisation's projects (I have not chosen one yet)</value>
+  </data>
+  <data name="SetupAction_RequestGpuAllowance" xml:space="preserve">
+    <value>Request a GPU allowance</value>
+  </data>
+  <data name="PageTitle_Wizard" xml:space="preserve">
+    <value>Set up Google Cloud</value>
+  </data>
+  <data name="StatusPillHelp" xml:space="preserve">
+    <value>Opens the Google Cloud setup, where you can sign in or check your project.</value>
+  </data>
+  <data name="WizardCheckAllButton.Content" xml:space="preserve">
+    <value>Check everything again</value>
   </data>
 </root>

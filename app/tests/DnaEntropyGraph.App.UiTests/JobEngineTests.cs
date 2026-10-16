@@ -762,4 +762,5 @@ public class JobEngineTests
     private sealed class ThrowingLauncher : IProcessLauncher
     {
         public IRunningProcess Start(ProcessSpec spec, Action<string>? onOutputLine = null) => throw new InvalidOperationException("boom with a path C:\\Users\\someone");
-    }}
+    }
+}

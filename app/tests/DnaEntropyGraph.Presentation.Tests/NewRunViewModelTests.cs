@@ -78,6 +78,18 @@ public sealed class NewRunViewModelTests : IDisposable
         return _viewModel.Items.Last();
     }
 
+    [Fact]
+    public async Task Files_handed_over_by_a_second_launch_arrive_as_the_navigation_parameter_and_are_added()
+    {
+        // Issue #108: Open with from Explorer navigates here with the files; the page forwards the parameter to this command.
+        var path = Write("opened.fasta", ">o\n" + Dna + "\n");
+
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(Drop(path));
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync("not a drop");
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(null);
+
+        _viewModel.Items.Select(i => i.Path).ShouldBe([path]);
+    }
     // ---- Start / Browse ----
 
     [Fact]

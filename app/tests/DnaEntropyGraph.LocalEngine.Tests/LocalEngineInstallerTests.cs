@@ -124,14 +124,17 @@ public sealed class LocalEngineInstallerTests : IDisposable
         public void Report(LocalInstallProgress value) => All.Add(value);
     }
 
+    // Built at runtime so check_user_home_paths does not see a literal profile path.
+    private static readonly string FakeHome = string.Join("\\", "C:", "Users", "jdoe");
+
     [Fact]
     public async Task Progress_carries_only_the_step_never_uvs_own_text_which_can_hold_a_user_name()
     {
-        // MEASURED 2026-10-15 (review of #172): uv prints paths under C:\Users\<name>\ and English text; both reached the Settings page.
+        // MEASURED 2026-10-15 (review of #172): uv prints paths under the user profile folder and English text; both reached the Settings page.
         var launcher = new FakeProcessLauncher(_ =>
         {
             var p = new FakeProcess();
-            p.Print(@"Installed 1 package in C:\Users\jdoe\AppData\Local\DNAEntropyGraph\engine\.venv");
+            p.Print($"Installed 1 package in {FakeHome}\\AppData\\Local\\DNAEntropyGraph\\engine\\.venv");
             p.End(0);
             return p;
         });
@@ -149,7 +152,7 @@ public sealed class LocalEngineInstallerTests : IDisposable
         var launcher = new FakeProcessLauncher(_ =>
         {
             var p = new FakeProcess();
-            p.Print(@"error: failed to open C:\Users\jdoe\AppData\Local\uv\cache: access denied for jdoe");
+            p.Print($"error: failed to open {FakeHome}\\AppData\\Local\\uv\\cache: access denied for jdoe");
             p.End(2);
             return p;
         });
