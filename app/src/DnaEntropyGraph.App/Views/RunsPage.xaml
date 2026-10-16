@@ -17,7 +17,11 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Button x:Uid="RunsRefreshButton" Grid.Row="0" HorizontalAlignment="Right" Command="{x:Bind ViewModel.RefreshCommand}" />
+        <Button x:Uid="RunsRefreshButton" Grid.Row="0" HorizontalAlignment="Right" Command="{x:Bind ViewModel.RefreshCommand}">
+            <Button.KeyboardAccelerators>
+                <KeyboardAccelerator Key="F5" />
+            </Button.KeyboardAccelerators>
+        </Button>
 
         <Grid Grid.Row="1" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
