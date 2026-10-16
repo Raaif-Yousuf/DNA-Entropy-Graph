@@ -26,6 +26,9 @@ public static class CloudJobRequestFactory
     /// </summary>
     private static readonly string[] DefaultZones = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"];
 
+    /// <summary>The region a run starts in when the user pins no zone: the region of <see cref="DefaultZones"/> (the one source of truth the wizard's GPU ask also uses, #740).</summary>
+    public static string DefaultRegion => ZoneCandidates.RegionOf(DefaultZones[0]);
+
     public static CloudJobRequest Create(
         RunOptions options,
         string jobId,

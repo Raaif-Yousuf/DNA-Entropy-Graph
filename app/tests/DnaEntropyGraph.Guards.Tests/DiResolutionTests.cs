@@ -406,6 +406,8 @@ public class DiResolutionTests
         runner.OnStall.ShouldNotBeNull();
         var choice = await runner.OnStall!(new DnaEntropyGraph.Core.Cloud.StallPrompt("job-1", "worker_stage_stuck", "stuck", "model-loading", TimeSpan.FromMinutes(20)), CancellationToken.None);
         choice.ShouldBe(DnaEntropyGraph.Core.Cloud.StallChoice.KeepWaiting);
+        notices.Select(n => n.Text).ShouldBe([string.Empty], "the question's end clears the run page notice (#740)");
+        notices.Clear();
         runner.OnNotice.ShouldNotBeNull();
         runner.OnNotice!(new DnaEntropyGraph.Core.Cloud.RunNotice("job-1", DnaEntropyGraph.Core.Cloud.RunNoticeKind.SlowStage, "model-loading", TimeSpan.FromMinutes(9), TimeSpan.FromMinutes(12)));
         notices.Count.ShouldBe(1);
