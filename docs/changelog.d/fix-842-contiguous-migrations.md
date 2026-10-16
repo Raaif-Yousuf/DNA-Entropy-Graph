@@ -1,0 +1,1 @@
+- Persistence: the embedded migration set is validated (names `NNNN_snake.sql`, versions exactly 1..N, no duplicates) and a database newer than the app is refused with an update action (#842).
