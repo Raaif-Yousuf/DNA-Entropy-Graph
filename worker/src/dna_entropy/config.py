@@ -201,3 +201,7 @@ class RunConfig:
     include_gc: bool = False
     gc_window: int = 51
     include_codons: bool = False
+    # issue #704 / #136: the app's option preset, recorded in provenance.json's run section and
+    # read by nothing else (a preset is the app's own shorthand for options it already sent).
+    preset_id: str | None = None
+    preset_name: str | None = None

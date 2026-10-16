@@ -25,12 +25,18 @@ public sealed partial class SetupStepsViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public SetupStepsViewModel(ISetupCheckService service, IGcpAccount account, IShellLauncher shell, IStringResourceProvider strings)
+    /// <summary>The region the GPU is asked for: the region of the zone ladder's defaults (the run starts there when nothing else is chosen): one source of truth, <see cref="CloudJobRequestFactory.DefaultRegion"/>.</summary>
+    public static string GpuAskRegion => CloudJobRequestFactory.DefaultRegion;
+
+    private readonly GpuQuotaRequester? _gpuRequester;
+
+    public SetupStepsViewModel(ISetupCheckService service, IGcpAccount account, IShellLauncher shell, IStringResourceProvider strings, GpuQuotaRequester? gpuRequester = null)
     {
         _service = service;
         _account = account;
         _shell = shell;
         _strings = strings;
+        _gpuRequester = gpuRequester;
         Rows =
         [
             Row(SetupStep.Billing),
@@ -75,6 +81,8 @@ public sealed partial class SetupStepsViewModel : ObservableObject
             row.ActionCommand?.NotifyCanExecuteChanged();
             row.RecheckCommand?.NotifyCanExecuteChanged();
             row.SkipCommand?.NotifyCanExecuteChanged();
+            row.AskCommand?.NotifyCanExecuteChanged();
+            row.AskActionCommand?.NotifyCanExecuteChanged();
         }
     }
 
@@ -84,8 +92,84 @@ public sealed partial class SetupStepsViewModel : ObservableObject
         row.ActionCommand = new AsyncRelayCommand(ct => PerformActionAsync(row, ct), () => !IsBusy);
         row.RecheckCommand = new AsyncRelayCommand(ct => RunFromAsync(row.Step, ct), () => !IsBusy);
         row.SkipCommand = new AsyncRelayCommand(ct => SkipAsync(row, ct), () => !IsBusy);
+        if (step == SetupStep.Quota && _gpuRequester is not null)
+        {
+            row.AskCommand = new AsyncRelayCommand(ct => AskGoogleAsync(row, ct), () => !IsBusy);
+        }
+
         return row;
     }
+
+    /// <summary>
+    /// "Ask Google for a GPU": runs <see cref="GpuQuotaRequester"/> for the chosen project and turns its report into one message and one action on the row.
+    /// A grant at once checks the step again (so the row turns green from what Google now says, not from our word).
+    /// </summary>
+    private Task AskGoogleAsync(SetupStepRow row, CancellationToken cancellationToken) => ExclusiveAsync(cancellationToken, async () =>
+    {
+        if (_gpuRequester is null || _account.SelectedProjectId is not { Length: > 0 } project)
+        {
+            return;
+        }
+
+        GpuQuotaRequestReport report;
+        try
+        {
+            report = await _gpuRequester.RequestAsync(project, GpuAskRegion, _account.CurrentAccount?.Email, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            ShowTryAgain(row);
+            return;
+        }
+
+        if (report.Sufficient)
+        {
+            await RunFromCoreAsync(SetupStep.Quota, cancellationToken);
+            return;
+        }
+
+        var failed = report.Items.FirstOrDefault(i => i.Outcome == QuotaRequestOutcome.Failed);
+        var refused = report.Items.FirstOrDefault(i => i.Outcome == QuotaRequestOutcome.NotEligible);
+        var quotaPage = new Uri(QuotaLinks.ForProject(project));
+        var recheck = new AsyncRelayCommand(ct => RunFromAsync(SetupStep.Quota, ct), () => !IsBusy);
+        if (failed is not null)
+        {
+            if (failed.ErrorKind is CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.ApiDisabled)
+            {
+                row.ShowAskResult("WizardGpuAsk_Permission", "WizardGpuAsk_OpenQuotaPage", null, quotaPage);
+            }
+            else
+            {
+                ShowTryAgain(row);
+            }
+        }
+        else if (refused is not null)
+        {
+            switch (refused.Ineligibility)
+            {
+                case QuotaIneligibilityReason.NoValidBillingAccount:
+                    row.ShowAskResult("WizardGpuAsk_NoBilling", "WizardGpuAsk_CheckBilling", new AsyncRelayCommand(ct => RunFromAsync(SetupStep.Billing, ct), () => !IsBusy), null);
+                    break;
+                case QuotaIneligibilityReason.NotEnoughUsageHistory:
+                    row.ShowAskResult("WizardGpuAsk_NoHistory", "WizardGpuAsk_OpenQuotaPage", null, quotaPage);
+                    break;
+                default:
+                    row.ShowAskResult("WizardGpuAsk_NotEligible", "WizardGpuAsk_OpenQuotaPage", null, quotaPage);
+                    break;
+            }
+        }
+        else
+        {
+            row.ShowAskResult("WizardGpuAsk_Requested", "WizardGpuAsk_CheckAgain", recheck, null);
+        }
+    });
+
+    private void ShowTryAgain(SetupStepRow row)
+        => row.ShowAskResult("WizardGpuAsk_Failed", "WizardGpuAsk_TryAgain", row.AskCommand, null);
 
     /// <summary>Checks every step from the first, in order.</summary>
     [RelayCommand(CanExecute = nameof(CanRunAll))]
