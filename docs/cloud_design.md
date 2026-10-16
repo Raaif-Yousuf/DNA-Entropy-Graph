@@ -1385,9 +1385,14 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   "not connected"). It deletes exactly `jobs/<job id>/` and nothing else: the bucket must be a `deg-` bucket and the prefix must match `^jobs/[a-z0-9_-]{1,63}/$`
   (so `jobs/`, `cache/`, an empty or partial prefix, a nested path or a `..` is refused with no request, `CloudDeleteRefusedException(NotAJobFolder)`), and
   `RunCloudResults.DeleteAsync` has already checked the stored prefix equals `jobs/<run's own job id>/`. **Ownership:** when the folder has objects, its
-  `manifest.json` must name this installation (`createdBy.installationId`, the `InstallationCleanup` test); another computer's run (an imported row, #111), a missing or
-  unreadable manifest, or an unreadable installation id is `CloudDeleteRefusedException(OtherComputer)` -> `CloudResultsStatus.OtherComputer`, nothing touched. An
-  already-empty prefix is success. It then calls `DeletePrefixAsync` and reads the prefix back with `GetPrefixUsageAsync`, comparing with the count before:
+  `manifest.json` must name this installation (`createdBy.installationId`, the `InstallationCleanup` test); another computer's run (an imported row, #111) is `CloudDeleteRefusal.OtherComputer` -> `CloudResultsStatus.OtherComputer`; a missing, unreadable or
+  wrong-shaped manifest, or an unreadable installation id, is `Unconfirmed` -> `NotConfirmed` (its own copy, "could not confirm this run is yours"); both leave
+  everything untouched and offer Open storage page. `DeletePrefixAsync` (Google and Fake) deletes `jobs/<id>/manifest.json` LAST: Cloud Storage lists lexicographically,
+  so otherwise the manifest would go before `output/`, `result.json` and `status.json`, and a sweep that died after it would strand the rest behind a false refusal
+  on the retry. (THEORY, unverified: persisting a "verified" flag on the run row would also survive an outside deletion of the manifest; not built, it needs a
+  migration.) The installation id is a write-once file untouched by Reset all settings (`SettingsStore.cs:172-191`, #558/#565), and manifests have carried
+  `createdBy.installationId` since `69707244` (2026-10-02, #460), before any release. An empty prefix is success only when the bucket listing succeeded; a 404 bucket is
+  `StorageNotFound` and the row is not changed. It then calls `DeletePrefixAsync` and reads the prefix back with `GetPrefixUsageAsync`, comparing with the count before:
   none left is success even if the call threw afterwards; the same count left means nothing was deleted, so the real classified error surfaces
   (`CloudDeleteResult.ErrorKind`: permission, billing and API-off each have their own Runs copy, anything else the general one); only some-gone-some-left throws
   `PartialCloudDeleteException(Remaining)` -> `PartiallyDeleted` with the count (singular copy for one). The

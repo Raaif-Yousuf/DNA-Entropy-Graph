@@ -239,7 +239,25 @@ public sealed partial class HistoryViewModel : ObservableObject
             OwnerRequestFor(run))
         {
             PresetText = PresetLine(run),
+            OpenStoragePageCommand = new RelayCommand(() => OpenStoragePage(run)),
+            ShowStoragePage = _storagePageOffered.Contains(run.JobId),
         };
+    }
+
+    // Job ids whose last Delete cloud copy was refused as not this installation's: their row offers Open storage page until the list is reopened.
+    private readonly HashSet<string> _storagePageOffered = new(StringComparer.Ordinal);
+
+    private void OpenStoragePage(RunRecord run)
+    {
+        if (string.IsNullOrWhiteSpace(run.Bucket) || string.IsNullOrWhiteSpace(run.JobPrefix))
+        {
+            return;
+        }
+
+        if (!_launcher.OpenUrl($"https://console.cloud.google.com/storage/browser/{Uri.EscapeDataString(run.Bucket)}/{run.JobPrefix}"))
+        {
+            Toast(RunsCopy.OpenMissing);
+        }
     }
 
     /// <summary>The "Preset: name" line of a run started from an option preset (issue #136), read from the options the run recorded.</summary>
@@ -392,6 +410,11 @@ public sealed partial class HistoryViewModel : ObservableObject
             }
 
             var result = await _cloud.DeleteAsync(run, CancellationToken.None);
+            if (result.Status is CloudResultsStatus.OtherComputer or CloudResultsStatus.NotConfirmed)
+            {
+                _storagePageOffered.Add(run.JobId);
+            }
+
             if (result.Status == CloudResultsStatus.Failed)
             {
                 return RunsCopy.DeleteCloudFailed(result.ErrorKind);
@@ -411,7 +434,7 @@ public sealed partial class HistoryViewModel : ObservableObject
 
             return RunsCopy.DeleteCloudPartialUnknown;
         },
-        RunsCopy.DeleteCloud(CloudResultsStatus.Failed));
+        RunsCopy.DeleteCloudFailed(null));
 
     private Task DeleteLocalAsync(RunRecord run) => ActAsync(
         async () =>

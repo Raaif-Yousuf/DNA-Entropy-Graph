@@ -31,6 +31,9 @@ public sealed class ShellLauncher : IShellLauncher
     public bool OpenFolder(string folder)
         => Directory.Exists(folder) && Start(new ProcessStartInfo(folder) { UseShellExecute = true });
 
+    public bool OpenUrl(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+
     public bool CopyText(string text)
     {
         try

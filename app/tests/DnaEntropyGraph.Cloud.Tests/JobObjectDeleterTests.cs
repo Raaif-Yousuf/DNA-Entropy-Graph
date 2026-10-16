@@ -120,19 +120,96 @@ public sealed class JobObjectDeleterTests
 
         var ex = await Should.ThrowAsync<CloudDeleteRefusedException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
 
-        ex.Reason.ShouldBe(CloudDeleteRefusal.OtherComputer);
+        ex.Reason.ShouldBe(CloudDeleteRefusal.Unconfirmed);
+        _gcp.ObjectKeys(Bucket).Count.ShouldBe(2);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"createdBy\":\"inst-1\"}")]
+    [InlineData("{\"createdBy\":{\"installationId\":7}}")]
+    [InlineData("{\"createdBy\":{}}")]
+    [InlineData("{}")]
+    public async Task A_manifest_of_the_wrong_shape_is_not_confirmed_and_left_untouched(string manifest)
+    {
+        _gcp.PutObject(Bucket, Prefix + "out/a.bin", [1]);
+        _gcp.PutObject(Bucket, Prefix + "manifest.json", Encoding.UTF8.GetBytes(manifest));
+
+        var ex = await Should.ThrowAsync<CloudDeleteRefusedException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Reason.ShouldBe(CloudDeleteRefusal.Unconfirmed);
         _gcp.ObjectKeys(Bucket).Count.ShouldBe(2);
     }
 
     [Fact]
-    public async Task An_unknown_installation_id_refuses_rather_than_guess()
+    public async Task A_folder_with_objects_and_no_manifest_at_all_is_not_confirmed()
+    {
+        _gcp.PutObject(Bucket, Prefix + "out/a.bin", [1]);
+
+        var ex = await Should.ThrowAsync<CloudDeleteRefusedException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Reason.ShouldBe(CloudDeleteRefusal.Unconfirmed);
+    }
+
+    [Fact]
+    public async Task An_unknown_installation_id_is_not_confirmed_rather_than_guessed()
     {
         Seed(JobId, 1);
 
         var ex = await Should.ThrowAsync<CloudDeleteRefusedException>(() => Make(installation: null).DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
 
-        ex.Reason.ShouldBe(CloudDeleteRefusal.OtherComputer);
+        ex.Reason.ShouldBe(CloudDeleteRefusal.Unconfirmed);
         _gcp.ObjectKeys(Bucket).Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task The_manifest_is_deleted_last_so_a_sweep_that_dies_early_can_be_retried_and_finished()
+    {
+        // The real layout: GCS lists lexicographically, so manifest.json sorts before output/, result.json and status.json.
+        foreach (var name in new[] { "control/cancel", "input/seq.fa", "logs/run.log", "output/s/s.bedgraph", "progress.jsonl", "result.json", "status.json" })
+        {
+            _gcp.PutObject(Bucket, Prefix + name, [1]);
+        }
+
+        _gcp.PutObject(Bucket, Prefix + "manifest.json", Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Installation + "\"}}"));
+        // Four objects go before it dies: in plain lexicographic order the fourth would be manifest.json, stranding the rest.
+        _gcp.WithPrefixDeleteFailingAfter(4, CloudErrorKind.Network);
+
+        var ex = await Should.ThrowAsync<PartialCloudDeleteException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Remaining.ShouldBe(4);
+        _gcp.ObjectKeys(Bucket).ShouldContain(Prefix + "manifest.json");
+
+        await Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken);
+
+        _gcp.ObjectKeys(Bucket).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_bucket_that_does_not_exist_is_storage_not_found_not_an_empty_success()
+    {
+        _gcp.WithMissingBucket(Bucket);
+
+        var ex = await Should.ThrowAsync<CloudDeleteRefusedException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Reason.ShouldBe(CloudDeleteRefusal.StorageNotFound);
+    }
+
+    [Fact]
+    public async Task More_objects_than_before_after_the_sweep_is_a_partial_with_the_count_now()
+    {
+        Seed(JobId, 1);
+        _gcp.AfterPrefixDelete(p =>
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                _gcp.PutObject(Bucket, p + $"late{i}.bin", [1]);
+            }
+        });
+
+        var ex = await Should.ThrowAsync<PartialCloudDeleteException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Remaining.ShouldBe(5);
     }
 
     [Fact]
@@ -176,7 +253,9 @@ public sealed class JobObjectDeleterTests
         Seed(JobId, 3);
         _gcp.WithSilentNoOpDeletes();
 
-        await Should.ThrowAsync<InvalidOperationException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Make().DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Other);
     }
 
     [Fact]
@@ -244,6 +323,39 @@ public sealed class JobObjectDeleterTests
         outcome.ShouldBe(CloudResultsStatus.OtherComputer);
         _gcp.ObjectKeys(Bucket).Count.ShouldBe(3);
         runs.AllRecordedInOrder.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Run_cloud_results_delete_without_a_manifest_is_not_confirmed_and_keeps_the_row()
+    {
+        _gcp.PutObject(Bucket, Prefix + "out/a.bin", [1]);
+        var results = Results(out var runs);
+
+        (await results.DeleteAsync(Run(), TestContext.Current.CancellationToken)).ShouldBe(CloudResultsStatus.NotConfirmed);
+
+        runs.AllRecordedInOrder.ShouldBeEmpty();
+        _gcp.ObjectKeys(Bucket).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Run_cloud_results_delete_in_a_missing_bucket_is_storage_not_found_and_does_not_mark_the_row()
+    {
+        _gcp.WithMissingBucket(Bucket);
+        var results = Results(out var runs);
+
+        (await results.DeleteAsync(Run(), TestContext.Current.CancellationToken)).ShouldBe(CloudResultsStatus.StorageNotFound);
+
+        runs.AllRecordedInOrder.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Run_cloud_results_delete_of_an_already_empty_prefix_in_a_real_bucket_marks_the_row_deleted()
+    {
+        var results = Results(out var runs);
+
+        (await results.DeleteAsync(Run(), TestContext.Current.CancellationToken)).ShouldBe(CloudResultsStatus.Done);
+
+        runs.AllRecordedInOrder.Last().CloudResultsDeleted.ShouldBeTrue();
     }
 
     [Fact]

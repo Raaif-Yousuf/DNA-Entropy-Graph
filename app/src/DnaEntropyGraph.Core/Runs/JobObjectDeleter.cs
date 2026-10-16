@@ -27,8 +27,14 @@ public enum CloudDeleteRefusal
     /// <summary>The bucket or prefix is not exactly one of our job folders.</summary>
     NotAJobFolder,
 
-    /// <summary>The folder's manifest does not name this installation (or cannot be read): it was made on another computer, or is not ours.</summary>
+    /// <summary>The folder's manifest names a different installation: it was made on another computer.</summary>
     OtherComputer,
+
+    /// <summary>Ownership could not be confirmed: no manifest, an unreadable or wrong-shaped one, or this installation's id cannot be read. Not the same as "another computer".</summary>
+    Unconfirmed,
+
+    /// <summary>The bucket does not exist (or the listing 404s), so there is nothing to prove was deleted.</summary>
+    StorageNotFound,
 }
 
 /// <summary>A delete that was refused up front: nothing was requested to be deleted.</summary>
@@ -84,7 +90,17 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         }
 
         // A failure here is before any delete: it surfaces as itself (a classified cloud failure), never as a partial delete.
-        var before = (await _storage.GetPrefixUsageAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false)).ObjectCount;
+        int before;
+        try
+        {
+            before = (await _storage.GetPrefixUsageAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false)).ObjectCount;
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            // An empty prefix in a bucket that exists is proof of "gone"; a bucket that does not exist is not (a wrong project, a deleted bucket).
+            throw new CloudDeleteRefusedException(CloudDeleteRefusal.StorageNotFound, "The results bucket was not found.");
+        }
+
         if (before == 0)
         {
             return;
@@ -111,11 +127,13 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
 
         if (left == before)
         {
-            // Nothing went: the real error if there was one, else a delete that was accepted and not done.
+            // Nothing went: the real error if there was one; else a delete that was accepted and not done, reported as a failed cloud call
+            // (the general "try again, then save diagnostics" copy), never a crash.
             failure?.Throw();
-            throw new InvalidOperationException("The delete was accepted but removed nothing.");
+            throw new CloudOperationException(new CloudError("DELETE_NOT_APPLIED", null, "The delete was accepted but removed nothing."), CloudErrorKind.Other);
         }
 
+        // Some went and some did not, or more objects than before are there now (something else wrote under the prefix meanwhile): partial, with the count.
         throw new PartialCloudDeleteException(left, failure?.SourceException);
     }
 
@@ -124,25 +142,34 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         var installation = _installationId();
         if (!InstallationId.IsValidLabelValue(installation))
         {
-            throw new CloudDeleteRefusedException(CloudDeleteRefusal.OtherComputer, "This installation cannot be identified, so the folder is not known to be its own.");
+            throw new CloudDeleteRefusedException(CloudDeleteRefusal.Unconfirmed, "This installation cannot be identified, so the folder is not known to be its own.");
         }
 
         var stream = await _storage.TryDownloadAsync(bucket, jobPrefix + ManifestName, cancellationToken).ConfigureAwait(false);
         if (stream is null)
         {
-            throw new CloudDeleteRefusedException(CloudDeleteRefusal.OtherComputer, "The folder has no readable manifest, so it is not known to be this installation's.");
+            throw new CloudDeleteRefusedException(CloudDeleteRefusal.Unconfirmed, "The folder has no manifest, so it is not known to be this installation's.");
         }
 
+        string? owner;
         await using (stream.ConfigureAwait(false))
         {
-            if (!await ManifestNamesAsync(stream, installation!, cancellationToken).ConfigureAwait(false))
-            {
-                throw new CloudDeleteRefusedException(CloudDeleteRefusal.OtherComputer, "The folder was made by another installation.");
-            }
+            owner = await ReadOwnerAsync(stream, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (owner is null)
+        {
+            throw new CloudDeleteRefusedException(CloudDeleteRefusal.Unconfirmed, "The folder's manifest could not be read as one that names an installation.");
+        }
+
+        if (owner != installation)
+        {
+            throw new CloudDeleteRefusedException(CloudDeleteRefusal.OtherComputer, "The folder was made by another installation.");
         }
     }
 
-    private static async Task<bool> ManifestNamesAsync(Stream manifest, string installationId, CancellationToken cancellationToken)
+    /// <summary>The <c>createdBy.installationId</c> of a manifest, or null when the JSON is not an object of that shape.</summary>
+    private static async Task<string?> ReadOwnerAsync(Stream manifest, CancellationToken cancellationToken)
     {
         try
         {
@@ -152,11 +179,12 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
                 && createdBy.ValueKind == JsonValueKind.Object
                 && createdBy.TryGetProperty("installationId", out var id)
                 && id.ValueKind == JsonValueKind.String
-                && id.GetString() == installationId;
+                ? id.GetString()
+                : null;
         }
         catch (JsonException)
         {
-            return false;
+            return null;
         }
     }
 

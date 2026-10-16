@@ -15,6 +15,7 @@ public sealed partial class FakeGcp
     private CloudErrorKind? _getVmFailure;
     private Action<string>? _afterPrefixDelete;
     private int? _bucketSoftDeleteDays;
+    private readonly HashSet<string> _missingBuckets = new(StringComparer.Ordinal);
     private int? _prefixDeleteFailAfter;
     private CloudErrorKind _prefixDeleteFailKind;
 
@@ -84,6 +85,13 @@ public sealed partial class FakeGcp
     {
         _prefixDeleteFailAfter = objects;
         _prefixDeleteFailKind = kind;
+        return this;
+    }
+
+    /// <summary>Listing under this bucket fails with a 404, as a bucket that does not exist (a wrong project, a deleted bucket) does.</summary>
+    public FakeGcp WithMissingBucket(string bucket)
+    {
+        _missingBuckets.Add(bucket);
         return this;
     }
 
@@ -185,6 +193,11 @@ public sealed partial class FakeGcp
         }
 
         ThrowIfScriptedTransient();
+        if (_missingBuckets.Contains(bucket))
+        {
+            throw Build(CloudErrorKind.Other, "NOT_FOUND", 404, $"The bucket '{bucket}' does not exist.");
+        }
+
         var under = _objects.Where(o => o.Key.Bucket == bucket && o.Key.Key.StartsWith(prefix, StringComparison.Ordinal)).ToList();
         return Task.FromResult(new PrefixUsage(under.Count, under.Sum(o => (long)o.Value.Length)));
     }
@@ -213,7 +226,12 @@ public sealed partial class FakeGcp
         StoragePrefixes.RequireDeletable(prefix);
         ThrowIfScriptedTransient();
         ThrowIfDeleteScripted(prefix);
-        var keys = _objects.Keys.Where(k => k.Bucket == bucket && k.Key.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+        // Like Cloud Storage: lexicographic key order, except that the folder's manifest.json (the proof of ownership) goes last.
+        var manifestKey = prefix + "manifest.json";
+        var keys = _objects.Keys.Where(k => k.Bucket == bucket && k.Key.StartsWith(prefix, StringComparison.Ordinal))
+            .OrderBy(k => k.Key == manifestKey ? 1 : 0)
+            .ThenBy(k => k.Key, StringComparer.Ordinal)
+            .ToList();
         if (_silentNoOpDeletes)
         {
             return Task.FromResult(keys.Count);

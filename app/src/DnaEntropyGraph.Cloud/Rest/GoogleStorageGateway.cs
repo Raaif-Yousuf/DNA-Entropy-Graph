@@ -142,37 +142,55 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     {
         StoragePrefixes.RequireDeletable(prefix);
         var deleted = 0;
+        var manifestKey = prefix + "manifest.json";
+        var manifestListed = false;
         await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
         {
             foreach (var item in page.Items ?? [])
             {
-                var name = item.Name;
-                await _pipeline.ExecuteAsync(
-                    "Storage.DeleteObject",
-                    async ct =>
-                    {
-                        try
-                        {
-                            await _service.Objects.Delete(bucket, name).ExecuteAsync(ct).ConfigureAwait(false);
-                        }
-                        catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
-                        {
-                            // Already gone is what a delete wants.
-                        }
-                        catch (GoogleApiException ex)
-                        {
-                            throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-                        }
-                    },
-                    cancellationToken,
-                    bypassBreaker: true,
-                    singleRequest: true).ConfigureAwait(false);
+                if (item.Name == manifestKey)
+                {
+                    // The listing is lexicographic, so the manifest would be deleted before output/, result.json and status.json. It is what proves
+                    // a folder is ours (JobObjectDeleter), so it goes last: a sweep that dies keeps the proof for the retry.
+                    manifestListed = true;
+                    continue;
+                }
+
+                await DeleteObjectAsync(bucket, item.Name, cancellationToken).ConfigureAwait(false);
                 deleted++;
             }
         }
 
+        if (manifestListed)
+        {
+            await DeleteObjectAsync(bucket, manifestKey, cancellationToken).ConfigureAwait(false);
+            deleted++;
+        }
+
         return deleted;
     }
+
+    private Task DeleteObjectAsync(string bucket, string name, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync(
+            "Storage.DeleteObject",
+            async ct =>
+            {
+                try
+                {
+                    await _service.Objects.Delete(bucket, name).ExecuteAsync(ct).ConfigureAwait(false);
+                }
+                catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
+                {
+                    // Already gone is what a delete wants.
+                }
+                catch (GoogleApiException ex)
+                {
+                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                }
+            },
+            cancellationToken,
+            bypassBreaker: true,
+            singleRequest: true);
 
     /// <summary>Every page of <c>objects.list</c> under <paramref name="prefix"/>. A repeated page token fails the listing (a short total must never read as complete).</summary>
     private async IAsyncEnumerable<StorageData.Objects> ListPagesAsync(string bucket, string prefix, string? delimiter, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)

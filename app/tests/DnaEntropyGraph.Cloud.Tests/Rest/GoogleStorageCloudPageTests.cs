@@ -106,6 +106,24 @@ public class GoogleStorageCloudPageTests
     }
 
     [Fact]
+    public async Task DeletePrefix_deletes_the_manifest_last_even_though_the_listing_sorts_it_first()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, Objects, 200, ListJson(null, [ObjectJson("jobs/j1/manifest.json", 1), ObjectJson("jobs/j1/output/a.txt", 2), ObjectJson("jobs/j1/result.json", 2)]))
+            .Returns(Delete, ObjectPath("jobs/j1/manifest.json"), 204, "{}")
+            .Returns(Delete, ObjectPath("jobs/j1/output/a.txt"), 204, "{}")
+            .Returns(Delete, ObjectPath("jobs/j1/result.json"), 204, "{}");
+
+        var deleted = await rig.Gateways.Storage.DeletePrefixAsync("deg-b", "jobs/j1/", CancellationToken.None);
+
+        deleted.ShouldBe(3);
+        var order = rig.Handler.Requests.Where(r => r.Method == Delete).Select(r => r.Uri.AbsolutePath).ToList();
+        order.Count.ShouldBe(3);
+        order[^1].ShouldContain("manifest.json");
+    }
+
+    [Fact]
     public async Task DeletePrefix_treats_an_object_already_gone_as_deleted_but_a_forbidden_delete_throws()
     {
         var rig = new GoogleGatewayHarness(retries: 0);

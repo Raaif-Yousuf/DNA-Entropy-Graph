@@ -69,10 +69,14 @@ public static class RunsCopy
     /// <summary>The cloud-delete copy for a failure the gateway classified: each names its own action. Anything else is the general failure copy.</summary>
     public static RunsMessage DeleteCloudFailed(CloudErrorKind? kind) => kind switch
     {
-        CloudErrorKind.Permission or CloudErrorKind.OrgPolicy => Pair("Runs_DeleteCloud_FailedPermission_Title", "Runs_DeleteCloud_FailedPermission_Body", ToastSeverity.Error),
+        CloudErrorKind.Permission => Pair("Runs_DeleteCloud_FailedPermission_Title", "Runs_DeleteCloud_FailedPermission_Body", ToastSeverity.Error),
+        CloudErrorKind.OrgPolicy => Pair("Runs_DeleteCloud_FailedOrgPolicy_Title", "Runs_DeleteCloud_FailedOrgPolicy_Body", ToastSeverity.Error),
         CloudErrorKind.Billing => Pair("Runs_DeleteCloud_FailedBilling_Title", "Runs_DeleteCloud_FailedBilling_Body", ToastSeverity.Error),
         CloudErrorKind.ApiDisabled => Pair("Runs_DeleteCloud_FailedApi_Title", "Runs_DeleteCloud_FailedApi_Body", ToastSeverity.Error),
-        _ => Pair("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error),
+        CloudErrorKind.Quota => Pair("Runs_DeleteCloud_FailedQuota_Title", "Runs_DeleteCloud_FailedQuota_Body", ToastSeverity.Error),
+        // The "check your internet connection" copy is for a network failure only.
+        CloudErrorKind.Network => Pair("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error),
+        _ => Pair("Runs_DeleteCloud_FailedOther_Title", "Runs_DeleteCloud_FailedOther_Body", ToastSeverity.Error),
     };
 
     /// <summary>One file left in storage after a partial cloud delete (singular body).</summary>
@@ -81,6 +85,8 @@ public static class RunsCopy
     public static RunsMessage DeleteCloud(CloudResultsStatus status) => status switch
     {
         CloudResultsStatus.OtherComputer => Pair("Runs_DeleteCloud_OtherComputer_Title", "Runs_DeleteCloud_OtherComputer_Body", ToastSeverity.Warning),
+        CloudResultsStatus.NotConfirmed => Pair("Runs_DeleteCloud_NotConfirmed_Title", "Runs_DeleteCloud_NotConfirmed_Body", ToastSeverity.Warning),
+        CloudResultsStatus.StorageNotFound => Pair("Runs_DeleteCloud_StorageNotFound_Title", "Runs_DeleteCloud_StorageNotFound_Body", ToastSeverity.Warning),
         CloudResultsStatus.Done => Pair("Runs_DeleteCloud_Done_Title", "Runs_DeleteCloud_Done_Body", ToastSeverity.Success),
         CloudResultsStatus.NoCloudCopy => Pair("Runs_DeleteCloud_NoCloudCopy_Title", "Runs_DeleteCloud_NoCloudCopy_Body", ToastSeverity.Info),
         CloudResultsStatus.Refused => Pair("Runs_DeleteCloud_Refused_Title", "Runs_DeleteCloud_Refused_Body", ToastSeverity.Error),

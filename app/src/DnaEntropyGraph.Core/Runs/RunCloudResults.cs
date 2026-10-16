@@ -34,6 +34,12 @@ public enum CloudResultsStatus
 
     /// <summary>The folder was made by another installation (or has no readable manifest naming this one): nothing was deleted.</summary>
     OtherComputer,
+
+    /// <summary>The folder's owner could not be confirmed (no or unreadable manifest, or this installation's id unreadable): nothing was deleted.</summary>
+    NotConfirmed,
+
+    /// <summary>The results bucket was not found, so nothing was deleted and the run row is unchanged.</summary>
+    StorageNotFound,
 }
 
 /// <summary>
@@ -213,7 +219,13 @@ public sealed class RunCloudResults : IRunCloudResults
         catch (CloudDeleteRefusedException refused)
         {
             // Refused up front: nothing was requested to be deleted.
-            return refused.Reason == CloudDeleteRefusal.OtherComputer ? CloudResultsStatus.OtherComputer : CloudResultsStatus.Refused;
+            return refused.Reason switch
+            {
+                CloudDeleteRefusal.OtherComputer => CloudResultsStatus.OtherComputer,
+                CloudDeleteRefusal.Unconfirmed => CloudResultsStatus.NotConfirmed,
+                CloudDeleteRefusal.StorageNotFound => CloudResultsStatus.StorageNotFound,
+                _ => CloudResultsStatus.Refused,
+            };
         }
         catch (CloudOperationException cloud)
         {
