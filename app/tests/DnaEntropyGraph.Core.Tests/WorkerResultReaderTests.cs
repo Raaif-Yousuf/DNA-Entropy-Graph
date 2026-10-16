@@ -91,6 +91,7 @@ public class WorkerResultReaderTests
     [InlineData("BATCH_LIMIT_EXCEEDED", "batch_limit_exceeded")]
     [InlineData("INPUT_INVALID", "input_invalid")]
     [InlineData("WORKER_VERSION_MISMATCH", "worker_version_mismatch")]
+    [InlineData("RUN_TIME_LIMIT", "run_time_limit")]
     [InlineData("MODEL_UNKNOWN", null)]
     [InlineData(null, null)]
     public void A_worker_status_code_maps_to_its_own_run_error_code_or_to_nothing(string? workerCode, string? expected)

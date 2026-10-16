@@ -58,6 +58,9 @@ public enum FakeWorkerMode
 
     /// <summary>A healthy worker: every look at <c>status.json</c> finds a newer heartbeat, and after many looks result.json lands as in <see cref="Done"/>. Issue #498.</summary>
     HeartbeatingThenDone,
+
+    /// <summary>The worker's heartbeat ticks on every look but its stage stays <c>model-loading</c> for ever and no result.json lands (a hung main thread under a free-running heartbeat thread). Issue #90.</summary>
+    StuckInModelLoading,
 }
 
 /// <summary>Whether the simulated worker ends its own VM after writing result.json (worker exit codes 10 and 11 in <c>worker/vm/startup.sh</c>).</summary>

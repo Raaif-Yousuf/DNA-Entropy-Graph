@@ -248,12 +248,32 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IQuotaGateway>(),
                 sp.GetRequiredService<IWorkerIdentityGateway>(),
                 sp.GetRequiredService<IRunRepository>(),
-                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
+            {
+                // Issue #675: safe production defaults until the app lane binds a real question and a real notice. With no UI a stall is answered at once with "end it as the
+                // run chose" (never a question nobody can answer, never a VM left billing), and a notice is logged by id and kind (never a sequence, a file name or an email).
+                OnStall = StallDecisions.EndAsRunChose,
+                OnNotice = notice => sp.GetRequiredService<IDiagnosticsLog>().Warning("run-notice", notice.JobId, notice.Kind.ToString()),
+            };
         });
         // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
         // AppStartup.BeginAsync (called once from App.OnLaunched) is what invokes it.
         // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
         services.AddSingleton<ActiveRuns>();
+        // Issue #99: the wizard's GPU step asks Google for the L4 and project-wide GPU quota through this (the app lane binds it).
+        services.AddSingleton<GpuQuotaRequester>(sp => new GpuQuotaRequester(sp.GetRequiredService<IQuotaGateway>()));
+        // Issue #105: what this installation has in the project, and "delete everything": for the Cloud page (the app lane binds it).
+        services.AddSingleton<InstallationCleanup>(sp =>
+        {
+            // Run rows and the driver registry are what end a run whose VM the cleanup deletes (Hard Rule 11); without them it would leave the row Running.
+            var messenger = sp.GetRequiredService<IMessenger>();
+            return new InstallationCleanup(
+                sp.GetRequiredService<IComputeGateway>(),
+                sp.GetRequiredService<IStorageGateway>(),
+                sp.GetRequiredService<IRunRepository>(),
+                sp.GetRequiredService<ActiveRuns>(),
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+        });
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();

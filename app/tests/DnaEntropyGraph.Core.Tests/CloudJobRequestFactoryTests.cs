@@ -59,7 +59,7 @@ public class CloudJobRequestFactoryTests
         request.Spec.ProjectId.ShouldBe("my-project");
         request.Spec.InstallationId.ShouldBe("install-1");
         request.Spec.TerminationAction.ShouldBe("DELETE");
-        request.Spec.MaxRunDuration.ShouldBe(TimeSpan.FromMinutes(240));
+        request.Spec.MaxRunDuration.ShouldBe(TimeSpan.FromMinutes(255));
 
         var labels = request.Spec.ToLabels();
         labels["app"].ShouldBe("dna-entropy-graph");
@@ -81,11 +81,13 @@ public class CloudJobRequestFactoryTests
     }
 
     [Fact]
-    public void The_users_max_run_duration_is_the_VM_backstop()
+    public void The_VM_backstop_is_the_users_cap_plus_15_minutes()
     {
         var request = FactoryCall.Create(Options(b => b.MaxRunDurationMinutes = 90), "job-1", "p", "i", "0.0.1");
 
-        request.Spec.MaxRunDuration.ShouldBe(TimeSpan.FromMinutes(90));
+        // The worker enforces the user's cap itself (manifest limits.maxRunSeconds); the platform's deadline sits 15 minutes later (#89).
+        request.Spec.MaxRunDuration.ShouldBe(TimeSpan.FromMinutes(105));
+        request.Spec.TerminationAction.ShouldBe("DELETE");
     }
 
     [Theory]

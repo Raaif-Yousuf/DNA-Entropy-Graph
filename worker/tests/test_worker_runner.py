@@ -1500,3 +1500,244 @@ def test_cancel_during_the_mirror_stops_it_without_a_marker(tmp_path: Path) -> N
     run_job(store, predictor_factory=_factory, cache_store=cache, hf_cache_dir=hf)
     assert is_cached(cache, "evo2_7b") is False
     assert any("mirror stopped" in p["message"] for p in _progress(store))
+
+
+# --- the user's run cap is enforced by the worker itself (issue #89 review) ------------
+
+
+class _FakeClock:
+    """A monotonic clock the test advances by hand, so no test sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _slow_predictor_factory(
+    clock: _FakeClock, calls: dict, seconds_per_call: float, *, slow_from_call: int = 2
+):
+    from dna_entropy.predictors.mock import MockPredictor
+
+    class _Slow:
+        def __init__(self) -> None:
+            self._inner = MockPredictor(seed=0)
+
+        def predict(self, seq):
+            calls["n"] += 1
+            if calls["n"] >= slow_from_call:
+                clock.now += seconds_per_call
+            return self._inner.predict(seq)
+
+    return lambda cfg: _Slow()
+
+
+def test_max_run_seconds_stops_a_slow_worker_with_a_named_code_and_keeps_partial_outputs(
+    tmp_path: Path,
+) -> None:
+    """The worker enforces limits.maxRunSeconds: past it, no further record starts, the work
+    already done is uploaded, and result.json says RUN_TIME_LIMIT (not a hang, not a crash)."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 1, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(store, predictor_factory=_slow_predictor_factory(clock, calls, 10.0), time_source=clock)
+
+    assert result.status == "failed"
+    assert result.error is not None and result.error["code"] == "RUN_TIME_LIMIT"
+    assert result.error["retriable"] is False
+    assert result.inputs[0].status == "failed"
+    assert result.inputs[0].error is not None and result.inputs[0].error["code"] == "RUN_TIME_LIMIT"
+    assert 1 <= calls["n"] < 3, "the cap did not stop the run between records"
+    assert result.inputs[0].outputs, "the records finished before the cap were not uploaded"
+    assert store.exists(RESULT_PATH)
+
+
+def test_a_run_inside_its_cap_is_untouched(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 3600})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(store, predictor_factory=_slow_predictor_factory(clock, calls, 10.0), time_source=clock)
+
+    assert result.status == "done"
+    assert result.error is None
+    assert calls["n"] == 3
+
+
+def test_max_run_seconds_stops_the_batch_before_the_next_input_starts(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(
+        store,
+        inputs=[
+            {"id": "in1", "path": "input/a.fasta", "name": "a"},
+            {"id": "in2", "path": "input/b.fasta", "name": "b"},
+        ],
+        limits={"maxRunSeconds": 1, "cancelPollSeconds": 0},
+    )
+    _seed_fasta_input(store, "input/a.fasta")
+    _seed_fasta_input(store, "input/b.fasta")
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(
+        store,
+        predictor_factory=_slow_predictor_factory(clock, calls, 10.0, slow_from_call=1),
+        time_source=clock,
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None and result.error["code"] == "RUN_TIME_LIMIT"
+    assert [r.id for r in result.inputs] == ["in1"], "a second input started after the cap"
+
+
+class _ClockAdvancingStore(LocalBlobstore):
+    """A store whose output uploads take ``seconds`` of (fake) time, like a slow link."""
+
+    def __init__(self, root: Path, clock: _FakeClock, seconds: float) -> None:
+        super().__init__(root)
+        self._clock = clock
+        self._seconds = seconds
+
+    def upload_file(self, local_src: Path, path: str) -> None:
+        if path.startswith("output/"):
+            self._clock.now += self._seconds
+        super().upload_file(local_src, path)
+
+
+def test_an_upload_that_crosses_the_cap_after_the_last_window_is_not_a_failed_run(tmp_path: Path) -> None:
+    """Issue #89 review: the verdict comes from the checkpoint state, not from a live clock re-read
+    after the work finished. Every window ran in time; only the upload took past the cap."""
+    clock = _FakeClock()
+    store = _ClockAdvancingStore(tmp_path, clock, 500.0)
+    _write_manifest(store, limits={"maxRunSeconds": 100, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    calls = {"n": 0}
+
+    result = run_job(store, predictor_factory=_slow_predictor_factory(clock, calls, 0.0), time_source=clock)
+
+    assert result.status == "done"
+    assert result.error is None
+    assert result.inputs[0].status == "done"
+    assert clock.now - 1000.0 >= 500.0, "the fake upload never advanced the clock: the test is vacuous"
+
+
+def test_the_cap_counts_from_vm_start_not_from_the_worker_start(tmp_path: Path) -> None:
+    """Issue #89 review: the platform's maxRunDuration counts from VM start, so boot and image pull
+    (already elapsed when the worker starts) come out of the worker's own budget."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 1000, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(
+        store,
+        predictor_factory=_slow_predictor_factory(clock, calls, 20.0, slow_from_call=1),
+        time_source=clock,
+        vm_uptime_seconds=lambda: 990.0,
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None and result.error["code"] == "RUN_TIME_LIMIT"
+    assert calls["n"] < 3
+
+
+def test_without_a_vm_uptime_the_cap_counts_from_the_worker_start(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"maxRunSeconds": 1000, "cancelPollSeconds": 0})
+    _seed_three_record_fasta_input(store)
+    clock = _FakeClock()
+    calls = {"n": 0}
+
+    result = run_job(
+        store,
+        predictor_factory=_slow_predictor_factory(clock, calls, 20.0, slow_from_call=1),
+        time_source=clock,
+        vm_uptime_seconds=lambda: 0.0,
+    )
+
+    assert result.status == "done"
+
+
+def test_vm_uptime_reads_proc_uptime_only_on_a_vm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dna_entropy.worker.runner import _default_vm_uptime_seconds
+
+    proc = tmp_path / "uptime"
+    proc.write_text("1234.56 4000.00\n", encoding="utf-8")
+    monkeypatch.delenv("DEG_VM_NAME", raising=False)
+    assert _default_vm_uptime_seconds(proc) == 0.0, "a laptop's uptime must never shorten a local run"
+    monkeypatch.setenv("DEG_VM_NAME", "deg-abc")
+    assert _default_vm_uptime_seconds(proc) == pytest.approx(1234.56)
+    assert _default_vm_uptime_seconds(tmp_path / "missing") == 0.0
+    proc.write_text("garbage", encoding="utf-8")
+    assert _default_vm_uptime_seconds(proc) == 0.0
+
+
+def test_a_cancel_is_acknowledged_in_status_json_as_cancelSeen(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+    store.write_text(CANCEL_PATH, "")
+
+    run_job(store)
+
+    status_doc = json.loads(store.read_text("status.json"))
+    assert status_doc["cancelSeen"] is True
+    progress = store.read_text("progress.jsonl")
+    assert "control/cancel seen" in progress
+
+
+def test_a_job_that_is_not_cancelled_never_claims_cancelSeen(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    run_job(store)
+
+    assert json.loads(store.read_text("status.json"))["cancelSeen"] is False
+
+
+def test_a_cancel_seen_before_the_model_loads_never_loads_the_model(tmp_path: Path) -> None:
+    """A cancel seen before the long stages must not start a multi-minute model load."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"cancelPollSeconds": 0})
+    _seed_fasta_input(store)
+    built: list[int] = []
+
+    def factory(cfg):
+        built.append(1)
+        raise AssertionError("the model must not be built once a cancel is pending")
+
+    # Written after the pre-start check and before the model load.
+    original = store.download_file
+
+    def download_then_cancel(path, dest):
+        out = original(path, dest)
+        store.write_text(CANCEL_PATH, "")
+        return out
+
+    store.download_file = download_then_cancel  # type: ignore[method-assign]
+
+    result = run_job(store, predictor_factory=factory)
+
+    assert result.status == "cancelled"
+    assert built == []
+
+
+def test_a_completed_run_reports_windows_done_and_a_last_progress_time_in_status_json(tmp_path: Path) -> None:
+    """#522: _on_window must feed the progress signal, or a real wedge cannot be told from a long window."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    run_job(store)
+
+    status_doc = json.loads(store.read_text("status.json"))
+    assert status_doc["windowsDone"] >= 1
+    assert status_doc["lastProgressAt"] >= status_doc["startedAt"]
