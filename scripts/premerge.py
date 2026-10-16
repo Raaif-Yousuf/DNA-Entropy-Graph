@@ -90,6 +90,23 @@ NOT_A_GATE: dict[str, str] = {
         "a path-diff gate that needs a pull request base sha and only decides which CI jobs run; "
         "its tests (scripts/tests/test_ci_changes_gate.py) run in the scripts-tests gate"
     ),
+    "scripts/release_assets.py": (
+        "runs against the built release assets inside release.yml; its tests "
+        "(scripts/tests/test_release_assets.py) run in the scripts-tests gate"
+    ),
+    "scripts/release_dockerfile_base_pinned.py": (
+        "gates a release only (renamed out of the check_* glob on purpose, a base image may float "
+        "between releases); its tests (scripts/tests/test_release_dockerfile_base_pinned.py) run "
+        "in the scripts-tests gate"
+    ),
+    "scripts/write_oauth_client.py": (
+        "writes the OAuth client file from a CI secret inside release.yml; its tests "
+        "(scripts/tests/test_write_oauth_client.py) run in the scripts-tests gate"
+    ),
+    "scripts/write_worker_images.py": (
+        "writes the pinned worker image list at release time; its tests "
+        "(scripts/tests/test_write_worker_images.py) run in the scripts-tests gate"
+    ),
 }
 
 # Test projects that are not run here, with the reason (ci-app.yml excludes the same one).

@@ -22,6 +22,8 @@ public sealed partial class SettingsPage : Page
 
     public CloudResultsSettingsViewModel CloudResults { get; }
 
+    public UpdateViewModel Updates { get; }
+
     public SettingsPage()
     {
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
@@ -32,6 +34,7 @@ public sealed partial class SettingsPage : Page
         FileAssociation = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FileAssociationSettingsViewModel>();
         Advanced = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<AdvancedSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
+        Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
         InitializeComponent();
     }
 }
