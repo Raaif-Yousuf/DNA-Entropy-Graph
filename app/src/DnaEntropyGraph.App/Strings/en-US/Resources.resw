@@ -1653,6 +1653,72 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="WizardCheckAllButton.Content" xml:space="preserve">
     <value>Check everything again</value>
   </data>
+  <data name="SettingsAboutHeader.Text" xml:space="preserve">
+    <value>About and updates</value>
+  </data>
+  <data name="AboutVersion_Text" xml:space="preserve">
+    <value>Version {0}</value>
+  </data>
+  <data name="UpdateCheckNowButton.Content" xml:space="preserve">
+    <value>Check now</value>
+  </data>
+  <data name="UpdateRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateBarRestartButton.Content" xml:space="preserve">
+    <value>Restart to update</value>
+  </data>
+  <data name="UpdateChannelChoices.Header" xml:space="preserve">
+    <value>Which updates to offer</value>
+  </data>
+  <data name="UpdateChannelStable.Content" xml:space="preserve">
+    <value>Stable (recommended)</value>
+  </data>
+  <data name="UpdateChannelBeta.Content" xml:space="preserve">
+    <value>Beta (early versions, may have rough edges)</value>
+  </data>
+  <data name="UpdateCheckOnLaunchBox.Content" xml:space="preserve">
+    <value>Check for updates when the app starts</value>
+  </data>
+  <data name="UpdateNotesHeader.Text" xml:space="preserve">
+    <value>What changes in this version</value>
+  </data>
+  <data name="UpdateChecking" xml:space="preserve">
+    <value>Checking for updates...</value>
+  </data>
+  <data name="UpdateUpToDate" xml:space="preserve">
+    <value>You have the latest version.</value>
+  </data>
+  <data name="UpdateNotInstalled" xml:space="preserve">
+    <value>This copy was not installed with the installer, so it cannot update itself. Download the latest installer from the releases page to update.</value>
+  </data>
+  <data name="UpdateCheckFailed" xml:space="preserve">
+    <value>Could not check for updates. Check your internet connection, then press Check now.</value>
+  </data>
+  <data name="UpdateAvailable_Title" xml:space="preserve">
+    <value>Update available: {0}</value>
+  </data>
+  <data name="UpdateAvailable_Status" xml:space="preserve">
+    <value>Version {0} is ready to download. Press Restart to update when you are between runs.</value>
+  </data>
+  <data name="UpdateWaitForRun" xml:space="preserve">
+    <value>A run is in progress, so the app will not restart now. Press Restart to update again when the run has finished.</value>
+  </data>
+  <data name="UpdateDownloading" xml:space="preserve">
+    <value>Downloading the update...</value>
+  </data>
+  <data name="UpdateDownloadingPercent" xml:space="preserve">
+    <value>Downloading the update... {0}%</value>
+  </data>
+  <data name="UpdateRestarting" xml:space="preserve">
+    <value>Restarting to finish the update...</value>
+  </data>
+  <data name="UpdateDownloadFailed" xml:space="preserve">
+    <value>The update could not be downloaded. Check your internet connection, then press Restart to update again.</value>
+  </data>
+  <data name="UpdateSettingNotSaved" xml:space="preserve">
+    <value>That choice could not be saved because the settings file is locked. Close other programs using it, then change it again.</value>
+  </data>
   <data name="NewRunPresetExpander.Header" xml:space="preserve">
     <value>Option presets</value>
   </data>
