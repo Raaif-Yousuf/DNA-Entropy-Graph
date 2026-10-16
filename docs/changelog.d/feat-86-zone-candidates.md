@@ -1,0 +1,1 @@
+- Zone candidate builder (#86a): the accelerator filter, the three-way quota rule and the zone ordering as a pure, tested function; the ladder itself is #86b.

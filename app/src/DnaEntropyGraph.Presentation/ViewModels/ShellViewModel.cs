@@ -28,8 +28,10 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IGcpAccount _gcpAccount;
     private readonly IDispatcher? _dispatcher;
+    private readonly RunCompletionActions _completion;
     private readonly IStringResourceProvider _strings;
     private readonly AppDataRoot? _dataRoot;
+    private readonly SimulatedCloudMode? _simulatedCloud;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
     // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
@@ -45,9 +47,11 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The in-app message bar state (issue #585): the InfoBar in MainWindow binds to this, and it is the same instance the DI-registered <c>IToastService</c> writes to.</summary>
     public InAppMessageCenter Messages { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null)
     {
+        _completion = completion;
         _dataRoot = dataRoot;
+        _simulatedCloud = simulatedCloud;
         _navigator = navigator;
         _gcpAccount = gcpAccount;
         _dispatcher = dispatcher;
@@ -86,6 +90,7 @@ public sealed partial class ShellViewModel : ObservableObject
         "Runs" => "PageTitle_Runs",
         "Cloud" => "PageTitle_Cloud",
         "Settings" => "PageTitle_Settings",
+        "Wizard" => "PageTitle_Wizard",
         _ => null,
     };
 
@@ -95,6 +100,14 @@ public sealed partial class ShellViewModel : ObservableObject
         : _strings.GetString("AppDisplayName");
 
     /// <summary>True when the app runs on a data folder given by <c>--profile</c> or <c>DEG_DATA_DIR</c> (issue #638), so the window must say it is not the real profile.</summary>
+    /// <summary>True when the app runs over the simulated cloud (issue #69): the banner is permanent, never dismissible.</summary>
+    /// <summary>What the status pill does, for a screen reader: it opens the setup wizard (issue #99).</summary>
+    public string StatusPillHelp => _strings.GetString("StatusPillHelp");
+
+    public bool HasSimulatedCloud => _simulatedCloud is not null;
+
+    public string SimulatedCloudBannerText => _simulatedCloud is null ? string.Empty : _strings.GetString("SimulatedCloud_Banner");
+
     public bool HasProfileOverride => _dataRoot is { IsOverride: true };
 
     /// <summary>The banner text naming the sandbox folder; empty on the real profile.</summary>
@@ -110,6 +123,15 @@ public sealed partial class ShellViewModel : ObservableObject
         OnPropertyChanged(nameof(CurrentPageTitle));
     }
 
+    /// <summary>Alt+Left (issue #110): back to the previous page; nothing when there is none.</summary>
+    public void GoBack()
+    {
+        if (_navigator.CanGoBack)
+        {
+            _navigator.GoBack();
+        }
+    }
+
     private void OnRunPhaseChanged(RunPhaseChangedMessage message)
     {
         if (IsTerminal(message.Phase))
@@ -122,7 +144,21 @@ public sealed partial class ShellViewModel : ObservableObject
         }
 
         HasActiveRun = _activeJobIds.Count > 0;
+
+        // Issue #643: what happens at the end of a run (toast, open folder, open Results) is decided by the Notifications settings.
+        if (message.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted)
+        {
+            CompletionWork = _completion.OnRunFinishedAsync(message.JobId, message.Phase);
+        }
+        else if (message.Phase == JobPhase.Failed)
+        {
+            // Issue #107: a failed run is worth a Windows notification too (desktop only; the run's own page says why).
+            CompletionWork = _completion.OnRunFailedAsync(message.JobId);
+        }
     }
+
+    /// <summary>The last run-finished work started by <see cref="OnRunPhaseChanged"/>; tests await it.</summary>
+    public Task CompletionWork { get; private set; } = Task.CompletedTask;
 
     private static bool IsTerminal(JobPhase phase) => phase is JobPhase.Completed or JobPhase.PartiallyCompleted or JobPhase.Cancelled or JobPhase.Failed;
 

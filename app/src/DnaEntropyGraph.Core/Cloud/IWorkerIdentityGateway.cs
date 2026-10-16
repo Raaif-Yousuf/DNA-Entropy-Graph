@@ -38,6 +38,9 @@ public static class WorkerIdentityNames
 
     public const string BucketRole = "roles/storage.objectAdmin";
 
+    /// <summary>The role the project owner grants a user on the worker account so the user may run a VM as it (issue #604); the text of the owner request names it.</summary>
+    public const string ActAsRole = "roles/iam.serviceAccountUser";
+
     /// <summary>The VM name prefix <see cref="VmSpec.VmName"/> gives every VM (<c>deg-&lt;jobId&gt;</c>).</summary>
     public const string VmNamePrefix = "deg-";
 

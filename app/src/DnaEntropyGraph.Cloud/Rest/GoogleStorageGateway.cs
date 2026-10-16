@@ -12,8 +12,9 @@ namespace DnaEntropyGraph.Cloud.Rest;
 /// <summary>
 /// The real <see cref="IStorageGateway"/> over Cloud Storage v1 REST (issue #53): the results bucket, and the object
 /// calls the job runner uses. It is never wrapped in <see cref="ResilientStorageGateway"/>: <see cref="EnsureBucketAsync"/>
-/// is a list, a create, a read-back, a second list, a config write and possibly a patch or a delete, and a whole-method retry would replay the create. Each HTTP call
-/// goes through <see cref="CloudCallPipeline"/> on its own (docs/cloud_design.md section 16).
+/// is a project get, a list, a create, a read-back, a second list, a config write and possibly a patch or a delete, and a whole-method retry would replay the create. Each HTTP call
+/// goes through <see cref="CloudCallPipeline"/> on its own (docs/cloud_design.md section 16); the metadata calls are capped per attempt
+/// (<c>singleRequest: true</c>, <see cref="CloudRetryOptions.AttemptTimeout"/>), the media transfers (upload, download) are not.
 /// <para>
 /// <b>EnsureBucketAsync.</b> The bucket is found by LABEL (<c>app=dna-entropy-graph</c>) among the project's
 /// <c>deg-</c> buckets, never by a fixed name (Hard Rule 9), so a second PC (same installation or another one in the same
@@ -49,13 +50,14 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     public async Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_options.InstallationId))
+        var installationId = _options.CurrentInstallationId;
+        if (string.IsNullOrWhiteSpace(installationId))
         {
             throw new InvalidOperationException("The results bucket needs the installation id: a bucket without the installation-id label is invisible to the Cloud page (Hard Rule 10).");
         }
 
         ResultsBucket.ValidateRetentionDays(_options.ResultsRetentionDays);
-        var labels = ResultsBucket.Labels(_options.InstallationId, _options.AppVersion);
+        var labels = ResultsBucket.Labels(installationId, _options.AppVersion);
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         var existing = await FindOursAsync(projectId, preferOwnInstallation: true, cancellationToken).ConfigureAwait(false);
@@ -107,7 +109,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         var ours = await ListOursAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         return ours
-            .OrderByDescending(b => preferOwnInstallation && string.Equals(InstallationOf(b), _options.InstallationId, StringComparison.Ordinal))
+            .OrderByDescending(b => preferOwnInstallation && string.Equals(InstallationOf(b), _options.CurrentInstallationId, StringComparison.Ordinal))
             .ThenBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
             .ThenBy(b => b.Name, StringComparer.Ordinal)
             .FirstOrDefault();
@@ -147,7 +149,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                         throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
                     }
                 },
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, singleRequest: true).ConfigureAwait(false);
 
             ours.AddRange((page.Items ?? []).Where(IsOurs));
             pageToken = page.NextPageToken;
@@ -196,7 +198,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                             throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
                         }
                     },
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken, singleRequest: true).ConfigureAwait(false);
                 created = await GetAsync(name, cancellationToken).ConfigureAwait(false);
             }
             catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.AlreadyExists)
@@ -265,7 +267,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                         throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
                     }
                 },
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, singleRequest: true).ConfigureAwait(false);
         }
         catch (CloudOperationException)
         {
@@ -301,11 +303,11 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                     throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
                 }
             },
-            cancellationToken);
+            cancellationToken, singleRequest: true);
 
     private async Task WriteConfigAsync(string bucket, CancellationToken cancellationToken)
     {
-        var json = ResultsBucket.ConfigJson(_options.InstallationId!, _options.AppVersion, _options.ResultsRetentionDays, _options.TimeProvider.GetUtcNow());
+        var json = ResultsBucket.ConfigJson(_options.CurrentInstallationId ?? throw new InvalidOperationException("The installation id became unreadable while the bucket was being set up."), _options.AppVersion, _options.ResultsRetentionDays, _options.TimeProvider.GetUtcNow());
         var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(json);
         try
         {
@@ -317,7 +319,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                     await UploadObjectAsync(bucket, ResultsBucket.ConfigObject, stream, "application/json", onlyIfAbsent: true, ct).ConfigureAwait(false);
                     return true;
                 },
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, singleRequest: true).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Error.Code == PreconditionFailedCode)
         {
@@ -359,7 +361,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                     throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
                 }
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, singleRequest: true).ConfigureAwait(false);
 
         ThrowIfNotApplied(await GetAsync(bucket.Name, cancellationToken).ConfigureAwait(false));
     }

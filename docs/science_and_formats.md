@@ -297,7 +297,10 @@ allowed (it wraps several times) and gets a notice saying so instead of the line
 reaches full context" one. The mock predictor seeds on
 window content, so rotation invariance (rotating a circular input rotates the output) is
 tested with a pure-local-context stub (`worker/tests/test_circular.py`), not the mock. The
-output GenBank keeps writing a linear `LOCUS` (not changed here).
+output GenBank carries the topology each contig was analyzed with (issue #524): a circular contig
+writes `circular` in its `LOCUS` line (so a plasmid stays a plasmid in SnapGene/Benchling and
+`read_genbank` reads it back as circular); a linear one writes no topology word, exactly as before,
+so every linear file is byte-identical. `--topology` decides, not only the input's word.
 
 ---
 
@@ -627,6 +630,19 @@ transform.
 | `<name>.entropy.tsv` | TSV | **1-based, inclusive**, matching WIG and both GFF3 flavours - see note below | Per-position entropy (and surprisal, when `include_surprisal` is on) in a plain, spreadsheet-friendly table, one row per base. | MEASURED 2026-09-19, `writers/tsv.py` |
 | `<name>.probs.tsv.gz` (and optionally `<name>.probs.npy`) | gzip-compressed TSV (UTF-8, LF; the gzip header carries no timestamp or file name, so equal matrices are equal bytes), and a float32 NumPy `.npy` | `position` is **1-based, inclusive** with the run's `start` offset, like `entropy.tsv`; a multi-contig file introduces each contig with a `# contig: <name>` line and restarts numbering (the `.npy` concatenates contigs in file order; lengths are in `provenance.json`) | **OFF by default** (size). Columns `position, base, pA, pC, pG, pT`: `base` is the actual base at that position and the four probabilities are the model's A/C/G/T distribution there, written with 9 significant digits (round-trips a float32 exactly). It is the very `(L, 4)` array the contract guard validated (Hard Rule 3), serialised and never recomputed, **in the original strand's coordinates and base order**: a reverse-complement pass is flipped back (`i -> L-1-i`) and its columns complemented (rc base b with probability p is original base comp(b) with probability p), then combined by the **same per-position rule as the entropy track**. So `shannon_entropy(matrix)` reproduces `<name>.entropy.*` within 1e-6 for forward-only, reverse-only, both-combined (and the combined track under both-separate), on linear and circular molecules; and `-log2(matrix[i, actual base])` reproduces the surprisal track. **Exception, `both-averaged`**: where both directions have full context the row is the *mean of the two probability vectors*, and entropy is concave, so its entropy is at least the averaged entropy track, not equal (the run says so in its notices). Not exported: the separate forward/reverse matrices under `both-separate`. | MEASURED 2026-10-03, `writers/probs.py`, `analysis/direction.py` `keep_probs` (issue #127) |
 
+**Which of these files the app asks for (issue #103).** The New run page offers one tick box per name in the manifest's
+`outputs` vocabulary (`job_contract.md` section 3), from one table, `OutputCatalog` in `DnaEntropyGraph.Core`: wire name,
+label, the input kinds it is offered for, default on or off, and whether it needs genes. Every file is offered for both a
+GenBank input and a FASTA/paste input (`pipeline.py` gates each writer on its own `include_*` flag on both paths). Every
+file is ticked by default except `wig` and `probs`/`probs_npy`. The worker writes ONE track format per run (`wig` with `bedgraph` also named gives bedgraph, `manifest.py` `build_run_config`), so `wig` is the alternative to `bedgraph`: the page clears one when the other is ticked, `OutputCatalog.Normalize` keeps the bedgraph if a stored choice names both, and WIG is off by default. The worker treats `probs` and `probs_npy` as off unless named, even when everything else is on. `genes_gff3` and `gene_summary` need genes, so the manifest never names them when gene finding is
+off. A non-empty `outputs` array is read literally by the worker, so a cleared box is a file that is not written; an empty
+selection is refused in the app because the worker would read an empty array as "everything". `smoothed` is sent with no
+`analysis.smoothingWindows`, so the worker's default window (51) applies. The choice is remembered per input kind
+(`OutputSelectionStore`, settings keys `output_files_genbank` and `output_files_sequence`, stored as the wire names). A
+stored run's `OptionsJson` that says `"All"` keeps meaning the eight files that existed before #103
+(`OutputFileKinds.All` is frozen). `OutputCatalogTests` pins the catalog to the contract row and
+`worker/tests/test_output_vocabulary.py` pins the worker to the same row.
+
 **A note on the Entropy TSV's shape (issue #281/#46, closed):** this doc proposed the
 convention before `TsvWriter` existed, so the first implementation had a shape to land in
 rather than inventing one at code-review time; the shipped writer confirms it exactly, no
@@ -724,6 +740,19 @@ are the file's own, Prodigal never runs). Differences worth knowing:
   `source_kind` stays `genbank` for EMBL and SnapGene so they take the GenBank output set.
 - The app does not yet validate these two formats locally before creating a VM (rule 2); that
   port is tracked in a follow-up issue.
+
+### 5d. Model-free companion tracks: GC percent and codon usage (issue #191)
+
+Both are computed from the validated sequence alone (`analysis/composition.py`), cost nothing on
+the GPU, and are **off by default** (new files nobody asked for; see #411). `--gc` / `--gc-window`
+and `--codons` on the CLI, `RunConfig.include_gc` / `gc_window` / `include_codons`.
+
+| File | Format | Coordinates | What it contains |
+|---|---|---|---|
+| `<name>.gc.bedgraph` | bedGraph, always (not WIG) | **0-based, half-open**, like every bedGraph here | GC percent (0 to 100) at each base over a centred window (default 51, odd): `100 * (G+C) / (A+C+G+T)` in the window. Ambiguity codes are not counted in the denominator; a window with no unambiguous base is `0.0`. A linear molecule's window shrinks at the ends, a circular one wraps the origin (same rules as the smoothed entropy tracks). |
+| `<name>.codons.tsv` | TSV with a header row | `begin`/`end` are 1-based inclusive, the gene's own | One row per codon that occurs, per CDS-shaped gene (the file's own genes, a paired GFF3's, or Prodigal's): `contig gene_id begin end strand codon amino_acid count frequency rscu deviation`. Codons are read on the gene's strand (minus strand = reverse complement; compound genes join their segments, not the intron) and translated with the standard code (table 1; sense assignments equal table 11). `frequency` = count / codons counted; `rscu` = count / (that amino acid's total / its number of synonymous codons), so 1.0 means an even split among synonyms; `deviation` = `rscu - 1`. A codon with an ambiguity code is not counted. A feature whose length is not a multiple of three is skipped and counted in one run notice. |
+
+A poly-G sequence gives 100.0 across the whole GC track (the issue's observable, tested).
 
 ## 6. Viewer support matrix
 

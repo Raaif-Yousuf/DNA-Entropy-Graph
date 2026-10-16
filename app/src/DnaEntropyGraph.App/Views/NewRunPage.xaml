@@ -11,6 +11,10 @@
         the wiring guard reads XAML text, and a comment naming a command would hide it from the allowlist check.
     -->
     <ScrollViewer>
+        <!-- Issue #110: Ctrl+Shift+V puts the clipboard in the Paste sequence box (Appendix A section 6). -->
+        <ScrollViewer.KeyboardAccelerators>
+            <KeyboardAccelerator Key="V" Modifiers="Control,Shift" Invoked="{x:Bind ViewModel.PasteFromClipboard}" />
+        </ScrollViewer.KeyboardAccelerators>
         <StackPanel Padding="24" Spacing="12" MaxWidth="900" HorizontalAlignment="Left">
             <InfoBar
                 IsOpen="{x:Bind ViewModel.HasStatusMessage, Mode=OneWay}"
@@ -46,7 +50,7 @@
                 </StackPanel>
             </Border>
 
-            <Expander x:Uid="NewRunPasteExpander" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+            <Expander x:Uid="NewRunPasteExpander" IsExpanded="{x:Bind ViewModel.IsPasteOpen, Mode=TwoWay}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <StackPanel Spacing="8">
                     <TextBox
                         x:Uid="NewRunPasteBox"
@@ -134,10 +138,34 @@
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
+            <StackPanel Spacing="4" Visibility="{x:Bind ViewModel.HasOutputChoices, Mode=OneWay}">
+                <TextBlock
+                    x:Uid="NewRunOutputsHeader"
+                    Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.OutputChoices}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:OutputChoiceItem">
+                            <CheckBox
+                                Content="{x:Bind Label}"
+                                IsChecked="{x:Bind IsChecked, Mode=TwoWay}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock
+                    x:Uid="NewRunOutputsNoneChosen"
+                    Visibility="{x:Bind ViewModel.HasNoOutputChosen, Mode=OneWay}"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+            </StackPanel>
+
             <Button
                 x:Uid="NewRunRun"
                 Style="{StaticResource AccentButtonStyle}"
-                Command="{x:Bind ViewModel.StartRunCommand}" />
+                Command="{x:Bind ViewModel.StartRunCommand}">
+                <Button.KeyboardAccelerators>
+                    <KeyboardAccelerator Key="Enter" Modifiers="Control" />
+                </Button.KeyboardAccelerators>
+            </Button>
         </StackPanel>
     </ScrollViewer>
 </Page>
