@@ -27,6 +27,18 @@ public sealed class FilePickerService(WindowHandleProvider window, IStringResour
         return files.Select(file => file.Path).Where(path => !string.IsNullOrEmpty(path)).ToList();
     }
 
+    public async Task<string?> PickAnnotationFileAsync(CancellationToken cancellationToken)
+    {
+        var picker = new FileOpenPicker();
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
+        foreach (var extension in AnnotationFileTypes.Extensions)
+        {
+            picker.FileTypeFilter.Add(extension);
+        }
+
+        var file = await picker.PickSingleFileAsync();
+        return string.IsNullOrEmpty(file?.Path) ? null : file.Path;
+    }
     public async Task<string?> PickProgramAsync(CancellationToken cancellationToken)
     {
         var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };

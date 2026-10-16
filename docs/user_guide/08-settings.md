@@ -30,6 +30,13 @@ The health check below it shows your graphics card, free disk space and whether 
 
 If the health check says the NVIDIA driver is not working, reinstall or update the driver from the NVIDIA website, restart the PC, then choose **Check again**. A run on this PC that stops reporting in, or runs past its time limit, is stopped by the app and shows a message telling you what to do. If you close the app while a run is going, the run stops, and the next time you open the app it shows that run as not finished so you can start it again. If you have two NVIDIA cards, the app uses the one with the most memory.
 
+## About and updates
+
+Shows the version you are running, which updates to offer (**Stable**, or **Beta** for early versions), a switch for checking
+when the app starts, and **Check now**. When a newer version is found, the page lists what changes in it and **Restart to
+update** downloads it and restarts the app. It will not restart while a run is in progress. See
+[01-install.md](01-install.md#staying-up-to-date).
+
 ## Diagnostics
 
 **Save diagnostics** writes one file you can send to support. It includes your run logs, run

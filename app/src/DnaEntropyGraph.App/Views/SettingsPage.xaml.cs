@@ -22,6 +22,8 @@ public sealed partial class SettingsPage : Page
 
     public ThisPcSettingsViewModel ThisPc { get; }
 
+    public UpdateViewModel Updates { get; }
+
     public SettingsPage()
     {
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
@@ -32,6 +34,7 @@ public sealed partial class SettingsPage : Page
         Advanced = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<AdvancedSettingsViewModel>();
         ThisPc = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ThisPcSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
+        Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
         InitializeComponent();
     }
 

@@ -50,6 +50,7 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
     <PackageReference Include="Velopack" />
+    <PackageReference Include="ScottPlot.WinUI" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>
 
@@ -79,5 +80,30 @@
     directory - an explicit <PRIResource Include> here is a duplicate-item
     build error (NETSDK1022), not a no-op.
   -->
+
+
+  <!--
+    Issue #263: the short git sha goes into the informational version ("0.0.1+abc1234"), which About and the dev-build banner show.
+    The SDK would add it itself only with a SourceLink package; without one SourceRevisionId is empty. A CI override (-p:SourceRevisionId=...) wins,
+    and a checkout with no git (a source zip) or a git that fails stamps "unknown".
+  -->
+  <Target Name="StampGitRevision" BeforeTargets="AddSourceRevisionToInformationalVersion;GetAssemblyVersion" Condition="'$(SourceRevisionId)' == ''">
+    <!--
+      ConsoleToMSBuild captures stdout AND stderr, so a failing git ("fatal: detected dubious ownership...") would become the revision.
+      MEASURED 2026-10-15 (issue #263 review): stderr goes to the null device, and the captured text must be 7 to 40 hex digits to be
+      used; anything else (git missing, no repository, an error line, several lines) stamps "unknown".
+    -->
+    <PropertyGroup>
+      <_DegNullDevice Condition="$([MSBuild]::IsOSPlatform('Windows'))">nul</_DegNullDevice>
+      <_DegNullDevice Condition="'$(_DegNullDevice)' == ''">/dev/null</_DegNullDevice>
+    </PropertyGroup>
+    <Exec Command="git rev-parse --short=7 HEAD 2&gt;$(_DegNullDevice)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" StandardErrorImportance="low" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_DegGitRevision" />
+    </Exec>
+    <PropertyGroup>
+      <SourceRevisionId Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(_DegGitRevision)', '^[0-9a-f]{7,40}$'))">$(_DegGitRevision)</SourceRevisionId>
+      <SourceRevisionId Condition="'$(SourceRevisionId)' == ''">unknown</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
 
 </Project>

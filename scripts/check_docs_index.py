@@ -162,6 +162,7 @@ def check(root: Path) -> list[str]:
 # fire, plus the exclusions and the directory-link case.
 # ---------------------------------------------------------------------------
 
+
 def _build_fixture(root: Path) -> None:
     docs = root / "docs"
     (docs / "migration").mkdir(parents=True)
@@ -177,7 +178,8 @@ def _build_fixture(root: Path) -> None:
         "[a dir](linked_dir/)\n\n"
         "[an anchor only](#section)\n\n"
         "[external](https://example.com)\n",
-        encoding="utf-8", newline="\n",
+        encoding="utf-8",
+        newline="\n",
     )
     (docs / "linked.md").write_text("linked\n", encoding="utf-8", newline="\n")
     (docs / "unlinked.md").write_text("orphan\n", encoding="utf-8", newline="\n")
