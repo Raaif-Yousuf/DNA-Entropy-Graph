@@ -303,6 +303,13 @@ public static class ServiceRegistration
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
+        // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.
+        services.AddSingleton<IAppUpdateSource, Services.VelopackUpdateSource>();
+        services.AddSingleton<IActiveRunProbe, Services.ActiveRunProbe>();
+        services.AddSingleton<UpdateSettings>();
+        // Issue #263: one read of the running exe's version, sha and signature for the title-bar banner and About.
+        services.AddSingleton(_ => Services.BuildIdentityFactory.Create());
+        services.AddSingleton<UpdateViewModel>();
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();
