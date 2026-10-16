@@ -123,6 +123,9 @@ internal sealed partial class DiagnosticsRedactor
         _userText = WholeTokenRegex(userText);
     }
 
+    /// <summary>True when the text still holds one of the user's own words (see the <c>userText</c> argument) as a whole token.</summary>
+    public bool ContainsUserText(string text) => _userText?.IsMatch(text) == true;
+
     private static Regex? WholeTokenRegex(IEnumerable<string>? values)
     {
         var usable = (values ?? [])

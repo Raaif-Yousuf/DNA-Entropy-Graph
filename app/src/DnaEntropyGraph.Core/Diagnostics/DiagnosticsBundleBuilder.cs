@@ -30,7 +30,7 @@ public static partial class DiagnosticsBundleBuilder
 
     private const int MaxSettingsBytes = 256_000;
 
-    private static readonly JsonSerializerOptions Indented = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions Indented = new(JsonSerializerDefaults.Web) { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private enum FileKind
     {
@@ -111,7 +111,7 @@ public static partial class DiagnosticsBundleBuilder
             },
             Indented);
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
-        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => includeNotesAndTags ? WithNotesAndTags(ToHistoryRow(run, ids.Map(run.JobId)), run, redactor, scrub) : ToHistoryRow(run, ids.Map(run.JobId))), Indented);
+        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => includeNotesAndTags ? WithNotesAndTags(ToHistoryRow(run, ids.Map(run.JobId)), run, redactor, [.. scrub, info.UserProfilePath]) : ToHistoryRow(run, ids.Map(run.JobId))), Indented);
 
         // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
         // the original is written nowhere in the zip.
@@ -119,6 +119,16 @@ public static partial class DiagnosticsBundleBuilder
         foreach (var file in loaded)
         {
             entries[EntryName(file, ids, logCounters)] = Copy(file, redactor, ids) ?? OmittedUnreadable;
+        }
+
+        // Fail closed on the user's own words: a copied file that still holds a note or tag as a whole token after redaction is
+        // replaced whole, never shipped and never a failed bundle.
+        foreach (var name in entries.Keys.Where(k => k.StartsWith("files/", StringComparison.Ordinal)).ToList())
+        {
+            if (redactor.ContainsUserText(entries[name]))
+            {
+                entries[name] = OmittedFile;
+            }
         }
 
         // The scan backstops the redactor on the user's own identifiers (the same list the redactor used, plus the profile
@@ -133,6 +143,8 @@ public static partial class DiagnosticsBundleBuilder
     }
 
     // Fixed words only: the leak scan blanks exactly this shape (and "<omitted: file too large>") before it checks identifiers.
+    private const string OmittedFile = "<omitted: file withheld>";
+
     private const string OmittedUnreadable = "<omitted: file is not valid json>";
 
     private static string EntryName(Loaded file, JobIdWithholder ids, Dictionary<string, int> logCounters)
@@ -178,14 +190,23 @@ public static partial class DiagnosticsBundleBuilder
     // "error") made every bundle fail or mangled ordinary log words (cold review of #141, issue #782).
     private static void AddUserText(RunRecord run, HashSet<string> userText)
     {
-        foreach (var tag in RunTags.Parse(run.TagsJson))
-        {
-            userText.Add(tag);
-        }
-
+        // Redaction is per line, so a multi-line note is added line by line as well as whole. Each is also added in its JSON-escaped
+        // spelling, which is how a quote or a backslash of it reads inside a copied JSON file.
+        var texts = new List<string>(RunTags.Parse(run.TagsJson));
         if (!string.IsNullOrWhiteSpace(run.Notes))
         {
-            userText.Add(run.Notes.Trim());
+            texts.Add(run.Notes.Trim());
+            texts.AddRange(run.Notes.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+
+        foreach (var text in texts)
+        {
+            userText.Add(text);
+            var escaped = JsonEncodedText.Encode(text, System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
+            if (escaped != text)
+            {
+                userText.Add(escaped);
+            }
         }
     }
 

@@ -73,10 +73,10 @@ public sealed class DiagnosticsNotesTagsTests
         row.ContainsKey("tags").ShouldBeFalse();
     }
 
-    private static Dictionary<string, string> BuildFor(RunRecord run, string log, bool include)
+    private static Dictionary<string, string> BuildFor(RunRecord run, string log, bool include, DiagnosticsInfo? info = null)
     {
         var files = new Dictionary<string, string> { [$"runs/{run.JobId}/logs/app.log"] = log };
-        var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], Info, includeNotesAndTags: include);
+        var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], info ?? Info, includeNotesAndTags: include);
         using var archive = new ZipArchive(new MemoryStream(zip), ZipArchiveMode.Read);
         return archive.Entries.ToDictionary(e => e.FullName, e => new StreamReader(e.Open(), Encoding.UTF8).ReadToEnd());
     }
@@ -137,5 +137,53 @@ public sealed class DiagnosticsNotesTagsTests
         history.ShouldNotContain("ACGTACGTACGTACGTACGT");
         var row = JsonNode.Parse(history)!.AsArray().Single()!;
         row["notes"]!.GetValue<string>().ShouldContain("end");
+    }
+
+    private static readonly DateTimeOffset Created = new(2026, 10, 1, 8, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void A_multi_line_note_is_scrubbed_from_a_log_line_by_line()
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, Notes: "a\nb secret");
+
+        var entries = BuildFor(run, "opened b secret here\n", include: false);
+
+        foreach (var (name, text) in entries)
+        {
+            text.ShouldNotContain("b secret", Case.Insensitive, $"in {name}");
+        }
+    }
+
+    [Fact]
+    public void A_tag_with_quotes_is_scrubbed_in_its_json_escaped_spelling_too()
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: "[\"say \\\"hi there\\\"\"]");
+
+        var log = BuildFor(run, "msg=say \\\"hi there\\\" and say \"hi there\"\n", include: false).Single(e => e.Key.EndsWith(".log")).Value;
+
+        log.ShouldNotContain("hi there");
+    }
+
+    [Fact]
+    public void A_ticked_note_that_names_the_profile_folder_is_withheld_not_a_failed_bundle()
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, Notes: "ask jdoe");
+
+        var history = BuildFor(run, "ok\n", include: true)["run-history.json"];
+
+        history.ShouldNotContain("jdoe");
+    }
+
+    [Fact]
+    public void A_user_named_User_with_a_ticked_path_note_still_makes_the_bundle_and_keeps_the_marker_readable()
+    {
+        var profile = Path.Combine("C:" + Path.DirectorySeparatorChar, "Users", "User");
+        var info = Info with { UserProfilePath = profile, SensitiveValues = ["User"] };
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, Notes: profile + Path.DirectorySeparatorChar + "x.txt");
+
+        var history = BuildFor(run, "ok\n", include: true, info)["run-history.json"];
+
+        history.ShouldNotContain("x.txt");
+        history.ShouldNotContain("\\u003C");
     }
 }
