@@ -30,8 +30,10 @@ Seven hooks live here, all registered as `PreToolUse` hooks in `.claude/settings
   `scripts/premerge.py` passed (green, unfiltered) on the CURRENT HEAD, recorded by
   `scripts/premerge_stamp.py` in `<git-dir>/premerge-stamp.json` (12 hour expiry). Escape hatch, logged to
   `<git-dir>/premerge-bypass.log`: `DEG_SKIP_PREMERGE=<reason> gh pr create ...` or the same variable in the
-  environment. Register it in `.claude/settings.json` exactly like the others, with matcher `Bash` and
-  `run_hook.py require_premerge_before_pr`.
+  environment. Registered in `.claude/settings.json` (matcher `Bash|PowerShell`, via `run_hook.py`). It only fires in
+  agent sessions, never in the owner's own terminal. `scripts/land_wt.py` is the sanctioned path: its `gh pr create`
+  is a child process the hook never sees, and it records the PR in `<common-git-dir>/landed-prs.json` so a later
+  `gh pr merge <n>` of that PR (from any checkout) is allowed.
 - `gcloud_read_only.py` -- lets a session READ Google Cloud state (`list`, `describe`,
   `get-iam-policy`, `ls`, `config list`, `auth list`) and refuses every other `gcloud`, `gsutil`
   or `bq` call, including an unknown verb and `auth print-access-token`. It replaced the blanket

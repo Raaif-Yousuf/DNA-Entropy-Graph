@@ -163,6 +163,15 @@ def test_green_landing_pushes_one_branch_opens_one_pr_and_leaves_the_venv_and_no
     assert not wt.exists()
 
 
+def test_green_landing_records_the_pr_for_the_merge_hook(world):
+    import premerge_stamp
+
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    landed = json.loads(premerge_stamp.landed_path(world.clone).read_text(encoding="utf-8"))
+    assert list(landed.values())[0]["head"] == sha
+
+
 def test_premerge_runs_inside_the_worktree_with_the_venv_junction_live_and_fast_by_default(world):
     sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
     assert _land(world, "feat/1-x", sha) == lw.EXIT_OK

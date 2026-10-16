@@ -164,3 +164,23 @@ def test_runs_under_the_dispatcher(repo):
     )
     assert proc.returncode == 0
     assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_landed_pr_merge_allowed_but_not_create(repo):
+    assert hook.verdict("gh pr merge 77 --merge", repo) is not None
+    stamp.record_landed(repo, "77", "abc")
+    assert hook.verdict("gh pr merge 77 --merge", repo) is None
+    assert hook.verdict("gh pr merge https://github.com/o/r/pull/77", repo) is None
+    assert hook.verdict("gh pr merge 78", repo) is not None
+    assert hook.verdict("gh pr create", repo) is not None
+
+
+def test_landed_record_expires(repo):
+    stamp.record_landed(repo, "5", "abc", now=time.time() - stamp.MAX_AGE_SECONDS - 60)
+    assert stamp.check_landed(repo, "5") is False
+
+
+def test_settings_registers_the_hook():
+    settings = json.loads((SCRIPTS_DIR.parent / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    commands = [h["command"] for entry in settings["hooks"]["PreToolUse"] for h in entry["hooks"]]
+    assert any('run_hook.py" require_premerge_before_pr' in c for c in commands)

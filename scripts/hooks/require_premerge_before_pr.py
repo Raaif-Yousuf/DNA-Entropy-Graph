@@ -15,6 +15,12 @@ unfiltered premerge run. This hook allows the command only when that stamp match
 current HEAD and is under 12 hours old. Committing changes HEAD, so the order is: commit, run
 `premerge.py --fast`, then `gh pr create`.
 
+LAND_WT IS THE SANCTIONED PATH
+---------------------------
+`scripts/land_wt.py` runs premerge in a throwaway worktree and runs `gh pr create` as a child process, which
+this hook never sees. It then records the PR in `<common-git-dir>/landed-prs.json`, so a later
+`gh pr merge <n>` from another checkout (whose HEAD has no stamp) is allowed for that PR only.
+
 ESCAPE HATCH (logged, never silent)
 -----------------------------------
 `DEG_SKIP_PREMERGE=<reason> gh pr create ...` (an inline env assignment in the command itself,
@@ -80,6 +86,17 @@ def _bypass_reason(env_prefix: str) -> str | None:
     return os.environ.get(BYPASS_VAR) or None
 
 
+def _merge_target(scanned: str, end: int) -> str | None:
+    """The PR number after `gh pr merge` (a number, or the tail of a PR URL), or None."""
+    rest = re.split(r"[;&|\n]", scanned[end:], maxsplit=1)[0]
+    for token in rest.split():
+        if token.startswith("-"):
+            continue
+        tail = token.strip("\"'").rstrip("/").rsplit("/", 1)[-1]
+        return tail if tail.isdigit() else None
+    return None
+
+
 def _log_bypass(repo: Path, verb: str, reason: str) -> None:
     path = stamp.stamp_path(repo)
     if path is None:
@@ -104,6 +121,12 @@ def verdict(command: str, cwd: str | Path | None) -> str | None:
             if not ok:
                 _log_bypass(repo, verb, bypass)
             return None
+        if not ok and verb == "merge":
+            # land_wt.py (the sanctioned path) verified this PR in a throwaway worktree; the merge is
+            # usually run from another checkout whose HEAD has no stamp of its own.
+            target = _merge_target(scanned, match.end())
+            if target and stamp.check_landed(repo, target):
+                continue
         if not ok:
             return MESSAGE.format(verb=verb, reason=reason)
     return None
@@ -152,6 +175,14 @@ def self_test() -> int:
             heredoc = "git commit -m \"$(cat <<'EOF'\nsay gh pr create here\nEOF\n)\""
             expect("a cat heredoc body is not a command", verdict(heredoc, repo), False)
 
+            expect(
+                "merge of a PR land_wt verified is allowed",
+                (stamp.record_landed(repo, "77", "x"), verdict("gh pr merge 77 --merge", repo))[1],
+                False,
+            )
+            expect("merge by URL of a verified PR is allowed", verdict("gh pr merge https://github.com/o/r/pull/77", repo), False)
+            expect("merge of another PR is still denied", verdict("gh pr merge 78 --merge", repo), True)
+            expect("create is not unlocked by a landed PR", verdict("gh pr create", repo), True)
             stamp.write_stamp(repo, "fast")
             expect("a fresh stamp allows gh pr create", verdict("gh pr create", repo), False)
             (repo / "a.txt").write_text("2\n", encoding="utf-8", newline="\n")

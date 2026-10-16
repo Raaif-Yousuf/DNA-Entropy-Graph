@@ -92,7 +92,7 @@ then `gh run watch`.
 From a shared checkout, `scripts/land_pr.py` (see `dev_commands.md`) does branch, explicit-path commit, push, PR,
 wait-for-green, merge and return-to-main in one call, and leaves every other lane's uncommitted edits untouched.
 Run `scripts/premerge.py --fast` first, in the working tree before the tool commits: `land_pr.py` refuses without a green
-stamp on the current HEAD (`--no-premerge-check` overrides). The `gh pr create` hook cannot see the `gh` call the tool makes
+stamp on the current HEAD (`--no-premerge-check` overrides). The `gh pr create`/`gh pr merge` hook (`scripts/hooks/require_premerge_before_pr.py`, registered in `.claude/settings.json`) denies an agent's `gh pr create`/`merge` without a green stamp on HEAD; `land_wt.py` is exempt for create (child process) and records its PRs so `gh pr merge <n>` of a landed PR is allowed. The `gh pr create` hook cannot see the `gh` call the tool makes
 internally, so the tool does the same check itself.
 
 GitHub registers no checks for a few seconds after `gh pr create` (MEASURED 2026-10-02, #472), so an empty check list

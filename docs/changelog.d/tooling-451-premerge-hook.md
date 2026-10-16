@@ -1,0 +1,1 @@
+- tooling: the `gh pr create`/`gh pr merge` premerge hook (#451) is now registered in `.claude/settings.json`, and `gh pr merge <n>` is allowed for a PR `land_wt.py` verified in its throwaway worktree (recorded in `<common-git-dir>/landed-prs.json`).

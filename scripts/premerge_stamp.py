@@ -41,6 +41,7 @@ import time
 from pathlib import Path
 
 STAMP_NAME = "premerge-stamp.json"
+LANDED_NAME = "landed-prs.json"
 MAX_AGE_SECONDS = 12 * 3600
 MODES = ("fast", "full")
 
@@ -62,6 +63,44 @@ def head_sha(repo: Path) -> str | None:
 def stamp_path(repo: Path) -> Path | None:
     git_dir = _git(repo, "rev-parse", "--absolute-git-dir")
     return Path(git_dir) / STAMP_NAME if git_dir else None
+
+
+def landed_path(repo: Path) -> Path | None:
+    """`<common-git-dir>/landed-prs.json`: shared by every worktree, because the orchestrator merges a PR
+    from a different checkout than the one land_wt.py verified it in."""
+    common = _git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    return Path(common) / LANDED_NAME if common else None
+
+
+def _read_landed(path: Path) -> dict[str, dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def record_landed(repo: Path, pr: str, sha: str, now: float | None = None) -> None:
+    """scripts/land_wt.py calls this after it opened PR `pr` from a premerge-green throwaway worktree."""
+    path = landed_path(repo)
+    if path is None:
+        return
+    records = _read_landed(path)
+    records[str(pr)] = {"head": sha, "time": time.time() if now is None else now}
+    path.write_text(json.dumps(records), encoding="utf-8", newline="\n")
+
+
+def check_landed(repo: Path, pr: str, now: float | None = None) -> bool:
+    """True when land_wt.py verified and opened PR `pr` within MAX_AGE_SECONDS."""
+    path = landed_path(repo)
+    record = _read_landed(path).get(str(pr)) if path is not None else None
+    if not isinstance(record, dict):
+        return False
+    try:
+        age = (time.time() if now is None else now) - float(record["time"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return age <= MAX_AGE_SECONDS
 
 
 def write_stamp(repo: Path, mode: str, now: float | None = None) -> Path:
