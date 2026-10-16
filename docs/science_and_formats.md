@@ -546,7 +546,8 @@ Benchling and IGV. When the contig is circular (`cfg.topology.resolve(contig.cir
 - `<name>.gb`: `join(120..126,1..10)` (the segment ending at `L` first), `complement(join(...))` on
   the minus strand, and the LOCUS line says `circular`. The `mean_entropy` note covers the gene's own
   bases only. A spliced feature on a linear contig keeps its outer span (GenBank's own `gene`
-  feature is the full span).
+  feature is the full span), but its `mean_entropy` note averages the joined exon bases only, the
+  same value the gene table reports (#563).
 - `<name>.genes.gff3`: one row per segment, all sharing one `ID`, plus a `region` row with
   `Is_circular=true` for every circular contig (the GFF3 convention for a discontinuous feature on a
   circular molecule). Positions carry the run's `start` offset like every other row.

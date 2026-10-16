@@ -87,7 +87,19 @@ def _build_record(
             if end <= begin0:
                 continue
             location = FeatureLocation(begin0, end, strand)
-            segment = np.asarray(values[begin0:end], dtype=float)
+            # issue #563: the note averages the feature's own bases (the joined exons), never the
+            # introns inside the outer span; the same bases the gene table (#124) summarises.
+            if len(f.segments) > 1:
+                index = np.concatenate(
+                    [
+                        np.arange(b - 1, min(e, len(seq)))
+                        for b, e in sorted(f.segments)
+                        if b <= min(e, len(seq))
+                    ]
+                )
+                segment = np.asarray(values[index], dtype=float)
+            else:
+                segment = np.asarray(values[begin0:end], dtype=float)
         mean_h = float(segment.mean()) if segment.size else 0.0
         quals: dict[str, list[str]] = {"note": [f"mean_entropy={mean_h:.3f} bits"]}
         if f.gene_id:
