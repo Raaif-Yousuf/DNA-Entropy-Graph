@@ -38,6 +38,8 @@ public sealed class InputFileValidatorWorkerParityTests
         ["malformed/genbank_bad_coordinates.gb"] = new(true),
         ["malformed/genbank_lone_cr.gb"] = new(true),
         ["malformed/genbank_truncated_mid_origin.gb"] = new(true),
+        // #543/#788: unreadable gene/CDS locations are dropped with one notice; the record still runs.
+        ["malformed/genbank_unparseable_location.gb"] = new(true),
 
         // refused: no usable record
         ["malformed/fasta_binary_garbage.fasta"] = new(false, InputProblemCode.NoRecords),
