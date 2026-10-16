@@ -345,6 +345,22 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void A_word_like_rejected_error_code_is_redacted_but_not_scrubbed_from_every_log_line()
+    {
+        // #613 review: a plain-word code ("job") is still not shipped, but scrubbing it would blank the word "job" in every log line.
+        var folder = SeededFolder();
+        var planted = System.Text.Json.Nodes.JsonNode.Parse(folder["runs/20261001-080000-abc234/result.json"])!.AsObject();
+        planted["error"] = new System.Text.Json.Nodes.JsonObject { ["code"] = "job", ["retriable"] = false };
+        folder["runs/20261001-080000-abc234/result.json"] = planted.ToJsonString();
+        folder["logs/app-20261003.log"] += "\n12:20 job started for the run";
+
+        var entries = BuildSeeded(folder);
+
+        entries["files/runs/20261001-080000-abc234/result.json"].ShouldContain("<redacted>");
+        entries["files/logs/log-01.log"].ShouldContain("job started for the run");
+    }
+
+    [Fact]
     public void A_known_worker_error_code_ships_in_result_json()
     {
         var folder = SeededFolder();

@@ -748,7 +748,9 @@ def test_a_foreign_exceptions_free_text_code_never_reaches_result_json(
 
     assert result.inputs[0].error["code"] == "WORKER_CRASH"
     on_disk = (tmp_path / "result.json").read_text(encoding="utf-8")
-    assert "my-patient-42" not in on_disk
+    # The raw value may sit in error.detail (developer-only; the bundle drops it), never in code or message.
+    err = json.loads(on_disk)["inputs"][0]["error"]
+    assert "my-patient-42" not in err["code"] and "my-patient-42" not in err["message"]
     written = json.loads(on_disk)["inputs"][0]["error"]["code"]
     assert written == "WORKER_CRASH"
 
@@ -1796,3 +1798,53 @@ def test_a_completed_run_reports_windows_done_and_a_last_progress_time_in_status
     status_doc = json.loads(store.read_text("status.json"))
     assert status_doc["windowsDone"] >= 1
     assert status_doc["lastProgressAt"] >= status_doc["startedAt"]
+
+
+@pytest.mark.parametrize(
+    ("foreign", "expected"),
+    [(404, "original code: 404"), ("my-patient-42", "original code: 'my-patient-42'")],
+)
+def test_a_foreign_code_is_kept_in_error_detail_not_in_error_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign: object, expected: str
+) -> None:
+    """Issue #613: the developer still sees what the exception said, in error.detail only."""
+    from dna_entropy.worker import runner as runner_module
+
+    class _ForeignError(Exception):
+        code = foreign
+
+    def _raise(*args, **kwargs):
+        raise _ForeignError("boom")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise)
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    error = run_job(store).inputs[0].error
+    assert error["code"] == "WORKER_CRASH"
+    assert "404" not in error["message"] and "my-patient-42" not in error["message"]
+    assert expected in error["detail"]
+
+
+def test_the_kept_original_code_is_ascii_escaped_and_cut_at_80(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dna_entropy.worker import runner as runner_module
+
+    class _ForeignError(Exception):
+        code = "\u00e9" * 200
+
+    def _raise(*args, **kwargs):
+        raise _ForeignError("boom")
+
+    monkeypatch.setattr(runner_module.pipeline, "run", _raise)
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    line = next(
+        ln for ln in run_job(store).inputs[0].error["detail"].splitlines() if ln.startswith("original code:")
+    )
+    assert line.isascii()
+    assert len(line) <= len("original code: ") + 80

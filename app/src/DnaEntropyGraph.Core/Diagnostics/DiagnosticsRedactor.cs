@@ -297,8 +297,9 @@ internal sealed partial class DiagnosticsRedactor
                     }
                     else if (child?.IsAllowedValue is { } isAllowed)
                     {
-                        // An enum-valued leaf (error.code) holding anything else is not shipped, so it is scrubbed from the logs too.
-                        if (value is JsonValue leaf && leaf.TryGetValue<string>(out var rejected) && !isAllowed(rejected) && rejected.Length is >= 3 and <= 260)
+                        // An enum-valued leaf (error.code) holding anything else is not shipped, so it is scrubbed from the logs too,
+                        // but only when it looks like data (a digit or punctuation): a plain word such as "job" would blank that word in every log line.
+                        if (value is JsonValue leaf && leaf.TryGetValue<string>(out var rejected) && !isAllowed(rejected) && rejected.Length is >= 3 and <= 260 && LooksLikeData(rejected))
                         {
                             sink.Add(rejected);
                         }

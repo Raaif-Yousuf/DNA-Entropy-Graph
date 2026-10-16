@@ -422,7 +422,11 @@ def _run_one_input(
         # run name) and result.json error.code ships in the diagnostics zip (issue #613):
         # anything unregistered is treated as if the exception had no code at all.
         code = getattr(exc, "code", None)
+        original_code: str | None = None
         if not isinstance(code, str) or code not in WORKER_ERROR_CODE_SET:
+            if code is not None:
+                # Kept for the developer in error.detail (never in error.code): ASCII-escaped, cut at 80.
+                original_code = f"original code: {ascii(code)[:80]}"
             code = None
         if code is None:
             # WindowingError (K below 128, an input under 10 nt, a ceiling below K) and
@@ -446,6 +450,8 @@ def _run_one_input(
         error: dict = {"code": code, "message": str(exc), "retriable": is_retriable(code)}
         if code == "WORKER_CRASH":
             error["detail"] = traceback.format_exc()
+        if original_code is not None:
+            error["detail"] = f"{error.get('detail', '')}\n{original_code}".strip()
         # issue #252: whatever contigs/records completed before the crash are already on
         # local disk (pipeline.run()'s own best-effort write) — upload them so one bad
         # record doesn't cost the whole input, not just the whole job.
