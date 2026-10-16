@@ -237,7 +237,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 jobId,
                 JobPhase.Draft,
                 DateTimeOffset.UtcNow,
-                Target: RunTargets.Cloud,
+                Target: RunTargets.CloudRecord,
                 StartedAt: DateTimeOffset.UtcNow,
                 OptionsJson: RunOptionsJson.Serialize(options),
                 ProjectId: projectId,

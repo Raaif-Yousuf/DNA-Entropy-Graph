@@ -2,6 +2,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Cost;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Persistence;
@@ -59,7 +60,7 @@ public sealed class SpendLedger : ISpendCapGate
         ArgumentNullException.ThrowIfNull(run);
         // A local-engine run (Target "local") rents no VM and books nothing. There is deliberately no fallback to StartedAt for a row with no
         // VmReadyAt: the engine writes the planned VM name up front, so a name is no proof a VM ever existed.
-        if (!string.Equals(run.Target, RunTargets.Cloud, StringComparison.OrdinalIgnoreCase)
+        if (!string.Equals(run.Target, RunTargets.CloudRecord, StringComparison.OrdinalIgnoreCase)
             || !JobStateMachine.IsTerminal(run.Phase)
             || run.VmReadyAt is not { } vmStart
             || run.FinishedAt is not { } finished
@@ -150,7 +151,7 @@ public sealed class SpendLedger : ISpendCapGate
         var total = 0.0;
         foreach (var run in latest)
         {
-            if (!string.Equals(run.Target, RunTargets.Cloud, StringComparison.OrdinalIgnoreCase) || JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
+            if (!string.Equals(run.Target, RunTargets.CloudRecord, StringComparison.OrdinalIgnoreCase) || JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
             {
                 continue;
             }

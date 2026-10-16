@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.LocalEngine;
+
 namespace DnaEntropyGraph.Core.Abstractions;
 
 /// <summary>
@@ -44,7 +46,7 @@ public sealed record RunRecord(
     DateTimeOffset CreatedUtc,
     string? Name = null,
     bool IsBatch = false,
-    string Target = RunTargets.Cloud,
+    string Target = RunTargets.CloudRecord,
     string? ErrorCode = null,
     string? ErrorDetail = null,
     DateTimeOffset? StartedAt = null,

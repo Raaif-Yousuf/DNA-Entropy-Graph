@@ -1,6 +1,7 @@
 using System.Globalization;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Presentation.ViewModels;
 
 namespace DnaEntropyGraph.Presentation.Services;
@@ -30,7 +31,7 @@ public static class RunCostText
     private static string? Build(RunRecord run, IStringResourceProvider strings, string noCloudKey, string estimateKey, string spotKey)
     {
         ArgumentNullException.ThrowIfNull(run);
-        if (string.Equals(run.Target, RunTargets.Local, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(run.Target, RunTargets.LocalRecord, StringComparison.OrdinalIgnoreCase))
         {
             return strings.GetString(noCloudKey);
         }

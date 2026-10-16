@@ -1,5 +1,6 @@
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 using NSubstitute;
@@ -73,9 +74,9 @@ public sealed class RunCostTextTests
     [Fact]
     public void The_local_target_matches_whatever_its_case()
     {
-        RunCostText.Header(Row(null, RunTargets.Local.ToUpperInvariant()), _strings).ShouldBe("no cloud cost");
-        RunTargets.Cloud.ShouldBe("cloud");
-        RunTargets.Local.ShouldBe("local");
+        RunCostText.Header(Row(null, RunTargets.LocalRecord.ToUpperInvariant()), _strings).ShouldBe("no cloud cost");
+        RunTargets.CloudRecord.ShouldBe("cloud");
+        RunTargets.LocalRecord.ShouldBe("local");
     }
 
     [Fact]
