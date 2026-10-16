@@ -83,6 +83,7 @@ public sealed partial class SetupStepRow : ObservableObject
                 OnPropertyChanged(nameof(HasCommandAction));
                 OnPropertyChanged(nameof(HasRecheck));
                 OnPropertyChanged(nameof(HasSkip));
+                OnPropertyChanged(nameof(HasAsk));
             }
         }
     }
@@ -146,6 +147,55 @@ public sealed partial class SetupStepRow : ObservableObject
     /// <summary>The last result, for the commands that act on it (the account to link, the code that failed).</summary>
     public SetupStepResult? Last { get; private set; }
 
+    /// <summary>"Ask Google for a GPU" (the GPU row only; set by <see cref="SetupStepsViewModel"/> when it can ask).</summary>
+    public CommunityToolkit.Mvvm.Input.IAsyncRelayCommand? AskCommand { get; set; }
+
+    /// <summary>What Google answered to the last ask, in the user's words, naming one action (Hard Rule 13); empty until asked and after the step is checked again.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAskResult))]
+    private string _askResultText = string.Empty;
+
+    /// <summary>The label of the one button that answer leaves.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAskActionCommand), nameof(HasAskLink))]
+    private string _askActionText = string.Empty;
+
+    /// <summary>What that button does when it is a command (check again, check billing, try again); null when it is a link.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAskActionCommand))]
+    private CommunityToolkit.Mvvm.Input.IAsyncRelayCommand? _askActionCommand;
+
+    /// <summary>The page that button opens when it is a link (Google's quota page), else null.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAskLink))]
+    private Uri? _askLinkUri;
+
+    public bool HasAskResult => AskResultText.Length > 0;
+
+    public bool HasAskActionCommand => AskActionText.Length > 0 && AskActionCommand is not null;
+
+    public bool HasAskLink => AskActionText.Length > 0 && AskLinkUri is not null;
+
+    /// <summary>True while the GPU row is red because the allowance was read and is zero, and something can ask Google for one.</summary>
+    public bool HasAsk => AskCommand is not null && IsFix && Last is { Step: SetupStep.Quota, Code: null } last && last.Tiers.Any(t => t.State == QuotaState.None);
+
+    /// <summary>Shows Google's answer with its one button: a command, or a link when <paramref name="link"/> is set.</summary>
+    public void ShowAskResult(string messageKey, string actionKey, CommunityToolkit.Mvvm.Input.IAsyncRelayCommand? command, Uri? link)
+    {
+        AskResultText = _strings.GetString(messageKey);
+        AskActionCommand = link is null ? command : null;
+        AskLinkUri = link;
+        AskActionText = _strings.GetString(actionKey);
+    }
+
+    public void ClearAskResult()
+    {
+        AskResultText = string.Empty;
+        AskActionText = string.Empty;
+        AskActionCommand = null;
+        AskLinkUri = null;
+    }
+
     public bool IsOk => Status == SetupStatus.Ok;
 
     public bool IsFix => Status == SetupStatus.NeedsAction;
@@ -172,6 +222,7 @@ public sealed partial class SetupStepRow : ObservableObject
 
     public void MarkRunning()
     {
+        ClearAskResult();
         Status = SetupStatus.Running;
         StatusText = _strings.GetString("WizardStatus_Running");
         MessageText = string.Empty;
@@ -184,6 +235,7 @@ public sealed partial class SetupStepRow : ObservableObject
 
     public void MarkPending()
     {
+        ClearAskResult();
         Status = SetupStatus.Pending;
         StatusText = _strings.GetString("WizardStatus_Pending");
         MessageText = string.Empty;
@@ -209,6 +261,7 @@ public sealed partial class SetupStepRow : ObservableObject
 
     public void MarkSkipped()
     {
+        ClearAskResult();
         Status = SetupStatus.Skipped;
         StatusText = _strings.GetString("WizardStatus_Skipped");
         MessageText = _strings.GetString("WizardQuota_Skipped");
@@ -222,7 +275,9 @@ public sealed partial class SetupStepRow : ObservableObject
     public void Apply(SetupStepResult result, string projectId)
     {
         Last = result;
+        ClearAskResult();
         Status = result.Status;
+        OnPropertyChanged(nameof(HasAsk));
         StatusText = _strings.GetString(result.Status == SetupStatus.Ok ? "WizardStatus_Ok" : "WizardStatus_Fix");
         NoteText = result.NoteCode is { } note ? _strings.GetString(SetupErrorCodes.ResourceKey(note)) : string.Empty;
         CanSkip = result.CanSkip;

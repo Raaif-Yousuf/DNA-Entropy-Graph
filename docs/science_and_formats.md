@@ -504,10 +504,102 @@ must each individually fit inside the record regardless of a partial marker; a
 legitimate origin-wrapping feature on a circular plasmid record (the intended shape for
 issue #128) already satisfies this per-segment, so this check does not affect it.
 
+**A feature whose location cannot be read is reported, not dropped (issue #543, MEASURED
+2026-10-15, Biopython 1.88).** The bad-location shapes split in two:
+
+- `LocationParserError`: Biopython warns and sets the feature's location to `None`. Covered
+  shapes include `abc`, `0..42`, `-1`, `1..?`, `?..5`, `1..`, `<<1..5`, `gap(10)`, `1.5..9`, and
+  `42..1` / `5..3` / `complement(42..1)` on a record that is **not** circular. On a circular record
+  `42..1` is a valid join across the origin, so nothing is dropped.
+- a plain `ValueError` (`join()`, `order()`, `complement(1..3)..5`, `99999999999999999999..5`, an
+  unterminated `join(1..5,`) or a bare `AssertionError` (`1..5,9..12`, `1..3)`): Biopython raises out
+  of the record and cannot resume, so the whole file is refused with the reader's own named action
+  (`GenBankReadError`). The notice cannot cover these.
+
+For the first kind, GenBank and EMBL (one shared mapper) add ONE notice per record: the count of
+dropped features that would have become genes (a record's `gene` features, else its `CDS`
+features; a CDS beside a readable `gene` set is not counted) and the key and location text of the
+first three (the rest as "and N more"), with a good location shown as the action. The location text
+is shown through `ascii()` and cut at 40 characters (Hard Rule 5). When the number of Biopython
+warnings does not match the number of unreadable features, only the feature key is named. The
+readable features are still used; the unreadable gene is not repaired. Biopython's other warnings
+are re-emitted unchanged. SnapGene builds its locations itself and raises on a bad range, so a bad
+SnapGene range is a refusal, not a notice. Test: `worker/tests/test_genbank_dropped_features.py`
+(fixture `malformed/genbank_unparseable_location.gb`).
+
+**Issue #694: CDS fallback per gene id, and two notices worded for what is wrong.** When a record
+uses `gene` features and one of them is dropped (unreadable location, or coordinates outside the
+record), the CDS feature with the same gene id stands in for it, per id, with one notice ("the CDS
+feature with the same gene id was used instead"; its span is the coding sequence, not the gene's).
+A gene whose id is only its feature key, or with no CDS of that id, is simply dropped as before. A
+between-bases site (`1^2`, which Biopython reads as a zero-length span) is named as "a location
+between two bases", and a position past 2**63-1 (`1..99999999999999999999`) as "too large to be a
+real coordinate", instead of both being called "outside the sequence length". The whole-file
+`ValueError` shapes above are unchanged.
+
+**Issue #694: a gene that crosses the origin is written as a join.** `begin..end` of such a feature
+is the outer span `1..L`; writing only that made the gene look like the whole molecule in SnapGene,
+Benchling and IGV. When the contig is circular (`cfg.topology.resolve(contig.circular)`, so
+`--topology` counts) and a feature has segments with one ending at base `L` and one starting at base
+1 (the rule the gene table and the readers use), the writers emit its real parts:
+
+- `<name>.gb`: `join(120..126,1..10)` (the segment ending at `L` first), `complement(join(...))` on
+  the minus strand, and the LOCUS line says `circular`. The `mean_entropy` note covers the gene's own
+  bases only. A spliced feature on a linear contig keeps its outer span (GenBank's own `gene`
+  feature is the full span).
+- `<name>.genes.gff3`: one row per segment, all sharing one `ID`, plus a `region` row with
+  `Is_circular=true` for every circular contig (the GFF3 convention for a discontinuous feature on a
+  circular molecule). Positions carry the run's `start` offset like every other row.
+
+Both read back as the same wrapping gene (`readers/genbank.py`, `readers/gff3.py` plus
+`fit_to_sequence`). Test: `worker/tests/test_origin_wrap_writers.py`. Known gap: the GenBank reader
+has no unstranded gene, so an unstranded gene (`.`) reads back from `.gb` as `+`.
+
 Every one of these five checks has a dedicated, deterministic test in
 `worker/tests/test_validation.py`; `docs/tests.md`'s neighbour-test set names the shapes a
 new validation test should also sweep (empty contig, ambiguity codes, multi-record files,
 `L < 2K`, `L > W`).
+
+### 4b. Fetching a record by NCBI accession (issue #133)
+
+`readers/entrez.py`, `dna-entropy run --accession NC_045512.2 [--accession-range 100-500]
+[--ncbi-api-key K] [--cache-dir D]`. The worker asks NCBI E-utilities (`efetch`, `db=nuccore`,
+`rettype=gb`) for the record, writes it under the cache directory
+(`%LOCALAPPDATA%\DNAEntropyGraph\cache\inputs` by default) and then runs the ordinary
+GenBank path on that file, so every rule in this section and the "use the file's own genes,
+never re-annotate" rule apply unchanged. Mechanics:
+
+- The accession is matched against a strict **ASCII-only** pattern before any request (`\d` alone
+  accepts Arabic-Indic and full-width digits, and `str.upper()` folds long s and dotless i into
+  ASCII letters, so both are refused first); a bad one is a `ValidationError` (`INPUT_INVALID`),
+  never a request. The CLI also checks every other option (`--predictor`, `--region-threshold`,
+  `--smoothing-window`, `--accession-range`, `--input`, a conflicting `--informat`) before the
+  fetch, so a run that cannot start never costs a request. `--informat` other than `genbank` with
+  `--accession` is refused, not overwritten.
+- NCBI can answer a failed lookup with HTTP 200 and an error text. A body that does not start
+  with `LOCUS`, does not end with `//` (a cut-off download), has no `VERSION` line, or names a
+  different record than asked, is refused and not cached.
+- **Resolved version.** The cache file is named, and provenance records, the versioned accession
+  from the record's `VERSION` line (`NC_045512` asked, `NC_045512.2` stored). An unversioned request
+  always asks NCBI (a cached unversioned answer could be a version NCBI has since replaced); a
+  versioned request never changes and is served from the cache. Provenance has both
+  `accession` (resolved) and `requested`.
+- **Deadline and size.** The body is read as it streams: 120 s in total, however slowly it drips
+  in (each single wait 30 s), and at most 64 MiB (the app's own input ceiling); over either, the
+  fetch is refused and nothing is cached. A bigger record needs `--accession-range`.
+- **Failures** each have their own message and one action: 429 (wait, or use an API key), 5xx (try
+  again in a few minutes), 400 and 404 (check the accession and range), 401 and 403 (check the API
+  key), a timeout, a too-large record, any other network failure. Only 429 and 5xx are retried,
+  once, after a 2 s backoff (NCBI's `Retry-After` up to 30 s when it sends one). No message carries
+  the URL or the key.
+- Rate limit: at least 0.34 s between requests without a key, 0.1 s with one.
+- The cache key is resolved accession plus range; a sidecar `.json` keeps the ORIGINAL retrieval
+  date, so a later run served from the cache still reports when the record was downloaded.
+- `provenance.json` gets `input_source: {type: "ncbi_entrez", accession, requested, range,
+  retrieved, from_cache}`. The API key is never written anywhere.
+- The test suite never touches the network (`worker/tests/test_entrez.py` injects the opener).
+  Local validation in the app (rule 2) is not needed for the fetch itself: the fetched text
+  goes through the same GenBank reader and validator in the worker before any prediction.
 
 ---
 
@@ -578,6 +670,110 @@ prototype processed only the first); GenBank multi-record input was already hand
 so the viewer and IGV keep every record's track aligned to its own sequence.
 
 ---
+
+### 5c. A FASTA + GFF3 pair as an annotated input (issue #135)
+
+`dna-entropy run -i seq.fasta --gff3 seq.gff3` (`RunConfig.annotation_path`, reader
+`readers/gff3.py`). The GFF3's genes are the file's own, so **Prodigal never runs**, even with
+`--genes`. Rules:
+
+- Rows are matched to FASTA records by the GFF3's first column, **percent-decoded** (GFF3 escapes
+  reserved characters, so `gnl%7Cx` is `gnl|x`), against the record id (the header text up to the
+  first space). If no name matches, the run is refused; if some do not, one counted notice says
+  so. A multi-record FASTA where only some records have GFF3 rows gives the others no genes, and
+  Prodigal still never runs for them (MEASURED 2026-10-15: `test_multi_record_fasta_with_gff3_rows...`).
+  A GFF3 with a non-FASTA input is refused.
+- Per sequence name, `gene` features are used, else `CDS` (the same preference as the GenBank
+  reader). Several rows (`gene` or `CDS`) sharing one `ID` are one feature: outer span in
+  `begin..end`, real parts in `segments`, with a notice (like a GenBank `join`). The gene id is
+  `Name`, else `gene`, `locus_tag`, `product`, `ID`.
+- **Coordinates** are GFF3's 1-based inclusive positions counted over the sequence letters, so
+  FASTA line wrapping and case do not shift them. The bounds check uses the validated sequence's
+  length (the letters; whitespace is not part of it, an ambiguity code keeps its position and
+  `--ambiguity-policy` never deletes a base). `--start` only relabels the outputs; it does not shift
+  how GFF3 positions are read.
+- **Strand** stays `+`, `-` or `.`: `.` and `?` are both unstranded, never turned into `+`. The
+  GenBank output writes an unstranded gene as a plain `begin..end` (GenBank has no unstranded
+  location), never as `complement(...)`.
+- **Circular sequences.** `Is_circular=true` on any row of a sequence (normally its `region` row)
+  is the input declaring a circular molecule, like a GenBank `LOCUS` line: the contig is analysed
+  as circular, with one notice, unless `--topology linear` says otherwise (`--topology circular`
+  forces it for the others). On a circular sequence a feature crosses the origin when either two
+  rows share an `ID` and touch both ends, or one row's end is past the sequence length (and the
+  wrapped part does not overlap the start). Both become the outer span `1..L` with `segments`, like
+  a GenBank origin join, and the gene table reports `wraps_origin`. On a linear sequence a feature
+  running past the end is dropped; the notice names both causes (an undeclared circular sequence, or
+  a GFF3 for a different FASTA).
+- A malformed line is skipped with a counted notice naming the first line number; the `##FASTA`
+  section is ignored.
+- Outputs: `<name>.genes.gff3` (source `gff3`), the gene summary tables, and the bonus `<name>.gb`
+  carry these genes. Auto-pairing `<name>.fasta` with `<name>.gff3` in one drop, and a pairing UI
+  when ambiguous, are app work (follow-up issue); the manifest field is `worker/manifest.py`'s.
+
+### 5b. Input formats beyond GenBank and FASTA (issue #134)
+
+`readers/embl.py` (EMBL flat file, `.embl`/`.emb`, or an `ID   ` first line) and
+`readers/snapgene.py` (SnapGene `.dna`, detected by its magic bytes: a type-0x09 packet whose
+data starts `SnapGene`, so a renamed file still works and a text file named `.dna` is not
+claimed) are parsed by Biopython (BSD-3-Clause; the `snapgene` SeqIO parser needs no new
+dependency) and mapped by the same `genbank.records_from_parsed` as GenBank: the file's own
+`gene` (else `CDS`) features become `GeneFeature`s, a circular topology is kept, a record with no
+sequence is skipped with a notice. The loaded input takes the GenBank output set (the genes
+are the file's own, Prodigal never runs). Differences worth knowing:
+
+- EMBL record ids are `accession.version`; a non-ASCII letter in the `SQ` block is refused (the
+  GenBank #492 case-folding trap applies, so it is checked before Biopython upper-cases).
+- SnapGene names features by `label`; the reader uses it as the gene id when there is no
+  `gene`/`locus_tag`/`product` (this also applies to GenBank features that only have a `label`).
+- SnapGene keeps one sequence per file and is capped at 64 MiB. The reader walks the packets
+  itself before Biopython: a cut-off packet, any non-DNA packet over 8 MiB, any `DOCTYPE` or
+  `ENTITY` declaration (SnapGene never writes one) and a non-ASCII DNA byte are each a named
+  refusal, never a traceback. MEASURED 2026-10-15 (Python 3.12.10, expat 2.7.1): this build's
+  expat already stops a billion-laughs document in 0.36 s, but that is a property of the Python
+  build, so the refusal does not rely on it.
+- A feature crossing the origin of a circular record (SnapGene range `120-10`, EMBL
+  `join(120..126,1..10)`) is mapped exactly like GenBank's: outer span `1..L` plus its
+  `segments`; the gene table reads the segments and reports `wraps_origin`. The notice says the
+  feature wraps the origin (not "intron") only when the record is circular and one segment ends at
+  the last base while another starts at base 1; otherwise it is a spliced join.
+- `provenance.json` carries `run.input_format` (`genbank`, `embl`, `snapgene`, `fasta`, `paste`).
+  `source_kind` stays `genbank` for EMBL and SnapGene so they take the GenBank output set.
+- The app does not yet validate these two formats locally before creating a VM (rule 2); that
+  port is tracked in a follow-up issue.
+
+### 5e. Analysis commands on top of a run (issues #129, #130, #192)
+
+**Batch outlier QC (#192).** A run of three or more inputs (a multi-record file) scores every input
+in `stats.txt` / `<name>.summary.txt`. `analysis/batch_qc.py` reduces each input to its mean entropy
+and computes a robust z-score over the batch, `0.6745 * (mean - median) / MAD`; `|z| > 3.5` is
+flagged. The overall block gets `batch QC flagged:   N of M` and each `[contig]` block gets
+`batch QC z-score`, `batch QC median` and `batch QC flag` (`ok` or `OUTLIER`); those keys are new, so
+a reader that takes the first value of each key (the app's `RunSummaryReader`) is not shadowed. If
+every other input is exactly alike (MAD = 0) any input that differs is flagged, with z capped at
+99. Below three inputs nothing is flagged. Tests: `worker/tests/test_batch_qc.py` (the statistic and
+the summary file; a planted outlier is flagged alone, MEASURED 2026-10-15 on synthetic tracks, not on
+shuffled real plasmids, which is the ToTest row).
+
+**Compare two runs (#129).** `dna-entropy compare A.entropy.tsv B.entropy.tsv [--offset N] [--contig C]`
+writes `<name>.compare.bedgraph` (B minus A in bits, bedGraph coordinates like every other track,
+one row per position) and `<name>.compare.deviations.tsv` (the `--top` largest `|difference|`,
+1-based). B index `j` is compared with A index `j + offset`; with no offset the lengths must match,
+otherwise the command refuses and names `--offset`. Positions are A's coordinates. A run compared with
+itself gives an all-zero track. Stacking A, B and the difference in the viewer is app work. Tests:
+`worker/tests/test_compare.py`.
+
+**Variant effect scan (#130).** `dna-entropy variants -i seq.fasta (--variants v.tsv | --positions 12,40)`
+scores substitutions with one forward pass per variant (`--max-variants`, default 50, refuses more
+and names the option; `--dry-run` prints only the cost). The cost line ("N forward passes ... about N
+seconds on an L4 GPU") is printed before any pass. Each variant is scored on the window `pos +- K/2`
+(`--context-length`) of the reference and of the variant; `<name>.variants.tsv` has `position, ref,
+alt, window_start, window_end, delta_surprisal_bits` (variant window total surprisal minus the
+reference window's), `delta_mean_entropy_bits`, and `site_surprisal_ref_bits` / `site_surprisal_alt_bits`
+(from the reference window's own prediction). Reference windows are predicted once per distinct
+window. The variants file is `pos<TAB>ref<TAB>alt`; every ref must match the sequence. Tests:
+`worker/tests/test_variants.py` (mock predictor: plumbing and arithmetic, not biology).
+THEORY (unverified): a synonymous change in a conserved codon scores a smaller delta than a nonsense
+change on the TnpB test locus (the issue's observable); it needs a real model (docs/ToTest.md).
 
 ### 5d. Model-free companion tracks: GC percent and codon usage (issue #191)
 

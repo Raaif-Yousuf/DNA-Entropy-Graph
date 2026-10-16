@@ -98,6 +98,20 @@ def test_cuda_image_installs_evo_and_genes_extras() -> None:
     assert '".[genes,evo]"' in text or '".[evo,genes]"' in text
 
 
+def test_cuda_image_carries_pytest_and_the_tests_for_gpu_test_mode_but_not_the_dev_extra() -> None:
+    """Issue #759: worker/vm/startup.sh's gpu-test mode runs `pytest -m gpu` in /opt/worker, so
+    the CUDA image needs pytest (MIT) and the tests folder. It must NOT install the `dev` extra:
+    hypothesis there is MPL-2.0 and this image ships (Hard Rule 21)."""
+    code = _code_only(DOCKERFILE_CUDA)
+    assert "COPY tests ./tests" in code
+    assert "pip install pytest" in code
+    assert "[dev" not in code
+    assert "hypothesis" not in code
+    # both land before the image drops to the non-root user
+    assert code.index("COPY tests ./tests") < code.index("USER worker")
+    assert code.index("pip install pytest") < code.index("USER worker")
+
+
 def test_cuda_image_is_clearly_marked_unverified() -> None:
     """This build has never run on a real GPU (no CUDA on this laptop) — the file must
     say so loudly, not imply it works."""
