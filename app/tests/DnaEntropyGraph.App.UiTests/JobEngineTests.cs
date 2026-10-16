@@ -298,6 +298,61 @@ public class JobEngineTests
         h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
     }
 
+    private static string PairFiles(string fastaSeqName, string gffSeqName, out string gff)
+    {
+        var dir = Path.Combine(TempRoot, "user-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var fasta = Path.Combine(dir, "pair.fasta");
+        File.WriteAllText(fasta, ">" + fastaSeqName + "\nACGTACGTACGTACGTACGT\n");
+        gff = Path.Combine(dir, "pair.gff3");
+        File.WriteAllText(gff, "##gff-version 3\n" + gffSeqName + "\tsrc\tgene\t1\t9\t.\t+\t.\tID=g1\n");
+        return fasta;
+    }
+
+    [Fact]
+    public async Task A_paired_gff3_is_staged_beside_the_input_checked_and_uploaded_with_it()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var fasta = PairFiles("chr1", "chr1", out var gff);
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: fasta) with { AnnotationPath = gff }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        File.Exists(Path.Combine(h.AppData, "runs", jobId, "annotation", "pair.gff3")).ShouldBeTrue();
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldContain(key => key.EndsWith("pair.gff3", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_paired_gff3_that_names_no_sequence_of_the_fasta_fails_locally_and_creates_nothing()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var fasta = PairFiles("chr1", "secretchrom", out var gff);
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: fasta) with { AnnotationPath = gff }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(RunErrorCodes.InputInvalid);
+        row.ErrorDetail.ShouldNotBeNull().ShouldContain("NoNameMatch");
+        row.ErrorDetail.ShouldNotContain("secretchrom", Case.Insensitive);
+        h.Gcp.CreateAttempts.ShouldBe(0);
+        h.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_paired_gff3_that_has_gone_missing_fails_as_a_missing_input_and_creates_nothing()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var fasta = PairFiles("chr1", "chr1", out var gff);
+        File.Delete(gff);
+
+        var jobId = await h.Engine.StartRunAsync(Options(input: fasta) with { AnnotationPath = gff }, CancellationToken.None);
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Failed);
+        (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId).ErrorCode.ShouldBe(RunErrorCodes.InputMissing);
+        h.Gcp.CreateAttempts.ShouldBe(0);
+    }
+
     [Fact]
     public async Task A_run_with_no_input_file_fails_with_input_missing_and_creates_nothing()
     {

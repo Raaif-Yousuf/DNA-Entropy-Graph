@@ -90,6 +90,23 @@ NOT_A_GATE: dict[str, str] = {
         "a path-diff gate that needs a pull request base sha and only decides which CI jobs run; "
         "its tests (scripts/tests/test_ci_changes_gate.py) run in the scripts-tests gate"
     ),
+    "scripts/release_assets.py": (
+        "runs against the built release assets inside release.yml; its tests "
+        "(scripts/tests/test_release_assets.py) run in the scripts-tests gate"
+    ),
+    "scripts/release_dockerfile_base_pinned.py": (
+        "gates a release only (renamed out of the check_* glob on purpose, a base image may float "
+        "between releases); its tests (scripts/tests/test_release_dockerfile_base_pinned.py) run "
+        "in the scripts-tests gate"
+    ),
+    "scripts/write_oauth_client.py": (
+        "writes the OAuth client file from a CI secret inside release.yml; its tests "
+        "(scripts/tests/test_write_oauth_client.py) run in the scripts-tests gate"
+    ),
+    "scripts/write_worker_images.py": (
+        "writes the pinned worker image list at release time; its tests "
+        "(scripts/tests/test_write_worker_images.py) run in the scripts-tests gate"
+    ),
 }
 
 # Test projects that are not run here, with the reason (ci-app.yml excludes the same one).
@@ -177,41 +194,86 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
 
     # 2. The non-check_ gates CI runs.
     gates += [
-        Gate("compile-sprint-log-check", [py, "scripts/compile_sprint_log.py", "--check"], root,
-             why="changelog fragment shape"),
-        Gate("changelog-fragment-present", [py, "scripts/check_changelog_fragments.py", "--base", base], root,
-             why=f"behaviour changed since merge-base({base}) means a docs/changelog.d fragment exists (Hard Rule 16)"),
-        Gate("manifest-schema-drift", [py, "scripts/gen_manifest_schema.py", "--check"], root,
-             why="docs/contract/*.json match the worker dataclasses"),
-        Gate("triage-schema", [py, "scripts/triage_diagnostics.py", "--check-schema"], root,
-             why="triage SCHEMA_FIELDS match the generated schema"),
+        Gate("compile-sprint-log-check", [py, "scripts/compile_sprint_log.py", "--check"], root, why="changelog fragment shape"),
+        Gate(
+            "changelog-fragment-present",
+            [py, "scripts/check_changelog_fragments.py", "--base", base],
+            root,
+            why=f"behaviour changed since merge-base({base}) means a docs/changelog.d fragment exists (Hard Rule 16)",
+        ),
+        Gate(
+            "manifest-schema-drift",
+            [py, "scripts/gen_manifest_schema.py", "--check"],
+            root,
+            why="docs/contract/*.json match the worker dataclasses",
+        ),
+        Gate(
+            "triage-schema", [py, "scripts/triage_diagnostics.py", "--check-schema"], root, why="triage SCHEMA_FIELDS match the generated schema"
+        ),
         Gate("ruff-worker-check", ["uvx", "ruff", "check", "worker"], root, why="worker lint"),
         Gate("ruff-worker-format", ["uvx", "ruff", "format", "--check", "worker"], root, why="worker format"),
         Gate("ruff-scripts-check", ["uvx", "ruff", "check", "scripts"], root, why="scripts lint"),
-        Gate("lychee-links", ["lychee", "--offline", "--no-progress", "--include-fragments",
-                              "--exclude-path", "legacy", "--exclude-path", "worker/legacy",
-                              "--exclude-path", "worker/docs-legacy",
-                              "--exclude-path", "docs/superpowers/specs",
-                              "--exclude-path", "worker/CLAUDE.legacy.md",
-                              "--exclude-path", "worker/README.legacy.md", "./**/*.md"],
-             root, optional=True, why="markdown links (CI parity; skipped when lychee is not installed)"),
+        Gate("ruff-scripts-format", ["uvx", "ruff", "format", "--check", "scripts"], root, why="scripts format"),
+        Gate(
+            "lychee-links",
+            [
+                "lychee",
+                "--offline",
+                "--no-progress",
+                "--include-fragments",
+                "--exclude-path",
+                "legacy",
+                "--exclude-path",
+                "worker/legacy",
+                "--exclude-path",
+                "worker/docs-legacy",
+                "--exclude-path",
+                "docs/superpowers/specs",
+                "--exclude-path",
+                "worker/CLAUDE.legacy.md",
+                "--exclude-path",
+                "worker/README.legacy.md",
+                "./**/*.md",
+            ],
+            root,
+            optional=True,
+            why="markdown links (CI parity; skipped when lychee is not installed)",
+        ),
     ]
 
     # 3. The three big suites (full mode only).
     gates += [
-        Gate("scripts-tests",
-             ["uv", "run", "--with", "pytest", "--with", "pyyaml", "python", "-m", "pytest", "scripts/tests", "-q"],
-             root, tier="full", pytest=True, why="the guards' own tests; pyyaml is not in the worker venv"),
-        Gate("worker-pytest", [py, "-m", "pytest", "worker/tests", "-m", "not gpu", "-q"], root, tier="full",
-             timeout=LONG_TIMEOUT, pytest=True, why="worker suite, no GPU"),
+        Gate(
+            "scripts-tests",
+            ["uv", "run", "--with", "pytest", "--with", "pyyaml", "python", "-m", "pytest", "scripts/tests", "-q"],
+            root,
+            tier="full",
+            pytest=True,
+            why="the guards' own tests; pyyaml is not in the worker venv",
+        ),
+        Gate(
+            "worker-pytest",
+            [py, "-m", "pytest", "worker/tests", "-m", "not gpu", "-q"],
+            root,
+            tier="full",
+            timeout=LONG_TIMEOUT,
+            pytest=True,
+            why="worker suite, no GPU",
+        ),
     ]
 
     # 4. dotnet: always with app/ as the working directory.
     app = root / "app"
     if app.is_dir():
-        gates.append(Gate("dotnet-format", ["dotnet", "format", "--verify-no-changes", "--no-restore"], app,
-                          forgive=_dotnet_format_forgive,
-                          why="C# formatting (cwd=app/); ENDOFLINE-only failures on an autocrlf checkout are KNOWN (#462)"))
+        gates.append(
+            Gate(
+                "dotnet-format",
+                ["dotnet", "format", "--verify-no-changes", "--no-restore"],
+                app,
+                forgive=_dotnet_format_forgive,
+                why="C# formatting (cwd=app/); ENDOFLINE-only failures on an autocrlf checkout are KNOWN (#462)",
+            )
+        )
         for project in discover_test_projects(root):
             project_name = project.parent.name
             if project_name in EXEMPT_TEST_PROJECTS:
@@ -219,9 +281,16 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
             rel = project.relative_to(app).as_posix()
             short = project_name.removeprefix("DnaEntropyGraph.")
             is_guards = short == "Guards.Tests"
-            gates.append(Gate(f"dotnet-test-{short}", ["dotnet", "test", rel], app,
-                              tier="fast" if is_guards else "full", timeout=LONG_TIMEOUT,
-                              why="mechanical C# guards" if is_guards else "C# suite (cwd=app/)"))
+            gates.append(
+                Gate(
+                    f"dotnet-test-{short}",
+                    ["dotnet", "test", rel],
+                    app,
+                    tier="fast" if is_guards else "full",
+                    timeout=LONG_TIMEOUT,
+                    why="mechanical C# guards" if is_guards else "C# suite (cwd=app/)",
+                )
+            )
     return gates
 
 
@@ -261,9 +330,7 @@ def audit(root: Path, gates: Sequence[Gate]) -> list[str]:
     if workflows.is_dir():
         for wf in sorted(workflows.glob("*.yml")):
             # Full-line YAML comments are prose, not steps: a comment naming a script is not a gate.
-            code = "\n".join(
-                line for line in wf.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")
-            )
+            code = "\n".join(line for line in wf.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#"))
             for ref in SCRIPT_REF.findall(code):
                 seen.setdefault(ref, wf.name)
     for ref, wf_name in sorted(seen.items()):
@@ -271,8 +338,7 @@ def audit(root: Path, gates: Sequence[Gate]) -> list[str]:
             problems.append(f"{wf_name} references {ref}, which does not exist")
         elif ref not in covered and ref not in NOT_A_GATE:
             problems.append(
-                f"{wf_name} runs {ref}, but premerge.py does not: add a gate in build_gates() "
-                f"or an entry with a reason in NOT_A_GATE"
+                f"{wf_name} runs {ref}, but premerge.py does not: add a gate in build_gates() or an entry with a reason in NOT_A_GATE"
             )
     return problems
 
@@ -320,8 +386,7 @@ ISSUE_ENDOFLINE = 462
 
 def _autocrlf_is_true(cwd: Path) -> bool:
     try:
-        proc = subprocess.run(["git", "config", "--get", "core.autocrlf"], cwd=cwd, capture_output=True, check=False,
-                              timeout=15)
+        proc = subprocess.run(["git", "config", "--get", "core.autocrlf"], cwd=cwd, capture_output=True, check=False, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return False
     return proc.returncode == 0 and proc.stdout.decode("utf-8", errors="replace").strip().lower() == "true"
@@ -370,7 +435,7 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
             return Result(gate, SKIP, 0.0, detail=f"{gate.argv[0]} is not installed; this gate did NOT run")
         hint = ""
         if "python" in Path(gate.argv[0]).name.lower():
-            hint = " (create it: cd worker; uv venv --python 3.12; uv pip install -e \".[dev,genes]\")"
+            hint = ' (create it: cd worker; uv venv --python 3.12; uv pip install -e ".[dev,genes]")'
         return Result(gate, ERROR, 0.0, detail=f"cannot run: {gate.argv[0]} not found{hint}")
     child_env = dict(os.environ if env is None else env)
     child_env.setdefault("PYTHONUTF8", "1")
@@ -449,9 +514,11 @@ def render_summary(results: Sequence[Result], tail_lines: int = 25) -> tuple[str
 def _rmtree_force(path: Path) -> None:
     """rmtree that also removes read-only files: git writes its objects read-only, and a plain
     `rmtree(ignore_errors=True)` silently left every pytest basetemp that held a git repo behind."""
+
     def clear(func, target, _exc):
         os.chmod(target, stat.S_IWRITE)
         func(target)
+
     shutil.rmtree(path, onexc=clear)
 
 
@@ -470,9 +537,9 @@ def _finish_basetemp(own_tmp: Path, results: Sequence[Result], emit: Callable[[s
         emit(f"basetemp kept: {own_tmp}")
 
 
-def run_all(gates: Sequence[Gate], log_dir: Path | None = None,
-            runner: Callable[[Gate], Result] | None = None, emit: Callable[[str], None] = print
-            ) -> tuple[list[Result], str, int]:
+def run_all(
+    gates: Sequence[Gate], log_dir: Path | None = None, runner: Callable[[Gate], Result] | None = None, emit: Callable[[str], None] = print
+) -> tuple[list[Result], str, int]:
     """Run the gates in order. Pytest gates each get a private --basetemp in a SHORT temp dir created here (never under
     `log_dir`: MEASURED 2026-10-02 #469, a basetemp 160+ chars deep made git fail inside test_land_pr's temp bare repos).
     The dir is removed at the end when every gate passed, kept for debugging otherwise; with a log dir its path is
@@ -500,8 +567,7 @@ def run_all(gates: Sequence[Gate], log_dir: Path | None = None,
     return results, summary, code
 
 
-def _run_each(gates: Sequence[Gate], runner: Callable[[Gate], Result], emit: Callable[[str], None],
-              log_dir: Path | None) -> list[Result]:
+def _run_each(gates: Sequence[Gate], runner: Callable[[Gate], Result], emit: Callable[[str], None], log_dir: Path | None) -> list[Result]:
     results: list[Result] = []
     for index, gate in enumerate(gates, 1):
         emit(f"[{index}/{len(gates)}] {gate.name} ...")
@@ -586,8 +652,9 @@ def self_test() -> bool:
     clean = pytest_stub("pt-pass", "print('10 passed in 0.5s')")
     no_summary = pytest_stub("pt-nosummary", "import sys\nprint('INTERNALERROR> boom')\nsys.exit(3)")
     echo_argv = pytest_stub("pt-argv", "import sys\nprint('ARGV', ' '.join(sys.argv[1:]))")
-    other_echo = Gate("pt-argv2", [sys.executable, "-c", "import sys\nprint('ARGV', ' '.join(sys.argv[1:]))"], Path.cwd(),
-                      pytest=True, timeout=30.0)
+    other_echo = Gate(
+        "pt-argv2", [sys.executable, "-c", "import sys\nprint('ARGV', ' '.join(sys.argv[1:]))"], Path.cwd(), pytest=True, timeout=30.0
+    )
     results, summary, code = run_all([crash_after_green, real_failure, clean, no_summary], emit=silent)
     pstatus = {r.gate.name: r.status for r in results}
     expect("a pytest that printed 100% then died is ERROR, not FAIL", pstatus["pt-crash"] == ERROR, str(pstatus))
@@ -601,8 +668,12 @@ def self_test() -> bool:
         seen = [next(line for line in r.output.splitlines() if line.startswith("ARGV")) for r in results]
         bases = [line.split("--basetemp ")[1].split(" -p")[0] for line in seen]
         expect("each pytest gate gets its own --basetemp", len(set(bases)) == 2 and all(b for b in bases), str(seen))
-        expect("... under one short temp root, recorded in the log dir", all(Path(b).parent == Path(bases[0]).parent for b in bases)
-               and (Path(logs) / "basetemp.txt").read_text(encoding="utf-8").strip() == str(Path(bases[0]).parent), str(bases))
+        expect(
+            "... under one short temp root, recorded in the log dir",
+            all(Path(b).parent == Path(bases[0]).parent for b in bases)
+            and (Path(logs) / "basetemp.txt").read_text(encoding="utf-8").strip() == str(Path(bases[0]).parent),
+            str(bases),
+        )
         expect("... with the cache provider off", all("no:cacheprovider" in s for s in seen))
 
     eol_only = (
@@ -610,17 +681,27 @@ def self_test() -> bool:
         "src/B.cs(9,1): error ENDOFLINE: Fix end of line marker. [x.csproj]\n"
     )
     mixed = eol_only + "src/C.cs(4,5): error IDE0055: Fix formatting. [x.csproj]\n"
-    expect("ENDOFLINE-only on an autocrlf checkout is forgiven by name",
-           forgive_endofline(eol_only, 2, True) is not None and "#462" in (forgive_endofline(eol_only, 2, True) or ""))
+    expect(
+        "ENDOFLINE-only on an autocrlf checkout is forgiven by name",
+        forgive_endofline(eol_only, 2, True) is not None and "#462" in (forgive_endofline(eol_only, 2, True) or ""),
+    )
     expect("ENDOFLINE-only with autocrlf off is NOT forgiven", forgive_endofline(eol_only, 2, False) is None)
     expect("ENDOFLINE mixed with a real finding is NOT forgiven", forgive_endofline(mixed, 2, True) is None)
     expect("an unparseable failure is NOT forgiven", forgive_endofline("Unhandled exception: boom", 1, True) is None)
     expect("a clean run needs no forgiveness", forgive_endofline("", 0, True) is None)
-    known_gate = Gate("stub-known", [sys.executable, "-c", f"import sys; sys.stdout.write({eol_only!r}); sys.exit(2)"],
-                      Path.cwd(), forgive=lambda out, rc, cwd: forgive_endofline(out, rc, True), timeout=30.0)
+    known_gate = Gate(
+        "stub-known",
+        [sys.executable, "-c", f"import sys; sys.stdout.write({eol_only!r}); sys.exit(2)"],
+        Path.cwd(),
+        forgive=lambda out, rc, cwd: forgive_endofline(out, rc, True),
+        timeout=30.0,
+    )
     results, ksummary, kcode = run_all([known_gate], emit=silent)
-    expect("a forgiven gate is KNOWN, exits 0 and is printed with its issue",
-           results[0].status == KNOWN and kcode == 0 and "KNOWN ISSUE" in ksummary and "#462" in ksummary, ksummary)
+    expect(
+        "a forgiven gate is KNOWN, exits 0 and is printed with its issue",
+        results[0].status == KNOWN and kcode == 0 and "KNOWN ISSUE" in ksummary and "#462" in ksummary,
+        ksummary,
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -628,23 +709,24 @@ def self_test() -> bool:
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / "app" / "tests" / "DnaEntropyGraph.Fake.Tests").mkdir(parents=True)
         (root / "app" / "tests" / "DnaEntropyGraph.Fake.Tests" / "DnaEntropyGraph.Fake.Tests.csproj").write_text(
-            "<Project/>", encoding="utf-8", newline="\n")
+            "<Project/>", encoding="utf-8", newline="\n"
+        )
         (root / "scripts" / "check_new_guard.py").write_text("print('x')\n", encoding="utf-8", newline="\n")
         (root / "scripts" / "unlisted_tool.py").write_text("print('x')\n", encoding="utf-8", newline="\n")
         (root / ".github" / "workflows" / "ci.yml").write_text(
-            "run: python scripts/unlisted_tool.py\nrun: python scripts/check_new_guard.py\n",
-            encoding="utf-8", newline="\n")
+            "run: python scripts/unlisted_tool.py\nrun: python scripts/check_new_guard.py\n", encoding="utf-8", newline="\n"
+        )
         gates = build_gates(root, python="py-stub")
         names = {g.name for g in gates}
         expect("a newly added check_*.py is picked up with no edit here", "check_new_guard" in names, str(names))
         expect("a newly added dotnet test project is picked up", "dotnet-test-Fake.Tests" in names, str(names))
-        expect("every dotnet gate runs with cwd=app/",
-               all(g.cwd == root / "app" for g in gates if g.argv[0] == "dotnet"))
-        expect("python gates use the interpreter given, never sys.executable",
-               all(g.argv[0] == "py-stub" for g in gates if g.name.startswith("check_")))
+        expect("every dotnet gate runs with cwd=app/", all(g.cwd == root / "app" for g in gates if g.argv[0] == "dotnet"))
+        expect(
+            "python gates use the interpreter given, never sys.executable",
+            all(g.argv[0] == "py-stub" for g in gates if g.name.startswith("check_")),
+        )
         problems = audit(root, gates)
-        expect("audit flags a workflow script the runner does not run",
-               any("unlisted_tool.py" in p for p in problems), str(problems))
+        expect("audit flags a workflow script the runner does not run", any("unlisted_tool.py" in p for p in problems), str(problems))
         expect("audit accepts a discovered check_ script", not any("check_new_guard" in p for p in problems))
 
     print(f"\n{'PASS' if ok else 'FAIL'}: premerge self-test")

@@ -181,15 +181,26 @@ EXCLUDED_PREFIXES = (
 )
 
 EXCLUDED_SUFFIXES = (
-    ".png", ".jpg", ".jpeg", ".ico", ".svg", ".pdf", ".woff", ".woff2",
-    ".lock", ".duckdb", ".parquet", ".onnx", ".zip", ".exe",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".ico",
+    ".svg",
+    ".pdf",
+    ".woff",
+    ".woff2",
+    ".lock",
+    ".duckdb",
+    ".parquet",
+    ".onnx",
+    ".zip",
+    ".exe",
 )
 
 # Paths that count as "source" when deciding whether a commit did work. A
 # commit touching only these is documentation, and documentation naming an
 # issue is a citation, not a fix.
-DOC_PREFIXES = ("docs/", "README", "CLAUDE.md", "NEXT_SESSION.md", "AGENTS.md",
-                "FEATURES.md")
+DOC_PREFIXES = ("docs/", "README", "CLAUDE.md", "NEXT_SESSION.md", "AGENTS.md", "FEATURES.md")
 
 
 # A commit that names one issue while its diff is really about another is a
@@ -285,9 +296,9 @@ class IssueMeta:
     per-issue round trip.
     """
 
-    state: str = "unknown"          # open | closed | unknown
+    state: str = "unknown"  # open | closed | unknown
     title: str = ""
-    milestone: str = ""             # "" means none set
+    milestone: str = ""  # "" means none set
     labels: tuple[str, ...] = ()
     # Body + every comment body, concatenated -- populated ONLY when the
     # bulk `gh issue list` call that built this IssueMeta also asked for
@@ -315,7 +326,7 @@ class IssueMeta:
 @dataclass
 class Evidence:
     number: int
-    state: str = "unknown"          # open | closed | unknown
+    state: str = "unknown"  # open | closed | unknown
     title: str = ""
     milestone: str = ""
     labels: tuple[str, ...] = ()
@@ -400,8 +411,7 @@ class Evidence:
             if self.commits:
                 return (
                     "NOTE",
-                    "OPEN. Commits name it but changed only docs -- it has been "
-                    "discussed, not built. Safe to start.",
+                    "OPEN. Commits name it but changed only docs -- it has been discussed, not built. Safe to start.",
                 )
             if self.hits.get("code") or self.hits.get("tests"):
                 return (
@@ -435,9 +445,7 @@ class Evidence:
 
 def _run(cmd: list[str], cwd: Path) -> str:
     try:
-        out = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
-        )
+        out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return ""
     return out.stdout if out.returncode == 0 else ""
@@ -517,8 +525,14 @@ def _parse_commit_records(root: Path) -> list[dict]:
     """
     raw = _run(
         [
-            "git", "log", "--all", "--no-decorate", "--name-only",
-            "--format=\x01%H\x02%h\x02%s\x02%b\x02\x03", "-n", LOG_DEPTH,
+            "git",
+            "log",
+            "--all",
+            "--no-decorate",
+            "--name-only",
+            "--format=\x01%H\x02%h\x02%s\x02%b\x02\x03",
+            "-n",
+            LOG_DEPTH,
         ],
         root,
     )
@@ -538,11 +552,16 @@ def _parse_commit_records(root: Path) -> list[dict]:
         body_raw, sep, tail = rest.partition("\x02\x03")
         if not sep:
             continue  # sentinel missing -- truncated output, same treatment
-        records.append({
-            "full": full, "short": short, "subject": subject, "body_raw": body_raw,
-            "files": [p.strip() for p in tail.splitlines() if p.strip()],
-            "merged": full in on_head,
-        })
+        records.append(
+            {
+                "full": full,
+                "short": short,
+                "subject": subject,
+                "body_raw": body_raw,
+                "files": [p.strip() for p in tail.splitlines() if p.strip()],
+                "merged": full in on_head,
+            }
+        )
     return records
 
 
@@ -587,7 +606,8 @@ def _cached_commit_records(root: Path, use_cache: bool = True) -> list[dict]:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(
                 json.dumps({"head": head, "log_depth": LOG_DEPTH, "commits": records}),
-                encoding="utf-8", newline="\n",
+                encoding="utf-8",
+                newline="\n",
             )
         except OSError:
             pass  # best-effort: a cache write failure must never break a real scan
@@ -595,7 +615,9 @@ def _cached_commit_records(root: Path, use_cache: bool = True) -> list[dict]:
 
 
 def scan_commits(
-    root: Path, patterns: dict[int, re.Pattern], use_cache: bool = True,
+    root: Path,
+    patterns: dict[int, re.Pattern],
+    use_cache: bool = True,
 ) -> dict[int, list[Commit]]:
     """Match `patterns` against the (possibly cached) parsed commit
     log. Splitting the expensive, issue-independent `git log` pass
@@ -640,15 +662,12 @@ def _issue_meta_from_json(data: dict, fallback_state: str = "") -> IssueMeta:
         state=str(data.get("state", fallback_state)).lower(),
         title=data.get("title", ""),
         milestone=str(milestone.get("title", "") if isinstance(milestone, dict) else ""),
-        labels=tuple(
-            str(label.get("name", "")) for label in labels if isinstance(label, dict)
-        ),
+        labels=tuple(str(label.get("name", "")) for label in labels if isinstance(label, dict)),
         thread_text=thread_text,
     )
 
 
-def gh_state(numbers: list[int], root: Path,
-             known: dict[int, IssueMeta] | None = None) -> dict[int, IssueMeta]:
+def gh_state(numbers: list[int], root: Path, known: dict[int, IssueMeta] | None = None) -> dict[int, IssueMeta]:
     """issue number -> IssueMeta (state, title, milestone, labels).
 
     `known` carries anything a bulk `gh issue list` already told us. A sweep of
@@ -659,10 +678,7 @@ def gh_state(numbers: list[int], root: Path,
     for n in numbers:
         if n in states:
             continue
-        raw = _run(
-            ["gh", "issue", "view", str(n), "--repo", REPO,
-             "--json", "state,title,milestone,labels"], root
-        )
+        raw = _run(["gh", "issue", "view", str(n), "--repo", REPO, "--json", "state,title,milestone,labels"], root)
         if not raw:
             continue
         try:
@@ -734,17 +750,25 @@ def gh_list(root: Path, state: str, limit: int = 400, label: str | None = None) 
     `--label` scopes a run to one area without this script doing its own
     filtering after the fact.
     """
-    cmd = ["gh", "issue", "list", "--repo", REPO, "--state", state,
-           "--limit", str(limit), "--json", "number,title,state,milestone,labels,body,comments"]
+    cmd = [
+        "gh",
+        "issue",
+        "list",
+        "--repo",
+        REPO,
+        "--state",
+        state,
+        "--limit",
+        str(limit),
+        "--json",
+        "number,title,state,milestone,labels,body,comments",
+    ]
     if label:
         cmd += ["--label", label]
     raw = _run(cmd, root)
     if not raw:
         return {}
-    return {
-        int(i["number"]): _issue_meta_from_json(i, fallback_state=state)
-        for i in json.loads(raw)
-    }
+    return {int(i["number"]): _issue_meta_from_json(i, fallback_state=state) for i in json.loads(raw)}
 
 
 def fill_related_issues_one(root: Path, n: int, e: Evidence, ev: dict[int, Evidence]) -> None:
@@ -790,10 +814,14 @@ def fill_related_issues_one(root: Path, n: int, e: Evidence, ev: dict[int, Evide
 
     raw = _run(
         [
-            "gh", "api", f"repos/{REPO}/issues/{n}/timeline", "--paginate",
-            "-q", (
+            "gh",
+            "api",
+            f"repos/{REPO}/issues/{n}/timeline",
+            "--paginate",
+            "-q",
+            (
                 '.[] | select(.event=="cross-referenced") | '
-                '[(.source.issue.number|tostring), .source.issue.state, '
+                "[(.source.issue.number|tostring), .source.issue.state, "
                 '.source.issue.title] | join(":::")'
             ),
         ],
@@ -808,8 +836,7 @@ def fill_related_issues_one(root: Path, n: int, e: Evidence, ev: dict[int, Evide
         except ValueError:
             continue
         if m != n:
-            candidates[m] = ("mentions this issue elsewhere (GitHub cross-reference)",
-                              parts[1], parts[2])
+            candidates[m] = ("mentions this issue elsewhere (GitHub cross-reference)", parts[1], parts[2])
 
     thread = get_issue_thread(root, n, e)
     for m in _issue_refs(thread):
@@ -822,10 +849,7 @@ def fill_related_issues_one(root: Path, n: int, e: Evidence, ev: dict[int, Evide
             if m in ev:
                 other_state, other_title = ev[m].state, ev[m].title
             else:
-                raw = _run(
-                    ["gh", "issue", "view", str(m), "--repo", REPO,
-                     "--json", "state,title"], root
-                )
+                raw = _run(["gh", "issue", "view", str(m), "--repo", REPO, "--json", "state,title"], root)
                 other_state, other_title = "unknown", ""
                 if raw:
                     try:
@@ -906,9 +930,7 @@ def _defines_function(source: str, name: str) -> bool:
         tree = ast.parse(source)
     except SyntaxError:
         return False
-    return any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name for node in ast.walk(tree)
-    )
+    return any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name for node in ast.walk(tree))
 
 
 _NODE_ID_SCAN_DIRS = ("worker/tests", "worker/src/dna_entropy")
@@ -1030,8 +1052,7 @@ def find_node_id_matches(root: Path, symbol: str, use_cache: bool = True) -> lis
 
     needle = f"def {symbol}("
     raw = _run(
-        ["git", "log", "--all", "-S", needle, "-n", str(_NODE_ID_CANDIDATE_LIMIT),
-         "--name-only", "--format=%H"],
+        ["git", "log", "--all", "-S", needle, "-n", str(_NODE_ID_CANDIDATE_LIMIT), "--name-only", "--format=%H"],
         root,
     )
     for block in raw.split("\n\n"):
@@ -1045,8 +1066,7 @@ def find_node_id_matches(root: Path, symbol: str, use_cache: bool = True) -> lis
 
     for path in _find_defining_files(root, symbol, use_cache=use_cache):
         raw = _run(
-            ["git", "log", "--all", "-n", str(_NODE_ID_CANDIDATE_LIMIT),
-             "--format=%H", "--", path],
+            ["git", "log", "--all", "-n", str(_NODE_ID_CANDIDATE_LIMIT), "--format=%H", "--", path],
             root,
         )
         for sha in raw.splitlines():
@@ -1088,8 +1108,7 @@ def fill_node_id_matches_one(root: Path, n: int, e: Evidence, use_cache: bool = 
             e.node_id_matches.append((symbol, sha, path))
 
 
-def scan(root: Path, numbers: list[int],
-         known: dict[int, IssueMeta] | None = None, use_cache: bool = True) -> dict[int, Evidence]:
+def scan(root: Path, numbers: list[int], known: dict[int, IssueMeta] | None = None, use_cache: bool = True) -> dict[int, Evidence]:
     ev = {n: Evidence(number=n) for n in numbers}
 
     # The trailing lookahead is the whole reason this is not a substring search:
@@ -1189,8 +1208,10 @@ def report_one(n: int, e: Evidence, suspect_only: bool) -> str:
                     "                    ALSO NAMES: "
                     + ", ".join(f"#{r}" for r in other_refs)
                     + " -- if that issue's own subject differs from #"
-                    + str(n) + "'s, this diff may not really be about #"
-                    + str(n) + ". Check the files below against both."
+                    + str(n)
+                    + "'s, this diff may not really be about #"
+                    + str(n)
+                    + ". Check the files below against both."
                 )
             if c.touched_source:
                 for p in c.source_files[:8]:
@@ -1220,8 +1241,7 @@ def report_one(n: int, e: Evidence, suspect_only: bool) -> str:
 
     docs = e.hits.get("docs") or []
     if docs:
-        print(f"  docs     : {len(docs)}  ({', '.join(p for p, _ in docs[:4])}"
-              f"{', ...' if len(docs) > 4 else ''})")
+        print(f"  docs     : {len(docs)}  ({', '.join(p for p, _ in docs[:4])}{', ...' if len(docs) > 4 else ''})")
 
     if e.in_totest:
         print("  totest   : an open row in docs/ToTest.md")
@@ -1234,8 +1254,7 @@ def report_one(n: int, e: Evidence, suspect_only: bool) -> str:
         for m, other_state, other_title, direction in e.related[:6]:
             title_part = f"  {other_title[:60]}" if other_title else ""
             print(f"             #{m} ({other_state}){title_part}")
-            print(f"               | {direction} -- check its own commits before trusting "
-                  f"\"no trace\" above")
+            print(f'               | {direction} -- check its own commits before trusting "no trace" above')
         if len(e.related) > 6:
             print(f"             ... and {len(e.related) - 6} more")
 
@@ -1332,23 +1351,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("numbers", nargs="*", type=int, help="issue numbers to check")
     ap.add_argument("--all-open", action="store_true", help="check every open issue (needs gh)")
-    ap.add_argument("--limit", type=int, default=None,
-                    help="with --all-open: fetch at most this many issues (newest first). "
-                         "Unset means the full backlog (up to 400). The recommended normal "
-                         "use, per issue #307, is a few dozen: --all-open --limit 30")
-    ap.add_argument("--label", help="with --all-open: scope to issues carrying this one label "
-                                     "(e.g. area:worker), filtered server-side by `gh issue list --label`")
-    ap.add_argument("--suspect-only", action="store_true",
-                    help="print only issues with a SUSPECT verdict")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="with --all-open: fetch at most this many issues (newest first). "
+        "Unset means the full backlog (up to 400). The recommended normal "
+        "use, per issue #307, is a few dozen: --all-open --limit 30",
+    )
+    ap.add_argument(
+        "--label",
+        help="with --all-open: scope to issues carrying this one label (e.g. area:worker), filtered server-side by `gh issue list --label`",
+    )
+    ap.add_argument("--suspect-only", action="store_true", help="print only issues with a SUSPECT verdict")
     ap.add_argument("--root", help="checkout to scan (default: the current directory's)")
-    ap.add_argument("--no-gh", action="store_true",
-                    help="skip GitHub entirely; report commit and tree evidence only")
-    ap.add_argument("--no-scan-cache", action="store_true",
-                    help="force a fresh `git log --all` pass instead of reading the "
-                         "HEAD-keyed cache; use when debugging the cache itself")
-    ap.add_argument("--no-progress", action="store_true",
-                    help="do not print a [i/N] progress line to stderr as each issue completes "
-                         "(the real report on stdout is unaffected either way)")
+    ap.add_argument("--no-gh", action="store_true", help="skip GitHub entirely; report commit and tree evidence only")
+    ap.add_argument(
+        "--no-scan-cache",
+        action="store_true",
+        help="force a fresh `git log --all` pass instead of reading the HEAD-keyed cache; use when debugging the cache itself",
+    )
+    ap.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="do not print a [i/N] progress line to stderr as each issue completes (the real report on stdout is unaffected either way)",
+    )
     args = ap.parse_args(argv)
 
     if args.all_open and args.no_gh:
@@ -1376,7 +1403,9 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("give at least one issue number, or --all-open")
 
     return run_stream(
-        root, numbers, known,
+        root,
+        numbers,
+        known,
         use_cache=not args.no_scan_cache,
         suspect_only=args.suspect_only,
         show_progress=not args.no_progress,

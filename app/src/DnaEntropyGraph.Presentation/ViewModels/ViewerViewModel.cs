@@ -1,6 +1,8 @@
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.Viewer;
 
@@ -21,6 +23,9 @@ public enum ViewerStatus
     ViewerError,
 }
 
+/// <summary>One record of the shown run: its name (the igv chromosome name), length and, for a combined-direction run, the seam base from provenance.</summary>
+public sealed record ViewerContig(string Name, int Length, int? Seam);
+
 /// <summary>
 /// State for the embedded igv.js viewer page (issues #72, #73). The WebView2 host in the App layer
 /// maps <see cref="MapRunFolder"/> to <c>run.deg</c>, posts every <see cref="MessageToViewer"/> string
@@ -36,7 +41,11 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     private readonly IWebViewRuntimeProbe _probe;
     private readonly IStringResourceProvider _strings;
+    private readonly IEntropyOverviewSource _overviewSource;
     private readonly long _maxFastaBytes;
+    private int _contigGeneration;
+    private int _fallbackGeneration;
+    private bool _settingSelection;
 
     // The current run's load command (kept after sending, see the class comment).
     private string? _loadJson;
@@ -71,11 +80,73 @@ public sealed partial class ViewerViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(HasRetryAction))]
     private string _actionLabel = string.Empty;
 
-    public ViewerViewModel(IWebViewRuntimeProbe probe, IStringResourceProvider strings, long maxFastaBytes = ViewerLimits.MaxFastaBytes)
+    /// <summary>The records of the shown run, for the contig selector (issue #116). Empty until the run's overview is read.</summary>
+    public ObservableCollection<ViewerContig> Contigs { get; } = [];
+
+    /// <summary>The selector is shown only when there is something to switch between (two or more records).</summary>
+    [ObservableProperty]
+    private bool _hasContigs;
+
+    [ObservableProperty]
+    private ViewerContig? _selectedContig;
+
+    /// <summary>Completes when the contig list of the last <see cref="OpenRun"/> is filled (or known to be unavailable).</summary>
+    public Task ContigsReady { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Issue #117: when the WebView2 viewer cannot start, the first record of the run's entropy track, so the viewer area still shows
+    /// the track (drawn natively by the same chart as the Results page) beside the one action. Null otherwise.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasFallbackChart))]
+    [NotifyPropertyChangedFor(nameof(FallbackTitle))]
+    private EntropyContig? _fallbackContig;
+
+    public bool HasFallbackChart => FallbackContig is not null;
+
+    public string FallbackTitle => FallbackContig?.Name ?? string.Empty;
+
+    /// <summary>Completes when the fallback chart of the last failed <see cref="OpenRun"/> is filled (or known to be unavailable).</summary>
+    public Task FallbackReady { get; private set; } = Task.CompletedTask;
+
+    private string? _lastRunFolder;
+
+    public ViewerViewModel(
+        IWebViewRuntimeProbe probe,
+        IStringResourceProvider strings,
+        IEntropyOverviewSource overviewSource,
+        long maxFastaBytes = ViewerLimits.MaxFastaBytes)
     {
         _probe = probe;
         _strings = strings;
+        _overviewSource = overviewSource;
         _maxFastaBytes = maxFastaBytes;
+    }
+
+    partial void OnSelectedContigChanged(ViewerContig? value)
+    {
+        // Only a choice made by the user while the page is drawn is a goto; filling the list is not.
+        GoToContigCommand.NotifyCanExecuteChanged();
+        if (!_settingSelection)
+        {
+            GoToSelectedContig();
+        }
+    }
+
+    /// <summary>Jumps to the selected record again (the list sends no change when the same record is picked after panning away).</summary>
+    [RelayCommand(CanExecute = nameof(CanGoToContig))]
+    private void GoToContig() => GoToSelectedContig();
+
+    private bool CanGoToContig() => SelectedContig is not null && _pageReady && Status == ViewerStatus.Ready;
+
+    private void GoToSelectedContig()
+    {
+        if (SelectedContig is { } contig && _pageReady && Status == ViewerStatus.Ready)
+        {
+            // An explicit range: a record named like a locus ("a:1-5") must not be parsed as one.
+            var locus = contig.Length > 0 ? $"{contig.Name}:1-{contig.Length}" : contig.Name;
+            Send(new { cmd = "goto", locus });
+        }
     }
 
     public ViewerStatus Status
@@ -86,6 +157,7 @@ public sealed partial class ViewerViewModel : ObservableObject
             if (SetProperty(ref _status, value))
             {
                 RetryCommand.NotifyCanExecuteChanged();
+                GoToContigCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -126,6 +198,8 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     public void OpenRun(string? runFolder)
     {
+        _lastRunFolder = runFolder;
+        _fallbackGeneration++; // a slow fallback read for the previous run must not land on this one
         if (string.IsNullOrWhiteSpace(runFolder))
         {
             Fail(ViewerStatus.NoRun, ViewerFailure.NoRun);
@@ -135,6 +209,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         if (!WebViewRuntimeDecision.IsAvailable(_probe.GetVersion))
         {
             Fail(ViewerStatus.RuntimeMissing, ViewerFailure.RuntimeMissing, ViewerUrls.RuntimeDownloadUrl);
+            FallbackReady = LoadFallbackAsync(runFolder);
             return;
         }
 
@@ -158,11 +233,100 @@ public sealed partial class ViewerViewModel : ObservableObject
                 return;
         }
 
+        FallbackContig = null;
         _loadJson = plan.LoadMessageJson;
         // Map first: the host remaps run.deg on this change, before the load command goes out.
         MapRunFolder = plan.RunFolder;
         ShowLoading();
         SendLoadIfReady();
+        ContigsReady = LoadContigsAsync(plan.RunFolder!);
+    }
+
+    // Off the UI thread, read once; a missing or malformed track just means no chart (the action card still shows).
+    private async Task LoadFallbackAsync(string folder)
+    {
+        var generation = ++_fallbackGeneration;
+        EntropyContig? first;
+        try
+        {
+            first = (await Task.Run(() => _overviewSource.Load(folder)))?.Contigs.FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            first = null;
+        }
+
+        if (generation == _fallbackGeneration)
+        {
+            FallbackContig = first;
+        }
+    }
+
+    // The record list and seams come from the run's own entropy track and provenance (off the UI thread, read once).
+    private async Task LoadContigsAsync(string folder)
+    {
+        var generation = ++_contigGeneration;
+        ClearContigs();
+        IReadOnlyList<EntropyContig> contigs;
+        try
+        {
+            contigs = (await Task.Run(() => _overviewSource.Load(folder)))?.Contigs ?? [];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Fire-and-forget: a malformed track (FormatException ...) must not fault the task unseen.
+            // The viewer itself still draws the run; only the selector and seam markers are lost.
+            contigs = [];
+        }
+
+        if (generation != _contigGeneration)
+        {
+            return;
+        }
+
+        foreach (var c in contigs)
+        {
+            Contigs.Add(new ViewerContig(c.Name, c.Length, c.Seam));
+        }
+
+        SelectWithoutGoto(Contigs.FirstOrDefault());
+        HasContigs = Contigs.Count > 1;
+        SendSeamsIfReady();
+    }
+
+    private void ClearContigs()
+    {
+        Contigs.Clear();
+        SelectWithoutGoto(null);
+        HasContigs = false;
+    }
+
+    private void SelectWithoutGoto(ViewerContig? contig)
+    {
+        _settingSelection = true;
+        try
+        {
+            SelectedContig = contig;
+        }
+        finally
+        {
+            _settingSelection = false;
+        }
+    }
+
+    // Seams are drawn in the page, so they go out once it has drawn the run and the list is known; either order works.
+    private void SendSeamsIfReady()
+    {
+        if (!_pageReady || Status != ViewerStatus.Ready)
+        {
+            return;
+        }
+
+        var seams = Contigs.Where(c => c.Seam is not null).Select(c => new { chr = c.Name, pos = c.Seam!.Value }).ToArray();
+        if (seams.Length > 0)
+        {
+            Send(new { cmd = "seams", label = _strings.GetString("ViewerSeamLabel"), seams });
+        }
     }
 
     /// <summary>Handles one event posted by bridge.js. Anything unrecognised, and non-fatal <c>warning</c> noise, is ignored.</summary>
@@ -208,6 +372,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 {
                     IsLoading = false;
                     Status = ViewerStatus.Ready;
+                    // A freshly drawn page shows the first record; keep the selector in step with it.
+                    SelectWithoutGoto(Contigs.FirstOrDefault());
+                    SendSeamsIfReady();
                 }
 
                 break;
@@ -225,7 +392,20 @@ public sealed partial class ViewerViewModel : ObservableObject
     }
 
     /// <summary>The WebView2 control could not start (corrupt runtime, unwritable profile folder).</summary>
-    public void OnViewerInitFailed() => Fail(ViewerStatus.ViewerError, ViewerFailure.InitFailed);
+    public void OnViewerInitFailed()
+    {
+        if (IsErrorVisible && Status != ViewerStatus.ViewerError)
+        {
+            // The run already failed for a more specific reason (no sequence file ...): that error is the one to fix first.
+            return;
+        }
+
+        Fail(ViewerStatus.ViewerError, ViewerFailure.InitFailed);
+        if (!string.IsNullOrWhiteSpace(_lastRunFolder))
+        {
+            FallbackReady = LoadFallbackAsync(_lastRunFolder);
+        }
+    }
 
     public void SetDarkMode(bool dark)
     {
@@ -247,6 +427,8 @@ public sealed partial class ViewerViewModel : ObservableObject
 
     private void ShowLoading()
     {
+        _fallbackGeneration++;
+        FallbackContig = null;
         IsErrorVisible = false;
         IsViewerVisible = true;
         IsLoading = true;
@@ -270,11 +452,21 @@ public sealed partial class ViewerViewModel : ObservableObject
     {
         _loadJson = null;
         MapRunFolder = null;
+        _contigGeneration++;
+        ClearContigs();
+        FallbackContig = null;
         ShowError(status, failure, actionUrl);
     }
 
     // A failure of the viewer page itself: keep the run so a retry or a reloaded page redraws it.
-    private void FailKeepingRun(ViewerFailure failure) => ShowError(ViewerStatus.ViewerError, failure, null);
+    private void FailKeepingRun(ViewerFailure failure)
+    {
+        ShowError(ViewerStatus.ViewerError, failure, null);
+        if (!string.IsNullOrWhiteSpace(_lastRunFolder))
+        {
+            FallbackReady = LoadFallbackAsync(_lastRunFolder);
+        }
+    }
 
     private void ShowError(ViewerStatus status, ViewerFailure failure, string? actionUrl)
     {

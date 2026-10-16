@@ -1,0 +1,6 @@
+##gff-version 3
+##sequence-region golden_1 1 58
+##sequence-region golden_2 1 57
+golden_1	genbank	gene	1	30	.	+	.	ID=gA;Name=gA
+golden_1	genbank	gene	34	57	.	-	.	ID=gB;Name=gB
+golden_2	genbank	gene	10	45	.	+	.	ID=gC;Name=gC
