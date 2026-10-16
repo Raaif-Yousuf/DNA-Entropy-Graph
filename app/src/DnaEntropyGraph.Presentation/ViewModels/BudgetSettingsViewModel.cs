@@ -15,6 +15,38 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// never Google's own text. The eventual standing-costs card (#219) binds the same <see cref="SaveCommand"/>, <see cref="HasBudget"/>,
 /// <see cref="StatusText"/> and <see cref="ErrorText"/>, or hosts this group's view model as it is.
 /// </summary>
+/// <summary>
+/// Reads the amount box the way the user typed it. The user's own number format decides ("12,5" is 12.5 in Germany and France), a
+/// thousands separator is refused, and so is any text that could mean two things ("1.000" in Germany): the money is never guessed.
+/// </summary>
+public static class BudgetAmountParser
+{
+    public static bool TryParse(string? text, CultureInfo culture, out decimal amount)
+    {
+        amount = 0;
+        var trimmed = (text ?? string.Empty).Trim().TrimStart('$').Trim();
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        if (decimal.TryParse(trimmed, NumberStyles.AllowDecimalPoint, culture, out amount))
+        {
+            return true;
+        }
+
+        // A plain "12.5" in a comma-decimal culture is fine only when the text holds nothing that this culture reads as a group separator.
+        var group = culture.NumberFormat.NumberGroupSeparator;
+        if (group.Length > 0 && trimmed.Contains(group, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return decimal.TryParse(trimmed, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out amount)
+            && !trimmed.Contains(',', StringComparison.Ordinal);
+    }
+}
+
 public sealed partial class BudgetSettingsViewModel : ObservableObject
 {
     private readonly IBudgetService _budgets;
@@ -25,6 +57,10 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     /// <summary>The amount box. Typed text is kept as typed; it is parsed only when Save is pressed.</summary>
     [ObservableProperty]
     private string _amountText = Format(BudgetNaming.DefaultAmountUsd);
+
+    // True once the user typed in the box: a late read from Google must never overwrite it.
+    private bool _amountEdited;
+    private bool _settingAmount;
 
     /// <summary>One plain line about the current state or the last success. Empty when there is nothing to say.</summary>
     [ObservableProperty]
@@ -68,10 +104,24 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
 
     public bool ShowConsoleLink => ConsoleLink is not null;
 
+    partial void OnAmountTextChanged(string value)
+    {
+        if (!_settingAmount)
+        {
+            _amountEdited = true;
+        }
+    }
+
     /// <summary>Looks at the budget every time the page opens, so the box shows what Google holds. Never throws.</summary>
     [RelayCommand]
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
+        // A refresh that lands while a save or remove runs would race it and clear its messages.
+        if (IsBusy)
+        {
+            return;
+        }
+
         ClearMessages();
         HasProject = ProjectId() is not null;
         if (ProjectId() is not { } project)
@@ -81,11 +131,30 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             return;
         }
 
-        await RunAsync(async () =>
+        IsBusy = true;
+        try
         {
-            var existing = await _budgets.GetAsync(project, cancellationToken);
-            Show(existing);
-        }, project, cancellationToken);
+            Show(await _budgets.GetAsync(project, cancellationToken));
+        }
+        catch (OperationCanceledException)
+        {
+            // The page went away: nothing to report.
+        }
+        catch (CloudOperationException ex)
+        {
+            // Nobody asked for this look, so a refusal is quiet information, not a red error; red is for a Save the user pressed.
+            System.Diagnostics.Trace.TraceWarning($"Budget look refused: {ex.Kind}");
+            StatusText = _strings.GetString(ex.Kind == CloudErrorKind.Permission ? "BudgetStatusNoAccess" : "BudgetStatusCouldNotCheck");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"Budget look failed: {ex.GetType().Name}");
+            StatusText = _strings.GetString("BudgetStatusCouldNotCheck");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanSave))]
@@ -97,7 +166,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             return;
         }
 
-        if (!TryParseAmount(AmountText, out var amount) || !BudgetNaming.IsValidAmount(amount))
+        if (!BudgetAmountParser.TryParse(AmountText, CultureInfo.CurrentCulture, out var amount) || !BudgetNaming.IsValidAmount(amount))
         {
             ErrorText = _strings.GetString("BudgetAmountInvalid");
             return;
@@ -106,6 +175,8 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         await RunAsync(async () =>
         {
             var saved = await _budgets.SaveAsync(project, amount, cancellationToken);
+            // What was saved (rounded to cents) replaces what was typed, and the box is Google's again.
+            _amountEdited = false;
             Show(saved);
             StatusText = string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetSaved"), Format(saved.AmountUsd));
         }, project, cancellationToken);
@@ -188,6 +259,14 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
                 ErrorText = _strings.GetString("BudgetError_NoBilling");
                 await OfferConsoleAsync(project, cancellationToken);
                 break;
+            case CloudErrorKind.OrgPolicy:
+                ErrorText = _strings.GetString("BudgetError_OrgPolicy");
+                ShowCopyRequest = true;
+                break;
+            case CloudErrorKind.ApiDisabled:
+                ErrorText = _strings.GetString("BudgetError_ApiDisabled");
+                ConsoleLink = new Uri(BudgetLinks.ForApi(project));
+                break;
             case CloudErrorKind.Network:
                 ErrorText = _strings.GetString("BudgetError_Network");
                 break;
@@ -218,8 +297,26 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             return;
         }
 
-        AmountText = Format(budget.AmountUsd);
+        // What the user typed is theirs: only an untouched box shows what Google holds.
+        if (!_amountEdited)
+        {
+            SetAmount(Format(budget.AmountUsd));
+        }
+
         StatusText = string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetStatusExists"), Format(budget.AmountUsd));
+    }
+
+    private void SetAmount(string text)
+    {
+        _settingAmount = true;
+        try
+        {
+            AmountText = text;
+        }
+        finally
+        {
+            _settingAmount = false;
+        }
     }
 
     private void ClearMessages()
@@ -232,12 +329,5 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
 
     private string? ProjectId() => _account.SelectedProjectId is { Length: > 0 } id ? id : null;
 
-    private static bool TryParseAmount(string text, out double amount)
-    {
-        var trimmed = text.Trim().TrimStart('$').Trim();
-        return double.TryParse(trimmed, NumberStyles.AllowDecimalPoint | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out amount)
-            || double.TryParse(trimmed, NumberStyles.AllowDecimalPoint | NumberStyles.AllowThousands, CultureInfo.CurrentCulture, out amount);
-    }
-
-    private static string Format(double amount) => amount.ToString("0.##", CultureInfo.InvariantCulture);
+    private static string Format(decimal amount) => amount.ToString("0.##", CultureInfo.CurrentCulture);
 }

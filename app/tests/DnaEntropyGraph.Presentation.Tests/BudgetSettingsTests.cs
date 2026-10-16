@@ -31,7 +31,7 @@ public sealed class BudgetSettingsTests
 
     private BudgetSettingsViewModel Open() => new(_budgets, _account, _shell, _strings);
 
-    private static BudgetInfo Existing(double amount) => new("billingAccounts/AAA/budgets/b-1", "DNA Entropy Graph inst-a", "billingAccounts/AAA", amount, [50, 90, 100]);
+    private static BudgetInfo Existing(decimal amount) => new("billingAccounts/AAA/budgets/b-1", "DNA Entropy Graph inst-a", "billingAccounts/AAA", amount, [50, 90, 100]);
 
     private static CloudOperationException Failure(CloudErrorKind kind, string? code = null)
         => new(new CloudError(code, 403, "raw google text"), kind);
@@ -53,13 +53,13 @@ public sealed class BudgetSettingsTests
     [Fact]
     public async Task Opening_with_a_budget_shows_its_amount_and_allows_remove()
     {
-        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(75.5));
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(75.5m));
         var vm = Open();
 
         await vm.RefreshCommand.ExecuteAsync(null);
 
         vm.HasBudget.ShouldBeTrue();
-        vm.AmountText.ShouldBe("75.5");
+        vm.AmountText.ShouldBe(75.5m.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture));
         vm.StatusText.ShouldBe("BudgetStatusExists");
         vm.RemoveCommand.CanExecute(null).ShouldBeTrue();
     }
@@ -67,13 +67,13 @@ public sealed class BudgetSettingsTests
     [Fact]
     public async Task Saving_sends_the_typed_amount_for_the_selected_project()
     {
-        _budgets.SaveAsync(Project, 120, Arg.Any<CancellationToken>()).Returns(Existing(120));
+        _budgets.SaveAsync(Project, 120m, Arg.Any<CancellationToken>()).Returns(Existing(120m));
         var vm = Open();
         vm.AmountText = "120";
 
         await vm.SaveCommand.ExecuteAsync(null);
 
-        await _budgets.Received(1).SaveAsync(Project, 120, Arg.Any<CancellationToken>());
+        await _budgets.Received(1).SaveAsync(Project, 120m, Arg.Any<CancellationToken>());
         vm.HasBudget.ShouldBeTrue();
         vm.StatusText.ShouldBe("BudgetSaved");
         vm.ErrorText.ShouldBeEmpty();
@@ -93,13 +93,13 @@ public sealed class BudgetSettingsTests
         await vm.SaveCommand.ExecuteAsync(null);
 
         vm.ErrorText.ShouldBe("BudgetAmountInvalid");
-        await _budgets.DidNotReceive().SaveAsync(Arg.Any<string>(), Arg.Any<double>(), Arg.Any<CancellationToken>());
+        await _budgets.DidNotReceive().SaveAsync(Arg.Any<string>(), Arg.Any<decimal>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task A_missing_billing_role_says_who_to_ask_and_offers_the_console_page_and_a_copyable_request()
     {
-        _budgets.SaveAsync(Project, 50, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Permission));
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Permission));
         var vm = Open();
 
         await vm.SaveCommand.ExecuteAsync(null);
@@ -119,7 +119,7 @@ public sealed class BudgetSettingsTests
     [Fact]
     public async Task A_project_with_no_billing_account_points_at_the_billing_page()
     {
-        _budgets.SaveAsync(Project, 50, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Billing, BudgetErrorCodes.NoBilling));
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Billing, BudgetErrorCodes.NoBilling));
         var vm = Open();
 
         await vm.SaveCommand.ExecuteAsync(null);
@@ -131,12 +131,10 @@ public sealed class BudgetSettingsTests
 
     [Theory]
     [InlineData(CloudErrorKind.Network, "BudgetError_Network")]
-    [InlineData(CloudErrorKind.ApiDisabled, "BudgetError_Other")]
-    [InlineData(CloudErrorKind.OrgPolicy, "BudgetError_Other")]
     [InlineData(CloudErrorKind.Other, "BudgetError_Other")]
     public async Task Every_other_failure_still_says_one_thing_to_try(CloudErrorKind kind, string expected)
     {
-        _budgets.SaveAsync(Project, 50, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(kind));
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(kind));
         var vm = Open();
 
         await vm.SaveCommand.ExecuteAsync(null);
@@ -146,21 +144,115 @@ public sealed class BudgetSettingsTests
     }
 
     [Fact]
-    public async Task A_failed_look_on_open_shows_the_same_plain_error_and_never_throws()
+    public async Task A_refused_look_on_open_is_neutral_info_never_a_red_error_and_offers_no_link()
     {
         _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Permission));
         var vm = Open();
 
         await vm.RefreshCommand.ExecuteAsync(null);
 
-        vm.ErrorText.ShouldBe("BudgetError_Permission");
+        vm.ErrorText.ShouldBeEmpty();
+        vm.StatusText.ShouldBe("BudgetStatusNoAccess");
+        vm.ShowConsoleLink.ShouldBeFalse();
         vm.AmountText.ShouldBe("50");
     }
 
     [Fact]
+    public async Task Any_other_failed_look_on_open_is_neutral_too()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Network));
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBeEmpty();
+        vm.StatusText.ShouldBe("BudgetStatusCouldNotCheck");
+    }
+
+    [Fact]
+    public async Task A_late_refresh_never_overwrites_an_amount_the_user_typed()
+    {
+        var gate = new TaskCompletionSource<BudgetInfo?>();
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Open();
+
+        var refresh = vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText = "30";
+        gate.SetResult(Existing(75m));
+        await refresh;
+
+        vm.AmountText.ShouldBe("30");
+        vm.HasBudget.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_refresh_while_a_save_is_running_does_nothing()
+    {
+        var gate = new TaskCompletionSource<BudgetInfo>();
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Open();
+
+        var save = vm.SaveCommand.ExecuteAsync(null);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        gate.SetResult(Existing(50m));
+        await save;
+
+        await _budgets.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task An_organization_policy_refusal_asks_for_the_organizations_administrator_with_a_copyable_request()
+    {
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.OrgPolicy));
+        var vm = Open();
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetError_OrgPolicy");
+        vm.ShowCopyRequest.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_budget_service_that_is_still_off_offers_the_page_that_switches_it_on()
+    {
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.ApiDisabled));
+        var vm = Open();
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetError_ApiDisabled");
+        vm.ConsoleLink!.ToString().ShouldBe("https://console.cloud.google.com/apis/library/billingbudgets.googleapis.com?project=my-lab");
+    }
+
+    [Theory]
+    [InlineData("de-DE", "12,5", 12.5)]
+    [InlineData("en-US", "12.5", 12.5)]
+    [InlineData("en-US", "$50", 50)]
+    [InlineData("de-DE", "50", 50)]
+    [InlineData("fr-FR", "12,5", 12.5)]
+    public void The_amount_is_read_in_the_users_own_number_format(string culture, string text, double expected)
+    {
+        BudgetAmountParser.TryParse(text, new System.Globalization.CultureInfo(culture), out var amount).ShouldBeTrue();
+
+        amount.ShouldBe((decimal)expected);
+    }
+
+    [Theory]
+    [InlineData("en-US", "12,5")]
+    [InlineData("en-US", "1,000")]
+    [InlineData("de-DE", "1.000")]
+    [InlineData("de-DE", "12.5")]
+    [InlineData("en-US", "1.000,5")]
+    [InlineData("en-US", "abc")]
+    [InlineData("en-US", "")]
+    public void An_ambiguous_or_unreadable_amount_is_refused_never_guessed(string culture, string text)
+    {
+        BudgetAmountParser.TryParse(text, new System.Globalization.CultureInfo(culture), out _).ShouldBeFalse();
+    }
+    [Fact]
     public async Task Removing_deletes_the_budget_and_goes_back_to_the_no_budget_state()
     {
-        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(50));
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(50m));
         _budgets.RemoveAsync(Project, Arg.Any<CancellationToken>()).Returns(true);
         var vm = Open();
         await vm.RefreshCommand.ExecuteAsync(null);

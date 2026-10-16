@@ -53,7 +53,7 @@ A collapsed group. **Reset all settings** asks first, then puts every setting ba
 
 ## Budget alert
 
-Makes a Google Cloud Billing budget on your billing account that emails the billing administrators at 50%, 90% and 100% of a monthly **Monthly amount** (50 by default). **Create or update the alert** makes it, or changes the amount of the one this copy of the app already made (it never makes a second one); **Remove the alert** deletes it. The group shows what Google holds each time the page opens. If you are not a billing administrator, the group says so, offers **Open Google's budgets page** and **Copy a request for my billing administrator**, and nothing is created. See [06-costs-and-cleanup.md](06-costs-and-cleanup.md).
+Makes a Google Cloud Billing budget on your billing account that emails the billing administrators at 50%, 90% and 100% of a monthly **Monthly amount** (50 by default). **Create or update the alert** makes it, or changes the amount of the one this copy of the app already made (it never makes a second one); **Remove the alert** deletes it. The group shows what Google holds each time the page opens. If you are not a billing administrator, the group says so, offers **Open the matching Google page** and **Copy a request for my administrator**, and nothing is created. See [06-costs-and-cleanup.md](06-costs-and-cleanup.md).
 
 ## External viewers
 

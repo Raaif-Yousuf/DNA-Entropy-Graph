@@ -22,7 +22,7 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
     private const int PageSize = 100;
     private const string UpdateMask = "amount,budgetFilter,thresholdRules";
     private const string SpendBasis = "CURRENT_SPEND";
-    private const double NanosPerUnit = 1_000_000_000;
+    private const decimal NanosPerUnit = 1_000_000_000m;
 
     private readonly CloudBillingBudgetService _service;
     private readonly CloudResourceManagerService _resourceManager;
@@ -37,7 +37,7 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
         _selectedProjectId = selectedProjectId;
     }
 
-    public async Task<BudgetInfo?> FindAsync(string billingAccountId, string installationId, CancellationToken cancellationToken)
+    public async Task<BudgetInfo?> FindAsync(string billingAccountId, string installationId, string projectId, CancellationToken cancellationToken)
     {
         var quotaProject = _selectedProjectId();
         string? pageToken = null;
@@ -57,7 +57,7 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
                 cancellationToken,
                 replayable: true).ConfigureAwait(false);
 
-            if ((page.Budgets ?? []).FirstOrDefault(b => BudgetNaming.IsOurs(b.DisplayName, installationId)) is { } ours)
+            if ((page.Budgets ?? []).FirstOrDefault(b => BudgetNaming.IsOurs(b.DisplayName, installationId, projectId)) is { } ours)
             {
                 return ToInfo(ours, billingAccountId);
             }
@@ -80,7 +80,7 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
     public async Task<BudgetInfo> UpsertAsync(BudgetSpec spec, CancellationToken cancellationToken)
     {
         // The existing budget is looked up first: a budget made by an earlier attempt (or whose create response was lost) is changed, never doubled.
-        var existing = await FindAsync(spec.BillingAccountId, spec.InstallationId, cancellationToken).ConfigureAwait(false);
+        var existing = await FindAsync(spec.BillingAccountId, spec.InstallationId, spec.ProjectId, cancellationToken).ConfigureAwait(false);
         var projectNumber = await ProjectNumberAsync(spec.ProjectId, cancellationToken).ConfigureAwait(false);
         var body = BuildBody(spec, projectNumber);
 
@@ -154,11 +154,13 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
 
     private static BudgetData.GoogleCloudBillingBudgetsV1Budget BuildBody(BudgetSpec spec, string projectName)
     {
-        var units = Math.Floor(spec.AmountUsd);
-        var nanos = (int)Math.Round((spec.AmountUsd - units) * NanosPerUnit);
+        // Whole cents first, in decimal: a double or a fraction like 12.9999999996 would otherwise round to 1,000,000,000 nanos, which Google refuses.
+        var rounded = BudgetNaming.RoundToCents(spec.AmountUsd);
+        var units = Math.Floor(rounded);
+        var nanos = (int)((rounded - units) * NanosPerUnit);
         return new BudgetData.GoogleCloudBillingBudgetsV1Budget
         {
-            DisplayName = BudgetNaming.DisplayName(spec.InstallationId),
+            DisplayName = BudgetNaming.DisplayName(spec.InstallationId, spec.ProjectId),
             BudgetFilter = new BudgetData.GoogleCloudBillingBudgetsV1Filter { Projects = [projectName] },
             Amount = new BudgetData.GoogleCloudBillingBudgetsV1BudgetAmount
             {

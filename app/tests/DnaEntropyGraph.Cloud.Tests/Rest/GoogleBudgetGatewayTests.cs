@@ -40,13 +40,13 @@ public class GoogleBudgetGatewayTests
     {
         var rig = new GoogleGatewayHarness();
         rig.Handler.Returns(Get, ListPath, 200, ListJson(
-            BudgetJson(Account + "/budgets/other", "DNA Entropy Graph inst-b", "20") + "," + BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a", "50")));
+            BudgetJson(Account + "/budgets/other", "DNA Entropy Graph inst-b my-lab", "20") + "," + BudgetJson(Account + "/budgets/otherproject", "DNA Entropy Graph inst-a other-lab", "30") + "," + BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "50")));
 
-        var found = await rig.Gateways.Budget.FindAsync(Account, "inst-a", CancellationToken.None);
+        var found = await rig.Gateways.Budget.FindAsync(Account, "inst-a", "my-lab", CancellationToken.None);
 
         found.ShouldNotBeNull();
         found.Name.ShouldBe(Account + "/budgets/b-1");
-        found.AmountUsd.ShouldBe(50);
+        found.AmountUsd.ShouldBe(50m);
         found.ThresholdPercents.ShouldBe([50, 90, 100]);
         var call = rig.Handler.To(Get, ListPath).Single();
         call.Uri.Host.ShouldBe("billingbudgets.googleapis.com");
@@ -61,9 +61,9 @@ public class GoogleBudgetGatewayTests
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, ListPath, 200, ListJson(BudgetJson(Account + "/budgets/other", "Someone else's budget", "20"), "p2"))
-            .Returns(Get, ListPath, 200, ListJson(BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a", "50")));
+            .Returns(Get, ListPath, 200, ListJson(BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "50")));
 
-        (await rig.Gateways.Budget.FindAsync(Account, "inst-a", CancellationToken.None)).ShouldNotBeNull();
+        (await rig.Gateways.Budget.FindAsync(Account, "inst-a", "my-lab", CancellationToken.None)).ShouldNotBeNull();
 
         var calls = rig.Handler.To(Get, ListPath);
         calls.Count.ShouldBe(2);
@@ -77,16 +77,16 @@ public class GoogleBudgetGatewayTests
         ProjectNumber(rig);
         rig.Handler
             .Returns(Get, ListPath, 200, ListJson(string.Empty))
-            .Returns(Post, ListPath, 200, BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a", "50"));
+            .Returns(Post, ListPath, 200, BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "50"));
 
-        var saved = await rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 50), CancellationToken.None);
+        var saved = await rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 50m), CancellationToken.None);
 
         saved.Name.ShouldBe(Account + "/budgets/b-1");
         var request = rig.Handler.To(Post, ListPath).Single();
         request.UserProject.ShouldBe("my-lab");
         using var body = JsonDocument.Parse(request.Body);
         var root = body.RootElement;
-        root.GetProperty("displayName").GetString().ShouldBe("DNA Entropy Graph inst-a");
+        root.GetProperty("displayName").GetString().ShouldBe("DNA Entropy Graph inst-a my-lab");
         root.GetProperty("budgetFilter").GetProperty("projects").EnumerateArray().Select(e => e.GetString()).ShouldBe(["projects/555"]);
         var amount = root.GetProperty("amount").GetProperty("specifiedAmount");
         amount.GetProperty("units").GetInt64().ShouldBe(50);
@@ -105,9 +105,9 @@ public class GoogleBudgetGatewayTests
         ProjectNumber(rig);
         rig.Handler
             .Returns(Get, ListPath, 200, ListJson(string.Empty))
-            .Returns(Post, ListPath, 200, BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a", "12"));
+            .Returns(Post, ListPath, 200, BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "12"));
 
-        await rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 12.5), CancellationToken.None);
+        await rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 12.5m), CancellationToken.None);
 
         using var body = JsonDocument.Parse(rig.Handler.To(Post, ListPath).Single().Body);
         var amount = body.RootElement.GetProperty("amount").GetProperty("specifiedAmount");
@@ -121,12 +121,12 @@ public class GoogleBudgetGatewayTests
         var rig = new GoogleGatewayHarness();
         ProjectNumber(rig);
         rig.Handler
-            .Returns(Get, ListPath, 200, ListJson(BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a", "50")))
-            .Returns(Patch, BudgetPath, 200, BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a", "120"));
+            .Returns(Get, ListPath, 200, ListJson(BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "50")))
+            .Returns(Patch, BudgetPath, 200, BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "120"));
 
-        var saved = await rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 120), CancellationToken.None);
+        var saved = await rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 120m), CancellationToken.None);
 
-        saved.AmountUsd.ShouldBe(120);
+        saved.AmountUsd.ShouldBe(120m);
         rig.Handler.To(Post, ListPath).ShouldBeEmpty();
         var patch = rig.Handler.To(Patch, BudgetPath).Single();
         Uri.UnescapeDataString(patch.Uri.Query).ShouldContain("updateMask=amount,budgetFilter,thresholdRules");
@@ -142,7 +142,7 @@ public class GoogleBudgetGatewayTests
         rig.Handler
             .Returns(Get, ListPath, 403, RpcError(403, "PERMISSION_DENIED", "The caller does not have permission"));
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 50), CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", 50m), CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
         rig.Handler.To(Post, ListPath).ShouldBeEmpty();
@@ -157,7 +157,7 @@ public class GoogleBudgetGatewayTests
             "details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com"}]}}
             """);
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Budget.FindAsync(Account, "inst-a", CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Budget.FindAsync(Account, "inst-a", "my-lab", CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
     }
@@ -175,4 +175,31 @@ public class GoogleBudgetGatewayTests
 
         rig.Handler.To(Delete, BudgetPath).Count.ShouldBe(2);
     }
-}
+
+    [Theory]
+    [InlineData("12.9999999996", 13L, null)]
+    [InlineData("999999.99", 999999L, 990_000_000)]
+    [InlineData("0.995", 1L, null)]
+    [InlineData("12.5", 12L, 500_000_000)]
+    public async Task The_amount_is_rounded_to_cents_and_nanos_never_reach_a_billion(string amountText, long units, int? nanos)
+    {
+        var rig = new GoogleGatewayHarness();
+        ProjectNumber(rig);
+        rig.Handler
+            .Returns(Get, ListPath, 200, ListJson(string.Empty))
+            .Returns(Post, ListPath, 200, BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "1"));
+
+        await rig.Gateways.Budget.UpsertAsync(new BudgetSpec(Account, "my-lab", "inst-a", decimal.Parse(amountText, System.Globalization.CultureInfo.InvariantCulture)), CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Post, ListPath).Single().Body);
+        var amount = body.RootElement.GetProperty("amount").GetProperty("specifiedAmount");
+        amount.GetProperty("units").GetInt64().ShouldBe(units);
+        if (nanos is null)
+        {
+            amount.TryGetProperty("nanos", out _).ShouldBeFalse();
+        }
+        else
+        {
+            amount.GetProperty("nanos").GetInt32().ShouldBe(nanos.Value);
+        }
+    }}

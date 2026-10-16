@@ -14,9 +14,16 @@ public sealed class BudgetService : IBudgetService
     private readonly IBillingGateway _billing;
     private readonly IServiceEnablementGateway _services;
     private readonly ISettingsStore _settings;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
-    public BudgetService(IBudgetGateway budgets, IBillingGateway billing, IServiceEnablementGateway services, ISettingsStore settings)
+    /// <summary>Waits before the n-th retry of a save that Google still answers "service disabled": 2, 4, 8 then 16 seconds, then it gives up.</summary>
+    private const int MaxAttempts = 5;
+
+    private static readonly TimeSpan FirstBackoff = TimeSpan.FromSeconds(2);
+
+    public BudgetService(IBudgetGateway budgets, IBillingGateway billing, IServiceEnablementGateway services, ISettingsStore settings, Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
+        _delay = delay ?? Task.Delay;
         _budgets = budgets;
         _billing = billing;
         _services = services;
@@ -36,10 +43,10 @@ public sealed class BudgetService : IBudgetService
             return null;
         }
 
-        return await _budgets.FindAsync(account, InstallationId.GetOrCreate(_settings), cancellationToken).ConfigureAwait(false);
+        return await _budgets.FindAsync(account, InstallationId.GetOrCreate(_settings), projectId, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<BudgetInfo> SaveAsync(string projectId, double amountUsd, CancellationToken cancellationToken)
+    public async Task<BudgetInfo> SaveAsync(string projectId, decimal amountUsd, CancellationToken cancellationToken)
     {
         if (!BudgetNaming.IsValidAmount(amountUsd))
         {
@@ -54,7 +61,20 @@ public sealed class BudgetService : IBudgetService
             await _services.EnableServicesAsync(projectId, [RequiredServices.BillingBudgets], cancellationToken).ConfigureAwait(false);
         }
 
-        return await _budgets.UpsertAsync(new BudgetSpec(account, projectId, InstallationId.GetOrCreate(_settings), amountUsd), cancellationToken).ConfigureAwait(false);
+        var spec = new BudgetSpec(account, projectId, InstallationId.GetOrCreate(_settings), BudgetNaming.RoundToCents(amountUsd));
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await _budgets.UpsertAsync(spec, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.ApiDisabled && attempt < MaxAttempts)
+            {
+                // Google can still answer "service disabled" for a short while after the enable returned. Only that kind is retried, and
+                // UpsertAsync looks the budget up first, so a replay never creates a second one.
+                await _delay(FirstBackoff * Math.Pow(2, attempt - 1), cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     public async Task<bool> RemoveAsync(string projectId, CancellationToken cancellationToken)
@@ -84,6 +104,7 @@ public sealed class BudgetService : IBudgetService
     private async Task<string?> LinkedAccountAsync(string projectId, CancellationToken cancellationToken)
     {
         var status = await _billing.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
-        return string.IsNullOrEmpty(status.AccountId) ? null : status.AccountId;
+        // An account that is linked but switched off cannot bill, so it reads as no billing (the same action: open Google's billing page).
+        return !status.Enabled || string.IsNullOrEmpty(status.AccountId) ? null : status.AccountId;
     }
 }

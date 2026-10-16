@@ -2109,10 +2109,10 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Remove the alert</value>
   </data>
   <data name="BudgetOpenConsoleLink.Content" xml:space="preserve">
-    <value>Open Google's budgets page</value>
+    <value>Open the matching Google page</value>
   </data>
   <data name="BudgetCopyRequestButton.Content" xml:space="preserve">
-    <value>Copy a request for my billing administrator</value>
+    <value>Copy a request for my administrator</value>
   </data>
   <data name="BudgetNeedsProject" xml:space="preserve">
     <value>No Google Cloud project is chosen yet. Finish the setup steps first, then come back here to create the alert.</value>
@@ -2133,7 +2133,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The monthly amount must be a number of 1 or more. Type an amount such as 50 and press the button again.</value>
   </data>
   <data name="BudgetError_Permission" xml:space="preserve">
-    <value>Your Google account is not allowed to create budgets on this billing account. Press Copy a request for my billing administrator and send it to them.</value>
+    <value>Your Google account is not allowed to create budgets on this billing account. Press Copy a request for my administrator and send it to your billing administrator.</value>
   </data>
   <data name="BudgetError_NoBilling" xml:space="preserve">
     <value>This project has no billing account yet, so there is nothing to put a budget on. Open Google's billing page and link a billing account to the project.</value>
@@ -2151,6 +2151,18 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>The request is copied. Paste it into an email to your billing administrator.</value>
   </data>
   <data name="BudgetRequestCopyFailed" xml:space="preserve">
-    <value>The request could not be copied. Press Copy a request for my billing administrator again in a moment.</value>
+    <value>The request could not be copied. Press Copy a request for my administrator again in a moment.</value>
+  </data>
+  <data name="BudgetStatusNoAccess" xml:space="preserve">
+    <value>This Google account cannot see budgets on your billing account, so any existing alert is not shown. To make one, press Create or update the alert.</value>
+  </data>
+  <data name="BudgetStatusCouldNotCheck" xml:space="preserve">
+    <value>The app could not check for an existing budget alert. To make or change one, press Create or update the alert.</value>
+  </data>
+  <data name="BudgetError_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization blocked this budget. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
+  </data>
+  <data name="BudgetError_ApiDisabled" xml:space="preserve">
+    <value>Google is still switching on the budget service for this project. Wait a minute, then press Create or update the alert again, or open the matching Google page to switch it on yourself.</value>
   </data>
 </root>

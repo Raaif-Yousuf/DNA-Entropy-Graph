@@ -26,25 +26,31 @@ public class BudgetServiceTests
 
     private static MemorySettings Installation(string id) => new() { Values = { [InstallationId.SettingsKey] = id } };
 
-    private static async Task<FakeGcp> LinkedAsync(string project = Project, string account = Account)
+    private static async Task<FakeGcp> LinkedAsync(string project = Project, string account = Account, FakeGcp? gcp = null)
     {
-        var gcp = new FakeGcp().WithBillingOff(project).WithBillingAccount(account, "Lab card");
+        gcp ??= new FakeGcp();
+        gcp.WithBillingOff(project).WithBillingAccount(account, "Lab card");
         await gcp.LinkProjectAsync(project, account, CancellationToken.None);
         return gcp;
     }
 
-    private static BudgetService Service(FakeGcp gcp, string installation = "inst-a") => new(gcp, gcp, gcp, Installation(installation));
+    private static BudgetService Service(FakeGcp gcp, string installation = "inst-a", List<TimeSpan>? delays = null)
+        => new(gcp, gcp, gcp, Installation(installation), (span, _) =>
+        {
+            delays?.Add(span);
+            return Task.CompletedTask;
+        });
 
     [Fact]
     public async Task Saving_creates_one_budget_on_the_projects_billing_account_with_the_standard_thresholds()
     {
         var gcp = await LinkedAsync();
 
-        var saved = await Service(gcp).SaveAsync(Project, 75, CancellationToken.None);
+        var saved = await Service(gcp).SaveAsync(Project, 75m, CancellationToken.None);
 
-        saved.AmountUsd.ShouldBe(75);
+        saved.AmountUsd.ShouldBe(75m);
         saved.BillingAccountId.ShouldBe(Account);
-        saved.DisplayName.ShouldBe("DNA Entropy Graph inst-a");
+        saved.DisplayName.ShouldBe("DNA Entropy Graph inst-a my-lab");
         saved.ThresholdPercents.ShouldBe([50, 90, 100]);
         gcp.Budgets.Count.ShouldBe(1);
         gcp.BudgetProjectOf(saved.Name).ShouldBe(Project);
@@ -56,12 +62,22 @@ public class BudgetServiceTests
         var gcp = await LinkedAsync();
         var service = Service(gcp);
 
-        var first = await service.SaveAsync(Project, 50, CancellationToken.None);
-        var second = await service.SaveAsync(Project, 120, CancellationToken.None);
+        var first = await service.SaveAsync(Project, 50m, CancellationToken.None);
+        var second = await service.SaveAsync(Project, 120m, CancellationToken.None);
 
         gcp.Budgets.Count.ShouldBe(1);
         second.Name.ShouldBe(first.Name);
-        gcp.Budgets.Single().AmountUsd.ShouldBe(120);
+        gcp.Budgets.Single().AmountUsd.ShouldBe(120m);
+    }
+
+    [Fact]
+    public async Task The_amount_is_rounded_to_cents_before_it_is_sent()
+    {
+        var gcp = await LinkedAsync();
+
+        var saved = await Service(gcp).SaveAsync(Project, 12.9999999996m, CancellationToken.None);
+
+        saved.AmountUsd.ShouldBe(13m);
     }
 
     [Fact]
@@ -69,12 +85,41 @@ public class BudgetServiceTests
     {
         var gcp = await LinkedAsync();
 
-        await Service(gcp, "inst-a").SaveAsync(Project, 50, CancellationToken.None);
-        await Service(gcp, "inst-b").SaveAsync(Project, 20, CancellationToken.None);
+        await Service(gcp, "inst-a").SaveAsync(Project, 50m, CancellationToken.None);
+        await Service(gcp, "inst-b").SaveAsync(Project, 20m, CancellationToken.None);
 
         gcp.Budgets.Count.ShouldBe(2);
-        (await Service(gcp, "inst-a").GetAsync(Project, CancellationToken.None))!.AmountUsd.ShouldBe(50);
-        (await Service(gcp, "inst-b").GetAsync(Project, CancellationToken.None))!.AmountUsd.ShouldBe(20);
+        (await Service(gcp, "inst-a").GetAsync(Project, CancellationToken.None))!.AmountUsd.ShouldBe(50m);
+        (await Service(gcp, "inst-b").GetAsync(Project, CancellationToken.None))!.AmountUsd.ShouldBe(20m);
+    }
+
+    [Fact]
+    public async Task Two_projects_on_one_billing_account_get_their_own_budgets_and_never_see_or_take_each_others()
+    {
+        var gcp = await LinkedAsync();
+        await LinkedAsync("other-lab", Account, gcp);
+        var service = Service(gcp);
+
+        await service.SaveAsync(Project, 50m, CancellationToken.None);
+        (await service.GetAsync("other-lab", CancellationToken.None)).ShouldBeNull();
+
+        await service.SaveAsync("other-lab", 20m, CancellationToken.None);
+
+        gcp.Budgets.Count.ShouldBe(2);
+        (await service.GetAsync(Project, CancellationToken.None))!.AmountUsd.ShouldBe(50m);
+        (await service.GetAsync("other-lab", CancellationToken.None))!.AmountUsd.ShouldBe(20m);
+        gcp.BudgetProjectOf((await service.GetAsync(Project, CancellationToken.None))!.Name).ShouldBe(Project);
+
+        (await service.RemoveAsync("other-lab", CancellationToken.None)).ShouldBeTrue();
+        (await service.GetAsync(Project, CancellationToken.None)).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void The_display_name_fits_Googles_limit_for_a_full_length_installation_id_and_project_id()
+    {
+        var name = BudgetNaming.DisplayName(Guid.NewGuid().ToString("n"), new string('a', 30));
+
+        name.Length.ShouldBeLessThanOrEqualTo(60);
     }
 
     [Fact]
@@ -82,10 +127,49 @@ public class BudgetServiceTests
     {
         var gcp = (await LinkedAsync()).WithServiceDisabled(Project, RequiredServices.BillingBudgets);
 
-        await Service(gcp).SaveAsync(Project, 50, CancellationToken.None);
+        await Service(gcp).SaveAsync(Project, 50m, CancellationToken.None);
 
         (await gcp.IsServiceEnabledAsync(Project, RequiredServices.BillingBudgets, CancellationToken.None)).ShouldBeTrue();
         gcp.Budgets.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_service_that_still_reads_as_off_just_after_enabling_is_retried_with_a_backoff_and_then_succeeds()
+    {
+        var gcp = (await LinkedAsync()).WithBudgetApiNotYetPropagated(2);
+        var delays = new List<TimeSpan>();
+
+        await Service(gcp, delays: delays).SaveAsync(Project, 50m, CancellationToken.None);
+
+        gcp.Budgets.Count.ShouldBe(1);
+        gcp.BudgetUpsertCalls.ShouldBe(3);
+        delays.Count.ShouldBe(2);
+        delays[1].ShouldBeGreaterThan(delays[0]);
+    }
+
+    [Fact]
+    public async Task A_service_that_never_reads_as_on_gives_up_after_a_bounded_number_of_tries_and_says_api_disabled()
+    {
+        var gcp = (await LinkedAsync()).WithBudgetApiNotYetPropagated(100);
+        var delays = new List<TimeSpan>();
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp, delays: delays).SaveAsync(Project, 50m, CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.ApiDisabled);
+        gcp.BudgetUpsertCalls.ShouldBeLessThanOrEqualTo(5);
+        gcp.Budgets.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_permission_error_is_never_retried()
+    {
+        var gcp = (await LinkedAsync()).WithBudgetPermissionDenied();
+        var delays = new List<TimeSpan>();
+
+        await Should.ThrowAsync<CloudOperationException>(() => Service(gcp, delays: delays).SaveAsync(Project, 50m, CancellationToken.None));
+
+        gcp.BudgetUpsertCalls.ShouldBe(1);
+        delays.ShouldBeEmpty();
     }
 
     [Fact]
@@ -93,10 +177,23 @@ public class BudgetServiceTests
     {
         var gcp = new FakeGcp().WithBillingOff(Project);
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50, CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Billing);
         ex.Error.Code.ShouldBe(BudgetErrorCodes.NoBilling);
+        gcp.BudgetUpsertCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_linked_account_with_billing_switched_off_reads_as_no_billing()
+    {
+        var gcp = new FakeGcp().WithBillingOff(Project).WithBillingAccount(Account, "Lab card").WithBillingLinkThatDoesNotEnable();
+        await gcp.LinkProjectAsync(Project, Account, CancellationToken.None);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe(BudgetErrorCodes.NoBilling);
+        (await Service(gcp).GetAsync(Project, CancellationToken.None)).ShouldBeNull();
         gcp.BudgetUpsertCalls.ShouldBe(0);
     }
 
@@ -105,7 +202,7 @@ public class BudgetServiceTests
     {
         var gcp = (await LinkedAsync()).WithBudgetPermissionDenied();
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50, CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
         gcp.Budgets.ShouldBeEmpty();
@@ -116,23 +213,22 @@ public class BudgetServiceTests
     {
         var gcp = (await LinkedAsync()).WithServiceDisabled(Project, RequiredServices.BillingBudgets).WithNotProjectOwner(Project);
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50, CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
         gcp.BudgetUpsertCalls.ShouldBe(0);
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(-5)]
-    [InlineData(double.NaN)]
-    [InlineData(double.PositiveInfinity)]
-    [InlineData(2_000_000)]
-    public async Task An_unusable_amount_is_refused_without_a_cloud_call(double amount)
+    [InlineData("0")]
+    [InlineData("-5")]
+    [InlineData("0.4")]
+    [InlineData("2000000")]
+    public async Task An_unusable_amount_is_refused_without_a_cloud_call(string amount)
     {
         var gcp = await LinkedAsync();
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, amount, CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, decimal.Parse(amount, System.Globalization.CultureInfo.InvariantCulture), CancellationToken.None));
 
         ex.Error.Code.ShouldBe(BudgetErrorCodes.InvalidAmount);
         gcp.BudgetUpsertCalls.ShouldBe(0);
@@ -170,12 +266,12 @@ public class BudgetServiceTests
     public async Task Removing_deletes_this_installations_budget_only()
     {
         var gcp = await LinkedAsync();
-        await Service(gcp, "inst-a").SaveAsync(Project, 50, CancellationToken.None);
-        await Service(gcp, "inst-b").SaveAsync(Project, 20, CancellationToken.None);
+        await Service(gcp, "inst-a").SaveAsync(Project, 50m, CancellationToken.None);
+        await Service(gcp, "inst-b").SaveAsync(Project, 20m, CancellationToken.None);
 
         (await Service(gcp, "inst-a").RemoveAsync(Project, CancellationToken.None)).ShouldBeTrue();
 
-        gcp.Budgets.Select(b => b.DisplayName).ShouldBe(["DNA Entropy Graph inst-b"]);
+        gcp.Budgets.Select(b => b.DisplayName).ShouldBe(["DNA Entropy Graph inst-b my-lab"]);
     }
 
     [Fact]

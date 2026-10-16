@@ -156,8 +156,8 @@ Billing Budget API on for you the first time. Press **Remove the alert** to dele
 
 Creating a budget needs a role on the **billing account**, not just on the project, and the person
 who made the project is often not a billing administrator. If Google refuses, the group says so and
-offers two things: **Open Google's budgets page** (the console page for your billing account) and
-**Copy a request for my billing administrator**, which you can paste into an email. Once they make
+offers two things: **Open the matching Google page** (the console page for your billing account) and
+**Copy a request for my administrator**, which you can paste into an email. Once they make
 the budget themselves or give you the Billing Account Costs Manager role, press the button again.
 This alert only emails you; it does not stop anything from running. Use the spending cap in
 Settings to stop new runs.

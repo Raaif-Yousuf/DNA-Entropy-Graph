@@ -13,8 +13,9 @@ public sealed partial class FakeGcp : IBudgetGateway
     private int _budgetUpsertCalls;
     private int _budgetSequence;
     private bool _budgetPermissionDenied;
+    private int _budgetApiNotPropagatedCalls;
 
-    private sealed record FakeBudget(string Name, string DisplayName, string BillingAccountId, string ProjectId, double AmountUsd);
+    private sealed record FakeBudget(string Name, string DisplayName, string BillingAccountId, string ProjectId, decimal AmountUsd);
 
     /// <summary>Every budget the fake holds, in no particular order.</summary>
     public IReadOnlyList<BudgetInfo> Budgets
@@ -50,7 +51,17 @@ public sealed partial class FakeGcp : IBudgetGateway
         return this;
     }
 
-    public Task<BudgetInfo?> FindAsync(string billingAccountId, string installationId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Google still answers "service disabled" to the next <paramref name="calls"/> create-or-update calls, as it can for a short while after
+    /// the Budget API was switched on. Each such call is counted in <see cref="BudgetUpsertCalls"/> and creates nothing.
+    /// </summary>
+    public FakeGcp WithBudgetApiNotYetPropagated(int calls)
+    {
+        _budgetApiNotPropagatedCalls = calls;
+        return this;
+    }
+
+    public Task<BudgetInfo?> FindAsync(string billingAccountId, string installationId, string projectId, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
         ThrowIfCatalogNotConnected();
@@ -58,7 +69,7 @@ public sealed partial class FakeGcp : IBudgetGateway
         ThrowIfBudgetDenied();
         lock (_budgetGate)
         {
-            var found = _budgets.Values.FirstOrDefault(b => b.BillingAccountId == billingAccountId && BudgetNaming.IsOurs(b.DisplayName, installationId));
+            var found = _budgets.Values.FirstOrDefault(b => b.BillingAccountId == billingAccountId && BudgetNaming.IsOurs(b.DisplayName, installationId, projectId));
             return Task.FromResult(found is null ? null : ToInfo(found));
         }
     }
@@ -69,11 +80,15 @@ public sealed partial class FakeGcp : IBudgetGateway
         ThrowIfCatalogNotConnected();
         Interlocked.Increment(ref _budgetUpsertCalls);
         ThrowIfBudgetDenied();
+        if (Interlocked.Decrement(ref _budgetApiNotPropagatedCalls) >= 0)
+        {
+            throw Build(CloudErrorKind.ApiDisabled, "SERVICE_DISABLED", 403, "Cloud Billing Budget API has not been used in this project before or it is disabled.");
+        }
         lock (_budgetGate)
         {
-            var existing = _budgets.Values.FirstOrDefault(b => b.BillingAccountId == spec.BillingAccountId && BudgetNaming.IsOurs(b.DisplayName, spec.InstallationId));
+            var existing = _budgets.Values.FirstOrDefault(b => b.BillingAccountId == spec.BillingAccountId && BudgetNaming.IsOurs(b.DisplayName, spec.InstallationId, spec.ProjectId));
             var name = existing?.Name ?? $"{spec.BillingAccountId}/budgets/fake-{++_budgetSequence}";
-            var stored = new FakeBudget(name, BudgetNaming.DisplayName(spec.InstallationId), spec.BillingAccountId, spec.ProjectId, spec.AmountUsd);
+            var stored = new FakeBudget(name, BudgetNaming.DisplayName(spec.InstallationId, spec.ProjectId), spec.BillingAccountId, spec.ProjectId, spec.AmountUsd);
             _budgets[name] = stored;
             return Task.FromResult(ToInfo(stored));
         }
