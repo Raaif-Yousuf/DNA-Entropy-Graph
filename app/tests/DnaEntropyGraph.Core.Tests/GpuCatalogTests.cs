@@ -92,6 +92,17 @@ public class GpuCatalogTests
     }
 
     [Fact]
+    public void Every_hopper_shape_is_spot_only_and_no_other_is()
+    {
+        // Source: Appendix B section 4.1 ("not offered on-demand for small A3 shapes", i.e. a3-highgpu-1g and 2g alike). THEORY (unverified
+        // against a real project): no live capacity read has confirmed it for the 1g shape, so both rows follow the one stated source.
+        foreach (var gpu in Shipped.Gpus)
+        {
+            gpu.SpotOnly.ShouldBe(gpu.IsHopper, $"{gpu.Tier}: SpotOnly must follow the A3 rule in Appendix B section 4.1.");
+        }
+    }
+
+    [Fact]
     public void The_window_ceiling_is_known_only_where_it_was_measured()
     {
         Shipped.Gpu(GpuTier.L4).ContextCeiling.ShouldBe(8192);

@@ -155,7 +155,16 @@ public sealed partial class GpuPlanViewModel : ObservableObject
     public bool HasWarning => WarningText.Length > 0;
 
     /// <summary>True when the pair fits or the user confirmed it will not: Run waits on this.</summary>
-    public bool IsRunnable => _fit == GpuFit.Fits || IsConfirmed;
+    public bool IsRunnable => _fit == GpuFit.Fits || (IsConfirmed && CanConfirm);
+
+    /// <summary>
+    /// True when a warning can be overridden with "Run anyway": there is a card to run on. When no offered card can run the model at all there is
+    /// nothing to confirm (the warning says to choose another model), so the tick is not shown and Run stays off.
+    /// </summary>
+    public bool CanConfirm => _fit != GpuFit.Fits && _resolved is not null;
+
+    /// <summary>True when the chosen tier is available as Spot or Flex-start only, so the run must be a Spot run (<c>RunOptions.SpotVm</c>) and is priced as one.</summary>
+    public bool RequiresSpot => _resolved is { } tier && _linker.Catalog.Gpu(tier).SpotOnly;
 
     /// <summary>The model the run uses.</summary>
     public string ModelId => _state.ModelId;
@@ -178,21 +187,27 @@ public sealed partial class GpuPlanViewModel : ObservableObject
 
     private void Apply(PlanResult result)
     {
+        // A lock toggle changes no pair: the notice of the last automatic move and a "Run anyway" tick stay. Only a changed model or card
+        // (what a run would use) clears them.
+        var pairChanged = !string.Equals(result.State.ModelId, _state.ModelId, StringComparison.Ordinal) || result.ResolvedGpu != _resolved;
         _state = result.State;
         _fit = result.Fit;
         _resolved = result.ResolvedGpu;
         _selectedModel = Models.First(m => m.Id == _state.ModelId);
         _selectedGpu = Gpus.First(g => g.Tier == _state.Gpu);
-        NoticeText = NoticeFor(result);
-        _applying = true;
-        try
+        if (pairChanged)
         {
-            // This change raises Changed once, below, not once more from the confirmation's own handler.
-            IsConfirmed = false;
-        }
-        finally
-        {
-            _applying = false;
+            NoticeText = NoticeFor(result);
+            _applying = true;
+            try
+            {
+                // This change raises Changed once, below, not once more from the confirmation's own handler.
+                IsConfirmed = false;
+            }
+            finally
+            {
+                _applying = false;
+            }
         }
 
         Refresh();
@@ -203,6 +218,8 @@ public sealed partial class GpuPlanViewModel : ObservableObject
         OnPropertyChanged(nameof(ModelId));
         OnPropertyChanged(nameof(Tier));
         OnPropertyChanged(nameof(IsRunnable));
+        OnPropertyChanged(nameof(CanConfirm));
+        OnPropertyChanged(nameof(RequiresSpot));
         Changed?.Invoke();
     }
 
@@ -228,7 +245,9 @@ public sealed partial class GpuPlanViewModel : ObservableObject
 
         WarningText = _fit == GpuFit.Fits
             ? string.Empty
-            : Format("NewRunGpuMisfit", _selectedModel.Label, GpuLabel(_resolved ?? _state.Gpu), _strings.GetString(LockKey(_fit)));
+            : _resolved is { } shown
+                ? Format("NewRunGpuMisfit", _selectedModel.Label, GpuLabel(shown), _strings.GetString(LockKey(_fit)))
+                : Format("NewRunGpuNoCard", _selectedModel.Label);
     }
 
     private string NoticeFor(PlanResult result) => result.Notice switch

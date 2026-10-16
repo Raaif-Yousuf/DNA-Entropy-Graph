@@ -220,7 +220,7 @@
                     <CheckBox
                         x:Uid="NewRunGpuConfirm"
                         IsChecked="{x:Bind ViewModel.Gpu.IsConfirmed, Mode=TwoWay}"
-                        Visibility="{x:Bind ViewModel.Gpu.HasWarning, Mode=OneWay}" />
+                        Visibility="{x:Bind ViewModel.Gpu.CanConfirm, Mode=OneWay}" />
                 </StackPanel>
             </Expander>
 

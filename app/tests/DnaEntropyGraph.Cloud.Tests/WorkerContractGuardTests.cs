@@ -75,4 +75,65 @@ public class WorkerContractGuardTests
             doc.RootElement.GetProperty("predictor").GetProperty("precision").GetString().ShouldBe(precision, $"model {id}");
         }
     }
+
+    /// <summary>Every disagreement between the worker's MODEL_REQUIREMENTS (the python text) and <see cref="GpuCatalog.Shipped"/>: model set, precision, Hopper, card count.</summary>
+    private static List<string> CatalogDisagreements(string python)
+    {
+        var blocks = Regex.Matches(python, @"""(?<id>evo2_[a-z0-9_]+)""\s*:\s*ModelRequirement\((?<body>.*?)\n    \),", RegexOptions.Singleline);
+        var problems = new List<string>();
+        var seen = new List<string>();
+        foreach (Match block in blocks)
+        {
+            var id = block.Groups["id"].Value;
+            var body = block.Groups["body"].Value;
+            seen.Add(id);
+            var precision = Regex.Match(body, @"precision=""(?<v>[a-z0-9]+)""").Groups["v"].Value;
+            var hopper = Regex.Match(body, @"needs_hopper=(?<v>True|False)").Groups["v"].Value == "True";
+            var countMatch = Regex.Match(body, @"min_gpu_count=(?<v>\d+)");
+            var count = countMatch.Success ? int.Parse(countMatch.Groups["v"].Value, System.Globalization.CultureInfo.InvariantCulture) : 1;
+            var model = GpuCatalog.Shipped.FindModel(id);
+            if (model is null)
+            {
+                problems.Add($"{id}: the worker knows it, the catalog does not");
+                continue;
+            }
+
+            if (model.Precision != precision)
+            {
+                problems.Add($"{id}: precision {model.Precision} in the catalog, {precision} in the worker");
+            }
+
+            if (model.NeedsHopper != hopper)
+            {
+                problems.Add($"{id}: needsHopper {model.NeedsHopper} in the catalog, {hopper} in the worker");
+            }
+
+            if (model.MinGpuCount != count)
+            {
+                problems.Add($"{id}: min GPU count {model.MinGpuCount} in the catalog, {count} in the worker");
+            }
+        }
+
+        foreach (var extra in GpuCatalog.Shipped.Models.Select(m => m.Id).Except(seen))
+        {
+            problems.Add($"{extra}: the catalog knows it, the worker does not");
+        }
+
+        seen.Count.ShouldBeGreaterThanOrEqualTo(5, "MODEL_REQUIREMENTS lists at least five models today; the parse found fewer");
+        return problems;
+    }
+
+    [Fact]
+    public void The_gpu_catalog_agrees_with_the_workers_model_requirements()
+        => CatalogDisagreements(Read("worker", "src", "dna_entropy", "predictors", "hardware.py")).ShouldBeEmpty();
+
+    [Fact]
+    public void A_changed_worker_requirement_is_caught_by_the_catalog_parity_check()
+    {
+        var python = Read("worker", "src", "dna_entropy", "predictors", "hardware.py");
+        var mutated = Regex.Replace(python, @"(""evo2_40b""\s*:\s*ModelRequirement\(.*?min_gpu_count=)2", "${1}1", RegexOptions.Singleline);
+        mutated.ShouldNotBe(python, "the mutation must change the 40b row, or this test proves nothing");
+
+        CatalogDisagreements(mutated).ShouldContain(p => p.StartsWith("evo2_40b: min GPU count", StringComparison.Ordinal));
+    }
 }

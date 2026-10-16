@@ -2150,6 +2150,9 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunGpuMisfit" xml:space="preserve">
     <value>{0} will not run on {1}: {2}. Choose another graphics card or model, or tick Run anyway below.</value>
   </data>
+  <data name="NewRunGpuNoCard" xml:space="preserve">
+    <value>No graphics card this app offers can run {0}. Choose another model.</value>
+  </data>
   <data name="NewRunGpuSwitchedNotice" xml:space="preserve">
     <value>Switched the graphics card to {0} for {1}.</value>
   </data>

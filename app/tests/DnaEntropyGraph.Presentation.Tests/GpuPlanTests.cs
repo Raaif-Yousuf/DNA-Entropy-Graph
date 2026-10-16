@@ -57,7 +57,7 @@ public sealed class GpuPlanTests : IDisposable
         _estimates,
         new OutputSelectionStore(Substitute.For<ISettingsStore>()),
         Substitute.For<IDiagnosticsLog>(),
-        gpu: new GpuPlanViewModel(catalog ?? GpuCatalog.Shipped, _strings));
+        new GpuPlanViewModel(catalog ?? GpuCatalog.Shipped, _strings));
 
     private async Task<NewRunViewModel> WithOneFile(GpuCatalog? catalog = null)
     {
@@ -212,6 +212,83 @@ public sealed class GpuPlanTests : IDisposable
         Gpu(vm, GpuTier.L4).Label.ShouldBe("NewRunGpuLocked");
         Gpu(vm, GpuTier.H100x2).IsLocked.ShouldBeFalse();
         Gpu(vm, GpuTier.H100x2).Label.ShouldBe("NewRunGpu_H100x2");
+    }
+
+    // ---- Spot-only shapes ----
+
+    [Fact]
+    public async Task A_spot_only_tier_makes_the_run_options_and_the_estimate_ask_for_spot()
+    {
+        var vm = await WithOneFile(Everything);
+        _estimates.ClearReceivedCalls();
+
+        vm.Gpu.SelectedModel = Model(vm, "evo2_40b");
+        await vm.StartRunCommand.ExecuteAsync(null);
+
+        _started!.GpuTier.ShouldBe(GpuTier.H100x2);
+        _started.SpotVm.ShouldBeTrue("a3-highgpu-2g is Spot or Flex-start only");
+        await WaitUntil(() => _estimates.ReceivedCalls().Any());
+        await _estimates.Received().EstimateAsync("a3-highgpu-2g", true, Dna.Length, 150, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task An_on_demand_tier_keeps_spot_off()
+    {
+        var vm = await WithOneFile(Everything);
+
+        vm.Gpu.SelectedGpu = Gpu(vm, GpuTier.A100_40);
+        await vm.StartRunCommand.ExecuteAsync(null);
+
+        _started!.SpotVm.ShouldBeFalse();
+    }
+
+    // ---- nothing fits ----
+
+    [Fact]
+    public async Task A_model_no_offered_card_can_run_cannot_be_run_even_when_ticked_and_says_what_to_do()
+    {
+        // 40B offered, but no Hopper card offered: an honest dead end, not a run on the L4.
+        var catalog = new GpuCatalog(Everything.Models, GpuCatalog.Shipped.Gpus);
+        var vm = await WithOneFile(catalog);
+
+        vm.Gpu.SelectedModel = Model(vm, "evo2_40b");
+
+        vm.Gpu.HasWarning.ShouldBeTrue();
+        vm.Gpu.WarningText.ShouldBe("NewRunGpuNoCard");
+        vm.Gpu.CanConfirm.ShouldBeFalse();
+        vm.Gpu.IsConfirmed = true;
+        vm.Gpu.IsRunnable.ShouldBeFalse();
+        vm.StartRunCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    // ---- pins do not undo a confirmation ----
+
+    [Fact]
+    public async Task Toggling_a_lock_keeps_the_confirmation_and_the_notice_when_the_pair_did_not_change()
+    {
+        var vm = await WithOneFile(Everything);
+        vm.Gpu.SelectedGpu = Gpu(vm, GpuTier.L4);
+        vm.Gpu.GpuPinned = true;
+        vm.Gpu.SelectedModel = Model(vm, "evo2_40b");
+        vm.Gpu.IsConfirmed = true;
+
+        vm.Gpu.ModelPinned = true;
+        vm.Gpu.GpuPinned = false;
+
+        vm.Gpu.IsConfirmed.ShouldBeTrue();
+        vm.StartRunCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Toggling_a_lock_keeps_the_notice_of_the_last_automatic_move()
+    {
+        var vm = await WithOneFile(Everything);
+        vm.Gpu.SelectedModel = Model(vm, "evo2_40b");
+        vm.Gpu.HasNotice.ShouldBeTrue();
+
+        vm.Gpu.GpuPinned = true;
+
+        vm.Gpu.HasNotice.ShouldBeTrue();
     }
 
     [Fact]

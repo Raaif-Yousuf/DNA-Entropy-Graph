@@ -22,8 +22,8 @@ public enum GpuFit
 }
 
 /// <summary>
-/// One model. THEORY (unverified) that this table matches the worker: it is copied from <c>worker/src/dna_entropy/predictors/hardware.py</c>
-/// <c>MODEL_REQUIREMENTS</c> (the worker refuses a run whose hardware disagrees, so a wrong row here costs the user a failed run, not a wrong answer).
+/// One model. Precision, Hopper and card count are guarded against <c>worker/src/dna_entropy/predictors/hardware.py</c> <c>MODEL_REQUIREMENTS</c>
+/// by <c>WorkerContractGuardTests</c> (the worker refuses a run whose hardware disagrees, so a wrong row here would cost the user a failed run).
 /// </summary>
 /// <param name="Id">The wire id (<c>predictor.model</c>).</param>
 /// <param name="Precision">"bf16" or "fp8".</param>
@@ -42,7 +42,7 @@ public sealed record ModelEntry(string Id, string Precision, int SizeBillions, i
 /// <param name="GpuCount">Graphics cards in the machine.</param>
 /// <param name="VramGbPerGpu">Memory of one card.</param>
 /// <param name="IsHopper">Whether the card is a Hopper (H100).</param>
-/// <param name="SpotOnly">Compute Engine offers this shape on Spot or Flex-start only (recorded; the page does not act on it yet).</param>
+/// <param name="SpotOnly">Compute Engine offers this shape on Spot or Flex-start only, so a run on it must be a Spot run (the pickers set <c>RunOptions.SpotVm</c>). THEORY (unverified against a real project): Appendix B section 4.1 says "not offered on-demand for small A3 shapes", which this catalog reads as both a3-highgpu-1g and 2g.</param>
 /// <param name="ContextCeiling">The largest window (bases) one forward pass fits on this tier, for the 7B model; null where it has not been measured (science_and_formats.md section 3). Never guessed.</param>
 /// <param name="Offered">Whether the page lets the user pick the tier.</param>
 public sealed record GpuEntry(
@@ -92,7 +92,7 @@ public sealed class GpuCatalog
             new GpuEntry(GpuTier.L4, "g2-standard-8", "nvidia-l4", QuotaMetrics.NvidiaL4Gpus, 1, 24, IsHopper: false, SpotOnly: false, ContextCeiling: 8192, Offered: true),
             new GpuEntry(GpuTier.A100_40, "a2-highgpu-1g", "nvidia-tesla-a100", QuotaMetrics.NvidiaA100Gpus, 1, 40, IsHopper: false, SpotOnly: false, ContextCeiling: null, Offered: true),
             new GpuEntry(GpuTier.A100_80, "a2-ultragpu-1g", "nvidia-a100-80gb", QuotaMetrics.NvidiaA100Gpus80Gb, 1, 80, IsHopper: false, SpotOnly: false, ContextCeiling: null, Offered: true),
-            new GpuEntry(GpuTier.H100, "a3-highgpu-1g", "nvidia-h100-80gb", QuotaMetrics.NvidiaH100Gpus, 1, 80, IsHopper: true, SpotOnly: false, ContextCeiling: null, Offered: false),
+            new GpuEntry(GpuTier.H100, "a3-highgpu-1g", "nvidia-h100-80gb", QuotaMetrics.NvidiaH100Gpus, 1, 80, IsHopper: true, SpotOnly: true, ContextCeiling: null, Offered: false),
             new GpuEntry(GpuTier.H100x2, "a3-highgpu-2g", "nvidia-h100-80gb", QuotaMetrics.NvidiaH100Gpus, 2, 80, IsHopper: true, SpotOnly: true, ContextCeiling: null, Offered: false),
         ]);
 

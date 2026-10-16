@@ -24,9 +24,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     // really uses comes from the linked pickers (Gpu, issue #87), which start on the first model the catalog offers: this one.
     private const string DefaultModelId = "evo2_7b";
 
-    // The VM kind the page's Run uses (RunOptions default: on-demand), so the estimate prices the machine a run on this page really starts.
-    // When a Spot picker lands it must feed both StartRunAsync and the estimate. The tier comes from the Gpu pickers.
-    private const bool DefaultSpot = false;
+    // The tier and the VM kind (on-demand, or Spot where the tier is Spot-only) come from the Gpu pickers and feed both StartRunAsync and the estimate.
 
     // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
     private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
@@ -101,6 +99,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         ICostEstimateService estimates,
         OutputSelectionStore outputStore,
         IDiagnosticsLog log,
+        GpuPlanViewModel gpu,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null,
         NewRunIntake? intake = null,
@@ -109,10 +108,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Func<string, string, Topology, AnnotationCheckResult>? validateAnnotation = null,
         bool? offerAnnotation = null,
         bool? offerAccession = null,
-        IAccessionLookup? accessionLookup = null,
-        GpuPlanViewModel? gpu = null)
+        IAccessionLookup? accessionLookup = null)
     {
-        Gpu = gpu ?? new GpuPlanViewModel(GpuCatalog.Shipped, strings);
+        // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
+        Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
         Gpu.Changed += OnGpuPlanChanged;
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _accessionLookup = accessionLookup;
@@ -885,6 +884,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             ModelId = Gpu.ModelId,
             RunTarget = "Cloud",
             GpuTier = Gpu.Tier,
+            SpotVm = Gpu.RequiresSpot,
             InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
             AnnotationPath = SelectedItem.AnnotationPath,
             Accession = SelectedItem.Accession,
@@ -1079,7 +1079,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         string diskText;
         try
         {
-            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(Gpu.Tier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
+            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(Gpu.Tier), Gpu.RequiresSpot, bases, DefaultBootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))

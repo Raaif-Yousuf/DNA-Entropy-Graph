@@ -185,6 +185,14 @@ starts and the machine the pickers and the estimate name cannot drift apart. GPU
 
 - **Fit**: Hopper first, then card count, then memory (`GpuFit`). MEASURED (project memory, prototype): Evo 2 7B runs on an L4 and an A100
   only; 1B, 20B and 40B need Hopper FP8 (H100), 40B two of them (`a3-highgpu-2g`, Spot or Flex-start only).
+- **Parity with the worker**: `WorkerContractGuardTests.The_gpu_catalog_agrees_with_the_workers_model_requirements` parses `hardware.py`
+  `MODEL_REQUIREMENTS` and fails when the model set, precision, Hopper need or card count differ; a second test mutates a copy of the text
+  (40B card count) and proves the check goes red.
+- **Spot-only tiers**: both A3 shapes (`a3-highgpu-1g` and `-2g`) are `SpotOnly`. Source: Appendix B section 4.1, "not offered on-demand for small
+  A3 shapes". THEORY (unverified against a real project): that wording covers the 1g shape too. A run on a SpotOnly tier carries
+  `RunOptions.SpotVm = true` and its estimate is asked for Spot (the price list has no A3 rows, so it says no estimate). Mapping `SpotVm` to the VM's
+  scheduling is issue #91's `VmSpec.Spot`; until it lands a SpotOnly tier would be requested on-demand, which is why no SpotOnly tier is offered today.
+- **Nothing fits**: when no offered card can run the chosen model the page says to choose another model, offers no "Run anyway", and Run stays off.
 - **Linking** (`ModelGpuLinker`, pure): a model pick raises an unpinned GPU to the cheapest offered tier that fits; a GPU pick moves an
   unpinned model to the largest offered model that fits (a tie keeps the current one); a pinned side never moves, so the pair can be
   infeasible, which the page warns about and asks the user to confirm. "Automatic" (`CheapestAvailable`) stays automatic in
@@ -194,6 +202,8 @@ starts and the machine the pickers and the estimate name cannot drift apart. GPU
   evo2_40b and evo2_1b_base, or hide them; an owner DECISION, open) is decided. MEASURED 2026-10-15: the app had offered only evo2_7b
   (no model picker existed), so only evo2_7b and the L4, A100 40 and A100 80 tiers are offered, and the model picker is hidden while one
   model is offered. `GpuCatalogTests.Today_only_the_standard_7b_model...` pins that state.
+- **Zone availability (not handled here)**: the zone ladder is `us-central1-a/b/c/f` for every tier, and an A100 80 GB or A3 machine type may not exist
+  in all of them; see the issue filed from the #87 cold review about how a "machine type not found in zone" error classifies.
 - **Accelerator and quota** per tier (`GpuEntry.Accelerator`, `QuotaMetric`) are what issue #414's accelerator-type field and the
   preflight quota check can read instead of the `"gpu"` placeholder; this change does not wire them into `VmSpec`.
 - **Window ceiling**: `GpuEntry.ContextCeiling` is 8,192 for the L4 and null (unmeasured, never guessed) for the others; the clamp offer
