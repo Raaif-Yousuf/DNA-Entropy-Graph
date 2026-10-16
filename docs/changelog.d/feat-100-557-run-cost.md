@@ -1,1 +1,2 @@
 - The Results page header and each Runs row now show the run's estimated cost (the figure the spend ledger booked, Spot-aware, "no cloud cost" for This PC runs, nothing for a run that never had a VM). RunRecord.ActualCostUsd documented as reserved and unused (#100, #557).
+- A run's booked cost is frozen once stored (a later price list change or a stale upsert no longer changes it, so the run pages match the month total); a non-finite or negative figure shows no cost line; run targets are the shared RunTargets constants, compared case-insensitively.

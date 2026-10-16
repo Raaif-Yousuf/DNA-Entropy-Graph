@@ -377,6 +377,30 @@ public class SpendLedgerTests
         }
     }
 
+    private sealed class Pricing2(string json) : IPricingSource
+    {
+        public PricingLoadResult Load() => PricingTable.Parse(json);
+    }
+
+    [Fact]
+    public async Task A_later_upsert_of_an_ended_row_keeps_the_first_booked_cost_even_if_the_price_list_changed()
+    {
+        var runs = new MemoryRuns();
+        var (ledger, repo, settings, paths) = Make();
+        using (paths)
+        {
+            await new LedgerRecordingRunRepository(runs, ledger).UpsertAsync(Finished("r1", 1), CancellationToken.None);
+            var booked = (await repo.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull();
+
+            // The price doubles, and a writer upserts the row again from an older copy that carries no figure.
+            var doubled = new SpendLedger(repo, new Pricing2(PricingJson.Replace("\"onDemandUsdPerHour\":1.0", "\"onDemandUsdPerHour\":2.0", StringComparison.Ordinal)), settings, new FixedTime(Now), TimeZoneInfo.Utc, runs);
+            await new LedgerRecordingRunRepository(runs, doubled).UpsertAsync(Finished("r1", 1), CancellationToken.None);
+
+            runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull().ShouldBe(booked, 1e-12, "the run row keeps what the ledger booked");
+            (await repo.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull().ShouldBe(booked, 1e-12);
+        }
+    }
+
     [Fact]
     public async Task The_run_row_is_stored_before_the_ledger_row_so_a_failed_store_leaves_no_ledger_row_and_the_retry_books_it_once()
     {

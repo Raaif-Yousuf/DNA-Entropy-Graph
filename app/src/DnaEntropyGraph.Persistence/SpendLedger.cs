@@ -59,17 +59,20 @@ public sealed class SpendLedger : ISpendCapGate
         ArgumentNullException.ThrowIfNull(run);
         // A local-engine run (Target "local") rents no VM and books nothing. There is deliberately no fallback to StartedAt for a row with no
         // VmReadyAt: the engine writes the planned VM name up front, so a name is no proof a VM ever existed.
-        if (!string.Equals(run.Target, "cloud", StringComparison.Ordinal)
+        if (!string.Equals(run.Target, RunTargets.Cloud, StringComparison.OrdinalIgnoreCase)
             || !JobStateMachine.IsTerminal(run.Phase)
             || run.VmReadyAt is not { } vmStart
             || run.FinishedAt is not { } finished
-            || UsdFor(run, vmStart, finished) is not { } usd)
+            || (BookedUsd(run) ?? UsdFor(run, vmStart, finished)) is not { } usd)
         {
             return null;
         }
 
         return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished, UsdEst: usd);
     }
+
+    /// <summary>The figure an ended row already carries (first write wins: a later pricing change or a stale copy never re-quotes it), or null.</summary>
+    private static double? BookedUsd(RunRecord run) => run.EstimatedCostUsd is { } usd && double.IsFinite(usd) && usd >= 0 ? usd : null;
 
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>
     public async Task<CostLedgerEntry?> RecordRunAsync(RunRecord run, CancellationToken cancellationToken)
@@ -147,7 +150,7 @@ public sealed class SpendLedger : ISpendCapGate
         var total = 0.0;
         foreach (var run in latest)
         {
-            if (!string.Equals(run.Target, "cloud", StringComparison.Ordinal) || JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
+            if (!string.Equals(run.Target, RunTargets.Cloud, StringComparison.OrdinalIgnoreCase) || JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
             {
                 continue;
             }
@@ -209,6 +212,14 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
+        // First write wins, same as the ledger: a row already stored with its booked cost keeps it, so the run pages and the
+        // month total can never disagree after a price list change or an upsert from an older copy of the row.
+        if (run.EstimatedCostUsd is null && JobStateMachine.IsTerminal(run.Phase)
+            && (await inner.GetAllAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(r => r.JobId == run.JobId) is { EstimatedCostUsd: { } kept } stored)
+        {
+            run = run with { EstimatedCostUsd = kept, VmSeconds = stored.VmSeconds };
+        }
+
         var quote = ledger.Quote(run);
         if (quote is not null)
         {

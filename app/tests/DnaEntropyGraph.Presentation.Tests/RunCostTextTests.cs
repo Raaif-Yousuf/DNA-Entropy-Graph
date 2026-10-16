@@ -59,6 +59,25 @@ public sealed class RunCostTextTests
         RunCostText.Short(Row(3.0, "local"), _strings).ShouldBe("none");
     }
 
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    [InlineData(-0.5)]
+    public void A_figure_that_is_not_a_real_amount_shows_no_line(double usd)
+    {
+        RunCostText.Header(Row(usd), _strings).ShouldBeNull();
+        RunCostText.Short(Row(usd), _strings).ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_local_target_matches_whatever_its_case()
+    {
+        RunCostText.Header(Row(null, RunTargets.Local.ToUpperInvariant()), _strings).ShouldBe("no cloud cost");
+        RunTargets.Cloud.ShouldBe("cloud");
+        RunTargets.Local.ShouldBe("local");
+    }
+
     [Fact]
     public void A_cloud_run_with_no_booked_figure_shows_nothing()
     {

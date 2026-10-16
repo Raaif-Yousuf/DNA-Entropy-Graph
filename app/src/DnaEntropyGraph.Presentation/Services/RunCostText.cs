@@ -1,4 +1,5 @@
 using System.Globalization;
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Presentation.ViewModels;
 
@@ -13,7 +14,6 @@ namespace DnaEntropyGraph.Presentation.Services;
 /// </summary>
 public static class RunCostText
 {
-    private const string LocalTarget = "local";
 
     /// <summary>The whole-dollars-and-cents text of a figure: rounded to the cent, never below one cent (a real VM ran).</summary>
     public static string Money(double usd)
@@ -30,12 +30,12 @@ public static class RunCostText
     private static string? Build(RunRecord run, IStringResourceProvider strings, string noCloudKey, string estimateKey, string spotKey)
     {
         ArgumentNullException.ThrowIfNull(run);
-        if (string.Equals(run.Target, LocalTarget, StringComparison.Ordinal))
+        if (string.Equals(run.Target, RunTargets.Local, StringComparison.OrdinalIgnoreCase))
         {
             return strings.GetString(noCloudKey);
         }
 
-        return run.EstimatedCostUsd is { } usd
+        return run.EstimatedCostUsd is { } usd && double.IsFinite(usd) && usd >= 0
             ? string.Format(CultureInfo.CurrentCulture, strings.GetString(run.IsSpot == true ? spotKey : estimateKey), Money(usd))
             : null;
     }
