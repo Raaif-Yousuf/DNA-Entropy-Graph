@@ -511,6 +511,12 @@
   <data name="NewRunNotice_GenBankRecordSkippedNoSequence" xml:space="preserve">
     <value>Record {0} has no sequence, so it was left out.</value>
   </data>
+  <data name="NewRunNotice_GenBankFeaturesDropped" xml:space="preserve">
+    <value>{0} genes in record {1} were left out because their positions could not be read. Fix the positions in the file (for example 1..42 or complement(85..126)) and add the file again to include them.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
+  </data>
   <data name="NewRunNotice_RnaConverted" xml:space="preserve">
     <value>Read {0} U letters as T, because this input is treated as RNA.</value>
   </data>
