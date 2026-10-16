@@ -12,6 +12,7 @@ from pathlib import Path
 import typer
 
 from . import __version__, pipeline
+from .analysis.composition import DEFAULT_GC_WINDOW
 from .analysis.regions import DEFAULT_MERGE_GAP, DEFAULT_MIN_LENGTH, DEFAULT_THRESHOLD_BITS
 from .analysis.smoothing import DEFAULT_SMOOTHING_WINDOWS
 from .analysis.windowing import WindowingError
@@ -210,6 +211,20 @@ def run(
         help="Also write <name>.genes.tsv and <name>.genes.csv: one row per gene with its mean, "
         "min and max entropy (needs genes: a GenBank input, or --genes; issue #124).",
     ),
+    gc: bool = typer.Option(
+        False,
+        "--gc/--no-gc",
+        help="Also write <name>.gc.bedgraph: GC percent over a rolling window; no model needed (issue #191).",
+    ),
+    gc_window: int = typer.Option(
+        DEFAULT_GC_WINDOW, "--gc-window", help="GC window in bases, an odd number (with --gc)."
+    ),
+    codons: bool = typer.Option(
+        False,
+        "--codons/--no-codons",
+        help="Also write <name>.codons.tsv: codon usage per gene (needs genes: a GenBank input, "
+        "a --gff3, or --genes; issue #191).",
+    ),
     seed: int = typer.Option(0, "--seed", help="Mock predictor seed (reproducibility)."),
 ) -> None:
     """Run the full pipeline: validate -> predict -> entropy -> IGV files."""
@@ -257,6 +272,9 @@ def run(
             region_min_length=region_min_length,
             region_merge_gap=region_merge_gap,
             include_gene_summary=gene_summary,
+            include_gc=gc,
+            gc_window=gc_window,
+            include_codons=codons,
             seed=seed,
         )
     except ValueError as exc:  # bad --predictor/--format/--direction/--ambiguity value

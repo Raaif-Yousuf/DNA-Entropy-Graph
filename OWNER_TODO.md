@@ -25,34 +25,90 @@ purpose, not forgotten.
 ### 1a. Create the OAuth Desktop-app client and consent screen (#21)
 
 The app cannot sign anyone in until an OAuth client exists in an owner-controlled Google
-Cloud project, with the consent screen configured (External, Testing) and the
-client-based APIs enabled there.
+Cloud project. About 15 minutes. Console labels as of 2026-10; Google renames these pages
+often, so search the console bar for the bold word if a path has moved.
 
-- [ ] Client id available to the build; client secret in
-      `app/secrets/oauth_client.local.json` locally and as a GitHub Actions secret for CI
-- [ ] Resource Manager, Service Usage, Billing, Quotas, IAM, Compute, Storage APIs
-      enabled in the owner's project
-- [ ] Lab members added as OAuth test users
+**Recommended: two projects.** A *publisher* project holds only the OAuth client and never
+runs anything. A *dev* project (1b) holds the GPU quota and the test VMs. Moving an OAuth
+client later changes the client id in every build and makes every user consent again, so the
+publisher project should be the permanent one from day one. (Alternative: one project for
+both. It is simpler today, but the move costs more later.)
 
-**Blocks:** any real sign-in, and therefore every other cloud item below and most of the
-GCP-side engineering work that has not yet been able to touch a real project tonight.
+1. [ ] console.cloud.google.com > project picker > **New project**. Name it
+       `DNA Entropy Graph` and note the project id Google assigns (for example
+       `dna-entropy-graph-123456`). Organisation: none (personal account) is fine.
+2. [ ] **Billing** > link a billing account. This project creates nothing that costs money,
+       but Google will not enable Compute or Storage without billing.
+3. [ ] **APIs & Services > Library**. Enable each of these: Cloud Resource Manager API,
+       Service Usage API, Cloud Billing API, Cloud Quotas API, Identity and Access
+       Management (IAM) API, Compute Engine API, Cloud Storage JSON API.
+4. [ ] **Google Auth Platform > Branding**. App name `DNA Entropy Graph`, your support
+       email, developer contact email. No logo, because a logo triggers brand review.
+5. [ ] **Google Auth Platform > Audience**. User type **External**, publishing status
+       **Testing** (DECISION #11). Under **Test users**, add your own Google account first,
+       then lab members (at most 100). Only listed accounts can sign in while in Testing.
+6. [ ] **Google Auth Platform > Data access** > Add scope
+       `https://www.googleapis.com/auth/cloud-platform` (DECISION #18), plus `openid` and
+       `email`. Save.
+7. [ ] **Google Auth Platform > Clients > Create client**. Application type **Desktop
+       app**, name `DNA Entropy Graph desktop`. Create, then **Download JSON**.
+8. [ ] Save the download as `app\secrets\oauth_client.local.json`. Create the `secrets`
+       folder if it is missing; it is gitignored. Open the file and check that it starts
+       with `{"installed":{"client_id":...`. A `"web"` key means the wrong client type was
+       chosen in step 7.
+9. [ ] Never commit this file and never paste the secret anywhere. The CI secret is a
+       separate step that waits on #518.
+
+**Check:** a dev build of the app, Settings > Sign in, opens the browser, you approve, and
+the app shows your email. If the app says `OAUTH_CLIENT_MISSING`, the file is not where
+step 8 put it. If Google shows "Access blocked: app not verified" or "has not completed the
+Google verification process", your account is missing from the step 5 test users.
 
 ### 1b. GPU quota and a dev project for `cloud_gpu_test.ps1` (#24)
 
 GPU tests only run on a labelled VM in the owner's own project; the dev laptop has no
-CUDA-capable GPU (Hard Rule 15). Worth starting in the same sitting as 1a, since it needs
-the same project and quota approval is not instant.
+CUDA-capable GPU (Hard Rule 15). About 10 minutes, plus Google's quota approval time,
+which is usually minutes and sometimes 1-2 days. Start it in the same sitting as 1a.
 
-- [ ] Owner dev project with billing enabled, Compute API enabled, `NVIDIA_L4_GPUS >= 1`
-      in at least one region, `GPUS_ALL_REGIONS >= 1`
-- [ ] Project id recorded in `.claude/skills/working-on-gcp/SKILL.md` as
-      `MEASURED <date>:`, this file records no project id itself, on purpose, so it
-      cannot go stale; the skill file is the single place that number lives once it
-      exists
+1. [ ] Project picker > **New project** > `deg-dev`. Note the project id.
+2. [ ] **Billing** > link the same billing account.
+3. [ ] **APIs & Services > Library** > enable **Compute Engine API** and **Cloud Storage
+       JSON API**. The first enable takes 1-2 minutes.
+4. [ ] Optional but recommended: **Billing > Budgets & alerts** > a budget scoped to this
+       project, for example $25 a month, with email alerts at 50 / 90 / 100 %. A budget
+       only alerts; it never stops spend. The app's own hard stop is #109.
+5. [ ] **IAM & Admin > Quotas & System Limits**. Filter `GPUs (all regions)`
+       (`GPUS_ALL_REGIONS`). Tick it > **Edit** > new value **1**. Paste this
+       justification:
+       `Running the Evo 2 genomic language model for DNA sequence analysis (DNA Entropy
+       Graph desktop app). One GPU, short jobs, usually under 30 minutes.`
+6. [ ] Same page, filter `NVIDIA L4 GPUs` (`NVIDIA_L4_GPUS`). Pick region
+       **us-central1**: the test script tries `us-central1-a` first. Edit to **1** with
+       the same justification. Skip the "Preemptible" and "Committed" variants of the
+       L4 row; they are separate quotas.
+7. [ ] Wait for both approval emails. Both rows must show a limit of 1 or more.
+       `GPUS_ALL_REGIONS = 0` overrides a regional 1.
+8. [ ] Point your local CLI at the dev project without disturbing CLAIR's default. Type
+       these in the Claude Code prompt with the `!` prefix, or in any terminal:
+       ```
+       gcloud config configurations create deg
+       gcloud config set project <deg-dev project id>
+       gcloud config set account <your Google account>
+       gcloud config set compute/region us-central1
+       ```
+       To switch back to CLAIR later, run `gcloud config configurations activate default`.
+9. [ ] Tell the session the dev project id. It gets recorded in
+       `.claude/skills/working-on-gcp/SKILL.md` as `MEASURED <date>:`, the single place
+       that id lives. This file does not record it.
 
-**Blocks:** every GPU test, every real end-to-end worker run, and the whole `docs/ToTest.md`
-queue this session seeded (every cloud path in this repo has, as of tonight, only ever
-run against an in-memory fake).
+**Check:** `gcloud compute regions describe us-central1 --format="value(quotas)"` lists
+`NVIDIA_L4_GPUS` with a limit of 1, and the first dry-run plan
+`pwsh scripts/cloud_gpu_test.ps1 -ProjectId <id>` (no `-Apply`, so it creates nothing)
+prints the project and zone instead of `NOT SET`.
+
+**If a quota request is denied:** a brand-new billing account has no usage history yet.
+Retry in a few days. Meanwhile the CPU-VM checks (the #56 row in `docs/ToTest.md`) need
+no GPU quota.
 
 ---
 
