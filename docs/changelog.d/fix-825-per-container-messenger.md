@@ -1,0 +1,1 @@
+- Fix (#825): each service container now owns its own messenger instead of the process-wide `WeakReferenceMessenger.Default`, so a Reset-all-settings message in one container (or test) can no longer reach another container's pickers and flake `RunTargetPickerSharingTests`. A guard fails if app/src references a static messenger.

@@ -1334,7 +1334,7 @@ the running app calls this class yet.
   Not built: the run page's "Starting your computer from yesterday" line (a run-page string, owned by the Presentation lane).
 - **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
   scheduling settings; that the `labels.job-id = "x"` filter syntax matches; that the DLVM image family boots and runs docker on a machine with no GPU;
-  the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row.
+  the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row. The reuse (like a create) is registered as in flight immediately BEFORE the gateway call is made (`VmProvisioner.TrackInflightCreate`, a placeholder that completes with the real task), because the gateway's synchronous part runs before it returns its task: MEASURED 2026-10-16 (#784), a cancel that looked in that window settled nothing and the VM then landed RUNNING under a Cancelled record. A cancel that arrives earlier (between the claim and the start of the call) is not in flight yet; it is covered instead by the cancel's label lookup, which finds the claimed VM by its job-id label.
 
 ### The worker identity (issue #54)
 

@@ -2480,4 +2480,76 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
     <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
   </data>
+  <data name="HelpButton.Content" xml:space="preserve">
+    <value>Help</value>
+  </data>
+  <data name="TourStepNewRun.Title" xml:space="preserve">
+    <value>Start here</value>
+  </data>
+  <data name="TourStepNewRun.Subtitle" xml:space="preserve">
+    <value>Drop a GenBank or FASTA file, or paste a sequence, then press Run. The app checks your file first, so nothing is rented until it is ready.</value>
+  </data>
+  <data name="TourStepNewRun.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepNewRun.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepRuns.Title" xml:space="preserve">
+    <value>Your runs</value>
+  </data>
+  <data name="TourStepRuns.Subtitle" xml:space="preserve">
+    <value>Every run you start is listed here with how it is going. Open one to see its results or the genome viewer.</value>
+  </data>
+  <data name="TourStepRuns.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepRuns.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepCloud.Title" xml:space="preserve">
+    <value>Your cloud</value>
+  </data>
+  <data name="TourStepCloud.Subtitle" xml:space="preserve">
+    <value>This is where you see the rented computers (VMs) and storage this app made in your Google Cloud project, and stop or delete them so they do not keep costing money.</value>
+  </data>
+  <data name="TourStepCloud.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepCloud.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepSettings.Title" xml:space="preserve">
+    <value>Settings and help</value>
+  </data>
+  <data name="TourStepSettings.Subtitle" xml:space="preserve">
+    <value>Choose where files go and how you are told a run is done. The Help button at the top right opens the guide page for the screen you are on, and you can show this tour again from Settings.</value>
+  </data>
+  <data name="TourStepSettings.ActionButtonContent" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="TourStepSettings.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="SettingsHelpHeader.Text" xml:space="preserve">
+    <value>Help</value>
+  </data>
+  <data name="SettingsHelpExplainer.Text" xml:space="preserve">
+    <value>Walk through the main screens again, or read the guide in your web browser.</value>
+  </data>
+  <data name="ReplayTourButton.Content" xml:space="preserve">
+    <value>Show the tour again</value>
+  </data>
+  <data name="OpenUserGuideLink.Content" xml:space="preserve">
+    <value>Open the user guide</value>
+  </data>
+  <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
+    <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
+  </data>
+  <data name="DataFolderUnusable_Portable_NotAFolder" xml:space="preserve">
+    <value>The app is in portable mode but {0} is a file, not a folder. Rename or move that file, or delete the file portable.flag next to the app to use the normal folder instead.</value>
+  </data>
+  <data name="OpenWithPortable" xml:space="preserve">
+    <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
+  </data>
 </root>
