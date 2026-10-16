@@ -48,13 +48,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from land_wt import CHECKS_TIMEOUT_SECONDS, pid_alive
+from land_wt import CHECKS_TIMEOUT_SECONDS, pid_alive, proc_start_time, run_bounded
 
 Runner = Callable[[list[str], "Path | None"], "tuple[int, str]"]
 
 _HB_LOCK = threading.Lock()
 STDERR_MARK = "\n--- stderr ---\n"
-STALE_MARGIN_SECONDS = 30 * 60  # a runner heartbeat older than checks_timeout + this is stale (a reused pid, or a hung runner)
+STALE_MARGIN_SECONDS = 30 * 60  # no progress for checks_timeout + this is shown by `status` as NO PROGRESS (never a reason to replace)
 _DONE_KEY = re.compile(r"(\S+) @ ([0-9A-Za-z]+)\s*$")
 _PR_URL = re.compile(r"pull/(\d+)")
 
@@ -67,11 +67,11 @@ COMMAND_TIMEOUT_SECONDS = 600.0
 
 
 def run_command(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
-    """Bytes in, text out (never text=True on Windows: it re-encodes). gh and git get a generous timeout (rc 124, `TIMEOUT after`);
-    land_wt.py has its own deadlines and gets none."""
+    """Bytes in, text out (never text=True on Windows: it re-encodes). gh and git get a generous timeout (rc 124, `TIMEOUT after`)
+    that kills the whole process tree; land_wt.py has its own per-call deadlines and gets none."""
     limit = None if any(Path(a).name == "land_wt.py" for a in argv[1:3]) else COMMAND_TIMEOUT_SECONDS
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, check=False, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=limit)
+        proc = run_bounded(argv, cwd=cwd, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=limit)
     except subprocess.TimeoutExpired:
         return 124, f"TIMEOUT after {int(limit or 0)} s: {' '.join(argv[:4])}"
     except OSError as err:
@@ -139,6 +139,19 @@ def pending_items(queue_text: str, taken: set[str]) -> list[Item]:
 
 class AlreadyRunning(RuntimeError):
     """Another runner for this state directory is alive."""
+
+
+def owner_alive(cur: dict[str, float], alive: Callable[[int], bool], start_time: Callable[[int], float | None]) -> bool:
+    """The recorded runner is alive: its pid exists AND (when both are known) its creation time is the recorded one.
+    A pid that exists with a different creation time was reused by another program (Windows reuses pids): it is dead to us."""
+    pid = int(cur["pid"])
+    if not alive(pid):
+        return False
+    recorded = cur.get("started")
+    if recorded is None:
+        return True
+    now = start_time(pid)
+    return now is None or abs(now - float(recorded)) <= 1.0
 
 
 class State:
@@ -214,17 +227,32 @@ class State:
     def consume_stop(self) -> None:
         self._p("runner.stop").unlink(missing_ok=True)
 
-    def write_runner(self, pid: int, ts: float, sleep: Callable[[float], None] = time.sleep, beat: float | None = None) -> bool:
-        """Heartbeat: replace our own runner.json atomically; `ts` is the main thread's last PROGRESS, `beat` the beater's own clock.
-        Returns False (and writes nothing) when the file no longer holds our pid: a new owner's claim is never overwritten.
-        Another process (`status`) may hold it open (PermissionError on Windows): retry, then give up quietly."""
+    def write_runner(
+        self, pid: int, ts: float, sleep: Callable[[float], None] = time.sleep, beat: float | None = None, started: float | None = None
+    ) -> bool:
+        """Heartbeat: replace our own runner.json atomically; `ts` is the main thread's last PROGRESS, `beat` the beater's own clock,
+        `started` our process creation time (kept from the file when not given).
+        Returns False (and writes nothing) when the file is missing, empty, unparsable or holds another pid: only a parsed file
+        holding OUR pid is ever replaced, so a new owner's claim (or one still being written) is never overwritten. A file that cannot
+        be read right now (`status` has it open, PermissionError on Windows) is retried and then skipped quietly: True, nothing written.
+        The check-then-replace window is narrow and accepted (a claimer renames the file aside, so a late replace here lands
+        on a file the claimer has already moved: the claimer's own `moved` check puts a fresh claim back)."""
         tmp = self._p(f"runner.json.{pid}.tmp")
         for attempt in range(4):
             kind, cur = self._runner_raw()
-            if kind in {"missing", "ok"} and (cur is None or int(cur["pid"]) != pid):
+            if kind == "unreadable":
+                if attempt < 3:
+                    sleep(0.2)
+                    continue
+                return True
+            if kind != "ok" or cur is None or int(cur["pid"]) != pid:
                 return False
+            record = {"pid": pid, "ts": ts, "beat": ts if beat is None else beat}
+            kept = started if started is not None else cur.get("started")
+            if kept is not None:
+                record["started"] = kept
             try:
-                tmp.write_text(json.dumps({"pid": pid, "ts": ts, "beat": ts if beat is None else beat}), encoding="utf-8", newline="\n")
+                tmp.write_text(json.dumps(record), encoding="utf-8", newline="\n")
                 os.replace(tmp, self._p("runner.json"))
                 return True
             except OSError:
@@ -239,14 +267,20 @@ class State:
         pid: int,
         ts: float,
         alive: Callable[[int], bool],
-        stale_after: float = 3600.0,
         sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
-        """Claim runner.json with O_EXCL so two starters cannot both win.
+        *,
+        start_time: Callable[[int], float | None] = proc_start_time,
+        started: float | None = None,
+        replace: bool = False,
+    ) -> int | None:
+        """Claim runner.json with O_EXCL so two starters cannot both win. Returns the pid it REPLACED (only with `replace`), else None.
 
+        A runner whose pid is alive (and whose creation time still matches the recorded one) is NEVER replaced automatically,
+        however old its heartbeat: AlreadyRunning. `replace=True` (`run --replace`, a human's call) takes over a live-but-stuck one.
         An empty or unparsable file is a claim in progress (the winner has created it and not written yet): wait briefly, and
-        only replace it when it is old. A parsed file whose pid is dead, or whose heartbeat is ancient (a reused pid), is stale:
+        only replace it when it is old. A parsed file whose pid is dead (or reused by another program) is stale:
         it is renamed to a unique name (atomic: only one racer wins the rename) and the claim retried."""
+        replaced: int | None = None
         path = self._p("runner.json")
         for attempt in range(40):
             try:
@@ -257,8 +291,8 @@ class State:
                 raise AlreadyRunning("runner.json is in use by another process. Check `status`") from None
             else:
                 with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(json.dumps({"pid": pid, "ts": ts, "beat": ts}))
-                return
+                    fh.write(json.dumps({"pid": pid, "ts": ts, "beat": ts, **({"started": started} if started is not None else {})}))
+                return replaced
             kind, cur = self._runner_raw()
             if kind == "missing":
                 continue
@@ -280,8 +314,12 @@ class State:
                 judged = None
             else:
                 judged = int(cur["pid"])
-                if judged != pid and alive(judged) and ts - float(cur.get("ts", 0)) <= stale_after:
-                    raise AlreadyRunning(f"a runner is already alive (pid {judged}). Check `status`; `stop` ends it")
+                if judged != pid and owner_alive(cur, alive, start_time):
+                    if not replace:
+                        raise AlreadyRunning(
+                            f"a runner is already alive (pid {judged}). Check `status`; `stop` ends it, `run --replace` takes over a stuck one"
+                        )
+                    replaced = judged
             aside = self._p(f"runner.json.stale.{pid}.{attempt}")
             try:
                 os.replace(path, aside)
@@ -312,7 +350,10 @@ class State:
             return "empty", None
         try:
             data = json.loads(text)
-            return "ok", {"pid": int(data["pid"]), "ts": float(data.get("ts", 0)), "beat": float(data.get("beat", data.get("ts", 0)))}
+            out = {"pid": int(data["pid"]), "ts": float(data.get("ts", 0)), "beat": float(data.get("beat", data.get("ts", 0)))}
+            if data.get("started") is not None:
+                out["started"] = float(data["started"])
+            return "ok", out
         except (ValueError, TypeError, KeyError, AttributeError):
             return "bad", None
 
@@ -351,6 +392,8 @@ class Env:
     clock: Callable[[], float] = time.time
     pid: int = field(default_factory=os.getpid)
     alive: Callable[[int], bool] = pid_alive
+    start_time: Callable[[int], float | None] = proc_start_time
+    started: float | None = None  # our own creation time, recorded in runner.json by drain
     ff_main: bool = False
     heartbeat_seconds: float = 60.0
     progress: float = 0.0  # clock() at the main thread's last progress (a subprocess returned, a poll ran, a stage began)
@@ -441,6 +484,8 @@ def merge_green(env: Env, pr: str, known_red: Sequence[str] = (), head_oid: str 
             head_oid = str(json.loads(env.run_json_text("gh", "pr", "view", pr, "--json", "headRefOid")).get("headRefOid", ""))
         except (ValueError, AttributeError):
             head_oid = ""
+    if not re.fullmatch(r"[0-9a-fA-F]{7,64}", head_oid):  # never merge without --match-head-commit
+        return "PENDING", "could not read the PR head commit (gh pr view failed); check gh auth, then `retry`"
     env.sleep(20)
     checks, timed_out = _settle(env, pr)
     bad = _failing(checks, ignore)
@@ -461,8 +506,7 @@ def merge_green(env: Env, pr: str, known_red: Sequence[str] = (), head_oid: str 
         return "REFUSED", "no checks were reported"
     if _mergeability(env, pr) == "DIRTY":
         return "DIRTY", ""
-    pin = ["--match-head-commit", head_oid] if head_oid else []
-    rc, out = env.run("gh", "pr", "merge", pr, "--merge", *pin)
+    rc, out = env.run("gh", "pr", "merge", pr, "--merge", "--match-head-commit", head_oid)
     if rc == 0:
         return "MERGED", ""
     if _mergeability(env, pr) == "DIRTY":
@@ -617,7 +661,7 @@ def _heartbeat(env: Env) -> bool:
     """Write runner.json with the main thread's last progress. Never raises; False once the file is no longer ours."""
     try:
         with _HB_LOCK:
-            return State(env.state).write_runner(env.pid, env.progress, env.sleep, env.clock())
+            return State(env.state).write_runner(env.pid, env.progress, env.sleep, env.clock(), env.started)
     except Exception as err:  # noqa: BLE001  (a heartbeat failure must never end the runner)
         with contextlib.suppress(Exception):
             State(env.state).append_flake(f"{env.now()} HEARTBEAT-FAIL {type(err).__name__}: {err}")
@@ -671,10 +715,13 @@ def _recover_interrupted(st: State) -> None:
     st.clear_inflight()
 
 
-def drain(env: Env, *, forever: bool = False) -> None:
+def drain(env: Env, *, forever: bool = False, replace: bool = False) -> None:
     st = State(env.state)
     env.progress = env.clock()
-    st.claim_runner(env.pid, env.progress, env.alive, env.stale_after, env.sleep)
+    env.started = env.start_time(env.pid)
+    replaced = st.claim_runner(env.pid, env.progress, env.alive, env.sleep, start_time=env.start_time, started=env.started, replace=replace)
+    if replaced is not None:
+        st.append_done(f"REPLACED pid {replaced} {env.now()}")
     _recover_interrupted(st)
     stop_beat = threading.Event()
 
@@ -688,7 +735,9 @@ def drain(env: Env, *, forever: bool = False) -> None:
     try:
         while True:
             env.progress = env.clock()
-            _heartbeat(env)
+            if not _heartbeat(env):  # runner.json is no longer ours: another runner owns this state directory
+                st.append_done(f"DISPLACED {env.now()} (another runner took over runner.json; this one took no further item)")
+                return
             if st.stop_requested():
                 st.append_done(f"STOPPED {env.now()}")
                 st.consume_stop()
@@ -722,15 +771,18 @@ def drain(env: Env, *, forever: bool = False) -> None:
 
 
 def runner_line(env: Env) -> tuple[str, bool]:
-    """(text, alive). `alive` is the pid check; the heartbeat age is context (an item can wait 30 min on checks)."""
+    """(text, alive). `alive` is the pid check (plus the creation-time check against a reused pid); the progress age is context
+    (an item can wait 30 min on checks) and never changes `alive`: a stuck runner is for a human to replace with `run --replace`."""
     cur = State(env.state).runner()
     if cur is None:
         return "runner: not running", False
     pid, age = int(cur["pid"]), int(env.clock() - float(cur.get("ts", 0)))
-    if env.alive(pid) and age > env.stale_after:
-        return f"runner: STALE? (pid {pid} exists but its heartbeat is {age} s old; a reused pid or a hung runner). `run` will replace it", False
-    if env.alive(pid):
+    if owner_alive(cur, env.alive, env.start_time):
+        if age > env.stale_after:
+            return f"runner: alive, NO PROGRESS for {age // 60} min - inspect; replace with run --replace (pid {pid})", True
         return f"runner: alive pid {pid}, heartbeat {age} s ago", True
+    if env.alive(pid):
+        return f"runner: DEAD (pid {pid} now belongs to another program; last heartbeat {age} s ago). Start it again with `run`", False
     return f"runner: DEAD (pid {pid} is gone; last heartbeat {age} s ago). Start it again with `run`", False
 
 
@@ -777,6 +829,7 @@ def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pi
     add.add_argument("--red", default="", help="comma separated check names to ignore for this item")
     run = sub.add_parser("run")
     run.add_argument("--once", action="store_true")
+    run.add_argument("--replace", action="store_true", help="take over a live but stuck runner (`status` says NO PROGRESS); logged REPLACED")
     run.add_argument(
         "--ff-main", action="store_true", help="after a merge, fast-forward the main checkout (only if on main, clean, no index.lock)"
     )
@@ -797,7 +850,7 @@ def main(argv: Sequence[str] | None = None, *, alive: Callable[[int], bool] = pi
         print(f"OK: queued {args.branch} @ {args.sha}")
     elif args.cmd == "run":
         try:
-            drain(env, forever=not args.once)
+            drain(env, forever=not args.once, replace=args.replace)
         except AlreadyRunning as err:
             print(f"ERROR: {err}")
             return 1

@@ -27,6 +27,10 @@ import json, sys
 from pathlib import Path
 log = Path(sys.argv[1])
 log.open("a", encoding="utf-8", newline="\\n").write(json.dumps(sys.argv[2:]) + "\\n")
+hang = Path(str(log) + ".hang")
+if hang.exists() and " ".join(sys.argv[2:4]) in hang.read_text(encoding="utf-8").split(","):
+    import time
+    time.sleep(60)
 if sys.argv[2:4] == ["pr", "checks"]:
     # scripted replies: the Nth `pr checks` call gets replies[N] (the last one repeats); a string is raw stdout
     replies = json.loads(Path(str(log) + ".checks").read_text(encoding="utf-8"))
@@ -581,7 +585,15 @@ def _check(name: str, bucket: str, run: int | None = None) -> dict[str, str]:
 
 
 def _land_green(
-    world: World, replies: list, *, timeout: float = 100.0, poll: float = 10.0, merge_rc: int = 0, rerun: bool = False, rerun_rc: int = 0
+    world: World,
+    replies: list,
+    *,
+    timeout: float = 100.0,
+    poll: float = 10.0,
+    merge_rc: int = 0,
+    rerun: bool = False,
+    rerun_rc: int = 0,
+    gh_timeout: float | None = None,
 ) -> tuple[int, Clock]:
     if rerun_rc:
         (world.root / "gh.log.rerunrc").write_text(str(rerun_rc), encoding="utf-8")
@@ -592,6 +604,8 @@ def _land_green(
     body = world.root / "body.md"
     body.write_text("body\n", encoding="utf-8", newline="\n")
     ctx = world.ctx()
+    if gh_timeout is not None:
+        ctx.gh_timeout = gh_timeout
     clock = Clock()
     ctx.sleep, ctx.monotonic = clock.sleep, clock.monotonic
     rc = lw.land(
@@ -819,3 +833,96 @@ def test_genuine_no_checks_reported_keeps_its_own_message(world, capsys):
     _land_green(world, ["no checks reported on the 'feat/66-x' branch"], timeout=20.0, poll=10.0)
     out = capsys.readouterr().out
     assert "no checks were reported" in out and "gh could not read" not in out
+
+
+# --- round 6: every subprocess is bounded, and a timeout kills the whole tree ---------------------------------------
+
+
+def _pid_gone(pid: int, wait: float = 10.0) -> bool:
+    end = time.time() + wait
+    while time.time() < end:
+        if not lw.pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+GRANDCHILD = """\
+import subprocess, sys, time
+from pathlib import Path
+gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+Path(sys.argv[1]).write_text(str(gc.pid))
+time.sleep(60)
+"""
+
+
+def test_run_bounded_kills_the_whole_tree_on_timeout(tmp_path):
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(GRANDCHILD, encoding="utf-8", newline="\n")
+    start = time.time()
+    with pytest.raises(subprocess.TimeoutExpired):
+        lw.run_bounded([sys.executable, str(script), str(pidfile)], timeout=2.0)
+    assert time.time() - start < 15  # the grandchild holds the pipes open: only a tree kill returns promptly
+    assert _pid_gone(int(pidfile.read_text()))
+
+
+def test_run_bounded_returns_output_and_stdin_like_run():
+    proc = lw.run_bounded([sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read()); sys.exit(3)"], stdin=b"hi", timeout=30)
+    assert proc.returncode == 3 and proc.stdout == b"hi"
+
+
+def test_git_has_a_timeout_and_names_it(tmp_path):
+    hang = f"alias.zz=!{Path(sys.executable).as_posix()} -c 'import time; time.sleep(60)'"
+    with pytest.raises(lw.LandError, match="timed out"):
+        lw.git(tmp_path, "-c", hang, "zz", timeout=1.0)
+
+
+def test_a_hung_gh_pr_checks_is_a_read_failure_not_a_hang(world):
+    (world.root / "gh.log.hang").write_text("pr checks", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 1.0
+    start = time.time()
+    assert lw._read_checks(ctx, "7") is None
+    assert time.time() - start < 15
+    assert "timed out" in ctx.checks_error
+
+
+def test_hung_check_reads_still_reach_the_deadline(world, capsys):
+    (world.root / "gh.log.hang").write_text("pr checks", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 0.5
+    clock = Clock()
+    ctx.sleep, ctx.monotonic = clock.sleep, clock.monotonic
+    assert lw._merge_when_green(ctx, "https://github.com/o/r/pull/7", 30.0, 10.0) == lw.EXIT_CHECKS_PENDING
+    assert "timed out" in capsys.readouterr().out
+    assert _calls(world, "merge") == []
+
+
+def test_a_hung_gh_pr_merge_is_a_failure_that_names_the_pr(world, capsys):
+    (world.root / "gh.log.hang").write_text("pr merge", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=1.0)
+    assert rc == lw.EXIT_FAILED
+    assert "timed out" in capsys.readouterr().out
+
+
+def test_a_hung_gh_pr_create_is_a_failure(world):
+    (world.root / "gh.log.hang").write_text("pr create", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 1.0
+    with pytest.raises(lw.LandError, match="timed out"):
+        lw._create_pr(ctx, world.clone, "feat/x", "t", world.root / "body.md")
+
+
+def test_a_hung_gh_run_rerun_is_not_a_successful_rerun(world):
+    (world.root / "gh.log.hang").write_text("run rerun", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 1.0
+    assert lw._rerun_failed(ctx, "7", [_check("a", "fail", run=5)]) is False
+
+
+def test_proc_start_time_is_stable_for_a_live_pid_and_none_for_a_dead_one():
+    first = lw.proc_start_time(os.getpid())
+    assert isinstance(first, float) and first > 0
+    assert lw.proc_start_time(os.getpid()) == first
+    assert lw.proc_start_time(_dead_pid()) is None

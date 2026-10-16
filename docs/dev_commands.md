@@ -236,9 +236,11 @@ Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/D
 
 ```powershell
 worker\.venv\Scripts\python.exe scripts\land_queue.py add feat/1-x <sha> 1 "feat: x (#1)" [--full] [--red "<check>"]
-worker\.venv\Scripts\python.exe scripts\land_queue.py run [--once]     # land_wt.py --merge-when-green, one item at a time; run it detached
-worker\.venv\Scripts\python.exe scripts\land_queue.py status [--check] | stop | retry feat/1-x@<sha>   # status: runner alive/DEAD
+worker\.venv\Scripts\python.exe scripts\land_queue.py run [--once] [--replace]     # land_wt.py --merge-when-green, one item at a time; run it detached; --replace takes over a live but stuck runner
+worker\.venv\Scripts\python.exe scripts\land_queue.py status [--check] | stop | retry feat/1-x@<sha>   # status: runner alive / alive, NO PROGRESS / DEAD
 ```
+
+A runner whose pid is alive is never replaced automatically: `run` refuses (a second runner would double-land). `status` shows `alive, NO PROGRESS for N min - inspect; replace with run --replace` when its progress clock is older than the checks timeout plus 30 min; a human inspects it, then `run --replace` takes over and logs `REPLACED pid N` to `done.log`. A recorded pid whose process creation time differs from the one in `runner.json` (Windows reuses pids) counts as dead. A runner that finds `runner.json` no longer holds its pid logs `DISPLACED` and returns before taking another item. Every gh/git call in both scripts has a timeout (gh 300 s, git 600 s in `land_wt.py`; 600 s in `land_queue.py`) and a timeout kills the whole process tree (`taskkill /T /F /PID <that pid>` on Windows, the process group elsewhere); a hung `gh pr checks` read counts as a failed read, so the 30 min deadline is enforced.
 
 Tests: `scripts/tests/test_land_queue.py` (fake gh/git runner, no network). Details: `branching_and_prs.md`.
 

@@ -68,6 +68,7 @@ def env(tmp_path: Path) -> lq.Env:
     runner.on("py", answer=(0, "OK: pushed x and opened https://github.com/o/r/pull/7. Merge with: gh pr merge 7 --merge\n"))
     runner.on("gh", "pr", "checks", "7", "--watch", answer=(0, ""))
     runner.on("gh", "pr", "checks", "7", answer=checks(("build and test", "pass")))
+    runner.on("gh", "pr", "view", "7", "--json", "headRefOid", answer=(0, json.dumps({"headRefOid": SHA_A})))
     runner.on("gh", "pr", "view", answer=view("CLEAN"))
     return lq.Env(
         repo=tmp_path / "repo", state=tmp_path / "state", python="py", runner=runner, sleep=lambda s: None, now=lambda: "2026-10-15T00:00:00"
@@ -193,8 +194,8 @@ def test_known_red_per_item_is_ignored_but_other_checks_are_not(env: lq.Env) -> 
 def test_a_dirty_pr_is_closed_and_relanded_from_the_same_sha(env: lq.Env) -> None:
     r = runner_of(env)
     r.first("gh", "pr", "view", answer=[view("DIRTY", "CONFLICTING"), view("CLEAN")])
-    r.first("gh", "pr", "view", "7", "--json", "headRefOid", answer=(0, "{}"))
-    r.first("gh", "pr", "view", "8", "--json", "headRefOid", answer=(0, "{}"))
+    r.first("gh", "pr", "view", "7", "--json", "headRefOid", answer=(0, json.dumps({"headRefOid": SHA_A})))
+    r.first("gh", "pr", "view", "8", "--json", "headRefOid", answer=(0, json.dumps({"headRefOid": SHA_A})))
     r.first("py", answer=[(0, "opened https://github.com/o/r/pull/7\n"), (0, "opened https://github.com/o/r/pull/8\n")])
     r.on("gh", "pr", "checks", "8", "--watch", answer=(0, ""))
     r.on("gh", "pr", "checks", "8", answer=checks(("build and test", "pass")))
@@ -209,13 +210,15 @@ def test_a_dirty_pr_is_closed_and_relanded_from_the_same_sha(env: lq.Env) -> Non
 def test_unknown_mergeability_is_polled_not_merged_blind(env: lq.Env) -> None:
     r = runner_of(env)
     r.first("gh", "pr", "view", answer=[view("UNKNOWN", "UNKNOWN"), view("CLEAN")])
+    r.first("gh", "pr", "view", "7", "--json", "headRefOid", answer=(0, json.dumps({"headRefOid": SHA_A})))
     assert lq.process_item(env, item(red="unrelated")).startswith("MERGED #7")
-    assert len(r.matching("gh", "pr", "view")) == 2
+    assert len(r.matching("gh", "pr", "view", "7", "--json", "mergeStateStatus,mergeable")) == 2
 
 
 def test_still_dirty_after_the_reland_is_refused(env: lq.Env) -> None:
     r = runner_of(env)
     r.first("gh", "pr", "view", answer=view("DIRTY", "CONFLICTING"))
+    r.first("gh", "pr", "view", "7", "--json", "headRefOid", answer=(0, json.dumps({"headRefOid": SHA_A})))
     res = lq.process_item(env, item(red="unrelated"))
     assert res.startswith("REFUSED") and "conflict" in res
     assert len(r.matching("py")) == 2
@@ -870,20 +873,24 @@ def test_run_command_separates_stderr_on_failure(tmp_path: Path) -> None:
     assert rc == 8 and out.split(lq.STDERR_MARK)[0].strip() == "[1]" and "warn" in out
 
 
-def test_a_live_pid_with_an_ancient_heartbeat_is_stale_and_replaced(env: lq.Env) -> None:
-    env.alive = lambda pid: True  # a reused Windows pid
+def test_a_live_pid_with_an_ancient_heartbeat_is_never_replaced_automatically(env: lq.Env) -> None:
+    env.alive = lambda pid: True
     env.clock = lambda: 1_000_000.0
     (env.state).mkdir(parents=True, exist_ok=True)
     (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
-    lq.drain(env)
+    with pytest.raises(lq.AlreadyRunning):
+        lq.drain(env)
+    assert json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["pid"] == 99
 
 
-def test_status_marks_an_ancient_heartbeat_stale(env: lq.Env) -> None:
+def test_status_marks_an_ancient_heartbeat_as_no_progress_but_alive(env: lq.Env) -> None:
     env.alive = lambda pid: True
     env.state.mkdir(parents=True, exist_ok=True)
     env.clock = lambda: 1_000_000.0
     (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
-    assert "STALE?" in lq.status(env)
+    text, alive = lq.runner_line(env)
+    assert alive is True
+    assert "alive, NO PROGRESS for 16666 min - inspect; replace with run --replace" in text
 
 
 def test_interrupted_recovery_does_not_match_a_longer_branch_suffix(env: lq.Env) -> None:
@@ -1096,13 +1103,12 @@ def test_the_beater_writes_the_main_threads_progress_not_its_own_clock(env: lq.E
     assert seen[1]["ts"] == seen[0]["ts"]  # but progress did not move, so staleness can fire
 
 
-def test_staleness_is_judged_on_progress_not_on_the_beat(env: lq.Env) -> None:
+def test_no_progress_is_judged_on_progress_not_on_the_beat(env: lq.Env) -> None:
     env.alive = lambda pid: True
     env.clock = lambda: 1_000_000.0
     env.state.mkdir(parents=True, exist_ok=True)
     (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0, "beat": 999_990.0}), encoding="utf-8")
-    assert "STALE?" in lq.status(env)
-    lq.drain(env)  # a new runner may replace it
+    assert "NO PROGRESS" in lq.status(env)
 
 
 def test_progress_moves_when_a_subprocess_returns(env: lq.Env) -> None:
@@ -1169,7 +1175,7 @@ def test_land_wt_is_not_given_the_generic_timeout(tmp_path: Path, monkeypatch: p
         seen.append(kw.get("timeout"))
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
-    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(lq, "run_bounded", fake)
     lq.run_command(["py", "scripts/land_wt.py", "--branch", "b"], tmp_path)
     lq.run_command(["gh", "pr", "view", "7"], tmp_path)
     assert seen[0] is None and seen[1] == lq.COMMAND_TIMEOUT_SECONDS
@@ -1179,3 +1185,160 @@ def test_a_timeout_is_logged_to_flakes(env: lq.Env) -> None:
     runner_of(env).first("gh", "pr", "view", answer=(124, "TIMEOUT after 600 s: gh pr view 7"))
     env.run("gh", "pr", "view", "7")
     assert "TIMEOUT gh pr view 7" in (env.state / "flakes.log").read_text(encoding="utf-8")
+
+
+# ---- round 6 (orchestrator DECISION): a live pid is never replaced automatically; --replace is explicit ----
+
+
+def test_replace_takes_over_a_live_stuck_runner_and_records_it(env: lq.Env) -> None:
+    env.alive = lambda pid: True
+    env.clock = lambda: 1_000_000.0
+    env.state.mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    lq.drain(env, replace=True)
+    assert "REPLACED pid 99" in (env.state / "done.log").read_text(encoding="utf-8")
+    assert list(env.state.glob("runner.json.stale.*"))
+
+
+def test_replace_of_a_dead_runner_logs_nothing(env: lq.Env) -> None:
+    env.alive = lambda pid: False
+    env.state.mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    lq.drain(env, replace=True)
+    assert "REPLACED" not in (env.state / "done.log").read_text(encoding="utf-8") if (env.state / "done.log").exists() else True
+
+
+def test_the_cli_replace_flag_reaches_the_claim(tmp_path: Path) -> None:
+    state = tmp_path / "s"
+    state.mkdir()
+    (state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0}), encoding="utf-8")
+    assert lq.main(["--state", str(state), "run", "--once"], alive=lambda pid: True) == 1
+    assert lq.main(["--state", str(state), "run", "--once", "--replace"], alive=lambda pid: True) == 0
+    assert "REPLACED pid 99" in (state / "done.log").read_text(encoding="utf-8")
+
+
+def test_a_pid_with_a_different_creation_time_is_dead(env: lq.Env) -> None:
+    env.alive = lambda pid: True  # Windows reused pid 99 for another program
+    env.start_time = lambda pid: 5_000.0
+    env.state.mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0, "started": 100.0}), encoding="utf-8")
+    text, alive = lq.runner_line(env)
+    assert "DEAD" in text and alive is False
+    lq.drain(env)  # claims without --replace, and does not call it a replacement
+    assert "REPLACED" not in (env.state / "done.log").read_text(encoding="utf-8") if (env.state / "done.log").exists() else True
+
+
+def test_a_pid_with_the_same_creation_time_is_alive(env: lq.Env) -> None:
+    env.alive = lambda pid: True
+    env.start_time = lambda pid: 100.0
+    env.state.mkdir(parents=True, exist_ok=True)
+    (env.state / "runner.json").write_text(json.dumps({"pid": 99, "ts": 1.0, "started": 100.0}), encoding="utf-8")
+    assert lq.runner_line(env)[1] is True
+    with pytest.raises(lq.AlreadyRunning):
+        lq.drain(env)
+
+
+def test_the_claim_records_our_creation_time_and_the_heartbeat_keeps_it(env: lq.Env) -> None:
+    env.start_time = lambda pid: 777.0
+    lq.State(env.state).append_queue("feat/1-x|aaa|1|0|t (#1)")
+    seen: list[dict[str, float]] = []
+    original = runner_of(env).__call__
+
+    def spy(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
+        if argv[:1] == ["py"]:
+            seen.append(_hb(env))
+        return original(argv, cwd)
+
+    env.runner = spy
+    lq.drain(env)
+    assert seen and seen[0]["started"] == 777.0
+
+
+def test_a_displaced_runner_stops_before_taking_another_item(env: lq.Env) -> None:
+    st = lq.State(env.state)
+    st.append_queue("feat/1-x|aaa|1|0|t (#1)")
+    st.append_queue("feat/2-y|bbb|2|0|u (#2)")
+    original = runner_of(env).__call__
+
+    def steal(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
+        if argv[:1] == ["py"]:
+            (env.state / "runner.json").write_text(json.dumps({"pid": 4321, "ts": 5.0}), encoding="utf-8")
+        return original(argv, cwd)
+
+    env.runner = steal
+    lq.drain(env)
+    done = (env.state / "done.log").read_text(encoding="utf-8")
+    assert "DISPLACED" in done and "feat/2-y" not in done
+    assert "feat/2-y@bbb" not in st.taken()
+    assert _hb(env)["pid"] == 4321  # and it left the new owner's file alone
+
+
+@pytest.mark.parametrize("content", ["", "not json", '{"pid": "x"}'])
+def test_a_heartbeat_never_overwrites_an_empty_or_bad_runner_file(env: lq.Env, content: str) -> None:
+    env.state.mkdir(parents=True, exist_ok=True)
+    f = env.state / "runner.json"
+    f.write_text(content, encoding="utf-8")
+    assert lq.State(env.state).write_runner(env.pid, 9.0, lambda s: None) is False
+    assert f.read_text(encoding="utf-8") == content
+
+
+def test_a_heartbeat_skips_an_unreadable_file_without_overwriting_or_stopping(env: lq.Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    env.state.mkdir(parents=True, exist_ok=True)
+    f = env.state / "runner.json"
+    f.write_text(json.dumps({"pid": env.pid, "ts": 1.0}), encoding="utf-8")
+    real = Path.read_text
+
+    def deny(self: Path, *a: object, **k: object) -> str:
+        if self.name == "runner.json":
+            raise PermissionError("mid-replace")
+        return real(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", deny)
+    assert lq.State(env.state).write_runner(env.pid, 9.0, lambda s: None) is True
+    monkeypatch.undo()
+    assert json.loads(f.read_text(encoding="utf-8"))["ts"] == 1.0
+
+
+@pytest.mark.parametrize("answer", [(0, "{}"), (0, "not json"), (1, ""), (0, json.dumps({"headRefOid": ""}))])
+def test_an_unreadable_head_commit_never_merges_unpinned(env: lq.Env, answer: tuple[int, str]) -> None:
+    r = runner_of(env)
+    r.first("gh", "pr", "view", "7", "--json", "headRefOid", answer=answer)
+    verdict, detail = lq.merge_green(env, "7")
+    assert verdict == "PENDING" and "head commit" in detail
+    assert not r.matching("gh", "pr", "merge")
+
+
+def test_the_merge_is_always_pinned_to_the_head_commit(env: lq.Env) -> None:
+    r = runner_of(env)
+    assert lq.merge_green(env, "7")[0] == "MERGED"
+    merge = r.matching("gh", "pr", "merge")[0]
+    assert merge[merge.index("--match-head-commit") + 1] == SHA_A
+
+
+def test_run_command_timeout_kills_the_grandchild_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import time
+
+    import land_wt
+
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "gc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "Path(sys.argv[1]).write_text(str(gc.pid))\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    monkeypatch.setattr(lq, "COMMAND_TIMEOUT_SECONDS", 2.0)
+    start = time.time()
+    rc, out = lq.run_command([sys.executable, str(script), str(pidfile)], tmp_path)
+    assert rc == 124 and "TIMEOUT after" in out
+    assert time.time() - start < 15
+    pid = int(pidfile.read_text())
+    end = time.time() + 10
+    while land_wt.pid_alive(pid) and time.time() < end:
+        time.sleep(0.1)
+    assert not land_wt.pid_alive(pid)

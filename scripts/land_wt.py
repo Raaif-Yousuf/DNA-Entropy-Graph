@@ -41,9 +41,11 @@ Console output is ASCII (`OK:` / `ERROR:` / `-`).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -86,11 +88,64 @@ def _text(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace").strip()
 
 
-def git(cwd: Path, *args: str, check: bool = True, stdin: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
-    """Bytes in, bytes out (never text=True on Windows: it re-encodes). Module-level so tests can spy on it."""
+GH_TIMEOUT_SECONDS = 300.0  # one gh call (pr checks / view / create / merge / run rerun)
+GIT_TIMEOUT_SECONDS = 600.0  # one git call (fetch / push / worktree add...)
+
+
+def kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill `proc` and everything it started: taskkill /T on exactly this PID (never by image name), or the process group."""
+    if os.name == "nt":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False, timeout=30)
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def run_bounded(
+    argv: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: bytes | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """`subprocess.run(capture_output=True)` whose timeout kills the WHOLE process tree (a grandchild holding the pipes open would
+    otherwise make `run` wait forever after its own kill). Raises subprocess.TimeoutExpired (after a bounded wait) and OSError."""
+    extra: dict[str, object] = {} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **extra,  # type: ignore[arg-type]
+    )
+    try:
+        out, err = proc.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            out, err = b"", b""  # something escaped the kill and still holds a pipe: give up on its output, never wait on it
+        raise subprocess.TimeoutExpired(list(argv), timeout or 0, out, err) from None
+    return subprocess.CompletedProcess(list(argv), proc.returncode, out, err)
+
+
+def git(
+    cwd: Path, *args: str, check: bool = True, stdin: bytes | None = None, timeout: float | None = GIT_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[bytes]:
+    """Bytes in, bytes out (never text=True on Windows: it re-encodes). Module-level so tests can spy on it. Bounded by `timeout`."""
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
-    proc = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=cwd, input=stdin, capture_output=True, check=False, env=env)
+    try:
+        proc = run_bounded(["git", "-c", "core.quotepath=off", *args], cwd=cwd, env=env, stdin=stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise LandError(f"git {' '.join(args[:3])} timed out after {int(timeout or 0)} s. Check the network and git, then land again") from None
     if check and proc.returncode != 0:
         raise LandError(f"git {' '.join(args[:3])} failed ({proc.returncode}): {_text(proc.stderr or proc.stdout)}")
     return proc
@@ -176,6 +231,34 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def proc_start_time(pid: int) -> float | None:
+    """The process creation time of `pid` as a float (an opaque but stable, comparable number: FILETIME ticks on Windows,
+    /proc starttime ticks on Linux), or None when it cannot be read (no such process, no /proc, no permission).
+    A recorded pid whose creation time now differs is a REUSED pid, not the process we recorded."""
+    if os.name == "nt":
+        import ctypes  # noqa: PLC0415
+        from ctypes import wintypes  # noqa: PLC0415
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+            if not kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)):
+                return None
+            return float((created.dwHighDateTime << 32) | created.dwLowDateTime)
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        # the command name is in parentheses and may hold spaces: the fields after the LAST `)` start at field 3
+        return float(text.rsplit(")", 1)[1].split()[19])  # field 22, starttime
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 def remove_tree_no_follow(path: Path) -> None:
     """Delete a directory tree WITHOUT ever entering a junction or symlink: those are unlinked, not recursed into."""
     if os.path.isjunction(path) or os.path.islink(path):
@@ -226,6 +309,7 @@ class Ctx:
     sleep: Callable[[float], None] = time.sleep  # injectable: tests never wait on a real clock
     monotonic: Callable[[], float] = time.monotonic
     log: list[str] = field(default_factory=list)
+    gh_timeout: float = GH_TIMEOUT_SECONDS
     checks_error: str = ""  # why the last `gh pr checks` could not be read ("" = it could, or gh simply had no checks yet)
 
     def say(self, message: str) -> None:
@@ -418,7 +502,11 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
 def _create_pr(ctx: Ctx, wt: Path, land_branch: str, title: str, body_file: Path) -> str:
     argv = [*ctx.gh, "pr", "create", "--base", BASE, "--head", land_branch, "--title", title, "--body-file", str(body_file)]
     try:
-        proc = subprocess.run(argv, cwd=wt, capture_output=True, check=False)
+        proc = run_bounded(argv, cwd=wt, timeout=ctx.gh_timeout)
+    except subprocess.TimeoutExpired:
+        raise LandError(
+            f"{land_branch} was pushed but gh pr create timed out after {int(ctx.gh_timeout)} s. Check the PR list, else open it by hand"
+        ) from None
     except OSError as err:  # gh missing or not executable
         raise LandError(f"{land_branch} was pushed but gh could not run ({err}). Install gh or open the PR by hand") from err
     if proc.returncode != 0:
@@ -431,7 +519,10 @@ def _read_checks(ctx: Ctx, pr: str) -> list[dict[str, str]] | None:
     "no checks reported" and exits 1 right after a PR opens). Exit 8 means "pending" and still carries the JSON."""
     argv = [*ctx.gh, "pr", "checks", pr, "--json", "name,bucket,state,link"]
     try:
-        proc = subprocess.run(argv, capture_output=True, check=False)
+        proc = run_bounded(argv, timeout=ctx.gh_timeout)
+    except subprocess.TimeoutExpired:
+        ctx.checks_error = f"gh pr checks timed out after {int(ctx.gh_timeout)} s"
+        return None
     except OSError as err:
         raise LandError(f"gh could not run ({err}). Install gh, then run `gh pr checks {pr} --watch` and merge by hand") from err
     try:
@@ -483,7 +574,10 @@ def _rerun_failed(ctx: Ctx, pr: str, red: Sequence[dict[str, str]]) -> bool:
     ok = True
     for run in runs:
         try:
-            proc = subprocess.run([*ctx.gh, "run", "rerun", run, "--failed"], capture_output=True, check=False)
+            proc = run_bounded([*ctx.gh, "run", "rerun", run, "--failed"], timeout=ctx.gh_timeout)
+        except subprocess.TimeoutExpired:
+            ctx.say(f"WARNING: `gh run rerun {run} --failed` timed out after {int(ctx.gh_timeout)} s")
+            return False
         except OSError:
             return False
         if proc.returncode != 0:
@@ -541,7 +635,9 @@ def _merge_when_green(ctx: Ctx, pr: str, timeout: float, poll: float, rerun_fail
         ctx.sleep(min(poll, deadline - ctx.monotonic()))
     argv = [*ctx.gh, "pr", "merge", pr, "--merge"]
     try:
-        proc = subprocess.run(argv, capture_output=True, check=False)
+        proc = run_bounded(argv, timeout=ctx.gh_timeout)
+    except subprocess.TimeoutExpired:
+        raise LandError(f"gh pr merge timed out after {int(ctx.gh_timeout)} s. Check whether {pr} merged, then merge it by hand") from None
     except OSError as err:
         raise LandError(f"gh could not run ({err}). Merge {pr} by hand with `gh pr merge --merge`") from err
     if proc.returncode != 0:

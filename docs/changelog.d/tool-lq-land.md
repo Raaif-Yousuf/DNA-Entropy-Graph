@@ -1,0 +1,2 @@
+- land_queue: a live runner pid is never replaced automatically (`run --replace` is the explicit takeover, logged `REPLACED pid N`; `status` says `NO PROGRESS`), a reused Windows pid is detected by process creation time, a displaced runner logs `DISPLACED` and stops, the heartbeat never overwrites an empty or unparsable `runner.json`, and the merge is never made without `--match-head-commit` (#813).
+- land_wt / land_queue: every gh and git subprocess has a timeout that kills the whole process tree, so a hung `gh pr checks` no longer defeats the 30 min deadline (#813).
