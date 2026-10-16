@@ -165,7 +165,7 @@ public sealed class CloudJobRunner
         _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls, _settings);
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
-        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync);
+        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync, quotaGateway, BucketLocationAsync, ClaimZoneAsync);
         _canceller = new VmCanceller(_rows, _provisioner, _terminator);
         _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
@@ -186,6 +186,40 @@ public sealed class CloudJobRunner
         {
             return false;
         }
+    }
+
+    /// <summary>The location of the run's bucket (issue #670: the ladder prefers zones on its continent), or null when it is not known yet or cannot be read.</summary>
+    private async Task<string?> BucketLocationAsync(RunProgress progress, CancellationToken cancellationToken)
+    {
+        if (progress.Bucket is not { } bucket || progress.ProjectId is not { } project)
+        {
+            return null;
+        }
+
+        var buckets = await _calls.CallAsync(token => _storage.ListBucketsAsync(project, token), cancellationToken).ConfigureAwait(false);
+        return buckets.FirstOrDefault(b => string.Equals(b.Name, bucket, StringComparison.Ordinal))?.Location;
+    }
+
+    /// <summary>
+    /// Issue #670: writes the zone this provision means the VM to be in (an empty zone clears the claim) to <c>jobs/&lt;jobId&gt;/control/zone</c>. A VM that boots in any other zone reads it (before
+    /// it writes anything under the job prefix, <c>worker/vm/startup.sh</c>) and deletes itself, so an extra that outlives its deletion by a few
+    /// seconds cannot overwrite the winner's status.json or log. A failure is the caller's to ignore: the extras are deleted by API regardless.
+    /// </summary>
+    private async Task ClaimZoneAsync(RunProgress progress, string zone, CancellationToken cancellationToken)
+    {
+        if (progress.Bucket is not { } bucket || progress.JobId is not { } jobId)
+        {
+            return;
+        }
+
+        await _calls.CallAsync(
+            async token =>
+            {
+                using var content = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(zone));
+                await _storage.UploadAsync(bucket, WorkerManifestBuilder.JobPrefix(jobId) + "control/zone", content, token).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<JobPhase> GetPhaseAsync(string jobId, CancellationToken cancellationToken)
@@ -323,6 +357,9 @@ public sealed class CloudJobRunner
         // Step 5 of the preflight order (docs/cloud_design.md section 2): the bucket exists.
         var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
 
+        progress.Bucket = bucket;
+        progress.ProjectId = request.Spec.ProjectId;
+        progress.JobId = request.JobId;
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Uploading, cancellationToken).ConfigureAwait(false);
 
         // docs/job_contract.md section 3: the manifest is immutable once the worker may be reading
@@ -353,6 +390,18 @@ public sealed class CloudJobRunner
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Preparing, cancellationToken).ConfigureAwait(false);
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Running, cancellationToken).ConfigureAwait(false);
                 var owned = await _calls.CallAsync(token => _compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+                if (owned.Count > 0)
+                {
+                    // A crash in the middle of a parallel batch can leave several: finish on one, delete and verify the rest (#670).
+                    var (kept, extrasNote) = await _provisioner.KeepOneOwnedVmAsync(request, owned, cancellationToken).ConfigureAwait(false);
+                    if (extrasNote is not null)
+                    {
+                        return await _outcome.FailAsync(request.JobId, CloudErrorKind.Other, RunErrorCodes.For(CloudErrorKind.Other), "More than one VM was found for this job and an extra could not be deleted.", extrasNote).ConfigureAwait(false);
+                    }
+
+                    owned = [kept];
+                }
+
                 progress.Zone = owned.Count > 0 ? owned[0].Zone : null;
                 progress.VmName = owned.Count > 0 ? owned[0].Name : null;
                 return await _outcome.FinishAsync(progress.Resolve(request), bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);

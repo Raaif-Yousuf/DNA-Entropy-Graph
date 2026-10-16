@@ -39,6 +39,7 @@ gs://deg-<projectNumber>-<rand6>/               (or a local dir for LocalBlobsto
     manifest.json                               # written by the app, immutable once the worker starts reading it
     input/<original filename(s)>
     control/cancel                              # presence (0 bytes) = cancel requested; absence = not cancelled
+    control/zone                                # the zone a parallel zone ladder kept (#670), written by the app; a VM in any other zone deletes itself (worker/vm/startup.sh) before writing here
     status.json                                 # worker overwrites atomically; small; includes the heartbeat
     progress.jsonl                              # re-uploaded whole every 5-10 s (object storage has no append)
     logs/worker.log

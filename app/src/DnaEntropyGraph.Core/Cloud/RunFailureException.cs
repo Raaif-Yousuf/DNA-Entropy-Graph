@@ -15,6 +15,15 @@ internal sealed class RunProgress
 
     public string? Zone { get; set; }
 
+    /// <summary>The run's results bucket, once the runner has ensured it: the zone ladder reads its location to prefer zones on its continent (#670).</summary>
+    public string? Bucket { get; set; }
+
+    /// <summary>The project the bucket lives in (set with <see cref="Bucket"/>).</summary>
+    public string? ProjectId { get; set; }
+
+    /// <summary>The job id (set with <see cref="Bucket"/>): the zone claim of a parallel ladder is written under its prefix (#670).</summary>
+    public string? JobId { get; set; }
+
     /// <summary>
     /// A moment on the runner's own clock taken just before THIS run asked for the VM it is on to be created or started (null for a VM it
     /// adopted, whose age only the platform knows). The platform's limit clock starts at or just after it, so the result deadline measures

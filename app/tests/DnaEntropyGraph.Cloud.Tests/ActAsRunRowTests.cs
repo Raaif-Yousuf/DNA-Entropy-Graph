@@ -261,6 +261,8 @@ public class ActAsRunRowTests
     {
         public int CreateAttempts { get; private set; }
 
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+
         public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
         /// <summary>From this call of FindByJobIdAsync on (1-based) the lookup fails; the sweep after a refused create is what reaches it.</summary>
         public int FindFailsFromCall { get; init; } = int.MaxValue;

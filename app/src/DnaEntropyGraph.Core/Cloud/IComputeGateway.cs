@@ -38,6 +38,14 @@ public interface IComputeGateway
     /// </summary>
     Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Issue #670: the zones that offer <paramref name="acceleratorType"/> (<c>nvidia-l4</c>, see <see cref="ZoneCandidates.AcceleratorFor"/>),
+    /// the zone universe the ladder builds its candidates from. A real gateway implements this with <c>acceleratorTypes.aggregatedList</c>
+    /// filtered to that name. An empty list means "the gateway does not know", never "no zone has it": the caller then falls back to the
+    /// zones the request names. A failure throws like any other read; the caller treats it the same as an empty answer.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken);
+
     Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);

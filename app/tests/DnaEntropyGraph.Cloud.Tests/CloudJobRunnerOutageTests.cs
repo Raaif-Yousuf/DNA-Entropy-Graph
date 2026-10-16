@@ -274,6 +274,8 @@ public class CloudJobRunnerOutageTests
     /// <summary>Delegates to the fake, but every look at a VM takes real time, as a slow network or a starved machine makes it.</summary>
     private sealed class SlowLookupCompute(IComputeGateway inner, TimeSpan lookupTime) : IComputeGateway
     {
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+
         public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
 
         public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
@@ -303,6 +305,8 @@ public class CloudJobRunnerOutageTests
         public bool? TrackThereAtFirstEndCall { get; set; }
 
         public int EndCalls { get; private set; }
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
 
         public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
 
