@@ -78,9 +78,6 @@ public sealed class CloudJobRunner
     public TimeSpan CreateTimeout { get => _settings.CreateTimeout; init => _settings.CreateTimeout = value; }
 
     /// <summary>How long to wait for a create the runner gave up on to settle (land or fail) before the VM end is recorded unconfirmed.</summary>
-    /// <summary>Issue #92: see <see cref="CloudRunSettings.FlexStartMargin"/>.</summary>
-    public TimeSpan FlexStartMargin { get => _settings.FlexStartMargin; init => _settings.FlexStartMargin = value; }
-
     public TimeSpan CreateSettleTimeout { get => _settings.CreateSettleTimeout; init => _settings.CreateSettleTimeout = value; }
 
     /// <summary>One upload's deadline. Null means a floor of 2 minutes plus 1 second per 128 KiB of the object (a slow 1 Mbit/s link still finishes).</summary>

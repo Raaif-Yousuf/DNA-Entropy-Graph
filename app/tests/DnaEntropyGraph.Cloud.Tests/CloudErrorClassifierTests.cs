@@ -237,4 +237,22 @@ public class CloudErrorClassifierTests
     private sealed record FixtureFile(
         [property: JsonPropertyName("cases")] FixtureCase[] Cases,
         [property: JsonPropertyName("evaluation_order")] string[] EvaluationOrder);
+
+    // ---- Issue #92 (cold review L7): the plausible shapes of an expired flex-start request. THEORY (unverified): none of these is measured; ToTest #92 records the real one. ----
+
+    [Theory]
+    [InlineData("FLEX_START_REQUEST_EXPIRED", "The request waited for capacity and was not granted in time.")]
+    [InlineData("FLEX_START_CAPACITY_UNAVAILABLE", "")]
+    [InlineData("DEADLINE_EXCEEDED", "The request could not be fulfilled: no capacity was found within requestValidForDuration.")]
+    [InlineData("OPERATION_ERROR", "Timed out waiting for capacity for the flex-start request.")]
+    [InlineData("RESOURCE_AVAILABILITY", "Capacity was not available before the request expired.")]
+    public void An_expired_flex_start_request_is_a_stockout(string code, string message)
+        => CloudErrorClassifier.Classify(new CloudError(code, null, message)).ShouldBe(CloudErrorKind.Stockout);
+
+    [Theory]
+    [InlineData("ACCESS_TOKEN_EXPIRED", "The access token expired.")]
+    [InlineData("OPERATION_ERROR", "The request expired.")]
+    [InlineData("QUOTA_EXCEEDED", "Quota exceeded: no capacity left in your quota.")]
+    public void A_message_that_only_looks_like_an_expired_flex_request_is_not_a_stockout(string code, string message)
+        => CloudErrorClassifier.Classify(new CloudError(code, null, message)).ShouldNotBe(CloudErrorKind.Stockout);
 }

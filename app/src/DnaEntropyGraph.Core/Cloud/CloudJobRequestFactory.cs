@@ -68,7 +68,7 @@ public static class CloudJobRequestFactory
         {
             Spot = options.SpotVm && !options.WaitForGpu,
             FlexStart = options.WaitForGpu,
-            FlexStartWait = options.WaitForGpu ? TimeSpan.FromMinutes(Math.Clamp(options.WaitForGpuMinutes, 1, (int)VmSpec.FlexStartLimit.TotalMinutes)) : null,
+            FlexStartWait = options.WaitForGpu ? TimeSpan.FromMinutes(Math.Clamp(options.WaitForGpuMinutes, 1, Math.Min((int)VmSpec.FlexStartLimit.TotalMinutes, options.MaxRunDurationMinutes + (int)VmGrace.TotalMinutes))) : null,
         };
 
         return new CloudJobRequest(

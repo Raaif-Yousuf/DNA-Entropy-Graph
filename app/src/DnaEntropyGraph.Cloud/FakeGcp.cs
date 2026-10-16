@@ -942,7 +942,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         // Issue #92: a queued (flex-start) request is the answer to a stockout, so it is not turned away by one; it waits and is granted or expires.
-        if (spec.FlexStart && (_flexGrantAfter is not null || _flexExpireAfter is not null))
+        if (spec.FlexStart && (_flexGrantAfter is not null || _flexExpireAfter is not null || _flexHold is not null))
         {
             return CreateQueuedAsync(spec, zone, key, cancellationToken);
         }
@@ -985,20 +985,58 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>Completes when the first flex-start create has been queued.</summary>
     public Task FlexStartQueued => _flexQueued.Task;
 
+    private TaskCompletionSource<bool>? _flexHold;
+    private bool _queuedHidden;
+    private readonly ConcurrentDictionary<(string Name, string Zone), byte> _queuedKeys = new();
+
+    /// <summary>Issue #92: a flex-start create is queued until <see cref="GrantFlexStart"/> (the test decides when Google finds a card). The request lives on the "server": a caller that gives up does not remove it.</summary>
+    public FakeGcp WithFlexStartHeld()
+    {
+        _flexHold = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        return this;
+    }
+
+    /// <summary>Issue #92: grants the held flex-start request.</summary>
+    public void GrantFlexStart() => _flexHold?.TrySetResult(true);
+
+    /// <summary>Issue #92: <see cref="FindByJobIdAsync"/> does not list a request that is still queued (THEORY: a real pending request may not be listable), so only a delete by name can find it.</summary>
+    public FakeGcp WithQueuedRequestsHiddenFromLabelListing()
+    {
+        _queuedHidden = true;
+        return this;
+    }
+
     private async Task<VmDescriptor> CreateQueuedAsync(VmSpec spec, string zone, (string, string) key, CancellationToken cancellationToken)
     {
         // The pending request is on the server from now on: a caller that gives up (cancels its wait) does not remove it, only a delete or an expiry does.
         var now = _timeProvider.GetUtcNow();
         _vms[key] = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        _queuedKeys[key] = 0;
+        var server = QueuedOnServerAsync(spec, zone, key);
+        _ = server.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         _flexQueued.TrySetResult();
-        await Task.Delay(_flexGrantAfter ?? _flexExpireAfter!.Value, cancellationToken).ConfigureAwait(false);
+        return await server.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<VmDescriptor> QueuedOnServerAsync(VmSpec spec, string zone, (string, string) key)
+    {
+        if (_flexHold is { } hold)
+        {
+            await hold.Task.ConfigureAwait(false);
+        }
+        else
+        {
+            await Task.Delay(_flexGrantAfter ?? _flexExpireAfter!.Value).ConfigureAwait(false);
+        }
+
+        _queuedKeys.TryRemove(key, out _);
         if (!_vms.ContainsKey(key))
         {
             // Deleted while queued: the request is gone.
             throw Build(CloudErrorKind.Other, "FLEX_START_REQUEST_CANCELLED", null, $"The request for '{spec.VmName}' was cancelled.");
         }
 
-        if (_flexGrantAfter is null)
+        if (_flexHold is null && _flexGrantAfter is null)
         {
             _vms.TryRemove(key, out _);
             throw Build(CloudErrorKind.Stockout, "FLEX_START_REQUEST_EXPIRED", null, $"The request for '{spec.VmName}' waited for capacity in zone '{zone}' and was not granted in time.");
@@ -1386,6 +1424,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var name = $"deg-{jobId}";
         // By the job-id label, as the real gateway does (a reused VM keeps its old name, #94); a VM seeded without labels, such as WithAlreadyExists's, by name.
         IReadOnlyList<VmDescriptor> matches = _vms.Values
+            .Where(v => !(_queuedHidden && _queuedKeys.ContainsKey((v.Name, v.Zone))))
             .Where(v => v.Labels is null ? v.Name == name : v.Labels.TryGetValue("job-id", out var owner) && owner == jobId)
             .ToList();
         return Task.FromResult(matches);

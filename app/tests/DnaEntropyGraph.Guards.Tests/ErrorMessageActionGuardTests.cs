@@ -61,4 +61,13 @@ public class ErrorMessageActionGuardTests
         RunErrorActions.TryGet(RunErrorCodes.PermissionActAs, out var action).ShouldBeTrue();
         action.ShouldBe(RunErrorAction.CopyOwnerRequest);
     }
+
+    [Fact]
+    public void The_stockout_message_does_not_name_the_wait_button_because_the_button_is_not_always_there()
+    {
+        // Issue #92: the Wait button is hidden when the run's options cannot be read, so the message must work without it; a separate hint is shown with the button.
+        var resw = Resw();
+        resw[RunErrorCodes.ResourceKey("stockout")].ShouldNotContain(resw["RunsWaitForGpuButton.Content"], Case.Insensitive);
+        resw.ContainsKey("RunsWaitForGpuHint.Text").ShouldBeTrue();
+    }
 }

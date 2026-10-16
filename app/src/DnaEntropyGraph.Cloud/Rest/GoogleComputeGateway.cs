@@ -92,7 +92,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             },
             cancellationToken).ConfigureAwait(false);
         // Issue #92: a queued (flex-start) insert stays pending until capacity is found, so its poll is bounded by the wait it asked for plus a margin.
-        await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken, deadline: spec.FlexStart && spec.FlexStartWait is { } flexWait ? flexWait + TimeSpan.FromMinutes(5) : null).ConfigureAwait(false);
+        await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken, deadline: spec.FlexStart ? spec.FlexStartCreateBound : null).ConfigureAwait(false);
 
         // A 404 here means the outcome is unknown, not that nothing was made (the operation said DONE): Network class, so it is
         // retryable, and a retry lands on 409 alreadyExists if the VM exists. The runner lists by label before trying another zone.

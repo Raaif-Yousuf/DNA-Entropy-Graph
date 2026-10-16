@@ -113,7 +113,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     {
         var zone = state.Zone;
         // Issue #92: a queued (flex-start) create is bounded by the wait it asked for plus a margin, never by the ordinary 30 s.
-        var createTimeout = spec.FlexStart && spec.FlexStartWait is { } flexWait ? flexWait + settings.FlexStartMargin : settings.CreateTimeout;
+        var createTimeout = spec.FlexStart ? spec.FlexStartCreateBound : settings.CreateTimeout;
         {
             // The kind the gateway (or the resilience pipeline in front of
             // it) already decided. Re-deriving it from the error text would
@@ -125,6 +125,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             progress.VmMayExist = true;
             if (spec.FlexStart)
             {
+                // Issue #92 (M2): the pending request is remembered by its own name and zone, so a cancel can delete it directly and does not depend on a label listing seeing it.
+                _pendingFlex[(spec.VmName, zone)] = request.JobId;
                 NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpu);
             }
 
@@ -162,6 +164,18 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             if (spec.FlexStart)
             {
                 NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpuEnded);
+                if (!createTimedOut)
+                {
+                    // The create answered (a grant, an expiry or an error), so nothing is pending any more; a cancelled wait leaves the entry for the canceller.
+                    _pendingFlex.TryRemove((spec.VmName, zone), out _);
+                }
+
+                if (outcome.Success)
+                {
+                    // H1 (review): the run's own clock (the result limit) starts when the VM exists, not when the request was queued; Compute's maxRunDuration
+                    // likewise counts from the grant. THEORY (unverified, no live project): the platform clock for a flex VM starts at the grant (ToTest #92).
+                    progress.VmStartMark = settings.StartClock();
+                }
             }
 
             if (createTimedOut)
@@ -235,17 +249,46 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             return;
         }
 
-        _ = Task.Run(() =>
+        // One chain, so the waiting line is always withdrawn after it was shown, however slow the handler or fast the create.
+        lock (_noticeGate)
         {
-            try
+            _noticeTail = _noticeTail.ContinueWith(
+                _ =>
+                {
+                    try
+                    {
+                        handler(new RunNotice(jobId, kind));
+                    }
+                    catch (Exception)
+                    {
+                        // A notice is advice for the screen; the run goes on without it.
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        }
+    }
+
+    private readonly object _noticeGate = new();
+    private Task _noticeTail = Task.CompletedTask;
+
+    /// <summary>Issue #92: flex requests queued by this instance whose create has not answered, by VM name and zone, with the job they belong to.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Name, string Zone), string> _pendingFlex = new();
+
+    /// <summary>Issue #92: takes (and forgets) the queued requests of <paramref name="jobId"/>, so a cancel can delete each by its own name and zone.</summary>
+    public IReadOnlyList<(string Name, string Zone)> TakePendingRequests(string jobId)
+    {
+        var taken = new List<(string Name, string Zone)>();
+        foreach (var (key, owner) in _pendingFlex)
+        {
+            if (owner == jobId && _pendingFlex.TryRemove(key, out _))
             {
-                handler(new RunNotice(jobId, kind));
+                taken.Add(key);
             }
-            catch (Exception)
-            {
-                // A notice is advice for the screen; the run goes on without it.
-            }
-        });
+        }
+
+        return taken;
     }
 
     /// <summary>The zones to try, in order, and whether the quota read says there is none anywhere (#670).</summary>

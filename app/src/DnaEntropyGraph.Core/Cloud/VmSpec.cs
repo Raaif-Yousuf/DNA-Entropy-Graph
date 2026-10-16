@@ -59,6 +59,12 @@ public sealed record VmSpec(
     /// <summary>Issue #92: how long the queued request may wait for capacity (the instance <c>params.requestValidForDuration</c>). Required when <see cref="FlexStart"/> is on, null otherwise.</summary>
     public TimeSpan? FlexStartWait { get; init; }
 
+    /// <summary>Issue #92: added to <see cref="FlexStartWait"/> to bound the create's own wait, so Compute Engine's answer when the request expires arrives before the app gives up. One value, read by the provisioner and by the gateway.</summary>
+    public TimeSpan FlexStartMargin { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>Issue #92: how long a queued create may take at most from the app's side: the wait plus <see cref="FlexStartMargin"/>.</summary>
+    public TimeSpan FlexStartCreateBound => (FlexStartWait ?? TimeSpan.Zero) + FlexStartMargin;
+
     /// <summary>
     /// The longest a FLEX_START VM may run, and the longest its request may wait. THEORY (unverified, no live project): Compute Engine's documented cap for a
     /// flex-start VM is seven days; docs/ToTest.md carries the row that proves it against a real project.
@@ -155,6 +161,11 @@ public sealed record VmSpec(
             if (FlexStartWait is not { } wait || wait <= TimeSpan.Zero || wait > FlexStartLimit)
             {
                 throw new InvalidOperationException($"VmSpec's flex-start wait must be more than zero and at most {FlexStartLimit.TotalDays:0} days.");
+            }
+
+            if (wait > MaxRunDuration)
+            {
+                throw new InvalidOperationException("VmSpec's flex-start wait must not be longer than its maxRunDuration.");
             }
 
             if (MaxRunDuration > FlexStartLimit)
