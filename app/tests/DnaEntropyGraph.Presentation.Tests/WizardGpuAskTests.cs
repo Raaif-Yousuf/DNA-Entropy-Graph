@@ -84,7 +84,7 @@ public class WizardGpuAskTests
 
         await row.AskCommand!.ExecuteAsync(null);
 
-        await _quota.Received(1).RequestQuotaIncreaseAsync(Project, Arg.Is<QuotaIncreaseRequest>(r => r.Metric == L4 && r.Region == "us-central1" && r.ContactEmail == "lab@example.org"), Arg.Any<CancellationToken>());
+        await _quota.Received(1).RequestQuotaIncreaseAsync(Project, Arg.Is<QuotaIncreaseRequest>(r => r.Metric == L4 && r.Region == CloudJobRequestFactory.DefaultRegion && r.ContactEmail == "lab@example.org"), Arg.Any<CancellationToken>());
         await _quota.Received(1).RequestQuotaIncreaseAsync(Project, Arg.Is<QuotaIncreaseRequest>(r => r.Metric == All), Arg.Any<CancellationToken>());
         row.AskResultText.ShouldBe("WizardGpuAsk_Requested");
         row.HasAskResult.ShouldBeTrue();
