@@ -245,7 +245,7 @@ worker\.venv\Scripts\python.exe scripts\land_pr.py --branch fix/412-x --hunks wo
 - It refuses (changing nothing) on a directory path, a path with no change, an index that already holds staged
   content it did not stage, an existing branch name, a detached HEAD, or a hunk index that does not exist.
 - It waits on `gh pr checks` and merges only when every check passed; a red check stops ON the branch and names the
-  check. **Zero checks is refused** unless `--allow-no-checks` (CI here can be on demand, and "no checks" is not green),
+  check. **Zero checks is refused** unless `--allow-no-checks` (a PR can touch no workflow's area, and "no checks" is not green),
   and only after a grace period (`--grace-seconds`, default 120) in which an empty list is polled again, because GitHub
   registers checks a few seconds after `gh pr create` (#472). `--allow-no-checks` is never the fix for that.
 - It returns the tree to main with `git checkout -B main origin/main`, never `git switch main` (MEASURED 2026-10-02:
@@ -446,7 +446,7 @@ what I asked for", which is the question you actually have when a command is den
 
 ## CI triggers, and the local gate that does not depend on them
 
-**The owner's 2026-09-19 decision was on-demand CI** (no push, pull request or schedule trigger). MEASURED 2026-10-02: the workflow files no longer match it: `ci-docs.yml` has a `pull_request` trigger and `ci-worker.yml` has one for `worker/**`; `ci-app.yml` is `workflow_dispatch` only; `codeql.yml` (#484) also runs weekly, on pull requests and on pushes to main touching `app/**`, `worker/**`, `scripts/**` or `.github/workflows/**`. Whichever is intended, a green-looking PR is not proof for `app/` (no automatic trigger), so run `scripts/premerge.py` locally. A run on demand:
+**CI runs automatically on pull requests.** MEASURED 2026-10-16 from `.github/workflows/*.yml`: `ci-app`, `ci-docs`, `ci-worker` and `ci-notices` each have `pull_request` plus `workflow_dispatch` (the first three start on every PR and skip the real work in a `changes` job when nothing in their area changed; `ci-notices` filters by `paths:`); `codeql` runs weekly, on pull requests and on pushes to main touching `app/**`, `worker/**`, `scripts/**` or `.github/workflows/**`; `release` runs on `v*` tags only. The owner's 2026-09-19 on-demand-CI decision was superseded by the sprint log entries that restored the PR triggers (#450 records the doc fix as an agent-made, reversible call). CI is still slow feedback, so run `scripts/premerge.py` locally first. A manual re-run:
 
 ```powershell
 gh workflow run ci-worker.yml       # pytest, ruff, build, schema, shellcheck, CPU container
@@ -457,8 +457,7 @@ gh run watch                        # follow the run you just started
 gh run list --limit 5               # what ran recently and how it went
 ```
 
-Every workflow file carries its original triggers in a comment directly above the `on:`
-block, so restoring automatic CI is uncommenting a block rather than reconstructing one.
+Each workflow file's comment above its `on:` block is the authority for that workflow's triggers.
 
 **What this means in practice:** the local gates are the same code CI runs, so run them before pushing rather than
 after:
