@@ -25,7 +25,8 @@ moving on; do not skip a step because a later one "would probably catch it anywa
 | `pytest -m "not gpu"` is green | `worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q` |
 | `dotnet test` is green (once `app/` exists) | `dotnet test app/DnaEntropyGraph.sln --filter "FullyQualifiedName!~UiTests"` |
 | No open `P0` issues remain | `gh issue list --label P0 --state open` (empty) |
-| Azure Trusted Signing secrets are present on this repo | `gh secret list` shows `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `TRUSTED_SIGNING_ENDPOINT`, `TRUSTED_SIGNING_ACCOUNT`, `TRUSTED_SIGNING_PROFILE` (`OWNER_TODO.md` item 3; without these, `release.yml`'s own precondition assertion fails the build on purpose rather than shipping unsigned) |
+| The `release` GitHub environment exists with a tag rule `v*`, required reviewers, and the signing secrets as ENVIRONMENT secrets (not repository secrets), plus the environment variable `RELEASE_SIGNER_SUBJECT` (owner steps: #703, `OWNER_TODO.md` item 5c) | `gh api repos/Raaif-Yousuf/DNA-Entropy-Graph/environments/release --jq ".protection_rules"` lists a reviewer; `gh secret list` (repository level) shows NONE of the names below; `gh secret list --env release` shows them |
+| Azure Trusted Signing secrets are present in that environment | `gh secret list --env release` shows `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `TRUSTED_SIGNING_ENDPOINT`, `TRUSTED_SIGNING_ACCOUNT`, `TRUSTED_SIGNING_PROFILE`, and `OAUTH_CLIENT_JSON` (the Desktop-app client file from Google's console, issue #21; the first six are `OWNER_TODO.md` item 3; without these, `release.yml`'s own precondition assertion fails the build on purpose rather than shipping unsigned) |
 | The GPU acceptance checklist has been run on this exact commit (v0.2 and later only) | `scripts/cloud_gpu_test.ps1` output, archived per `dev_commands.md` |
 
 ## 1. What changed since last time

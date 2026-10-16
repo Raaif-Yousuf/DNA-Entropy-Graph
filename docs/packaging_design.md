@@ -73,9 +73,16 @@ here because it has bitten other projects silently:** the signing step can no-op
 if its secret is unset, producing an unsigned build that looks like a normal release
 artifact until a user's SmartScreen warns them. `release.yml` therefore asserts every
 required secret (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
-`TRUSTED_SIGNING_ENDPOINT`, `TRUSTED_SIGNING_ACCOUNT`, `TRUSTED_SIGNING_PROFILE`) exists
+`TRUSTED_SIGNING_ENDPOINT`, `TRUSTED_SIGNING_ACCOUNT`, `TRUSTED_SIGNING_PROFILE`, plus `OAUTH_CLIENT_JSON`, see section 9) exists
 and fails the build loudly before attempting to sign, rather than letting the signing
-step's own silent-no-op behaviour be the only signal. Do not remove this assertion to
+step's own silent-no-op behaviour be the only signal. The assert is the `verify` job and every other job
+`needs` it (pinned by `scripts/tests/test_release_workflow.py`), so a missing secret stops the run before anything is built,
+pushed or signed. The signing step is `azure/artifact-signing-action` (Microsoft renamed Trusted Signing to Artifact Signing;
+the action is the renamed `azure/trusted-signing-action`, MIT, pinned by SHA). It signs this project's own binaries
+(`DnaEntropyGraph.*.dll`, `DnaEntropyGraph.App.exe`) before `vpk pack`, then `Setup.exe` after it, and a
+`signtool verify /pa` step proves both, because a green signing step alone is not proof. THEORY (unverified): Velopack's own
+`Update.exe`, which lives inside the package, is not signed by this flow; if SmartScreen objects on updates, move signing to
+`vpk pack --signParams`. Do not remove this assertion to
 "simplify" the workflow; it is there because the no-op is a real, documented Azure
 Trusted Signing behaviour, not a hypothetical.
 
@@ -173,7 +180,7 @@ support conversation about "which worker actually ran this job" never has to gue
 `worker/pyproject.toml`'s `[project].version` and exits 1 naming both files when they differ, or when
 `Directory.Build.props` is missing (a guard that skips a missing file can never fail). `ci-docs.yml` runs it on
 every PR through its `for script in scripts/check_*.py` glob, so a grep for its name in the workflow finds nothing.
-With `--tag vX.Y.Z` it also requires the tag to equal both; that call belongs in `release.yml` (#178, not yet written).
+With `--tag vX.Y.Z` it also requires the tag to equal both; `release.yml`'s `verify` job makes that call (#178).
 MEASURED 2026-10-03: a planted pair (`0.0.1` vs `0.0.2`) printed `ERROR: version mismatch: worker/pyproject.toml says
 '0.0.1', app/Directory.Build.props says '0.0.2'` and exited 1.
 
@@ -208,11 +215,12 @@ re-bake maintenance burden.
 
 ## 7. What a release actually produces
 
-**Open item for the release runbook (issue #458):** the app's pinned list is
-`app/src/DnaEntropyGraph.App/worker-images.json` and ships **empty** today. A release must
-write the just-built `-cuda` and `-cpu` digests, keyed by the release version, into that file
-**before** the app is built, or every run in that build ends `no_worker_image`. Nothing does
-this yet; it belongs in `release.yml` and `docs/release_runbook.md`.
+**Image pinning (issue #458):** the app's pinned list is
+`app/src/DnaEntropyGraph.App/worker-images.json` and ships **empty** in git. A release writes the just-built
+`-cuda` and `-cpu` digests, keyed by the release version without the `v`, into that file **before** the app is built, or
+every run in that build ends `no_worker_image`. `release.yml`'s `app` job does this with
+`scripts/write_worker_images.py` (tested by `scripts/tests/test_write_worker_images.py`), and a test pins that the step
+runs before `dotnet publish`. The file in git stays empty; the entry exists only in the release build.
 The provider allows an image only if it is exactly the entry for the running app version and
 the variant the run needs (`-cuda` for a GPU tier, `-cpu` otherwise); a pinned image of another
 version or variant is refused (a `-cpu` image on a GPU VM has no torch). Developer mode
@@ -281,6 +289,77 @@ trigger for the job's `if:` condition to ever satisfy), and even a restored PR t
 would fail immediately because the repository's Dependency graph setting is off (issue
 #325, an owner-only action). Restoring the PR trigger before #325 is done would recreate a
 permanently red check.
+
+### The packId (#712)
+
+**Decision: `--packId DnaEntropyGraph.Desktop`** (release.yml and ci-app.yml). MEASURED 2026-10-15 from Velopack source
+(`src/bins/src/commands/install.rs`): the default install root is `<LocalAppData>\<manifest id>`, and `commands/uninstall.rs` runs
+`remove_dir_contents(root_path)` on that root. The app data folder is `%LOCALAPPDATA%\DNAEntropyGraph` (`AppDataRoot.Default`). With the old
+`--packId DnaEntropyGraph` the two were the same folder on NTFS (case-insensitive), so an uninstall would have emptied history, settings,
+auth and saved inputs. The new id is a different folder, so the uninstaller never touches the data folder. Installer file names follow
+the id (`DnaEntropyGraph.Desktop-win-Setup.exe`, `DnaEntropyGraph.Desktop-<ver>-win-full.nupkg`).
+THEORY (unverified): the packId is immutable once shipped. It is the install folder, the update feed's package id and the nupkg file
+prefix, so an installed copy would look for updates under the old id; the Velopack docs say only that it is "the unique ID of your
+application". That is why it is fixed before the first public release.
+`scripts/tests/test_release_workflow.py` fails if a `--packId` equals the data folder name ignoring case; the name is read from
+`AppDataRoot.cs`, not hard-coded.
+
+## 9. release.yml (issues #178, #518, #165, #255, #181)
+
+Jobs, in order: `verify` (secrets, lockstep with the tag, tag is on `main`), `images` (matrix `cuda`/`cpu`), `wheel`, `app`
+(signing secrets, READ token), `upload` (write token, no secret), `publish`, `verify-reminder`. `verify` and `app` run under the
+`release` GitHub environment (tag rule `v*`, required reviewers, environment-scoped secrets; owner steps in #703 and
+`release_runbook.md` section 0). Every checkout sets `persist-credentials: false`. Steps are addressed by exact name in the test, and
+the app job order (sign, pack, sign Setup.exe, verify, stage, attest, hand off) and the publish order (attach, asset check, flip) are
+pinned step by step. Structure is pinned by `scripts/tests/test_release_workflow.py`; the file is also linted with
+actionlint (`uvx --from actionlint-py actionlint .github/workflows/release.yml`). MEASURED 2026-10-15: actionlint exits 0 on it, `check_actions_pinned.py` passes, and `git ls-remote` confirmed each of the 13 distinct pinned SHAs exists and matches its `# vX.Y.Z` comment (two tags are annotated: the peeled commit matches).
+Nothing here has run on a real tag yet; `docs/ToTest.md` carries the row.
+
+- **OAuth client (#518).** `OAUTH_CLIENT_JSON` is the file Google's console downloads for the Desktop-app client. The `app` job
+  is read by `scripts/write_oauth_client.py`, which keeps ONLY `installed.client_id` and `installed.client_secret` (validated
+  non-empty strings; every other field is dropped), masks both before printing or writing anything, and writes
+  `oauth_client.local.json` into the publish folder next to the exe, which `OAuthClientLoader.DefaultCandidates` checks first, so
+  `vpk pack` carries it in the payload. It never touches git and is never an artifact on its own. The signed installer payload does
+  hold it, and the draft/public release is public by design (Google says a Desktop-app client secret is not confidential,
+  CLAUDE.md Hard Rule 12). A job cannot read another job's disk, so the `app` job hands the staged release files to the `upload` job
+  through ONE artifact, `release-files` (path `stage/*`, one day of retention). DECISION (agent-made, reversible): this is the only
+  artifact that may carry packages; `test_release_workflow.py` forbids every other upload-artifact step from touching
+  `app/releases`, `app/publish`, `*.nupkg`, `*.exe` or the OAuth file in any slash form. The alternative (one job with the write token
+  and the secrets) was rejected so the job that builds the repo never holds contents: write.
+- **SBOM and provenance (#165).** CycloneDX SBOMs (anchore/sbom-action, Apache-2.0) for the app publish folder (taken before the
+  OAuth file is written) and for each image digest. `actions/attest` (MIT) attaches SLSA provenance and the SBOM as GitHub
+  attestations: to the installer and nupkg, and to each image in GHCR (`push-to-registry`). The images are also built with
+  buildkit `provenance: mode=max` and `sbom: true`. Check with `gh attestation verify <file> --repo Raaif-Yousuf/DNA-Entropy-Graph`.
+- **Signatures.** After signing, every signed file (the exe, every `DnaEntropyGraph.*.dll`, `Setup.exe`) must pass `signtool verify /pa`,
+  `Get-AuthenticodeSignature` status `Valid`, AND carry the owner's identity in its signer subject (`RELEASE_SIGNER_SUBJECT`, an
+  environment variable). A file signed by someone else fails the build.
+- **Which files are this release (#178, #179).** MEASURED 2026-10-15 from velopack 1.2.161 source (tag `1.2.161`, which exists on
+  NuGet): `vpk download github` fetches only the latest FULL nupkg (no feed file); `vpk pack` writes `assets.win.json` naming what it
+  produced; `vpk upload github` uploads exactly the files that names, then `releases.win.json` and, for the default Windows channel,
+  a legacy `RELEASES`. So the feed names to expect on a release are `releases.win.json` and `RELEASES`. A prior release's nupkg left
+  in `app/releases` is never uploaded, but a `*.nupkg` glob would have attested it: `scripts/release_assets.py stage` reads
+  `assets.win.json` instead (refusing a nupkg of another version, requiring the full nupkg and `Setup.exe`), and `check` verifies the
+  published asset NAMES, anchored (the full nupkg of this version, not only a delta).
+- **Containers (#255).** The `images` job runs `scripts/release_dockerfile_base_pinned.py` (named `release_*`, not `check_*`, so premerge and ci-docs do not run it on every PR: it gates a release, and fails by design until #37 pins Dockerfile.cuda) (tested against fixture Dockerfiles): EVERY
+  `FROM` must be pinned by `@sha256` (a multi-stage file with one pinned stage fails; `FROM <earlier stage>` and `scratch` are
+  exempt). The job then builds with
+  `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true`, pushes, then runs Trivy (Apache-2.0) on the pushed digest and fails on a
+  fixable HIGH or CRITICAL finding. The publish job needs it, and a digest that failed the scan is never written into
+  `worker-images.json`, so no released app can run it. The tag it pushed stays in GHCR. MEASURED 2026-09 (issue #255 thread):
+  two clean `docker build`s of `Dockerfile.cpu` had identical installed package versions but different image digests, so
+  "same tag gives the same digest" is NOT yet true; the timestamp rewrite is the next lever and is THEORY (unverified) until two
+  release builds are compared. `Dockerfile.cuda` still builds from an unpinned NGC tag (#37), so a release cannot be cut until
+  that base is pinned: the gate is working as intended, not a bug.
+- **Draft until complete.** `vpk upload github` (in the `upload` job) without `--publish` creates a draft. The `publish` job downloads it, adds the
+  wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, asserts every expected asset name is present (exact, anchored), and only then runs
+  `gh release edit --draft=false` (a tag containing `-` becomes a pre-release instead of the latest release).
+- **Reminder (#181).** The last job opens `Verify <tag> on a clean VM` with the runbook's checklist, unless an issue with that
+  exact title already exists, so re-running the workflow never opens a second one.
+- **Not in the workflow.** The test suites. A release is cut from a commit whose `ci-app` and `ci-worker` runs were green
+  (runbook section 0); the release workflow builds with `-warnaserror` through `dotnet publish` only.
+
+Licences of the tools added (Hard Rule 21; none ship in the product): `docker/*` actions Apache-2.0, `azure/artifact-signing-action`
+MIT, `actions/attest` MIT, `anchore/sbom-action` and Syft Apache-2.0, `aquasecurity/trivy-action` and Trivy Apache-2.0, `vpk` MIT.
 
 ## Related
 
