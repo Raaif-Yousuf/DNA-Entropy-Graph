@@ -1058,6 +1058,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private VmDescriptor GrantCreate(VmSpec spec, string zone, (string, string) key)
     {
         var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow(), InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
+        // A VM the simulation is about to preempt or lose (#91) never gets a worker.
+        var willBeLost = spec.Spot ? _spotPreemptionsLeft > 0 : _onDemandLossesLeft > 0;
+        if (!willBeLost)
+        {
+            RunSimulatedWorker(spec, zone);
+        }
         _vms[key] = vm;
         _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
@@ -1081,7 +1088,6 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             return vm;
         }
 
-        RunSimulatedWorker(spec, zone);
         return vm;
     }
 
@@ -1241,8 +1247,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfProjectWide(spec.ProjectId);
         vm = vm with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
-        _vms[key] = vm;
         RunSimulatedWorker(reuse, zone);
+        _vms[key] = vm;
         if (_reuseResponseLost)
         {
             _reuseResponseLost = false;

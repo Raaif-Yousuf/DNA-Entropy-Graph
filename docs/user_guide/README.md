@@ -25,7 +25,8 @@ yet say so in a note at that spot; this table is the summary.
 | Settings: appearance, run defaults, files, notifications, diagnostics, advanced, external viewers | Yes |
 | The Google Cloud setup wizard (page 02) | Not yet shown as a screen. The steps on page 02 are the design |
 | The Cloud page, Settings > Account, Settings > Budget (pages 02 and 06) | Not yet. The Cloud page shows a "not built yet" message |
-| Check for app updates, run presets, a first-launch tour | Not yet |
+| A first-launch tour, the Help button and Settings > Help (page 08) | Yes |
+| Check for app updates, run presets | Not yet |
 
 ## Who this is for
 

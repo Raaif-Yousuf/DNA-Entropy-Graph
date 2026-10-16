@@ -1,0 +1,1 @@
+- NEXT_SESSION.md: handoff for the 2026-10-16b wave (landing queue state, held chain from #684 up awaiting a cold review, #138 CLI findings).

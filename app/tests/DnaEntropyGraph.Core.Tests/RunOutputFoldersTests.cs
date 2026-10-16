@@ -114,4 +114,16 @@ public sealed class RunOutputFoldersTests : IDisposable
     [Fact]
     public void The_default_parent_falls_back_when_the_lookup_throws()
         => Path.GetFileName(RunOutputFolders.DefaultParent(() => throw new InvalidOperationException("shell unavailable"))).ShouldBe("Downloads");
+
+    [Fact]
+    public void In_portable_mode_the_default_output_parent_is_the_portable_outputs_folder_and_downloads_is_never_asked()
+    {
+        var asked = false;
+
+        var parent = RunOutputFolders.DefaultParent(() => { asked = true; return @"C:\Users\me\Downloads"; }, portableOutputs: @"D:\stick\outputs");
+
+        parent.ShouldBe(@"D:\stick\outputs");
+        asked.ShouldBeFalse();
+        RunOutputFolders.DefaultParent(() => @"C:\Users\me\Downloads", portableOutputs: null).ShouldBe(@"C:\Users\me\Downloads");
+    }
 }

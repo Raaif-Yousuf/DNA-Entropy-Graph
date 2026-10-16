@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using Microsoft.UI.Xaml.Controls;
 
@@ -17,6 +18,11 @@ public sealed class NavigationService : INavigator
     private readonly Dictionary<string, Type> _pages = new(StringComparer.OrdinalIgnoreCase);
     private Frame? _frame;
     private Type? _fallbackPageType;
+    private readonly PageKeyHistory _history = new();
+
+    public string? CurrentPageKey => _history.Current;
+
+    public event EventHandler? CurrentPageChanged;
 
     public void Initialize(Frame frame) => _frame = frame;
 
@@ -38,7 +44,11 @@ public sealed class NavigationService : INavigator
             return;
         }
 
-        _frame.Navigate(pageType, parameter);
+        if (_frame.Navigate(pageType, parameter))
+        {
+            _history.Push(pageKey);
+            CurrentPageChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public void GoBack()
@@ -46,6 +56,8 @@ public sealed class NavigationService : INavigator
         if (_frame?.CanGoBack == true)
         {
             _frame.GoBack();
+            _history.Pop();
+            CurrentPageChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 }
