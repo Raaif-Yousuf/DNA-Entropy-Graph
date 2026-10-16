@@ -352,9 +352,10 @@ def resw_driver_flags(repo: Path) -> tuple[list[str], Path]:
     """(`-c` flags that route Resources.resw through scripts/resw_merge.py for ONE git command, the temp
     attributes file they name). The caller deletes the file when the command is done.
 
-    Passed per command instead of persisted: worktrees share .git/config, and git reads info/attributes
-    from the COMMON dir only (MEASURED 2026-10-16: a linked worktree's own info/attributes is ignored), so
-    neither would stay scoped to the throwaway worktree. The attribute line goes in a unique temp file used
+    Passed per command instead of persisted, so landing needs no one-time setup and nothing here leaks into
+    the shared repo config. (scripts/setup_git_drivers.py persists the same routing for ordinary merges: git reads
+    info/attributes from the COMMON dir only, MEASURED 2026-10-16, a linked worktree's own copy is ignored, so that
+    setup writes the common dir's file.) The attribute line goes in a unique temp file used
     as core.attributesFile; that setting replaces the user's global attributes, so the file is the user's
     own global attributes text plus the resw line. The script is the one beside this file (the lane
     branch may not have it) and the interpreter is the one running land_wt (the venv's).
