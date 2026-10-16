@@ -194,6 +194,19 @@ public static class RunErrorCodes
     /// </summary>
     public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN", "GPU_TESTS_FAILED"];
 
+    /// <summary>
+    /// Every code the worker may write as <c>error.code</c> (docs/contract/error-codes.json, generated from the worker's own
+    /// registry): the ones <see cref="ForWorkerStatusCode"/> maps plus <see cref="WorkerStatusCodesWithoutDedicatedCopy"/>.
+    /// The diagnostics bundle keeps no other <c>error.code</c> (#613), because a value outside this set did not come from
+    /// the worker's registry and could be free text. <c>WorkerContractGuardTests</c> pins this set equal to the contract.
+    /// </summary>
+    public static IReadOnlySet<string> WorkerErrorCodes { get; } = new HashSet<string>(
+        [
+            "GPU_NOT_VISIBLE", "IMAGE_PULL_FAILED", "MANIFEST_INVALID", "WORKER_CRASH", "MODEL_NEEDS_HOPPER", "MODEL_OOM",
+            "BATCH_LIMIT_EXCEEDED", "INPUT_INVALID", "WORKER_VERSION_MISMATCH", "RUN_TIME_LIMIT", .. WorkerStatusCodesWithoutDedicatedCopy,
+        ],
+        StringComparer.Ordinal);
+
     /// <summary>The <c>Resources.resw</c> key for a code (plain, non-dotted: it is read from code, not through <c>x:Uid</c>). An unknown code gets the generic message.</summary>
     public static string ResourceKey(string? code) => code switch
     {
