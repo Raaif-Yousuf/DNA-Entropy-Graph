@@ -54,10 +54,13 @@ def _capture(guard_name: str, hooks_dir: Path, timeout: float = 3.0, stdin_paylo
 # run_hook.py's own self-test, bridged into pytest
 # ---------------------------------------------------------------------------
 
+
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "run_hook.py"), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -66,7 +69,9 @@ def test_self_test_passes():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "run_hook.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert "--timeout" in proc.stdout
@@ -76,6 +81,7 @@ def test_help_exits_zero():
 # ---------------------------------------------------------------------------
 # run(): every arm, in-process (fast, precise)
 # ---------------------------------------------------------------------------
+
 
 def test_missing_guard_file_denies(tmp_path):
     out = _capture("does-not-exist-at-all", tmp_path)
@@ -94,7 +100,8 @@ def test_guard_crash_denies_with_stderr_in_reason(tmp_path):
 
 def test_guard_deny_passes_through_unchanged(tmp_path):
     _write_guard(
-        tmp_path, "denies",
+        tmp_path,
+        "denies",
         "import json, sys\n"
         "json.dump({'hookSpecificOutput': {'hookEventName': 'PreToolUse', "
         "'permissionDecision': 'deny', 'permissionDecisionReason': 'no'}}, sys.stdout)\n",
@@ -127,7 +134,8 @@ def test_guard_nonjson_output_denies(tmp_path):
 
 def test_stdin_payload_genuinely_reaches_the_guard(tmp_path):
     _write_guard(
-        tmp_path, "echo_and_fail",
+        tmp_path,
+        "echo_and_fail",
         "import sys\nsys.stderr.write('saw:' + sys.stdin.read())\nsys.exit(1)\n",
     )
     out = _capture("echo_and_fail", tmp_path, stdin_payload='{"marker": "unique-12345"}')
@@ -162,6 +170,7 @@ def test_run_always_returns_zero_even_on_deny(tmp_path):
 # inside _main must still end in a deny, exit 0, never a bare traceback.
 # ---------------------------------------------------------------------------
 
+
 def test_main_catches_an_unexpected_exception_and_still_denies(monkeypatch, capsys):
     def _boom(argv=None):
         raise RuntimeError("something nobody anticipated")
@@ -178,10 +187,14 @@ def test_main_catches_an_unexpected_exception_and_still_denies(monkeypatch, caps
 # CLI surface: the real subprocess contract .claude/settings.json invokes
 # ---------------------------------------------------------------------------
 
+
 def _run_cli(args: list[str], stdin_payload: str = "{}", timeout: int = 15) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(HOOKS_DIR / "run_hook.py"), *args],
-        input=stdin_payload, capture_output=True, text=True, timeout=timeout,
+        input=stdin_payload,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
@@ -204,9 +217,7 @@ def test_cli_unknown_guard_denies_not_silently_allows():
 def test_cli_real_silent_guard_produces_no_stdout_and_exits_zero():
     """block_git_stash.py itself, run under the real dispatcher, against a
     harmless command: silent, exit 0 -- the everyday case."""
-    proc = _run_cli(["block_git_stash"], stdin_payload=json.dumps(
-        {"tool_name": "Bash", "tool_input": {"command": "git status"}}
-    ))
+    proc = _run_cli(["block_git_stash"], stdin_payload=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}}))
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
 
@@ -214,9 +225,7 @@ def test_cli_real_silent_guard_produces_no_stdout_and_exits_zero():
 def test_cli_real_guard_deny_passes_through():
     """block_git_stash.py itself, run under the real dispatcher, against a
     command it is known to deny."""
-    proc = _run_cli(["block_git_stash"], stdin_payload=json.dumps(
-        {"tool_name": "Bash", "tool_input": {"command": "git stash pop"}}
-    ))
+    proc = _run_cli(["block_git_stash"], stdin_payload=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git stash pop"}}))
     assert proc.returncode == 0
     assert _is_deny(proc.stdout)
 
@@ -224,6 +233,8 @@ def test_cli_real_guard_deny_passes_through():
 def test_cli_bad_timeout_value_is_a_usage_error_not_a_silent_allow():
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "run_hook.py"), "--timeout", "not-a-number", "block_git_stash"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 2  # argparse usage error, not a silent allow

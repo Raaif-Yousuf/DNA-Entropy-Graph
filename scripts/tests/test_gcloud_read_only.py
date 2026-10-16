@@ -87,7 +87,10 @@ def test_end_to_end_denies():
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gcloud compute instances delete vm"}})
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "gcloud_read_only.py")],
-        input=payload, capture_output=True, text=True, timeout=15,
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -97,7 +100,10 @@ def test_end_to_end_silent_on_read_only():
     payload = json.dumps({"tool_name": "PowerShell", "tool_input": {"command": "gcloud config list"}})
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "gcloud_read_only.py")],
-        input=payload, capture_output=True, text=True, timeout=15,
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
@@ -106,7 +112,10 @@ def test_end_to_end_silent_on_read_only():
 def test_fails_open_on_malformed_stdin():
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "gcloud_read_only.py")],
-        input="not json", capture_output=True, text=True, timeout=15,
+        input="not json",
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
@@ -115,6 +124,8 @@ def test_fails_open_on_malformed_stdin():
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(HOOKS_DIR / "gcloud_read_only.py"), "--self-test"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
