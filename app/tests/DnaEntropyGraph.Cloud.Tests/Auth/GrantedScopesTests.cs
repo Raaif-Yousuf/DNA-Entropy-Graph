@@ -58,7 +58,7 @@ public class GrantedScopesTests
     }
 
     [Fact]
-    public async Task A_refresh_answer_that_keeps_cloud_platform_or_names_no_scope_is_fine()
+    public async Task A_refresh_answer_that_keeps_cloud_platform_is_fine()
     {
         using var harness = new AuthHarness();
         harness.Google.ExpiresInSeconds = 30;
@@ -67,5 +67,21 @@ public class GrantedScopesTests
         harness.Google.RefreshGrantedScope = "openid https://www.googleapis.com/auth/cloud-platform";
 
         (await service.GetAccessTokenAsync(CancellationToken.None)).ShouldStartWith("at-");
+    }
+
+    [Fact]
+    public async Task A_refresh_answer_that_names_no_scope_keeps_the_stored_grant_and_the_sign_in()
+    {
+        using var harness = new AuthHarness();
+        harness.Google.ExpiresInSeconds = 30;
+        await harness.SignedInAsync("1001", "first@example.test");
+        var service = harness.NewService();
+        harness.Google.RefreshGrantedScope.ShouldBeNull("the fake answers the refresh with no scope field");
+
+        (await service.GetAccessTokenAsync(CancellationToken.None)).ShouldStartWith("at-");
+
+        harness.Google.TokenRequests.Count(r => r["grant_type"] == "refresh_token").ShouldBe(1, "the refresh really happened");
+        service.IsSignedIn.ShouldBeTrue();
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue();
     }
 }
