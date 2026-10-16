@@ -1007,7 +1007,7 @@ def test_a_generic_type_parameter_resolve_is_not_reported(tmp_path):
         tmp_path / "w",
         {
             "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
-            "src/Demo.App/Startup/Helpers.cs": "public static class H { public static T Get<T>(IServiceProvider p) => p.GetRequiredService<T>(); }\n",
+            "src/Demo.App/Startup/Helpers.cs": "public static class H { public static T Get<T>(IServiceProvider p) => p.GetRequiredService<T>(); }\n",  # noqa: E501
             "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
         },
     )
@@ -1046,8 +1046,8 @@ def test_a_type_registered_in_another_startup_file_satisfies_a_resolve(tmp_path)
         tmp_path / "w",
         {
             "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
-            "src/Demo.App/Startup/Extra.cs": "public static class Extra { public static void Add(IServiceCollection s) { s.AddSingleton<Other>(); } }\n",
-            "src/Demo.App/Startup/AppStartup.cs": "public static class A { public static void Run(IServiceProvider p) { p.GetRequiredService<Other>(); } }\n",
+            "src/Demo.App/Startup/Extra.cs": "public static class Extra { public static void Add(IServiceCollection s) { s.AddSingleton<Other>(); } }\n",  # noqa: E501
+            "src/Demo.App/Startup/AppStartup.cs": "public static class A { public static void Run(IServiceProvider p) { p.GetRequiredService<Other>(); } }\n",  # noqa: E501
             "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
             "src/Demo.Core/Other.cs": "public sealed class Other { }\n",
         },
