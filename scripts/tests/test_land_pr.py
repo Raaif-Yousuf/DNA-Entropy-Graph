@@ -28,8 +28,9 @@ def _land(world, branch="fix/x", paths=(), hunks=None, checks="pass", **kwargs):
     kwargs.setdefault("allow_no_checks", False)
     kwargs.setdefault("dry_run", False)
     kwargs.setdefault("grace", 0.0)  # tests never wait for real; the grace tests below use a fake clock
-    return lp.land(world.ctx(checks), branch, list(paths), hunks or {}, "fix: the thing", None,
-                   poll=0.0, timeout=kwargs.pop("timeout", 30.0), **kwargs)
+    return lp.land(
+        world.ctx(checks), branch, list(paths), hunks or {}, "fix: the thing", None, poll=0.0, timeout=kwargs.pop("timeout", 30.0), **kwargs
+    )
 
 
 def _status(world) -> str:
@@ -41,8 +42,9 @@ def _merge_called(world) -> bool:
 
 
 def test_self_test_passes():
-    proc = subprocess.run([sys.executable, str(SCRIPTS_DIR / "land_pr.py"), "--self-test"],
-                          capture_output=True, text=True, timeout=120, check=False)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "land_pr.py"), "--self-test"], capture_output=True, text=True, timeout=120, check=False
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
 
@@ -98,8 +100,13 @@ def test_list_hunks_prints_index_header_and_first_change(world):
     rows = lp.list_hunks(world.ctx(), "f.txt")
     assert [r[0] for r in rows] == [0, 1]
     assert rows[0][1].startswith("@@") and "line 03" in rows[0][2]
-    proc = subprocess.run([sys.executable, str(SCRIPTS_DIR / "land_pr.py"), "--repo", str(world.work), "--list-hunks", "f.txt"],
-                          capture_output=True, text=True, timeout=60, check=False)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "land_pr.py"), "--repo", str(world.work), "--list-hunks", "f.txt"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
     assert proc.returncode == 0 and "line 36" in proc.stdout
 
 
@@ -262,8 +269,13 @@ def test_local_main_ahead_of_origin_is_not_orphaned(world, capsys):
 
 
 def test_cli_refuses_without_branch_and_title(world):
-    proc = subprocess.run([sys.executable, str(SCRIPTS_DIR / "land_pr.py"), "--repo", str(world.work), "--paths", "other.txt"],
-                          capture_output=True, text=True, timeout=60, check=False)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "land_pr.py"), "--repo", str(world.work), "--paths", "other.txt"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
     assert proc.returncode == 2
 
 
@@ -273,10 +285,30 @@ def test_cli_end_to_end_with_the_stub_gh(world):
     body = world.root / "body.md"
     body.write_text("evidence goes here\n", encoding="utf-8", newline="\n")
     proc = subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "land_pr.py"), "--repo", str(world.work), "--branch", "fix/cli", "--no-premerge-check",
-         "--paths", "other.txt", "--title", "fix: cli", "--body-file", str(body), "--poll-seconds", "0",
-         "--gh", f"{Path(sys.executable).as_posix()} {world.stub.as_posix()}"],
-        capture_output=True, text=True, timeout=120, check=False, env=env,
+        [
+            sys.executable,
+            str(SCRIPTS_DIR / "land_pr.py"),
+            "--repo",
+            str(world.work),
+            "--branch",
+            "fix/cli",
+            "--no-premerge-check",
+            "--paths",
+            "other.txt",
+            "--title",
+            "fix: cli",
+            "--body-file",
+            str(body),
+            "--poll-seconds",
+            "0",
+            "--gh",
+            f"{Path(sys.executable).as_posix()} {world.stub.as_posix()}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=env,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "LANDED" in proc.stdout
