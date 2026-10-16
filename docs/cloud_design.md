@@ -1314,6 +1314,39 @@ account and a role and edits two policies, and a whole-method retry would replay
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
+## 18. The Cloud Billing budget (issues #148, #222)
+
+#222 is the standing-costs-card half of #148 ("merges with the earlier budget issue; keep one"): one budget, one
+implementation, and the card (#219, not built) binds the same view model (`BudgetSettingsViewModel`: `SaveCommand`,
+`HasBudget`, `StatusText`, `ErrorText`, `ConsoleLink`, `CopyRequestCommand`) or hosts it.
+
+- **Interface.** `Core/Cloud/IBudgetGateway` (`FindAsync`, `UpsertAsync`, `DeleteAsync`); the policy is `BudgetService`
+  (`IBudgetService`: look, save, remove, console link) over it, `IBillingGateway` (the project's linked account) and
+  `IServiceEnablementGateway`. `FakeGcp.Budgets.cs` implements the gateway with `WithBudgetPermissionDenied()`; the Budgets
+  API off, not-project-owner and billing-off scenarios come from the existing fake switches.
+- **Real gateway.** `Cloud/Rest/GoogleBudgetGateway` over `Google.Apis.CloudBillingBudget.v1` (the DECISION #535 family,
+  Apache-2.0): `billingAccounts.budgets.list`, `create`, `patch` (`updateMask=amount,budgetFilter,thresholdRules`), `delete`.
+  Every HTTP call goes through the pipeline; the create is never replayed (`replayable: false`), and `UpsertAsync` lists
+  first, so a budget whose create response was lost is patched, not doubled. Never wrapped in a `Resilient*` decorator.
+- **Discovery (Hard Rule 9).** Budgets carry no labels, so this installation's budget is the one whose display name is
+  `DNA Entropy Graph <installation-id>` on the account (`BudgetNaming`). Two users on one billing account get two budgets and
+  each sees only its own. A budget of another name is never touched.
+- **Shape.** One project in `budgetFilter.projects` (the project NUMBER, read from Resource Manager), `amount.specifiedAmount`
+  with no currency (the account's own is used), threshold rules 0.5, 0.9 and 1.0 on `CURRENT_SPEND`, and NO
+  `notificationsRule`, so billing administrators and users are emailed by default. Default amount 50.
+- **Quota project.** Each request carries `x-goog-user-project: <the user's project>`; without it Google bills the call to the
+  OAuth client's own project, where the Budget API is not on. The API is switched on lazily at the first save
+  (`RequiredServices.BillingBudgets`, deliberately not in `RequiredServices.Ids`: an optional extra must never fail the wizard).
+- **Permission is the common case.** The user needs `billing.budgets.create` on the BILLING ACCOUNT (Billing Account Costs
+  Manager or Administrator); a project owner often lacks it. The view model turns `CloudErrorKind.Permission` into one sentence,
+  a link to the account's console budgets page and a copyable request for the billing administrator; `Billing` (no account)
+  links to the billing home. No new `SetupErrorCodes`: the group maps kinds itself, so the three-way code guard is untouched.
+- **Already exists.** Google allows two budgets with one display name, so there is no 409 to handle; idempotence is the
+  find-then-patch above.
+- **THEORY (unverified, no live billing account):** that an unset currency and an absent `notificationsRule` behave as documented,
+  that `projects/{number}` is the filter form, and that `x-goog-user-project` is honoured with a user token. `docs/ToTest.md`
+  carries the real-account row.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

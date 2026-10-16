@@ -51,6 +51,10 @@ your sequences, file names, results, email address or sign-in.
 
 A collapsed group. **Reset all settings** asks first, then puts every setting back to its starting value; your runs, results and input files are not touched. Close the app and open it again to finish. A note says whether this copy is using a pretend cloud for testing. The analysis program image box is for developers: it works only when developer mode is already on in the settings file. If you paste an address that is not a full one, the box says so and the shipped image is used until you paste a full one. After a reset, every group on the page shows its starting values at once.
 
+## Budget alert
+
+Makes a Google Cloud Billing budget on your billing account that emails the billing administrators at 50%, 90% and 100% of a monthly **Monthly amount** (50 by default). **Create or update the alert** makes it, or changes the amount of the one this copy of the app already made (it never makes a second one); **Remove the alert** deletes it. The group shows what Google holds each time the page opens. If you are not a billing administrator, the group says so, offers **Open Google's budgets page** and **Copy a request for my billing administrator**, and nothing is created. See [06-costs-and-cleanup.md](06-costs-and-cleanup.md).
+
 ## External viewers
 
 The buttons **Open in IGV** and **Open in Geneious** on the Results page start those programs

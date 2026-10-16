@@ -145,6 +145,23 @@ this app created.*
 - In **Settings > Budget**, you can set a monthly spending warning (a friendly reminder,
   $50 a month by default) or a hard stop that disables the Run button once you reach it.
 
+## Get an email from Google when spending gets high
+
+The estimate in this app is only an estimate. Google keeps its own count and can email you when
+your spending nears an amount you choose. In **Settings > Budget alert**, type a monthly amount
+(50 is suggested, in the currency of your billing account) and press **Create or update the
+alert**. Google then emails the people who administer your billing account at 50%, 90% and 100%
+of that amount each month. The alert watches this project only, and the app switches the Cloud
+Billing Budget API on for you the first time. Press **Remove the alert** to delete it.
+
+Creating a budget needs a role on the **billing account**, not just on the project, and the person
+who made the project is often not a billing administrator. If Google refuses, the group says so and
+offers two things: **Open Google's budgets page** (the console page for your billing account) and
+**Copy a request for my billing administrator**, which you can paste into an email. Once they make
+the budget themselves or give you the Billing Account Costs Manager role, press the button again.
+This alert only emails you; it does not stop anything from running. Use the spending cap in
+Settings to stop new runs.
+
 ## Related
 
 [03-run.md](03-run.md), where the live cost estimate appears before you press Run.

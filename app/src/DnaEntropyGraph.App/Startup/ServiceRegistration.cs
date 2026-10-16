@@ -347,6 +347,9 @@ public static class ServiceRegistration
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();
+        // Issues #148 and #222: the Settings "Budget alert" group. The service is the policy (account, API, installation id); the gateway is Google or the fake.
+        services.AddSingleton<IBudgetService, BudgetService>();
+        services.AddTransient<BudgetSettingsViewModel>();
 
         if (cloud == CloudBackend.Developer)
         {
@@ -401,6 +404,7 @@ public static class ServiceRegistration
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Billing);
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Services);
         services.AddSingleton<IQuotaGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Quota);
+        services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Budget);
 
     }
 
@@ -423,6 +427,7 @@ public static class ServiceRegistration
         services.AddSingleton<IProjectCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<FakeGcp>());
     }
 }
 

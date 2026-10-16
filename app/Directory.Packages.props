@@ -34,6 +34,8 @@
     <PackageVersion Include="Google.Apis.Storage.v1" Version="1.76.0.4271" />
     <!-- Cloud: IAM v1 REST discovery client for the worker service account and its custom role (issue #54). Apache-2.0. Same reason as above. -->
     <PackageVersion Include="Google.Apis.Iam.v1" Version="1.77.0.4285" />
+    <!-- Cloud: Cloud Billing Budgets REST discovery client (issue #148). Apache-2.0. Same family as the other Google.Apis clients (docs/cloud_design.md section 16). -->
+    <PackageVersion Include="Google.Apis.CloudBillingBudget.v1" Version="1.77.0.4288" />
     <!-- Cloud: DPAPI (CurrentUser) for the token files (issue #48). MIT. -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
 
