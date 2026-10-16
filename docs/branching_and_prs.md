@@ -133,7 +133,7 @@ because gh refuses to re-run an unfinished run), appends `<time> pr=<url> checks
 with no run link, or a rejected re-run, refuses at once. Read `flaky-checks.log` to see which checks flake and fix their
 tests; the re-run is not a licence to leave them.
 
-A pending check at the timeout never merges, and an empty check list is "not green yet", never green (gh reports no checks for
+When gh itself fails on a poll (anything but its normal "no checks reported"), the first failure prints `WARNING: gh pr checks failed (rc=N: ...)` and a timeout says `gh could not read the checks (rc=N: ...)` instead of "no checks were reported" (MEASURED 2026-10-16: PR #811 was all green, but gh was failing on every poll with exit 3221225794). A pending check at the timeout never merges, and an empty check list is "not green yet", never green (gh reports no checks for
 a moment after the PR opens). Console output is ASCII. Without the flag nothing changes: the script prints the
 `gh pr merge` line and you decide.
 
@@ -167,6 +167,38 @@ branch.
 `land_pr.py` stays for the shared-checkout case (uncommitted edits, exact paths or hunks); it is a separate script because its
 input and its return-to-main step do not apply here. `--content-dir` is deferred to #576, only needed if a wave goes back to a
 shared checkout.
+
+## Landing many branches: `scripts/land_queue.py`
+
+The orchestrator's queue runner, in the repo. It takes `branch|sha|issue|full|title` lines (optional sixth field
+`red=<check>[,<check>]`, a KNOWN_RED override for that item only), runs `land_wt.py --merge-when-green` for each (land_wt waits for the checks, reruns failed runs once and merges; exit 5/6 leave the PR open and
+are logged `FAILED rc=5|6 (PR #n stays open)`). An item with `red=` (or the KNOWN_RED env var) lands without the flag and the queue's own merge loop
+ignores the named checks, reruns the failed runs once (logged to `flakes.log`) and merges with `gh pr merge --merge`.
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\land_queue.py add feat/1-x <sha> 1 "feat: x (#1)" [--full] [--red "build and test"]
+worker\.venv\Scripts\python.exe scripts\land_queue.py run          # the loop; `run --once` drains and returns; `run --replace` takes over a live but stuck runner
+worker\.venv\Scripts\python.exe scripts\land_queue.py status [--check]  # runner alive/DEAD, pending, in flight, last results; --check exits 1 if not alive
+worker\.venv\Scripts\python.exe scripts\land_queue.py retry feat/1-x@<sha>   # an item already taken, again
+worker\.venv\Scripts\python.exe scripts\land_queue.py stop         # runner.stop: exits before the next item
+```
+
+State is under `--state` (default `%TEMP%\deg-land-queue`): `queue.txt`, `taken.log`, `done.log`, `flakes.log`,
+`inflight.json`, `runner.json` (pid + heartbeat), `land-<slug>-<sha7>.log` (one per item), `body-<slug>-<sha7>.md`. `run` refuses to start while
+the pid in `runner.json` is alive and exits clean after `stop` (the stop file is consumed). It is built to run detached and survive the session that
+started it: a later session reads `status`. Every log is append-only: `retry` appends `RETRY <key>` to `taken.log` and `RETRY <branch> @ <sha>` to
+`done.log` (a rewrite would make `tail -F` monitors replay the file). When an item fails, a later queued item whose sha has the failed sha as an
+ancestor is logged `SKIPPED-STACK` and never attempted. With `run --ff-main` (default off) the main checkout is fast-forwarded after a merge, only when it is on `main`, clean and has no `index.lock`; the outcome is logged as `FF-MAIN ...` in `done.log`. A DIRTY re-land closes the old PR with `--delete-branch` only when the PR head is a branch this queue created, never the lane's own. A daemon thread beats 
+unner.json every 60 s for the life of the runner, so heartbeat age is a real liveness signal (pid stays the primary check). On a retry an existing PR is resumed only when its head is the item's sha or that sha plus merges of main (never unverified commits), a MERGED one is logged MERGED-RECOVERED #n branch @ sha (verified against the PR head or origin/main), and the merge always passes --match-head-commit. Every done line ends with `branch @ sha`. `runner.json` holds `pid`, `started` (the process creation time: a live pid with a different one is a reused pid and counts as dead), `ts` (the main thread's last progress: a subprocess returned or a stage began) and `beat` (the beater's own clock). A runner whose pid is alive is NEVER replaced automatically (`run` refuses); `status` shows `alive, NO PROGRESS for N min - inspect; replace with run --replace` once `ts` is older than the checks timeout plus 30 min, and `run --replace` (a human's call) kills its process tree first (pid and creation time must still match the record, and the process must really exit, else it refuses), then takes over and logs `REPLACED pid N (killed)` (THEORY, unverified: grandchildren whose parent already exited are orphaned and not killed by `taskkill /T`); the killed runner's in-flight item becomes `FAILED interrupted` and `retry` resumes its open PR. The heartbeat only ever replaces a parsed `runner.json` holding its own pid; when the file is gone, empty, unparsable or another pid's, the runner logs `DISPLACED` and returns before taking another item. gh and git calls time out after 600 s (rc 124, logged `TIMEOUT` in `flakes.log`) and a timeout kills the whole process tree; `land_wt.py` bounds each of its own gh/git calls (gh 300 s, git 600 s; a hung `gh pr checks` is a failed read, so its 30 min deadline holds) and the premerge (`--premerge-timeout`, 7200 s); `land_queue.py` bounds `land_wt.py` itself at premerge + 2 x the checks wait + the worst-case git/gh call chain + 30 min (formula beside `LAND_WT_TIMEOUT_SECONDS`). `land_wt.py`'s own merge is pinned to the pushed sha with `--match-head-commit` and refuses if the PR head moved. `merge_green` never merges without `--match-head-commit`: an unreadable PR head is `PENDING` (`FAILED rc=6`). An open PR from an earlier attempt whose head is not this sha plus merges of main is `FAILED open PR #n has unverified commits`, never a second PR. A pending check at the timeout never merges (`FAILED rc=6`). An `inflight.json` with no verdict at start becomes `FAILED interrupted`, so `retry` applies. `add` rejects a bad sha, a `|` or whitespace in the branch, or `|red=` in the title; `stop` refuses when no runner is alive. MEASURED 2026-10-15 defects of the scratchpad scripts it replaces, each with a test:
+
+- Items are keyed `branch@sha`, not by the whole line, so editing a queued title (or a trailing space) never re-takes a landed
+  branch; a new sha of the same branch is a new item.
+- If `origin` already holds the branch (a closed PR), land_wt gets `--land-branch <branch>-<sha7>` instead of a failing push.
+- Before merging, `mergeStateStatus` is read (UNKNOWN is polled). A DIRTY PR (another PR was merged by hand while this one was
+  in CI, PR #674) is closed with its branch deleted and the same sha is re-landed once on `<branch>-<sha7>-r2`; DIRTY twice is
+  REFUSED.
+- `land_wt.py --merge-when-green` (#666) is now on main, so the queue delegates the merge to it; only known-red items keep the loop here.
+
 ## Closing keywords
 
 A commit message or PR body that says an issue is **not** fixed can still
