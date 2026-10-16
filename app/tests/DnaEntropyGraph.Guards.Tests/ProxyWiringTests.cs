@@ -55,6 +55,14 @@ public class ProxyWiringTests : IDisposable
         proxied.ShouldBe(sources);
     }
 
+    [Fact]
+    public void The_diagnostics_zip_is_given_the_policy_so_it_can_record_the_mode()
+    {
+        var registration = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "Startup", "ServiceRegistration.cs"));
+
+        System.Text.RegularExpressions.Regex.IsMatch(registration, @"DiagnosticsInfoProvider\.Current\([^;]*GetRequiredService<IProxyPolicy>\(\)\)").ShouldBeTrue();
+    }
+
     public void Dispose()
     {
         try
