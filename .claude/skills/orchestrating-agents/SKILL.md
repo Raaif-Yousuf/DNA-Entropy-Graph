@@ -17,6 +17,9 @@ per-lane, one at a time, is exactly the shape that makes it feel skippable
 when there are many lanes — it is one call, always run it before dispatching,
 not just on the *next* wave's candidates.
 
+**Run `python scripts\prune_worktrees.py` (dry run; `--apply` once the table looks right) at wave start**, so landed lanes do not
+hold their branches checked out and a repair lane can use the original branch name (#794).
+
 **Prefer reuse and batching over a new spawn.** A fresh agent pays a cold
 start re-deriving context you already hold. Send a follow-up via
 `SendMessage` to a running agent, or hand one agent several related tasks in
