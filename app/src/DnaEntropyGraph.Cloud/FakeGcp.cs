@@ -448,13 +448,26 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
 
     /// <summary>
-    /// The platform deletes a VM once its <c>maxRunDuration</c> has passed since it was created (Hard Rule 10's
+    /// The platform deletes a running VM once its <c>maxRunDuration</c> has passed since it last started (Hard Rule 10's
     /// <c>instanceTerminationAction=DELETE</c>); off by default. A VM past its limit is gone at the next look,
     /// by <see cref="GetVmAsync"/> or <see cref="FindByJobIdAsync"/>, measured on this fake's <see cref="TimeProvider"/>.
     /// </summary>
     public FakeGcp WithMaxRunDurationEnforced()
     {
         _enforceMaxRunDuration = true;
+        return this;
+    }
+
+    private bool _runClockFromCreation;
+
+    /// <summary>
+    /// The other reading of the platform's <c>maxRunDuration</c>: its clock counts from the instance's CREATION and never restarts, so a VM
+    /// reused days later is deleted soon after it starts. THEORY (unverified, ToTest #94) which reading is real; the app must end such a
+    /// run in a recorded terminal state with nothing left billing under either. Needs <see cref="WithMaxRunDurationEnforced"/>.
+    /// </summary>
+    public FakeGcp WithRunClockFromCreation()
+    {
+        _runClockFromCreation = true;
         return this;
     }
 
@@ -468,7 +481,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var now = _timeProvider.GetUtcNow();
         foreach (var (key, vm) in _vms)
         {
-            if (vm.CreatedAt is { } created && _maxRunByVm.TryGetValue(key, out var limit) && now >= created + limit)
+            // The platform limits a VM that is running. THEORY (unverified, ToTest #94): its clock restarts at each start (lastStartTimestamp),
+            // not at creation. The other reading is available through WithRunClockFromCreation so the app is tested safe under either.
+            var basis = _runClockFromCreation ? vm.CreatedAt : vm.RunClockStart;
+            if (vm.Status is not ("STOPPED" or "TERMINATED" or "STOPPING") && basis is { } clockStart && _maxRunByVm.TryGetValue(key, out var limit) && now >= clockStart + limit)
             {
                 _vms.TryRemove(key, out _);
             }
@@ -840,8 +856,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 $"The zone '{zone}' does not have enough resources available to fulfill the request for accelerator.");
         }
 
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels());
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow());
         _vms[key] = vm;
+        _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)
         {
@@ -852,6 +869,153 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.FromResult(vm);
     }
 
+    /// <summary>How many times <see cref="ReuseVmAsync"/> was called (issue #94).</summary>
+    public int ReuseAttempts => Volatile.Read(ref _reuseAttempts);
+
+    private int _reuseAttempts;
+    private CloudErrorKind? _reuseStartFailure;
+
+    /// <summary>
+    /// The start of a reused VM fails with this kind of error AFTER the VM was claimed (relabelled for the new job), as the real
+    /// gateway's start can (a stockout, billing turned off). Issue #94.
+    /// </summary>
+    public FakeGcp WithReuseStartFailure(CloudErrorKind kind)
+    {
+        _reuseStartFailure = kind;
+        return this;
+    }
+
+    private bool _reuseResponseLost;
+    private Func<VmSpec, Task>? _reuseBarrier;
+
+    /// <summary>
+    /// The start of a reused VM SUCCEEDS but the answer is lost (a 503 on the final look, a dropped connection): the VM is running for the new
+    /// job and the call throws a <see cref="CloudErrorKind.Network"/> error, once. The real gateway's last step can fail this way. Issue #94.
+    /// </summary>
+    public FakeGcp WithReuseResponseLost()
+    {
+        _reuseResponseLost = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="barrier"/> inside <see cref="ReuseVmAsync"/> after the VM was read and before anything is written, so a test can make two
+    /// installations' jobs read the same stopped VM and then race to claim it. Issue #94.
+    /// </summary>
+    public FakeGcp WithReuseBarrier(Func<VmSpec, Task> barrier)
+    {
+        _reuseBarrier = barrier;
+        return this;
+    }
+
+    /// <summary>The <c>maxRunDuration</c> the VM was last given (create, or a reuse's scheduling write), or null when there is no such VM.</summary>
+    public TimeSpan? MaxRunDurationOf(string vmName, string zone) => _maxRunByVm.TryGetValue((vmName, zone), out var limit) ? limit : null;
+
+    // The real labelFingerprint is fresh when an instance is created, moves on EVERY labels write (this app's claim, or anyone
+    // else's), and a deleted-and-recreated instance never shares one with its predecessor. A global counter gives the same three
+    // properties; an entry is dropped with its VM.
+    private readonly ConcurrentDictionary<(string Name, string Zone), long> _labelFingerprints = new();
+    private readonly object _claimLock = new();
+    private long _fingerprintClock;
+
+    private long NextFingerprint() => Interlocked.Increment(ref _fingerprintClock);
+
+    /// <summary>
+    /// Someone else (the console, gcloud, another tool) rewrote this VM's labels: merges <paramref name="labels"/> into them and moves the
+    /// labelFingerprint, as any real <c>setLabels</c> does, so a reuse that read the VM before it fails its claim with a 412. Issue #94 review.
+    /// </summary>
+    public FakeGcp SimulateExternalRelabel(string vmName, string zone, IReadOnlyDictionary<string, string> labels)
+    {
+        var key = (vmName, zone);
+        lock (_claimLock)
+        {
+            if (_vms.TryGetValue(key, out var vm))
+            {
+                var merged = new Dictionary<string, string>(vm.Labels ?? new Dictionary<string, string>());
+                foreach (var (k, v) in labels)
+                {
+                    merged[k] = v;
+                }
+
+                _vms[key] = vm with { Labels = merged };
+                _labelFingerprints[key] = NextFingerprint();
+            }
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// Issue #94: claims and starts a stopped VM for <paramref name="spec"/>'s job, as the real gateway does: refuses a VM that is
+    /// not stopped before any change, CLAIMS it first (rewrites the labels, which carry a fingerprint: of two jobs that read the same VM only
+    /// one passes, the other gets a 412 and has written nothing), then rewrites the lifetime limit, then starts it (the VM then reads RUNNING;
+    /// its <c>creationTimestamp</c> stays and its <c>lastStartTimestamp</c> moves; THEORY (unverified, ToTest #94): its <c>maxRunDuration</c> clock restarts with it) and lets the simulated
+    /// worker act for the new job. Under the VM's own, old name.
+    /// </summary>
+    public async Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        var reuse = spec with { ExistingVmName = existingVmName };
+        reuse.EnsurePreconditions();
+        Interlocked.Increment(ref _reuseAttempts);
+        var key = (existingVmName, zone);
+        if (!_vms.TryGetValue(key, out var vm))
+        {
+            throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+        }
+
+        if (vm.Status is not ("STOPPED" or "TERMINATED"))
+        {
+            throw Build(CloudErrorKind.Other, "VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{vm.Status}', not stopped.");
+        }
+
+        var readFingerprint = _labelFingerprints.GetValueOrDefault(key);
+        if (_reuseBarrier is { } barrier)
+        {
+            await barrier(spec).ConfigureAwait(false);
+        }
+
+        // The claim comes before everything else, so a start that fails leaves the VM labelled for this job (the caller ends it).
+        lock (_claimLock)
+        {
+            if (!_vms.TryGetValue(key, out vm))
+            {
+                throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+            }
+
+            if (_labelFingerprints.GetValueOrDefault(key) != readFingerprint)
+            {
+                throw Build(CloudErrorKind.Other, "CONDITION_NOT_MET", 412, "The labels fingerprint is invalid: another job claimed this VM first.");
+            }
+
+            _labelFingerprints[key] = NextFingerprint();
+            vm = vm with { Labels = reuse.ToLabels() };
+            _vms[key] = vm;
+            _maxRunByVm[key] = reuse.MaxRunDuration;
+        }
+
+        if (_reuseStartFailure is { } kind)
+        {
+            throw kind switch
+            {
+                CloudErrorKind.Stockout => Build(CloudErrorKind.Stockout, "ZONE_RESOURCE_POOL_EXHAUSTED", null, $"The zone '{zone}' does not have enough resources available to fulfill the request."),
+                CloudErrorKind.Billing => Build(CloudErrorKind.Billing, "BILLING_DISABLED", 403, "This API method requires billing to be enabled."),
+                _ => Build(kind, null, null, "The start failed."),
+            };
+        }
+
+        ThrowIfProjectWide(spec.ProjectId);
+        vm = vm with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
+        _vms[key] = vm;
+        RunSimulatedWorker(reuse, zone);
+        if (_reuseResponseLost)
+        {
+            _reuseResponseLost = false;
+            throw Build(CloudErrorKind.Network, null, 503, "The service is unavailable: the answer to the start was lost.");
+        }
+
+        return vm;
+    }
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         if (ConsumeHang())
@@ -964,6 +1128,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var existed = _vms.TryRemove((vmName, zone), out _);
+        _labelFingerprints.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
             _nextDeleteRacesAWorkerDelete = false;
@@ -1010,7 +1175,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ExpireOverdueVms();
         var name = $"deg-{jobId}";
-        IReadOnlyList<VmDescriptor> matches = _vms.Values.Where(v => v.Name == name).ToList();
+        // By the job-id label, as the real gateway does (a reused VM keeps its old name, #94); a VM seeded without labels, such as WithAlreadyExists's, by name.
+        IReadOnlyList<VmDescriptor> matches = _vms.Values
+            .Where(v => v.Labels is null ? v.Name == name : v.Labels.TryGetValue("job-id", out var owner) && owner == jobId)
+            .ToList();
         return Task.FromResult(matches);
     }
 

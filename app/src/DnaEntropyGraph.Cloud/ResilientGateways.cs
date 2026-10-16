@@ -24,6 +24,11 @@ public sealed class ResilientComputeGateway : IComputeGateway
     public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.CreateVm", token => _inner.CreateVmAsync(spec, zone, token), cancellationToken);
 
+    public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+        // A composite (claim, scheduling, metadata, start): replaying it after a transient failure of its last step meets a VM that already
+        // started. replayable: false gives it the breaker but neither retries nor a 401 replay; the provisioner looks by label on a Network failure.
+        => _pipeline.ExecuteAsync("Compute.ReuseVm", token => _inner.ReuseVmAsync(spec, existingVmName, zone, token), cancellationToken, replayable: false);
+
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.GetVm", token => _inner.GetVmAsync(vmName, zone, token), cancellationToken);
 

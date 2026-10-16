@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// (<see cref="VmCanceller"/>) and the ladder wait for these through <see cref="SettleInflightCreatesAsync"/> before they
 /// record a terminal state. Nothing else touches the dictionary.
 /// </summary>
-internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator)
+internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, Task<bool>>? jobIsFinished = null)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, string> _inflightCreates = new();
 
@@ -69,10 +69,17 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         if (existing.Count > 0)
         {
             progress.VmMayExist = true;
-            return ProvisionResult.Ok(existing[0].Zone);
+            progress.VmName = existing[0].Name;
+            return ProvisionResult.Ok(existing[0].Zone, existing[0].Name);
         }
 
         var spec = await completeSpec(cancellationToken).ConfigureAwait(false);
+
+        // Issue #94: a stopped VM this installation left behind is started for this job before a new one is created.
+        if (await TryReuseAsync(request, spec, progress, cancellationToken).ConfigureAwait(false) is { } reuse)
+        {
+            return reuse;
+        }
 
         // One value for both the create's own timeout and the poller's deadline, so they cannot drift apart: the create's
         // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the
@@ -97,6 +104,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                         // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
                         // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
                         // token (the same instant, so the poller's would win and hide the abandoned create).
+                        progress.VmStartMark = settings.StartClock();
                         createTask = compute.CreateVmAsync(spec, zone, cancellationToken);
                         TrackInflightCreate(request.JobId, createTask);
                         var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
@@ -180,6 +188,108 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         return ProvisionResult.Failed(CloudErrorKind.Stockout, $"No zone in [{string.Join(", ", request.Zones)}] could provision '{request.Spec.VmName}'.");
     }
 
+    /// <summary>
+    /// Issue #94. Null means "provision a new VM": nothing eligible, or the start failed in a way a new VM can fix. A VM is eligible when
+    /// it is this installation's (the listing is by label, Hard Rule 9), stopped, of the same model label and machine type, and the run
+    /// that last used it has ended (a stopped VM of a run still underway is that run's). A start that fails is never a failed run by
+    /// itself: the VM, which was claimed for this job by then, is ended by label so nothing is left billing, and the ladder takes over.
+    /// A failure of a class a new VM cannot fix (billing off, the API off, a missing permission, an unreachable API) aborts like the ladder's.
+    /// </summary>
+    private async Task<ProvisionResult?> TryReuseAsync(CloudJobRequest request, VmSpec spec, RunProgress progress, CancellationToken cancellationToken)
+    {
+        if (jobIsFinished is null)
+        {
+            return null;
+        }
+
+        IReadOnlyList<VmDescriptor> listed;
+        try
+        {
+            listed = await calls.CallAsync(token => compute.ListByInstallationAsync(spec.InstallationId, token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException)
+        {
+            // Not being able to look is not a reason to fail: the create path reports a project-wide problem itself.
+            return null;
+        }
+
+        var model = spec.ToLabels()["model"];
+        VmDescriptor? chosen = null;
+        foreach (var vm in listed.OrderByDescending(v => v.StoppedAt ?? DateTimeOffset.MinValue))
+        {
+            if (!VmFacts.IsStopped(vm) || vm.Labels is null || vm.MachineType != spec.MachineType
+                || !vm.Labels.TryGetValue("app", out var app) || app != VmSpec.AppLabelValue
+                || !vm.Labels.TryGetValue("installation-id", out var owner) || owner != spec.InstallationId
+                || !vm.Labels.TryGetValue("model", out var vmModel) || vmModel != model
+                || !vm.Labels.TryGetValue("job-id", out var oldJob) || oldJob == request.JobId)
+            {
+                continue;
+            }
+
+            if (await jobIsFinished(oldJob).ConfigureAwait(false))
+            {
+                chosen = vm;
+                break;
+            }
+        }
+
+        if (chosen is null)
+        {
+            return null;
+        }
+
+        progress.VmMayExist = true;
+        try
+        {
+            // Tracked like a create: a cancel that arrives between the claim and the start must wait for this to land, or the start
+            // goes on after the cancel looked and leaves a billing VM under a Cancelled record.
+            var started = await calls.CallAsync(
+                token =>
+                {
+                    progress.VmStartMark = settings.StartClock();
+                    var reuse = compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token);
+                    TrackInflightCreate(request.JobId, reuse);
+                    return reuse;
+                },
+                cancellationToken,
+                settings.CreateTimeout).ConfigureAwait(false);
+            progress.VmName = started.Name;
+            return ProvisionResult.Ok(started.Zone, started.Name);
+        }
+        catch (CloudOperationException ex)
+        {
+            // A Network failure is an UNKNOWN outcome (the composite is never replayed, and its last answer may have been lost after the
+            // start worked): a VM this job's label now finds and that is booting or running is the reuse having succeeded. Adopt it.
+            if (ex.Kind == CloudErrorKind.Network && await TryAdoptReusedAsync(request, cancellationToken).ConfigureAwait(false) is { } adopted)
+            {
+                progress.VmName = adopted.Name;
+                return ProvisionResult.Ok(adopted.Zone, adopted.Name);
+            }
+
+            // The claim may already have been made: whatever carries this job's label is ended before anything else is tried.
+            var note = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+            if (note is not null || VmFacts.IsProjectWide(ex.Kind) || ex.Kind == CloudErrorKind.Network)
+            {
+                return ProvisionResult.Failed(ex.Kind, ex.Error.Message, note, RunErrorCodes.For(ex.Error, ex.Kind));
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>The one VM the job's label finds, when it is booting or running (the reuse's start worked and only its answer was lost); else null. A failure of the look is "not found".</summary>
+    private async Task<VmDescriptor?> TryAdoptReusedAsync(CloudJobRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var found = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+            return found is [{ } only] && (only.Status == "RUNNING" || VmFacts.IsBooting(only)) ? only : null;
+        }
+        catch (CloudOperationException)
+        {
+            return null;
+        }
+    }
     /// <summary>Waits, bounded by <see cref="CloudRunSettings.CreateSettleTimeout"/>, for every create this instance started for the job to land or fail. False when one is still in flight.</summary>
     public async Task<bool> SettleInflightCreatesAsync(string jobId)
     {
@@ -240,8 +350,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
 internal readonly struct ProvisionResult
 {
-    private ProvisionResult(bool success, string? zone, CloudErrorKind? failureKind, string? failureMessage, string? vmEndNote, string? failureCode)
+    private ProvisionResult(bool success, string? zone, CloudErrorKind? failureKind, string? failureMessage, string? vmEndNote, string? failureCode, string? vmName = null)
     {
+        VmName = vmName;
         FailureCode = failureCode;
         Success = success;
         Zone = zone;
@@ -264,7 +375,10 @@ internal readonly struct ProvisionResult
     /// <summary>The code the run row records (issue #604): the error's own specific code (PERMISSION_ACTAS) when it has one, else the code of <see cref="FailureKind"/>.</summary>
     public string? FailureCode { get; }
 
-    public static ProvisionResult Ok(string zone) => new(true, zone, null, null, null, null);
+    /// <summary>The name of the VM when it is not the one computed from the job id (a reused or adopted VM, #94); null when the caller knows it already.</summary>
+    public string? VmName { get; }
+
+    public static ProvisionResult Ok(string zone, string? vmName = null) => new(true, zone, null, null, null, null, vmName);
 
     public static ProvisionResult Failed(CloudErrorKind kind, string message, string? vmEndNote = null, string? code = null) => new(false, null, kind, message, vmEndNote, code ?? RunErrorCodes.For(kind));
 }

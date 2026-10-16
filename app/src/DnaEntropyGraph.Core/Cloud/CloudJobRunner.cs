@@ -165,10 +165,27 @@ public sealed class CloudJobRunner
         _preflight = new PreflightChecks(projectSetupGateway, quotaGateway, _calls, _settings);
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
-        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator);
+        _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync);
         _canceller = new VmCanceller(_rows, _provisioner, _terminator);
         _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
+    }
+
+    /// <summary>
+    /// Issue #94: whether the run that last used a stopped VM has ended (its row is terminal, or this history has no row for it, as the
+    /// idle-VM sweep reads it). A history that cannot be read answers false: a VM that may belong to a run underway is never reused.
+    /// </summary>
+    private async Task<bool> JobIsFinishedAsync(string jobId)
+    {
+        try
+        {
+            var row = await _rows.LatestRecordAsync(jobId, CancellationToken.None).ConfigureAwait(false);
+            return row is null || JobStateMachine.IsTerminal(row.Phase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     public async Task<JobPhase> GetPhaseAsync(string jobId, CancellationToken cancellationToken)
@@ -270,11 +287,20 @@ public sealed class CloudJobRunner
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested) && progress.VmMayExist && !VmEndNotes.AlreadyAttempted(ex))
         {
+            // Issue #687: a cancel that arrived while this run was provisioning set the row to Cancelling; when the in-flight create or reuse
+            // lands, this run's own next step is an illegal Cancelling -> Preparing transition. That is the cancel winning the race, not a
+            // failure: the run stands down, CancelAsync (which waits for the in-flight create and deletes by label) owns the VM and records
+            // the one terminal state, Cancelled.
+            if (ex is InvalidOperationException && await _rows.TryLatestRecordAsync(request.JobId).ConfigureAwait(false) is { Phase: JobPhase.Cancelling or JobPhase.Cancelled } standDown)
+            {
+                return RunRowStore.ResultFromRow(standDown);
+            }
+
             // Hard Rule 11: whatever fails once a VM may exist (a failed call, a bad transition, a failing repository),
             // the VM must not be left billing under a terminal Failed record nothing will ever look at again. The VM is
             // found by the zone when known and by its job-id label when not. Only the CALLER cancelling is not this (CancelAsync owns that
             // delete): an OperationCanceledException with the caller's token live is a gateway's own deadline, a failure like any other.
-            var note = await _terminator.EndVmAfterFailureAsync(request, progress.Zone).ConfigureAwait(false);
+            var note = await _terminator.EndVmAfterFailureAsync(progress.Resolve(request), progress.Zone).ConfigureAwait(false);
             throw VmEndNotes.Apply(ex, note);
         }
     }
@@ -328,7 +354,8 @@ public sealed class CloudJobRunner
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Running, cancellationToken).ConfigureAwait(false);
                 var owned = await _calls.CallAsync(token => _compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
                 progress.Zone = owned.Count > 0 ? owned[0].Zone : null;
-                return await _outcome.FinishAsync(request, bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
+                progress.VmName = owned.Count > 0 ? owned[0].Name : null;
+                return await _outcome.FinishAsync(progress.Resolve(request), bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -340,7 +367,8 @@ public sealed class CloudJobRunner
         }
 
         progress.Zone = provisioned.Zone!;
-        return await RunOnVmAsync(request, bucket, progress.Zone, cancellationToken).ConfigureAwait(false);
+        progress.VmName = provisioned.VmName ?? progress.VmName;
+        return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -365,7 +393,7 @@ public sealed class CloudJobRunner
     }
 
     /// <summary>Everything from the moment a VM exists. <see cref="RunCoreAsync"/> ends the VM for any exception that leaves here without having done so.</summary>
-    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken)
+    private async Task<CloudJobResult> RunOnVmAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null)
     {
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Preparing, cancellationToken).ConfigureAwait(false);
 
@@ -397,7 +425,7 @@ public sealed class CloudJobRunner
         // RUNNING is not working (CLAUDE.md Critical Pitfalls): the VM being up says nothing about the
         // job. result.json is the worker's own terminal signal (docs/job_contract.md section 7), so wait
         // for it, checking on the VM between looks so a lost VM ends the run instead of waiting it out.
-        var resultText = await _waiter.AwaitResultAsync(request, bucket, zone, cancellationToken).ConfigureAwait(false);
+        var resultText = await _waiter.AwaitResultAsync(request, bucket, zone, cancellationToken, vmStartMark).ConfigureAwait(false);
         return await _outcome.FinishAsync(request, bucket, zone, resultText, cancellationToken).ConfigureAwait(false);
     }
 
