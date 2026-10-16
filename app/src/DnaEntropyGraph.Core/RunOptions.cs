@@ -48,6 +48,12 @@ public sealed record RunOptions
     /// </summary>
     public string? InputPath { get; init; }
 
+    /// <summary>
+    /// A GFF3 paired with <see cref="InputPath"/> (a FASTA file; issue #686). Like the input it is read-only to the app: JobEngine copies it under
+    /// app data and the copy is uploaded. Manifest: <c>inputs[].annotation</c> (the uploaded object's name). Null means none: the worker finds genes itself.
+    /// </summary>
+    public string? AnnotationPath { get; init; }
+
     /// <summary>Manifest: <c>inputs[].informat</c>. Default "Auto" (auto-detect, matching <see cref="Inputs.SequenceSniffer" />).</summary>
     public InputFormat Format { get; init; } = InputFormat.Auto;
 
