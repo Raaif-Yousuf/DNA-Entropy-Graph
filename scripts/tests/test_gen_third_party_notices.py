@@ -15,7 +15,9 @@ import gen_third_party_notices as gtpn  # noqa: E402
 def test_self_test_passes():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "gen_third_party_notices.py"), "--self-test"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -24,7 +26,9 @@ def test_self_test_passes():
 def test_help_exits_zero():
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "gen_third_party_notices.py"), "--help"],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0
 
@@ -106,8 +110,7 @@ _ASSET_BYTES = b"console.log('vendored');\n"
 _LICENSE_TEXT = "The MIT License (MIT)\n"
 
 
-def _make_root(tmp_path: Path, *, licence: str = "MIT", sha: str | None = None,
-               write_asset: bool = True, write_licence: bool = True) -> Path:
+def _make_root(tmp_path: Path, *, licence: str = "MIT", sha: str | None = None, write_asset: bool = True, write_licence: bool = True) -> Path:
     (tmp_path / "scripts").mkdir()
     viewer = tmp_path / "web"
     viewer.mkdir()
@@ -117,17 +120,19 @@ def _make_root(tmp_path: Path, *, licence: str = "MIT", sha: str | None = None,
         (viewer / "lib.LICENSE.txt").write_text(_LICENSE_TEXT, encoding="utf-8")
     manifest = {
         "directory": "web",
-        "assets": [{
-            "path": "web/lib.min.js",
-            "name": "lib.min.js",
-            "description": "a test library",
-            "version": "1.2.3",
-            "license": licence,
-            "license_file": "web/lib.LICENSE.txt",
-            "source": "https://example.invalid/lib-1.2.3.tgz",
-            "upstream_shasum": "abc123",
-            "sha256": sha if sha is not None else hashlib.sha256(_ASSET_BYTES).hexdigest().upper(),
-        }],
+        "assets": [
+            {
+                "path": "web/lib.min.js",
+                "name": "lib.min.js",
+                "description": "a test library",
+                "version": "1.2.3",
+                "license": licence,
+                "license_file": "web/lib.LICENSE.txt",
+                "source": "https://example.invalid/lib-1.2.3.tgz",
+                "upstream_shasum": "abc123",
+                "sha256": sha if sha is not None else hashlib.sha256(_ASSET_BYTES).hexdigest().upper(),
+            }
+        ],
     }
     (tmp_path / "scripts" / "vendored_assets.json").write_text(json.dumps(manifest), encoding="utf-8")
     return tmp_path
@@ -166,8 +171,7 @@ def test_missing_licence_file_names_the_file(tmp_path):
     assert "web/lib.LICENSE.txt" in str(exc.value)
 
 
-@pytest.mark.parametrize("licence", ["GPL-3.0-only", "LGPL-2.1-or-later", "AGPL-3.0-only",
-                                      "LicenseRef-Whatever", "MIT AND GPL-2.0-only"])
+@pytest.mark.parametrize("licence", ["GPL-3.0-only", "LGPL-2.1-or-later", "AGPL-3.0-only", "LicenseRef-Whatever", "MIT AND GPL-2.0-only"])
 def test_non_allowed_licence_fails_naming_the_file(tmp_path, licence):
     root = _make_root(tmp_path, licence=licence)
     with pytest.raises(gtpn.VendoredAssetError) as exc:
@@ -179,9 +183,20 @@ def test_non_allowed_licence_fails_naming_the_file(tmp_path, licence):
 def test_cli_exits_2_with_error_line_on_sha_mismatch(tmp_path):
     root = _make_root(tmp_path, sha="0" * 64)
     proc = subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "gen_third_party_notices.py"), "--stdout",
-         "--repo-root", str(root), "--app-root", str(root / "app"), "--worker-root", str(root / "worker")],
-        capture_output=True, text=True, timeout=60,
+        [
+            sys.executable,
+            str(SCRIPTS_DIR / "gen_third_party_notices.py"),
+            "--stdout",
+            "--repo-root",
+            str(root),
+            "--app-root",
+            str(root / "app"),
+            "--worker-root",
+            str(root / "worker"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 2
     assert any(line.startswith("ERROR:") and "web/lib.min.js" in line for line in proc.stderr.splitlines())
