@@ -332,7 +332,7 @@ The authoritative list is spec 5.9 and Appendix B section 7. The app's `ErrorCat
 
 ## 5. Viewer integration
 
-> Still the only source. No `docs/` file covers the igv.js/WebView2 bridge design below (the virtual-host mapping, the `bridge.js` message shape, the dark-mode CSS override, the WebView2 security settings). This is implementation detail an engineer building the viewer will need and currently cannot find outside this appendix. Filed as issue #312 to give it a home in `docs/` before or alongside whoever implements it, so this section does not stay the only copy indefinitely.
+> Superseded by [`docs/viewer.md`](../../viewer.md) (issue #312), which describes the viewer as built and lists where it differs from this section. Kept as the original design.
 
 **Primary: igv.js (MIT) embedded in WebView2, vendored offline.** Reasons over JBrowse 2: ~1 MB single file vs a React bundle, no build pipeline, first-class bedGraph/WIG/GFF3/FASTA, `indexed:false` FASTA for small sequences, and igv.js already matches the files the tool emits and the users' desktop IGV mental model. **Native chart** (`ScottPlot.WinUI` `Signal` plot) is worthwhile as a *fast overview*: History sparklines, Results header strip, PNG export, seam marker, drag-select to jump the viewer. WebView2 costs ~0.5 to 1 s to initialise and cannot be instanced per list row.
 
