@@ -51,9 +51,12 @@ Order (landing now, top first): the `-ea3` cloud chain (675, 717, 677, 111, 113,
 3. **Still held from before:** #138 CLI (`feat/138-cli` @ 432104bf; findings in the 2026-10-16b handoff, git history of
    this file), `ci/761-653-codeql-src-only` (its `scripts/tests/test_codeql_workflow.py:65` still asserts the old
    build line, so it fails premerge as is).
-4. **Code-scanning dismissals:** after `quality/488-491-codescan` lands, dismiss the reviewed false positives listed in
+4. **Built, NOT cold-reviewed, not queued (the session ended first):** `tooling/584-notices-regen` @ 0c5a4fc8
+   (#584, built on tool-lq-land; needs a ToTest app-dev row citing 0c5a4fc8) and `tooling/812-prune-content-check`
+   @ 599804b9 (#812, content-based prune with `--contained-in` and `--remote`). Cold-review both, then queue.
+5. **Code-scanning dismissals:** after `quality/488-491-codescan` lands, dismiss the reviewed false positives listed in
    `...\9a565426-...\scratchpad\codescan-dismiss.tsv` (165 FALSE-POSITIVE rows; the NOISE-CONFIG rows close by config).
-5. **Next buildable, ascending:** #514, #515, #522-follow-ups, #523, #552, #556 (after #109), #566, #571, #588, #591
+6. **Next buildable, ascending:** #514, #515, #522-follow-ups, #523, #552, #556 (after #109), #566, #571, #588, #591
    (DECISION), #598, #610, #620, #624, #630, #631, #668, #680, #697, #720, #722, #735, #741, #768, #769, #772, #803,
    #828, #840, #841, #846, #847, plus the cost family #215-#225 once #100/#109 land.
 
