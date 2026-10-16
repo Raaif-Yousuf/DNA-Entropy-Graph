@@ -258,6 +258,38 @@
                     </StackPanel>
                 </Border>
             </StackPanel>
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsTransferHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Uid="SettingsTransferExplainer" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Uid="SettingsTransferExportButton" Command="{x:Bind Transfer.ExportCommand}" />
+                            <Button x:Uid="SettingsTransferImportButton" Command="{x:Bind Transfer.ChooseImportFileCommand}" />
+                        </StackPanel>
+                        <StackPanel Spacing="8" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Transfer.HasPreview), Mode=OneWay}">
+                            <TextBlock Text="{x:Bind Transfer.PreviewSummary, Mode=OneWay}" TextWrapping="Wrap" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <ItemsControl ItemsSource="{x:Bind Transfer.Changes}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:SettingsChangeRow">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{x:Bind Label}" />
+                                            <TextBlock Text="{x:Bind Current}" Opacity="0.7" />
+                                            <TextBlock x:Uid="SettingsTransferArrow" />
+                                            <TextBlock Text="{x:Bind Incoming}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Uid="SettingsTransferApplyButton" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind Transfer.ApplyImportCommand}" />
+                                <Button x:Uid="SettingsTransferCancelButton" Command="{x:Bind Transfer.CancelImportCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind Transfer.Status, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </Page>

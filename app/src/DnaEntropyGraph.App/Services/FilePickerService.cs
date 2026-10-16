@@ -64,5 +64,29 @@ public sealed class FilePickerService(WindowHandleProvider window, IStringResour
         return string.IsNullOrEmpty(file?.Path) ? null : file.Path;
     }
 
+    public async Task<string?> PickSettingsFileAsync(CancellationToken cancellationToken)
+    {
+        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
+        picker.FileTypeFilter.Add(".json");
+
+        var file = await picker.PickSingleFileAsync();
+        return string.IsNullOrEmpty(file?.Path) ? null : file.Path;
+    }
+
+    public async Task<string?> PickSaveSettingsAsync(string suggestedFileName, CancellationToken cancellationToken)
+    {
+        var picker = new FileSavePicker
+        {
+            SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+            SuggestedFileName = Path.GetFileNameWithoutExtension(suggestedFileName),
+        };
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
+        picker.FileTypeChoices.Add(strings.GetString("SettingsFileTypeLabel"), [".json"]);
+
+        var file = await picker.PickSaveFileAsync();
+        return string.IsNullOrEmpty(file?.Path) ? null : file.Path;
+    }
+
     public Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);
 }
