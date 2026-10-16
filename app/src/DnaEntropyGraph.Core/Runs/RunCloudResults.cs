@@ -31,13 +31,17 @@ public enum CloudResultsStatus
 
     /// <summary>A delete stopped partway: some objects are gone, some are not, and the same press finishes it.</summary>
     PartiallyDeleted,
+
+    /// <summary>The folder was made by another installation (or has no readable manifest naming this one): nothing was deleted.</summary>
+    OtherComputer,
 }
 
 /// <summary>
 /// What a cloud-copy delete did. <see cref="ObjectsLeft"/> is how many objects were still in the bucket for <see cref="CloudResultsStatus.PartiallyDeleted"/>
-/// (null when that could not be read). A bare <see cref="CloudResultsStatus"/> converts to a result with none.
+/// (null when that could not be read). <see cref="ErrorKind"/> is the classified cause of a <see cref="CloudResultsStatus.Failed"/> when the gateway named one.
+/// A bare <see cref="CloudResultsStatus"/> converts to a result with none.
 /// </summary>
-public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null)
+public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null)
 {
     public static implicit operator CloudDeleteResult(CloudResultsStatus status) => new(status);
 }
@@ -206,10 +210,15 @@ public sealed class RunCloudResults : IRunCloudResults
             // Some objects are gone and some are not: the row is NOT marked deleted, so Delete cloud copy stays offered and the next press finishes it.
             return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining);
         }
-        catch (ArgumentException)
+        catch (CloudDeleteRefusedException refused)
         {
-            // The deleter refused the bucket or prefix shape: nothing was requested.
-            return CloudResultsStatus.Refused;
+            // Refused up front: nothing was requested to be deleted.
+            return refused.Reason == CloudDeleteRefusal.OtherComputer ? CloudResultsStatus.OtherComputer : CloudResultsStatus.Refused;
+        }
+        catch (CloudOperationException cloud)
+        {
+            // Nothing was deleted (a partial delete is its own exception above): the classified cause picks the action the user is told.
+            return new CloudDeleteResult(CloudResultsStatus.Failed, null, cloud.Kind);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

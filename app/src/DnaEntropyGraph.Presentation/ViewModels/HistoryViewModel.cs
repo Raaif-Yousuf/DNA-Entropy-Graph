@@ -392,6 +392,11 @@ public sealed partial class HistoryViewModel : ObservableObject
             }
 
             var result = await _cloud.DeleteAsync(run, CancellationToken.None);
+            if (result.Status == CloudResultsStatus.Failed)
+            {
+                return RunsCopy.DeleteCloudFailed(result.ErrorKind);
+            }
+
             if (result.Status != CloudResultsStatus.PartiallyDeleted)
             {
                 return RunsCopy.DeleteCloud(result.Status);
@@ -400,7 +405,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             // Partway through: say how many are left (or that it could not be counted) and that the same button finishes it.
             if (result.ObjectsLeft is { } left)
             {
-                Toast(RunsCopy.DeleteCloud(CloudResultsStatus.PartiallyDeleted), left);
+                Toast(left == 1 ? RunsCopy.DeleteCloudPartialOne : RunsCopy.DeleteCloud(CloudResultsStatus.PartiallyDeleted), left);
                 return null;
             }
 

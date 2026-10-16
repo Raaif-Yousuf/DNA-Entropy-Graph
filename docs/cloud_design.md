@@ -1383,9 +1383,14 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
 - `JobObjectDeleter` (Core/Runs, issues #262 and #534): the real `IJobObjectDeleter` behind the Runs page "Delete cloud copy" (replaces the stand-in that always said
   "not connected"). It deletes exactly `jobs/<job id>/` and nothing else: the bucket must be a `deg-` bucket and the prefix must match `^jobs/[a-z0-9_-]{1,63}/$`
-  (so `jobs/`, `cache/`, an empty or partial prefix, a nested path or a `..` is refused with no request), and `RunCloudResults.DeleteAsync` has already
-  checked the stored prefix equals `jobs/<run's own job id>/`. It calls `DeletePrefixAsync`, then reads the prefix back with `GetPrefixUsageAsync`: objects left, or a
-  delete that failed midway (403, network), throw `PartialCloudDeleteException(Remaining)`, which becomes `CloudResultsStatus.PartiallyDeleted` with the count. The
+  (so `jobs/`, `cache/`, an empty or partial prefix, a nested path or a `..` is refused with no request, `CloudDeleteRefusedException(NotAJobFolder)`), and
+  `RunCloudResults.DeleteAsync` has already checked the stored prefix equals `jobs/<run's own job id>/`. **Ownership:** when the folder has objects, its
+  `manifest.json` must name this installation (`createdBy.installationId`, the `InstallationCleanup` test); another computer's run (an imported row, #111), a missing or
+  unreadable manifest, or an unreadable installation id is `CloudDeleteRefusedException(OtherComputer)` -> `CloudResultsStatus.OtherComputer`, nothing touched. An
+  already-empty prefix is success. It then calls `DeletePrefixAsync` and reads the prefix back with `GetPrefixUsageAsync`, comparing with the count before:
+  none left is success even if the call threw afterwards; the same count left means nothing was deleted, so the real classified error surfaces
+  (`CloudDeleteResult.ErrorKind`: permission, billing and API-off each have their own Runs copy, anything else the general one); only some-gone-some-left throws
+  `PartialCloudDeleteException(Remaining)` -> `PartiallyDeleted` with the count (singular copy for one). The
   run row is marked `CloudResultsDeleted` only on a clean read-back, so the button stays offered and the next press finishes it (a repeat delete of an empty prefix is
   success). Deleted objects are not recoverable beyond the bucket's soft-delete window, which the confirm dialog does not promise either way.
   The `cache/` model weights have their own lifecycle rule (`matchesPrefix: ["cache/"]`, 365 days or longer) separate from the `jobs/` rule, so neither the retention

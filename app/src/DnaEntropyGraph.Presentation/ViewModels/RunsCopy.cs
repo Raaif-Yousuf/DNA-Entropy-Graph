@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -65,8 +66,21 @@ public static class RunsCopy
         _ => Pair("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error),
     };
 
+    /// <summary>The cloud-delete copy for a failure the gateway classified: each names its own action. Anything else is the general failure copy.</summary>
+    public static RunsMessage DeleteCloudFailed(CloudErrorKind? kind) => kind switch
+    {
+        CloudErrorKind.Permission or CloudErrorKind.OrgPolicy => Pair("Runs_DeleteCloud_FailedPermission_Title", "Runs_DeleteCloud_FailedPermission_Body", ToastSeverity.Error),
+        CloudErrorKind.Billing => Pair("Runs_DeleteCloud_FailedBilling_Title", "Runs_DeleteCloud_FailedBilling_Body", ToastSeverity.Error),
+        CloudErrorKind.ApiDisabled => Pair("Runs_DeleteCloud_FailedApi_Title", "Runs_DeleteCloud_FailedApi_Body", ToastSeverity.Error),
+        _ => Pair("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error),
+    };
+
+    /// <summary>One file left in storage after a partial cloud delete (singular body).</summary>
+    public static readonly RunsMessage DeleteCloudPartialOne = Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body_One", ToastSeverity.Warning);
+
     public static RunsMessage DeleteCloud(CloudResultsStatus status) => status switch
     {
+        CloudResultsStatus.OtherComputer => Pair("Runs_DeleteCloud_OtherComputer_Title", "Runs_DeleteCloud_OtherComputer_Body", ToastSeverity.Warning),
         CloudResultsStatus.Done => Pair("Runs_DeleteCloud_Done_Title", "Runs_DeleteCloud_Done_Body", ToastSeverity.Success),
         CloudResultsStatus.NoCloudCopy => Pair("Runs_DeleteCloud_NoCloudCopy_Title", "Runs_DeleteCloud_NoCloudCopy_Body", ToastSeverity.Info),
         CloudResultsStatus.Refused => Pair("Runs_DeleteCloud_Refused_Title", "Runs_DeleteCloud_Refused_Body", ToastSeverity.Error),
@@ -99,7 +113,8 @@ public static class RunsCopy
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
-        .. Flatten(DeleteCloudPartialUnknown),
+        .. Flatten(DeleteCloudPartialUnknown), .. Flatten(DeleteCloudPartialOne),
+        .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudFailed(k))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),
     ];
 

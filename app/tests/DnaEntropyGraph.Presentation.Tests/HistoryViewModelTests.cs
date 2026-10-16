@@ -690,6 +690,43 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task A_partial_cloud_delete_with_one_file_left_uses_the_singular_copy()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 1));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body_One", ToastSeverity.Warning);
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, "Runs_DeleteCloud_FailedPermission_Title", "Runs_DeleteCloud_FailedPermission_Body")]
+    [InlineData(CloudErrorKind.Billing, "Runs_DeleteCloud_FailedBilling_Title", "Runs_DeleteCloud_FailedBilling_Body")]
+    [InlineData(CloudErrorKind.ApiDisabled, "Runs_DeleteCloud_FailedApi_Title", "Runs_DeleteCloud_FailedApi_Body")]
+    [InlineData(CloudErrorKind.Network, "Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body")]
+    public async Task A_classified_cloud_delete_failure_toasts_its_own_action(CloudErrorKind kind, string title, string body)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.Failed, null, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast(title, body, ToastSeverity.Error);
+    }
+
+    [Fact]
+    public async Task A_cloud_delete_of_another_computers_run_toasts_the_other_computer_copy()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.OtherComputer);
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_OtherComputer_Title", "Runs_DeleteCloud_OtherComputer_Body", ToastSeverity.Warning);
+    }
+
+    [Fact]
     public async Task A_failed_cloud_delete_toasts_the_failure_copy()
     {
         _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.Failed);
