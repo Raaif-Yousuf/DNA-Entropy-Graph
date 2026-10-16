@@ -676,8 +676,31 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
+    /// <summary>What <see cref="OnCallParked"/> was told is parked.</summary>
+    public enum ParkedCall
+    {
+        /// <summary>A call that never answers (<see cref="WithHungCalls"/>).</summary>
+        Hang,
+
+        /// <summary>A create that answers after its delay (<see cref="WithCreateDelay"/>).</summary>
+        SlowCreate,
+
+        /// <summary>A create that ignores its token and never answers (<see cref="WithBlockedCreate"/>): its caller then waits out the settle window before giving up on it.</summary>
+        CreateThatNeverLands,
+    }
+
+    /// <summary>
+    /// Called, synchronously and before the call parks, whenever a scripted call is about to wait without answering: a hung call
+    /// (<see cref="WithHungCalls"/>, span <see cref="Timeout.InfiniteTimeSpan"/>) or a slow create (<see cref="WithCreateDelay"/>,
+    /// its delay). A test that runs the caller on a virtual clock (#567) moves that clock from here, so a deadline fires because
+    /// a call the test itself scripted is known to be parked, never because a machine was slow: a healthy call never calls this,
+    /// so time cannot pass under it. Null in production, where nothing sets it.
+    /// </summary>
+    public Action<ParkedCall, TimeSpan>? OnCallParked { get; set; }
+
     private async Task<T> HangAsync<T>(CancellationToken cancellationToken)
     {
+        OnCallParked?.Invoke(ParkedCall.Hang, Timeout.InfiniteTimeSpan);
         // A callee that ignores its token is what a stuck socket under a library that never checks it looks like.
         await Task.Delay(Timeout.Infinite, _hangsIgnoreCancellation ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
         return default!;
@@ -843,13 +866,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     private async Task<VmDescriptor> CreateAfterDelayAsync(VmSpec spec, string zone)
     {
-        await Task.Delay(_createDelay).ConfigureAwait(false);
+        var landing = Task.Delay(_createDelay, _timeProvider);
+        OnCallParked?.Invoke(ParkedCall.SlowCreate, _createDelay);
+        await landing.ConfigureAwait(false);
         return await CreateVmCore(spec, zone, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task<VmDescriptor> CreateAfterGateAsync(CreateGate gate, VmSpec spec, string zone, CancellationToken cancellationToken)
     {
         gate.Entered.TrySetResult();
+        OnCallParked?.Invoke(gate.IgnoreCancellation ? ParkedCall.CreateThatNeverLands : ParkedCall.Hang, Timeout.InfiniteTimeSpan);
         if (gate.IgnoreCancellation)
         {
             await gate.Release.Task.ConfigureAwait(false);

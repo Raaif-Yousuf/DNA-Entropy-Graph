@@ -101,14 +101,25 @@ public class JobReconcilerTests
 
         public MemorySettingsStore Settings { get; } = new() { Values = { [InstallationId.SettingsKey] = "install-1" } };
 
-        public CloudJobRunner Runner => new(Gcp, Gcp, Gcp, Gcp, Gcp, Repo, (id, phase) => Notified.Add((id, phase)))
+        /// <summary>The runner's clocks (#567): its call, result and lifecycle deadlines run on test time, so a loaded machine cannot cut a call. No park pump: a test that scripts a hung call here wants it parked until its own cancel.</summary>
+        public RunnerClocks Clocks { get; } = new();
+
+        public CloudJobRunner Runner
         {
-            ResultPollInterval = TimeSpan.FromMilliseconds(1),
-            ResultTimeout = ResultTimeout,
-            CallTimeout = TimeSpan.FromMilliseconds(200),
-            LifecycleTimeout = TimeSpan.FromMilliseconds(80),
-            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
-        };
+            get
+            {
+                return new(Gcp, Gcp, Gcp, Gcp, Gcp, Repo, (id, phase) => Notified.Add((id, phase)))
+                {
+                    ResultPollInterval = TimeSpan.FromMilliseconds(1),
+                    ResultTimeout = ResultTimeout,
+                    CallTimeout = TimeSpan.FromMilliseconds(200),
+                    LifecycleTimeout = TimeSpan.FromMilliseconds(80),
+                    LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+                    TimeProvider = Clocks.Run,
+                    PollDelay = Clocks.SleepAsync,
+                };
+            }
+        }
 
         public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null) => new(
             Runner,

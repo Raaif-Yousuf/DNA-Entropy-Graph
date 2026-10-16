@@ -12,6 +12,9 @@ namespace DnaEntropyGraph.Cloud.Tests.Rest;
 /// </summary>
 public class GoogleServiceUsageGatewayTests
 {
+    /// <summary>Real-time ceiling on a test whose subject is a hung call: it only turns a hang into a failure, it never decides a timing assertion.</summary>
+    private static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(20);
+
     private const string Compute = "/v1/projects/my-lab/services/compute.googleapis.com";
     private const string Storage = "/v1/projects/my-lab/services/storage.googleapis.com";
     private const string Quotas = "/v1/projects/my-lab/services/cloudquotas.googleapis.com";
@@ -113,8 +116,8 @@ public class GoogleServiceUsageGatewayTests
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
         ex.Kind.ShouldBe(CloudErrorKind.Network);
-        // The POST's own (tiny) wall time comes off the one budget, so the waits add up to just under the deadline.
-        rig.Delays.Sum(d => d.TotalSeconds).ShouldBeInRange(9, 10);
+        // The clock stands still, so the POST costs the budget nothing and the waits add up to exactly the deadline.
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(10);
     }
 
     [Fact]
@@ -229,8 +232,8 @@ public class GoogleServiceUsageGatewayTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
-        // The POST's own (tiny) wall time comes off the one budget, so the waits add up to just under the deadline.
-        rig.Delays.Sum(d => d.TotalSeconds).ShouldBeInRange(19, 20);
+        // The clock stands still, so the POST costs the budget nothing and the waits add up to exactly the deadline.
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(20);
     }
 
     [Fact]
@@ -279,11 +282,9 @@ public class GoogleServiceUsageGatewayTests
         var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromMilliseconds(300), retries: 3);
         rig.Handler.Returns(Post, BatchEnable, 200, OperationDone).Hangs(Get, Compute);
 
-        var started = System.Diagnostics.Stopwatch.StartNew();
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None).WaitAsync(Watchdog, TestContext.Current.CancellationToken));
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
-        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(30));
         rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
         rig.Handler.To(Get, Compute).Count.ShouldBe(1);
         rig.Log.Retries.ShouldBeEmpty();
@@ -298,13 +299,12 @@ public class GoogleServiceUsageGatewayTests
         var rig = new GoogleGatewayHarness(operationDeadline: deadline, retries: 3);
         rig.Handler.Hangs(Post, BatchEnable);
 
-        var started = System.Diagnostics.Stopwatch.StartNew();
+        var started = rig.Clock.GetTimestamp();
         var call = rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None);
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => call.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => call.WaitAsync(Watchdog, TestContext.Current.CancellationToken));
 
         ex.Error.Code.ShouldBe(OperationPoller.TimeoutCode);
-        started.Elapsed.ShouldBeGreaterThanOrEqualTo(deadline - TimeSpan.FromMilliseconds(100));
-        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
+        rig.Clock.GetElapsedTime(started).ShouldBeGreaterThanOrEqualTo(deadline, "the hung POST was cut by the deadline, which ran on test time");
         rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
         rig.Log.Retries.ShouldBeEmpty();
     }

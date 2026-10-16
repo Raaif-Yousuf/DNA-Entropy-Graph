@@ -53,8 +53,11 @@ public class VmProvisionerTests
     public async Task A_create_slower_than_CreateTimeout_is_cut_off_at_CreateTimeout_and_the_late_VM_is_deleted()
     {
         // Pins that CreateTimeout (not the poller's deadline, which is the same value) is what ends the wait: the call
-        // returns near 100 ms although the create would take 400 ms, and what the create then made is deleted.
-        var gcp = new FakeGcp().WithCreateDelay(TimeSpan.FromMilliseconds(400));
+        // returns near 100 ms although the create would take 400 ms, and what the create then made is deleted. The fake and the
+        // provisioner share one virtual clock (#567); the create's own delay moves it once the provisioner is waiting.
+        var clocks = new RunnerClocks();
+        var gcp = new FakeGcp(clocks.Run).WithCreateDelay(TimeSpan.FromMilliseconds(400));
+        clocks.ParkPump(gcp, TimeSpan.FromMilliseconds(100));
         var spec = Spec("job-p9");
         var request = TestInputs.Request("job-p9", spec, zones: ["us-central1-a"]);
         var settings = new CloudRunSettings
@@ -63,17 +66,19 @@ public class VmProvisionerTests
             CreateSettleTimeout = TimeSpan.FromSeconds(5),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
             LifecycleTimeout = TimeSpan.FromMilliseconds(50),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
         var calls = new GatewayCalls(settings, gcp);
         var provisioner = new VmProvisioner(gcp, calls, settings, new VmTerminator(gcp, calls, settings));
-        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var started = clocks.Run.GetTimestamp();
 
         var create = provisioner.ProvisionAsync(request, spec, new RunProgress(), CancellationToken.None);
         var result = await create.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         result.Success.ShouldBeFalse();
         (await gcp.FindByJobIdAsync("job-p9", CancellationToken.None)).ShouldBeEmpty("the late create must be settled and deleted");
-        clock.Elapsed.ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(90));
+        clocks.Run.GetElapsedTime(started).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(100), "the create was waited on for its deadline, on test time");
     }
 
     [Fact]

@@ -15,6 +15,30 @@ internal sealed class VirtualTimeProvider(bool autoAdvance = false) : TimeProvid
     private readonly object _gate = new();
     private readonly List<VirtualTimer> _timers = [];
     private long _ticks;
+    private int _timersCreated;
+    private readonly List<(int After, TaskCompletionSource Signal)> _createdWaiters = [];
+
+    /// <summary>
+    /// Completes once more than <paramref name="after"/> timers have been created (see <see cref="TimersCreated"/>): the signal that a caller has armed a deadline on this clock, so a test moves the clock
+    /// only once the deadline can fire. Already complete if the count is already past <paramref name="after"/>.
+    /// </summary>
+    public Task WhenTimerCreatedAsync(int after)
+    {
+        lock (_createdWaiters)
+        {
+            if (TimersCreated > after)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _createdWaiters.Add((after, signal));
+            return signal.Task;
+        }
+    }
+
+    /// <summary>How many timers this clock has ever created (disposals do not lower it): a test waits on this rising to know a caller has started waiting on a deadline.</summary>
+    public int TimersCreated => Volatile.Read(ref _timersCreated);
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -26,6 +50,21 @@ internal sealed class VirtualTimeProvider(bool autoAdvance = false) : TimeProvid
     {
         var timer = new VirtualTimer(this, callback, state);
         timer.Change(dueTime, period);
+        lock (_createdWaiters)
+        {
+            var created = Interlocked.Increment(ref _timersCreated);
+            _createdWaiters.RemoveAll(w =>
+            {
+                if (created <= w.After)
+                {
+                    return false;
+                }
+
+                w.Signal.TrySetResult();
+                return true;
+            });
+        }
+
         return timer;
     }
 
