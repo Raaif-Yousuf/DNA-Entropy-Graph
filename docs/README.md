@@ -51,6 +51,7 @@ Full description of what each carries: [`.claude/README.md`](../.claude/README.m
 | Every dependency, version, licence | [`tech_stack.md`](tech_stack.md) |
 | App/worker split, job lifecycle, state machine | [`architecture.md`](architecture.md) |
 | The app-worker contract: manifest, bucket layout, progress, result | [`job_contract.md`](job_contract.md) |
+| Running on this PC: GPU detection, engine install and health, the This PC runner, run targets | [`local_engine.md`](local_engine.md) |
 | The science: `(L,4)`, entropy, windowing, direction, writers | [`science_and_formats.md`](science_and_formats.md) |
 | Cloud: preflight, error classes, labels, cost, termination | [`cloud_design.md`](cloud_design.md) · [`gcp_setup_manual.md`](gcp_setup_manual.md) |
 | WinUI patterns, copy rules, theme, state-to-UI table | [`ui_conventions.md`](ui_conventions.md) |
