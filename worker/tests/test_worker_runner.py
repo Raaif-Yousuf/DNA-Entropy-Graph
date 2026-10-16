@@ -1677,3 +1677,54 @@ def test_vm_uptime_reads_proc_uptime_only_on_a_vm(tmp_path: Path, monkeypatch: p
     assert _default_vm_uptime_seconds(tmp_path / "missing") == 0.0
     proc.write_text("garbage", encoding="utf-8")
     assert _default_vm_uptime_seconds(proc) == 0.0
+
+
+def test_a_cancel_is_acknowledged_in_status_json_as_cancelSeen(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+    store.write_text(CANCEL_PATH, "")
+
+    run_job(store)
+
+    status_doc = json.loads(store.read_text("status.json"))
+    assert status_doc["cancelSeen"] is True
+    progress = store.read_text("progress.jsonl")
+    assert "control/cancel seen" in progress
+
+
+def test_a_job_that_is_not_cancelled_never_claims_cancelSeen(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store)
+    _seed_fasta_input(store)
+
+    run_job(store)
+
+    assert json.loads(store.read_text("status.json"))["cancelSeen"] is False
+
+
+def test_a_cancel_seen_before_the_model_loads_never_loads_the_model(tmp_path: Path) -> None:
+    """A cancel seen before the long stages must not start a multi-minute model load."""
+    store = LocalBlobstore(tmp_path)
+    _write_manifest(store, limits={"cancelPollSeconds": 0})
+    _seed_fasta_input(store)
+    built: list[int] = []
+
+    def factory(cfg):
+        built.append(1)
+        raise AssertionError("the model must not be built once a cancel is pending")
+
+    # Written after the pre-start check and before the model load.
+    original = store.download_file
+
+    def download_then_cancel(path, dest):
+        out = original(path, dest)
+        store.write_text(CANCEL_PATH, "")
+        return out
+
+    store.download_file = download_then_cancel  # type: ignore[method-assign]
+
+    result = run_job(store, predictor_factory=factory)
+
+    assert result.status == "cancelled"
+    assert built == []

@@ -48,6 +48,30 @@ internal sealed class CloudRunSettings
     /// <summary>Per-stage deadlines that replace <see cref="HeartbeatWatch.DefaultStageDeadlines"/> for the stages named (#90). Null means the defaults.</summary>
     public IReadOnlyDictionary<string, TimeSpan>? StageDeadlines { get; set; }
 
+    /// <summary>Issue #675: told when a stage is taking longer than usual and when a stall question opens or is withdrawn. Null means nobody is listening.</summary>
+    public Action<RunNotice>? OnNotice { get; set; }
+
+    /// <summary>Issue #675: asked to choose Stop, Delete or Keep waiting when the heartbeat watch fires. Null means the VM is ended at once the way the run chose.</summary>
+    public StallDecision? OnStall { get; set; }
+
+    /// <summary>
+    /// How long a cancel waits for a sign of life from the worker after writing <c>control/cancel</c> (docs/job_contract.md section 6: 60 s). Zero turns the
+    /// graceful step off: the VM is deleted at once.
+    /// </summary>
+    public TimeSpan CancelAckTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a stall question may stay unanswered before it counts as no answer (the run then ends the way it chose). A handler that never returns, or blocks, must not hold a stalled VM for
+    /// ever: the question runs off the poll loop and is cut here. Default 10 minutes; null never cuts it (the run's own time limit still bounds the wait, Hard Rule 11).
+    /// </summary>
+    public TimeSpan? StallAnswerTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// After the worker has acknowledged a cancel, how long to wait for it to reach a terminal stage (it stops between windows, one window is at most about
+    /// 15 s, then it uploads what it has) before the VM is deleted anyway. THEORY (unverified): 2 minutes covers the window plus the upload, not measured on a real VM.
+    /// </summary>
+    public TimeSpan CancelFinishTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
     public TimeSpan CallTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     /// <summary>

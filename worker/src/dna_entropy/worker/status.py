@@ -129,6 +129,9 @@ class StatusDocument:
     vm: VmRef
     worker: WorkerInfo
     error: ErrorInfo | None = None
+    # Issue #675: true once the worker has seen control/cancel (job_contract.md section 6):
+    # its explicit acknowledgement.
+    cancelSeen: bool = False
 
 
 class StatusWriter:
@@ -194,6 +197,7 @@ class StatusWriter:
                 "image": worker.image if worker else "",
             },
             "error": None,
+            "cancelSeen": False,
         }
         self._progress: list[dict] = []
         self._progress_seq = 0
@@ -218,6 +222,13 @@ class StatusWriter:
                 "gpu": gpu.name,
                 "driver": gpu.driver,
             }
+        self._write_status()
+
+    def mark_cancel_seen(self) -> None:
+        """Issue #675: acknowledge ``control/cancel``. Written at once (not at the next tick), so the app's
+        cancel sees an explicit answer within a poll, however far the worker is from its next heartbeat."""
+        with self._lock:
+            self._state["cancelSeen"] = True
         self._write_status()
 
     def start(self) -> None:

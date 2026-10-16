@@ -408,4 +408,18 @@ public class DiResolutionTests
         row.Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Cancelled);
         row.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.DeletedByCleanup);
     }
+    [Fact]
+    public async Task The_production_runner_has_safe_stall_and_notice_defaults_that_need_no_UI()
+    {
+        // Issue #675: OnStall / OnNotice / CancelAckTimeout were wired to nothing in production. A stall with no UI must resolve by itself.
+        using var provider = BuildRealServiceProvider();
+        var runner = provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.CloudJobRunner>();
+
+        runner.OnStall.ShouldNotBeNull();
+        var choice = await runner.OnStall!(new DnaEntropyGraph.Core.Cloud.StallPrompt("job-1", "worker_stage_stuck", "stuck", "model-loading", TimeSpan.FromMinutes(20)), CancellationToken.None);
+        choice.ShouldBe(DnaEntropyGraph.Core.Cloud.StallChoice.EndAsRunChose);
+        runner.OnNotice.ShouldNotBeNull();
+        Should.NotThrow(() => runner.OnNotice!(new DnaEntropyGraph.Core.Cloud.RunNotice("job-1", DnaEntropyGraph.Core.Cloud.RunNoticeKind.SlowStage, "model-loading")));
+        runner.CancelAckTimeout.ShouldBe(TimeSpan.FromSeconds(60));
+    }
 }
