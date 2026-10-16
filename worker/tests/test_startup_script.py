@@ -305,3 +305,10 @@ def test_keep_hold_measures_elapsed_time_from_vm_boot_not_script_start() -> None
 
 def test_the_exit_code_dispatch_passes_the_worker_exit_code_to_keep_hold() -> None:
     assert 'keep_hold "$rc"' in _code_only()
+
+
+def test_infra_stage_snapshots_carry_stage_started_at() -> None:
+    """The app reads a stage's age from status.json after a resume (#90 review), so the snapshots this
+    script writes for booting/installing carry stageStartedAt too (the same instant as updatedAt)."""
+    text = _code_only()
+    assert '"stageStartedAt":"%s"' in text

@@ -87,25 +87,39 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// success ends the run through <see cref="RunFailureException"/>, with the VM ended per the user's
     /// choice first and the outcome of that recorded (Hard Rule 11).
     /// </summary>
-    public async Task<string> AwaitResultAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken)
+    public async Task<string> AwaitResultAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark = null)
     {
         var key = WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json";
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
         var clockStart = settings.StartClock();
         string? lastTransient = null;
-        DateTimeOffset? vmCreatedAt = null;
+        DateTimeOffset? vmCreatedAt = null; // when the platform's limit clock last started (see VmDescriptor.RunClockStart)
 
-        // The VM's maxRunDuration started when Compute Engine created it, not when it reached Running: a boot of several
-        // minutes, or a resume, has already used part of it. With the default limit the clock is moved forward by the VM's
-        // age at the first look that reports a creation time (a gateway that reports none leaves it at "from Running").
+        // The VM's maxRunDuration started when Compute Engine last STARTED it (its creation, for a new VM; the start of the reuse, for a VM
+        // created days ago, #94), not when it reached Running: a boot of several minutes, or a resume, has already used part of it. With the
+        // default limit the clock is moved forward by the VM's age at the first look that reports a start time (a gateway that reports
+        // none leaves it at "from Running").
+        //
+        // Skew-safe: when this run started the VM itself, the age is the runner's OWN clock between that moment and now. Subtracting the
+        // platform's timestamp from the app's wall clock instead is wrong by the whole skew of the laptop's clock (an hour fast fires the
+        // deadline an hour early). Only a VM the run did not start (adopted after a restart) has no mark and falls back to the wall-clock
+        // difference, clamped to the VM's own limit; THEORY (unverified): that fallback is off by the laptop's skew.
         var elapsedBeforeClock = TimeSpan.Zero;
         var ageKnown = settings.ResultTimeout is not null;
+        if (vmStartMark is { } mark && !ageKnown)
+        {
+            ageKnown = true;
+            var sinceStart = settings.TimeProvider.GetElapsedTime(mark, clockStart);
+            elapsedBeforeClock = sinceStart > TimeSpan.Zero ? sinceStart : TimeSpan.Zero;
+        }
+
         var statusKey = WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json";
         var progressKey = WorkerManifestBuilder.JobPrefix(request.JobId) + "progress.jsonl";
         var watch = new HeartbeatWatch(
             VmProvisioner.ExpectsGpu(request.Spec.MachineType),
             settings.FirstHeartbeatTimeout,
-            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor));
+            settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor),
+            settings.StageDeadlines);
 
         while (true)
         {
@@ -121,12 +135,12 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 lastTransient = null;
-                vmCreatedAt = vm?.CreatedAt ?? vmCreatedAt;
-                if (!ageKnown && vm?.CreatedAt is { } createdAt)
+                vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
+                if (!ageKnown && vm?.RunClockStart is { } clockBegan)
                 {
                     ageKnown = true;
-                    var age = settings.TimeProvider.GetUtcNow() - createdAt - settings.ElapsedSince(clockStart);
-                    elapsedBeforeClock = age > TimeSpan.Zero ? age : TimeSpan.Zero;
+                    var age = settings.TimeProvider.GetUtcNow() - clockBegan - settings.ElapsedSince(clockStart);
+                    elapsedBeforeClock = age > TimeSpan.Zero ? (age < request.Spec.MaxRunDuration ? age : request.Spec.MaxRunDuration) : TimeSpan.Zero;
                 }
 
                 if (!VmFacts.IsHealthyRunning(vm, out var reason) && !VmFacts.IsBooting(vm))

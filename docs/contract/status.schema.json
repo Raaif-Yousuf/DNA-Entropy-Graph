@@ -22,6 +22,9 @@
     "startedAt": {
       "type": "string"
     },
+    "stageStartedAt": {
+      "type": "string"
+    },
     "updatedAt": {
       "type": "string"
     },
@@ -112,6 +115,7 @@
     "percent",
     "detail",
     "startedAt",
+    "stageStartedAt",
     "updatedAt",
     "heartbeatSeq",
     "vm",

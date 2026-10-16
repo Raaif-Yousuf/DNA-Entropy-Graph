@@ -556,6 +556,11 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   (`result_timeout`, above). THEORY (unverified): Compute Engine deletes at exactly `creationTimestamp + maxRunDuration`; ToTest #89 measures it.
   Already built before #89 and now covered by name: labels and `DELETE` guard (`VmSpec`), the Insert fields (`GoogleComputeGateway`),
   the post-result stop/delete verification (`VmTerminator.EnsureVmEndedAsync`, `lifecycle_unverified` / `vm_end_unconfirmed`).
+- **Per-stage deadlines (issue #90).** `HeartbeatWatch` also remembers the `stage` in `status.json` and when it last CHANGED (on the app's clock, any
+  writer: the startup script's `booting`/`installing` count). A stage past its deadline (`booting` 8 min, `installing` 15, `restoring-cache` 15,
+  `model-loading` 15, `uploading` 10; `CloudJobRunner.StageDeadlines` overrides them) ends the run as `worker_stage_stuck` and the VM per the
+  user's choice, whatever the heartbeat says: this catches a hung main thread under a ticking heartbeat thread while it is in one of those
+  stages (#522's remaining case is a hang inside `running`). Numbers are the contract's (THEORY, unverified on a real VM).
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
@@ -1210,6 +1215,26 @@ the running app calls this class yet.
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
   `Labels` and `StoppedAt` (`lastStopTimestamp`) are filled, `CreatedAt` from `creationTimestamp`.
+- **Reuse of a stopped VM (issue #94).** The default after a run is Stop (Hard Rule 11), so the next job finds this installation's stopped VM and
+  starts it (about 2 minutes) instead of paying for a new VM and an image pull. `VmProvisioner` does this AFTER the adopt-by-label look and BEFORE the
+  zone ladder: it lists the installation's VMs (`ListByInstallationAsync`, by label, Hard Rule 9) and takes the most recently stopped one that is
+  `STOPPED`/`TERMINATED`, has the same `model` label and machine type (`VmDescriptor.MachineType`), and whose last job's run row is terminal or absent
+  (`CloudJobRunner.JobIsFinishedAsync`; a history that cannot be read answers "not finished", so a VM that may belong to a run underway is never taken).
+  `IComputeGateway.ReuseVmAsync` then does, in this order: `instances.get` (refuses a VM that is not stopped with `VM_NOT_STOPPED` before any change),
+  `setLabels` (the CLAIM, FIRST: the `job-id` label becomes this job's, with the label fingerprint read at the start, so of two jobs racing for one VM only
+  one passes and the loser, answered 412, has written nothing), `setScheduling` (this job's `maxRunDuration` and `DELETE`; it has no fingerprint, so a racer
+  that lost the claim must never have written it), `setMetadata` (the new startup script and `deg-*` attributes, with the fingerprint read at the start), then
+  `start`. The composite is NOT idempotent as a whole: `ResilientComputeGateway` attempts it once (no retries, no 401 replay; the real gateway already retries each
+  HTTP request itself), because a replay after a lost answer meets a RUNNING VM, answers `VM_NOT_STOPPED` and used to delete the VM that had just started. A
+  `Network` failure of the reuse is an unknown outcome: the provisioner looks by label and adopts the one VM that is booting or running for this job. The reuse is
+  tracked as an in-flight create, so a cancel waits for it to land and then deletes the VM. THEORY (unverified, ToTest #94 measures it): the platform's `maxRunDuration` clock restarts at each start; a
+  reused VM keeps its `creationTimestamp`. The app is safe under either reading. For a VM this run started (a create or a reuse) the result deadline counts the runner's OWN elapsed clock from just before the request (`RunProgress.VmStartMark`); it never subtracts a platform timestamp from the laptop's wall clock, so a clock an hour fast cannot fire it early. Only a VM the run adopted has no mark and falls back to `VmDescriptor.RunClockStart` (`lastStartTimestamp`, else the creation) against the wall clock, clamped to the VM's limit (THEORY (unverified): off by the laptop's skew). If the clock does NOT restart, a VM created days ago is deleted by the platform soon after its start: the run ends in a recorded terminal state (`vm_unhealthy` or `run_time_limit`) with nothing left billing, and `FakeGcp.WithRunClockFromCreation` tests exactly that. The VM keeps its old name (`deg-<earlierJobId>`; an instance cannot be renamed): `VmSpec.ExistingVmName` carries it and
+  `RunProgress.Resolve` makes every later look at, and the end of, the run use it; discovery stays by the label. A start that fails is never a failed run
+  by itself: whatever carries this job's label is deleted (the claim may already have been made), then a stockout, quota or any other per-VM failure
+  falls through to the create ladder, while billing, API-off, permission, org-policy and network failures abort like the ladder's. Only one VM is tried.
+  THEORY (unverified, no live project): that `setScheduling` accepts `maxRunDuration` on a stopped instance; that a stockout on a start reads like one on
+  an insert; that the old VM's boot disk still carries the OLD job's `job-id` label (only the instance's labels are rewritten: a finding, not fixed here).
+  Not built: the run page's "Starting your computer from yesterday" line (a run-page string, owned by the Presentation lane).
 - **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
   scheduling settings; that the `labels.job-id = "x"` filter syntax matches; that the DLVM image family boots and runs docker on a machine with no GPU;
   the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row.

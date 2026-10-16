@@ -580,6 +580,111 @@ public class GoogleComputeGatewayTests
         found[1].Zone.ShouldBe("us-west1-b");
     }
 
+    // ---- #94: reuse of a stopped VM ----
+
+    private const string OldInstance = Instances + "/deg-job-old";
+
+    private static string StoppedOld(string status = "TERMINATED")
+        => "{\"kind\":\"compute#instance\",\"name\":\"deg-job-old\",\"status\":\"" + status + "\","
+            + "\"zone\":\"https://www.googleapis.com/compute/v1/projects/my-lab/zones/" + Zone + "\",\"creationTimestamp\":\"2026-10-03T01:02:03.000-07:00\","
+            + "\"machineType\":\"https://www.googleapis.com/compute/v1/projects/my-lab/zones/" + Zone + "/machineTypes/g2-standard-8\","
+            + "\"labelFingerprint\":\"lf1\",\"metadata\":{\"fingerprint\":\"mf1\",\"items\":[{\"key\":\"deg-job-id\",\"value\":\"job-old\"}]},"
+            + "\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}}";
+
+    [Fact]
+    public async Task Reuse_claims_a_stopped_VM_by_labels_first_then_scheduling_then_metadata_then_start_each_with_its_fingerprint()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start"))
+            .Returns(Get, OldInstance, 200, Vm("deg-job-old", Zone, "RUNNING", job: "job1"));
+
+        var vm = await rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None);
+
+        vm.Name.ShouldBe("deg-job-old");
+        rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[(r.Uri.AbsolutePath.LastIndexOf('/') + 1)..])
+            .ShouldBe(["setLabels", "setScheduling", "setMetadata", "start"], "the claim (labels, fingerprinted) comes first: setScheduling has no fingerprint, so a racer that lost the claim must not have written it");
+
+        using var scheduling = JsonDocument.Parse(rig.Handler.To(Post, OldInstance + "/setScheduling").Single().Body);
+        scheduling.RootElement.GetProperty("maxRunDuration").GetProperty("seconds").GetInt64().ShouldBe(5400);
+        scheduling.RootElement.GetProperty("instanceTerminationAction").GetString().ShouldBe("DELETE");
+
+        using var metadata = JsonDocument.Parse(rig.Handler.To(Post, OldInstance + "/setMetadata").Single().Body);
+        metadata.RootElement.GetProperty("fingerprint").GetString().ShouldBe("mf1");
+        var items = metadata.RootElement.GetProperty("items").EnumerateArray().ToDictionary(i => i.GetProperty("key").GetString()!, i => i.GetProperty("value").GetString());
+        items["deg-job-id"].ShouldBe("job1", "the old job's id must be replaced, or startup.sh would run the old job");
+        items["block-project-ssh-keys"].ShouldBe("true");
+
+        using var labels = JsonDocument.Parse(rig.Handler.To(Post, OldInstance + "/setLabels").Single().Body);
+        labels.RootElement.GetProperty("labelFingerprint").GetString().ShouldBe("lf1");
+        var sent = labels.RootElement.GetProperty("labels").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
+        sent["job-id"].ShouldBe("job1");
+        sent["app"].ShouldBe("dna-entropy-graph");
+        sent.Count.ShouldBe(6);
+    }
+
+    [Fact]
+    public async Task A_lost_claim_changes_nothing_else_about_the_VM()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "Labels fingerprint either invalid or resource labels have changed", "conditionNotMet"));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(412);
+        thrown.Kind.ShouldBe(CloudErrorKind.Other, "a lost claim is not an org-policy refusal (that would abort the run) nor a stockout");
+        rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[(r.Uri.AbsolutePath.LastIndexOf('/') + 1)..])
+            .ShouldBe(["setLabels"], "the winner's scheduling and metadata must not be overwritten by a racer that lost the claim");
+    }
+
+    [Fact]
+    public async Task A_reused_VM_reports_its_last_start_apart_from_its_creation()
+    {
+        var rig = new GoogleGatewayHarness();
+        var started = StoppedOld("RUNNING").Replace("\"creationTimestamp\":\"2026-10-03T01:02:03.000-07:00\",", "\"creationTimestamp\":\"2026-10-03T01:02:03.000-07:00\",\"lastStartTimestamp\":\"2026-10-09T05:06:07.000-07:00\",");
+        rig.Handler.Returns(Get, OldInstance, 200, started);
+
+        var vm = (await rig.Gateways.Compute.GetVmAsync("deg-job-old", Zone, CancellationToken.None))!;
+
+        vm.CreatedAt.ShouldBe(new DateTimeOffset(2026, 10, 3, 1, 2, 3, TimeSpan.FromHours(-7)));
+        vm.StartedAt.ShouldBe(new DateTimeOffset(2026, 10, 9, 5, 6, 7, TimeSpan.FromHours(-7)));
+        vm.RunClockStart.ShouldBe(vm.StartedAt);
+    }
+
+    [Fact]
+    public async Task Reuse_of_a_VM_that_is_not_stopped_is_refused_before_any_change()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, OldInstance, 200, StoppedOld("RUNNING"));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.Code.ShouldBe("VM_NOT_STOPPED");
+        rig.Handler.Requests.ShouldAllBe(r => r.Method == Get, "a VM that is not stopped must not be edited");
+    }
+
+    [Fact]
+    public async Task A_start_that_runs_out_of_capacity_is_a_stockout_after_the_VM_was_claimed()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setScheduling", 200, Op("DONE", "setScheduling"))
+            .Returns(Post, OldInstance + "/setMetadata", 200, Op("DONE", "setMetadata"))
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldInstance + "/start", 200, Op("DONE", "start", OpError("ZONE_RESOURCE_POOL_EXHAUSTED", "The zone does not have enough resources available to fulfill the request."), 503));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Kind.ShouldBe(CloudErrorKind.Stockout);
+    }
+
     [Fact]
     public async Task Calls_that_need_a_project_fail_loudly_when_none_is_selected()
     {

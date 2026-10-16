@@ -2099,4 +2099,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="OpenWithPortable" xml:space="preserve">
     <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
   </data>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
+  </data>
 </root>
