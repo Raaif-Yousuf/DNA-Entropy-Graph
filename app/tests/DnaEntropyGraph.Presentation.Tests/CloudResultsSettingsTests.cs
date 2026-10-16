@@ -60,10 +60,24 @@ public sealed class CloudResultsSettingsTests
     {
         var vm = Create();
 
-        vm.SelectedChoice = vm.Choices.Single(c => c.Days == 30);
+        vm.SelectedChoice = vm.Choices.Single(c => c.Days == 180);
 
+        _settings.Values[ResultsRetentionSetting.Key].ShouldBe("180");
+        ResultsRetentionSetting.Days(_settings).ShouldBe(180);
+        vm.RetentionStatus.ShouldBe("CloudRetentionSaved");
+    }
+
+    [Fact]
+    public void Choosing_fewer_days_than_before_says_a_longer_bucket_is_not_shrunk_and_a_longer_choice_does_not()
+    {
+        // Cold review of #114: a shorter choice changes nothing on a bucket that already keeps longer (#597), so "Saved" alone misleads.
+        var vm = Create();
+
+        vm.SelectedChoice = vm.Choices.Single(c => c.Days == 30);
+        vm.RetentionStatus.ShouldBe("CloudRetentionSavedShorter");
         _settings.Values[ResultsRetentionSetting.Key].ShouldBe("30");
-        ResultsRetentionSetting.Days(_settings).ShouldBe(30);
+
+        vm.SelectedChoice = vm.Choices.Single(c => c.Days == 180);
         vm.RetentionStatus.ShouldBe("CloudRetentionSaved");
     }
 

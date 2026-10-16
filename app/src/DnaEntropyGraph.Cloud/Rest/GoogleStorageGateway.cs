@@ -56,7 +56,11 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             throw new InvalidOperationException("The results bucket needs the installation id: a bucket without the installation-id label is invisible to the Cloud page (Hard Rule 10).");
         }
 
-        ResultsBucket.ValidateRetentionDays(_options.ResultsRetentionDays);
+        // Read the retention once for the whole call (#114): the option may read settings.json each time, and a change landing mid-call
+        // must not make a bucket look drifted or fail the read-back. AsyncLocal so concurrent calls each keep their own value.
+        var retention = _options.ResultsRetentionDays;
+        ResultsBucket.ValidateRetentionDays(retention);
+        _callRetention.Value = retention;
         var labels = ResultsBucket.Labels(installationId, _options.AppVersion);
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
@@ -65,6 +69,11 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             ? await ConvergeAsync(existing, cancellationToken).ConfigureAwait(false)
             : await CreateAsync(projectId, projectNumber, labels, cancellationToken).ConfigureAwait(false);
     }
+
+    private readonly AsyncLocal<int?> _callRetention = new();
+
+    /// <summary>The retention this <c>EnsureBucketAsync</c> call snapshotted; outside a call, the option's current value.</summary>
+    private int Retention => _callRetention.Value ?? _options.ResultsRetentionDays;
 
     public async Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
     {
@@ -307,7 +316,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     private async Task WriteConfigAsync(string bucket, CancellationToken cancellationToken)
     {
-        var json = ResultsBucket.ConfigJson(_options.CurrentInstallationId ?? throw new InvalidOperationException("The installation id became unreadable while the bucket was being set up."), _options.AppVersion, _options.ResultsRetentionDays, _options.TimeProvider.GetUtcNow());
+        var json = ResultsBucket.ConfigJson(_options.CurrentInstallationId ?? throw new InvalidOperationException("The installation id became unreadable while the bucket was being set up."), _options.AppVersion, Retention, _options.TimeProvider.GetUtcNow());
         var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(json);
         try
         {
@@ -378,7 +387,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         Rule =
         [
             .. (existing ?? []).Where(r => !IsOurRule(r)),
-            DeleteRule(ResultsBucket.JobsPrefix, Math.Max(_options.ResultsRetentionDays, LongestOwnAge(existing, ResultsBucket.JobsPrefix))),
+            DeleteRule(ResultsBucket.JobsPrefix, Math.Max(Retention, LongestOwnAge(existing, ResultsBucket.JobsPrefix))),
             DeleteRule(ResultsBucket.CachePrefix, Math.Max(ResultsBucket.CacheRetentionDays, LongestOwnAge(existing, ResultsBucket.CachePrefix))),
         ],
     };
@@ -439,9 +448,10 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
         // A jobs/ or cache/ age LONGER than asked for is not drift: the bucket is shared, and shortening it would delete another
         // installation's files early (Hard Rule 14, #597). Only a missing rule or a shorter age is repaired.
-        if (!HasDeleteRule(bucket, ResultsBucket.JobsPrefix, _options.ResultsRetentionDays, orLonger: true))
+        var retention = Retention;
+        if (!HasDeleteRule(bucket, ResultsBucket.JobsPrefix, retention, orLonger: true))
         {
-            problems.Add($"no rule deletes {ResultsBucket.JobsPrefix} objects after {_options.ResultsRetentionDays} days or more");
+            problems.Add($"no rule deletes {ResultsBucket.JobsPrefix} objects after {retention} days or more");
         }
 
         if (!HasDeleteRule(bucket, ResultsBucket.CachePrefix, ResultsBucket.CacheRetentionDays, orLonger: true))

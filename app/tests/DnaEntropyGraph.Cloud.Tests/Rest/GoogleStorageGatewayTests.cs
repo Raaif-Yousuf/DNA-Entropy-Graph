@@ -654,6 +654,24 @@ public class GoogleStorageGatewayTests
     }
 
     [Fact]
+    public async Task A_retention_that_changes_during_one_call_is_read_once_so_the_call_is_consistent()
+    {
+        // Cold review of #114: the source hits settings.json, and one EnsureBucketAsync reads the retention several times (validate,
+        // compare, patch, read-back). A change landing mid-call must not make a 30 day bucket look drifted and patch it to 120.
+        var reads = 0;
+        var rig = new GoogleGatewayHarness(retries: 2, retentionSource: () => ++reads == 1 ? 30 : 120);
+        rig.Handler.Returns(Get, Project, 200, ProjectBody());
+        var existing = "deg-" + Number + "-abcdef";
+        rig.Handler.Returns(Get, Buckets, 200, List(BucketJson(existing, jobsAge: 30)));
+        ScriptConfigAlreadyThere(rig.Handler, existing);
+
+        await rig.Gateways.Storage.EnsureBucketAsync("my-lab", CancellationToken.None);
+
+        rig.Handler.To(Patch, BucketPath(existing)).ShouldBeEmpty("the call asked for 30 throughout and the bucket says 30");
+        reads.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_patch_for_another_reason_keeps_the_longer_jobs_age_it_found()
     {
         var rig = NewRig(retentionDays: 7);
