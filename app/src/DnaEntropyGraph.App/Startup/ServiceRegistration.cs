@@ -354,6 +354,12 @@ public static class ServiceRegistration
         // Issue #242: export/import of settings and presets as versioned JSON, and the Settings group that drives it.
         services.AddSingleton<DnaEntropyGraph.Core.SettingsPortability.SettingsTransfer>();
         services.AddTransient<SettingsTransferViewModel>();
+        // Issue #243: one look for the earlier command-line version's runs, shared by the first-launch offer and the Settings button.
+        services.AddSingleton(new DnaEntropyGraph.Core.PrototypeImport.PrototypeSearchPaths(
+            DnaEntropyGraph.Core.PrototypeImport.PrototypeLocations.ConfigPath(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
+            DnaEntropyGraph.Core.PrototypeImport.PrototypeLocations.Downloads(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))));
+        services.AddSingleton<DnaEntropyGraph.Core.PrototypeImport.PrototypeImporter>();
+        services.AddSingleton<PrototypeImportViewModel>();
 
         if (cloud == CloudBackend.Developer)
         {

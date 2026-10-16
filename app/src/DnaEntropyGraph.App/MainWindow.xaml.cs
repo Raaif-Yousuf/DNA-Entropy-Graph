@@ -55,6 +55,7 @@ public sealed partial class MainWindow : Window
         await ViewModel.PrepareSessionAsync(CancellationToken.None);
         RootNavigationView.SelectedItem = NavSelection.Find(RootNavigationView, ViewModel.StartupNavKey);
         _readiness.MarkReady();
+        await ViewModel.RunStartupOffersAsync(CancellationToken.None);
     }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

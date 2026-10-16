@@ -2204,4 +2204,37 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
     <value>IGV connection number</value>
   </data>
+  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
+    <value>Earlier version</value>
+  </data>
+  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
+    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
+  </data>
+  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
+    <value>Look for earlier runs</value>
+  </data>
+  <data name="PrototypeImportTitle" xml:space="preserve">
+    <value>Earlier runs found</value>
+  </data>
+  <data name="PrototypeImportBody" xml:space="preserve">
+    <value>Found {0} runs saved by the earlier command-line version in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+  </data>
+  <data name="PrototypeImportZoneLine" xml:space="preserve">
+    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
+  </data>
+  <data name="PrototypeImportSshLine" xml:space="preserve">
+    <value>The earlier version used the SSH key file {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+  </data>
+  <data name="PrototypeImportDone" xml:space="preserve">
+    <value>Added {0} earlier runs to Runs.</value>
+  </data>
+  <data name="PrototypeImportNothingFound" xml:space="preserve">
+    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
+  </data>
+  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
+    <value>Every earlier run found is already in Runs.</value>
+  </data>
+  <data name="PrototypeImportFailed" xml:space="preserve">
+    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
 </root>

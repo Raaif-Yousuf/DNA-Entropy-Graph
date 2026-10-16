@@ -34,6 +34,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly SimulatedCloudMode? _simulatedCloud;
     private readonly BuildIdentity? _build;
     private readonly SessionRestorer? _session;
+    private readonly PrototypeImportViewModel? _prototypeImport;
     private SessionTarget? _pendingRestore;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
@@ -53,8 +54,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The update check state (issue #179): the shell's Update available bar binds to it, and Settings > About shows the same instance. Null only in tests that do not exercise updates.</summary>
     public UpdateViewModel? Updates { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null, PrototypeImportViewModel? prototypeImport = null)
     {
+        _prototypeImport = prototypeImport;
         _session = session;
         Updates = updates;
         _build = build;
@@ -145,6 +147,15 @@ public sealed partial class ShellViewModel : ObservableObject
         if (pending is { SubPage: not null } && pending.NavKey == pageKey)
         {
             _navigator.NavigateTo(pending.SubPage, pending.Parameter);
+        }
+    }
+
+    /// <summary>First-launch offers, run once the window is showing (issue #243: bring in the earlier version's runs). Never throws.</summary>
+    public async Task RunStartupOffersAsync(CancellationToken cancellationToken)
+    {
+        if (_prototypeImport is not null)
+        {
+            await _prototypeImport.OfferOnFirstLaunchAsync(cancellationToken);
         }
     }
 
