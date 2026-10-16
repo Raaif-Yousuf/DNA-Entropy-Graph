@@ -68,16 +68,34 @@ public sealed class CloudResultsSettingsTests
     }
 
     [Fact]
-    public void Choosing_fewer_days_than_before_says_a_longer_bucket_is_not_shrunk_and_a_longer_choice_does_not()
+    public void Every_choice_shows_the_one_status_that_is_true_whatever_the_previous_choice_or_the_bucket_holds()
     {
-        // Cold review of #114: a shorter choice changes nothing on a bucket that already keeps longer (#597), so "Saved" alone misleads.
+        // Review of #114: the bucket's age is not known here, so no choice may claim more than the one message says. 90 -> 7 -> 30 and a
+        // bucket at 365 with 180 chosen both get it; the text itself (resw) carries the "never shortens a longer rule" part.
         var vm = Create();
+        var seen = new List<string>();
 
+        foreach (var days in new[] { 7, 30, 365, 180 })
+        {
+            vm.SelectedChoice = vm.Choices.Single(c => c.Days == days);
+            seen.Add(vm.RetentionStatus);
+            _settings.Values[ResultsRetentionSetting.Key].ShouldBe(days.ToString());
+        }
+
+        seen.ShouldAllBe(s => s == "CloudRetentionSaved");
+    }
+
+    [Fact]
+    public void A_failed_save_does_not_change_what_a_later_successful_save_says()
+    {
+        _settings.Locked = true;
+        var vm = Create();
+        vm.SelectedChoice = vm.Choices.Single(c => c.Days == 7);
+        vm.RetentionStatus.ShouldBe("AdvancedNotSaved");
+
+        _settings.Locked = false;
         vm.SelectedChoice = vm.Choices.Single(c => c.Days == 30);
-        vm.RetentionStatus.ShouldBe("CloudRetentionSavedShorter");
-        _settings.Values[ResultsRetentionSetting.Key].ShouldBe("30");
 
-        vm.SelectedChoice = vm.Choices.Single(c => c.Days == 180);
         vm.RetentionStatus.ShouldBe("CloudRetentionSaved");
     }
 

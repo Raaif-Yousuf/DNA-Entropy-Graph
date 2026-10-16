@@ -1444,10 +1444,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>A change applies when your next run starts. Choosing fewer days than the bucket already keeps does not shrink it, because other copies of this app may share the same bucket and we never delete results early. To go back to a longer time, choose it here.</value>
   </data>
   <data name="CloudRetentionSaved" xml:space="preserve">
-    <value>Saved. It applies when your next run starts.</value>
-  </data>
-  <data name="CloudRetentionSavedShorter" xml:space="preserve">
-    <value>Saved. A shorter time only takes effect if no longer time is already set on the bucket, and this app cannot see that from here. If your older results are still there, that is the safe side. To remove them sooner, delete them yourself in the Cloud Storage page of your Google Cloud project.</value>
+    <value>Saved. It applies when your next run starts. A time shorter than the one already set on the storage for your results (the bucket) never shortens it, so older results may stay. To remove them sooner, delete them in the Cloud Storage page of your Google Cloud project.</value>
   </data>
   <data name="SettingsAdvancedHeader.Text" xml:space="preserve">
     <value>Advanced</value>

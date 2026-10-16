@@ -73,9 +73,8 @@ public sealed partial class CloudResultsSettingsViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedChoiceChanged(RetentionChoice? oldValue, RetentionChoice newValue)
+    partial void OnSelectedChoiceChanged(RetentionChoice value)
     {
-        var value = newValue;
         // A ComboBox sets null while its list is rebuilt.
         if (_loading || value is null)
         {
@@ -85,8 +84,9 @@ public sealed partial class CloudResultsSettingsViewModel : ObservableObject
         try
         {
             _settings.SetString(ResultsRetentionSetting.Key, value.Days.ToString(CultureInfo.InvariantCulture));
-            // The bucket's current age is not known here, and a shorter choice never shrinks a longer rule (#597): say so instead of "Saved" alone.
-            RetentionStatus = _strings.GetString(oldValue is not null && value.Days < oldValue.Days ? "CloudRetentionSavedShorter" : "CloudRetentionSaved");
+            // One message, true for every choice: the bucket's current age is not known here (and the previous selection is not it), and a
+            // shorter choice never shrinks a longer rule (#597), so the text covers both without guessing.
+            RetentionStatus = _strings.GetString("CloudRetentionSaved");
         }
         catch (SettingsUnavailableException ex)
         {

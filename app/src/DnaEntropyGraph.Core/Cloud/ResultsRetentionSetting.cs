@@ -13,6 +13,8 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public static class ResultsRetentionSetting
 {
+    private static readonly System.Text.RegularExpressions.Regex WholeWithPoint = new(@"^([+-]?[0-9]+)\.0*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     /// <summary>The settings key.</summary>
     public const string Key = "results_retention_days";
 
@@ -42,9 +44,10 @@ public static class ResultsRetentionSetting
 
         if (!BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
         {
-            if (decimal.TryParse(raw, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var d) && d == decimal.Truncate(d))
+            // "30.0": digits, a point, then only zeros. Parsed as text so a value of any size clamps like the integer path.
+            if (WholeWithPoint.Match(raw) is { Success: true } whole)
             {
-                parsed = new BigInteger(d);
+                parsed = BigInteger.Parse(whole.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture);
             }
             else
             {
