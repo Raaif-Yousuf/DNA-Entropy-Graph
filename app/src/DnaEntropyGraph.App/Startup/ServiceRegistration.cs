@@ -209,6 +209,7 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IClipboardTextReader, Services.ClipboardTextReader>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
+        services.AddSingleton(new DnaEntropyGraph.Presentation.Services.ResultsExportRoot(() => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory)));
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),

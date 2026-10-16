@@ -55,6 +55,22 @@ public static class RunOutputFolders
     }
 
     /// <summary>
+    /// A path in <paramref name="folder"/> named <c>baseName.ext</c>, or <c>baseName_2.ext</c>, <c>_3</c> and so on when that exists: a file the
+    /// user may care about is never silently overwritten (Hard Rule 14).
+    /// </summary>
+    public static string UniqueFilePath(string folder, string baseName, string extension)
+    {
+        for (var n = 1; ; n++)
+        {
+            var candidate = Path.Combine(folder, n == 1 ? baseName + extension : $"{baseName}_{n}{extension}");
+            if (!Path.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    /// <summary>
     /// Takes <paramref name="candidate"/> only if nothing exists there. <c>Directory.CreateDirectory</c>
     /// (the staging folder lives in <paramref name="parent"/> because an atomic move needs the same volume)
     /// succeeds on an existing folder, so it cannot tell "mine" from "someone else's". Instead a fresh

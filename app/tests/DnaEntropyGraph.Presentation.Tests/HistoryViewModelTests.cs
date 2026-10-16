@@ -232,7 +232,7 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
-    public async Task An_imported_run_offers_no_redownload_or_cloud_delete_and_run_again_finds_no_input_and_starts_nothing()
+    public async Task An_imported_run_offers_no_redownload_or_cloud_delete_and_run_again_says_it_has_no_options_and_starts_nothing()
     {
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
         _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(false);
@@ -245,6 +245,22 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "legacy-1").RerunCommand.ExecuteAsync(null);
         await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoOptions_Title", "Runs_Rerun_NoOptions_Body", ToastSeverity.Warning);
+    }
+
+    [Fact]
+    public async Task An_imported_run_that_somehow_has_options_but_no_input_file_says_so_and_starts_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns((string?)null);
+        var options = DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" });
+        var imported = Row("legacy-2", outputDir: @"C:\Users\me\Downloads\proto", options: options) with { Imported = true };
+        var vm = await Loaded(imported);
+
+        await Item(vm, "legacy-2").RerunCommand.ExecuteAsync(null);
+
+        await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body", ToastSeverity.Warning);
     }
 
     [Fact]
