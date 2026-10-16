@@ -26,6 +26,14 @@ Each run's results are also stored in a storage area in your own Google Cloud pr
 
 Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (off, so a finished run never pulls you away from what you are typing). When the app is not the window in front (or is minimized), the message also appears as a Windows notification, for a run that finished and for one that failed; **Open run** on it (or a click on the notification) opens that run's Results page, even if you had closed the app. If you do not see it, check that Windows Focus Assist is not hiding notifications. They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
 
+## This PC
+
+Run the analysis on your own computer instead of a rented one. It needs an NVIDIA graphics card with about 24 GB of memory, an NVIDIA driver of version 550 or newer, and 30 GB of free disk space. The **Where to run** box chooses the default for new runs: **Cloud**, **This PC**, or **Auto** (This PC when it can run the model, the cloud when it cannot). If this PC cannot run the model, **This PC** is greyed out and the line under the box says why and what to do.
+
+The health check below it shows your graphics card, free disk space and whether the engine (the model software the app installs for this feature) is installed and working. **Install** sets the engine up in one step (it downloads several gigabytes and can be cancelled), **Repair** sets it up again, **Remove** deletes it (your results and input copies are not touched), and **Check again** looks at the computer again. A run on this PC never creates anything in Google Cloud and costs nothing but time.
+
+If the health check says the NVIDIA driver is not working, reinstall or update the driver from the NVIDIA website, restart the PC, then choose **Check again**. A run on this PC that stops reporting in, or runs past its time limit, is stopped by the app and shows a message telling you what to do. If you close the app while a run is going, the run stops, and the next time you open the app it shows that run as not finished so you can start it again. If you have two NVIDIA cards, the app uses the one with the most memory.
+
 ## About and updates
 
 Shows the version you are running, which updates to offer (**Stable**, or **Beta** for early versions), a switch for checking
