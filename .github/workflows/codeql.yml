@@ -59,7 +59,7 @@ jobs:
         with:
           global-json-file: app/global.json
 
-      - uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           languages: ${{ matrix.language }}
           config-file: ./.github/codeql/codeql-config.yml
@@ -72,10 +72,10 @@ jobs:
           dotnet restore
           dotnet build -c Release -p:Platform=x64 --no-restore
 
-      - uses: github/codeql-action/autobuild@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+      - uses: github/codeql-action/autobuild@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         if: matrix.language != 'csharp'
 
-      - uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         if: matrix.language != 'csharp'
         with:
           category: "/language:${{ matrix.language }}"
@@ -83,7 +83,7 @@ jobs:
       # csharp: paths-ignore in the config file is not applied to a built compiled language, so about
       # 110 of the first 182 alerts were in generated obj/**/*.g.cs. Analyse without uploading, drop
       # results under obj/ and bin/, then upload the filtered SARIF under the same category.
-      - uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         if: matrix.language == 'csharp'
         with:
           category: "/language:${{ matrix.language }}"
@@ -99,7 +99,7 @@ jobs:
           input: sarif-results/csharp.sarif
           output: sarif-results/csharp.sarif
 
-      - uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         if: matrix.language == 'csharp'
         with:
           sarif_file: sarif-results/csharp.sarif
