@@ -77,7 +77,7 @@ jobs:
           echo "OK: all release secrets are set"
 
       - name: set up python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -195,7 +195,7 @@ jobs:
           cp "sbom-image-${{ matrix.variant }}.cdx.json" out/
 
       - name: upload digest and SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-${{ matrix.variant }}
           path: out/*
@@ -213,11 +213,11 @@ jobs:
         with:
           persist-credentials: false
       - name: set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
       - name: build the wheel
         run: uv build --wheel --out-dir dist worker
       - name: keep the wheel for the release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: worker-wheel
           path: dist/*.whl
@@ -243,7 +243,7 @@ jobs:
           persist-credentials: false
 
       - name: set up python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -421,7 +421,7 @@ jobs:
           sbom-path: sbom-app.cdx.json
 
       - name: keep the app SBOM for the release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-app
           path: sbom-app.cdx.json
@@ -431,7 +431,7 @@ jobs:
       # The one deliberate package hand-off between jobs (a job cannot read another job's disk). It is the SAME signed
       # installer the public release will carry, one day of retention, and the folder holds only what stage copied.
       - name: hand the staged files to the upload job
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-files
           path: stage/*
