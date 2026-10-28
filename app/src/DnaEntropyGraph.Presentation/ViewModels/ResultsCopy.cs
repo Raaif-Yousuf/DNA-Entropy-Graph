@@ -18,6 +18,18 @@ public static class ResultsCopy
     // Issue #118: the entropy overview strip.
     public const string ExportPngFailed = "Results_ExportPngFailed";
 
+    // Issue #552: the gene table.
+    public const string GenesTruncated = "Results_GenesTruncated";
+    public const string GenesUnreadable = "Results_GenesUnreadable";
+    public const string GenesSortedAscending = "Results_GenesSortedAscending";
+    public const string GenesSortedDescending = "Results_GenesSortedDescending";
+
+    /// <summary>The sort keys of <see cref="ResultsGeneTable"/>, in column order.</summary>
+    public static IReadOnlyList<string> GeneColumnKeys { get; } = ["contig", "gene", "begin", "end", "strand", "length", "mean", "min", "max", "low"];
+
+    /// <summary>The header text key of a gene table column.</summary>
+    public static string GeneColumnKey(string sortKey) => "Results_GeneColumn_" + sortKey;
+
     // Issue #586: Open in IGV and Open in Geneious.
     public const string IgvNoFiles = "Results_IgvNoFiles";
     public const string IgvNotFound = "Results_IgvNotFound";
@@ -72,9 +84,11 @@ public static class ResultsCopy
         GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
+        GenesTruncated, GenesUnreadable, GenesSortedAscending, GenesSortedDescending,
+        .. GeneColumnKeys.Select(GeneColumnKey),
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
-    public static IReadOnlyList<string> FormatKeys { get; } = [StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
+    public static IReadOnlyList<string> FormatKeys { get; } = [GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
 }
 

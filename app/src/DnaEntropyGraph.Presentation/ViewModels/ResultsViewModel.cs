@@ -34,6 +34,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly IExternalViewerOpener _viewers;
     private readonly IEntropyOverviewSource? _overviewSource;
     private readonly IOverviewImageExporter? _imageExporter;
+    private readonly IGeneTableSource? _geneTables;
     private IReadOnlyList<RunOutputFile> _outputFiles = [];
     private string? _folder;
     private int _loadGeneration;
@@ -64,8 +65,10 @@ public sealed partial class ResultsViewModel : ObservableObject
         IStringResourceProvider strings,
         IExternalViewerOpener viewers,
         IEntropyOverviewSource? overviewSource = null,
-        IOverviewImageExporter? imageExporter = null)
+        IOverviewImageExporter? imageExporter = null,
+        IGeneTableSource? geneTables = null)
     {
+        _geneTables = geneTables;
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
         _runRepository = runRepository;
@@ -88,6 +91,18 @@ public sealed partial class ResultsViewModel : ObservableObject
     public string OverviewTitle => Overview?.Name ?? string.Empty;
 
     public ObservableCollection<ResultsStatsGroup> Groups { get; } = [];
+
+    /// <summary>Issue #552: one sortable table per <c>*.genes.tsv</c> in the run folder (only the readable ones).</summary>
+    public ObservableCollection<ResultsGeneTable> GeneTables { get; } = [];
+
+    public bool HasGeneTables => GeneTables.Count > 0;
+
+    // Why a gene table is missing while the rest of the page is fine: one reason, one action.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsGeneNoticeVisible))]
+    private string _geneNoticeText = string.Empty;
+
+    public bool IsGeneNoticeVisible => GeneNoticeText.Length > 0;
 
     public ObservableCollection<ResultsFileItem> Files { get; } = [];
 
@@ -142,6 +157,8 @@ public sealed partial class ResultsViewModel : ObservableObject
 
             Show(folder!, snapshot);
 
+            await ShowGeneTablesAsync(folder!, generation);
+
             // The strip fills in after the page: reading a big track is disk work and must not hold the stats back.
             if (_overviewSource is not null)
             {
@@ -176,12 +193,40 @@ public sealed partial class ResultsViewModel : ObservableObject
         StatsNoticeText = string.Empty;
         ActionNoticeText = string.Empty;
         Groups.Clear();
+        GeneTables.Clear();
+        GeneNoticeText = string.Empty;
+        OnPropertyChanged(nameof(HasGeneTables));
         Files.Clear();
         OnPropertyChanged(nameof(HasFiles));
         OpenFolderCommand.NotifyCanExecuteChanged();
         OpenInViewerCommand.NotifyCanExecuteChanged();
         OpenInIgvCommand.NotifyCanExecuteChanged();
         OpenInGeneiousCommand.NotifyCanExecuteChanged();
+    }
+
+    // The tables are disk work (a big genome has thousands of rows): off the UI thread, and only the newest load may show them.
+    private async Task ShowGeneTablesAsync(string folder, int generation)
+    {
+        if (_geneTables is null)
+        {
+            return;
+        }
+
+        var tables = await Task.Run(() => _geneTables.Load(folder), CancellationToken.None);
+        if (generation != Volatile.Read(ref _loadGeneration))
+        {
+            return;
+        }
+
+        var several = tables.Count > 1;
+        foreach (var table in tables.Where(t => t.Rows is not null))
+        {
+            GeneTables.Add(new ResultsGeneTable(several ? table.RelativePath : string.Empty, table.Rows!, _strings));
+        }
+
+        var unreadable = tables.FirstOrDefault(t => t.Rows is null);
+        GeneNoticeText = unreadable is null ? string.Empty : Format(ResultsCopy.GenesUnreadable, unreadable.RelativePath);
+        OnPropertyChanged(nameof(HasGeneTables));
     }
 
     private void Show(string folder, RunOutputSnapshot snapshot)

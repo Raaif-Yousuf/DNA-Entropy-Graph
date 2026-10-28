@@ -9,7 +9,9 @@ against. The copy rules in section 2 are mechanically guarded by `Guards.Tests`
 `StringResourceKeyGuardTests`, `CodeBehindBranchingGuardTests`). Screen-by-screen detail
 beyond what is summarized here lives in
 [Appendix A, section 2](superpowers/specs/2026-09-18-appendix-a-app-design.md#2-screen-by-screen-ux);
-the viewer page is described in `docs/viewer.md` (issue #312).
+the viewer page is described in `docs/viewer.md` (issue #312). The Results page also lists the gene
+tables (`*.genes.tsv`, issue #552: one `ResultsGeneTable` per file, sorted on the numbers not the shown text, first 500 rows drawn), and
+the Viewer page lists the run's smoothed entropy tracks as switches that add and remove a track through the bridge.
 
 ---
 

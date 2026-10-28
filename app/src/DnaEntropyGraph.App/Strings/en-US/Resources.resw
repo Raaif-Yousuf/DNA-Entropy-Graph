@@ -2688,4 +2688,88 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
   </data>
+  <data name="Results_GenesTruncated" xml:space="preserve">
+    <value>Only the first 500 genes are shown here. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
+  </data>
+  <data name="Results_GenesUnreadable" xml:space="preserve">
+    <value>The gene table {0} could not be read, so it is not shown. Choose Open next to it in the file list to look at it yourself.</value>
+  </data>
+  <data name="Results_GenesSortedAscending" xml:space="preserve">
+    <value>Sorted by {0}, lowest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GenesSortedDescending" xml:space="preserve">
+    <value>Sorted by {0}, highest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GeneColumn_contig" xml:space="preserve">
+    <value>Record</value>
+  </data>
+  <data name="Results_GeneColumn_gene" xml:space="preserve">
+    <value>Gene</value>
+  </data>
+  <data name="Results_GeneColumn_begin" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="Results_GeneColumn_end" xml:space="preserve">
+    <value>End</value>
+  </data>
+  <data name="Results_GeneColumn_strand" xml:space="preserve">
+    <value>Strand</value>
+  </data>
+  <data name="Results_GeneColumn_length" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="Results_GeneColumn_mean" xml:space="preserve">
+    <value>Mean entropy</value>
+  </data>
+  <data name="Results_GeneColumn_min" xml:space="preserve">
+    <value>Lowest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_max" xml:space="preserve">
+    <value>Highest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_low" xml:space="preserve">
+    <value>Low-entropy share</value>
+  </data>
+  <data name="Viewer_SmoothedToggle" xml:space="preserve">
+    <value>Smoothed over {0} bases</value>
+  </data>
+  <data name="Viewer_SmoothedTrackName" xml:space="preserve">
+    <value>Smoothed entropy, {0} bases (bits)</value>
+  </data>
+  <data name="ResultsGenesHeading.Text" xml:space="preserve">
+    <value>Genes</value>
+  </data>
+  <data name="ResultsGeneHeadContig.Content" xml:space="preserve">
+    <value>Record</value>
+  </data>
+  <data name="ResultsGeneHeadGene.Content" xml:space="preserve">
+    <value>Gene</value>
+  </data>
+  <data name="ResultsGeneHeadBegin.Content" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="ResultsGeneHeadEnd.Content" xml:space="preserve">
+    <value>End</value>
+  </data>
+  <data name="ResultsGeneHeadStrand.Content" xml:space="preserve">
+    <value>Strand</value>
+  </data>
+  <data name="ResultsGeneHeadLength.Content" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="ResultsGeneHeadMean.Content" xml:space="preserve">
+    <value>Mean entropy</value>
+  </data>
+  <data name="ResultsGeneHeadMin.Content" xml:space="preserve">
+    <value>Lowest entropy</value>
+  </data>
+  <data name="ResultsGeneHeadMax.Content" xml:space="preserve">
+    <value>Highest entropy</value>
+  </data>
+  <data name="ResultsGeneHeadLow.Content" xml:space="preserve">
+    <value>Low-entropy share</value>
+  </data>
+  <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
+    <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
+  </data>
 </root>
