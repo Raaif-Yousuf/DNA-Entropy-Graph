@@ -94,7 +94,7 @@ public class ProxyPolicyTests
 
         store.Save(new ProxySettings(ProxyMode.Manual, "proxy.uni.edu:8080"));
         store.Load().ShouldBe(new ProxySettings(ProxyMode.Manual, "proxy.uni.edu:8080"));
-        settings.Values[ProxySettingKeys.Mode].ShouldBe("manual");
+        settings.Values[ProxySettingKeys.ModeKey].ShouldBe("manual");
 
         store.Save(new ProxySettings(ProxyMode.None, string.Empty));
         store.Load().Mode.ShouldBe(ProxyMode.None);
@@ -104,7 +104,7 @@ public class ProxyPolicyTests
     public void An_unreadable_mode_is_the_system_setting_not_a_crash_and_the_password_is_never_in_settings_json()
     {
         var settings = new MemorySettings();
-        settings.Values[ProxySettingKeys.Mode] = "turbo";
+        settings.Values[ProxySettingKeys.ModeKey] = "turbo";
 
         new ProxySettingsStore(settings).Load().Mode.ShouldBe(ProxyMode.System);
 
@@ -298,8 +298,8 @@ public class ProxyPolicyTests
     {
         var settings = new MemorySettings();
         var credentials = new MemoryCredentials { Saved = new NetworkCredential("old", "oldpw") };
-        settings.Values[ProxySettingKeys.Mode] = "manual";
-        settings.Values[ProxySettingKeys.Address] = "old.uni.edu:8080";
+        settings.Values[ProxySettingKeys.ModeKey] = "manual";
+        settings.Values[ProxySettingKeys.AddressKey] = "old.uni.edu:8080";
         var policy = new ProxyPolicy(settings, credentials);
         policy.Settings.ManualAddress.ShouldBe("old.uni.edu:8080");
         settings.FailWrites = true;
@@ -309,7 +309,7 @@ public class ProxyPolicyTests
         credentials.Saved!.UserName.ShouldBe("old");
         policy.ManualCredential!.UserName.ShouldBe("old");
         policy.Settings.ManualAddress.ShouldBe("old.uni.edu:8080");
-        settings.Values[ProxySettingKeys.Address].ShouldBe("old.uni.edu:8080");
+        settings.Values[ProxySettingKeys.AddressKey].ShouldBe("old.uni.edu:8080");
     }
 
     [Fact]
@@ -317,8 +317,8 @@ public class ProxyPolicyTests
     {
         var settings = new MemorySettings();
         var credentials = new MemoryCredentials { Saved = new NetworkCredential("old", "oldpw") };
-        settings.Values[ProxySettingKeys.Mode] = "manual";
-        settings.Values[ProxySettingKeys.Address] = "old.uni.edu:8080";
+        settings.Values[ProxySettingKeys.ModeKey] = "manual";
+        settings.Values[ProxySettingKeys.AddressKey] = "old.uni.edu:8080";
         var policy = new ProxyPolicy(settings, credentials);
         policy.ManualCredential.ShouldNotBeNull();
         settings.FailWrites = true;
@@ -373,8 +373,8 @@ public class ProxyPolicyTests
     public void A_rollback_puts_back_the_values_that_were_in_settings_json_not_the_fallback_used_while_it_was_unreadable()
     {
         var settings = new MemorySettings();
-        settings.Values[ProxySettingKeys.Mode] = "manual";
-        settings.Values[ProxySettingKeys.Address] = "old.uni.edu:8080";
+        settings.Values[ProxySettingKeys.ModeKey] = "manual";
+        settings.Values[ProxySettingKeys.AddressKey] = "old.uni.edu:8080";
         settings.FailReads = true;
         var policy = new ProxyPolicy(settings, new MemoryCredentials());
         policy.Settings.Mode.ShouldBe(ProxyMode.System); // the fallback while the file could not be read
@@ -383,8 +383,8 @@ public class ProxyPolicyTests
 
         Should.Throw<SettingsUnavailableException>(() => policy.Apply(new ProxySettings(ProxyMode.None, string.Empty), null));
 
-        settings.Values[ProxySettingKeys.Mode].ShouldBe("manual");
-        settings.Values[ProxySettingKeys.Address].ShouldBe("old.uni.edu:8080");
+        settings.Values[ProxySettingKeys.ModeKey].ShouldBe("manual");
+        settings.Values[ProxySettingKeys.AddressKey].ShouldBe("old.uni.edu:8080");
     }
 
     [Fact]

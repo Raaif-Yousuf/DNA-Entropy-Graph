@@ -76,7 +76,7 @@ public sealed class ProxySettingsTests
         vm.ApplyCommand.Execute(null);
 
         policy.Settings.ShouldBe(new ProxySettings(ProxyMode.Manual, "proxy.uni.edu:8080"));
-        _settings.Values[ProxySettingKeys.Mode].ShouldBe("manual");
+        _settings.Values[ProxySettingKeys.ModeKey].ShouldBe("manual");
         vm.Status.ShouldBe("ProxySaved");
     }
 
@@ -131,8 +131,8 @@ public sealed class ProxySettingsTests
     public void Applying_again_with_the_password_box_empty_keeps_the_saved_password_for_the_same_user()
     {
         _credentials.Saved = new NetworkCredential("alice", "hunter2");
-        _settings.Values[ProxySettingKeys.Mode] = "manual";
-        _settings.Values[ProxySettingKeys.Address] = "proxy.uni.edu:8080";
+        _settings.Values[ProxySettingKeys.ModeKey] = "manual";
+        _settings.Values[ProxySettingKeys.AddressKey] = "proxy.uni.edu:8080";
         var (vm, policy) = Create();
         vm.ProxyUserName.ShouldBe("alice");
         vm.ManualAddress = "proxy2.uni.edu:8080";
@@ -147,8 +147,8 @@ public sealed class ProxySettingsTests
     public void Clearing_the_user_name_forgets_the_saved_sign_in()
     {
         _credentials.Saved = new NetworkCredential("alice", "hunter2");
-        _settings.Values[ProxySettingKeys.Mode] = "manual";
-        _settings.Values[ProxySettingKeys.Address] = "proxy.uni.edu:8080";
+        _settings.Values[ProxySettingKeys.ModeKey] = "manual";
+        _settings.Values[ProxySettingKeys.AddressKey] = "proxy.uni.edu:8080";
         var (vm, policy) = Create();
         vm.ProxyUserName = string.Empty;
 
@@ -190,8 +190,8 @@ public sealed class ProxySettingsTests
     {
         var messenger = new WeakReferenceMessenger();
         _credentials.Saved = new NetworkCredential("alice", "hunter2");
-        _settings.Values[ProxySettingKeys.Mode] = "manual";
-        _settings.Values[ProxySettingKeys.Address] = "proxy.uni.edu:8080";
+        _settings.Values[ProxySettingKeys.ModeKey] = "manual";
+        _settings.Values[ProxySettingKeys.AddressKey] = "proxy.uni.edu:8080";
         var (vm, policy) = Create(messenger);
 
         _settings.Values.Clear();

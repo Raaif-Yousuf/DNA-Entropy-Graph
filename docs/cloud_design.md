@@ -1476,7 +1476,9 @@ Round 4 (same method):
 
 THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes back populated in an instances aggregatedList on a real project.
 
-## 19. Network proxy (issue #239)
+## 21. Network proxy (issue #239)
+
+Numbering note: this was §19 on its own branch. The Spot VMs branch (#91) takes §19 and flex-start (#92) §20; neither had landed on origin/main when this was renumbered (2026-10-28), so the proxy section is §21 to avoid a duplicate heading whichever lands first.
 
 **One policy, applied in one place.** `ProxyMode` is `System` (default), `Manual` (`host:port`) or `None`, saved as `proxy_mode` and `proxy_address` in settings.json. The sign-in for a manual proxy is NOT there: `ProxyCredentialFile` keeps it DPAPI-encrypted under `%LOCALAPPDATA%\DNAEntropyGraph\auth\proxy.cred` (Hard Rule 12). `ProxyPolicy` (Core, singleton) holds the live choice; `PolicyWebProxy` is the one `IWebProxy` every client holds, so a change in Settings > Advanced > Network proxy reaches the next request of clients that already exist (no restart; pooled connections to the old proxy age out).
 

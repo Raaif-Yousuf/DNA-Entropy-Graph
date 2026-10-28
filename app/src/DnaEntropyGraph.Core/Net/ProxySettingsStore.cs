@@ -6,9 +6,9 @@ namespace DnaEntropyGraph.Core.Net;
 /// <summary>The settings.json keys for the proxy choice (issue #239). The sign-in for a proxy is NOT here: it is DPAPI-encrypted (<see cref="IProxyCredentialStore"/>).</summary>
 public static class ProxySettingKeys
 {
-    public const string Mode = "proxy_mode";
+    public const string ModeKey = "proxy_mode";
 
-    public const string Address = "proxy_address";
+    public const string AddressKey = "proxy_address";
 }
 
 /// <summary>Reads and writes the proxy choice in settings.json.</summary>
@@ -20,8 +20,8 @@ public sealed class ProxySettingsStore(ISettingsStore settings)
         string? address;
         try
         {
-            mode = settings.GetString(ProxySettingKeys.Mode);
-            address = settings.GetString(ProxySettingKeys.Address);
+            mode = settings.GetString(ProxySettingKeys.ModeKey);
+            address = settings.GetString(ProxySettingKeys.AddressKey);
         }
         catch (SettingsUnavailableException)
         {
@@ -42,7 +42,7 @@ public sealed class ProxySettingsStore(ISettingsStore settings)
     {
         try
         {
-            return (settings.GetString(ProxySettingKeys.Mode), settings.GetString(ProxySettingKeys.Address));
+            return (settings.GetString(ProxySettingKeys.ModeKey), settings.GetString(ProxySettingKeys.AddressKey));
         }
         catch (SettingsUnavailableException)
         {
@@ -53,14 +53,14 @@ public sealed class ProxySettingsStore(ISettingsStore settings)
     /// <summary>Writes back values read by <see cref="TryReadRaw"/>; an absent key is written empty, which reads back as the same default.</summary>
     public void WriteRaw(string? mode, string? address)
     {
-        settings.SetString(ProxySettingKeys.Mode, mode ?? string.Empty);
-        settings.SetString(ProxySettingKeys.Address, address ?? string.Empty);
+        settings.SetString(ProxySettingKeys.ModeKey, mode ?? string.Empty);
+        settings.SetString(ProxySettingKeys.AddressKey, address ?? string.Empty);
     }
 
     public void Save(ProxySettings value)
     {
-        settings.SetString(ProxySettingKeys.Mode, value.Mode switch { ProxyMode.Manual => "manual", ProxyMode.None => "none", _ => "system" });
-        settings.SetString(ProxySettingKeys.Address, value.Mode == ProxyMode.Manual ? value.ManualAddress.Trim() : string.Empty);
+        settings.SetString(ProxySettingKeys.ModeKey, value.Mode switch { ProxyMode.Manual => "manual", ProxyMode.None => "none", _ => "system" });
+        settings.SetString(ProxySettingKeys.AddressKey, value.Mode == ProxyMode.Manual ? value.ManualAddress.Trim() : string.Empty);
     }
 }
 

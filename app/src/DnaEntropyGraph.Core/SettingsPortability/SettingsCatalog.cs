@@ -53,9 +53,10 @@ public static class SettingsCatalog
     {
         [InstallationId.SettingsKey] = "Identifies this PC's cloud resources (Hard Rules 9 and 10); sharing it would let two PCs claim each other's VMs.",
         ["MainWindowPlacement"] = "Where the window sits on this PC's screens.",
+        // Literal on purpose: TourSettings.CompletedKey lives in Presentation, which references Core, so Core cannot name it. A Presentation.Tests test pins the two together.
         ["onboarding_tour_done"] = "Whether the first-run tour was shown on this PC (TourSettings.CompletedKey, #143); a new PC should show it once, so it is not carried over.",
-        [ProxySettingKeys.Mode] = "The network proxy choice is specific to this PC and its network; an imported file must not be able to route traffic through a proxy (#239).",
-        [ProxySettingKeys.Address] = "A proxy address can name the user's institution and only means something on that network (#239); never exported or imported.",
+        [ProxySettingKeys.ModeKey] = "The network proxy choice is specific to this PC and its network; an imported file must not be able to route traffic through a proxy (#239).",
+        [ProxySettingKeys.AddressKey] = "A proxy address can name the user's institution and only means something on that network (#239); never exported or imported.",
         [WorkerImageSettingKeys.DeveloperMode] = "Developer switch; an imported file must not be able to turn it on.",
         [WorkerImageSettingKeys.WorkerImage] = "An image the app would run on a rented computer; an imported file must not be able to choose one.",
         [ViewerSettingKeys.IgvPath] = "A program path on this PC.",

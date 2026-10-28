@@ -28,10 +28,6 @@ public sealed partial class SettingsKeyCatalogGuardTests
         "UninstallRemoveData_Title", "UninstallRemoveData_Body",
     };
 
-    // ProxySettingKeys.Mode / .Address (issue #239) are named for what they hold, not "...Key": recognised by their holder class so a bare "Mode" elsewhere is not read as a settings key.
-    private static bool IsProxyKeyConstant(string path, string constantName)
-        => Path.GetFileName(path).Contains("ProxySetting", StringComparison.Ordinal) && constantName is "Mode" or "Address";
-
     internal static IReadOnlySet<string> DiscoverKeys(IEnumerable<(string Path, string Text)> files)
     {
         var found = new HashSet<string>(StringComparer.Ordinal);
@@ -52,7 +48,7 @@ public sealed partial class SettingsKeyCatalogGuardTests
             foreach (Match m in Constant().Matches(text))
             {
                 var name = m.Groups["name"].Value;
-                if (name.Contains("Key", StringComparison.Ordinal) || name is "Theme" or "DeveloperMode" or "WorkerImage" or "IgvPath" or "IgvPort" or "GeneiousPath" || IsProxyKeyConstant(path, name))
+                if (name.Contains("Key", StringComparison.Ordinal) || name is "Theme" or "DeveloperMode" or "WorkerImage" or "IgvPath" or "IgvPort" or "GeneiousPath")
                 {
                     found.Add(m.Groups["key"].Value);
                 }
