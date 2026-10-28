@@ -196,7 +196,7 @@ public sealed class NewRunViewModelTests : IDisposable
     public async Task Back_to_the_page_still_attaches_it_to_the_intake()
     {
         var intake = new NewRunIntake();
-        var viewModel = new NewRunViewModel(_picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates, new OutputSelectionStore(Substitute.For<ISettingsStore>()), _log, intake: intake);
+        var viewModel = new NewRunViewModel(_picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates, new OutputSelectionStore(Substitute.For<ISettingsStore>()), _log, TestGpu.Plan(), intake: intake);
         var path = Write("later.fasta", ">l\n" + Dna + "\n");
 
         await viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(new NavigationArrival(null, IsNewNavigation: false));
