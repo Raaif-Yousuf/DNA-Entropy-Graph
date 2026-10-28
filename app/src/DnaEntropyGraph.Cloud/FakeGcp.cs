@@ -316,6 +316,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public FakeGcp WithAlreadyExists(string vmName, string zone, string status = "RUNNING")
     {
         var key = (vmName, zone);
+        // vm-row-create: inserts a NEW row (the #875 guard allows a bare assignment only here)
         _vms[key] = new VmDescriptor(vmName, zone, status);
         ResetVmDeleted(vmName);
         _alreadyExistingVmKeys.Add(key);
@@ -994,6 +995,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow());
         // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
         RunSimulatedWorker(spec, zone);
+        // vm-row-create: inserts a NEW row (the #875 guard allows a bare assignment only here)
         _vms[key] = vm;
         ResetVmDeleted(spec.VmName);
         _labelFingerprints[key] = NextFingerprint();
@@ -1093,8 +1095,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                     merged[k] = v;
                 }
 
-                UpdateVm(key, v => v with { Labels = merged });
-                _labelFingerprints[key] = NextFingerprint();
+                if (UpdateVm(key, v => v with { Labels = merged }) is not null)
+                {
+                    _labelFingerprints[key] = NextFingerprint();
+                }
             }
         }
 
@@ -1144,8 +1148,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 throw Build(CloudErrorKind.Other, "CONDITION_NOT_MET", 412, "The labels fingerprint is invalid: another job claimed this VM first.");
             }
 
-            _labelFingerprints[key] = NextFingerprint();
             vm = UpdateVm(key, v => v with { Labels = reuse.ToLabels() }) ?? throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+            _labelFingerprints[key] = NextFingerprint();
             _maxRunByVm[key] = reuse.MaxRunDuration;
         }
 
@@ -1305,7 +1309,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    /// <summary>Test seam (#875): runs between a reuse's claim and its start, so a test can interleave a delete there deterministically.</summary>
+    /// <summary>Test seam (#875): runs between a reuse's claim (or a plain start's read) and its start, so a test can interleave a delete there deterministically.</summary>
     internal Action? BeforeStartWrite { get; set; }
 
     /// <summary>
@@ -1317,7 +1321,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         while (_vms.TryGetValue(key, out var current))
         {
             var next = change(current);
-            if (ReferenceEquals(next, current) || _vms.TryUpdate(key, next, current))
+            if (ReferenceEquals(next, current))
+            {
+                // Nothing to change: confirm the row still exists rather than report a row a delete may have just removed.
+                return _vms.TryGetValue(key, out var still) ? still : null;
+            }
+
+            if (_vms.TryUpdate(key, next, current))
             {
                 return next;
             }
@@ -1344,16 +1354,17 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         BeforeStopWrite?.Invoke();
         // A delete that landed since the read wins (real Compute deletes the instance and the stop operation then fails), it is never resurrected as STOPPED.
+        // Only while the row is still in the state this stop read: a concurrent change of state (a preempt to TERMINATED with its reason) is not overwritten.
         if (_stoppingPolls > 0)
         {
-            if (UpdateVm(key, v => v with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() }) is not null)
+            if (UpdateVm(key, v => v.Status == vm.Status ? v with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() } : v) is { Status: "STOPPING" })
             {
                 _stoppingPollsLeft[key] = _stoppingPolls;
             }
         }
         else
         {
-            UpdateVm(key, v => v with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() });
+            UpdateVm(key, v => v.Status == vm.Status ? v with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() } : v);
         }
     }
 

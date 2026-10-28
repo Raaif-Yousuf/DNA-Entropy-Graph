@@ -51,16 +51,71 @@ public class FakeGcpTests
     private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string file = "") => file;
 
     [Fact]
-    public void Only_a_create_may_assign_a_vm_row_directly_every_change_goes_through_UpdateVm()
+    public void Only_a_marked_create_may_assign_a_vm_row_directly_every_change_goes_through_UpdateVm()
     {
-        // #875: a bare `_vms[key] = ...` is a read-modify-write that can resurrect a deleted VM. Two creates assign a new row; everything else is UpdateVm.
-        var source = Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", "..", "src", "DnaEntropyGraph.Cloud", "FakeGcp.cs"); // from this file, not the build output (which may live elsewhere)
-        File.Exists(source).ShouldBeTrue();
-        var lines = File.ReadAllLines(source);
-        var assignments = lines.Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal) && System.Text.RegularExpressions.Regex.IsMatch(l, @"_vms\[[^\]]*\]\s*=[^=]")).ToList();
+        // #875: a bare `_vms[key] = ...` is a read-modify-write that can resurrect a deleted VM. FakeGcp is a partial class: every FakeGcp*.cs is scanned, an assignment may
+        // span lines, and one is allowed only right after a `vm-row-create` marker (a new row), so a third create must say so.
+        var dir = Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", "..", "src", "DnaEntropyGraph.Cloud");
+        var files = Directory.GetFiles(dir, "FakeGcp*.cs");
+        files.Length.ShouldBeGreaterThan(3); // vacuity: the partial files were found
+        var assignment = new System.Text.RegularExpressions.Regex(@"_vms\s*\[[^\]]*\]\s*=[^=]");
+        var unmarked = new List<string>();
+        var updateVmCalls = 0;
+        var marked = 0;
+        foreach (var file in files)
+        {
+            var text = File.ReadAllText(file);
+            updateVmCalls += System.Text.RegularExpressions.Regex.Matches(text, @"\bUpdateVm\(").Count;
+            // Comments blanked to spaces of the same length, so a match's index still addresses the original text (and the marker comment).
+            var code = System.Text.RegularExpressions.Regex.Replace(text, @"//[^\n]*|/\*.*?\*/", m => new string(' ', m.Length), System.Text.RegularExpressions.RegexOptions.Singleline);
+            foreach (System.Text.RegularExpressions.Match m in assignment.Matches(code))
+            {
+                var before = text[Math.Max(0, m.Index - 200)..m.Index];
+                var at = before.LastIndexOf("vm-row-create", StringComparison.Ordinal);
+                if (at >= 0 && !before[at..].Contains(';', StringComparison.Ordinal))
+                {
+                    marked++;
+                }
+                else
+                {
+                    unmarked.Add(Path.GetFileName(file) + ": " + m.Value);
+                }
+            }
+        }
 
-        assignments.Count.ShouldBe(2, "only WithAlreadyExists and CreateVmAsync insert a new row:" + string.Join(" | ", assignments.Select(a => a.Trim())));
-        lines.Count(l => l.Contains("UpdateVm(", StringComparison.Ordinal)).ShouldBeGreaterThan(5); // vacuity: the helper is really used
+        unmarked.ShouldBeEmpty();
+        marked.ShouldBe(2); // WithAlreadyExists and CreateVmAsync insert a new row
+        updateVmCalls.ShouldBeGreaterThan(5); // vacuity: the helper is really used
+    }
+
+    [Fact]
+    public async Task A_delete_that_lands_before_a_plain_start_writes_leaves_the_vm_deleted_and_the_start_says_gone()
+    {
+        var gcp = new FakeGcp();
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+        gcp.BeforeStartWrite = () => gcp.DeleteVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult();
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => gcp.StartVmAsync(created.Name, created.Zone, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("VM_NOT_FOUND");
+        (await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_preempt_that_lands_between_a_stops_read_and_write_is_not_overwritten_with_stopped()
+    {
+        var gcp = new FakeGcp();
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        gcp.WithPreemption(created.Name, created.Zone, TimeSpan.Zero);
+        gcp.BeforeStopWrite = () => gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult(); // the poll applies the preempt
+
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+
+        var vm = await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None);
+        vm.ShouldNotBeNull();
+        vm.Status.ShouldBe("TERMINATED");
+        vm.StatusReason.ShouldBe("preempted");
     }
 
     [Fact]
