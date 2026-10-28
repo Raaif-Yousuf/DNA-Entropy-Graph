@@ -34,7 +34,11 @@ public class CloudJobRunnerHardeningTests
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
     private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, TimeSpan? resultTimeout = null, bool defaultWait = false)
-        => new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
+    {
+        // Test time (#567): every deadline of the run is on a clock that moves only as the runner polls or a scripted hang parks.
+        var clocks = new RunnerClocks();
+        clocks.ParkPump(gcp, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100));
+        return new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = defaultWait ? null : resultTimeout ?? TimeSpan.FromMilliseconds(80),
@@ -45,7 +49,10 @@ public class CloudJobRunnerHardeningTests
             BootTimeout = TimeSpan.FromSeconds(1),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
+    }
 
     private static async Task<string?> VmStatusAsync(FakeGcp gcp, string jobId)
         => (await gcp.GetVmAsync($"deg-{jobId}", Zone, CancellationToken.None))?.Status;

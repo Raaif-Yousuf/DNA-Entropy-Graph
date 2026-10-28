@@ -40,8 +40,13 @@ public class ActAsRunRowTests
     };
 
     private static CloudJobRunner Runner(IComputeGateway compute, FakeGcp gcp, InMemoryRunRepository repo)
-        => new(compute, gcp, gcp, gcp, gcp, repo)
+    {
+        // Test time (#567): the 80 ms result and lifecycle windows run on a clock that moves only as the runner polls.
+        var clocks = new RunnerClocks();
+        return new(compute, gcp, gcp, gcp, gcp, repo)
         {
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
             // Generous safety values: no assertion here depends on a real-time window, so a stalled CI machine must not turn a
@@ -54,6 +59,7 @@ public class ActAsRunRowTests
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         };
+    }
 
     public static TheoryData<string?, int?, string, CloudErrorKind, string> ErrorsAndTheirRowCodes() => new()
     {

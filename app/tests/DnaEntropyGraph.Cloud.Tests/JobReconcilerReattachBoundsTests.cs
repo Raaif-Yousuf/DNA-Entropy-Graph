@@ -32,7 +32,8 @@ public class JobReconcilerReattachBoundsTests
         var reconciler = env.Reconciler(time);
         reconciler.CancelSettleArmed = _ => armed.TrySetResult();
         var reattach = reconciler.ReattachAsync(CancellationToken.None);
-        await WaitUntilAsync(() => env.Active.IsActive("job-hung") && env.Row("job-ok").Phase == JobPhase.Completed);
+        await env.Active.WhenActiveAsync("job-hung");
+        await env.Repo.WhenRecordedAsync(r => r.JobId == "job-ok" && r.Phase == JobPhase.Completed);
 
         // The user cancels job-hung, and the cancel's own work (a gateway call that ignores its token) never returns.
         var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -63,7 +64,7 @@ public class JobReconcilerReattachBoundsTests
         var reconciler = env.Reconciler(time);
         reconciler.CancelSettleArmed = _ => armed.TrySetResult();
         var reattach = reconciler.ReattachAsync(CancellationToken.None);
-        await WaitUntilAsync(() => env.Active.IsActive("job-leak"));
+        await env.Active.WhenActiveAsync("job-leak");
         var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancel = env.Active.CancelAsync("job-leak", () => neverEnds.Task);
         await armed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
@@ -90,7 +91,8 @@ public class JobReconcilerReattachBoundsTests
         await env.SeedAsync("job-done", JobPhase.Running, vm: true);
         using var shutdown = new CancellationTokenSource();
         var reattach = env.Reconciler(ClockAfterTheSeededRows()).ReattachAsync(shutdown.Token);
-        await WaitUntilAsync(() => env.Active.IsActive("job-long") && env.Row("job-done").Phase == JobPhase.Completed);
+        await env.Active.WhenActiveAsync("job-long");
+        await env.Repo.WhenRecordedAsync(r => r.JobId == "job-done" && r.Phase == JobPhase.Completed);
 
         await shutdown.CancelAsync();
         var outcomes = await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
@@ -114,7 +116,7 @@ public class JobReconcilerReattachBoundsTests
         var reconciler = env.Reconciler(time);
         reconciler.CancelSettleArmed = _ => armed.TrySetResult();
         var reattach = reconciler.ReattachAsync(CancellationToken.None);
-        await WaitUntilAsync(() => env.Active.IsActive("job-slow"));
+        await env.Active.WhenActiveAsync("job-slow");
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancel = env.Active.CancelAsync("job-slow", async () =>
         {
@@ -157,7 +159,7 @@ public class JobReconcilerReattachBoundsTests
         reconciler.CancelSettleArmed = _ => armed.TrySetResult();
         using var shutdown = new CancellationTokenSource();
         var reattach = reconciler.ReattachAsync(shutdown.Token);
-        await WaitUntilAsync(() => env.Active.IsActive("job-shutdown"));
+        await env.Active.WhenActiveAsync("job-shutdown");
         var neverEnds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancel = env.Active.CancelAsync("job-shutdown", async () =>
         {
@@ -165,7 +167,7 @@ public class JobReconcilerReattachBoundsTests
             await neverEnds.Task;
         });
         await armed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await WaitUntilAsync(() => env.Row("job-shutdown").Phase == JobPhase.Cancelling);
+        await env.Repo.WhenRecordedAsync(r => r.JobId == "job-shutdown" && r.Phase == JobPhase.Cancelling);
 
         await shutdown.CancelAsync();
         var outcome = (await reattach.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Single();
@@ -182,7 +184,7 @@ public class JobReconcilerReattachBoundsTests
         var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
         await env.SeedAsync("job-failed-cancel", JobPhase.Running, vm: true);
         var reattach = env.Reconciler(ClockAfterTheSeededRows()).ReattachAsync(CancellationToken.None);
-        await WaitUntilAsync(() => env.Active.IsActive("job-failed-cancel"));
+        await env.Active.WhenActiveAsync("job-failed-cancel");
 
         await Should.ThrowAsync<IOException>(() => env.Active.CancelAsync("job-failed-cancel", async () =>
         {
@@ -234,7 +236,7 @@ public class JobReconcilerReattachBoundsTests
         var reconciler = env.Reconciler(time, mutationTimeout: mutationTimeout);
         reconciler.CancelSettleArmed = _ => armed.TrySetResult();
         var reattach = reconciler.ReattachAsync(CancellationToken.None);
-        await WaitUntilAsync(() => env.Active.IsActive("job-edge"));
+        await env.Active.WhenActiveAsync("job-edge");
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancel = env.Active.CancelAsync("job-edge", async () =>
         {
@@ -291,7 +293,7 @@ public class JobReconcilerReattachBoundsTests
         var env = new JobReconcilerTests.Env(new FakeGcp().WithWorker(FakeWorkerMode.Never)) { ResultTimeout = TimeSpan.FromMinutes(5) };
         await env.SeedAsync("job-cancel-failed", JobPhase.Running, vm: true);
         var reattach = env.Reconciler(ClockAfterTheSeededRows()).ReattachAsync(CancellationToken.None);
-        await WaitUntilAsync(() => env.Active.IsActive("job-cancel-failed"));
+        await env.Active.WhenActiveAsync("job-cancel-failed");
 
         await env.Active.CancelAsync("job-cancel-failed", () => env.Repo.UpsertAsync(
             env.Row("job-cancel-failed") with { Phase = JobPhase.Failed, ErrorCode = RunErrorCodes.CancelFailed, ErrorDetail = "the VM is still there" },
@@ -343,15 +345,5 @@ public class JobReconcilerReattachBoundsTests
     public void The_reported_action_is_derived_from_the_phase_the_row_ended_as(ReattachAction underway, JobPhase? finalPhase, ReattachAction expected)
     {
         JobReconciler.ActionForFinalPhase(underway, finalPhase).ShouldBe(expected);
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (!condition())
-        {
-            (DateTime.UtcNow < deadline).ShouldBeTrue("the condition was not met within 10 s");
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
     }
 }
