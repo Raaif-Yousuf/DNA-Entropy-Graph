@@ -48,6 +48,17 @@ internal enum BootOutcome
 /// </summary>
 internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator)
 {
+    /// <summary>The newest incarnation (instance id, creation time) of each job's VM this waiter has looked at alive: what a preemption lookup is bound to (#91).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, VmIncarnation> _seenIncarnations = new(StringComparer.Ordinal);
+
+    private void Observe(string jobId, VmDescriptor? vm)
+    {
+        if (vm is not null && (vm.InstanceId is not null || vm.CreatedAt is not null))
+        {
+            _seenIncarnations[jobId] = new VmIncarnation(vm.InstanceId, vm.CreatedAt);
+        }
+    }
+
     /// <summary>How long before the VM's own <c>maxRunDuration</c> the default result timeout ends.</summary>
     private static readonly TimeSpan ResultMargin = TimeSpan.FromMinutes(3);
 
@@ -83,6 +94,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             try
             {
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
+                Observe(request.JobId, vm);
                 if (vm is { Status: "RUNNING" })
                 {
                     return (BootOutcome.Running, null);
@@ -274,6 +286,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 }
 
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
+                Observe(request.JobId, vm);
                 lastTransient = null;
                 vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
                 platform = PlatformClock.Read(vm?.ServerNow, settings.TimeProvider.GetUtcNow(), settings.StartClock()) ?? platform;
@@ -417,14 +430,52 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, VmClockBasis? clock = null)
     {
         var workerCode = await TryReadWorkerErrorCodeAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json", cancellationToken).ConfigureAwait(false);
-        var note = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
         var mapped = RunErrorCodes.ForWorkerStatusCode(workerCode);
 
         // #89: a VM that was seen created, is gone, and whose maxRunDuration has now passed was deleted by Compute Engine at its limit
         // (Hard Rule 10's backstop), not lost. Issue #691: "now passed" is judged on the platform's clock (the last server time read plus the monotonic time since), because the laptop's clock may be an hour out; the platform's time is aged with a MONOTONIC interval so a wall-clock step cannot move it; with no plausible server time the laptop's clock is used. THEORY (unverified): the platform deletes at created + maxRunDuration on a real instance.
         var pastLimit = clock is { } basis && PlatformNow(basis.Reading) >= basis.RunClockStart + request.Spec.MaxRunDuration;
+
+        // Issue #91: a Spot VM is a preemption only on POSITIVE evidence from Compute itself (a compute.instances.preempted zone operation on the instance). A VM that is
+        // merely gone or stopped proves nothing: the person's Delete, a cancel, an admin, a zone outage and a limit with no clock all look the same, and a wrong guess is a paid
+        // on-demand retry. Nothing is asked when this app ended the VM itself or the worker already said why it stopped. A lookup that fails is "not confirmed": the run fails
+        // as a lost VM (its message names the action: start the run again). A preempted VM is deleted whatever the user chose for after a run.
+        var preempted = false;
+        var lookupFailed = false;
+        _seenIncarnations.TryRemove(request.JobId, out var seen);
+        if (request.Spec.Spot && mapped is null && !pastLimit && !terminator.AppRequestedEnd(request.JobId))
+        {
+            // Bound to this VM's own life: the id it was seen with, else the moment it was created (when the run knows it), else nothing (and then nothing is confirmed).
+            var incarnation = seen ?? new VmIncarnation(null, clock?.RunClockStart);
+            for (var look = 1; ; look++)
+            {
+                try
+                {
+                    preempted = await calls.CallAsync(token => compute.WasPreemptedAsync(request.Spec.VmName, zone, incarnation, token), cancellationToken).ConfigureAwait(false);
+                }
+                catch (CloudOperationException)
+                {
+                    lookupFailed = true;
+                    break;
+                }
+
+                // Compute may record the operation a moment after the instance is gone: look again before concluding "not preempted".
+                if (preempted || look >= settings.PreemptionLookupAttempts)
+                {
+                    break;
+                }
+
+                await settings.DelayAsync(settings.PreemptionLookupInterval, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        var note = await terminator.EndVmAfterFailureAsync(request, zone, forceDelete: preempted).ConfigureAwait(false);
         return VmEndNotes.Apply(
-            mapped is not null
+            preempted
+                ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, reason ?? "The Spot VM was taken back by Google.") { SpotPreempted = true }
+                : lookupFailed
+                ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.VmUnhealthy, (reason ?? "The VM is no longer running.") + " Whether Google took the Spot VM back could not be checked, so the run was not started again.")
+                : mapped is not null
                 ? new RunFailureException(CloudErrorKind.Other, mapped, $"The worker reported {workerCode} in status.json and no result.json followed. {reason}")
                 : pastLimit
                     ? new RunFailureException(CloudErrorKind.Other, RunErrorCodes.RunTimeLimit, $"The VM was gone after its maxRunDuration of {request.Spec.MaxRunDuration.TotalMinutes.ToString("0.#", CultureInfo.InvariantCulture)} minutes and no result.json followed. {reason}")

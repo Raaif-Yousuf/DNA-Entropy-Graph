@@ -766,6 +766,45 @@
   <data name="RunsRefreshButton.Content" xml:space="preserve">
     <value>Refresh</value>
   </data>
+  <data name="RunsImportButton.Content" xml:space="preserve">
+    <value>Find runs from other computers</value>
+  </data>
+  <data name="Runs_Import_Running" xml:space="preserve">
+    <value>Looking in your cloud results for runs from other computers...</value>
+  </data>
+  <data name="Runs_Import_None" xml:space="preserve">
+    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
+  </data>
+  <data name="Runs_Import_Done_One" xml:space="preserve">
+    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
+  </data>
+  <data name="Runs_Import_Done_Many" xml:space="preserve">
+    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
+  </data>
+  <data name="Runs_Import_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed" xml:space="preserve">
+    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
+  </data>
+  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
+  </data>
+  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
+    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed_Network" xml:space="preserve">
+    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
+  </data>
+  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
+    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
+  </data>
+  <data name="Runs_Imported_Badge" xml:space="preserve">
+    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
+    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+  </data>
   <data name="RunsOpenButton.Content" xml:space="preserve">
     <value>Open</value>
   </data>
@@ -2081,78 +2120,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
     <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
   </data>
-  <data name="HelpButton.Content" xml:space="preserve">
-    <value>Help</value>
-  </data>
-  <data name="TourStepNewRun.Title" xml:space="preserve">
-    <value>Start here</value>
-  </data>
-  <data name="TourStepNewRun.Subtitle" xml:space="preserve">
-    <value>Drop a GenBank or FASTA file, or paste a sequence, then press Run. The app checks your file first, so nothing is rented until it is ready.</value>
-  </data>
-  <data name="TourStepNewRun.ActionButtonContent" xml:space="preserve">
-    <value>Next</value>
-  </data>
-  <data name="TourStepNewRun.CloseButtonContent" xml:space="preserve">
-    <value>Skip tour</value>
-  </data>
-  <data name="TourStepRuns.Title" xml:space="preserve">
-    <value>Your runs</value>
-  </data>
-  <data name="TourStepRuns.Subtitle" xml:space="preserve">
-    <value>Every run you start is listed here with how it is going. Open one to see its results or the genome viewer.</value>
-  </data>
-  <data name="TourStepRuns.ActionButtonContent" xml:space="preserve">
-    <value>Next</value>
-  </data>
-  <data name="TourStepRuns.CloseButtonContent" xml:space="preserve">
-    <value>Skip tour</value>
-  </data>
-  <data name="TourStepCloud.Title" xml:space="preserve">
-    <value>Your cloud</value>
-  </data>
-  <data name="TourStepCloud.Subtitle" xml:space="preserve">
-    <value>This is where you see the rented computers (VMs) and storage this app made in your Google Cloud project, and stop or delete them so they do not keep costing money.</value>
-  </data>
-  <data name="TourStepCloud.ActionButtonContent" xml:space="preserve">
-    <value>Next</value>
-  </data>
-  <data name="TourStepCloud.CloseButtonContent" xml:space="preserve">
-    <value>Skip tour</value>
-  </data>
-  <data name="TourStepSettings.Title" xml:space="preserve">
-    <value>Settings and help</value>
-  </data>
-  <data name="TourStepSettings.Subtitle" xml:space="preserve">
-    <value>Choose where files go and how you are told a run is done. The Help button at the top right opens the guide page for the screen you are on, and you can show this tour again from Settings.</value>
-  </data>
-  <data name="TourStepSettings.ActionButtonContent" xml:space="preserve">
-    <value>Done</value>
-  </data>
-  <data name="TourStepSettings.CloseButtonContent" xml:space="preserve">
-    <value>Skip tour</value>
-  </data>
-  <data name="SettingsHelpHeader.Text" xml:space="preserve">
-    <value>Help</value>
-  </data>
-  <data name="SettingsHelpExplainer.Text" xml:space="preserve">
-    <value>Walk through the main screens again, or read the guide in your web browser.</value>
-  </data>
-  <data name="ReplayTourButton.Content" xml:space="preserve">
-    <value>Show the tour again</value>
-  </data>
-  <data name="OpenUserGuideLink.Content" xml:space="preserve">
-    <value>Open the user guide</value>
-  </data>
-  <data name="RunError_worker_stage_stuck" xml:space="preserve">
-    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
-  </data>
-  <data name="RunError_worker_progress_stalled" xml:space="preserve">
-    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
-  </data>
-  <data name="RunError_cleanup_deleted" xml:space="preserve">
-    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
-  </data>
   <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
     <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
   </data>
@@ -2162,14 +2129,8 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="OpenWithPortable" xml:space="preserve">
     <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
   </data>
-  <data name="DatabaseNewerThanApp" xml:space="preserve">
-    <value>Your run history was saved by a newer version of DNA Entropy Graph (it uses format {0}; this version understands up to {1}). Your history has not been changed. Install the latest version of DNA Entropy Graph.</value>
-  </data>
-  <data name="DatabaseInUse" xml:space="preserve">
-    <value>Your run history is in use by another copy of DNA Entropy Graph, so this copy cannot start. Your history has not been changed. Close the other copy, then start the app again.</value>
-  </data>
-  <data name="DatabaseUnusable" xml:space="preserve">
-    <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
   <data name="AuthError_CONSENT_INCOMPLETE" xml:space="preserve">
     <value>Google signed you in, but the permission this app needs to set up and run your rented computer was not ticked on the permission page. Choose Sign in again and allow access, then leave every box ticked.</value>
@@ -2357,6 +2318,9 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="StallDialog_KeepWaiting" xml:space="preserve">
     <value>Keep waiting</value>
   </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
+  </data>
   <data name="RunError_input_accession_invalid" xml:space="preserve">
     <value>The NCBI accession or its range is not valid. Check the accession and the range, then start the run again.</value>
   </data>
@@ -2368,6 +2332,9 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="RunError_input_accession_unreachable" xml:space="preserve">
     <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
+  </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
   </data>
   <data name="NewRunPillKind_Ncbi" xml:space="preserve">
     <value>NCBI record</value>
@@ -2567,6 +2534,69 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunModel_Unknown" xml:space="preserve">
     <value>Unknown model</value>
   </data>
+  <data name="HelpButton.Content" xml:space="preserve">
+    <value>Help</value>
+  </data>
+  <data name="TourStepNewRun.Title" xml:space="preserve">
+    <value>Start here</value>
+  </data>
+  <data name="TourStepNewRun.Subtitle" xml:space="preserve">
+    <value>Drop a GenBank or FASTA file, or paste a sequence, then press Run. The app checks your file first, so nothing is rented until it is ready.</value>
+  </data>
+  <data name="TourStepNewRun.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepNewRun.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepRuns.Title" xml:space="preserve">
+    <value>Your runs</value>
+  </data>
+  <data name="TourStepRuns.Subtitle" xml:space="preserve">
+    <value>Every run you start is listed here with how it is going. Open one to see its results or the genome viewer.</value>
+  </data>
+  <data name="TourStepRuns.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepRuns.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepCloud.Title" xml:space="preserve">
+    <value>Your cloud</value>
+  </data>
+  <data name="TourStepCloud.Subtitle" xml:space="preserve">
+    <value>This is where you see the rented computers (VMs) and storage this app made in your Google Cloud project, and stop or delete them so they do not keep costing money.</value>
+  </data>
+  <data name="TourStepCloud.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepCloud.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepSettings.Title" xml:space="preserve">
+    <value>Settings and help</value>
+  </data>
+  <data name="TourStepSettings.Subtitle" xml:space="preserve">
+    <value>Choose where files go and how you are told a run is done. The Help button at the top right opens the guide page for the screen you are on, and you can show this tour again from Settings.</value>
+  </data>
+  <data name="TourStepSettings.ActionButtonContent" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="TourStepSettings.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="SettingsHelpHeader.Text" xml:space="preserve">
+    <value>Help</value>
+  </data>
+  <data name="SettingsHelpExplainer.Text" xml:space="preserve">
+    <value>Walk through the main screens again, or read the guide in your web browser.</value>
+  </data>
+  <data name="ReplayTourButton.Content" xml:space="preserve">
+    <value>Show the tour again</value>
+  </data>
+  <data name="OpenUserGuideLink.Content" xml:space="preserve">
+    <value>Open the user guide</value>
+  </data>
   <data name="RunError_cleanup_stopped" xml:space="preserve">
     <value>This run ended because its rented computer was stopped when you closed the app, before the results were downloaded. Choose Run to start the run again.</value>
   </data>
@@ -2640,10 +2670,22 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
   </data>
+  <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
+    <value>Drag along the strip to open the viewer at that part of the sequence.</value>
+  </data>
   <data name="ViewerIndexFailed_Title" xml:space="preserve">
     <value>The viewer could not prepare this sequence file</value>
   </data>
   <data name="ViewerIndexFailed_Body" xml:space="preserve">
     <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
+  </data>
+  <data name="DatabaseNewerThanApp" xml:space="preserve">
+    <value>Your run history was saved by a newer version of DNA Entropy Graph (it uses format {0}; this version understands up to {1}). Your history has not been changed. Install the latest version of DNA Entropy Graph.</value>
+  </data>
+  <data name="DatabaseInUse" xml:space="preserve">
+    <value>Your run history is in use by another copy of DNA Entropy Graph, so this copy cannot start. Your history has not been changed. Close the other copy, then start the app again.</value>
+  </data>
+  <data name="DatabaseUnusable" xml:space="preserve">
+    <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
   </data>
 </root>
